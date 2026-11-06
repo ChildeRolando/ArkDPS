@@ -13,6 +13,8 @@ The user plays Arknights and wants to compare operators' actual damage during a 
 ## Product Purpose
 An independent always-on-top small window showing per-operator total damage and DPS.
 
+The confirmed product direction is a free, source-available community meter prioritizing trustworthy statistics, reliable connection, glanceable live contribution and then deeper analysis. Planned scope adds healing, effective shields, engagement DPS/HPS, the most recent 100 battles and automatic new-battle switching. Damage includes overkill with no separate overkill metric. Bars scale linearly to the highest operator; summons are attributed to their summoner. Exact support metrics and retired-operator handling remain in design; see docs/design-interview.md. These plans do not expand the validated Demo's capabilities.
+
 ## Operating Context
 MuMu 12, official Android game 2.7.91, Root enabled. The game is operated by the user.
 
