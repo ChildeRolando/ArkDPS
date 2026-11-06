@@ -50,6 +50,9 @@ def main():
         assert abs(effective - global_delta) < .001
         assert abs(effective - min(delta, hp['before'])) < .001
         hits.append(dict(frame=new['frame'],game_time=new['game_time'],character_delta=delta,
+                         timestamp_basis='later observation, not a native hit-event timestamp',
+                         observation_interval=dict(start_frame=old['frame'],end_frame=new['frame'],
+                             start_game_time=old['game_time'],end_game_time=new['game_time'],bounds='(start,end]'),
                          global_delta=global_delta,hp=hp))
     assert [h['character_delta'] for h in hits] == [280,280,200,200,200]
     redeploy = read(HERE/'redeploy-observation.json')

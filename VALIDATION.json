@@ -17,6 +17,14 @@
         "frame": 636,
         "game_time": 21.199979782104492,
         "character_delta": 280.0,
+        "timestamp_basis": "later observation, not a native hit-event timestamp",
+        "observation_interval": {
+          "start_frame": 630,
+          "end_frame": 636,
+          "start_game_time": 20.999979972839355,
+          "end_game_time": 21.199979782104492,
+          "bounds": "(start,end]"
+        },
         "global_delta": 280.0,
         "hp": {
           "address": 129503068047360,
@@ -29,6 +37,14 @@
         "frame": 669,
         "game_time": 22.299978733062744,
         "character_delta": 280.0,
+        "timestamp_basis": "later observation, not a native hit-event timestamp",
+        "observation_interval": {
+          "start_frame": 666,
+          "end_frame": 669,
+          "start_game_time": 22.199978828430176,
+          "end_game_time": 22.299978733062744,
+          "bounds": "(start,end]"
+        },
         "global_delta": 280.0,
         "hp": {
           "address": 129503068047360,
@@ -41,6 +57,14 @@
         "frame": 890,
         "game_time": 29.666638374328613,
         "character_delta": 200.0,
+        "timestamp_basis": "later observation, not a native hit-event timestamp",
+        "observation_interval": {
+          "start_frame": 887,
+          "end_frame": 890,
+          "start_game_time": 29.566638469696045,
+          "end_game_time": 29.666638374328613,
+          "bounds": "(start,end]"
+        },
         "global_delta": 200.0,
         "hp": {
           "address": 129505408081920,
@@ -53,6 +77,14 @@
         "frame": 921,
         "game_time": 30.699970722198486,
         "character_delta": 200.0,
+        "timestamp_basis": "later observation, not a native hit-event timestamp",
+        "observation_interval": {
+          "start_frame": 919,
+          "end_frame": 921,
+          "start_game_time": 30.633304119110107,
+          "end_game_time": 30.699970722198486,
+          "bounds": "(start,end]"
+        },
         "global_delta": 200.0,
         "hp": {
           "address": 129505408081920,
@@ -65,6 +97,14 @@
         "frame": 955,
         "game_time": 31.833302974700928,
         "character_delta": 200.0,
+        "timestamp_basis": "later observation, not a native hit-event timestamp",
+        "observation_interval": {
+          "start_frame": 952,
+          "end_frame": 955,
+          "start_game_time": 31.73330307006836,
+          "end_game_time": 31.833302974700928,
+          "bounds": "(start,end]"
+        },
         "global_delta": 44.0,
         "hp": {
           "address": 129505408081920,
