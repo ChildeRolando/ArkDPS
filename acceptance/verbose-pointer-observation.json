@@ -1,0 +1,18 @@
+{
+  "probe": "Android BattleLogger.m_verboseRecorder pointer only",
+  "port": 27383,
+  "status": "observed",
+  "pid": 3201,
+  "session": "a57105df-760c-4e89-9e1d-8a38396aa8a8:3380:3201:129505456067360:129505459503648:129503068091200",
+  "frame": 24,
+  "game_time": 0.7999992370605469,
+  "logger": "0x75c8913d4c80",
+  "verbose_recorder": "0x0",
+  "recorder_class": null,
+  "guard": {
+    "attempts": 1,
+    "start": 24,
+    "end": 24,
+    "complete": true
+  }
+}
