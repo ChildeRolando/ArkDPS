@@ -1,0 +1,357 @@
+{
+  "schema_version": 1,
+  "data_version": "2026-11-01-ea7475c2dad5",
+  "generated_at": "2026-11-01T05:51:07.069913+00:00",
+  "runtime_platform": "android_arm64",
+  "android_game_version": "2.7.91",
+  "emulator_serial": "127.0.0.1:16384",
+  "pc_game_path": "E:\\Hypergryph Launcher\\games\\Arknights",
+  "files": {
+    "catalogs/battle_equip.json": {
+      "sha256": "a49e2dc207d9dc13fae95c0cc70977d862a4828f548853c35d314ecbf34d676e",
+      "size": 3651795
+    },
+    "catalogs/char_names.json": {
+      "sha256": "da7a68639b9ba38bf5d86baeb1a4b7960d731fea639012cf0997ea2b73297c84",
+      "size": 15886
+    },
+    "catalogs/characters.json": {
+      "sha256": "c2e66f4a8e2f47f225525ff9ad7ed158000d43247d1bb2866c3a629c0586e83d",
+      "size": 9573454
+    },
+    "catalogs/devices.json": {
+      "sha256": "651806a2dcad403c6559ee6521f78ee079c180ba2c1c83f84bc48147081f12db",
+      "size": 4613680
+    },
+    "catalogs/effect_frames.json": {
+      "sha256": "11e0b2cfa1aaca8de9866d39cd7a1c7a243d2b72dfeee505d25f35ce491f236e",
+      "size": 1175991
+    },
+    "catalogs/enemy_database.json": {
+      "sha256": "14df0ba19fff95a17139ef4e5e27b276269bf818bdb071b900186898a0c95333",
+      "size": 3844722
+    },
+    "catalogs/enemy_handbook.json": {
+      "sha256": "31e4447f3ee85542529d1ece0372f3af0c50b1473462efeea5f53c90f9427291",
+      "size": 1140894
+    },
+    "catalogs/enemy_names.json": {
+      "sha256": "5ba4385f2e22287f5c3cea084d0b3402462b3995041684852e8cca2ff246374b",
+      "size": 454913
+    },
+    "catalogs/enemy_stats.json": {
+      "sha256": "7eea126a01966b28d79eb96bb8814418229e72c3b07e9c910b9693ca3a5b2d0b",
+      "size": 141315
+    },
+    "catalogs/skills.json": {
+      "sha256": "581d70a86eead088451e83556cf7acbe481f2fb015d6037b9bf242f103ba1421",
+      "size": 6883324
+    },
+    "catalogs/stage_enemy_usage.json": {
+      "sha256": "587c51a0cda8b3cf527b206a26570a2b92bbe3fb21b8072f291e2e416e782d81",
+      "size": 2849148
+    },
+    "catalogs/uniequip.json": {
+      "sha256": "3bbd9ee7290716677c39a01b7ef9aa7abb5939ec56fc0c9c2235ce00bdbd95c3",
+      "size": 2688843
+    },
+    "offsets/android_arm64.json": {
+      "sha256": "1b289bfce7ffc79f11777dd51dc5d076e1accd581b3750255e200c3ffa26a592",
+      "size": 34175
+    },
+    "offsets/pc_x64.json": {
+      "sha256": "ead9b66a4a1e9178b5ead18d02b276fe9acd9bee3256d50740b9c64354d7dbb9",
+      "size": 16203
+    },
+    "README.md": {
+      "sha256": "e63d1db2593e150d0d380fe1ca4a22031bd0ebc4d77af61cfb3cd9d4bea80184",
+      "size": 4428
+    },
+    "reference/android_arm64/dump.cs": {
+      "sha256": "fe2c4171e7e5746326dad211a1eeb1e4d821de7cdedb6a867c5bd18491c4c7fa",
+      "size": 173348
+    },
+    "reference/pc_x64/dump.cs": {
+      "sha256": "af7f9697afe424ce923052c9243ebc876f5946e2ece2b72dd43ba7db4f391529",
+      "size": 89818469
+    },
+    "schemas/table_fields.json": {
+      "sha256": "6ebd5d357430c60c89e73ac3306b0e150e8f3aaf00ce88a63a6fb9a248c6acca",
+      "size": 2839
+    },
+    "tables/activity_table.bin": {
+      "sha256": "9e297ffeb08a41f458019e3e9a079263fc88baacaddae9b270eeb25639a7b694",
+      "size": 4665732
+    },
+    "tables/arkvent_table.bin": {
+      "sha256": "d2338f494a4c030884773654cbe7568e56027c8acc55cb278d15d69b5738d4e4",
+      "size": 224920
+    },
+    "tables/battle_equip_table.bin": {
+      "sha256": "1741530259847999b997f28a26c600892e01294d40cdf7b4e67c5daa0553fa1b",
+      "size": 1232076
+    },
+    "tables/building_data.bin": {
+      "sha256": "4d5d96e1f303667415714d7a2dbd502444a9c5cbbbb5411b5068be84df8ebd68",
+      "size": 2651044
+    },
+    "tables/character_table.bin": {
+      "sha256": "d0eb893498f98d392bd4d4242e7cd798aceb9d210bc81502827d91bf465b302b",
+      "size": 2632036
+    },
+    "tables/charword_table.bin": {
+      "sha256": "e0a18ae742333fd07f5df30123178a39d2ec29cb45aa1e65f0fccf853362cf20",
+      "size": 6675916
+    },
+    "tables/climb_tower_table.bin": {
+      "sha256": "249aaf196947e943ce291e1b528fbc05ea4be2235b202db7cd382477d92e829b",
+      "size": 297336
+    },
+    "tables/display_meta_table.bin": {
+      "sha256": "450f1a8ce798af9db8fe4ff2658062bdd861098bea55d33e134c8982c7302898",
+      "size": 278944
+    },
+    "tables/enemy_database.bin": {
+      "sha256": "ff0ca18c05095558dc01bc7de40b4d7a95cd6345cd13bf63a3238dee2824ed2c",
+      "size": 2256096
+    },
+    "tables/enemy_handbook_table.bin": {
+      "sha256": "863d5b8e3396e2cd6a4a62ee5f83b91532f664f3019cb16ab958ffbf827ed74d",
+      "size": 988104
+    },
+    "tables/extra_battlelog_table.bin": {
+      "sha256": "f1242d4255453013b22d09035a3de3595ab0c6a4fb3e630585cd63d9bd3f84b6",
+      "size": 16696
+    },
+    "tables/gacha_table.bin": {
+      "sha256": "a83622cea716ae96d7f017c16c860f8fc4822586c31273e4a0d14f69f76b6aff",
+      "size": 228332
+    },
+    "tables/handbook_info_table.bin": {
+      "sha256": "d320ca238c4507859ffcfc416d1c098cdd452ba91be365253332ef793d7706f5",
+      "size": 4390652
+    },
+    "tables/hotupdate_meta_table.bin": {
+      "sha256": "ea7475c2dad50ecdf7d12171d4d540e4911e076ccb363c6940b82531d266abce",
+      "size": 6180
+    },
+    "tables/item_table.bin": {
+      "sha256": "73d10fafe134f40a70ceb70a8be1fed4e637f698a21c2b545a1c8607df06d836",
+      "size": 942608
+    },
+    "tables/medal_table.bin": {
+      "sha256": "3faacc270b745347385382fe2b68d9bdae62a7ec2d429fe43f0b98df21b67019",
+      "size": 886724
+    },
+    "tables/retro_table.bin": {
+      "sha256": "203cc6d2874118ab57dc4db972eb793a97f1774e79f729615d81561c57cf29c5",
+      "size": 1566724
+    },
+    "tables/roguelike_topic_table.bin": {
+      "sha256": "3ae4e45054fbf7be0105afe70dd2e49613be3a56100c1e3643ecf09b7728ddae",
+      "size": 8603372
+    },
+    "tables/sandbox_perm_table.bin": {
+      "sha256": "18ee661b8eb1ffc2a940460d08aeeed7d0154ac325b0808c0b93b897f36038bd",
+      "size": 2458232
+    },
+    "tables/shop_client_table.bin": {
+      "sha256": "17f3380373f5c9ff36860d45b628a715c9f5e5df0f950bb962d69cccc6e7b552",
+      "size": 824600
+    },
+    "tables/skill_table.bin": {
+      "sha256": "8620dbc94c37709960dbe1f57890abf13418180ca52379e4581162b559354625",
+      "size": 4852592
+    },
+    "tables/skin_table.bin": {
+      "sha256": "a709f31824b7b3628d492168876a58a2a7369a8b0c73d2bb0a7f02832356368c",
+      "size": 1594904
+    },
+    "tables/stage_table.bin": {
+      "sha256": "9d00dd4139ad6057bb9e3c1f5117c8080742d7c648a42e5175c240f94ab7cef9",
+      "size": 5424124
+    },
+    "tables/story_table.bin": {
+      "sha256": "cea9576eb071392dceaeaa909c0baf649678f8253bf1541c5d2aa7694cdf0239",
+      "size": 544060
+    },
+    "tables/uniequip_table.bin": {
+      "sha256": "14863cce856f02543b1fac7ca1735ef9aa74ba9eaeaeae42d7fa38bb0ca980be",
+      "size": 2290164
+    },
+    "tables/zone_table.bin": {
+      "sha256": "1908603ba4b312938dce1fe44200e2d4540ea07296b6915066960ec9749c1876",
+      "size": 102144
+    },
+    "update_report.json": {
+      "sha256": "13f143fdd7280bfa2c17c29ec5aeda9a767dc3c72564d37013e5b9cb7820dd26",
+      "size": 14667
+    },
+    "validation.json": {
+      "sha256": "7b098aa80c5a7fc30b72643dc2782a134b6c6ff795c821321553a4fd8881fdfe",
+      "size": 40564
+    }
+  },
+  "tables": {
+    "activity_table": {
+      "table_id": "activity_table071163",
+      "source": "base/activity_table071163.dat",
+      "file": "activity_table.bin",
+      "source_layer": "base"
+    },
+    "arkvent_table": {
+      "table_id": "arkvent_table20afad",
+      "source": "base/arkvent_table20afad.dat",
+      "file": "arkvent_table.bin",
+      "source_layer": "base"
+    },
+    "battle_equip_table": {
+      "table_id": "battle_equip_table91e6b6",
+      "source": "hot/battle_equip_table91e6b6.dat",
+      "file": "battle_equip_table.bin",
+      "source_layer": "hot"
+    },
+    "building_data": {
+      "table_id": "building_data73949e",
+      "source": "base/building_data73949e.dat",
+      "file": "building_data.bin",
+      "source_layer": "base"
+    },
+    "character_table": {
+      "table_id": "character_tablec913b6",
+      "source": "hot/character_tablec913b6.dat",
+      "file": "character_table.bin",
+      "source_layer": "hot"
+    },
+    "charword_table": {
+      "table_id": "charword_table0a71c8",
+      "source": "base/charword_table0a71c8.dat",
+      "file": "charword_table.bin",
+      "source_layer": "base"
+    },
+    "climb_tower_table": {
+      "table_id": "climb_tower_table0b61c0",
+      "source": "base/climb_tower_table0b61c0.dat",
+      "file": "climb_tower_table.bin",
+      "source_layer": "base"
+    },
+    "display_meta_table": {
+      "table_id": "display_meta_tableb1aa89",
+      "source": "hot/display_meta_tableb1aa89.dat",
+      "file": "display_meta_table.bin",
+      "source_layer": "hot"
+    },
+    "enemy_database": {
+      "table_id": "enemy_database0e81c0",
+      "source": "hot/enemy_database0e81c0.dat",
+      "file": "enemy_database.bin",
+      "source_layer": "hot"
+    },
+    "enemy_handbook_table": {
+      "table_id": "enemy_handbook_table493349",
+      "source": "hot/enemy_handbook_table493349.dat",
+      "file": "enemy_handbook_table.bin",
+      "source_layer": "hot"
+    },
+    "extra_battlelog_table": {
+      "table_id": "extra_battlelog_table467b4f",
+      "source": "base/extra_battlelog_table467b4f.dat",
+      "file": "extra_battlelog_table.bin",
+      "source_layer": "base"
+    },
+    "gacha_table": {
+      "table_id": "gacha_table286841",
+      "source": "base/gacha_table286841.dat",
+      "file": "gacha_table.bin",
+      "source_layer": "base"
+    },
+    "handbook_info_table": {
+      "table_id": "handbook_info_table1ff5ad",
+      "source": "base/handbook_info_table1ff5ad.dat",
+      "file": "handbook_info_table.bin",
+      "source_layer": "base"
+    },
+    "hotupdate_meta_table": {
+      "table_id": "hotupdate_meta_table7fb967",
+      "source": "base/hotupdate_meta_table7fb967.dat",
+      "file": "hotupdate_meta_table.bin",
+      "source_layer": "base"
+    },
+    "item_table": {
+      "table_id": "item_table1c04fa",
+      "source": "base/item_table1c04fa.dat",
+      "file": "item_table.bin",
+      "source_layer": "base"
+    },
+    "medal_table": {
+      "table_id": "medal_table26d2d8",
+      "source": "base/medal_table26d2d8.dat",
+      "file": "medal_table.bin",
+      "source_layer": "base"
+    },
+    "retro_table": {
+      "table_id": "retro_tableb46c3c",
+      "source": "base/retro_tableb46c3c.dat",
+      "file": "retro_table.bin",
+      "source_layer": "base"
+    },
+    "roguelike_topic_table": {
+      "table_id": "roguelike_topic_tablebd71d3",
+      "source": "hot/roguelike_topic_tablebd71d3.dat",
+      "file": "roguelike_topic_table.bin",
+      "source_layer": "hot"
+    },
+    "sandbox_perm_table": {
+      "table_id": "sandbox_perm_tablea8c1d3",
+      "source": "base/sandbox_perm_tablea8c1d3.dat",
+      "file": "sandbox_perm_table.bin",
+      "source_layer": "base"
+    },
+    "shop_client_table": {
+      "table_id": "shop_client_tablead7bef",
+      "source": "base/shop_client_tablead7bef.dat",
+      "file": "shop_client_table.bin",
+      "source_layer": "base"
+    },
+    "skill_table": {
+      "table_id": "skill_tableafb859",
+      "source": "hot/skill_tableafb859.dat",
+      "file": "skill_table.bin",
+      "source_layer": "hot"
+    },
+    "skin_table": {
+      "table_id": "skin_tabled7e521",
+      "source": "base/skin_tabled7e521.dat",
+      "file": "skin_table.bin",
+      "source_layer": "base"
+    },
+    "stage_table": {
+      "table_id": "stage_tableb3e241",
+      "source": "base/stage_tableb3e241.dat",
+      "file": "stage_table.bin",
+      "source_layer": "base"
+    },
+    "story_table": {
+      "table_id": "story_tablee4e4f8",
+      "source": "base/story_tablee4e4f8.dat",
+      "file": "story_table.bin",
+      "source_layer": "base"
+    },
+    "uniequip_table": {
+      "table_id": "uniequip_table8b1bb5",
+      "source": "base/uniequip_table8b1bb5.dat",
+      "file": "uniequip_table.bin",
+      "source_layer": "base"
+    },
+    "zone_table": {
+      "table_id": "zone_tablefb5543",
+      "source": "base/zone_tablefb5543.dat",
+      "file": "zone_table.bin",
+      "source_layer": "base"
+    }
+  },
+  "tools": {
+    "il2cpp_dumper_sha256": "071e36d396ae93cb2cfec032513b46a6bfd67e9b93157830711ab6d79db55045",
+    "asset_studio_sha256": "e8474fb36d822b6f0b05a2eb4130da49dc7e1a670e97b9d1841292df10a3a13d"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "bc": "0x75c8d6b49320",
+  "logger": "0x75c8913d4c80",
+  "logger_owner": "0x75c8d6b49320",
+  "events": [],
+  "squad": [
+    {
+      "charInstId": 2,
+      "charId": "char_502_nblade",
+      "charName": "夜刀",
+      "skinId": "char_502_nblade#1",
+      "skillId": "",
+      "skillIndex": -1,
+      "skillLvl": 0,
+      "level": 30,
+      "phase": 0,
+      "potentialRank": 5
+    },
+    {
+      "charInstId": 4,
+      "charId": "char_503_rang",
+      "charName": "巡林者",
+      "skinId": "char_503_rang#1",
+      "skillId": "",
+      "skillIndex": -1,
+      "skillLvl": 0,
+      "level": 1,
+      "phase": 0,
+      "potentialRank": 5
+    }
+  ],
+  "sample": {
+    "session": "a57105df-760c-4e89-9e1d-8a38396aa8a8:3380:3201:129505456067360:129505459503648:129503068091200",
+    "frame": 24,
+    "game_time": 0.7999992370605469,
+    "state": 2,
+    "speed": 1,
+    "rows": [
+      {
+        "id": "char_145_prove",
+        "name": "普罗旺斯",
+        "damage": 373.0,
+        "physical": 373.0,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -373.0
+      }
+    ],
+    "global_total": 373.0,
+    "sum_damage": 373.0,
+    "read_ms": 60.93,
+    "observed_at": 1794002055.6141014,
+    "captured_monotonic": 120269.171,
+    "guard": {
+      "attempts": 1,
+      "start": 24,
+      "end": 24,
+      "complete": true
+    }
+  }
+}

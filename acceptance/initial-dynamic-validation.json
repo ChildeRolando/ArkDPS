@@ -1,0 +1,165 @@
+{
+  "date": "2026-11-07",
+  "environment": "MuMu 12 / Android ARM64 Arknights 2.7.91",
+  "source_capture": "runtime\\captures\\20261107-052746.jsonl",
+  "source_sha256": "ca312fe88777cf9683554018938232af443d99f76decfcd6996c712ed2858baf",
+  "accepted_samples": 1061,
+  "distinct_frames": 57,
+  "game_time_start": 26.599974632263184,
+  "game_time_end": 40.36662817001343,
+  "speed_levels": [
+    1,
+    2
+  ],
+  "every_published_guard_complete": true,
+  "initial": {
+    "session": "a57105df-760c-4e89-9e1d-8a38396aa8a8:3380:3201:129505456067360:129503893480784:129503004937680",
+    "frame": 798,
+    "game_time": 26.599974632263184,
+    "state": 2,
+    "speed": 2,
+    "rows": [
+      {
+        "id": "char_145_prove",
+        "name": "普罗旺斯",
+        "damage": 4747.40625,
+        "physical": 4747.40625,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -4747.40625,
+        "dps": 178.4740893790875,
+        "share": 0.4904646139839414,
+        "recent_dps": null
+      },
+      {
+        "id": "char_166_skfire",
+        "name": "天火",
+        "damage": 3272.0,
+        "physical": 0.0,
+        "arts": 3272.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -3272.0,
+        "dps": 123.00763610621576,
+        "share": 0.3380372633910267,
+        "recent_dps": null
+      },
+      {
+        "id": "char_350_surtr",
+        "name": "史尔特尔",
+        "damage": 1660.0,
+        "physical": 0.0,
+        "arts": 1660.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -1660.0,
+        "dps": 62.40607455266447,
+        "share": 0.1714981226250319,
+        "recent_dps": null
+      }
+    ],
+    "global_total": 9140.2412109375,
+    "sum_damage": 9679.40625,
+    "read_ms": 47.0,
+    "observed_at": 1794000466.794908,
+    "guard": {
+      "attempts": 1,
+      "start": 798,
+      "end": 798,
+      "complete": true
+    },
+    "global_difference": 539.1650390625,
+    "recent_method": "5 game seconds, sampled cumulative totals, interpolated boundary; unavailable across gaps >1s"
+  },
+  "final": {
+    "session": "a57105df-760c-4e89-9e1d-8a38396aa8a8:3380:3201:129505456067360:129503893480784:129503004937680",
+    "frame": 1211,
+    "game_time": 40.36662817001343,
+    "state": 2,
+    "speed": 2,
+    "rows": [
+      {
+        "id": "char_145_prove",
+        "name": "普罗旺斯",
+        "damage": 4747.40625,
+        "physical": 4747.40625,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -4747.40625,
+        "dps": 117.6072034058727,
+        "share": 0.3763181427470875,
+        "recent_dps": 0.0
+      },
+      {
+        "id": "char_350_surtr",
+        "name": "史尔特尔",
+        "damage": 3320.0,
+        "physical": 0.0,
+        "arts": 3320.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -3320.0,
+        "dps": 82.24615605784682,
+        "share": 0.26317028038633317,
+        "recent_dps": 0.0
+      },
+      {
+        "id": "char_166_skfire",
+        "name": "天火",
+        "damage": 3272.0,
+        "physical": 0.0,
+        "arts": 3272.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -3272.0,
+        "dps": 81.05705500640808,
+        "share": 0.25936540886267534,
+        "recent_dps": 0.0
+      },
+      {
+        "id": "char_4244_tocka",
+        "name": "冻河",
+        "damage": 1276.0,
+        "physical": 1276.0,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -1276.0,
+        "dps": 31.610269617413415,
+        "share": 0.10114616800390396,
+        "recent_dps": 127.60260762054625
+      }
+    ],
+    "global_total": 11460.0,
+    "sum_damage": 12615.40625,
+    "read_ms": 78.0,
+    "observed_at": 1794000689.1371684,
+    "guard": {
+      "attempts": 1,
+      "start": 1211,
+      "end": 1211,
+      "complete": true
+    },
+    "global_difference": 1155.40625,
+    "recent_method": "5 game seconds, sampled cumulative totals, interpolated boundary; unavailable across gaps >1s"
+  },
+  "tests": {
+    "passed": 15,
+    "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests -q --assert=plain"
+  },
+  "limitations": [
+    "Prototype; not a full damage-semantics validation",
+    "Actual multi-battle transitions and special skill attribution not tested",
+    "Sum of character counters differs from global counter; reason unverified"
+  ],
+  "native_binary_sha256": "cbf92ef571c7afbf767861a3a9ec10e0b3ab7d68f9ea56555c65308d5b33d80e"
+}

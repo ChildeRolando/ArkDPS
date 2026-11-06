@@ -1,0 +1,131 @@
+{
+  "bc": "0x75c8d31a0000",
+  "logger": "0x75c890d21c30",
+  "logger_owner": "0x75c8d31a0000",
+  "events": [
+    {
+      "timestamp": 19.79998,
+      "frame": null,
+      "uniqueId": 2147483650,
+      "charInstId": 2,
+      "charId": "char_502_nblade",
+      "charName": "夜刀",
+      "op": 0,
+      "opName": "SPAWN",
+      "direction": 1,
+      "directionName": "RIGHT",
+      "gridRow": 3,
+      "gridCol": 4,
+      "extraInfo": ""
+    },
+    {
+      "timestamp": 32.599968,
+      "frame": null,
+      "uniqueId": 2147483650,
+      "charInstId": 2,
+      "charId": "char_502_nblade",
+      "charName": "夜刀",
+      "op": 1,
+      "opName": "WITHDRAW",
+      "direction": 0,
+      "directionName": "UP",
+      "gridRow": 3,
+      "gridCol": 4,
+      "extraInfo": ""
+    },
+    {
+      "timestamp": 68.499931,
+      "frame": null,
+      "uniqueId": 2147483650,
+      "charInstId": 2,
+      "charId": "char_502_nblade",
+      "charName": "夜刀",
+      "op": 0,
+      "opName": "SPAWN",
+      "direction": 1,
+      "directionName": "RIGHT",
+      "gridRow": 3,
+      "gridCol": 6,
+      "extraInfo": ""
+    }
+  ],
+  "squad": [
+    {
+      "charInstId": 2,
+      "charId": "char_502_nblade",
+      "charName": "夜刀",
+      "skinId": "char_502_nblade#1",
+      "skillId": "",
+      "skillIndex": -1,
+      "skillLvl": 0,
+      "level": 30,
+      "phase": 0,
+      "potentialRank": 5
+    },
+    {
+      "charInstId": 4,
+      "charId": "char_503_rang",
+      "charName": "巡林者",
+      "skinId": "char_503_rang#1",
+      "skillId": "",
+      "skillIndex": -1,
+      "skillLvl": 0,
+      "level": 1,
+      "phase": 0,
+      "potentialRank": 5
+    }
+  ],
+  "sample": {
+    "session": "a57105df-760c-4e89-9e1d-8a38396aa8a8:3380:3201:129505395605504:129505459503376:129503286750256",
+    "frame": 2245,
+    "game_time": 74.83326196670532,
+    "state": 2,
+    "speed": 2,
+    "rows": [
+      {
+        "id": "char_145_prove",
+        "name": "普罗旺斯",
+        "damage": 4747.40625,
+        "physical": 4747.40625,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -4747.40625
+      },
+      {
+        "id": "char_166_skfire",
+        "name": "天火",
+        "damage": 3272.0,
+        "physical": 0.0,
+        "arts": 3272.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -3272.0
+      },
+      {
+        "id": "char_502_nblade",
+        "name": "夜刀",
+        "damage": 2560.0,
+        "physical": 2560.0,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -2560.0
+      }
+    ],
+    "global_total": 9974.2412109375,
+    "sum_damage": 10579.40625,
+    "read_ms": 48.15,
+    "observed_at": 1794001937.6236684,
+    "captured_monotonic": 120151.187,
+    "guard": {
+      "attempts": 1,
+      "start": 2245,
+      "end": 2245,
+      "complete": true
+    }
+  }
+}

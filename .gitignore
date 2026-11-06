@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+runtime/
+acceptance/audit-*.jsonl
+acceptance/*hint.json
+acceptance/STOP
+acceptance/current-battle-log.json
+acceptance/battle-candidates.json
+.env
+.env.*
+!.env.example

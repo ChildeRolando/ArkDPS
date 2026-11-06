@@ -1,0 +1,113 @@
+{
+  "scope": "Android 2.7.91 / MuMu 12: direct damage prototype; excludes universal skill-attribution acceptance",
+  "verdict": "PASS for scoped underlying statistics Demo",
+  "audit": {
+    "accepted_samples": 2844,
+    "rejected": {
+      "different_frames": 86
+    },
+    "errors": [
+      {
+        "error": "enemy list changed",
+        "wall_time": 1794001917.5520077
+      }
+    ],
+    "hits": [
+      {
+        "frame": 636,
+        "game_time": 21.199979782104492,
+        "character_delta": 280.0,
+        "global_delta": 280.0,
+        "hp": {
+          "address": 129503068047360,
+          "before": 1550.0,
+          "after": 1270.0,
+          "finish": 0
+        }
+      },
+      {
+        "frame": 669,
+        "game_time": 22.299978733062744,
+        "character_delta": 280.0,
+        "global_delta": 280.0,
+        "hp": {
+          "address": 129503068047360,
+          "before": 1270.0,
+          "after": 990.0,
+          "finish": 0
+        }
+      },
+      {
+        "frame": 890,
+        "game_time": 29.666638374328613,
+        "character_delta": 200.0,
+        "global_delta": 200.0,
+        "hp": {
+          "address": 129505408081920,
+          "before": 444.00003656744957,
+          "after": 244.00003656744957,
+          "finish": 0
+        }
+      },
+      {
+        "frame": 921,
+        "game_time": 30.699970722198486,
+        "character_delta": 200.0,
+        "global_delta": 200.0,
+        "hp": {
+          "address": 129505408081920,
+          "before": 244.00003656744957,
+          "after": 44.00003656744957,
+          "finish": 0
+        }
+      },
+      {
+        "frame": 955,
+        "game_time": 31.833302974700928,
+        "character_delta": 200.0,
+        "global_delta": 44.0,
+        "hp": {
+          "address": 129505408081920,
+          "before": 44.00003656744957,
+          "after": 0.0,
+          "finish": 2
+        }
+      }
+    ]
+  },
+  "redeploy": {
+    "before": 1160,
+    "after": 2560,
+    "rows_for_yato": 1,
+    "per_hit_hp_after_redeploy": "not captured"
+  },
+  "new_battle": {
+    "game_time": 0.7999992370605469,
+    "yato_present": false,
+    "npc_damage": 373,
+    "session_changed": true
+  },
+  "clock_capture": {
+    "accepted_samples": 1061,
+    "distinct_frames": 57,
+    "speeds": [
+      1,
+      2
+    ],
+    "start": 26.599974632263184,
+    "end": 40.36662817001343
+  },
+  "provenance": {
+    "acceptance\\audit-20261107-054941.jsonl": "41360aad30e96fdf90724ce030b4b17ebebeb789983e24bacf8c54df72739c11",
+    "acceptance\\redeploy-observation.json": "037b0499ccfd7767ce7751be40fddd34620d98893d7f94c6df58e324ba6444da",
+    "acceptance\\new-battle-observation.json": "a080f4f2b49011e1b3f0bd0a3254ea2218563bd23f1f6b6ca43dc62fd43a4288",
+    "runtime\\captures\\20261107-052746.jsonl": "ca312fe88777cf9683554018938232af443d99f76decfcd6996c712ed2858baf"
+  },
+  "limitations": [
+    "The HP audit stopped on a transient enemy-list change before redeployment attacks; retry code was corrected but not revalidated during active combat.",
+    "Overkill demonstrated on one isolated Yato finishing hit; earlier NPC/global discrepancies are not fully attributed.",
+    "One real restart of the same practice was verified; arbitrary map transitions, menu auto-recovery and process restarts remain untested.",
+    "Summons, damage over time, complex skills, elemental attribution and effective per-operator HP damage remain outside this Demo acceptance.",
+    "Rolling five-second DPS uses sampled/interpolated boundaries; export save dialog has not been end-to-end accepted."
+  ]
+}

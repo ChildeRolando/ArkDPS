@@ -1,0 +1,251 @@
+Tim23333 Non-Commercial Software License
+Version 1.0
+
+Copyright (c) 2026 Tim23333
+
+GitHub Account: https://github.com/Tim23333
+
+Permission is hereby granted under the terms of this license to use, copy,
+modify, merge, publish, distribute, and create derivative works of this software
+only for non-commercial purposes, except as expressly permitted below.
+
+1. Definitions
+
+1.1. "Software" means the source code, object code, documentation, examples,
+configuration files, models, scripts, assets, and any other materials included
+in this repository, unless a separate license is explicitly provided for a
+specific file or component.
+
+1.2. "Licensor" means the copyright holder identified as Tim23333, including the
+natural person controlling the GitHub account "Tim23333".
+
+1.3. "You" means any individual, organization, company, institution, or other
+legal entity receiving, accessing, using, copying, modifying, distributing, or
+creating derivative works based on the Software.
+
+1.4. "Non-Commercial Use" means use that is not primarily intended for or
+directed toward commercial advantage, monetary compensation, business operation,
+paid service, revenue generation, commercial product development, commercial
+deployment, commercial research and development, or internal business use by a
+for-profit entity.
+
+1.5. "Commercial Use" includes, but is not limited to:
+
+    (a) using the Software in a product, service, platform, system, or workflow
+        that is sold, licensed, rented, subscribed to, or otherwise monetized;
+
+    (b) using the Software to provide paid consulting, integration, deployment,
+        training, maintenance, hosting, software-as-a-service, model-as-a-service,
+        or other commercial services;
+
+    (c) using the Software internally by a company or other for-profit entity
+        for business operations, product development, research and development,
+        automation, production, testing, quality control, data processing, or
+        any other business purpose;
+
+    (d) incorporating the Software into proprietary software, commercial
+        software, commercial hardware, commercial robots, embedded systems,
+        cloud services, edge devices, applications, datasets, models, or other
+        commercial deliverables;
+
+    (e) using the Software in connection with advertising, marketing, sales,
+        customer support, business intelligence, industrial deployment, or
+        revenue-generating activities;
+
+    (f) sublicensing, selling, renting, leasing, or otherwise commercially
+        transferring the Software or any derivative work based on it.
+
+1.6. "Authorized Commercial Users" means only the following:
+
+    (a) the Licensor personally;
+
+    (b) the natural person controlling the GitHub account "Tim23333";
+
+    (c) any company, institution, organization, laboratory, research group,
+        project team, or other legal entity to which the Licensor currently
+        belongs as an employee, contractor, founder, shareholder, member,
+        officer, researcher, student, consultant, collaborator, or formally
+        affiliated participant;
+
+    (d) any company, institution, organization, laboratory, research group,
+        project team, or other legal entity that has received explicit written
+        authorization for Commercial Use from the Licensor.
+
+For clarity, authorization under Section 1.6(c) applies only while the Licensor
+has an active affiliation with that entity, unless the Licensor grants separate
+written permission stating otherwise.
+
+2. Grant of Non-Commercial License
+
+Subject to the terms of this license, the Licensor grants You a worldwide,
+royalty-free, non-exclusive, non-transferable, non-sublicensable license to use,
+copy, modify, merge, publish, distribute, and create derivative works of the
+Software solely for Non-Commercial Use.
+
+3. Commercial Use Restriction
+
+Except for Authorized Commercial Users, You may not use the Software for
+Commercial Use without obtaining prior explicit written permission from the
+Licensor.
+
+Any Commercial Use by any person or entity other than an Authorized Commercial
+User is prohibited.
+
+4. Commercial Rights Reserved by the Licensor
+
+The Licensor reserves all rights to use, modify, distribute, sublicense, sell,
+license, commercialize, deploy, integrate, and otherwise exploit the Software
+for any purpose, including Commercial Use.
+
+Nothing in this license limits the Licensor's right to grant additional
+permissions, exceptions, sublicenses, commercial licenses, private licenses, or
+separate agreements to any person or entity.
+
+5. Rights of Authorized Commercial Users
+
+Authorized Commercial Users may use, copy, modify, merge, publish, distribute,
+sublicense, deploy, integrate, and commercialize the Software for Commercial Use,
+provided that such use is authorized by the Licensor and does not violate any
+separate agreement between the Licensor and the Authorized Commercial User.
+
+Authorized Commercial Users may use the Software in commercial products,
+services, internal systems, research and development, production systems,
+client deliverables, demonstrations, prototypes, deployments, and other
+commercial or business contexts.
+
+6. Distribution
+
+If You distribute the Software or any derivative work based on the Software
+for Non-Commercial Use, You must:
+
+    (a) include a copy of this license;
+
+    (b) retain all copyright, license, and attribution notices;
+
+    (c) clearly indicate any material modifications You made;
+
+    (d) ensure that the distributed copy remains subject to this license;
+
+    (e) not imply that the Licensor endorses You, Your work, Your product,
+        Your service, or Your organization.
+
+7. Derivative Works
+
+You may create derivative works based on the Software only for Non-Commercial
+Use, unless You are an Authorized Commercial User or have received explicit
+written permission from the Licensor.
+
+Derivative works must remain subject to this license unless the Licensor grants
+separate written permission.
+
+8. No Sublicensing by General Users
+
+Except for Authorized Commercial Users, You may not sublicense, sell, rent,
+lease, commercially host, or otherwise transfer commercial rights in the
+Software or derivative works based on the Software.
+
+9. Contributions
+
+Unless otherwise agreed in writing, any contribution submitted to this repository
+by You is provided under the same terms as this license.
+
+By submitting a contribution, You represent that You have the right to submit it
+and that You grant the Licensor a perpetual, worldwide, royalty-free,
+non-exclusive license to use, copy, modify, merge, publish, distribute,
+sublicense, commercialize, and otherwise exploit the contribution for any
+purpose, including Commercial Use.
+
+10. Third-Party Components
+
+This license applies only to the Software provided by the Licensor.
+
+Third-party libraries, dependencies, models, datasets, assets, or other
+components included in or used by the Software may be subject to their own
+separate licenses. You are responsible for complying with all applicable
+third-party license terms.
+
+11. Trademarks
+
+This license does not grant permission to use the names, trademarks, service
+marks, logos, trade names, domain names, GitHub account names, or branding of
+the Licensor, except as required for reasonable attribution.
+
+12. Patent Rights
+
+No patent license is granted under this license unless explicitly stated in a
+separate written agreement.
+
+13. No Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, RELIABILITY,
+SECURITY, OR AVAILABILITY.
+
+THE LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE, SECURE,
+UNINTERRUPTED, MAINTAINED, UPDATED, OR SUITABLE FOR ANY PARTICULAR PURPOSE.
+
+14. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE
+LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, LOSSES, COSTS, EXPENSES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, NEGLIGENCE, STRICT LIABILITY,
+OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+THIS INCLUDES, WITHOUT LIMITATION, DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, LOSS OF PROFITS, LOSS OF DATA,
+LOSS OF BUSINESS, BUSINESS INTERRUPTION, COMPUTER FAILURE, SYSTEM FAILURE, OR
+ANY OTHER COMMERCIAL DAMAGES OR LOSSES.
+
+15. Termination
+
+If You violate this license, all rights granted to You under this license
+terminate automatically.
+
+Upon termination, You must stop using, copying, modifying, distributing, or
+creating derivative works based on the Software, and You must delete or destroy
+all copies of the Software in Your possession or control, unless otherwise
+required by law.
+
+Sections concerning definitions, commercial restrictions, ownership, warranty
+disclaimer, limitation of liability, termination, and reserved rights survive
+termination.
+
+16. No Waiver
+
+Failure by the Licensor to enforce any provision of this license does not
+constitute a waiver of the Licensor's right to enforce that provision or any
+other provision in the future.
+
+17. Severability
+
+If any provision of this license is held to be invalid, illegal, or
+unenforceable, the remaining provisions remain in full force and effect.
+
+18. Governing Law
+
+Unless otherwise required by applicable law or agreed in writing, this license
+shall be interpreted under the laws applicable to the Licensor's place of
+residence or principal place of business, without regard to conflict-of-law
+principles.
+
+19. Contact for Commercial Licensing
+
+For commercial licensing, exceptions, written authorization, or other permission,
+please contact the Licensor through the GitHub account:
+
+https://github.com/Tim23333
+
+20. Summary
+
+You may use this Software for non-commercial purposes.
+
+You may not use this Software for commercial purposes unless You are:
+
+    (a) Tim23333;
+    (b) the person controlling the GitHub account Tim23333;
+    (c) an organization, institution, or company to which Tim23333 currently belongs;
+    (d) otherwise explicitly authorized in writing by Tim23333.
+
+All other commercial use is prohibited without prior written permission.
