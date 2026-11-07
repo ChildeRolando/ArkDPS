@@ -240,7 +240,6 @@ class BattleStatisticsAdapter:
                    | self.mapping_conflicts)
         counters: dict[str, dict[str, float]] = {}
         types_update: dict[str, dict[str, float]] = {}
-        names: dict[str, str] = {}
         for row in sample.get('rows', ()):
             cid = row.get('id')
             if not isinstance(cid, str) or not cid:
@@ -256,11 +255,12 @@ class BattleStatisticsAdapter:
             if not self._register(cid, owner):
                 continue
             counters[cid] = counter
-            names[owner] = row.get('name') or names.get(owner, owner)
+            name = row.get('name')
+            if cid == owner and name and name != owner:
+                self.presented_names[owner] = name
             damage_types = _types(row)
             if damage_types is not None:
                 types_update[cid] = damage_types
-        self.presented_names.update(names)
         if not counters:
             # Fail closed: rows exist but none can be attributed. This is a
             # mapping/layout problem, not a legitimate empty battle.

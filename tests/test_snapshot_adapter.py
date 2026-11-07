@@ -159,6 +159,31 @@ def test_summon_shared_key_is_counted_once_and_attributed_to_host():
     assert a.result(r)['rows']['char_242_otter']['damage'] == 660
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+def test_summon_healing_uses_the_hosts_display_name(reverse):
+    host = entry('char_108_silent', 11)
+    drone = entry('token_10000_silent_healrb', 12, token=True,
+                  host_key=host.cid, host_uid=host.unique_id)
+    r = roster([host, drone])
+    a = BattleStatisticsAdapter()
+    rows = [row(host.cid, healing=581, name='赫默'),
+            row(drone.cid, healing=125, name='医疗无人机')]
+    if reverse:
+        rows.reverse()
+    a.update(sample(rows, 0, 1), paired(r, 1))
+    assert a.result()['rows'][host.cid]['name'] == '赫默'
+    assert a.result()['rows'][host.cid]['healing'] == 706
+
+    drone_only = [row(drone.cid, healing=2500, name='医疗无人机')]
+    a.update(sample(drone_only, 1, 2), paired(r, 2))
+    assert a.result()['rows'][host.cid]['name'] == '赫默'
+    assert a.result()['rows'][host.cid]['healing'] == 3081
+
+    a.update(sample(drone_only, 0, 3, session='battle-2'), paired(r, 3))
+    assert a.result()['rows'][host.cid]['name'] == host.cid
+    assert a.result()['rows'][host.cid]['healing'] == 2500
+
+
 def test_unmapped_token_is_excluded_not_guessed():
     orphan = entry('token_otter', 12, token=True,
                    host_key='char_242_otter', host_uid=999)
