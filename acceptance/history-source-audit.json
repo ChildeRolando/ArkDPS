@@ -1,0 +1,92 @@
+{
+  "source_commit": "5734c30bf54780056ff758505380322c0cf519fe",
+  "scope": "Read-only source/type audit; no game or ADB interaction; no runtime behavior inferred from empty method bodies.",
+  "pc_source": "game_data/reference/pc_x64/dump.cs",
+  "findings": [
+    {
+      "topic": "BattleStats complete field surface",
+      "lines": "398055-398091",
+      "fields": [
+        "killedEnemiesCnt",
+        "unnatrualRecoveredCost",
+        "charStats",
+        "enemyStats",
+        "skillTrigStats",
+        "charAdvancedStats",
+        "enemyAdvancedStats",
+        "runeAdvancedStats",
+        "rlBuffAdvancedStats",
+        "extraBattleInfoStats",
+        "extraBattleInfoSubStats",
+        "m_extraBattleLogTmpIds",
+        "charList",
+        "enemyList",
+        "runeList",
+        "rlBuffList",
+        "beginTs",
+        "endTs",
+        "access",
+        "hash",
+        "packageName",
+        "checkKilledCnt",
+        "leftHp",
+        "totalHeal",
+        "totalDamage",
+        "fixedPlayTime",
+        "restartCompleteTimeList",
+        "extraInfo",
+        "extraBattleInfo",
+        "clientAntiCheatLog",
+        "idList",
+        "packedRuneDataList",
+        "sixStarRuneList",
+        "autoReplayCancelled"
+      ],
+      "conclusion": "No declared standard per-hit timestamp/event series in this surface. Opaque extraInfo/clientAntiCheatLog collections cannot be categorically ruled out by names alone."
+    },
+    {
+      "topic": "CharAdvancedStats",
+      "lines": "397984-398015",
+      "conclusion": "Ranges, scalar totals, per-type totals, elemental totals/counts and CharacterSnapshot list. No native hit-event history list."
+    },
+    {
+      "topic": "Enemy snapshots",
+      "lines": "398019-398033;398172-398174;541948-542015",
+      "conclusion": "EnemySnapshot and EnemyRuntimeSnapshot are AntiCheat attribute snapshots, with maximum one snapshot per enemy key in declared constants; not complete enemy HP history."
+    },
+    {
+      "topic": "ReplayController",
+      "lines": "383782-383794;397867-397921",
+      "conclusion": "Holds Journal plus pending/ready BattleLogger.LogItem operations. Journal has initial squad, random seed, rune list and operation log. Replay input is distinct from directly readable output-event history."
+    },
+    {
+      "topic": "Verbose log enable condition",
+      "lines": "398228-398231;398474-398495",
+      "conclusion": "_CreateVerboseRecorder takes GameModeType; recorder has createOverride factory, isMultiLayerRecord property and GetLogDirPath. Type dump has empty method bodies, so exact enable condition cannot be established."
+    },
+    {
+      "topic": "Verbose log storage",
+      "lines": "398477-398484;398546-398558",
+      "conclusion": "Besides m_detailLogs, recorder has FileLogger and BattleLog directory / BattleLog_{1}/B-{2}.log naming. Read-only filesystem discovery is worthwhile even when current recorder pointer is null."
+    },
+    {
+      "topic": "ExtraBattleInfo action nodes",
+      "lines": "576870-576958;398067-398069;398121",
+      "conclusion": "Nodes exist for current play time, frame-count key and ModifierRealDelta. This is a potential mode-specific logging route, not evidence of a universal per-hit ledger. Need actual Android mappings and actual keys/content before use."
+    },
+    {
+      "topic": "Other misleading histories",
+      "lines": "214416-214500;215320-215358;90468-90497",
+      "conclusion": "MultiplayerBattleLogMgr queues file upload references; GameActionHistoryRet carries multiplayer StepData; BattleLogCollector holds crisis runes. None establishes ordinary OF-2 per-hit recovery."
+    }
+  ],
+  "recommended_runtime_checks": [
+    "Read confirmed Android Logger+0x38 at start, after known attacks, before battle exit; retain session/frame/guard for every result.",
+    "Read only game-owned app files/external-files paths for BattleLog or MultiBattleLog files, inspect format and coverage if present; do not enable recorders or debug flags.",
+    "Compare confirmed operation-log count/types before and after attacks with no player action; verify whether any new event type appears.",
+    "If inspecting extraBattleInfo/clientAntiCheatLog, first resolve Android field metadata; never transplant the PC offsets from this report. Treat special-node content as incomplete until timestamps/source/deltas and retention are verified.",
+    "If any actual event source is found, test a deliberate collector gap, long battle retention and session reset; reconcile against live observations."
+  ],
+  "bounded_conclusion": "Known read-only cumulative counters plus operation journal do not directly determine unobserved hit timings. Current evidence does not support promising full event-history recovery. It also does not prove no other mode-specific, disk or opaque-collection path exists.",
+  "no_enablement_or_injection": true
+}
