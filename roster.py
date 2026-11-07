@@ -294,7 +294,6 @@ def parse_results(results: list[bytes | None], layout: dict,
                     raise RosterUnavailable('召唤物宿主键读取不完整')
                 entries.append(entry)
     present: set[int] = set()
-    present_known = False
     roster_uids = {entry.unique_id for entry in entries}
     # Prefer the actual UnorderedArray layout; fall back to List<T> when it
     # is unavailable. Never treat an unread occupied slot as absent.
@@ -304,7 +303,6 @@ def parse_results(results: list[bytes | None], layout: dict,
             continue
         if len(items) % 8 or _slots(items) > len(group['slots']):
             raise RosterUnavailable('在场单位槽位读取不完整')
-        present_known = True
         for index in range(_slots(items)):
             if not _u64(items, index * 8):
                 continue
@@ -323,9 +321,11 @@ def parse_results(results: list[bytes | None], layout: dict,
                     raise RosterUnavailable('预置在场单位统计键读取不完整')
                 entries.append(predefined)
         break
+    else:
+        raise RosterUnavailable('在场单位列表不可读，无法确认归属')
     return RosterSnapshot(frame=frame, entries=tuple(entries),
                           present_unique_ids=frozenset(present),
-                          present_known=present_known)
+                          present_known=True)
 
 
 class RosterReader:

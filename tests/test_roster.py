@@ -25,6 +25,7 @@ def data_bytes(cid, uid, *, token=False, host_uid=0, predefined=False):
 
 def populated_player(results, layout, characters=(), tokens=()):
     results[layout['player_items']] = struct.pack('<Q', 0x1000)
+    results[layout['live'][0]['items']] = b''
     player = layout['players'][0]
     raw = bytearray(0x28)
     for group, values, offset in (('char', characters, BATTLE_PLAYER_DATA_CHARACTERS),
@@ -123,7 +124,7 @@ def test_occupied_live_slot_failure_is_rejected_but_empty_list_is_known():
         parse_results(results, layout, frame=1)
 
 
-@pytest.mark.parametrize('failure', ['data', 'short_data', 'key', 'invalid_key'])
+@pytest.mark.parametrize('failure', ['data', 'short_data', 'key', 'invalid_key', 'lists'])
 def test_unread_live_npc_cannot_hide_shared_key_conflict(failure):
     from snapshot_adapter import BattleStatisticsAdapter, build_owner_map
 
@@ -146,8 +147,12 @@ def test_unread_live_npc_cannot_hide_shared_key_conflict(failure):
     results[data] = data_bytes('char_a', 1, predefined=True)
     results[key] = string_bytes('char_a')
     assert 'char_a' in build_owner_map(parse_results(results, layout, 2)).ambiguous_cids
-    results[data if failure in ('data', 'short_data') else key] = (
-        b'bad' if failure in ('short_data', 'invalid_key') else None)
+    if failure == 'lists':
+        for group in layout['live']:
+            results[group['items']] = None
+    else:
+        results[data if failure in ('data', 'short_data') else key] = (
+            b'bad' if failure in ('short_data', 'invalid_key') else None)
     with pytest.raises(RosterUnavailable):
         adapter.update(dict(sample, frame=2, game_time=1, rows=[
             {'id': 'char_a', 'damage': 500, 'healing': 0}]),
