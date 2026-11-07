@@ -17,6 +17,10 @@
 - [重连后的历史数据](reconnect-research.md) — 已知证据与未决能力。
 - [MAA 实验作业目录](../acceptance/maa/README.md) — 可执行作业、回调和失败记录。
 
+## 调研与对标
+
+- [同类 DPS 工具架构调研](dps-tool-prior-art.md) — Details!/Skada/ACT/Deucalion/ArcDPS 的可借鉴设计与 ArkDPS 差距。
+
 ## 实现契约
 
 - [连接配置与 MuMu 自动检测](connection.md) — 连接目标、版本门禁和诊断。
