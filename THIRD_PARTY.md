@@ -21,3 +21,5 @@ python -m ziglang cc -target aarch64-linux-musl -static -O2 -o memsrv memsrv.c
 新增：collector.py 的伤害专用守卫事务、身份/版本校验和关闭清理；metrics.py 的游戏时间 DPS；app.py 的独立置顶窗口与本地导出；tests、启动脚本和文档。
 
 本原型不代表原作者认可或提供维护支持。
+
+ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff758505380322c0cf519fe` 的 `tools/stage_global_state/memory.py`，保留其有界精确只读实现；包入口精简为该子集的说明，不导入未随附的 Timeline 应用。`tools/enemy_health/battle_lifecycle.py` 的读取结果增加已读取的原生 `state` 字段，供产品区分初始化、运行和结束；其余单例与场景读守卫保留。新增产品观察代次、队列交接及视图契约位于仓库根目录 `battle_lifecycle.py`，没有复制上游完整应用。

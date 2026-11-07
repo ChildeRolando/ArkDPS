@@ -13,7 +13,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
-from metrics import Meter, observation_age
+from metrics import observation_age
+from battle_lifecycle import BattleRuntime
 
 
 def number(value):
@@ -37,6 +38,7 @@ class App:
         self.frame = None
         self.error = ''
         self.scanning = False
+        self.battle_status = 'waiting'
         root.title('明日方舟 · 局内伤害')
         root.geometry(f'580x366+{max(0, root.winfo_screenwidth()-610)}+75')
         root.minsize(520, 310)
@@ -83,7 +85,7 @@ class App:
         bar.grid(row=0, column=1, sticky='ns')
         self.table.configure(yscrollcommand=bar.set)
         self.table.bind('<<TreeviewSelect>>', self.select)
-        self.detail = tk.StringVar(value='等待完整采样；近 5 秒指标需要观察满 5 个游戏秒。')
+        self.detail = tk.StringVar(value='等待可靠采样；近 5 秒指标从开始观察时计时。')
         ttk.Label(root, textvariable=self.detail, foreground='#b9d2de', wraplength=530,
                   padding=(16,8,16,4), font=('Microsoft YaHei UI',9)).grid(row=3,column=0,sticky='ew')
         self.summary = tk.StringVar(value='合计 —')
@@ -101,7 +103,17 @@ class App:
         root.after(100,self.tick)
 
     def collect(self):
-        meter = Meter()
+        try:
+            self._collect()
+        except Exception as exc:
+            traceback.print_exc()
+            self.events.put(('error',str(exc)))
+        finally:
+            if self.collector:
+                self.collector.close()
+
+    def _collect(self):
+        runtime = BattleRuntime()
         first_connection = True
         last_written_key = None
         last_written_at = 0
@@ -114,36 +126,47 @@ class App:
                     self.rescan.clear()
                     self.events.put(('scanning',True))
                     if self.collector:
+                        runtime.disconnected('relocating')
                         self.collector.close()
                     self.collector=Collector(self.args.adb,self.args.serial,log=lambda x:print(x,flush=True))
                     try:
                         force = not first_connection
                         first_connection = False
-                        self.collector.connect(force=force)
+                        self.collector.connect(force=force, lifecycle=True)
                     except Exception as exc:
                         traceback.print_exc()
                         self.events.put(('error',str(exc)))
+                        runtime.disconnected(str(exc))
                         self.collector.close()
                         self.collector=None
                     self.events.put(('scanning',False))
                 if self.collector:
                     try:
-                        sample=meter.update(self.collector.read())
-                        key=(sample['session'],sample['frame'],sample['sum_damage'])
-                        if key != last_written_key or time.monotonic()-last_written_at >= 5:
-                            out.write(json.dumps(sample,ensure_ascii=False)+'\n')
-                            out.flush()
-                            last_written_key=key
-                            last_written_at=time.monotonic()
-                        self.events.put(('sample',sample))
+                        observation = runtime.poll(self.collector)
+                        self.events.put(('lifecycle',runtime.sessions.state))
+                        sample = runtime.display_sample()
+                        if sample and observation.kind in ('sample', 'end'):
+                            key=(sample['session'],sample['frame'],sample['sum_damage'],
+                                 runtime.sessions.state)
+                            if key != last_written_key or time.monotonic()-last_written_at >= 5:
+                                out.write(json.dumps(sample,ensure_ascii=False)+'\n')
+                                out.flush()
+                                last_written_key=key
+                                last_written_at=time.monotonic()
+                            self.events.put(('sample',sample))
                     except BattleChanged as exc:
+                        runtime.disconnected(str(exc))
                         self.events.put(('error',str(exc)))
                         self.rescan.set()
                     except Exception as exc:
                         self.events.put(('error',str(exc)))
+                for archive in runtime.sessions.pop_archives():
+                    out.write(json.dumps({'archive_ready':archive},ensure_ascii=False)+'\n')
+                    out.flush()
                 self.stop.wait(0.2)
-        if self.collector:
-            self.collector.close()
+            runtime.disconnected('capture_stopped')
+            out.write(json.dumps({'lifecycle_stopped':runtime.sessions.live()},ensure_ascii=False)+'\n')
+            out.flush()
 
     def tick(self):
         try:
@@ -158,6 +181,9 @@ class App:
                     self.render(value)
                 elif kind=='error':
                     self.error=value
+                elif kind=='lifecycle':
+                    self.battle_status=value
+                    self.error=''
                 elif kind=='scanning':
                     self.scanning=value
                     self.scan_button.configure(state='disabled' if value else 'normal')
@@ -173,10 +199,12 @@ class App:
             self.detail.set(self.error)
         elif not self.last:
             label='等待战斗数据'
+        elif self.battle_status=='ended':
+            label='战斗结束'
+        elif self.battle_status=='frozen':
+            label='战局冻结 · 保留最后有效记录'
         elif age>2:
             label='数据已过期 · 请重新定位'
-        elif self.last['state']==3:
-            label='战斗结束'
         elif time.monotonic()-self.last_frame_change>0.8:
             label='暂停 / 等待战斗推进'
         else:
@@ -200,7 +228,8 @@ class App:
                 self.table.insert('',idx,iid=key,values=values)
         for key in self.table.get_children():
             if key not in live_ids:self.table.delete(key)
-        self.summary.set(f'干员合计 {number(sample["sum_damage"])}    ·    全局 DPS {number(sample["sum_damage"]/seconds if seconds>0 else None)}')
+        total_label = '干员合计' if sample.get('statistics_complete', True) else '已知累计（数据不全）'
+        self.summary.set(f'{total_label} {number(sample["sum_damage"])}    ·    全局 DPS {number(sample["sum_damage"]/seconds if seconds>0 else None)}')
         self.export_button.configure(state='normal')
         self.select()
 
@@ -209,7 +238,8 @@ class App:
         chosen=self.table.selection()
         row=next((r for r in self.last['rows'] if chosen and r['id']==chosen[0]),None)
         if row:
-            self.detail.set(f'{row["name"]} · 占比 {row["share"]:.1%} · 物理 {number(row["physical"])} · 法术 {number(row["arts"])} · 真实 {number(row["true"])} · 元素伤害 {number(row["elemental"])}')
+            share = f'{row["share"]:.1%}' if row['share'] is not None else '—（全队数据不全）'
+            self.detail.set(f'{row["name"]} · 占比 {share} · 物理 {number(row["physical"])} · 法术 {number(row["arts"])} · 真实 {number(row["true"])} · 元素伤害 {number(row["elemental"])}')
         else:
             self.detail.set('选中干员查看伤害分类。近 5 秒 DPS 为采样估算；“—”表示观察不足。')
 
@@ -260,22 +290,10 @@ def main():
         root.destroy()
         return
     if args.capture_seconds:
-        collector=Collector(args.adb,args.serial)
-        meter=Meter()
-        try:
-            collector.connect()
-            end=time.monotonic()+args.capture_seconds
-            dest=ROOT/'runtime'/f'capture-{timestamp():%Y%m%d-%H%M%S}.jsonl'
-            with dest.open('w',encoding='utf-8') as out:
-                while time.monotonic()<end:
-                    sample=meter.update(collector.read())
-                    out.write(json.dumps(sample,ensure_ascii=False)+'\n')
-                    out.flush()
-                    print(sample['frame'],round(sample['game_time'],3),[(r['name'],round(r['damage'],2)) for r in sample['rows']],flush=True)
-                    time.sleep(.2)
-            print(dest)
-        finally:
-            collector.close()
+        from capture_battles import capture
+        dest=ROOT/'runtime'/f'battles-{timestamp():%Y%m%d-%H%M%S}'
+        capture(args.capture_seconds, dest, args.adb, args.serial)
+        print(dest)
         return
     log=(ROOT/'runtime'/f'app-{timestamp():%Y%m%d-%H%M%S}.log').open('a',encoding='utf-8',buffering=1)
     sys.stdout=sys.stderr=log

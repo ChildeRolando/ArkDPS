@@ -102,6 +102,7 @@ class Collector:
         self.last_pid_check = 0.0
         self.cache_path = ROOT / 'runtime' / 'address_hint.json'
         self._roster_reader = None
+        self._lifecycle_reader = None
         self.adb_path = adb
         self.serial = serial
         self.diagnostics = ConnectionDiagnostics(
@@ -136,8 +137,9 @@ class Collector:
             raise SampleUnavailable('发现多个有效战局，无法确认当前局；停止发布数据')
         self.core.bc_addr=valid[0]
 
-    def connect(self, force=False):
+    def connect(self, force=False, lifecycle=False):
         self.log('正在连接 MuMu…')
+        self._lifecycle_reader = None
         self.core.bc_addr = 0
         # MemCore owns its channel; its creation uses the class port default.
         TcpChannel.PORT = PORT
@@ -173,6 +175,20 @@ class Collector:
         self.diagnostics.version_status = VersionStatus.COMPATIBLE
         self.core._chan = self.core.mc.channel()
         self.last_pid_check = time.monotonic()
+        if lifecycle:
+            from tools.enemy_health.battle_lifecycle import locate_lifecycle
+            locator = DeployTrackerReader(self.core.mc)
+            try:
+                classes = locator.scan_classes(('BattleController',))
+                if not classes or len(classes) != 1:
+                    raise SampleUnavailable('无法唯一定位战局单例类型；保留未知状态')
+                self._lifecycle_reader = locate_lifecycle(
+                    self.core.mc, next(iter(classes)), locator)
+                # Reuse the collector-owned transport; no resident observer.
+                self._lifecycle_reader.m.channel = self.core._chan
+            finally:
+                locator.close()
+            return
         hint = None
         try:
             hint = json.loads(self.cache_path.read_text(encoding='utf-8'))
@@ -274,11 +290,41 @@ class Collector:
         session = ':'.join(map(str, (*self.core.mc.process_instance, self.core.mc.pid,
             self.core.bc_addr, u64(values[1], L.STATS), u64(values[0], B.LEVEL_DATA))))
         return dict(session=session, frame=frame, game_time=game_time,
+            battle_identity=(self.core.bc_addr, u64(values[0], B.UNITY_CACHED_PTR)),
             damage_basis='client character counters; includes overkill; excludes healing',
             state=state, speed=i32(values[0], B.M_SPEED_LEVEL), rows=rows,
             global_total=abs(global_total), sum_damage=sum(r['damage'] for r in rows),
             read_ms=round((time.perf_counter() - started) * 1000, 2),
             observed_at=time.time(), captured_monotonic=captured_monotonic, guard=guard)
+
+    def read_lifecycle(self):
+        if self._lifecycle_reader is None:
+            raise SampleUnavailable('生命周期尚未连接')
+        # This check brackets every paired acquisition, including menu polls.
+        # Cached metadata must never be reused across PID/birth reuse.
+        _package, pid = self.core.mc._pid_for_known_package()
+        if pid != self.core.mc.pid:
+            raise BattleChanged('游戏进程已变化')
+        raw = self.core.mc.shell(
+            f'cat /proc/sys/kernel/random/boot_id /proc/{int(pid)}/stat', timeout=5)
+        try:
+            boot, stat = raw.strip().split('\n', 1)
+            identity = (boot.strip(), int(stat.rsplit(')', 1)[1].split()[19]))
+        except (ValueError, IndexError) as exc:
+            raise SampleUnavailable('无法核对游戏进程出生标识') from exc
+        if identity != self.core.mc.process_instance:
+            raise BattleChanged('游戏进程出生标识已变化')
+        self.last_pid_check = time.monotonic()
+        return self._lifecycle_reader.sample()
+
+    def bind_battle(self, address):
+        """Bind only the live singleton selected by the lifecycle reader."""
+        if self.core.bc_addr == address and self.core._bc_static_fields:
+            return
+        self.core.bc_addr = address
+        self._roster_reader = None
+        if not self.core._resolve_battle_clock():
+            raise SampleUnavailable('未能验证当前单例的逻辑时钟')
 
     def read_roster(self, max_attempts: int = 8) -> RosterSnapshot:
         """Read stable statistic keys, host mapping and live membership.

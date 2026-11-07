@@ -270,6 +270,14 @@ def test_backwards_clock_starts_a_new_observation_not_a_mixed_series():
     assert a.session_switches == 2
 
 
+def test_clock_reset_is_detected_even_when_frame_number_is_reused():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 1000)], 10, 1), paired(BASE, 1))
+    a.update(sample([row('char_a', 50)], 1, 1), paired(BASE, 1))
+    assert a.session_switches == 2
+    assert a.result()['rows']['char_a']['damage'] == 50
+
+
 def test_existing_mapping_cannot_be_silently_reassigned():
     token = entry('token_otter', 12, token=True,
                   host_key='char_242_otter', host_uid=11)

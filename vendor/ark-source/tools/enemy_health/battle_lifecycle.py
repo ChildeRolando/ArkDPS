@@ -90,7 +90,7 @@ class LifecycleReader:
         if raw[0x20] not in (0, 1):
             raise ReadFailure('unsupported_layout')
         source, target = [self._string(struct.unpack_from('<Q', raw, offset)[0]) for offset in (0x28, 0x30)]
-        battle, ready = None, False
+        battle, ready, state = None, False, None
         if bc:
             fields = gs.BattleControllerFields
             size = max(fields.M_STATE + 4, fields.SCHEDULER + 8,
@@ -122,7 +122,7 @@ class LifecycleReader:
         if after[:2] != slots or after[2] != raw[0x20:0x38]:
             raise ReadFailure('binding_changed')
         return dict(battle=battle, ready=ready, transiting=bool(raw[0x20]),
-                    source=source, target=target)
+                    source=source, target=target, state=state)
 
 
 def locate_lifecycle(mc, battle_klass, locator):

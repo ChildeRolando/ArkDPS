@@ -208,8 +208,6 @@ class BattleStatisticsAdapter:
                 self.statistics = None
             self._begin(sample, roster)
         game_time = sample['game_time']
-        if self.last_frame is not None and frame == self.last_frame:
-            return None
         if self.last_game_time is not None:
             if game_time < self.last_game_time:
                 # A battle clock cannot move backwards in one session. Treat it
@@ -219,6 +217,8 @@ class BattleStatisticsAdapter:
                 self._begin(sample, roster)
             elif game_time == self.last_game_time:
                 return None
+        if self.last_frame is not None and frame == self.last_frame:
+            return None
         roster_map = build_owner_map(roster)
         # New roster evidence can map tokens that were not attributable when
         # the session started. Never change an existing mapping in-place.
