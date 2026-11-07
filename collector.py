@@ -21,6 +21,7 @@ from tools.enemy_health.memcore import TcpChannel
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
 from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
                         EXPECTED_GAME_VERSION, ForwardRegistry)
+from roster import RosterReader, RosterSnapshot, RosterUnavailable
 
 DEFAULT_ADB = r'C:\Program Files\Netease\MuMu Player 12\nx_main\adb.exe'
 DEFAULT_SERIAL = '127.0.0.1:16384'
@@ -100,6 +101,7 @@ class Collector:
         self.names = json.loads((VENDOR / 'game_data/catalogs/char_names.json').read_text(encoding='utf-8'))
         self.last_pid_check = 0.0
         self.cache_path = ROOT / 'runtime' / 'address_hint.json'
+        self._roster_reader = None
         self.adb_path = adb
         self.serial = serial
         self.diagnostics = ConnectionDiagnostics(
@@ -185,6 +187,7 @@ class Collector:
             self._locate_active_battle()
         if not self.core._resolve_battle_clock():
             raise SampleUnavailable('未找到游戏逻辑时钟')
+        self._roster_reader = None
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.cache_path.write_text(json.dumps(dict(pid=self.core.mc.pid,
             birth=self.core.mc.process_instance, bc=self.core.bc_addr)), encoding='utf-8')
@@ -276,6 +279,21 @@ class Collector:
             global_total=abs(global_total), sum_damage=sum(r['damage'] for r in rows),
             read_ms=round((time.perf_counter() - started) * 1000, 2),
             observed_at=time.time(), captured_monotonic=captured_monotonic, guard=guard)
+
+    def read_roster(self, max_attempts: int = 8) -> RosterSnapshot:
+        """Read stable statistic keys, host mapping and live membership.
+
+        The transaction is frame-guarded and tied to the current battle
+        controller; callers must treat RosterUnavailable as a gap, never as an
+        empty roster.
+        """
+        if getattr(self, '_roster_reader', None) is None or                 self._roster_reader.bc_addr != self.core.bc_addr:
+            static_fields = getattr(self.core, '_bc_static_fields', 0)
+            if not self.core.bc_addr or not static_fields:
+                raise RosterUnavailable('战局或逻辑时钟尚未定位')
+            self._roster_reader = RosterReader(
+                self.core.mc, self.core.bc_addr, static_fields, self.log)
+        return self._roster_reader.read(max_attempts=max_attempts)
 
     def close(self):
         try:
