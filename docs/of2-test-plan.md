@@ -1,5 +1,7 @@
 # OF-2 只读采集实机测试站位
 
+通用流程见[实机实验手册](experiment-playbook.md)；本页只记录 OF-2 的路线、时序与具体站位。
+
 2026-11-07。用户授权用 MAA 操作零理智 OF-2。先核对路线再部署；不依赖地块外观推测路径。
 
 来源：Kengxxiao/ArknightsGameData 的 zh_CN/gamedata/levels/activities/act3d0/level_act3d0_02.json；本地原始数据 SHA-256 `bcf8ea2afeb1afaf80b336dc61d77a38b1780cc3bdb7fbdf9d1028b510290f7d`。公开提取数据用于预案，实机行为仍须核对。
