@@ -1,0 +1,74 @@
+{
+  "summon-baseline.json": {
+    "sha256": "72d60edf3011c320c6ea729f1252a856e2b3e95bb10d7565fa6b1abf6528efde",
+    "bytes": 15678
+  },
+  "summon-physical-1.json": {
+    "sha256": "8b8ba5ff7aec1d61ebcb25255fcc56f96e5bb8b95a7c133bc13299efde51ca7b",
+    "bytes": 28105
+  },
+  "summon-physical-2.json": {
+    "sha256": "1c95739d5b692e938d7d5279df59d74bdd35389ad1690718398f58d381d28df6",
+    "bytes": 28111
+  },
+  "summon-retired.json": {
+    "sha256": "11fcb6e68843b8bc794eea112fb90a06b500025629ed836e8011c48f294734ad",
+    "bytes": 4466
+  },
+  "summon-retired-reconnected.json": {
+    "sha256": "1c5ee4c371560015204e33fe6f3d74a08914787790f95a6df9d715a71c03f065",
+    "bytes": 4475
+  },
+  "shield-before-active-gap.json": {
+    "sha256": "fe0ab740f2f1b9f08c552d8ca9d58646d144f1c8ffddfbcbfba808a0ceab4c85",
+    "bytes": 18033
+  },
+  "active-gap-reconnected.json": {
+    "sha256": "fa5c41c4f7c9d7c018f46eeb3469ee3bbed61d1e40598596b34dcb50a7d651b9",
+    "bytes": 21583
+  },
+  "history-runtime-expanded.json": {
+    "sha256": "c5d081a970256b0bd0eec29f9c93e52b2bf0dafff21363a3d0e9c3e40e6478b3",
+    "bytes": 11014
+  },
+  "history-late-fields.json": {
+    "sha256": "68b3f40fdfa314ac3f177b2f9f19ce1e733610ff71ecf930be4c98d9751878a7",
+    "bytes": 11009
+  },
+  "battle-log-files.json": {
+    "sha256": "a602ab063e64a75188facb9de49fe104c6547ae694e4dc6f93edec1b6d225094",
+    "bytes": 566
+  },
+  "shield-live-1.jsonl": {
+    "sha256": "59f686a5ca1203e359dad36d4a72ec0cd4fe6a42ce85732ad876c73a9f7a80b4",
+    "bytes": 229066
+  },
+  "shield-events-3.jsonl": {
+    "sha256": "8481d782f63df40e60906cc63000b27e7dd5ad479e07b9d6a05a6b6f995e3461",
+    "bytes": 13873
+  },
+  "shield-events-of8.jsonl": {
+    "sha256": "6e4d63f08cba0ad95ade7002a9e1ada295bd70a965e2d35352518670b650603b",
+    "bytes": 401054
+  },
+  "of8-shield-paused.json": {
+    "sha256": "dd482a576e69ca2cbf7a45fca2e39ea2113023d3d473657f9f2490cfd512bdf2",
+    "bytes": 36002
+  },
+  "shield-events-of8-hp.jsonl": {
+    "sha256": "a263ae1d035b9d68d3b08d25cb9cfd814bcd755f60cbd21c56925f87916ab107",
+    "bytes": 718863
+  },
+  "of8-shield-hp-paused.json": {
+    "sha256": "81966af1d91c483b177c544cd3b35214491370e207ca016fc6d116e050f41540",
+    "bytes": 36000
+  },
+  "maa-experiment-callbacks.json": {
+    "sha256": "d75cbc3756f9683e18f7ffea8adbe969821b5a5ba426918b1b6d9f145299caf5",
+    "bytes": 4113
+  },
+  "reusable-probe-smoke-3.jsonl": {
+    "sha256": "c85fea70e3b039bea6ed6daffb9aef7b2f624dbd7db3fc33e4d5b74fc1969e66",
+    "bytes": 1097
+  }
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "command": "ls -la /sdcard/Android/data/com.hypergryph.arknights/files/BattleLog",
+    "exit_code": 0,
+    "stdout": "total 16\ndrwxrws---  2 u0_a34 ext_data_rw 4096 2025-04-10 00:15 .\ndrwxrws--- 14 u0_a34 ext_data_rw 4096 2026-11-01 16:52 ..\n",
+    "stderr": ""
+  },
+  {
+    "command": "wc -c /sdcard/Android/data/com.hypergryph.arknights/files/FileStorage/BattleLogNeedToUpload.json",
+    "exit_code": 0,
+    "stdout": "0 /sdcard/Android/data/com.hypergryph.arknights/files/FileStorage/BattleLogNeedToUpload.json\n",
+    "stderr": ""
+  }
+]

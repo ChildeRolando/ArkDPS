@@ -1,0 +1,45 @@
+{
+  "stage_name": "OF-2",
+  "opers": [
+    {
+      "name": "闪灵",
+      "skill": 2
+    },
+    {
+      "name": "夜刀"
+    }
+  ],
+  "actions": [
+    {
+      "type": "Deploy",
+      "name": "闪灵",
+      "location": [
+        4,
+        4
+      ],
+      "direction": "Up"
+    },
+    {
+      "type": "Deploy",
+      "name": "夜刀",
+      "location": [
+        4,
+        3
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "Click",
+      "rect": [
+        1208,
+        52,
+        1,
+        1
+      ]
+    }
+  ],
+  "doc": {
+    "title": "ArkDPS shield route-checked test",
+    "details": "OF-2; no consumables; stop paused after deployment"
+  }
+}

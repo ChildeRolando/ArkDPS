@@ -1,0 +1,204 @@
+[
+  {
+    "wall": 1794010823.4739723,
+    "message": 10001,
+    "taskid": 1,
+    "what": null,
+    "details": null
+  },
+  {
+    "wall": 1794010836.5156302,
+    "message": 20003,
+    "taskid": 1,
+    "what": "BattleFormationSelected",
+    "details": {
+      "group_name": "夜刀",
+      "selected": "夜刀"
+    }
+  },
+  {
+    "wall": 1794010840.263371,
+    "message": 20003,
+    "taskid": 1,
+    "what": "BattleFormationSelected",
+    "details": {
+      "group_name": "闪灵",
+      "selected": "闪灵"
+    }
+  },
+  {
+    "wall": 1794010847.4117603,
+    "message": 20003,
+    "taskid": 1,
+    "what": "BattleFormationSelected",
+    "details": {
+      "group_name": "煌",
+      "selected": "煌"
+    }
+  },
+  {
+    "wall": 1794010862.6005805,
+    "message": 20003,
+    "taskid": 1,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "wall": 1794010864.2330916,
+    "message": 20003,
+    "taskid": 1,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "wall": 1794010878.1357293,
+    "message": 20003,
+    "taskid": 1,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "wall": 1794010902.8387885,
+    "message": 20003,
+    "taskid": 1,
+    "what": "CopilotAction",
+    "details": {
+      "action": "SkillUsage",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "wall": 1794010903.0695593,
+    "message": 20003,
+    "taskid": 1,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Output",
+      "doc": "Shield break observation; automatic pause after 70 real seconds at 1x.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "wall": 1794010962.4872108,
+    "message": 10002,
+    "taskid": 1,
+    "what": null,
+    "details": null
+  },
+  {
+    "wall": 1794011057.630942,
+    "message": 10001,
+    "taskid": 2,
+    "what": null,
+    "details": null
+  },
+  {
+    "wall": 1794011063.773995,
+    "message": 10000,
+    "taskid": 2,
+    "what": null,
+    "details": null
+  },
+  {
+    "wall": 1794011131.8225915,
+    "message": 10001,
+    "taskid": 3,
+    "what": null,
+    "details": null
+  },
+  {
+    "wall": 1794011144.5832117,
+    "message": 20003,
+    "taskid": 3,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "wall": 1794011146.215381,
+    "message": 20003,
+    "taskid": 3,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "wall": 1794011161.2921047,
+    "message": 20003,
+    "taskid": 3,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "wall": 1794011185.884251,
+    "message": 20003,
+    "taskid": 3,
+    "what": "CopilotAction",
+    "details": {
+      "action": "SkillUsage",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "wall": 1794011186.0923448,
+    "message": 20003,
+    "taskid": 3,
+    "what": "CopilotAction",
+    "details": {
+      "action": "Output",
+      "doc": "Shield break observation; automatic pause after 70 real seconds at 1x.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "wall": 1794011245.5207117,
+    "message": 10002,
+    "taskid": 3,
+    "what": null,
+    "details": null
+  }
+]

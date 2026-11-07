@@ -1,0 +1,79 @@
+// Research observer for the measured Android 2.7.91 ARM64 layout.
+// Interceptors observe calls only: no argument, return-value, or gameplay writes.
+if(Process.arch!=='arm64')throw new Error('ARM64 emulated realm required');
+const il=Process.getModuleByName('libil2cpp.so');
+function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
+function className(k){return k.add(0x10).readPointer().readCString();}
+function expectFields(k,expected){
+ const a=k.add(0x80).readPointer(),n=k.add(0x124).readU16(),seen={};
+ if(n>1000)throw new Error('invalid field metadata');
+ for(let i=0;i<n;i++){const f=a.add(i*32);if(!f.add(16).readPointer().equals(k))throw new Error('field owner mismatch');seen[f.readPointer().readCString()]=f.add(24).readS32();}
+ for(const [name,offset] of Object.entries(expected))if(seen[name]!==offset)throw new Error('unsupported layout '+className(k)+'.'+name);
+}
+const domain=api('il2cpp_domain_get','pointer',[])();
+const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
+const cfg={methods:[]};let clock;
+try{
+ const size=Memory.alloc(8), assemblies=api('il2cpp_domain_get_assemblies','pointer',['pointer','pointer'])(domain,size);
+ const imageOf=api('il2cpp_assembly_get_image','pointer',['pointer']), imageName=api('il2cpp_image_get_name','pointer',['pointer']);
+ const classCount=api('il2cpp_image_get_class_count','ulong',['pointer']),classAt=api('il2cpp_image_get_class','pointer',['pointer','ulong']);
+ let im;
+ for(let i=0;i<size.readU64().toNumber();i++){const x=imageOf(assemblies.add(i*8).readPointer());if(imageName(x).readCString()==='Assembly-CSharp.dll'){im=x;break;}}
+ if(!im)throw new Error('Assembly-CSharp not found');
+ const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController']);const found={};
+ for(let i=0,n=classCount(im);i<n;i++){
+  const k=classAt(im,i),name=className(k);if(!wanted.has(name))continue;
+  const ns=k.add(0x18).readPointer().readCString();if(ns!==(['BuffContainer','BlockDamage'].includes(name)?'':'Torappu.Battle'))continue;
+  if(found[name])throw new Error('ambiguous class '+name);found[name]=k;
+ }
+ for(const name of wanted)if(!found[name])throw new Error('class not found '+name);
+ expectFields(found.Entity,{'m_hp':0x40,'<id>k__BackingField':0x148});
+ expectFields(found.Buff,{'m_source':0x18,'m_blackboard':0xb8,'<key>k__BackingField':0x208,'<instanceUid>k__BackingField':0x218,'<hasShield>k__BackingField':0x27c});
+ expectFields(found.Modifier,{'m_source':0x10,'m_target':0x20,'m_originalSource':0x30,'m_value':0x40,'realDelta':0x58,'<targetType>k__BackingField':0x70,'<damageType>k__BackingField':0x78,'<cancelReason>k__BackingField':0x80});
+ // FIXED_FRAME_COUNT is verified from the current class metadata, not an old battle object.
+ expectFields(found.BattleController,{'s_fixedFrameCnt':0x14});
+ clock=found.BattleController.add(0xb8).readPointer().add(0x14);
+ for(const [owner,k] of Object.entries(found)){
+  if(['Modifier','BattleController'].includes(owner))continue;
+  const ma=k.add(0x98).readPointer(),mn=k.add(0x120).readU16();if(mn>2000)throw new Error('method count invalid');
+  for(let i=0;i<mn;i++){
+   const m=ma.add(i*8).readPointer();if(!m.add(0x20).readPointer().equals(k))continue;
+   const name=m.add(0x18).readPointer().readCString();
+   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || owner==='Entity'&&['ApplyModifier','OnAppliedModifier','OnTakeHeal'].includes(name)) cfg.methods.push({owner,name,address:m.readPointer().toString()});
+  }
+ }
+ for(const key of ['Entity.ApplyModifier','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar'])if(!cfg.methods.some(m=>m.owner+'.'+m.name===key))throw new Error('required method missing '+key);
+} finally {api('il2cpp_thread_detach','void',['pointer'])(thread);}
+let queue=[],seq=0;const stacks=new Map();
+function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)return null;return p.add(0x14).readUtf16String(n);}
+function fp(p){return p.readS64().toNumber()/4294967296;}
+function entity(p){if(p.isNull())return null;return {address:p.toString(),id:str(p.add(0x148).readPointer()),hp:fp(p.add(0x40))};}
+function modifier(p){return {pointer:p.toString(),source:p.readPointer().toString(),target:p.add(0x10).readPointer().toString(),original:p.add(0x20).readPointer().toString(),value:fp(p.add(0x30)),realDelta:fp(p.add(0x48)),type:p.add(0x68).readS32(),targetType:p.add(0x60).readS32(),cancel:p.add(0x70).readS32()};}
+function bb(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad bb');const a=p.add(0x10).readPointer().add(0x20);let out={};for(let i=0;i<n;i++)out[str(a.add(i*24).readPointer())]=a.add(i*24+8).readFloat();return out;}
+function buff(p){return {pointer:p.toString(),uid:p.add(0x218).readU32(),key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer().toString(),hasShield:p.add(0x27c).readU8(),bb:bb(p.add(0xb8).readPointer())};}
+function emit(v){queue.push(v);}
+for(const m of cfg.methods){Interceptor.attach(ptr(m.address),{
+ onEnter(args){
+  this.seq=++seq;this.self=args[0];this.tid=this.threadId;this.name=m.owner+'.'+m.name;
+  try{
+   if(m.owner==='Buff'&&m.name==='OnTakeDamage'){
+    let stack=stacks.get(this.tid)||[];stack.push(args[0]);stacks.set(this.tid,stack);this.pushed=true;emit({name:this.name,frame:clock.readU32(),self:args[0].toString()});return;
+   }
+   this.before={seq:this.seq,name:this.name,frame:clock.readU32(),self:this.self.toString()};
+   const stack=stacks.get(this.tid)||[];if(stack.length)this.before.currentBuff=buff(stack[stack.length-1]);
+   if(['OnBlockDamage','OnTakeDamage','ApplyModifier','OnAppliedModifier','OnTakeHeal'].includes(m.name)){this.mod=args[1];this.before.modifier=modifier(this.mod);if(m.owner==='Entity'||m.owner==='Unit')this.before.entity=entity(this.self);if(m.name==='ApplyModifier')this.before.sourceEntity=entity(this.mod.readPointer());if(m.owner==='Buff')this.before.buff=buff(args[0]);}
+   if(m.name==='_AssignDynamicVar'){this.bb=args[1];this.mod=args[2];this.before.blackboard=bb(this.bb);this.before.modifier=modifier(this.mod);this.before.dynamicArg=args[3].toString();this.before.damageArg=args[4].toString();}
+   if(m.name==='Execute'){this.bb=args[1];this.before.blackboard=bb(this.bb);this.before.sourceType=args[2].toInt32();}
+  }catch(e){this.before={seq:this.seq,name:this.name,error:String(e)};}
+ },
+ onLeave(ret){
+  if(this.pushed){const s=stacks.get(this.tid);s.pop();return;}
+  const out={...this.before,afterFrame:clock.readU32()};
+  try{if(this.bb)out.afterBlackboard=bb(this.bb);if(this.mod)out.afterModifier=modifier(this.mod);if(this.before.entity)out.afterEntity=entity(this.self);}catch(e){out.afterError=String(e);}
+  emit(out);
+ }
+});}
+const timer=setInterval(()=>{if(queue.length){send({events:queue});queue=[];}},100);
+rpc.exports={flush(){if(queue.length){send({events:queue});queue=[];}},stop(){Interceptor.detachAll();clearInterval(timer);this.flush();}};
+const probe=Process.getModuleByName('libil2cpp.so').getExportByName('il2cpp_domain_get');const handle=Interceptor.attach(probe,{onEnter(){send({selftest:'domain_get_callback'});}});new NativeFunction(probe,'pointer',[])();handle.detach();
+send({ready:true,arch:Process.arch,clock:clock.toString(),frame:clock.readU32(),methods:cfg.methods});

@@ -1,0 +1,111 @@
+{
+  "scope": "MuMu / Android 2.7.91 recorded cases; not product acceptance",
+  "summon": {
+    "host_damage": 748.7999877929688,
+    "token_damage": 1295.0,
+    "normalized_host_damage": 2043.7999877929688,
+    "isolated_token_increment": 740,
+    "token_entities": 2,
+    "shared_counter_entries": 1
+  },
+  "reconnect": {
+    "damage_increment": 1645,
+    "healing_increment": 1455.900390625,
+    "complete_native_history": "NOT ESTABLISHED"
+  },
+  "unused_shield_expiry": {
+    "uid": 103,
+    "unconsumed": 316.5,
+    "last_frame": 968
+  },
+  "native_output_counter_comparison": {
+    "char_502_nblade": {
+      "metric": "damage",
+      "events": 61,
+      "event_sum": 11565,
+      "counter": 11565.0,
+      "difference": 0.0
+    },
+    "char_017_huang": {
+      "metric": "damage",
+      "events": 33,
+      "event_sum": 31899.100678418763,
+      "counter": 31899.103515625,
+      "difference": 0.0028372062370181084
+    },
+    "char_147_shining": {
+      "metric": "healing",
+      "events": 17,
+      "event_sum": 11710.49984908104,
+      "counter": 11710.5009765625,
+      "difference": 0.001127481460571289
+    }
+  },
+  "shield_first_run": {
+    "events": 14,
+    "absorbed": 768.5000020191073,
+    "partial_breaks": [
+      {
+        "frame": 2213,
+        "incoming": 372,
+        "absorbed": 316.5,
+        "remaining": 55.5,
+        "buff_uid": 140
+      },
+      {
+        "frame": 2313,
+        "incoming": 372,
+        "absorbed": 316.5,
+        "remaining": 55.5,
+        "buff_uid": 142
+      }
+    ],
+    "callbacks": {
+      "BuffContainer.OnTakeDamage": 177,
+      "Entity.OnTakeDamage": 177,
+      "Unit.OnTakeDamage": 177,
+      "Buff.OnTakeDamage": 331,
+      "BlockDamage._AssignDynamicVar": 14,
+      "BuffContainer.OnBlockDamage": 12,
+      "Entity.OnBlockDamage": 12,
+      "BlockDamage.Execute": 14
+    }
+  },
+  "shield_hp_run": {
+    "events": 12,
+    "absorbed": 753.5000017955899,
+    "partial_breaks": [
+      {
+        "frame": 2215,
+        "incoming": 372,
+        "absorbed": 316.5,
+        "remaining": 55.5,
+        "buff_uid": 182,
+        "hp_before": 1030,
+        "hp_after": 974.5
+      },
+      {
+        "frame": 2315,
+        "incoming": 372,
+        "absorbed": 316.5,
+        "remaining": 55.5,
+        "buff_uid": 183,
+        "hp_before": 1030,
+        "hp_after": 974.5
+      }
+    ],
+    "callbacks": {
+      "Entity.OnAppliedModifier": 211,
+      "BuffContainer.OnTakeDamage": 177,
+      "Entity.OnTakeDamage": 177,
+      "Unit.OnTakeDamage": 177,
+      "Entity.ApplyModifier": 215,
+      "Buff.OnTakeDamage": 329,
+      "Entity.OnTakeHeal": 17,
+      "BlockDamage._AssignDynamicVar": 12,
+      "BuffContainer.OnBlockDamage": 10,
+      "Entity.OnBlockDamage": 10,
+      "BlockDamage.Execute": 12
+    }
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "label": "summon-retired-reconnected",
+  "wall": 1794008384.093713,
+  "coherent": true,
+  "before": {
+    "session": "a57105df-760c-4e89-9e1d-8a38396aa8a8:3380:3201:129505456067360:129503089824560:129503089866576",
+    "frame": 1684,
+    "game_time": 56.13327980041504,
+    "damage_basis": "client character counters; includes overkill; excludes healing",
+    "state": 2,
+    "speed": 1,
+    "rows": [
+      {
+        "id": "char_242_otter",
+        "name": "梅尔",
+        "damage": 748.7999877929688,
+        "physical": 0.0,
+        "arts": 748.7999877929688,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -748.7999877929688
+      },
+      {
+        "id": "token_10004_otter_motter",
+        "name": "token_10004_otter_motter",
+        "damage": 1295.0,
+        "physical": 1295.0,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -1295.0
+      }
+    ],
+    "global_total": 1938.7999267578125,
+    "sum_damage": 2043.7999877929688,
+    "read_ms": 43.8,
+    "observed_at": 1794008384.0666308,
+    "captured_monotonic": 126597.859,
+    "guard": {
+      "attempts": 1,
+      "start": 1684,
+      "end": 1684,
+      "complete": true
+    }
+  },
+  "after": {
+    "session": "a57105df-760c-4e89-9e1d-8a38396aa8a8:3380:3201:129505456067360:129503089824560:129503089866576",
+    "frame": 1684,
+    "game_time": 56.13327980041504,
+    "damage_basis": "client character counters; includes overkill; excludes healing",
+    "state": 2,
+    "speed": 1,
+    "rows": [
+      {
+        "id": "char_242_otter",
+        "name": "梅尔",
+        "damage": 748.7999877929688,
+        "physical": 0.0,
+        "arts": 748.7999877929688,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -748.7999877929688
+      },
+      {
+        "id": "token_10004_otter_motter",
+        "name": "token_10004_otter_motter",
+        "damage": 1295.0,
+        "physical": 1295.0,
+        "arts": 0.0,
+        "true": 0.0,
+        "elemental": 0.0,
+        "healing": 0.0,
+        "raw_output": -1295.0
+      }
+    ],
+    "global_total": 1938.7999267578125,
+    "sum_damage": 2043.7999877929688,
+    "read_ms": 2.05,
+    "observed_at": 1794008384.093713,
+    "captured_monotonic": 126597.921,
+    "guard": {
+      "attempts": 1,
+      "start": 1684,
+      "end": 1684,
+      "complete": true
+    }
+  },
+  "characters": [
+    {
+      "address": 129503876360192,
+      "hp": 0.0,
+      "identity": {
+        "data_ptr": 129503912395648,
+        "level": 1,
+        "evolve_phase": 0,
+        "potential_rank": 5,
+        "favor_phase": 83,
+        "unique_id": 1073741955,
+        "profession": 128,
+        "rarity": 4,
+        "deploy_position": 1,
+        "is_token": true,
+        "is_predefined": false,
+        "is_hidden": false,
+        "is_assist": false,
+        "token_or_host_uid": 2147483779,
+        "token_initial_count": 0,
+        "main_skill_index": 0,
+        "cid": "token_10004_otter_motter",
+        "alias": "char_242_otter",
+        "tmpl_id": "",
+        "name": "机械水獭",
+        "name_en": "Mibo",
+        "team_key": "",
+        "token_or_host_key": "char_242_otter",
+        "nation_id": "",
+        "group_id": "",
+        "team_id": ""
+      },
+      "shield": 0.0,
+      "buffs": []
+    },
+    {
+      "address": 129505452644352,
+      "hp": 0.0,
+      "identity": {
+        "data_ptr": 129503912395648,
+        "level": 1,
+        "evolve_phase": 0,
+        "potential_rank": 5,
+        "favor_phase": 83,
+        "unique_id": 1073741955,
+        "profession": 128,
+        "rarity": 4,
+        "deploy_position": 1,
+        "is_token": true,
+        "is_predefined": false,
+        "is_hidden": false,
+        "is_assist": false,
+        "token_or_host_uid": 2147483779,
+        "token_initial_count": 0,
+        "main_skill_index": 0,
+        "cid": "token_10004_otter_motter",
+        "alias": "char_242_otter",
+        "tmpl_id": "",
+        "name": "机械水獭",
+        "name_en": "Mibo",
+        "team_key": "",
+        "token_or_host_key": "char_242_otter",
+        "nation_id": "",
+        "group_id": "",
+        "team_id": ""
+      },
+      "shield": 0.0,
+      "buffs": []
+    }
+  ],
+  "verbose_recorder": 0,
+  "operation_log_count": 4
+}
