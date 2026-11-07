@@ -145,7 +145,7 @@ class App:
                         observation = runtime.poll(self.collector)
                         self.events.put(('lifecycle',runtime.sessions.state))
                         sample = runtime.display_sample()
-                        if sample and observation.kind in ('sample', 'end'):
+                        if sample and observation.kind in ('sample', 'terminal', 'end'):
                             key=(sample['session'],sample['frame'],sample['sum_damage'],
                                  runtime.sessions.state)
                             if key != last_written_key or time.monotonic()-last_written_at >= 5:
@@ -201,6 +201,8 @@ class App:
             label='等待战斗数据'
         elif self.battle_status=='ended':
             label='战斗结束'
+        elif self.battle_status=='finalizing':
+            label='战斗结束 · 等待结算确认'
         elif self.battle_status=='frozen':
             label='战局冻结 · 保留最后有效记录'
         elif age>2:

@@ -115,6 +115,11 @@ def test_each_end_signal_archives_once_and_never_infers_a_victory(ending):
     end = r.poll(c)
     r.sessions.consume(end)
     r.poll(c)
+    if ending == 'finished':
+        assert r.sessions.state == 'finalizing'
+        assert not r.sessions.pop_archives()
+        c.lifecycle['battle'] = None
+        r.poll(c)
     archive, = r.sessions.pop_archives()
     assert archive['metadata']['outcome'] == 'unknown'
     assert archive['metadata']['practice'] is None
@@ -229,6 +234,8 @@ def test_final_metadata_preserves_known_stage_and_conflicting_outcomes_stay_unkn
     r.poll(c)
     c.lifecycle.update(state=3, ready=False)
     r.poll(c)
+    c.lifecycle['battle'] = None
+    r.poll(c)
     record, = r.sessions.pop_archives()
     assert record['metadata']['outcome'] == 'unknown'
     assert record['metadata']['metadata_conflicts'] == ['outcome']
@@ -298,8 +305,12 @@ def test_unreadable_final_snapshot_still_archives_last_reliable_data_once():
     c.read_roster = unavailable
     r.poll(c)
     r.poll(c)
+    assert r.sessions.state == 'finalizing'
+    assert not r.sessions.pop_archives()
+    c.lifecycle['battle'] = None
+    r.poll(c)
     record, = r.sessions.pop_archives()
-    assert record['reason'] == 'finished_snapshot_unavailable'
+    assert record['metadata']['final_sample_error'] == 'finished_snapshot_unavailable'
     assert record['statistics']['rows']['a']['damage'] == 100.
     assert record['statistics']['rows']['a']['recent_damage'] is None
     assert record['statistics']['ended']
@@ -310,6 +321,8 @@ def test_final_mapping_failure_cannot_overwrite_reliable_totals_or_lose_archive(
     c.lifecycle.update(state=3, ready=False)
     c.advance(damage=175.)
     c.sample['rows'] = [dict(c.sample['rows'][0], id='unknown')]
+    r.poll(c)
+    c.lifecycle['battle'] = None
     r.poll(c)
     record, = r.sessions.pop_archives()
     assert record['statistics']['rows']['a']['damage'] == 100.
@@ -429,3 +442,33 @@ def test_gui_worker_failure_still_closes_its_owned_collector():
     window.collect()
     assert window.collector.closed
     assert window.events.get() == ('error', 'capture log unavailable')
+
+
+def test_terminal_same_frame_revisions_are_kept_until_confirmed_scene_exit():
+    # OF-8 native samples: 2964 / 98.79990577697754, first state=3 then a
+    # later accounting revision at exactly that frame/time (host aef6051).
+    c, r, _ = begin()
+    c.lifecycle.update(state=3, ready=False)
+    c.advance(time=98.79990577697754, frame=2964, damage=28985.8828125)
+    r.poll(c)
+    c.advance(time=98.79990577697754, frame=2964, damage=31899.103515625)
+    r.poll(c)
+    assert total(r) == 31899.103515625
+    assert r.sessions.state == 'finalizing'
+    assert not r.sessions.pop_archives()
+    c.lifecycle['battle'] = None
+    r.poll(c)
+    record, = r.sessions.pop_archives()
+    assert record['statistics']['rows']['a']['damage'] == 31899.103515625
+    assert record['statistics']['rows']['a']['recent_damage'] is None
+
+
+def test_active_sample_cannot_reopen_a_finalizing_generation():
+    c, r, first = begin()
+    c.lifecycle.update(state=3, ready=False)
+    c.advance(damage=175.)
+    r.poll(c)
+    assert not r.sessions.consume(replace(first, sequence=999))
+    assert r.sessions.state == 'finalizing'
+    assert total(r) == 175.
+    assert not r.sessions.pop_archives()

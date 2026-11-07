@@ -197,18 +197,25 @@ class BattleStatisticsAdapter:
         self.owner_map.owners[cid] = owner
         return True
 
-    def update(self, sample: dict, roster: RosterSnapshot) -> AdapterUpdate | None:
+    def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False) -> AdapterUpdate | None:
         """Apply one cumulative snapshot; returns None for duplicate frames."""
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
             raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
+        if terminal and (sample.get('state') != 3 or self.statistics is None
+                         or sample['session'] != self.session or self.last_game_time is None):
+            raise FrameMismatch('结算修订必须属于已有观察战局的原生结束状态')
+        if terminal and (sample['game_time'] < self.last_game_time or
+                         (self.statistics.end_time is not None and
+                          sample['game_time'] != self.statistics.end_time)):
+            raise FrameMismatch('结算修订不能改变冻结的游戏时间')
         if self.statistics is None or sample['session'] != self.session:
             if self.statistics is not None:
                 self._freeze()
                 self.statistics = None
             self._begin(sample, roster)
         game_time = sample['game_time']
-        if self.last_game_time is not None:
+        if self.last_game_time is not None and not terminal:
             if game_time < self.last_game_time:
                 # A battle clock cannot move backwards in one session. Treat it
                 # as a new observation session rather than mixing samples.
@@ -217,7 +224,7 @@ class BattleStatisticsAdapter:
                 self._begin(sample, roster)
             elif game_time == self.last_game_time:
                 return None
-        if self.last_frame is not None and frame == self.last_frame:
+        if self.last_frame is not None and frame == self.last_frame and not terminal:
             return None
         roster_map = build_owner_map(roster)
         # New roster evidence can map tokens that were not attributable when
@@ -266,7 +273,12 @@ class BattleStatisticsAdapter:
             # mapping/layout problem, not a legitimate empty battle.
             if sample.get('rows'):
                 raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
-            self.statistics.snapshot(game_time, {})
+        if terminal:
+            if self.statistics.end_time is None:
+                if game_time > self.last_game_time:
+                    self.statistics.snapshot(game_time, counters)
+                self.statistics.finish(game_time)
+            self.statistics.correct_final_totals(counters)
         else:
             self.statistics.snapshot(game_time, counters)
         self.last_types.update(types_update)
@@ -285,7 +297,8 @@ class BattleStatisticsAdapter:
     def finish(self, game_time: float | None = None) -> dict:
         if self.statistics is None or self.last_game_time is None:
             return self.last_result or {'rows': {}}
-        self.statistics.finish(game_time if game_time is not None else self.last_game_time)
+        if self.statistics.end_time is None:
+            self.statistics.finish(game_time if game_time is not None else self.last_game_time)
         self.last_result = self.statistics.result()
         self.finished_session = self.session
         return self.last_result

@@ -38,6 +38,7 @@ class BattleFeed:
         self.retired_clock = None
         self.retired_session = None
         self.native_session = None
+        self.terminal = False
 
     def _emit(self, kind, sample=None, roster=None, reason=''):
         self.sequence += 1
@@ -53,6 +54,7 @@ class BattleFeed:
         self.retired, self.retired_clock = self.identity, self.clock
         self.retired_session = self.native_session
         self.identity = self.clock = self.native_session = None
+        self.terminal = False
         return self._emit('end', sample, roster, reason=reason)
 
     def _read_pair(self, collector, before):
@@ -99,11 +101,14 @@ class BattleFeed:
                 try:
                     sample, roster = self._read_pair(collector, before)
                 except (SampleUnavailable, RosterUnavailable, AdapterError, ReadFailure):
-                    return self._end('finished_snapshot_unavailable')
+                    self.terminal = True
+                    return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
                     sample['native_session'] = sample['session']
                     sample['session'] = f'{self.id}:{self.generation}'
-                    return self._end('finished', sample, roster)
+                    self.terminal = True
+                    self.clock = sample['game_time']
+                    return self._emit('terminal', sample, roster)
             return self._end('finished' if self.identity == identity else 'replaced')
         if not before['ready'] or before['transiting']:
             if before.get('state') in (0, 1):
@@ -114,6 +119,9 @@ class BattleFeed:
             return self.gap('scene_transition')
         sample, roster = self._read_pair(collector, before)
         now = sample['game_time']
+        if (self.terminal and identity == self.identity and
+                sample['session'] == self.native_session and now >= self.clock):
+            return self._emit('waiting', reason='terminal_battle')
         if (self.identity is None and identity == self.retired
                 and sample['session'] == self.retired_session):
             if self.retired_clock is None or now >= self.retired_clock:
@@ -122,6 +130,7 @@ class BattleFeed:
                    or (self.clock is not None and now < self.clock))
         if changed:
             self.generation += 1
+            self.terminal = False
         self.identity, self.clock = identity, now
         self.native_session = sample['session']
         sample['native_session'] = sample['session']
@@ -209,17 +218,39 @@ class BattleSessions:
         self._archived = True
         self.state = 'ended'
 
+    def _terminal_update(self, observation):
+        if observation.sample is None:
+            self.adapter.on_gap()
+            self.adapter.finish()
+            self.metadata['final_sample_error'] = observation.reason
+            return
+        if observation.sample['session'] != self.battle_id:
+            raise ValueError('final sample does not belong to the live battle')
+        final_adapter = deepcopy(self.adapter)
+        try:
+            final_adapter.update(observation.sample, observation.roster, terminal=True)
+        except (AdapterError, ValueError) as exc:
+            self.adapter.on_gap()
+            self.adapter.finish()
+            self.metadata['final_sample_error'] = str(exc)
+        else:
+            self.adapter = final_adapter
+            self.latest_sample = deepcopy(observation.sample)
+            self._merge_metadata(observation.sample)
+
     def consume(self, observation):
         if (observation.feed != self.feed_id or
                 observation.sequence <= self.sequence or
                 observation.generation < self.generation):
             return False
-        if observation.kind not in ('sample', 'gap', 'end', 'waiting'):
+        if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting'):
             raise ValueError('unknown observation kind')
         if observation.kind == 'sample':
             if observation.generation <= 0 or observation.sample['session'] != f'{self.feed_id}:{observation.generation}':
                 raise ValueError('sample does not match its observation generation')
-            if observation.generation == self.generation and self._archived:
+            if observation.generation == self.generation and (
+                    self._archived or (self.adapter is not None and
+                                       self.adapter.statistics.end_time is not None)):
                 return False
             # A guarded new generation retires the old battle even if the new
             # roster cannot yet be mapped. Keep the old adapter for display;
@@ -240,24 +271,20 @@ class BattleSessions:
             self.state = 'playing'
             self.connection = 'connected'
             self.reason = ''
+        elif observation.kind == 'terminal':
+            if (observation.generation != self.generation or self.adapter is None
+                    or self._archived):
+                return False
+            self._terminal_update(observation)
+            self.state = 'finalizing'
+            self.connection = 'connected'
         elif observation.kind == 'end':
             if observation.generation != self.generation:
                 return False
-            if observation.reason == 'finished_snapshot_unavailable' and self.adapter is not None:
+            if self.adapter is not None and self.adapter.statistics.end_time is None:
                 self.adapter.on_gap()
             if observation.sample is not None and not self._archived:
-                if observation.sample['session'] != self.battle_id:
-                    raise ValueError('final sample does not belong to the live battle')
-                final_adapter = deepcopy(self.adapter)
-                try:
-                    final_adapter.update(observation.sample, observation.roster)
-                except (AdapterError, ValueError) as exc:
-                    self.adapter.on_gap()
-                    self.metadata['final_sample_error'] = str(exc)
-                else:
-                    self.adapter = final_adapter
-                    self.latest_sample = deepcopy(observation.sample)
-                    self._merge_metadata(observation.sample)
+                self._terminal_update(observation)
             self._archive(observation.reason)
             self.connection = 'connected'
         elif observation.kind == 'gap':
@@ -348,5 +375,5 @@ class BattleRuntime:
         sample['rows'].sort(key=lambda row: row['damage'], reverse=True)
         sample['sum_damage'] = total
         sample['statistics_complete'] = complete
-        sample['state'] = 3 if self.sessions.state == 'ended' else 2
+        sample['state'] = 3 if result['ended'] else 2
         return sample

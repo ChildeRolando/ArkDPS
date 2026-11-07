@@ -109,6 +109,36 @@ class Statistics:
             while len(history) > 2 and history[1][0] <= cutoff:
                 history.popleft()
 
+    def correct_final_totals(self, counters):
+        """Accept monotonic terminal accounting revisions at the frozen time.
+
+        The caller must verify the same ended battle and terminal native state.
+        Same-time changes remain forbidden in ordinary snapshots. These totals
+        have no new event timing, so sampled rates become unavailable; the end
+        time, engagement intervals and event/shield data never advance.
+        """
+        if self.end_time is None or not self.baseline_ready:
+            raise ValueError('final totals require an ended observation baseline')
+        for source, values in counters.items():
+            if source not in self.owners or set(values) != {'damage', 'healing'}:
+                raise ValueError('unknown source or incomplete final counters')
+            for kind in ('damage', 'healing'):
+                self._amount(values[kind])
+                if source in self.sources and values[kind] < self.sources[source]['values'][kind]:
+                    raise ValueError('final cumulative counter decreased')
+        self.invalidate_snapshots()
+        for source, values in counters.items():
+            state = self.sources.get(source)
+            if state is None:
+                state = self.sources[source] = dict(values={}, history=deque(),
+                                                     continuous=False, segment_start=self.now)
+            state['values'] = dict(values)
+            entry = (self.now, dict(values))
+            if state['history'] and state['history'][-1][0] == self.now:
+                state['history'][-1] = entry
+            else:
+                state['history'].append(entry)
+
     def event(self, event_id, game_time, source, kind, amount):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
