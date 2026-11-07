@@ -1,0 +1,16 @@
+{
+  "repository": "owner/project",
+  "repository_path": "../..",
+  "state_dir": "../../.review-loop",
+  "workspace_id": "<Multica workspace UUID>",
+  "project_id": "<Multica project UUID>",
+  "reviewer_id": "<Multica reviewer UUID>",
+  "fixer_id": "<Multica coding agent UUID>",
+  "review": {
+    "enabled": false,
+    "candidate_source": "git",
+    "git_remote": "origin",
+    "git_base_ref": "refs/heads/main",
+    "engine": "multica"
+  }
+}

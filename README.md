@@ -63,3 +63,7 @@ python -m pytest tests -q --assert=plain
 本原型基于 [Tim23333/Arknights_timer](https://github.com/Tim23333/Arknights_timer)，固定提交 `5734c30bf54780056ff758505380322c0cf519fe`。随附的是采集所需的源码与数据子集，不是上游完整应用。
 
 **依照随附 LICENSE 仅供非商业用途；商业使用需获得原作者相应授权。** 上游 README 的 MIT 描述与实际许可证不一致，本原型按实际许可证保留限制。修改明细、编译方式见 `THIRD_PARTY.md`。
+
+## 开发协作
+
+[Multica Review Loop](tools/review-loop/README.md) 是独立的开发评审工具；业务验收条件仍以本仓库文档和对应工单为准。

@@ -10,3 +10,7 @@ acceptance/battle-candidates.json
 .env
 .env.*
 !.env.example
+
+# Local Review Loop configuration and evidence
+/.review-loop/
+/tools/review-loop/*.local.json
