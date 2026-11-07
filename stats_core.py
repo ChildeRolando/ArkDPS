@@ -190,6 +190,12 @@ class Statistics:
                             [self.sources[s]['segment_start'] for s in sources])
                 rates = [self._recent(self.sources[s], kind, start) for s in sources]
                 row['recent_' + kind] = sum(rates) if complete and rates and all(v is not None for v in rates) else None
+                # A short post-gap/new-source rate is useful, but cannot certify
+                # a full team window. Publish only the expected full interval.
+                expected_start = max(self.start_time, self.now - 5)
+                row['recent_' + kind + '_window'] = (
+                    (start, self.now) if row['recent_' + kind] is not None
+                    and start == expected_start else None)
                 state = self.engagement.get((owner, kind))
                 if state:
                     covered_until = self.event_coverage_end if self.event_coverage_end is not None else self.now

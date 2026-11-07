@@ -482,7 +482,11 @@ class TcpChannel:
     def _ensure_server(self):
         """启动设备侧服务并建立 adb forward (幂等; 5555 是 adbd 占用, 避开)。
         每次连接都先查版本: 二进制变更时 _push_memsrv 会杀旧服务, 此处负责重启。"""
-        self.mc.adb("forward", f"tcp:{self.port}", f"tcp:{self.port}")
+        registry = getattr(self.mc, 'forward_registry', None)
+        if registry is not None:
+            registry.ensure(self.mc.adb_path, self.mc.adb_serial, self.port, self.port)
+        else:
+            self.mc.adb("forward", f"tcp:{self.port}", f"tcp:{self.port}")
         if not self._push_memsrv():
             raise RuntimeError(
                 'memsrv v5 二进制缺失或部署失败；无法读取游戏内存')
