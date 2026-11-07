@@ -81,6 +81,19 @@ SKADI = entry('char_263_skadi', 22)
 SUMMON_ROSTER = roster([OTTER, SKADI], present=(11,), frame=10)
 
 
+def test_shared_prefab_for_player_and_map_character_stays_ambiguous():
+    map_a = entry('char_a', 9, predefined=True)
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('char_b', 20)], 0, 1),
+                   roster([CHAR_A, CHAR_B, map_a], present=(9, 2)))
+    adapter.update(sample([row('char_a', 140), row('char_b', 30)], 1, 2),
+                   roster([CHAR_A, CHAR_B], present=(1, 2), frame=2))
+    result = adapter.result()
+    assert result['mapping_conflicts'] == ['char_a']
+    assert 'char_a' not in result['rows']
+    assert result['rows']['char_b']['damage'] == 30
+
+
 def test_mid_battle_baseline_starts_short_window_immediately():
     a = BattleStatisticsAdapter()
     a.update(sample([row('char_a', 1000, 500, physical=1000)], 30, 1), paired(BASE, 1))

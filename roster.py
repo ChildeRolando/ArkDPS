@@ -66,7 +66,7 @@ class CharacterEntry:
     is_predefined: bool
     host_key: str | None
     host_uid: int | None
-    player_side: int
+    player_side: int | None
 
 
 @dataclass(frozen=True)
@@ -226,7 +226,9 @@ def build_operations(bc_addr: int) -> tuple[list[tuple], dict]:
         for index in range(MAX_LIVE_UNITS):
             data_ptr = ops.deref(items_index, index * 8, CHARACTER_DATA, 8)
             data = ops.deref(data_ptr, 0, 0, BATTLE_CHARACTER_READ_SIZE)
-            slots.append((data, data_ptr))
+            key = ops.deref(data, BATTLE_CHARACTER_PREFAB_KEY, 0,
+                            IL2CPP_STRING_CHARS + MAX_STRING_CHARS * 2)
+            slots.append((data, data_ptr, key))
         live.append({'items': items_index, 'slots': slots})
     return ops.operations, {'player_items': player_items, 'players': players, 'live': live}
 
@@ -236,7 +238,7 @@ def _slots(result: bytes | None) -> int:
 
 
 def _entry(data: bytes, key_raw: bytes | None, host_raw: bytes | None,
-           player_side: int) -> CharacterEntry | None:
+           player_side: int | None) -> CharacterEntry | None:
     if not data or len(data) < BATTLE_CHARACTER_READ_SIZE:
         return None
     cid = decode_string(key_raw)
@@ -293,6 +295,7 @@ def parse_results(results: list[bytes | None], layout: dict,
                 entries.append(entry)
     present: set[int] = set()
     present_known = False
+    roster_uids = {entry.unique_id for entry in entries}
     # Prefer the actual UnorderedArray layout; fall back to List<T> when it
     # is unavailable. Never treat an unread occupied slot as absent.
     for group in reversed(layout['live']):
@@ -303,11 +306,20 @@ def parse_results(results: list[bytes | None], layout: dict,
         for index in range(min(_slots(items), len(group['slots']))):
             if not _u64(items, index * 8):
                 continue
-            data = results[group['slots'][index][0]]
+            data_index, _, key_index = group['slots'][index]
+            data = results[data_index]
             if not data or len(data) < BATTLE_CHARACTER_READ_SIZE:
                 present_known = False
                 continue
-            present.add(_u32(data, BATTLE_CHARACTER_UNIQUE_ID))
+            uid = _u32(data, BATTLE_CHARACTER_UNIQUE_ID)
+            present.add(uid)
+            # Map-provided operators may exist only in the live list. Admit
+            # explicit non-token predefines by their own native statistic key.
+            if (uid not in roster_uids and data[BATTLE_CHARACTER_IS_PREDEFINED] == 1
+                    and data[BATTLE_CHARACTER_IS_TOKEN] == 0):
+                predefined = _entry(data, results[key_index], None, None)
+                if predefined is not None:
+                    entries.append(predefined)
         break
     return RosterSnapshot(frame=frame, entries=tuple(entries),
                           present_unique_ids=frozenset(present),

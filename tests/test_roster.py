@@ -2,6 +2,7 @@ import struct
 import pytest
 
 from roster import (BATTLE_CHARACTER_HOST_UID, BATTLE_CHARACTER_IS_TOKEN,
+                    BATTLE_CHARACTER_IS_PREDEFINED,
                     BATTLE_CHARACTER_READ_SIZE, BATTLE_CHARACTER_UNIQUE_ID, BATTLE_CHARACTER_HOST_KEY,
                     BATTLE_PLAYER_DATA_SIDE, build_operations, decode_string,
                     parse_results, RosterUnavailable,
@@ -13,10 +14,11 @@ def string_bytes(value):
     return b'\x00' * 0x10 + struct.pack('<i', len(value)) + raw
 
 
-def data_bytes(cid, uid, *, token=False, host_uid=0):
+def data_bytes(cid, uid, *, token=False, host_uid=0, predefined=False):
     raw = bytearray(BATTLE_CHARACTER_READ_SIZE)
     struct.pack_into('<I', raw, BATTLE_CHARACTER_UNIQUE_ID, uid)
     raw[BATTLE_CHARACTER_IS_TOKEN] = 1 if token else 0
+    raw[BATTLE_CHARACTER_IS_PREDEFINED] = 1 if predefined else 0
     struct.pack_into('<I', raw, BATTLE_CHARACTER_HOST_UID, host_uid)
     return bytes(raw)
 
@@ -114,6 +116,36 @@ def test_occupied_live_slot_failure_is_unknown_but_empty_list_is_known():
     assert parse_results(results, layout, frame=1).present_known is True
     results[live['items']] = struct.pack('<Q', 0)
     assert parse_results(results, layout, frame=1).present_known is True
+
+
+def test_live_predefined_character_maps_itself_and_keeps_total_after_removal():
+    from snapshot_adapter import BattleStatisticsAdapter
+
+    ops, layout = build_operations(0x1000)
+    results = [None] * len(ops)
+    populated_player(results, layout)
+    live = layout['live'][1]
+    results[live['items']] = struct.pack('<QQ', 0x2000, 0x3000)
+    for i, (cid, token) in enumerate((('char_map', False), ('token_map', True))):
+        data, _, key = live['slots'][i]
+        results[data] = data_bytes(cid, i + 1, token=token, predefined=True)
+        results[key] = string_bytes(cid)
+    adapter = BattleStatisticsAdapter()
+    sample = {'session': 'map', 'frame': 1, 'game_time': 0, 'rows': [
+        {'id': 'char_map', 'damage': 373, 'healing': 0},
+        {'id': 'token_map', 'damage': 14, 'healing': 0}]}
+    adapter.update(sample, parse_results(results, layout, 1))
+    observed = adapter.result()
+    assert observed['rows']['char_map']['sources'] == ['char_map']
+    assert observed['rows']['char_map']['present'] is True
+    assert observed['unknown_present_unique_ids'] == [2]
+    assert observed['unknown_sources'] == ['token_map']
+
+    results[live['items']] = b''
+    adapter.update(dict(sample, frame=2, game_time=1), parse_results(results, layout, 2))
+    absent = adapter.result()['rows']['char_map']
+    assert absent['damage'] == 373
+    assert absent['present'] is False
 
 
 @pytest.mark.parametrize('failure', ['data', 'key', 'count', 'items'])

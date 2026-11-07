@@ -54,11 +54,12 @@ def build_owner_map(roster: RosterSnapshot) -> OwnerMap:
         by_uid.setdefault(entry.unique_id, []).append(entry)
     result = OwnerMap()
     for entry in non_tokens:
-        previous = result.owners.get(entry.cid)
-        if previous is not None and previous != entry.cid:
+        previous = result.roster_entries.setdefault(entry.cid, entry)
+        # Native counters keyed by prefab cannot separate a map unit and a
+        # squad operator if the client gives them the same key.
+        if previous.is_predefined != entry.is_predefined:
             result.ambiguous_cids.add(entry.cid)
         result.owners[entry.cid] = entry.cid
-        result.roster_entries.setdefault(entry.cid, entry)
     for token in roster.entries:
         if not token.is_token:
             continue
@@ -228,6 +229,10 @@ class BattleStatisticsAdapter:
             self.owner_map.owners.setdefault(cid, owner)
         self.owner_map.unknown_token_cids |= roster_map.unknown_token_cids
         self.owner_map.ambiguous_cids |= roster_map.ambiguous_cids
+        self.mapping_conflicts.update(
+            entry.cid for entry in roster.entries
+            if entry.is_predefined and not entry.is_token
+            and entry.cid in roster_map.ambiguous_cids)
         self.owner_map.roster_entries.update(roster_map.roster_entries)
         self.last_roster_frame = roster.frame
 
@@ -241,7 +246,7 @@ class BattleStatisticsAdapter:
             if not isinstance(cid, str) or not cid:
                 continue
             owner = self.owner_map.owners.get(cid)
-            if owner is None or cid in blocked:
+            if owner is None or cid in blocked or owner in blocked:
                 self.unknown_sources.add(cid)
                 continue
             counter = _counter(row)
