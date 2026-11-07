@@ -103,19 +103,56 @@ def test_decode_string_validation():
                          + '[]'.encode('utf-16-le')) is None
 
 
-def test_occupied_live_slot_failure_is_unknown_but_empty_list_is_known():
+def test_occupied_live_slot_failure_is_rejected_but_empty_list_is_known():
     ops, layout = build_operations(0x1000)
     results = [None] * len(ops)
     results[layout['player_items']] = b''
     live = layout['live'][1]
     results[live['items']] = struct.pack('<Q', 0x2000)
-    assert parse_results(results, layout, frame=1).present_known is False
+    with pytest.raises(RosterUnavailable):
+        parse_results(results, layout, frame=1)
     results[live['slots'][0][0]] = b'\x00' * 4
-    assert parse_results(results, layout, frame=1).present_known is False
+    with pytest.raises(RosterUnavailable):
+        parse_results(results, layout, frame=1)
     results[live['items']] = b''
     assert parse_results(results, layout, frame=1).present_known is True
     results[live['items']] = struct.pack('<Q', 0)
     assert parse_results(results, layout, frame=1).present_known is True
+    results[live['items']] = b'\x01'
+    with pytest.raises(RosterUnavailable):
+        parse_results(results, layout, frame=1)
+
+
+@pytest.mark.parametrize('failure', ['data', 'short_data', 'key', 'invalid_key'])
+def test_unread_live_npc_cannot_hide_shared_key_conflict(failure):
+    from snapshot_adapter import BattleStatisticsAdapter, build_owner_map
+
+    ops, layout = build_operations(0x1000)
+    results = [None] * len(ops)
+    player = populated_player(results, layout, (0x100,))
+    data, key, _ = player['characters'][0]
+    results[data] = data_bytes('char_a', 100)
+    results[key] = string_bytes('char_a')
+    live = layout['live'][1]
+    results[live['items']] = b''
+    adapter = BattleStatisticsAdapter()
+    sample = {'session': 'battle', 'frame': 1, 'game_time': 0, 'rows': [
+        {'id': 'char_a', 'damage': 100, 'healing': 0}]}
+    adapter.update(sample, parse_results(results, layout, 1))
+    before = adapter.result()
+
+    results[live['items']] = struct.pack('<Q', 0x200)
+    data, _, key = live['slots'][0]
+    results[data] = data_bytes('char_a', 1, predefined=True)
+    results[key] = string_bytes('char_a')
+    assert 'char_a' in build_owner_map(parse_results(results, layout, 2)).ambiguous_cids
+    results[data if failure in ('data', 'short_data') else key] = (
+        b'bad' if failure in ('short_data', 'invalid_key') else None)
+    with pytest.raises(RosterUnavailable):
+        adapter.update(dict(sample, frame=2, game_time=1, rows=[
+            {'id': 'char_a', 'damage': 500, 'healing': 0}]),
+            parse_results(results, layout, 2))
+    assert adapter.result() == before
 
 
 def test_live_predefined_character_maps_itself_and_keeps_total_after_removal():

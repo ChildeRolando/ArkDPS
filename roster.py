@@ -302,15 +302,16 @@ def parse_results(results: list[bytes | None], layout: dict,
         items = results[group['items']]
         if items is None:
             continue
-        present_known = len(items) % 8 == 0 and _slots(items) <= len(group['slots'])
-        for index in range(min(_slots(items), len(group['slots']))):
+        if len(items) % 8 or _slots(items) > len(group['slots']):
+            raise RosterUnavailable('在场单位槽位读取不完整')
+        present_known = True
+        for index in range(_slots(items)):
             if not _u64(items, index * 8):
                 continue
             data_index, _, key_index = group['slots'][index]
             data = results[data_index]
             if not data or len(data) < BATTLE_CHARACTER_READ_SIZE:
-                present_known = False
-                continue
+                raise RosterUnavailable('非空在场单位数据读取不完整')
             uid = _u32(data, BATTLE_CHARACTER_UNIQUE_ID)
             present.add(uid)
             # Map-provided operators may exist only in the live list. Admit
@@ -318,8 +319,9 @@ def parse_results(results: list[bytes | None], layout: dict,
             if (uid not in roster_uids and data[BATTLE_CHARACTER_IS_PREDEFINED] == 1
                     and data[BATTLE_CHARACTER_IS_TOKEN] == 0):
                 predefined = _entry(data, results[key_index], None, None)
-                if predefined is not None:
-                    entries.append(predefined)
+                if predefined is None:
+                    raise RosterUnavailable('预置在场单位统计键读取不完整')
+                entries.append(predefined)
         break
     return RosterSnapshot(frame=frame, entries=tuple(entries),
                           present_unique_ids=frozenset(present),
