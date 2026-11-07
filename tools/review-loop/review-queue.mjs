@@ -159,12 +159,14 @@ async function registerCandidate(config, prNumber, pr, issue, engine, worktree, 
 export async function discoverReviews(config, io = makeReviewIO(config)) {
   if (config.review?.enabled !== true || candidateSource(config) !== 'github') return [];
   const found = [];
+  const prefixes = config.review?.issue_prefixes;
+  const issueKeys = text => [...new Set(((text ?? '').match(/\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b/g) ?? [])
+    .filter(key => !prefixes || prefixes.includes(key.split('-')[0])))];
   for (const pr of await io.openPRs()) {
     if (pr.draft) continue;
-    const prefixes = config.review?.issue_prefixes;
-    const keys = [...new Set((`${pr.title ?? ''}\n${pr.body ?? ''}`.match(/\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b/g) ?? [])
-      .filter(key => !prefixes || prefixes.includes(key.split('-')[0])))];
-    if (keys.length !== 1) continue; // Explicit register handles titles containing several issues.
+    const titleKeys = issueKeys(pr.title);
+    const keys = titleKeys.length ? titleKeys : issueKeys(pr.body);
+    if (keys.length !== 1) continue; // Multiple possible owners require explicit registration.
     try {
       const issue = await io.issueByKey(keys[0]); eligibleIssue(config, issue);
       if (issue.status !== 'in_review') continue;

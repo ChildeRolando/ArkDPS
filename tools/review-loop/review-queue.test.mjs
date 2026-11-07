@@ -68,6 +68,27 @@ test('GitHub candidate discovery uses configured issue prefix and the mapped wor
   assert.equal((await discoverReviews(f.config, f.io))[0].status, 'SKIPPED');
 });
 
+test('GitHub discovery uses the title issue even when the body names a dependency', async t => {
+  const f = await nativeFixture(t);
+  f.config.review.issue_prefixes = ['ARK'];
+  f.pr.title = 'ARK-7: Shared panel model';
+  f.pr.body = 'Implements ARK-7. Event data depends on ARK-5.';
+  f.io.issueByKey = async key => {
+    assert.ok(['ARK-7', f.issue.id].includes(key));
+    return structuredClone(f.issue);
+  };
+  assert.equal((await discoverReviews(f.config, f.io))[0].status, 'QUEUED');
+
+  f.pr.title = 'ARK-7 and ARK-5';
+  f.pr.body = 'ARK-7';
+  assert.deepEqual(await discoverReviews(f.config, f.io), []);
+
+  f.pr.title = 'Shared panel model';
+  assert.equal((await discoverReviews(f.config, f.io))[0].status, 'QUEUED');
+  f.pr.body = 'ARK-7 depends on ARK-5';
+  assert.deepEqual(await discoverReviews(f.config, f.io), []);
+});
+
 test('GitHub candidate source can run the same review without granting delivery writes', async t => {
   const f = await nativeFixture(t);
   f.config.delivery.enabled = false;

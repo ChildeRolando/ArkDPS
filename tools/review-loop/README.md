@@ -24,7 +24,9 @@ node tools/review-loop/review-queue.mjs reconcile tools/review-loop/review.local
 
 ## 可选：保留 GitHub 的原有自动交付
 
-使用 GitHub PR 作为候选时，设 `review.candidate_source: "github"`，`repository` 填 GitHub 的 `owner/name`，Git 的 `origin` 指向同一仓库，`gh` 登录后可访问它。建议设 `review.issue_prefixes` 为本工作区的工单前缀列表（如 `["DEMO"]`）。这个模式仍支持 `register <config> <PR> <工单>`，也会发现正文或标题唯一关联已进入 `in_review` 且编码运行结束的非草稿 PR。
+使用 GitHub PR 作为候选时，设 `review.candidate_source: "github"`，`repository` 填 GitHub 的 `owner/name`，Git 的 `origin` 指向同一仓库，`gh` 登录后可访问它。建议设 `review.issue_prefixes` 为本工作区的工单前缀列表（如 `["DEMO"]`）。
+
+自动发现先用 PR 标题里唯一的工单编号。标题里没有匹配编号时，才用正文里唯一的编号。有多个可能的归属时，使用 `register <config> <PR> <工单>` 明确登记。Multica 内外的编码执行器都可提交非草稿 PR，将工单置为 `in_review` 时使用 `--no-start`，由调度器准备候选并派发 Reviewer。
 
 需要自动交付时再显式加入 `"delivery": { "enabled": true, "merge_method": "squash" }`。此时中台发布评审和检查，按 GitHub 的保护规则合并，读回已合并后关闭关联业务票。只给 PR 合并就能满足全部结束条件的项目开启自动关票；仍要部署或实机验收的项目用审核模式。不开自动交付时没有 GitHub 写操作。两种候选来源各有自己的本地队列；切换来源时应先结束在途任务，不导入其他实例的历史。
 
