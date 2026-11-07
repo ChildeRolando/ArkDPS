@@ -8,6 +8,8 @@
 
 ## 文档导航
 
+开发中的可选实时入口见[实时事件采集入口与验收](docs/event-capture.md)：窗口与命令行共用采集会话，显式传入 `--frida-remote` 后观察事件。该接入仍待新增回归及两组新实机验收，不能作为首版已交付声明。
+
 - [文档索引](docs/README.md)：按产品设计、实验实证、实现契约分类的文档入口。
 - 要做实机实验：先读[实机实验手册](docs/experiment-playbook.md)，再查 [MAA 作业目录](acceptance/maa/README.md)。
 - 要查已测能力边界：[底层能力报告](docs/capability-validation.md)、[补充实验](docs/recovery-validation.md)。

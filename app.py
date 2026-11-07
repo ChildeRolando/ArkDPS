@@ -12,8 +12,10 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
+from collector import BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from metrics import Meter, observation_age
+from collection_session import CollectionSession
+from event_capture import CaptureRetry
 
 
 def number(value):
@@ -115,11 +117,13 @@ class App:
                     self.events.put(('scanning',True))
                     if self.collector:
                         self.collector.close()
-                    self.collector=Collector(self.args.adb,self.args.serial,log=lambda x:print(x,flush=True))
+                    self.collector=CollectionSession(self.args.adb,self.args.serial,
+                        frida_remote=self.args.frida_remote, log=lambda x:print(x,flush=True))
                     try:
                         force = not first_connection
                         first_connection = False
-                        self.collector.connect(force=force)
+                        self.collector.connect()
+                        self.collector.locate(force=force, cancelled=self.stop.is_set)
                     except Exception as exc:
                         traceback.print_exc()
                         self.events.put(('error',str(exc)))
@@ -136,6 +140,8 @@ class App:
                             last_written_key=key
                             last_written_at=time.monotonic()
                         self.events.put(('sample',sample))
+                    except CaptureRetry:
+                        pass
                     except BattleChanged as exc:
                         self.events.put(('error',str(exc)))
                         self.rescan.set()
@@ -244,7 +250,19 @@ def main():
     parser.add_argument('--adb',default=DEFAULT_ADB)
     parser.add_argument('--serial',default=DEFAULT_SERIAL)
     parser.add_argument('--capture-seconds',type=float,default=0)
+    parser.add_argument('--frida-remote', help='optional Frida 17.26.1 endpoint; no server is installed or started')
+    parser.add_argument('--wait-battle-seconds',type=float,default=180)
+    parser.add_argument('--baseline-timeout',type=float,default=90)
+    parser.add_argument('--output-dir',type=Path)
+    parser.add_argument('--stop-file',type=Path)
+    parser.add_argument('--expect-head')
+    parser.add_argument('--maa-job',type=Path)
+    parser.add_argument('--maa-log',type=Path)
+    parser.add_argument('--stage')
+    parser.add_argument('--require-progress',action='store_true')
     args=parser.parse_args()
+    if (args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0):
+        parser.error('capture/wait durations must be nonnegative and baseline timeout positive')
     (ROOT/'runtime').mkdir(exist_ok=True)
     # One owner for the device channel. A second launch cannot tear it down.
     instance_lock=socket.socket()
@@ -260,22 +278,8 @@ def main():
         root.destroy()
         return
     if args.capture_seconds:
-        collector=Collector(args.adb,args.serial)
-        meter=Meter()
-        try:
-            collector.connect()
-            end=time.monotonic()+args.capture_seconds
-            dest=ROOT/'runtime'/f'capture-{timestamp():%Y%m%d-%H%M%S}.jsonl'
-            with dest.open('w',encoding='utf-8') as out:
-                while time.monotonic()<end:
-                    sample=meter.update(collector.read())
-                    out.write(json.dumps(sample,ensure_ascii=False)+'\n')
-                    out.flush()
-                    print(sample['frame'],round(sample['game_time'],3),[(r['name'],round(r['damage'],2)) for r in sample['rows']],flush=True)
-                    time.sleep(.2)
-            print(dest)
-        finally:
-            collector.close()
+        from capture_cli import run_capture
+        run_capture(args)
         return
     log=(ROOT/'runtime'/f'app-{timestamp():%Y%m%d-%H%M%S}.log').open('a',encoding='utf-8',buffering=1)
     sys.stdout=sys.stderr=log

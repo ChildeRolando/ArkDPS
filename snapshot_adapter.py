@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import Statistics
+from event_stream import EventStream, StreamGap
 
 DAMAGE_TYPES = ('physical', 'arts', 'true', 'elemental')
 
@@ -123,6 +124,8 @@ class BattleStatisticsAdapter:
     """One live battle at a time; callers create a new adapter per process."""
 
     def __init__(self):
+        self.snapshot_revision = 0
+        self.event_stream = None
         self._character_names = load_character_names()
         self.statistics: Statistics | None = None
         self.session: str | None = None
@@ -150,6 +153,10 @@ class BattleStatisticsAdapter:
     def on_gap(self) -> None:
         """Report a collection gap without inventing zeros or rates."""
         if self.statistics is not None:
+            if self.statistics.end_time is not None:
+                return
+            if self.event_stream is not None:
+                self.event_stream.stop()
             self.statistics.invalidate_snapshots()
             self.statistics.invalidate_events()
             self.last_result = self.statistics.result()
@@ -157,6 +164,8 @@ class BattleStatisticsAdapter:
 
     def _freeze(self) -> None:
         if self.statistics is not None and self.last_game_time is not None:
+            if self.event_stream is not None:
+                self.event_stream.stop()
             try:
                 self.statistics.finish(self.last_game_time)
             except ValueError:
@@ -164,6 +173,8 @@ class BattleStatisticsAdapter:
             self.last_result = self.statistics.result()
 
     def _begin(self, sample: dict, roster: RosterSnapshot) -> None:
+        self.snapshot_revision = 0
+        self.event_stream = None
         session = sample['session']
         start = sample['game_time']
         mapping = build_owner_map(roster)
@@ -186,6 +197,49 @@ class BattleStatisticsAdapter:
         self.presented_names = {}
         self.last_roster_frame = roster.frame
         self.session_switches += 1
+
+    def start_events(self, *, session, frame, sequence):
+        """Start only after the producer proves its barrier follows this baseline."""
+        if (self.statistics is None or self.event_stream is not None
+                or session != self.session or frame != self.last_frame
+                or self.last_game_time != self.coverage_start
+                or self.owner_map.unknown_token_cids or self.owner_map.ambiguous_cids
+                or self.mapping_conflicts):
+            raise ValueError('event barrier does not match the initial baseline')
+        self.statistics.event_coverage = True
+        try:
+            self.event_stream = EventStream(self.statistics, session=session,
+                                            baseline_frame=frame,
+                                            baseline_sequence=sequence)
+        except ValueError:
+            self.statistics.event_coverage = False
+            raise
+        self.last_result = self.statistics.result()
+
+    def accept_event(self, **event):
+        if self.event_stream is None:
+            raise StreamGap('event stream is unavailable')
+        source = event.get('source')
+        if not isinstance(source, str) or not source:
+            self.event_stream.stop()
+            self.last_result = self.statistics.result()
+            raise StreamGap('event source is invalid')
+        blocked = (self.owner_map.unknown_token_cids | self.owner_map.ambiguous_cids
+                   | self.mapping_conflicts)
+        if source in blocked or self.owner_map.owners.get(source) in blocked:
+            self.event_stream.stop()
+            self.last_result = self.statistics.result()
+            raise StreamGap('event source is ambiguous')
+        owner = self.owner_map.owners.get(source)
+        if owner is not None and source not in self.statistics.owners:
+            if not self._register(source, owner):
+                self.event_stream.stop()
+                self.last_result = self.statistics.result()
+                raise StreamGap('event source cannot be registered')
+        try:
+            self.event_stream.accept(**event)
+        finally:
+            self.last_result = self.statistics.result()
 
     def _register(self, cid: str, owner: str) -> bool:
         if cid in self.owner_map.owners and self.owner_map.owners[cid] != owner:
@@ -210,9 +264,13 @@ class BattleStatisticsAdapter:
                 self.statistics = None
             self._begin(sample, roster)
         game_time = sample['game_time']
-        if self.last_frame is not None and frame == self.last_frame:
+        settling = self.statistics.end_time is not None
+        if settling and (frame != self.last_frame or game_time != self.statistics.end_time
+                         or sample.get('state') != 3):
+            raise FrameMismatch('结算修订必须属于同局、同帧、同时间的结束快照')
+        if not settling and self.last_frame is not None and frame == self.last_frame:
             return None
-        if self.last_game_time is not None:
+        if not settling and self.last_game_time is not None:
             if game_time < self.last_game_time:
                 # A battle clock cannot move backwards in one session. Treat it
                 # as a new observation session rather than mixing samples.
@@ -240,6 +298,8 @@ class BattleStatisticsAdapter:
 
         blocked = (roster_map.unknown_token_cids | roster_map.ambiguous_cids
                    | self.mapping_conflicts)
+        if self.event_stream is not None and blocked:
+            self.event_stream.stop()
         counters: dict[str, dict[str, float]] = {}
         types_update: dict[str, dict[str, float]] = {}
         for row in sample.get('rows', ()):
@@ -268,9 +328,14 @@ class BattleStatisticsAdapter:
             # mapping/layout problem, not a legitimate empty battle.
             if sample.get('rows'):
                 raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
-            self.statistics.snapshot(game_time, {})
+        if settling:
+            changed = self.statistics.settle_snapshot(counters)
         else:
             self.statistics.snapshot(game_time, counters)
+            changed = True
+        if (changed or roster != self.last_roster
+                or any(self.last_types.get(cid) != values for cid, values in types_update.items())):
+            self.snapshot_revision += 1
         self.last_types.update(types_update)
         self.types_current = set(types_update)
         self.last_roster = roster
@@ -287,7 +352,15 @@ class BattleStatisticsAdapter:
     def finish(self, game_time: float | None = None) -> dict:
         if self.statistics is None or self.last_game_time is None:
             return self.last_result or {'rows': {}}
-        self.statistics.finish(game_time if game_time is not None else self.last_game_time)
+        end = game_time if game_time is not None else self.last_game_time
+        if self.event_stream is not None:
+            if (not self.event_stream.closed and self.event_stream.game_time == end
+                    and self.statistics.now == end):
+                # The final watermark proves coverage through the battle end.
+                self.event_stream.closed = True
+            else:
+                self.event_stream.stop()
+        self.statistics.finish(end)
         self.last_result = self.statistics.result()
         self.finished_session = self.session
         return self.last_result
@@ -339,4 +412,5 @@ class BattleStatisticsAdapter:
         result['mapping_conflicts'] = sorted(self.mapping_conflicts)
         result['missing_fields'] = sorted(self.missing_fields)
         result['adapter_session'] = self.session
+        result['snapshot_revision'] = self.snapshot_revision
         return result
