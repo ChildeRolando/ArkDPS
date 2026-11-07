@@ -1,0 +1,32 @@
+# 统计核心输入契约（离线，不接现有窗口）
+
+`stats_core.Statistics` 是单局、由调用方提供可靠游戏时钟和数据的计算器，不读取游戏，不接入现有 `Collector` 或 Tk 窗口。每局创建新实例；换局或时钟回退由调用方停止旧实例并新建，不能用旧实例跨局累加。此接口与实机采集、真实事件完整性以及全部机制兼容性尚未集成验收。
+
+## 权威来源和顺序
+
+1. 创建实例时传入本局可靠观察开始的游戏时间；已知事件流从同一时刻完整覆盖时才设 `event_coverage=True`。默认事件不可用，护盾和事件指标为未知，不是零。调用方负责保证这是可靠覆盖；研究探针代码不是本接口的产品采集器。
+2. 以 `register_source(statistic_key, owner)` 注册已可靠识别的累计统计键和宿主，稳定维持至本局结束。键是累计记录身份，不是每个临时实体的身份：多个实体共用一个键只注册并提交一次；不同键可归属同一宿主。未知归属不得猜测，冲突被拒绝。
+3. 在覆盖起点提交首个 `snapshot(start_time, {key: {'damage': D, 'healing': H}})`，即原生累计基线，包含启动前输出。后续同结构快照是**替换性的累计值**，不是再加一次的增量；宿主总量为其不同键的累计之和。缺失键保留上次可靠值，但 `counter_snapshot_complete=False`，其近期速率未知。新出现的非零键先作为该键基线，不能把原有数当成采集后输出。
+4. `advance(t)` 推进可靠游戏时钟（暂停时不推进）。可靠事件调用 `event(id, t, key, kind, amount)`；事件必须按游戏时间有序、不能晚于当前时钟。伤害/治疗事件只驱动采集后的接敌分子和区间，**不加到累计快照总量或快照近期速率**；`shield_absorbed` 事件只累计实际吸收，不能以到期、覆盖、离场、剩余盾量或受盾者推算。重复事件 ID 且内容一致忽略，冲突拒绝。
+5. 首次基线与事件同帧时，必须先完成原子基线并确认事件发生在该基线之后，才接受该帧事件；无法判定先后的事件不应输入。下一帧快照自身会包含该事件，故不用再将事件加进快照。相同游戏时间的累计快照若发生变化会拒绝，调用方应等待可区分的下个游戏时刻，不能用时间不变的快照制造速率。
+6. 明确发生采集缺口时，在最后可靠时间调用 `invalidate_snapshots()` 和/或 `invalidate_events()`。前者保留累计、重建近期窗口；后者冻结事件覆盖终点及接敌已观察区间，停止接收事件，结果标记覆盖不完整。未知缺口不能靠核心自动推测，调用方必须及时报告。缺口不能回填零；该实例没有恢复事件流的接口。
+7. `finish(t)` 用战斗结束游戏时刻截断区间。事件尾部只有实际经过的时间计入；结果中的 `coverage_start`、`shield_coverage_start`、`event_coverage_end`、`event_coverage_complete` 和 `counter_snapshot_complete` 供展示和持久化传播，使用方必须保留不完整标记。
+
+`recent_damage` / `recent_healing` 是最多 5 个观察游戏秒的累计快照差分速率：不足 5 秒使用实际观察时长，零时长未知。5 秒边界位于两个样本间时作线性插值，仅当两个样本相距不超过 1 秒；否则未知。采样差分是估计，不是事件时间。调用方确认连续但长间隔的两个样本在短窗口仍按实际差分估算；缺口必须显式报告。伤害/治疗接敌区间分别按事件产生并合并 `[t, t+1.5]`，分子仅是对应已观察事件，零活跃时长未知。
+
+最小离线调用：
+
+```python
+from stats_core import Statistics
+
+meter = Statistics('battle-1', 30, event_coverage=True)
+meter.register_source('host-stat', 'host')
+meter.snapshot(30, {'host-stat': {'damage': 1000, 'healing': 500}})
+meter.advance(32.3)
+meter.event('hit-1', 31, 'host-stat', 'damage', 230)
+meter.snapshot(32.3, {'host-stat': {'damage': 1230, 'healing': 615}})
+row = meter.result()['rows']['host']
+# damage=1230; recent_damage=100; observed_damage=230
+```
+
+事件 ID、来源映射、首次快照与事件的顺序、覆盖缺口识别均是未来适配器的责任；当前无法据此宣称运行中的 Demo 已支持新指标。
