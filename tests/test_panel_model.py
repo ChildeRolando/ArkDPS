@@ -3,13 +3,14 @@ import pytest
 from panel_model import (Category, DAMAGE_COLORS, PanelCollection, PanelConfig,
                          PanelSourceRow, Ranking, RateBasis, format_compact,
                          render_board, render_panel, rows_from_statistics)
+from stats_core import Statistics
 
 
 def src(owner, *, damage=None, healing=None, shield=None, recent_damage=None,
         recent_healing=None, recent_shield=None, engagement_damage=None,
         engagement_healing=None, active_damage=None, active_healing=None,
         present=True, types=None, counter_complete=True, event_complete=True,
-        sources=()):
+        sources=(), recent_window=(0, 5), recent_types=None):
     return PanelSourceRow(
         owner_id=owner, name=owner, present=present, damage=damage,
         healing=healing, shield=shield, recent_damage=recent_damage,
@@ -18,7 +19,82 @@ def src(owner, *, damage=None, healing=None, shield=None, recent_damage=None,
         engagement_healing=engagement_healing,
         active_damage=active_damage, active_healing=active_healing,
         damage_by_type=types or {}, counter_complete=counter_complete,
-        event_complete=event_complete, sources=sources)
+        event_complete=event_complete, sources=sources,
+        recent_damage_window=recent_window, recent_healing_window=recent_window,
+        recent_shield_window=recent_window,
+        recent_damage_by_type=recent_types or {})
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+@pytest.mark.parametrize('gap', [False, True])
+def test_statistics_recent_share_requires_full_common_window(category, gap):
+    stats = Statistics('window', 0)
+    stats.register_source('a', 'A')
+    stats.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    stats.register_source('b', 'B')
+    stats.snapshot(4, {'a': {'damage': 500, 'healing': 500},
+                       'b': {'damage': 0, 'healing': 0}})
+    if gap:
+        stats.invalidate_snapshots()
+        stats.snapshot(4.5, {'a': {'damage': 500, 'healing': 500},
+                             'b': {'damage': 0, 'healing': 0}})
+    stats.snapshot(5, {'a': {'damage': 500, 'healing': 500},
+                       'b': {'damage': 200, 'healing': 200}})
+    view = render_panel(recent(category), rows_from_statistics(stats.result()))
+    assert not view.share_known
+    assert view.share_reason
+    assert all(entry.share is None for entry in view.entries)
+
+
+def test_recent_damage_segments_use_recent_types_only():
+    row = src('A', damage=1000, recent_damage=20,
+              types={'physical': 900, 'arts': 100})
+    entry = render_panel(recent(), [row]).entries[0]
+    assert entry.segments == ()
+    assert not entry.segments_complete
+    row.recent_damage_by_type = {'arts': 20}
+    entry = render_panel(recent(), [row]).entries[0]
+    assert entry.segments_complete
+    assert [(s['kind'], s['ratio']) for s in entry.segments] == [('arts', 1.0)]
+    assert render_panel(total(), [row]).entries[0].segments[0]['kind'] == 'physical'
+
+
+def test_statistics_recent_share_recovers_when_full_window_observed():
+    stats = Statistics('window', 0)
+    stats.register_source('a', 'A')
+    stats.register_source('b', 'B')
+    stats.snapshot(0, {'a': {'damage': 0, 'healing': 0},
+                       'b': {'damage': 0, 'healing': 0}})
+    stats.invalidate_snapshots()
+    stats.snapshot(1, {'a': {'damage': 0, 'healing': 0},
+                       'b': {'damage': 0, 'healing': 0}})
+    stats.snapshot(6, {'a': {'damage': 100, 'healing': 50},
+                       'b': {'damage': 300, 'healing': 150}})
+    for category in (Category.DAMAGE, Category.HEALING):
+        view = render_panel(recent(category), rows_from_statistics(stats.result()))
+        assert view.share_known
+        assert view.entries[0].share == pytest.approx(0.75)
+
+
+def test_recent_share_requires_matching_certified_windows_including_zero_rows():
+    rows = [src('A', recent_damage=10), src('B', recent_damage=0, recent_window=(1, 5))]
+    assert not render_panel(recent(), rows).share_known
+    rows[1].recent_damage_window = None
+    assert not render_panel(recent(), rows).share_known
+    rows[1].recent_damage_window = (0, 5)
+    assert render_panel(recent(), rows).share_known
+
+
+def test_adapter_recent_types_and_absent_window_are_explicit():
+    rows = rows_from_statistics({'rows': {'A': {
+        'damage': 1000, 'recent_damage': 20,
+        'damage_by_type': {'physical': 1000},
+        'recent_damage_by_type': {'arts': 20},
+    }}})
+    view = render_panel(recent(), rows)
+    assert not view.share_known
+    assert view.entries[0].segments_complete
+    assert view.entries[0].segments[0]['kind'] == 'arts'
 
 
 def total(category=Category.DAMAGE):

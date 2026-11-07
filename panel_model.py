@@ -162,6 +162,11 @@ class PanelSourceRow:
     counter_complete: bool = True
     event_complete: bool = True
     sources: tuple[str, ...] = ()
+    # A window certifies that the full expected recent interval was observed.
+    recent_damage_window: tuple[float, float] | None = None
+    recent_healing_window: tuple[float, float] | None = None
+    recent_shield_window: tuple[float, float] | None = None
+    recent_damage_by_type: Mapping[str, float] = field(default_factory=dict)
 
     def total(self, category: Category) -> float | None:
         return {Category.DAMAGE: self.damage,
@@ -179,6 +184,11 @@ class PanelSourceRow:
         if category is Category.HEALING:
             return self.engagement_healing
         return None
+
+    def recent_window(self, category: Category) -> tuple[float, float] | None:
+        return {Category.DAMAGE: self.recent_damage_window,
+                Category.HEALING: self.recent_healing_window,
+                Category.SHIELD: self.recent_shield_window}[category]
 
 
 def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
@@ -200,6 +210,10 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             active_damage=row.get('active_damage'),
             active_healing=row.get('active_healing'),
             damage_by_type=row.get('damage_by_type') or {},
+            recent_damage_by_type=row.get('recent_damage_by_type') or {},
+            recent_damage_window=row.get('recent_damage_window'),
+            recent_healing_window=row.get('recent_healing_window'),
+            recent_shield_window=row.get('recent_shield_window'),
             counter_complete=bool(row.get('counter_snapshot_complete', True)),
             event_complete=bool(row.get('event_coverage_complete', True)),
             sources=tuple(row.get('sources') or ()),
@@ -255,14 +269,15 @@ def _metric_complete(row: PanelSourceRow, category: Category,
     return row.counter_complete
 
 
-def _segments(row: PanelSourceRow) -> tuple[tuple[dict, ...], bool]:
-    total = row.damage
+def _segments(row: PanelSourceRow, ranking: Ranking) -> tuple[tuple[dict, ...], bool]:
+    total = row.damage if ranking is Ranking.TOTAL else row.recent_damage
+    by_type = row.damage_by_type if ranking is Ranking.TOTAL else row.recent_damage_by_type
     if total is None or not _finite(total) or total <= 0:
         return (), False
     segments = []
     known = 0.0
     for kind in DAMAGE_ORDER:
-        value = row.damage_by_type.get(kind)
+        value = by_type.get(kind)
         if not _finite(value) or value <= 0:
             continue
         known += value
@@ -307,16 +322,25 @@ def render_panel(config: PanelConfig,
     any_unknown_row = any(
         not _finite(r.total(category) if ranking is Ranking.TOTAL else r.recent(category))
         for r in rows)
-    share_known = (bool(values) and team_complete and not any_unknown_row
+    windows = [r.recent_window(category) for r in rows] if ranking is Ranking.RECENT else []
+    def valid_window(window):
+        return (isinstance(window, (tuple, list)) and len(window) == 2
+                and all(_finite(t) for t in window)
+                and 0 < window[1] - window[0] <= 5)
+    window_known = (ranking is Ranking.TOTAL or
+                    (bool(windows) and all(valid_window(w) for w in windows)
+                     and all(tuple(w) == tuple(windows[0]) for w in windows)))
+    share_known = (bool(values) and team_complete and not any_unknown_row and window_known
                    and all(complete.values()) and team_denominator > 0)
     share_reason = ('' if share_known else
-                    '队伍数据不完整，无法计算全队同口径占比')
+                    ('近期窗口不完整或不一致，无法计算全队同口径占比'
+                     if not window_known else '队伍数据不完整，无法计算全队同口径占比'))
     max_value = max(displayed.values(), default=0.0)
 
     entries: list[PanelEntry] = []
     for owner, value in displayed.items():
         row = row_by_owner[owner]
-        segments, segments_complete = (_segments(row) if category is Category.DAMAGE
+        segments, segments_complete = (_segments(row, ranking) if category is Category.DAMAGE
                                        else ((), False))
         share = (value / team_denominator
                  if share_known and team_denominator > 0 else None)
