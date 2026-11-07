@@ -6,6 +6,7 @@
 
 - 累计快照：`session`、逻辑帧、游戏时间、每个统计条目的四类伤害与治疗累计。
 - 编队快照：`BattlePlayerData.characters` / `tokens` 中的 `prefabKey`、`uniqueId`、`isToken`、`tokenOrHostKey`、`tokenOrHostUniqueId`，以及 `UnitManager` 的在场单位。读取在一个帧守卫事务内完成，逻辑帧变化则整体拒绝。
+- 两次读取是独立事务；调用方须确保同一战局，`update` 在修改状态前校验累计帧与编队帧完全相同，不同或缺失时抛 `FrameMismatch`，调用方应重读配对。编队的非空玩家、数组计数、槽位、条目或关键键读取不完整时抛 `RosterUnavailable`；只有已确认的空槽才可跳过。读取失败按缺口处理，保留上次可靠累计。
 
 ## 稳定统计键与宿主
 

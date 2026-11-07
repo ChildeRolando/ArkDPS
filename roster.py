@@ -211,7 +211,8 @@ def build_operations(bc_addr: int) -> tuple[list[tuple], dict]:
                              IL2CPP_STRING_CHARS + MAX_STRING_CHARS * 2)
             tokens.append((data, key, host))
         players.append({'player': player, 'characters': chars, 'tokens': tokens,
-                        'char_count': char_count, 'token_count': token_count})
+                        'char_count': char_count, 'token_count': token_count,
+                        'char_items': char_items, 'token_items': token_items})
     unit_manager = ops.deref(bc, BATTLE_CONTROLLER_UNIT_MANAGER, 0, 0x30)
     # UnitManager.characters is an UnorderedArray: items +0x10, count +0x20.
     unit_list = ops.deref(unit_manager, UNIT_MANAGER_CHARACTERS, 0, 0x28)
@@ -227,7 +228,7 @@ def build_operations(bc_addr: int) -> tuple[list[tuple], dict]:
             data = ops.deref(data_ptr, 0, 0, BATTLE_CHARACTER_READ_SIZE)
             slots.append((data, data_ptr))
         live.append({'items': items_index, 'slots': slots})
-    return ops.operations, {'players': players, 'live': live}
+    return ops.operations, {'player_items': player_items, 'players': players, 'live': live}
 
 
 def _slots(result: bytes | None) -> int:
@@ -253,25 +254,43 @@ def _entry(data: bytes, key_raw: bytes | None, host_raw: bytes | None,
 
 def parse_results(results: list[bytes | None], layout: dict,
                   frame: int) -> RosterSnapshot:
-    """Parse transaction results; unknown or garbled entries are omitted."""
+    """Reject incomplete ownership evidence; skip only confirmed empty slots."""
     entries: list[CharacterEntry] = []
-    for player in layout['players']:
-        player_raw = results[player['player']]
-        if not player_raw:
+    player_items = results[layout['player_items']]
+    if player_items is None or len(player_items) % 8 or _slots(player_items) > len(layout['players']):
+        raise RosterUnavailable('战局编队玩家列表读取不完整')
+    for player_index in range(_slots(player_items)):
+        if not _u64(player_items, player_index * 8):
             continue
+        player = layout['players'][player_index]
+        player_raw = results[player['player']]
+        if not player_raw or len(player_raw) < 0x28:
+            raise RosterUnavailable('战局编队玩家数据读取不完整')
         side = _i32(player_raw, BATTLE_PLAYER_DATA_SIDE)
-        for group, count_index in (('characters', 'char_count'),
-                                   ('tokens', 'token_count')):
+        for group, count_index, items_index, pointer_offset in (
+                ('characters', 'char_count', 'char_items', BATTLE_PLAYER_DATA_CHARACTERS),
+                ('tokens', 'token_count', 'token_items', BATTLE_PLAYER_DATA_TOKENS)):
+            if not _u64(player_raw, pointer_offset):
+                continue
             count_raw = results[player[count_index]]
-            count = _i32(count_raw, 0) if count_raw and len(count_raw) >= 4 else 0
-            count = min(max(count, 0), len(player[group]))
-            for data_index, key_index, host_index in player[group][:count]:
-                data = results[data_index]
-                if not data:
+            if not count_raw or len(count_raw) < 4:
+                raise RosterUnavailable('战局编队计数读取不完整')
+            count = _i32(count_raw, 0)
+            if count < 0 or count > len(player[group]):
+                raise RosterUnavailable('战局编队计数超出支持范围')
+            items = results[player[items_index]]
+            if count and (items is None or len(items) < count * 8):
+                raise RosterUnavailable('战局编队槽位读取不完整')
+            for index, (data_index, key_index, host_index) in enumerate(player[group][:count]):
+                if not _u64(items, index * 8):
                     continue
+                data = results[data_index]
                 entry = _entry(data, results[key_index], results[host_index], side)
-                if entry:
-                    entries.append(entry)
+                if entry is None:
+                    raise RosterUnavailable('非空编队条目的数据或统计键读取不完整')
+                if entry.is_token and _u64(data, BATTLE_CHARACTER_HOST_KEY) and not entry.host_key:
+                    raise RosterUnavailable('召唤物宿主键读取不完整')
+                entries.append(entry)
     present: set[int] = set()
     present_known = False
     # Prefer the actual UnorderedArray layout; fall back to List<T> when it

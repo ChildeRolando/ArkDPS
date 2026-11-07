@@ -26,6 +26,10 @@ class MappingUnavailable(AdapterError):
     """No reliable owner mapping is available; counters must not be published."""
 
 
+class FrameMismatch(AdapterError):
+    """The independently guarded snapshots must be sampled again."""
+
+
 @dataclass
 class OwnerMap:
     owners: dict[str, str] = field(default_factory=dict)
@@ -194,13 +198,15 @@ class BattleStatisticsAdapter:
 
     def update(self, sample: dict, roster: RosterSnapshot) -> AdapterUpdate | None:
         """Apply one cumulative snapshot; returns None for duplicate frames."""
+        frame = sample.get('frame')
+        if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
+            raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
         if self.statistics is None or sample['session'] != self.session:
             if self.statistics is not None:
                 self._freeze()
                 self.statistics = None
             self._begin(sample, roster)
         game_time = sample['game_time']
-        frame = sample.get('frame')
         if self.last_frame is not None and frame == self.last_frame:
             return None
         if self.last_game_time is not None:
