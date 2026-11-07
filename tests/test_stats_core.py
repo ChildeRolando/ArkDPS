@@ -144,3 +144,34 @@ def test_explicit_gaps_close_coverage_and_do_not_invent_rates():
     assert row['event_coverage_complete'] is False
     with pytest.raises(ValueError):
         s.event('other', 2, 'a', 'damage', 10)
+
+
+def test_recent_restarts_immediately_after_gap():
+    s = Statistics('battle', 0)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 110, 'healing': 0}})
+    s.invalidate_snapshots()
+    s.snapshot(2, {'a': {'damage': 200, 'healing': 0}})
+    s.snapshot(2.5, {'a': {'damage': 250, 'healing': 0}})
+    assert s.result()['rows']['a']['recent_damage'] == 100
+
+
+def test_new_source_uses_common_owner_window():
+    s = Statistics('battle', 0)
+    s.register_source('a', 'host')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    s.snapshot(2, {'a': {'damage': 300, 'healing': 0}})
+    s.register_source('b', 'host')
+    s.snapshot(2, {'a': {'damage': 300, 'healing': 0}, 'b': {'damage': 1000, 'healing': 0}})
+    s.snapshot(2.5, {'a': {'damage': 350, 'healing': 0}, 'b': {'damage': 1050, 'healing': 0}})
+    assert s.result()['rows']['host']['recent_damage'] == 200
+
+
+def test_new_owner_starts_short_window_at_first_baseline():
+    s = Statistics('battle', 0)
+    s.snapshot(0, {})
+    s.register_source('b', 'b')
+    s.snapshot(2, {'b': {'damage': 1000, 'healing': 0}})
+    s.snapshot(2.5, {'b': {'damage': 1050, 'healing': 0}})
+    assert s.result()['rows']['b']['recent_damage'] == 100

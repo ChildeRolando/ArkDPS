@@ -93,10 +93,11 @@ class Statistics:
         for source, values in counters.items():
             state = self.sources.get(source)
             if state is None:
-                state = self.sources[source] = {'values': dict(values), 'history': deque(), 'continuous': True}
+                state = self.sources[source] = {'values': dict(values), 'history': deque(), 'continuous': True, 'segment_start': game_time}
             elif not state['continuous']:
                 state['history'].clear()
                 state['continuous'] = True
+                state['segment_start'] = game_time
             state['values'] = dict(values)
             history = state['history']
             entry = (game_time, dict(values))
@@ -142,24 +143,30 @@ class Statistics:
             else:
                 intervals.append((game_time, game_time + 1.5))
 
-    def _recent(self, state, kind):
+    def _recent(self, state, kind, start):
         if not state['continuous'] or not state['history']:
             return None
         history = state['history']
         # A sample missing at the current time cannot represent a current rate.
         if history[-1][0] != self.now:
             return None
-        start = max(self.start_time, self.now - 5)
         duration = self.now - start
         if duration <= 0 or history[0][0] > start:
             return None
-        baseline = history[0][1][kind]
-        if history[0][0] < start:
-            if len(history) < 2 or history[1][0] - history[0][0] > 1:
+        before = history[0]
+        after = None
+        for point in history:
+            if point[0] <= start:
+                before = point
+            else:
+                after = point
+                break
+        baseline = before[1][kind]
+        if before[0] < start:
+            if after is None or after[0] - before[0] > 1:
                 return None
-            a, b = history[0], history[1]
-            fraction = (start - a[0]) / (b[0] - a[0])
-            baseline += fraction * (b[1][kind] - baseline)
+            fraction = (start - before[0]) / (after[0] - before[0])
+            baseline += fraction * (after[1][kind] - baseline)
         return (history[-1][1][kind] - baseline) / duration
 
     def result(self):
@@ -179,7 +186,9 @@ class Statistics:
                    'shield_absorbed': self.shields.get(owner, 0) if self.event_coverage else None}
             for kind in ('damage', 'healing'):
                 row[kind] = sum(self.sources[s]['values'][kind] for s in sources) if sources else None
-                rates = [self._recent(self.sources[s], kind) for s in sources]
+                start = max([self.start_time, self.now - 5] +
+                            [self.sources[s]['segment_start'] for s in sources])
+                rates = [self._recent(self.sources[s], kind, start) for s in sources]
                 row['recent_' + kind] = sum(rates) if complete and rates and all(v is not None for v in rates) else None
                 state = self.engagement.get((owner, kind))
                 if state:
