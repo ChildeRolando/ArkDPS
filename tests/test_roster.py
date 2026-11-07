@@ -25,7 +25,7 @@ def data_bytes(cid, uid, *, token=False, host_uid=0, predefined=False):
 
 def populated_player(results, layout, characters=(), tokens=()):
     results[layout['player_items']] = struct.pack('<Q', 0x1000)
-    results[layout['live'][0]['items']] = b''
+    results[layout['live'][1]['items']] = b''
     player = layout['players'][0]
     raw = bytearray(0x28)
     for group, values, offset in (('char', characters, BATTLE_PLAYER_DATA_CHARACTERS),
@@ -64,7 +64,7 @@ def test_parse_results_maps_characters_tokens_and_presence():
     results[data_idx] = data_bytes('token_otter', 12, token=True, host_uid=11)
     results[key_idx] = string_bytes('token_otter')
     results[host_idx] = string_bytes('char_242_otter')
-    live = layout['live'][0]
+    live = layout['live'][1]
     results[live['items']] = struct.pack('<Q', 0x2000)
     results[live['slots'][0][0]] = data_bytes('char_242_otter', 11)
     snapshot = parse_results(results, layout, frame=77)
@@ -158,6 +158,47 @@ def test_unread_live_npc_cannot_hide_shared_key_conflict(failure):
             {'id': 'char_a', 'damage': 500, 'healing': 0}]),
             parse_results(results, layout, 2))
     assert adapter.result() == before
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_unread_unordered_list_cannot_fall_back_to_empty_list(cached):
+    from snapshot_adapter import BattleStatisticsAdapter, build_owner_map
+
+    ops, layout = build_operations(0x1000)
+    results = [None] * len(ops)
+    player = populated_player(results, layout, (0x100,))
+    data, key, _ = player['characters'][0]
+    results[data] = data_bytes('char_166_skfire', 100)
+    results[key] = string_bytes('char_166_skfire')
+    live = layout['live'][1]
+    adapter = BattleStatisticsAdapter()
+    sample = {'session': 'battle', 'frame': 1, 'game_time': 0, 'rows': [
+        {'id': 'char_166_skfire', 'damage': 100, 'healing': 0}]}
+    if cached:
+        results[live['items']] = b''
+        adapter.update(sample, parse_results(results, layout, 1))
+
+    results[live['items']] = struct.pack('<Q', 0x200)
+    data, _, key = live['slots'][0]
+    results[data] = data_bytes('char_166_skfire', 1, predefined=True)
+    results[key] = string_bytes('char_166_skfire')
+    assert 'char_166_skfire' in build_owner_map(
+        parse_results(results, layout, 2)).ambiguous_cids
+
+    # The wrong List<T> count offset can look like a valid empty list.
+    results[live['items']] = None
+    results[layout['live'][0]['items']] = b''
+    with pytest.raises(RosterUnavailable):
+        adapter.update(dict(sample, frame=2, game_time=1, rows=[
+            {'id': 'char_166_skfire', 'damage': 500, 'healing': 0}]),
+            parse_results(results, layout, 2))
+    adapter.on_gap()
+    if cached:
+        row = adapter.result()['rows']['char_166_skfire']
+        assert row['damage'] == 100
+        assert row['counter_snapshot_complete'] is False
+    else:
+        assert not adapter.active
 
 
 def test_live_predefined_character_maps_itself_and_keeps_total_after_removal():

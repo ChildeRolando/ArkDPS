@@ -295,34 +295,31 @@ def parse_results(results: list[bytes | None], layout: dict,
                 entries.append(entry)
     present: set[int] = set()
     roster_uids = {entry.unique_id for entry in entries}
-    # Prefer the actual UnorderedArray layout; fall back to List<T> when it
-    # is unavailable. Never treat an unread occupied slot as absent.
-    for group in reversed(layout['live']):
-        items = results[group['items']]
-        if items is None:
-            continue
-        if len(items) % 8 or _slots(items) > len(group['slots']):
-            raise RosterUnavailable('在场单位槽位读取不完整')
-        for index in range(_slots(items)):
-            if not _u64(items, index * 8):
-                continue
-            data_index, _, key_index = group['slots'][index]
-            data = results[data_index]
-            if not data or len(data) < BATTLE_CHARACTER_READ_SIZE:
-                raise RosterUnavailable('非空在场单位数据读取不完整')
-            uid = _u32(data, BATTLE_CHARACTER_UNIQUE_ID)
-            present.add(uid)
-            # Map-provided operators may exist only in the live list. Admit
-            # explicit non-token predefines by their own native statistic key.
-            if (uid not in roster_uids and data[BATTLE_CHARACTER_IS_PREDEFINED] == 1
-                    and data[BATTLE_CHARACTER_IS_TOKEN] == 0):
-                predefined = _entry(data, results[key_index], None, None)
-                if predefined is None:
-                    raise RosterUnavailable('预置在场单位统计键读取不完整')
-                entries.append(predefined)
-        break
-    else:
+    # Only the UnorderedArray layout is verified. The List<T> count offset
+    # can yield an empty result even when live units exist.
+    group = layout['live'][1]
+    items = results[group['items']]
+    if items is None:
         raise RosterUnavailable('在场单位列表不可读，无法确认归属')
+    if len(items) % 8 or _slots(items) > len(group['slots']):
+        raise RosterUnavailable('在场单位槽位读取不完整')
+    for index in range(_slots(items)):
+        if not _u64(items, index * 8):
+            continue
+        data_index, _, key_index = group['slots'][index]
+        data = results[data_index]
+        if not data or len(data) < BATTLE_CHARACTER_READ_SIZE:
+            raise RosterUnavailable('非空在场单位数据读取不完整')
+        uid = _u32(data, BATTLE_CHARACTER_UNIQUE_ID)
+        present.add(uid)
+        # Map-provided operators may exist only in the live list. Admit
+        # explicit non-token predefines by their own native statistic key.
+        if (uid not in roster_uids and data[BATTLE_CHARACTER_IS_PREDEFINED] == 1
+                and data[BATTLE_CHARACTER_IS_TOKEN] == 0):
+            predefined = _entry(data, results[key_index], None, None)
+            if predefined is None:
+                raise RosterUnavailable('预置在场单位统计键读取不完整')
+            entries.append(predefined)
     return RosterSnapshot(frame=frame, entries=tuple(entries),
                           present_unique_ids=frozenset(present),
                           present_known=True)
