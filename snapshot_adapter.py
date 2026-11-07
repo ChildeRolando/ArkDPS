@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import Statistics
 
@@ -122,6 +123,7 @@ class BattleStatisticsAdapter:
     """One live battle at a time; callers create a new adapter per process."""
 
     def __init__(self):
+        self._character_names = load_character_names()
         self.statistics: Statistics | None = None
         self.session: str | None = None
         self.owner_map = OwnerMap()
@@ -324,7 +326,9 @@ class BattleStatisticsAdapter:
             enriched['present'] = owners_present.get(owner) if present_known else None
             enriched['sources'] = sorted(
                 cid for cid, mapped in self.owner_map.owners.items() if mapped == owner)
-            enriched['name'] = self.presented_names.get(owner, owner)
+            enriched['name'] = (self.presented_names.get(owner)
+                                or self._character_names.get(owner)
+                                or owner)
             rows[owner] = enriched
         result['rows'] = rows
         result['present_known'] = present_known

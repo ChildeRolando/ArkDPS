@@ -19,6 +19,7 @@ from tools.enemy_health import game_structs as gs
 from tools.enemy_health.enemy_reader import EnemyReader
 from tools.enemy_health.memcore import TcpChannel
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
+from character_catalog import load_character_names
 from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
                         EXPECTED_GAME_VERSION, ForwardRegistry)
 from roster import RosterReader, RosterSnapshot, RosterUnavailable
@@ -98,7 +99,7 @@ class Collector:
         self.forward_registry = ForwardRegistry()
         self.core.mc.forward_registry = self.forward_registry
         # Dedicated port: do not share the upstream app's stream.
-        self.names = json.loads((VENDOR / 'game_data/catalogs/char_names.json').read_text(encoding='utf-8'))
+        self.names = load_character_names()
         self.last_pid_check = 0.0
         self.cache_path = ROOT / 'runtime' / 'address_hint.json'
         self._roster_reader = None

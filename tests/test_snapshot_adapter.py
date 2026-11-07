@@ -166,22 +166,24 @@ def test_summon_healing_uses_the_hosts_display_name(reverse):
                   host_key=host.cid, host_uid=host.unique_id)
     r = roster([host, drone])
     a = BattleStatisticsAdapter()
-    rows = [row(host.cid, healing=581, name='赫默'),
+    rows = [row(host.cid, healing=581, name='助战赫默'),
             row(drone.cid, healing=125, name='医疗无人机')]
     if reverse:
         rows.reverse()
     a.update(sample(rows, 0, 1), paired(r, 1))
-    assert a.result()['rows'][host.cid]['name'] == '赫默'
+    assert a.result()['rows'][host.cid]['name'] == '助战赫默'
     assert a.result()['rows'][host.cid]['healing'] == 706
 
     drone_only = [row(drone.cid, healing=2500, name='医疗无人机')]
     a.update(sample(drone_only, 1, 2), paired(r, 2))
-    assert a.result()['rows'][host.cid]['name'] == '赫默'
+    assert a.result()['rows'][host.cid]['name'] == '助战赫默'
     assert a.result()['rows'][host.cid]['healing'] == 3081
 
     a.update(sample(drone_only, 0, 3, session='battle-2'), paired(r, 3))
-    assert a.result()['rows'][host.cid]['name'] == host.cid
-    assert a.result()['rows'][host.cid]['healing'] == 2500
+    result = a.result()['rows']
+    assert result[host.cid]['name'] == '赫默'
+    assert result[host.cid]['healing'] == 2500
+    assert drone.cid not in result
 
 
 def test_unmapped_token_is_excluded_not_guessed():
