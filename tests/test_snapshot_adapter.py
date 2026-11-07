@@ -128,6 +128,44 @@ def test_snapshots_replace_totals_and_duplicate_frames_are_ignored():
     assert a.result(BASE)['rows']['char_a']['damage'] == 1260
 
 
+def test_ordered_event_barrier_and_gap_do_not_change_native_totals():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 1000)], 30, 10), paired(BASE, 10))
+    a.start_events(session='battle-1', frame=10, sequence=4)
+    a.accept_event(session='battle-1', sequence=5, frame=10, game_time=30,
+                   source='char_a', kind='damage', amount=20)
+    a.update(sample([row('char_a', 1020)], 31, 11), paired(BASE, 11))
+    a.on_gap()
+    result = a.result()['rows']['char_a']
+    assert result['damage'] == 1020
+    assert result['observed_damage'] == 20
+    assert result['event_coverage_end'] == 30
+    assert not result['event_coverage_complete']
+
+
+def test_event_stream_cannot_continue_after_mapping_conflict():
+    token = entry('token_a', 3, token=True, host_key='char_a', host_uid=1)
+    changed = entry('token_a', 3, token=True, host_key='char_b', host_uid=2)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a'), row('token_a')], 0, 1),
+             roster([CHAR_A, CHAR_B, token], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.update(sample([row('char_a'), row('token_a')], 1, 2),
+             roster([CHAR_A, CHAR_B, changed], frame=2))
+    assert not a.result()['rows']['char_a']['event_coverage_complete']
+
+
+def test_shield_only_summon_uses_roster_host_without_a_counter_row():
+    token = entry('token_a', 3, token=True, host_key='char_a', host_uid=1)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a')], 0, 1), roster([CHAR_A, token], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
+                   source='token_a', kind='shield_absorbed', amount=2)
+    assert a.result()['rows']['char_a']['shield_absorbed'] == 2
+    assert a.result()['rows']['char_a']['damage'] == 0
+
+
 def test_pause_does_not_fabricate_a_rate_or_change_totals():
     a = BattleStatisticsAdapter()
     a.update(sample([row('char_a', 1000, 0)], 0, 1), paired(BASE, 1))

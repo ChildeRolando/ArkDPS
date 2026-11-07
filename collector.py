@@ -137,7 +137,7 @@ class Collector:
             raise SampleUnavailable('发现多个有效战局，无法确认当前局；停止发布数据')
         self.core.bc_addr=valid[0]
 
-    def connect(self, force=False):
+    def connect(self, force=False, *, locate=True):
         self.log('正在连接 MuMu…')
         self.core.bc_addr = 0
         # MemCore owns its channel; its creation uses the class port default.
@@ -174,6 +174,14 @@ class Collector:
         self.diagnostics.version_status = VersionStatus.COMPATIBLE
         self.core._chan = self.core.mc.channel()
         self.last_pid_check = time.monotonic()
+        if locate:
+            self.locate_battle(force=force)
+
+    def locate_battle(self, force=False):
+        """Locate after a version-checked connection, allowing pre-battle hooks."""
+        if self.diagnostics.version_status != VersionStatus.COMPATIBLE:
+            raise UnsupportedVersion('版本未通过校验，拒绝定位战局', self.diagnostics)
+        self.core.bc_addr = 0
         hint = None
         try:
             hint = json.loads(self.cache_path.read_text(encoding='utf-8'))
