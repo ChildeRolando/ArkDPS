@@ -274,16 +274,22 @@ def parse_results(results: list[bytes | None], layout: dict,
                     entries.append(entry)
     present: set[int] = set()
     present_known = False
-    for group in layout['live']:
+    # Prefer the actual UnorderedArray layout; fall back to List<T> when it
+    # is unavailable. Never treat an unread occupied slot as absent.
+    for group in reversed(layout['live']):
         items = results[group['items']]
         if items is None:
             continue
-        present_known = True
-        count = min(_slots(items), len(group['slots']))
-        for index in range(count):
+        present_known = len(items) % 8 == 0 and _slots(items) <= len(group['slots'])
+        for index in range(min(_slots(items), len(group['slots']))):
+            if not _u64(items, index * 8):
+                continue
             data = results[group['slots'][index][0]]
-            if data and len(data) >= BATTLE_CHARACTER_READ_SIZE:
-                present.add(_u32(data, BATTLE_CHARACTER_UNIQUE_ID))
+            if not data or len(data) < BATTLE_CHARACTER_READ_SIZE:
+                present_known = False
+                continue
+            present.add(_u32(data, BATTLE_CHARACTER_UNIQUE_ID))
+        break
     return RosterSnapshot(frame=frame, entries=tuple(entries),
                           present_unique_ids=frozenset(present),
                           present_known=present_known)

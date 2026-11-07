@@ -76,7 +76,7 @@ def build_owner_map(roster: RosterSnapshot) -> OwnerMap:
             continue
         result.owners[token.cid] = owner
         result.roster_entries.setdefault(token.cid, token)
-    for cid in result.ambiguous_cids:
+    for cid in result.ambiguous_cids | result.unknown_token_cids:
         result.owners.pop(cid, None)
     return result
 
@@ -132,7 +132,7 @@ class BattleStatisticsAdapter:
         self.same_time_changes = 0
         self.mapping_conflicts: set[str] = set()
         self.last_roster_frame: int | None = None
-        self.present_known = False
+        self.last_roster: RosterSnapshot | None = None
         self.presented_names: dict[str, str] = {}
         self.finished_session: str | None = None
 
@@ -145,6 +145,8 @@ class BattleStatisticsAdapter:
         if self.statistics is not None:
             self.statistics.invalidate_snapshots()
             self.statistics.invalidate_events()
+            self.last_result = self.statistics.result()
+            self.types_current.clear()
 
     def _freeze(self) -> None:
         if self.statistics is not None and self.last_game_time is not None:
@@ -173,7 +175,8 @@ class BattleStatisticsAdapter:
         self.unknown_sources = set(mapping.unknown_token_cids)
         self.missing_fields = set()
         self.mapping_conflicts = set()
-        self.present_known = roster.present_known
+        self.last_roster = None
+        self.presented_names = {}
         self.last_roster_frame = roster.frame
         self.session_switches += 1
 
@@ -221,8 +224,9 @@ class BattleStatisticsAdapter:
         self.owner_map.ambiguous_cids |= roster_map.ambiguous_cids
         self.owner_map.roster_entries.update(roster_map.roster_entries)
         self.last_roster_frame = roster.frame
-        self.present_known = roster.present_known
 
+        blocked = (roster_map.unknown_token_cids | roster_map.ambiguous_cids
+                   | self.mapping_conflicts)
         counters: dict[str, dict[str, float]] = {}
         types_update: dict[str, dict[str, float]] = {}
         names: dict[str, str] = {}
@@ -231,7 +235,7 @@ class BattleStatisticsAdapter:
             if not isinstance(cid, str) or not cid:
                 continue
             owner = self.owner_map.owners.get(cid)
-            if owner is None:
+            if owner is None or cid in blocked:
                 self.unknown_sources.add(cid)
                 continue
             counter = _counter(row)
@@ -244,7 +248,7 @@ class BattleStatisticsAdapter:
             names[owner] = row.get('name') or names.get(owner, owner)
             damage_types = _types(row)
             if damage_types is not None:
-                types_update[owner] = damage_types
+                types_update[cid] = damage_types
         self.presented_names.update(names)
         if not counters:
             # Fail closed: rows exist but none can be attributed. This is a
@@ -254,9 +258,9 @@ class BattleStatisticsAdapter:
             self.statistics.snapshot(game_time, {})
         else:
             self.statistics.snapshot(game_time, counters)
-        for owner, values in types_update.items():
-            self.last_types[owner] = values
+        self.last_types.update(types_update)
         self.types_current = set(types_update)
+        self.last_roster = roster
         self.last_frame = frame
         self.last_game_time = game_time
         self.last_result = self.statistics.result()
@@ -280,24 +284,32 @@ class BattleStatisticsAdapter:
         if self.last_result is None:
             return {'rows': {}}
         result = dict(self.last_result)
+        roster = roster if roster is not None else self.last_roster
         present_ids = roster.present_unique_ids if roster else frozenset()
-        present_known = roster.present_known if roster else self.present_known
+        present_known = roster.present_known if roster else False
         unknown_present: set[int] = set()
         owners_present: dict[str, bool] = {}
         if present_known:
-            known_uids = {e.unique_id for e in self.owner_map.roster_entries.values()}
+            known_uids = {e.unique_id for e in roster.entries}
             unknown_present = set(present_ids) - known_uids
             for owner in result['rows']:
                 owners_present[owner] = any(
                     entry.unique_id in present_ids
-                    for entry in self.owner_map.roster_entries.values()
+                    for entry in roster.entries
                     if self.owner_map.owners.get(entry.cid) == owner)
         rows = {}
         for owner, row in result['rows'].items():
             enriched = dict(row)
-            enriched['damage_by_type'] = dict(self.last_types.get(owner, {}))
-            enriched['types_available'] = owner in self.last_types
-            enriched['types_stale'] = owner not in self.types_current
+            sources = [cid for cid, mapped in self.statistics.owners.items()
+                       if mapped == owner]
+            known_types = [self.last_types[cid] for cid in sources
+                           if cid in self.last_types]
+            enriched['damage_by_type'] = (
+                {kind: sum(values[kind] for values in known_types)
+                 for kind in DAMAGE_TYPES} if known_types else {})
+            enriched['types_available'] = bool(known_types)
+            enriched['types_stale'] = not sources or any(
+                cid not in self.types_current for cid in sources)
             enriched['present'] = owners_present.get(owner) if present_known else None
             enriched['sources'] = sorted(
                 cid for cid, mapped in self.owner_map.owners.items() if mapped == owner)

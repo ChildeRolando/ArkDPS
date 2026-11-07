@@ -96,3 +96,17 @@ def test_decode_string_validation():
     assert decode_string(b'\x00' * 20) is None
     assert decode_string(b'\x00' * 0x10 + struct.pack('<i', 2)
                          + '[]'.encode('utf-16-le')) is None
+
+
+def test_occupied_live_slot_failure_is_unknown_but_empty_list_is_known():
+    ops, layout = build_operations(0x1000)
+    results = [None] * len(ops)
+    live = layout['live'][1]
+    results[live['items']] = struct.pack('<Q', 0x2000)
+    assert parse_results(results, layout, frame=1).present_known is False
+    results[live['slots'][0][0]] = b'\x00' * 4
+    assert parse_results(results, layout, frame=1).present_known is False
+    results[live['items']] = b''
+    assert parse_results(results, layout, frame=1).present_known is True
+    results[live['items']] = struct.pack('<Q', 0)
+    assert parse_results(results, layout, frame=1).present_known is True

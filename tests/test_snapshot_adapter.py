@@ -250,3 +250,106 @@ def test_predefined_and_assisted_units_keep_their_own_identity():
     result = a.result(r)
     assert result['rows']['enemy_npc']['damage'] == 40
     assert result['rows']['char_180_amgoat']['damage'] == 70
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_summon_types_sum_each_key_and_mark_partial_stale(reverse):
+    token = entry('token_otter', 12, token=True, host_key=OTTER.cid, host_uid=11)
+    r = roster([OTTER, token])
+    a = BattleStatisticsAdapter()
+    rows = [row(OTTER.cid, 10, physical=10), row(token.cid, 20, arts=20)]
+    if reverse:
+        rows.reverse()
+    a.update(sample(rows, 0, 1), r)
+    host = a.result()['rows'][OTTER.cid]
+    assert host['damage_by_type'] == {'physical': 10, 'arts': 20, 'true': 0, 'elemental': 0}
+    assert host['types_stale'] is False
+    partial = row(token.cid, 30, arts=30)
+    del partial['arts']
+    a.update(sample([row(OTTER.cid, 15, physical=15), partial], 1, 2), r)
+    host = a.result()['rows'][OTTER.cid]
+    assert host['damage_by_type'] == {'physical': 15, 'arts': 20, 'true': 0, 'elemental': 0}
+    assert host['types_stale'] is True
+
+
+def test_default_result_uses_latest_presence_and_resets_on_new_session():
+    a = BattleStatisticsAdapter()
+    for i, (present, known, expected) in enumerate([((1,), True, True), ((), True, False), ((1,), True, True), ((), False, None)]):
+        a.update(sample([row('char_a', 100)], i, i+1), roster([CHAR_A], present, known))
+        assert a.result()['rows']['char_a']['present'] is expected
+    a.update(sample([row('char_a', 2)], 0, 1, 'new'), roster([CHAR_A], (), True))
+    assert a.result()['rows']['char_a']['present'] is False
+
+
+def test_gap_immediately_invalidates_rates_even_on_paused_frame():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 100)], 0, 1), BASE)
+    a.update(sample([row('char_a', 200)], 1, 2), BASE)
+    a.on_gap()
+    for _ in range(2):
+        r = a.result()['rows']['char_a']
+        assert r['damage'] == 200
+        assert r['recent_damage'] is None
+        assert r['counter_snapshot_complete'] is False
+        assert a.update(sample([row('char_a', 200)], 1, 2), BASE) is None
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('cached', [False, True])
+def test_partial_unknown_shared_token_key_is_not_updated(reverse, cached):
+    valid = entry('token_a', 2, token=True, host_key='char_a', host_uid=1)
+    invalid = entry('token_a', 3, token=True, host_key='char_a', host_uid=999)
+    a = BattleStatisticsAdapter()
+    if cached:
+        a.update(sample([row('char_a', 100), row('token_a', 50)], 0, 1), roster([CHAR_A, valid]))
+    tokens = [valid, invalid]
+    if reverse:
+        tokens.reverse()
+    r = roster([CHAR_A] + tokens)
+    assert 'token_a' not in build_owner_map(r).owners
+    a.update(sample([row('char_a', 100), row('token_a', 500)], 1 if cached else 0, 2), r)
+    result = a.result()
+    assert result['rows']['char_a']['damage'] == (150 if cached else 100)
+    assert 'token_a' in result['unmapped_tokens']
+    if cached:
+        assert result['rows']['char_a']['counter_snapshot_complete'] is False
+
+
+def test_recorded_summon_fixture_preserves_both_damage_types():
+    import json
+    from pathlib import Path
+    data = json.loads((Path(__file__).parents[1] / 'acceptance/recovery/summon-roster-live.json').read_text(encoding='utf-8'))
+    player = data['players'][0]
+    entries = [entry(e['cid'], e['unique_id'], token=e['is_token'],
+                     host_key=e['token_or_host_key'], host_uid=e['token_or_host_uid'])
+               for e in player['characters'] + player['tokens']]
+    a = BattleStatisticsAdapter()
+    a.update(data['before'], roster(entries))
+    result = a.result()['rows']['char_242_otter']
+    assert result['damage_by_type']['physical'] == 1295
+    assert result['damage_by_type']['arts'] == pytest.approx(374.3999938964844)
+    assert result['damage'] == pytest.approx(1669.3999938964844)
+
+
+def test_missing_initial_source_type_is_partial():
+    token = entry('token_a', 2, token=True, host_key='char_a', host_uid=1)
+    missing = row('token_a', 20)
+    del missing['arts']
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 10, physical=10), missing], 0, 1), roster([CHAR_A, token]))
+    r = a.result()['rows']['char_a']
+    assert r['damage_by_type']['physical'] == 10
+    assert r['types_available'] is True
+    assert r['types_stale'] is True
+
+
+def test_changed_owner_evidence_does_not_increase_cached_source():
+    valid = entry('token_a', 3, token=True, host_key='char_a', host_uid=1)
+    changed = entry('token_a', 3, token=True, host_key='char_b', host_uid=2)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 100), row('token_a', 50)], 0, 1), roster([CHAR_A, CHAR_B, valid]))
+    a.update(sample([row('char_a', 100), row('token_a', 500)], 1, 2), roster([CHAR_A, CHAR_B, changed]))
+    r = a.result()
+    assert r['rows']['char_a']['damage'] == 150
+    assert r['rows']['char_a']['counter_snapshot_complete'] is False
+    assert 'token_a' in r['mapping_conflicts']
