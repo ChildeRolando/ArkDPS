@@ -19,6 +19,8 @@ from tools.enemy_health import game_structs as gs
 from tools.enemy_health.enemy_reader import EnemyReader
 from tools.enemy_health.memcore import TcpChannel
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
+from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
+                        EXPECTED_GAME_VERSION)
 
 DEFAULT_ADB = r'C:\Program Files\Netease\MuMu Player 12\nx_main\adb.exe'
 DEFAULT_SERIAL = '127.0.0.1:16384'
@@ -34,6 +36,19 @@ class SampleUnavailable(RuntimeError):
 
 class BattleChanged(SampleUnavailable):
     pass
+
+
+class UnsupportedVersion(SampleUnavailable):
+    """The transport works, but statistics for this game version are unverified.
+
+    The diagnostic attached here deliberately reports connection_ok=True and
+    version_status=incompatible so the GUI can distinguish "not connected"
+    from "connected but unsupported".
+    """
+
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 def check_battle_ownership(bc, native, managed_reference, logger_owner):
@@ -83,6 +98,11 @@ class Collector:
         self.names = json.loads((VENDOR / 'game_data/catalogs/char_names.json').read_text(encoding='utf-8'))
         self.last_pid_check = 0.0
         self.cache_path = ROOT / 'runtime' / 'address_hint.json'
+        self.adb_path = adb
+        self.serial = serial
+        self.diagnostics = ConnectionDiagnostics(
+            status=DetectionStatus.NO_INSTANCE, adb_path=adb,
+            selected_serial=serial, version_expected=EXPECTED_GAME_VERSION)
 
     def _valid_battle(self, bc):
         mc=self.core.mc
@@ -118,14 +138,35 @@ class Collector:
         # MemCore owns its channel; its creation uses the class port default.
         TcpChannel.PORT = PORT
         self.core.connect()
+        if not hasattr(self, 'diagnostics'):
+            self.diagnostics = ConnectionDiagnostics()
+        self.adb_path = getattr(self, 'adb_path', None)
+        self.serial = getattr(self, 'serial', None)
+        self.diagnostics.adb_path = self.adb_path
+        self.diagnostics.selected_serial = self.serial
         if not self.core.mc.process_instance:
+            self.diagnostics.connection_ok = False
             raise SampleUnavailable('无法验证游戏进程身份，请重试连接')
+        self.diagnostics.connection_ok = True
+        self.diagnostics.status = DetectionStatus.READY_UNIQUE
         package_info = self.core.mc.shell(f'dumpsys package {self.core.mc.package}', timeout=10)
         version = re.search(r'versionName=([^\s]+)', package_info)
-        expected = json.loads((VENDOR / 'game_data/manifest.json').read_text(encoding='utf-8'))['android_game_version']
-        if not version or version.group(1) != expected:
-            actual = version.group(1) if version else '未知'
-            raise SampleUnavailable(f'当前仅验证 Android {expected}，检测到 {actual}；需更新适配后再读取')
+        expected = EXPECTED_GAME_VERSION or json.loads(
+            (VENDOR / 'game_data/manifest.json').read_text(encoding='utf-8'))['android_game_version']
+        if not version:
+            self.diagnostics.version_status = VersionStatus.UNKNOWN
+            self.diagnostics.message = '已连接，但无法解析游戏版本；拒绝读取统计'
+            raise UnsupportedVersion(self.diagnostics.message, self.diagnostics)
+        actual = version.group(1)
+        self.diagnostics.version_actual = actual
+        if actual != expected:
+            self.diagnostics.version_status = VersionStatus.INCOMPATIBLE
+            self.diagnostics.message = (
+                f'当前仅验证 Android {expected}，检测到 {actual}；需更新适配后再读取')
+            raise UnsupportedVersion(
+                f'当前仅验证 Android {expected}，检测到 {actual}；需更新适配后再读取',
+                self.diagnostics)
+        self.diagnostics.version_status = VersionStatus.COMPATIBLE
         self.core._chan = self.core.mc.channel()
         self.last_pid_check = time.monotonic()
         hint = None
