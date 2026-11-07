@@ -26,6 +26,7 @@ class BattleObservation:
     roster: object | None = None
     reason: str = ''
     events: dict | None = None
+    lifecycle: dict | None = None
 
 
 class BattleFeed:
@@ -42,13 +43,18 @@ class BattleFeed:
         self.retired_session = None
         self.native_session = None
         self.terminal = False
+        self.current_lifecycle = None
+        self.stage = None
+        self.retired_stage = None
 
     def _emit(self, kind, sample=None, roster=None, reason='', events=None):
         self.sequence += 1
         return BattleObservation(self.id, self.sequence, self.generation,
-                                 kind, deepcopy(sample), roster, reason, deepcopy(events))
+                                 kind, deepcopy(sample), roster, reason, deepcopy(events),
+                                 deepcopy(self.current_lifecycle))
 
     def gap(self, reason='read_unavailable'):
+        self.current_lifecycle = None
         return self._emit('gap', reason=reason)
 
     def _end(self, reason, sample=None, roster=None):
@@ -56,7 +62,9 @@ class BattleFeed:
             return self._emit('waiting', reason=reason)
         self.retired, self.retired_clock = self.identity, self.clock
         self.retired_session = self.native_session
+        self.retired_stage = self.stage
         self.identity = self.clock = self.native_session = None
+        self.stage = None
         self.terminal = False
         return self._emit('end', sample, roster, reason=reason)
 
@@ -98,6 +106,8 @@ class BattleFeed:
             raise FrameMismatch('快照不属于当前单例战局')
         if sample.get('state') != before.get('state'):
             raise FrameMismatch('快照战斗状态与生命周期状态不一致')
+        if before.get('metadata'):
+            sample['battle_metadata'] = deepcopy(before['metadata'])
         now = sample['game_time']
         if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
             raise FrameMismatch('游戏时间无效')
@@ -115,7 +125,12 @@ class BattleFeed:
         FINISHED state, finish transition, or a new guarded identity ends a
         battle. No polling timeout, empty unit list or transport error does.
         """
+        self.current_lifecycle = None
         before = collector.read_lifecycle()
+        self.current_lifecycle = before
+        metadata = before.get('metadata') or {}
+        stage = metadata.get('stage_id') if metadata.get('evidence') else None
+        stage_changed = bool(stage and self.stage and stage != self.stage)
         battle = before['battle']
         if battle is None:
             observation = self._end('battle_absent')
@@ -129,7 +144,7 @@ class BattleFeed:
         if before.get('state') == 3 or exiting:
             # A singleton replacement may be observed only after it finished.
             # It cannot provide a result for the previously observed battle.
-            if self.identity == identity and before.get('state') == 3 and not exiting:
+            if self.identity == identity and not stage_changed and before.get('state') == 3 and not exiting:
                 from collector import SampleUnavailable
                 from roster import RosterUnavailable
                 from tools.stage_global_state.memory import ReadFailure
@@ -145,7 +160,7 @@ class BattleFeed:
                     self.terminal = True
                     self.clock = sample['game_time']
                     return self._emit('terminal', sample, roster, events=events)
-            return self._end('finished' if self.identity == identity else 'replaced')
+            return self._end('finished' if self.identity == identity and not stage_changed else 'replaced')
         if not before['ready'] or before['transiting']:
             if before.get('state') in (0, 1):
                 observation = self._end('battle_initializing')
@@ -155,18 +170,22 @@ class BattleFeed:
             return self.gap('scene_transition')
         sample, roster, events = self._read_pair(collector, before, observer)
         now = sample['game_time']
-        if (self.terminal and identity == self.identity and
+        if (self.terminal and not stage_changed and identity == self.identity and
                 sample['session'] == self.native_session and now >= self.clock):
             return self._emit('waiting', reason='terminal_battle')
         if (self.identity is None and identity == self.retired
-                and sample['session'] == self.retired_session):
+                and sample['session'] == self.retired_session
+                and not (stage and self.retired_stage and stage != self.retired_stage)):
             if self.retired_clock is None or now >= self.retired_clock:
                 return self._emit('waiting', reason='retired_battle')
-        changed = (self.identity != identity or self.native_session != sample['session']
+        changed = (self.identity != identity or stage_changed or self.native_session != sample['session']
                    or (self.clock is not None and now < self.clock))
         if changed:
             self.generation += 1
             self.terminal = False
+            self.stage = stage
+        elif stage:
+            self.stage = stage
         self.identity, self.clock = identity, now
         self.native_session = sample['session']
         sample['native_session'] = sample['session']

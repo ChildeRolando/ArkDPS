@@ -90,7 +90,7 @@ class LifecycleReader:
         if raw[0x20] not in (0, 1):
             raise ReadFailure('unsupported_layout')
         source, target = [self._string(struct.unpack_from('<Q', raw, offset)[0]) for offset in (0x28, 0x30)]
-        battle, ready, state = None, False, None
+        battle, ready, state, metadata = None, False, None, None
         if bc:
             fields = gs.BattleControllerFields
             size = max(fields.M_STATE + 4, fields.SCHEDULER + 8,
@@ -104,6 +104,22 @@ class LifecycleReader:
                 state = struct.unpack_from('<i', block, fields.M_STATE)[0]
                 if state not in (0, 1, 2, 3):
                     raise ReadFailure('unsupported_layout')
+                # Optional stage evidence never turns a failed read into an
+                # absent battle or a guessed outcome/practice flag.
+                level = struct.unpack_from('<Q', block, fields.LEVEL_DATA)[0]
+                if level:
+                    try:
+                        m.identity(level, 'LevelData')
+                        slot = level + gs.LevelDataFields.LEVEL_ID
+                        stage_ptr = m.pointer(slot)
+                        if stage_ptr:
+                            m.identity(stage_ptr, 'String')
+                        stage = self._string(stage_ptr)
+                        if stage and m.pointer(slot) == stage_ptr:
+                            metadata = dict(stage_id=stage,
+                                            evidence='native.LevelData.levelId:Android2.7.91')
+                    except (ReadFailure, UnicodeError):
+                        pass
                 # No advancing-clock requirement: paused PLAYING is valid.
                 if state == 2 and not raw[0x20]:
                     ready = True
@@ -122,7 +138,7 @@ class LifecycleReader:
         if after[:2] != slots or after[2] != raw[0x20:0x38]:
             raise ReadFailure('binding_changed')
         return dict(battle=battle, ready=ready, transiting=bool(raw[0x20]),
-                    source=source, target=target, state=state)
+                    source=source, target=target, state=state, metadata=metadata)
 
 
 def locate_lifecycle(mc, battle_klass, locator):

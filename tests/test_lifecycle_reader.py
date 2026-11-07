@@ -14,7 +14,8 @@ class MemoryFixture:
         self.mc = SimpleNamespace(is_ptr=lambda address: address >= 1000)
         self.blocks = {}
         self.pointers = {1000 + 0x58: 1100, 1100 + 0xB8: 1200,
-                         2000 + 0x58: 2100, 2100 + 0xB8: 2200}
+                         2000 + 0x58: 2100, 2100 + 0xB8: 2200,
+                         8000 + gs.LevelDataFields.LEVEL_ID: 0}
         self.names = {1000: ('BattleController', 'Torappu.Battle'),
                       1100: ('SingletonMonoBehaviour`1', 'Torappu'),
                       2000: ('GameFlowController', 'Torappu'),
@@ -102,6 +103,23 @@ def test_memory_access_rejects_short_reads_instead_of_decoding_zero():
     memory = MemoryAccess(SimpleNamespace(is_ptr=lambda address: True), channel)
     with pytest.raises(ReadFailure):
         memory.pointer(1000)
+
+
+def test_optional_native_stage_requires_readable_stable_string_but_no_result_guess():
+    memory = MemoryFixture()
+    stage = 'Activities/ACT3D0/level_act3d0_02'
+    memory.pointers[8000 + gs.LevelDataFields.LEVEL_ID] = 10000
+    memory.identities[10000] = 'String'
+    raw = bytearray(0x14)
+    struct.pack_into('<i', raw, 0x10, len(stage))
+    memory.blocks[10000] = bytes(raw) + stage.encode('utf-16-le')
+    result = LifecycleReader(memory, 1000, 2000).sample()
+    assert result['metadata'] == dict(stage_id=stage,
+                                       evidence='native.LevelData.levelId:Android2.7.91')
+    assert 'outcome' not in result['metadata'] and 'practice' not in result['metadata']
+    memory.blocks.pop(10000)
+    result = LifecycleReader(memory, 1000, 2000).sample()
+    assert result['metadata'] is None and result['ready']
 
 
 @pytest.mark.parametrize('birth', [10, 11, 'invalid'])

@@ -62,6 +62,12 @@ Get-FileHash runtime/ark6-live-01/observations.jsonl -Algorithm SHA256
 
 ### 整合已合入的 ARK-5（新候选实机待验收）
 
+只读字段取证已确认当前暂停的 OF-2：`LevelData.levelId` 为 `Activities/ACT3D0/level_act3d0_02`，前后快照均在逻辑帧 3084、102.79990196228027 游戏秒。读取器现将通过对象类型、字符串槽稳定性和生命周期配对校验的原生关卡 ID 传到元信息与归档；保留原生 ID，不猜显示编号。可确认的关卡 ID 改变也会在重复帧过滤前签发新代次；读取失败保留未知，不制造换局。`lifecycle_observation.lifecycle` 保留当次单例、状态、场景与关卡证据。
+
+该切图回归已在 `756a581` 上实际失败、修复后通过：同地址、同帧同时间、原生 session 不变但关卡 ID 改变时仍建立新局，不吞掉首份累计。前后测试输出保留于 Review Loop `evidence/ark6-live-work/stage-id-regression`；新增契约同时验证 stage_id 进入归档，未知演习/胜负不会被字段接入顺带填值。
+
+取证产物为 Review Loop `evidence/ark6-live-work/metadata-1794095779935419600/metadata.json`。同次检查读到 `BattleController.m_result` 的元数据声明及暂停时原始零值；这不是结束结果对照，且元数据偏移与既有实测布局存在漂移，不能直接按声明解码胜负。没有取得演习或退出字段的场景对照，相关值继续未知。`756a581` 的正式 `--no-events` 只读入口采集 8 个暂停样本、无采集错误，日志重放通过；它只证明当前局采集与清理，不证明跨局或结果字段验收。
+
 正常窗口与 `app.py --capture-seconds` 均在连接前启用 `CollectionSession.enable_lifecycle()`，共用 `BattleRuntime` 持有的唯一统计适配器。先认证并准备默认事件观察器，再定位单例；生命周期 ID 同时用于快照、事件流、发布和归档。同一观察器跨同进程的新局继续排队，新基线的序号屏障丢弃旧局前缀；消费者先拒绝旧 feed/代次/序号，再输入事件，不为每局重复挂载同一 PID。
 
 暂时的累计/编队跨帧与观察器 retry 保留队列、不签发新代次、不关闭事件覆盖；连接失败或序列缺口才冻结相应覆盖。首个可靠终局先应用事件水位，再冻结时间。后续同帧单调累计修订同步更新发布值，事件不增加，重复稳定修订不增加修订号。`tests/test_lifecycle_events.py` 覆盖真实入口、共用 ID、终局修订、一次交接、旧事件隔离、选择器和默认事件降级。

@@ -194,3 +194,45 @@ def test_product_journal_replays_event_totals_and_rejects_lost_archive(tmp_path)
     save(damaged)
     with pytest.raises(ValueError, match='published statistics'):
         replay(path)
+
+
+def test_guarded_native_metadata_reaches_archive_without_inventing_practice_or_result(monkeypatch):
+    session, collector, _, records = connected(remote=None)
+    original = collector.read_lifecycle
+    stage = 'Activities/ACT3D0/level_act3d0_02'
+    monkeypatch.setattr(collector, 'read_lifecycle', lambda: dict(original(), metadata=dict(
+        stage_id=stage, evidence='native.LevelData.levelId:Android2.7.91')))
+    try:
+        session.read()
+        collector.state = 1
+        with pytest.raises(CaptureRetry):
+            session.read()
+        archive = next(data for kind, data in records if kind == 'archive_ready')
+        assert archive['metadata']['stage_id'] == stage
+        assert archive['metadata']['practice'] is None
+        assert archive['metadata']['outcome'] == 'unknown'
+        observed = next(data for kind, data in records if kind == 'lifecycle_observation')
+        assert observed.lifecycle['metadata']['stage_id'] == stage
+    finally:
+        session.close()
+
+
+def test_confirmed_stage_switch_with_reused_addresses_and_monotonic_clock_starts_new_id(monkeypatch):
+    session, collector, _, records = connected(remote=None)
+    original = collector.read_lifecycle
+    stage = {'value': 'level_a'}
+    monkeypatch.setattr(collector, 'read_lifecycle', lambda: dict(original(), metadata=dict(
+        stage_id=stage['value'], evidence='native.LevelData.levelId:Android2.7.91')))
+    try:
+        first = session.read()
+        stage['value'] = 'level_b'
+        # Clock, frame and every pointer may be reused. Confirmed stage evidence
+        # identifies this switch before the adapter filters duplicate frames.
+        collector.damage = 3
+        second = session.read()
+        assert second['session'] != first['session']
+        assert second['statistics']['rows']['char_a']['damage'] == 3
+        archive, = [data for kind, data in records if kind == 'archive_ready']
+        assert archive['metadata']['stage_id'] == 'level_a'
+    finally:
+        session.close()
