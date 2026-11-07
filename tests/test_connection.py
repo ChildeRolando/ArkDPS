@@ -17,6 +17,7 @@ class FakeAdb:
         self.list_error = list_error
         self.shell_error = shell_error
         self.calls = []
+        self.forwards = {}
 
     def __call__(self, args, timeout=None):
         args = list(args)
@@ -25,6 +26,12 @@ class FakeAdb:
             if self.list_error:
                 return conn.CommandResult(1, '', self.list_error)
             return conn.CommandResult(0, self.devices_output, '')
+        if 'connect' in args:
+            return conn.CommandResult(0, 'connected', '')
+        if 'forward' in args and '--list' in args:
+            return conn.CommandResult(0, ''.join(
+                f'{serial} tcp:{local} tcp:{remote}\n'
+                for (serial, local), remote in self.forwards.items()))
         serial = args[args.index('-s') + 1]
         if 'shell' in args:
             tail = args[args.index('shell') + 1:]
@@ -51,6 +58,14 @@ class FakeAdb:
                     0, f'Packages:\n  Package [com.hypergryph.arknights]\n'
                        f'    versionName={version}\n', '')
         if 'forward' in args:
+            if '--remove' in args:
+                local = int(args[-1].split(':')[1])
+                self.forwards.pop((serial, local), None)
+            else:
+                local, remote = (int(value.split(':')[1]) for value in args[-2:])
+                if '--no-rebind' in args and any(port == local for _, port in self.forwards):
+                    return conn.CommandResult(1, '', 'cannot rebind existing socket')
+                self.forwards[(serial, local)] = remote
             return conn.CommandResult(0, '', '')
         return conn.CommandResult(0, '', '')
 
@@ -285,3 +300,85 @@ def test_collectable_gate_refuses_incompatible_version(adb_path):
     with pytest.raises(conn.ConnectionUnavailable) as exc:
         target.require_collectable()
     assert exc.value.diagnostics.version_status is conn.VersionStatus.INCOMPATIBLE
+
+
+def test_foreign_forward_conflict_and_replacement_are_preserved():
+    fake = FakeAdb()
+    fake.forwards[('other', 27381)] = 1717
+    registry = conn.ForwardRegistry(fake)
+    with pytest.raises(conn.CommandError):
+        registry.ensure('adb', 's')
+    registry.release('s')
+    assert fake.forwards == {('other', 27381): 1717}
+    fake.forwards.clear()
+    registry.ensure('adb', 's')
+    fake.forwards[('s', 27381)] = 9999  # replaced by another client
+    registry.release('s')
+    assert fake.forwards == {('s', 27381): 9999}
+
+
+def test_manual_unregistered_tcp_address_connects_once(adb_path):
+    class Unregistered(FakeAdb):
+        registered = False
+
+        def __call__(self, args, timeout=None):
+            if 'connect' in args:
+                self.registered = True
+            if args[-2:] == ['shell', 'true'] and not self.registered:
+                self.calls.append(list(args))
+                return conn.CommandResult(1, '', "device 'localhost:16384' not found")
+            return super().__call__(args, timeout)
+
+    fake = Unregistered(versions={'localhost:16384': conn.EXPECTED_GAME_VERSION})
+    target = conn.resolve_target(conn.ConnectionConfig(serial='localhost:16384'), fake)
+    assert target.collectable
+    assert sum('connect' in call for call in fake.calls) == 1
+
+
+def test_manual_tcp_failed_connect_and_usb_do_not_fake_success(adb_path):
+    fake = FakeAdb(shell_error='device not found')
+    with pytest.raises(conn.ConnectionUnavailable) as exc:
+        conn.resolve_target(conn.ConnectionConfig(serial='localhost:16384'), fake)
+    assert not exc.value.diagnostics.connection_ok
+    assert sum('connect' in call for call in fake.calls) == 1
+    fake = FakeAdb(shell_error='device not found')
+    with pytest.raises(conn.ConnectionUnavailable):
+        conn.resolve_target(conn.ConnectionConfig(serial='usb-serial'), fake)
+    assert not any('connect' in call for call in fake.calls)
+
+
+def test_forward_list_failure_preserves_mapping_for_retry():
+    class ListFailure(FakeAdb):
+        def __call__(self, args, timeout=None):
+            if '--list' in args:
+                return conn.CommandResult(1, '', 'adb unavailable')
+            return super().__call__(args, timeout)
+
+    fake = ListFailure()
+    registry = conn.ForwardRegistry(fake)
+    registry.ensure('adb', 's')
+    registry.release('s')
+    assert fake.forwards == {('s', 27381): 27381}
+    assert ('s', 27381) in registry.owned
+
+
+@pytest.mark.parametrize('missing', ['null', ' NULL ', ''])
+def test_missing_android_id_keeps_distinct_instances(adb_path, missing):
+    serials = ('127.0.0.1:16384', '127.0.0.1:16416')
+    fake = FakeAdb('List of devices attached\n' + ''.join(map(device_line, serials)),
+                   identities={s: ('model', 'product', 'device', f'hw-{i}', missing)
+                               for i, s in enumerate(serials)})
+    result = conn.detect_instances(runner=fake)
+    assert result.status is conn.DetectionStatus.NEEDS_SELECTION
+    assert result.selected_serial is None
+    assert len(result.instances) == 2
+
+
+def test_both_identifiers_missing_keeps_distinct_instances(adb_path):
+    serials = ('127.0.0.1:16384', '127.0.0.1:16416')
+    fake = FakeAdb('List of devices attached\n' + ''.join(map(device_line, serials)),
+                   identities={s: ('model', 'product', 'device', 'unknown', 'null')
+                               for s in serials})
+    result = conn.detect_instances(runner=fake)
+    assert result.status is conn.DetectionStatus.NEEDS_SELECTION
+    assert len(result.instances) == 2

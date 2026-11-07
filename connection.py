@@ -409,6 +409,11 @@ def _query_identity(run: Runner, adb: str, serial: str) -> tuple[dict, str]:
     lines = [line.strip() for line in result.stdout.replace('\r', '').splitlines()]
     lines += [''] * (5 - len(lines))
     model, product, device, hardware_serial, android_id = lines[:5]
+    # Android's settings command prints "null" for an unset value.
+    if android_id.lower() in ('null', 'unknown'):
+        android_id = ''
+    if hardware_serial.lower() in ('null', 'unknown'):
+        hardware_serial = ''
     identity = {'model': model, 'product': product, 'device': device,
                 'hardware_serial': hardware_serial, 'android_id': android_id}
     # Two serials that alias the same emulator return the same android id,
@@ -543,6 +548,16 @@ def resolve_target(config: ConnectionConfig,
                                          message='手动配置了实例，但未找到 adb。')
             raise ConnectionUnavailable(diag.message, diag)
         report = check_version(adb, config.serial, run)
+        # A TCP endpoint may be reachable yet absent from this adb server.
+        # Do not reconnect registered/offline or USB devices.
+        if (not report.connection_ok and
+                re.fullmatch(r'(?:\[[^\]]+\]|[^:\s]+):\d+', config.serial) and
+                'not found' in report.message.lower()):
+            try:
+                _run(run, [adb, 'connect', config.serial], 10.0)
+                report = check_version(adb, config.serial, run)
+            except CommandError as exc:
+                report.message = '无法连接设备：' + str(exc)
         diag = report.diagnostics()
         diag.adb_path, diag.selected_serial = adb, config.serial
         if not report.connection_ok:
@@ -607,22 +622,31 @@ class ForwardRegistry:
 
     def __init__(self, runner: Runner | None = None):
         self.run = runner or SubprocessRunner()
-        self.owned: dict[tuple[str, int], str] = {}
+        self.owned: dict[tuple[str, int], tuple[str, int]] = {}
 
     def ensure(self, adb: str, serial: str, local: int = PROJECT_FORWARD_PORT,
                remote: int = PROJECT_FORWARD_PORT) -> None:
-        result = _run(self.run, [adb, '-s', serial, 'forward',
+        result = _run(self.run, [adb, '-s', serial, 'forward', '--no-rebind',
                                  f'tcp:{local}', f'tcp:{remote}'], 10.0)
         if result.returncode != 0:
             raise CommandError((result.stderr or result.stdout).strip() or 'adb forward 失败')
-        self.owned[(serial, local)] = adb
+        self.owned[(serial, local)] = (adb, remote)
 
     def release(self, serial: str, local: int = PROJECT_FORWARD_PORT) -> None:
-        adb = self.owned.pop((serial, local), None)
-        if not adb:
+        owned = self.owned.get((serial, local))
+        if not owned:
             return
+        adb, remote = owned
         try:
-            _run(self.run, [adb, '-s', serial, 'forward', '--remove',
-                            f'tcp:{local}'], 10.0)
+            listing = _run(self.run, [adb, 'forward', '--list'], 10.0)
+            if listing.returncode != 0:
+                return
+            expected = [serial, f'tcp:{local}', f'tcp:{remote}']
+            if any(line.split() == expected for line in listing.stdout.splitlines()):
+                result = _run(self.run, [adb, '-s', serial, 'forward', '--remove',
+                                         f'tcp:{local}'], 10.0)
+                if result.returncode != 0:
+                    return
+            self.owned.pop((serial, local), None)
         except CommandError:
             pass

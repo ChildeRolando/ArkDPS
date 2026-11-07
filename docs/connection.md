@@ -23,11 +23,13 @@
 
 写入采用同目录临时文件 + `os.replace` 原子替换；损坏文件返回默认配置并给出警告，不静默覆盖原文件。`serial` 非空时优先使用手动指定实例，否则按 `adb_path` 自动检测。
 
+手动 TCP 地址尚未在 adb 注册且探测报告设备不存在时，执行一次有超时的 `adb connect`，再重新检查连接和版本；USB 序列及已注册的离线设备不会因此重连。
+
 ## 自动检测
 
 1. 按“显式配置 → 环境变量 → 常见 MuMu 安装路径 → PATH”解析 `adb.exe`。
 2. 解析 `adb devices -l`，保留 offline / unauthorized / no permissions 等不可访问状态。
-3. 对可访问设备读取型号与 `android_id`；MuMu 常同时暴露 `127.0.0.1:16384` 与 `emulator-5554`，相同 `android_id` 合并为一个实例，优先选择回环端口。
+3. 对可访问设备读取型号与 `android_id`；MuMu 常同时暴露 `127.0.0.1:16384` 与 `emulator-5554`，相同 `android_id` 合并为一个实例，优先选择回环端口。缺失或占位标识（如 `null`）不参与合并；回退硬件序列，两者均缺失时保留独立候选。
 4. MuMu 认证依据：`127.0.0.1:16384+32n` 序列、MuMu 安装目录下的 adb、或设备属性含 mumu/netease。仅因 adb 来自 MuMu 目录不会把 USB 真机误判为 MuMu。
 5. 结果状态：`ready_unique`（唯一实例自动选中）、`needs_selection`（多实例，等待玩家选择）、`no_instance`、`no_certified_instance`、`adb_missing`、`adb_inaccessible`、`error`。
 
@@ -46,6 +48,8 @@
 | `message` / `error` | 面向用户的诊断文本 |
 
 采集器在 `connect()` 后设置同一结构；`ConnectionTarget.require_collectable()` 在版本不匹配时抛出带诊断的 `ConnectionUnavailable`。
+
+`ForwardRegistry` 使用 `adb forward --no-rebind`，占用端口时报告冲突；释放前检查当前映射仍与登记值一致，查询失败时保留登记以便重试。adb 不提供映射所有权令牌或原子条件删除，因此外部程序若在检查与删除之间替换同一端口，或替换为完全相同的映射，无法由此接口辨认。
 
 ## 验证
 
