@@ -30,3 +30,7 @@ row = meter.result()['rows']['host']
 ```
 
 事件 ID、来源映射、首次快照与事件的顺序、覆盖缺口识别均是未来适配器的责任；当前无法据此宣称运行中的 Demo 已支持新指标。
+
+## 近期窗口证明
+
+`Statistics.result()` 的每行 `recent_damage_window` / `recent_healing_window` 在对应速率有效且完整覆盖 `[max(coverage_start, game_time - 5), game_time]` 时提供 `(start, end)`，否则为 `None`。新来源或采集缺口后的短窗口速率仍可用，但不能据此证明全队同窗口占比。窗口起止使用游戏秒数。
