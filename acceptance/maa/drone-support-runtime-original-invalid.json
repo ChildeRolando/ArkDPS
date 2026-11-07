@@ -1,0 +1,149 @@
+[
+  {
+    "type": "copilot",
+    "subtype": "stage",
+    "details": {
+      "stage_name": "OF-2"
+    }
+  },
+  {
+    "type": "copilot",
+    "subtype": "action",
+    "details": {
+      "actions": [
+        {
+          "type": "Click",
+          "rect": [
+            1208,
+            52,
+            1,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "wait_seconds": 3
+  },
+  {
+    "type": "copilot",
+    "subtype": "action",
+    "details": {
+      "actions": [
+        {
+          "type": "Deploy",
+          "name": "山",
+          "location": [
+            2,
+            3
+          ],
+          "direction": "Right"
+        }
+      ]
+    }
+  },
+  {
+    "wait_seconds": 6
+  },
+  {
+    "type": "copilot",
+    "subtype": "action",
+    "details": {
+      "actions": [
+        {
+          "type": "Skill",
+          "location": [
+            2,
+            3
+          ]
+        },
+        {
+          "type": "Deploy",
+          "name": "夜刀",
+          "location": [
+            4,
+            3
+          ],
+          "direction": "Right"
+        }
+      ]
+    }
+  },
+  {
+    "wait_seconds": 18
+  },
+  {
+    "type": "copilot",
+    "subtype": "action",
+    "details": {
+      "actions": [
+        {
+          "type": "Deploy",
+          "name": "赫默",
+          "location": [
+            7,
+            4
+          ],
+          "direction": "Right"
+        }
+      ]
+    }
+  },
+  {
+    "wait_seconds": 15
+  },
+  {
+    "type": "copilot",
+    "subtype": "action",
+    "details": {
+      "actions": [
+        {
+          "type": "Deploy",
+          "name": "歌蕾蒂娅",
+          "location": [
+            2,
+            4
+          ],
+          "direction": "Up"
+        },
+        {
+          "type": "Skill",
+          "location": [
+            7,
+            4
+          ]
+        },
+        {
+          "type": "Deploy",
+          "name": "医疗探机",
+          "location": [
+            5,
+            4
+          ],
+          "direction": "Right"
+        }
+      ]
+    }
+  },
+  {
+    "wait_seconds": 4
+  },
+  {
+    "type": "copilot",
+    "subtype": "action",
+    "details": {
+      "actions": [
+        {
+          "type": "Click",
+          "rect": [
+            1208,
+            52,
+            1,
+            1
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "status": "recorded summon healing passes",
+  "deployments": 3,
+  "heal_events": 60,
+  "native_total_healing": 7500,
+  "effective_hp_restored_audit_only": 4181.000001981854,
+  "cold_borrowed_owner_mapping": true,
+  "drone_deployment": "user assisted",
+  "whole_demo_accepted": false
+}

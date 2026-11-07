@@ -1,3 +1,6 @@
 # Preserve captured evidence bytes: manifest hashes must survive checkout.
 acceptance/capabilities/*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 acceptance/capabilities/*.jsonl -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+acceptance/recovery/*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+acceptance/recovery/*.jsonl -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+acceptance/recovery/*.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

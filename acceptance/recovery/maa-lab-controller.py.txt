@@ -1,0 +1,78 @@
+"""Local MAA test controller. Only explicitly supplied tasks are executed."""
+import ctypes
+import json
+import sys
+import time
+from pathlib import Path
+
+MAA=Path('F:/MAA-v5.9.0-win-x64')
+HERE=Path(__file__).resolve().parent/'maa-lab'
+HERE.mkdir(exist_ok=True)
+sys.path.insert(0,str(MAA/'Python'))
+from asst.asst import Asst
+from asst.utils import InstanceOptionType
+
+@Asst.CallBackType
+def callback(msg,details,arg):
+    data=json.loads(details.decode('utf-8'))
+    with (HERE/'callbacks.jsonl').open('a',encoding='utf-8') as f:
+        f.write(json.dumps(dict(at=time.time(),msg=msg,data=data),ensure_ascii=False)+'\n')
+    if msg in (0,1,2,3,10000,10001,10002):
+        print('EVENT',msg,json.dumps(data,ensure_ascii=False),flush=True)
+
+assert Asst.load(MAA,incremental_path=HERE.parent/'maa-extension',user_dir=HERE)
+a=Asst(callback)
+a.set_instance_option(InstanceOptionType.touch_type,'maatouch')
+a.set_instance_option(InstanceOptionType.kill_on_adb_exit,'0')
+lib=Asst._Asst__lib
+handle=a._Asst__ptr
+lib.AsstAsyncScreencap.argtypes=(ctypes.c_void_p,ctypes.c_bool)
+lib.AsstAsyncScreencap.restype=ctypes.c_int32
+lib.AsstAsyncClick.argtypes=(ctypes.c_void_p,ctypes.c_int32,ctypes.c_int32,ctypes.c_bool)
+lib.AsstAsyncClick.restype=ctypes.c_int32
+print('VERSION',a.get_version(),flush=True)
+assert a.connect(r'C:\Program Files\Netease\MuMu Player 12\nx_main\adb.exe','127.0.0.1:16384','General')
+print('READY',flush=True)
+try:
+    for line in sys.stdin:
+        try:
+            c=json.loads(line)
+            op=c['op']
+            if op=='snapshot':
+                lib.AsstAsyncScreencap(handle,True)
+                data=a.get_image(16*1024*1024)
+                if not data:raise RuntimeError('no screenshot')
+                p=HERE/(c.get('name','screen')+'.png')
+                p.write_bytes(data)
+                print('IMAGE',str(p),flush=True)
+            elif op=='click':
+                print('CLICK',lib.AsstAsyncClick(handle,c['x'],c['y'],True),flush=True)
+            elif op=='task':
+                task=a.append_task(c['type'],c.get('params',{}))
+                if not task:raise RuntimeError('append failed')
+                print('TASK',task,'START',a.start(),flush=True)
+            elif op=='research_plan':
+                plan=json.loads(Path(c['filename']).read_text(encoding='utf-8-sig'))
+                for index,step in enumerate(plan):
+                    print('PLAN_STEP',index,flush=True)
+                    if 'wait_seconds' in step:
+                        seconds=step['wait_seconds']
+                        assert 0<=seconds<=60
+                        time.sleep(seconds)
+                        continue
+                    task=a.append_task('SingleStep',step)
+                    if not task or not a.start():raise RuntimeError('plan task start failed')
+                    deadline=time.monotonic()+90
+                    while a.running():
+                        if time.monotonic()>deadline:
+                            a.stop();raise TimeoutError('plan step timed out')
+                        time.sleep(0.1)
+                print('PLAN_DONE',flush=True)
+            elif op=='status':print('RUNNING',a.running(),flush=True)
+            elif op=='stop':print('STOP',a.stop(),flush=True)
+            elif op=='quit':break
+            else:raise ValueError(op)
+        except Exception as exc:print('ERROR',repr(exc),flush=True)
+finally:
+    a.stop()
+    del a

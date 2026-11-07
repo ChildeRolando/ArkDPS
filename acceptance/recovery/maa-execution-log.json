@@ -1,0 +1,2928 @@
+[
+  {
+    "at": 1794007849.393434,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794007894.2232556,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "ArkDPS read-only audit ready",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008073.8493493,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008073.8493493,
+    "msg": 10002,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008132.9224787,
+    "msg": 10001,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008132.923483,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008133.2648234,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "梅尔"
+    }
+  },
+  {
+    "at": 1794008134.9363508,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794008138.9393897,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008139.2503211,
+    "msg": 10002,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008196.886731,
+    "msg": 10001,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008196.8886871,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008197.195862,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008202.1357284,
+    "msg": 10002,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008226.513557,
+    "msg": 10001,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008226.5145397,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008226.830428,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008235.7246206,
+    "msg": 10002,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008278.4778929,
+    "msg": 10001,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008278.4788744,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008278.8083038,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794008280.4735837,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008284.8539164,
+    "msg": 10002,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008328.9145193,
+    "msg": 10001,
+    "taskid": 7,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008328.915496,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008329.2287257,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008333.6157694,
+    "msg": 10002,
+    "taskid": 7,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008369.2467043,
+    "msg": 10001,
+    "taskid": 8,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008369.2486641,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008369.5751472,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008370.7457974,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008371.0637312,
+    "msg": 10002,
+    "taskid": 8,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008397.6122267,
+    "msg": 10001,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008397.6122267,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008397.924611,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794008399.5514596,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794008401.1986701,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008401.519626,
+    "msg": 10002,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008688.7803917,
+    "msg": 10001,
+    "taskid": 10,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794008700.84975,
+    "msg": 20003,
+    "taskid": 10,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794008712.1058412,
+    "msg": 20003,
+    "taskid": 10,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794008717.5903919,
+    "msg": 20003,
+    "taskid": 10,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008718.3940663,
+    "msg": 10002,
+    "taskid": 10,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794008758.2384927,
+    "msg": 10001,
+    "taskid": 11,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008758.23947,
+    "msg": 20003,
+    "taskid": 11,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008758.5457227,
+    "msg": 20003,
+    "taskid": 11,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008777.077547,
+    "msg": 10002,
+    "taskid": 11,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008845.147097,
+    "msg": 10001,
+    "taskid": 12,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008845.1480737,
+    "msg": 20003,
+    "taskid": 12,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008845.4735081,
+    "msg": 20003,
+    "taskid": 12,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008857.8126016,
+    "msg": 10002,
+    "taskid": 12,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008915.0865927,
+    "msg": 10001,
+    "taskid": 13,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794008915.0875695,
+    "msg": 20003,
+    "taskid": 13,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008915.4057202,
+    "msg": 20003,
+    "taskid": 13,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794008950.8883586,
+    "msg": 10002,
+    "taskid": 13,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009014.9646904,
+    "msg": 10001,
+    "taskid": 14,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009014.9656663,
+    "msg": 20003,
+    "taskid": 14,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009015.2905338,
+    "msg": 20003,
+    "taskid": 14,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009023.6883872,
+    "msg": 10002,
+    "taskid": 14,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009102.1145134,
+    "msg": 10001,
+    "taskid": 15,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009102.1155179,
+    "msg": 20003,
+    "taskid": 15,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009102.4545922,
+    "msg": 20003,
+    "taskid": 15,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009112.8234704,
+    "msg": 10002,
+    "taskid": 15,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009632.9345677,
+    "msg": 10001,
+    "taskid": 16,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009632.935549,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009633.2842581,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009637.743225,
+    "msg": 10002,
+    "taskid": 16,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009720.4165134,
+    "msg": 10001,
+    "taskid": 17,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009720.4184673,
+    "msg": 20003,
+    "taskid": 17,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009720.7353554,
+    "msg": 20003,
+    "taskid": 17,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009722.8247592,
+    "msg": 10002,
+    "taskid": 17,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009801.0276566,
+    "msg": 10001,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794009801.0286617,
+    "msg": 20003,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009801.3913736,
+    "msg": 20003,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794009803.021513,
+    "msg": 10002,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794010823.4739723,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794010862.6005805,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794010864.2330916,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794010878.1357293,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "at": 1794010902.8387885,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "SkillUsage",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "at": 1794010903.0695593,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Shield break observation; automatic pause after 70 real seconds at 1x.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794010962.4872108,
+    "msg": 10002,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794011057.630942,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794011063.773995,
+    "msg": 10000,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794011131.8225915,
+    "msg": 10001,
+    "taskid": 3,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794011144.5832117,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794011146.215381,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794011161.2921047,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "at": 1794011185.884251,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "SkillUsage",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "at": 1794011186.0923448,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Shield break observation; automatic pause after 70 real seconds at 1x.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794011245.5207117,
+    "msg": 10002,
+    "taskid": 3,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794012510.7130182,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794012523.497408,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794012525.1331356,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794012540.142926,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "at": 1794012564.6692002,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "SkillUsage",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "煌"
+    }
+  },
+  {
+    "at": 1794012564.8837323,
+    "msg": 20003,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012565.7016947,
+    "msg": 10002,
+    "taskid": 1,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794012658.087504,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012658.088482,
+    "msg": 10002,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012659.193431,
+    "msg": 10001,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012659.1949353,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012659.5273929,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "Collector disconnected; device observer alone records this gap.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012699.6636448,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012699.9889677,
+    "msg": 10002,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012767.2958622,
+    "msg": 10001,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012767.296843,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012767.885135,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012768.2091503,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012768.5630739,
+    "msg": 10002,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012837.4903896,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794012849.4860847,
+    "msg": 10002,
+    "taskid": 1,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794012878.920521,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794012919.5476933,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "梅尔"
+    }
+  },
+  {
+    "at": 1794012921.1840973,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794012923.2875264,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794012934.1633718,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Two summons attack separate initial dogs; pause for identity/counter baseline.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012937.2002413,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012938.015244,
+    "msg": 10002,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794012996.9406724,
+    "msg": 10001,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012996.9416466,
+    "msg": 10002,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012998.045439,
+    "msg": 10001,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794012998.0464153,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012998.37407,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794012999.5436907,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794013006.131867,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "Replacement summon attacks; preserve owner cumulative.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013012.2757552,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013012.6036508,
+    "msg": 10002,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013082.3387141,
+    "msg": 10001,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013082.3411992,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013082.6638618,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013083.8520389,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794013085.5082757,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "Free upper interception so replacement at [5,3] receives enemies.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013097.6450706,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013097.9765553,
+    "msg": 10002,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013155.7033682,
+    "msg": 10001,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013155.7043452,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013156.0208962,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "Wait for the next central wave to reach the replacement summon.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013175.5170429,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013175.8591971,
+    "msg": 10002,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013307.9992654,
+    "msg": 10001,
+    "taskid": 7,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794013313.1447115,
+    "msg": 10002,
+    "taskid": 7,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794013331.7308395,
+    "msg": 10001,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794013343.7404888,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "梅尔"
+    }
+  },
+  {
+    "at": 1794013345.3636973,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794013347.414834,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794013358.2348578,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Two summons attack separate initial dogs; pause for identity/counter baseline.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013361.2816,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013362.4631138,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794013369.2187285,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Replacement catches first dog on its path to the blue box.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013377.4116197,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013378.5738065,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794013380.2016358,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794013381.8309736,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Allow retired summon entities to leave the live container.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013387.976853,
+    "msg": 20003,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013388.7857368,
+    "msg": 10002,
+    "taskid": 8,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794013483.7760563,
+    "msg": 10001,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013483.7770329,
+    "msg": 10002,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013484.878412,
+    "msg": 10001,
+    "taskid": 10,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013484.8793886,
+    "msg": 20003,
+    "taskid": 10,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013485.493129,
+    "msg": 20003,
+    "taskid": 10,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013485.8280218,
+    "msg": 20003,
+    "taskid": 10,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794013486.168332,
+    "msg": 10002,
+    "taskid": 10,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794013573.154489,
+    "msg": 10001,
+    "taskid": 11,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794013575.1074848,
+    "msg": 10002,
+    "taskid": 11,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794013584.4456637,
+    "msg": 10001,
+    "taskid": 12,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794013607.8575072,
+    "msg": 10000,
+    "taskid": 12,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794013722.7017963,
+    "msg": 10001,
+    "taskid": 13,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794013912.2557101,
+    "msg": 10001,
+    "taskid": 14,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794013936.152708,
+    "msg": 10000,
+    "taskid": 14,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794013989.4165344,
+    "msg": 10001,
+    "taskid": 15,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794013990.732884,
+    "msg": 10002,
+    "taskid": 15,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794014012.5719757,
+    "msg": 10001,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794014068.9172347,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "山"
+    }
+  },
+  {
+    "at": 1794014070.5491757,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "SkillUsage",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "山"
+    }
+  },
+  {
+    "at": 1794014070.7594244,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794014074.4251845,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "凯瑟琳"
+    }
+  },
+  {
+    "at": 1794014088.8284278,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "爬行号·防护单元"
+    }
+  },
+  {
+    "at": 1794014097.6348195,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "歌蕾蒂娅"
+    }
+  },
+  {
+    "at": 1794014111.7232006,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Observe summon-provided barrier before adding a second shield provider.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014131.8943598,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "闪灵"
+    }
+  },
+  {
+    "at": 1794014133.7503746,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Observe shield-source attribution with two potential providers.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014141.8358402,
+    "msg": 20003,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014142.6697245,
+    "msg": 10002,
+    "taskid": 16,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794014443.6975415,
+    "msg": 10001,
+    "taskid": 17,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014443.6975415,
+    "msg": 10002,
+    "taskid": 17,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014453.8900065,
+    "msg": 10001,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014453.891574,
+    "msg": 20003,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014454.2058427,
+    "msg": 20003,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014456.125839,
+    "msg": 20003,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "UseSkill",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014457.1148312,
+    "msg": 20003,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014457.4438217,
+    "msg": 10002,
+    "taskid": 18,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014550.088097,
+    "msg": 10001,
+    "taskid": 19,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014550.0890744,
+    "msg": 20003,
+    "taskid": 19,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014550.4153967,
+    "msg": 20003,
+    "taskid": 19,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014568.4701192,
+    "msg": 20003,
+    "taskid": 19,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014568.8049567,
+    "msg": 10002,
+    "taskid": 19,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014590.2912977,
+    "msg": 10001,
+    "taskid": 20,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014590.292279,
+    "msg": 20003,
+    "taskid": 20,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014590.6133494,
+    "msg": 20003,
+    "taskid": 20,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014600.707427,
+    "msg": 20003,
+    "taskid": 20,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014601.0289056,
+    "msg": 10002,
+    "taskid": 20,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014621.9274256,
+    "msg": 10001,
+    "taskid": 21,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014621.9288652,
+    "msg": 20003,
+    "taskid": 21,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014622.2724144,
+    "msg": 20003,
+    "taskid": 21,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014623.4592752,
+    "msg": 20003,
+    "taskid": 21,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014626.4644423,
+    "msg": 20003,
+    "taskid": 21,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014626.793582,
+    "msg": 10002,
+    "taskid": 21,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014672.6416423,
+    "msg": 10001,
+    "taskid": 22,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014672.6426234,
+    "msg": 20003,
+    "taskid": 22,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014673.1952436,
+    "msg": 20003,
+    "taskid": 22,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014673.5189438,
+    "msg": 20003,
+    "taskid": 22,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014673.850111,
+    "msg": 10002,
+    "taskid": 22,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014714.5204003,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794014748.9376097,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794014794.3107333,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014795.1230707,
+    "msg": 10002,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794014869.0973258,
+    "msg": 10001,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014869.0973258,
+    "msg": 10002,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014882.9683692,
+    "msg": 10001,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014882.9693453,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014883.6867032,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014884.013293,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794014884.37243,
+    "msg": 10002,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794014925.314502,
+    "msg": 10001,
+    "taskid": 5,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794014948.7766876,
+    "msg": 10000,
+    "taskid": 5,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015034.2268205,
+    "msg": 10001,
+    "taskid": 6,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015057.737843,
+    "msg": 10000,
+    "taskid": 6,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015122.6182854,
+    "msg": 10001,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015163.6731875,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "梅尔"
+    }
+  },
+  {
+    "at": 1794015165.2880511,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794015167.3653276,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794015178.0762124,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "山"
+    }
+  },
+  {
+    "at": 1794015183.030475,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "SkillUsage",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "山"
+    }
+  },
+  {
+    "at": 1794015183.2831504,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "歌蕾蒂娅"
+    }
+  },
+  {
+    "at": 1794015197.0726101,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015198.2406213,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "机械水獭"
+    }
+  },
+  {
+    "at": 1794015202.679566,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Output",
+      "doc": "Wait for later waves to reach replacement summon; blue exits are guarded.",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015252.6835277,
+    "msg": 20003,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015253.5033839,
+    "msg": 10002,
+    "taskid": 7,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015299.842367,
+    "msg": 10001,
+    "taskid": 8,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015299.842367,
+    "msg": 10002,
+    "taskid": 8,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015317.050978,
+    "msg": 10001,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015317.0519555,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015317.3889334,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015317.6649542,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015318.008049,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015318.2450597,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015318.5986755,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015318.834113,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015319.1529646,
+    "msg": 20003,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Output",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015319.3853226,
+    "msg": 10002,
+    "taskid": 9,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015357.7269187,
+    "msg": 10001,
+    "taskid": 10,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015381.1590085,
+    "msg": 10000,
+    "taskid": 10,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015441.5404828,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794015446.2217314,
+    "msg": 10002,
+    "taskid": 1,
+    "taskchain": "Custom",
+    "details": {}
+  },
+  {
+    "at": 1794015470.0415561,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015544.4943023,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015545.4107525,
+    "msg": 10002,
+    "taskid": 2,
+    "taskchain": "Copilot",
+    "details": {}
+  },
+  {
+    "at": 1794015593.1297588,
+    "msg": 10001,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015593.1297588,
+    "msg": 10002,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015663.8193705,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015663.8193705,
+    "msg": 10002,
+    "taskid": 1,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015664.3239646,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015664.3259223,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015664.6489177,
+    "msg": 10002,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015668.2293966,
+    "msg": 10001,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015668.2303765,
+    "msg": 20003,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "山"
+    }
+  },
+  {
+    "at": 1794015669.885411,
+    "msg": 10002,
+    "taskid": 3,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015676.437409,
+    "msg": 10001,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015676.4383833,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "UseSkill",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015677.4544213,
+    "msg": 20003,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "夜刀"
+    }
+  },
+  {
+    "at": 1794015679.08514,
+    "msg": 10002,
+    "taskid": 4,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015697.649488,
+    "msg": 10001,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015697.6504638,
+    "msg": 20003,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "赫默"
+    }
+  },
+  {
+    "at": 1794015699.3229506,
+    "msg": 10002,
+    "taskid": 5,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015714.8633854,
+    "msg": 10001,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015714.8643632,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Deploy",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": "歌蕾蒂娅"
+    }
+  },
+  {
+    "at": 1794015716.5229838,
+    "msg": 20003,
+    "taskid": 6,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "UseSkill",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015856.36811,
+    "msg": 10001,
+    "taskid": 1,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015856.36811,
+    "msg": 10002,
+    "taskid": 1,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015873.9280229,
+    "msg": 10001,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  },
+  {
+    "at": 1794015873.9289994,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015874.2629845,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Retreat",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015875.4420211,
+    "msg": 20003,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {
+      "action": "Click",
+      "doc": "",
+      "doc_color": "",
+      "elapsed_time": -1,
+      "target": ""
+    }
+  },
+  {
+    "at": 1794015875.7664833,
+    "msg": 10002,
+    "taskid": 2,
+    "taskchain": "SingleStep",
+    "details": {}
+  }
+]

@@ -16,6 +16,8 @@ OF-8 首轮成功自动编队及执行。一次复跑因返回地图后未重新
 
 实机配置、敌人路线、结果与未覆盖机制见 [能力报告](../../docs/capability-validation.md)。离线重算：
 
+后续恢复实验见 [补充报告](../../docs/recovery-validation.md)。`of2-summon-shield-original-invalid.json` 留存山技能误设为反复开启的历史版本，**不可作为正确作业使用**；`of2-summon-shield.json` 和 `of2-drone-healing.json` 已将山二技能设为使用一次。原始梅尔并发与冷读作业不含守门干员，保持历史执行内容。作业文件存在不表示对应实验已验收。
+
 ```powershell
 python acceptance/verify_capabilities.py
 ```

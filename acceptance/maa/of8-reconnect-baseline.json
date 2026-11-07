@@ -1,0 +1,63 @@
+{
+  "stage_name": "OF-8",
+  "opers": [
+    {
+      "name": "夜刀"
+    },
+    {
+      "name": "闪灵",
+      "skill": 2
+    },
+    {
+      "name": "煌",
+      "skill": 2
+    }
+  ],
+  "actions": [
+    {
+      "type": "Deploy",
+      "name": "夜刀",
+      "location": [
+        3,
+        2
+      ],
+      "direction": "Up"
+    },
+    {
+      "type": "Deploy",
+      "name": "闪灵",
+      "location": [
+        2,
+        3
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "Deploy",
+      "name": "煌",
+      "location": [
+        3,
+        5
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "SkillUsage",
+      "name": "煌",
+      "skill_usage": 1
+    },
+    {
+      "type": "Click",
+      "rect": [
+        1208,
+        52,
+        1,
+        1
+      ]
+    }
+  ],
+  "doc": {
+    "title": "ArkDPS OF-8 shield break experiment",
+    "details": "No consumables. Yato intercepts top rockbreakers, Shining S2 covers Yato, Blaze holds lower convergence. Native event trace starts before battle."
+  }
+}

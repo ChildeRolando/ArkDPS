@@ -1,0 +1,14 @@
+{
+  "status": "recorded cases pass",
+  "shield_totals": {
+    "token_10041_cathy_catsld": 155.77999303489923,
+    "char_147_shining": 112.00000166893005
+  },
+  "mountain_triggers_before_after": [
+    10,
+    11
+  ],
+  "break_frame": 2711,
+  "cold_owner_mapping": true,
+  "whole_demo_accepted": false
+}

@@ -1,0 +1,21 @@
+{
+  "scope": "Recorded Android 2.7.91 cases; not complete product acceptance",
+  "shield": {
+    "device_observer_continued": true,
+    "host_reference_observer_continued": false,
+    "before": 91.50000136345625,
+    "recovered": 753.5000017955899,
+    "gap": 662,
+    "native_remaining_shields": 0,
+    "recovery_without_continuing_observer": "NOT ESTABLISHED"
+  },
+  "summon": {
+    "two_entities_one_counter": true,
+    "live_entities_absent_on_cold_read": true,
+    "roster_owner_mapping_recovered": true,
+    "host_damage": 1123.199951171875,
+    "token_damage": 1665.0,
+    "normalized_damage": 2788.199951171875,
+    "replacement_attack": "not observed in these OF-2 captures"
+  }
+}

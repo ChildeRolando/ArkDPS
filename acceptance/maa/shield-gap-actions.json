@@ -1,0 +1,31 @@
+{
+  "type": "copilot",
+  "subtype": "action",
+  "details": {
+    "actions": [
+      {
+        "type": "Click",
+        "rect": [
+          1208,
+          52,
+          1,
+          1
+        ]
+      },
+      {
+        "type": "Output",
+        "doc": "Collector disconnected; device observer alone records this gap.",
+        "post_delay": 40000
+      },
+      {
+        "type": "Click",
+        "rect": [
+          1208,
+          52,
+          1,
+          1
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,158 @@
+{
+  "shield-gap-before.json": {
+    "sha256": "ab32f825d2f55e16e7db51c1d868af077171e48bbc41359acbb8fb5a6a572989",
+    "bytes": 38181
+  },
+  "shield-gap-after.json": {
+    "sha256": "25268a083828cdc8899c4fafbe983d3c9021636cd18a47b355f51475472c8608",
+    "bytes": 44147
+  },
+  "shield-ledger-before.json": {
+    "sha256": "3a0b2767dcb975903f6a71d1ea3178937d406e0c6fbbad15f68d1c42098a03a7",
+    "bytes": 282
+  },
+  "shield-ledger-recovered.json": {
+    "sha256": "4a63b7e03dd2caefacfe15f9dc6047f4a183011faec44072b9a9ce59845e621d",
+    "bytes": 326
+  },
+  "shield-device-final.json": {
+    "sha256": "cf0f03f79c78e6835ff70c284986a8b8ac7742306189481a4fa7c51a0064d180",
+    "bytes": 325
+  },
+  "shield-device-final.events.jsonl": {
+    "sha256": "70a3233cdbbb4bbe8e10bebd0f4e28eb36bba5bbd709a3d4ebd68efe107ebc3b",
+    "bytes": 89014
+  },
+  "summon-concurrent-paused.json": {
+    "sha256": "4cd815d616b1c7fcafa8468e1d8048dc691f47306dcc05ebf6312dbefc2169a4",
+    "bytes": 29201
+  },
+  "summon-replacement-paused.json": {
+    "sha256": "ef4395c27c5a4ee1c33bd578e34aeed8bab1c13da7f571b52c12991e000ab069",
+    "bytes": 29848
+  },
+  "summon-replacement-hit.json": {
+    "sha256": "817ff98f94533b393c30f9cf91274a7113c3792d4dc3eb956e9730820a0dd6bb",
+    "bytes": 33423
+  },
+  "summon-roster-live.json": {
+    "sha256": "a7f4553e92bc2563af609bcbeba66327138320890798d426454555d67d59afe5",
+    "bytes": 6206
+  },
+  "summon-concurrent-events.jsonl": {
+    "sha256": "0c837091e4e0d167fd2a5d3484e177021e90da5d3110ebd1042b05a41a7cbf2c",
+    "bytes": 113374
+  },
+  "summon-cold-events.jsonl": {
+    "sha256": "4b4146459f595a9a9d002233fc74d41c6a78ed173a096f4c82fca54bcff7c347",
+    "bytes": 81270
+  },
+  "summon-cold-recovered.json": {
+    "sha256": "74463352587da9f8e298a6369205e99dbe4599f9276b4490e4958e31ad990c3d",
+    "bytes": 20355
+  },
+  "summon-roster-after-cleanup.json": {
+    "sha256": "55866f8e7918edfa1801d1c0e628fa3cb85842c522faa680554b920e6f423549",
+    "bytes": 6235
+  },
+  "device-ledger-experiment.js.txt": {
+    "sha256": "bc75dc932bd7c3ddaa13ba72486f02089352a8f214f76fbafeddf984b5bb8e91",
+    "bytes": 8829
+  },
+  "device-ledger-launcher.py.txt": {
+    "sha256": "6ec14cccfd9924de738e4ad3e1fcc2fa08f9f041df829a2a59b37133cb295836",
+    "bytes": 3317
+  },
+  "roster-probe.py.txt": {
+    "sha256": "edb16a98028c7369fdfdb91efa2e2f22a39aad8101ce6a81ee7108106da3198f",
+    "bytes": 2197
+  },
+  "mountain-toggle-audit.json": {
+    "sha256": "c03ccb82c446911a72146e73f03e0fe212a6f8457c472d5901df4424a6362fad",
+    "bytes": 86804
+  },
+  "mountain-toggle-corrected.json": {
+    "sha256": "43d668929be3665f8ec2a7d019b4323c8f82ddd83c5ae9237f2908ee517fc7f3",
+    "bytes": 94674
+  },
+  "summon-shield-after-correction.json": {
+    "sha256": "5f78bf037835e0c1c373988a1e0191bd174b2030710d38cb0b1fba21beb032cf",
+    "bytes": 92191
+  },
+  "summon-shield-post-break.json": {
+    "sha256": "3baa4c14f764dd29f0c71c1881cb6ad11c92f8acca67db011b884d1c8d46ba0a",
+    "bytes": 89085
+  },
+  "summon-shield-cold.json": {
+    "sha256": "103d8cbdc4514ad94b15434e128a7f89e7ab668518625f57853cbde304330cd2",
+    "bytes": 54422
+  },
+  "summon-shield-roster.json": {
+    "sha256": "8526290a3020de12a472a3a53b90effca9614dfee0f91ec386d92445b3c45e94",
+    "bytes": 10198
+  },
+  "summon-shield-roster-after-cleanup.json": {
+    "sha256": "0887c38f1bc1cf6ac334c4aab4f9f2d074cf1625cc4ab61179e918af481b92b0",
+    "bytes": 10181
+  },
+  "summon-shield-events.jsonl": {
+    "sha256": "e4f3dd3262223233b2c8bbc711eb5d296a2bb1b7c07a66b2a51face493e4ef9d",
+    "bytes": 417506
+  },
+  "drone-skill-preflight.json": {
+    "sha256": "49d6c4bcce29cc750354b1b3e4acd54183b5acb01181ff2a91158214d6d2de73",
+    "bytes": 4932
+  },
+  "summon-redeploy-guarded.json": {
+    "sha256": "9ac717bbba61690618d17ea6eb1b98a3739de6124630a653c069a35303ab113f",
+    "bytes": 58403
+  },
+  "summon-redeploy-guarded-roster.json": {
+    "sha256": "17b9d7f13c1c655f65da5c2b13e69ae25d51aff1144a83d3d40c1bfbe9bf5edf",
+    "bytes": 7406
+  },
+  "summon-redeploy-guarded-events.jsonl": {
+    "sha256": "ee73eba28ee951f4ecb69efa52703499bc86b79ee956aeffe7b8f22a8bcd9a8d",
+    "bytes": 273162
+  },
+  "drone-support-preflight.json": {
+    "sha256": "bb38c13961a8211a703e88edda9c4e0281ca9ce7dc31c5b9583ed593de32610c",
+    "bytes": 5859
+  },
+  "maa-lab-controller.py.txt": {
+    "sha256": "9502cfcb46deb04b2d73dcaa4e7e7bed5183867869fc93610f225b6cd4e01cd0",
+    "bytes": 3488
+  },
+  "capability-probe.py.txt": {
+    "sha256": "95d18ba4c1349bf273074caf308bca92c5ff2dadbae0ea0fbfa42a156d375a06",
+    "bytes": 4279
+  },
+  "drone-user-deployed-observation.json": {
+    "sha256": "ed17ffa88f4204d271818c5b7453b516ecbf15403f2a994c0e27f7a8692e0958",
+    "bytes": 48490
+  },
+  "drone-support-paused.json": {
+    "sha256": "b732f947b388bbccf2d2d7576eb7995d946e44793c56f116fb915d2b7f85a826",
+    "bytes": 41573
+  },
+  "drone-support-roster.json": {
+    "sha256": "ce64b7b05cff4648033a98465a64cd1185dff81410f04c48e0381fac9998e39d",
+    "bytes": 8654
+  },
+  "drone-support-cold.json": {
+    "sha256": "98cc6fd83841f807b75888ee92ac534e9ce4fa5c5d06583aec65684061989ed0",
+    "bytes": 34504
+  },
+  "drone-support-cold-roster.json": {
+    "sha256": "5ab4baaab32f3484a376da7a6fce715c211c04c8763c40f076795ac23397acf9",
+    "bytes": 8666
+  },
+  "drone-support-events.jsonl": {
+    "sha256": "64391e14c8d54df9d523dd37e3f794a46e91698f85bf8a9f96b66d502c12166f",
+    "bytes": 643107
+  },
+  "maa-execution-log.json": {
+    "sha256": "825635f1395ccd5c0c79e9c2d9f841cbb1a73185ae5f5c6c926d668ba86b45bc",
+    "bytes": 56885
+  }
+}

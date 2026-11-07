@@ -1,0 +1,63 @@
+{
+  "stage_name": "OF-2",
+  "opers": [
+    {
+      "name": "梅尔",
+      "skill": 1
+    },
+    {
+      "name": "闪灵",
+      "skill": 2
+    },
+    {
+      "name": "夜刀"
+    }
+  ],
+  "actions": [
+    {
+      "type": "Deploy",
+      "name": "梅尔",
+      "location": [
+        4,
+        2
+      ],
+      "direction": "Left"
+    },
+    {
+      "type": "Deploy",
+      "name": "机械水獭",
+      "location": [
+        5,
+        3
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "Deploy",
+      "name": "机械水獭",
+      "location": [
+        7,
+        3
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "Output",
+      "post_delay": 3000,
+      "doc": "Two summons attack separate initial dogs; pause for identity/counter baseline."
+    },
+    {
+      "type": "Click",
+      "rect": [
+        1208,
+        52,
+        1,
+        1
+      ]
+    }
+  ],
+  "doc": {
+    "title": "ArkDPS simultaneous summon attribution",
+    "details": "OF-2 initial dogs wait at [5,3] and [8,3]; host faces away. No consumables."
+  }
+}

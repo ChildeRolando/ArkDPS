@@ -1,0 +1,59 @@
+import sys,json,time,threading
+from pathlib import Path
+HERE=Path(__file__).resolve().parent
+sys.path.insert(0,str(HERE/'frida-deps'))
+import frida
+label=sys.argv[1]
+base='/data/local/tmp/ark_dps/'+label
+src=(HERE.parent/'outputs/ark-dps/acceptance/probes/shield_events_android2791.js').read_text(encoding='utf8')
+src=src[:src.index('const timer=setInterval')]
+src=src.replace('let queue=[],seq=0;const stacks=new Map();', 'let queue=[],seq=0;const stacks=new Map();const hooks=[];')
+src=src.replace('for(const m of cfg.methods){Interceptor.attach(ptr(m.address),{','for(const m of cfg.methods){hooks.push(Interceptor.attach(ptr(m.address),{')
+src=src.replace('\n});}', '\n}));}')
+extra=r"""
+const base=BASE;
+const totals={},errors=[];let count=0,stopped=false;
+const started=Date.now(), journal=new File(base+'.events.jsonl','w');
+const rename=new NativeFunction(Process.getModuleByName('libc.so').getExportByName('rename'),'int',['pointer','pointer']);
+function snapshot(){
+ const v={label:base,started,wall:Date.now(),frame:clock.readU32(),count,totals,errors,stopped};
+ const f=new File(base+'.tmp','w');f.write(JSON.stringify(v));f.flush();f.close();
+ if(rename(Memory.allocUtf8String(base+'.tmp'),Memory.allocUtf8String(base+'.json'))!==0)throw new Error('snapshot rename failed');
+}
+function flush(){
+ for(const e of queue){
+  if(e.error||e.afterError){errors.push(e);continue;}
+  if(!['Entity.ApplyModifier','BlockDamage._AssignDynamicVar'].includes(e.name))continue;
+  let source,amount,metric;
+  if(e.name==='BlockDamage._AssignDynamicVar'){
+   source=entity(ptr(e.currentBuff.source));amount=Number(BigInt(e.damageArg))/4294967296;metric='shield';
+  }else{
+   if(e.afterModifier.targetType!==0)continue;
+   source=e.sourceEntity;if(!source||!source.id||!(source.id.startsWith('char_')||source.id.startsWith('token_')))continue;
+   metric=e.afterModifier.type===4?'healing':'damage';amount=e.afterModifier.value;
+  }
+  const key=source.id+'/'+metric;totals[key]=(totals[key]||0)+amount;
+  journal.write(JSON.stringify({index:++count,source,amount,metric,event:e})+'\n');
+ }
+ queue=[];journal.flush();snapshot();
+}
+function shouldStop(){try{const f=new File(base+'.stop','r');f.close();return true;}catch(_){return false;}}
+function stop(){if(stopped)return;stopped=true;for(const h of hooks)h.detach();clearInterval(timer);flush();journal.close();}
+const timer=setInterval(()=>{try{flush();if(shouldStop()||Date.now()-started>300000)stop();}catch(e){errors.push(String(e));stop();}},200);
+flush();send({ready:true,base,frame:clock.readU32()});
+"""
+# JS source needs an actual escaped newline, not two literal backslashes.
+src+=extra.replace('BASE',json.dumps(base))
+(HERE/(label+'.js')).write_text(src,encoding='utf8')
+dev=frida.get_device_manager().add_remote_device('127.0.0.1:27043');session=dev.attach(3201,realm='emulated');script=session.create_script(src)
+ready=threading.Event();failed=[]
+def message(m,b):
+ if m.get('type')=='error':failed.append(m);print(m,flush=True);ready.set()
+ if m.get('payload',{}).get('ready'):print(m,flush=True);ready.set()
+script.on('message',message)
+try:
+ script.load()
+ assert ready.wait(20) and not failed
+ script.eternalize()
+ print('ETERNALIZED; detaching host session',flush=True)
+finally:session.detach()

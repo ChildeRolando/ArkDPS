@@ -1,0 +1,38 @@
+import json,struct
+from types import SimpleNamespace
+from collector import gs,u64,i32
+
+def inspect(c,reader_type,dest,label):
+ before=c.read();ch=c.core._chan;mc=c.core.mc
+ def read(p,n):
+  v=ch.batch_read([(p,n)])[0]
+  if v is None:raise RuntimeError('missing roster memory')
+  return v
+ def fields(obj,expected):
+  assert mc.read_klass_name(obj)==expected,(mc.read_klass_name(obj),expected)
+  k=u64(read(obj,8));h=read(k,0x140);n=struct.unpack_from('<H',h,0x124)[0];assert 0<n<2000
+  r=read(u64(h,0x80),n*32);out={}
+  for i in range(n):
+   f=r[i*32:(i+1)*32];assert u64(f,16)==k
+   name=read(u64(f),160).split(b'\0')[0].decode()
+   attrs=struct.unpack('<I',read(u64(f,8)+8,4))[0]&0xffff
+   if not attrs&0x10:out[name]=i32(f,24)
+  return out
+ bcfields=fields(c.core.bc_addr,'BattleController');off=bcfields['m_playerDataList'];p=u64(read(c.core.bc_addr+off,8));h=read(p,0x20);n=i32(h,0x18);assert 0<n<32
+ players=read(u64(h,0x10)+0x20,n*8);result=[];reader=reader_type(c.core)
+ for i in range(n):
+  player=u64(players,i*8);f=fields(player,'BattlePlayerData');record={'pointer':player,'fields':f}
+  for key in ['characters','tokens']:
+   arr=u64(read(player+f[key],8))
+   if not arr:record[key]=[];continue
+   h=read(arr,0x20);cnt=u64(h,0x18);assert cnt<1000
+   items=read(arr+0x20,cnt*8) if cnt else b'';infos={}
+   for j in range(cnt):
+    ptr=u64(items,j*8)
+    if ptr:assert mc.read_klass_name(ptr)=='BattleCharacterData';infos[ptr]=SimpleNamespace(addr=ptr,data_ptr=ptr)
+   reader._fill_new_identities(infos)
+   record[key]=[reader._identities[ptr] for ptr in infos]
+  result.append(record)
+ after=c.read();out={'label':label,'coherent':before['session']==after['session'] and before['frame']==after['frame'],'before':before,'after':after,'player_data_list_offset':off,'players':result}
+ (dest/(label+'.json')).write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf8')
+ print('ROSTER',label,out['coherent'],after['frame'],json.dumps([{'characters':[(d['cid'],d['unique_id']) for d in r['characters']],'tokens':[(d['cid'],d['token_or_host_key'],d['token_or_host_uid']) for d in r['tokens']]} for r in result],ensure_ascii=False),flush=True)

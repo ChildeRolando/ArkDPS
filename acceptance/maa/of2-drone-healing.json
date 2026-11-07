@@ -1,0 +1,96 @@
+{
+  "stage_name": "OF-2",
+  "opers": [
+    {
+      "name": "夜刀"
+    },
+    {
+      "name": "赫默",
+      "skill": 2
+    },
+    {
+      "name": "山",
+      "skill": 2
+    },
+    {
+      "name": "歌蕾蒂娅",
+      "skill": 1
+    }
+  ],
+  "actions": [
+    {
+      "type": "Deploy",
+      "name": "山",
+      "location": [
+        2,
+        3
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "SkillUsage",
+      "name": "山",
+      "skill_usage": 2,
+      "skill_times": 1
+    },
+    {
+      "type": "Deploy",
+      "name": "夜刀",
+      "location": [
+        4,
+        3
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "Deploy",
+      "name": "赫默",
+      "location": [
+        7,
+        4
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "Deploy",
+      "name": "歌蕾蒂娅",
+      "location": [
+        2,
+        4
+      ],
+      "direction": "Up"
+    },
+    {
+      "type": "Output",
+      "post_delay": 10000,
+      "doc": "Wait for healing-drone stock; host faces away from Yato."
+    },
+    {
+      "type": "Deploy",
+      "name": "医疗探机",
+      "location": [
+        5,
+        4
+      ],
+      "direction": "Right"
+    },
+    {
+      "type": "Output",
+      "post_delay": 4000,
+      "doc": "Observe drone healing with source attribution before withdrawal."
+    },
+    {
+      "type": "Click",
+      "rect": [
+        1208,
+        52,
+        1,
+        1
+      ]
+    }
+  ],
+  "doc": {
+    "title": "ArkDPS summon healing attribution",
+    "details": "OF-2. Silence [7,4] faces Right, away from Yato [4,3]; drone [5,4] covers Yato. No consumables. Mountain [2,3] and Gladiia [2,4] guard the blue exits; their outputs are excluded from the test subject reconciliation."
+  }
+}

@@ -1,0 +1,74 @@
+"""Paused, read-only capability snapshots. No game memory writes."""
+import sys, json, time, struct, importlib.util
+from pathlib import Path
+HERE=Path(__file__).resolve().parent
+ROOT=HERE.parent/'outputs'/'ark-dps'
+sys.path.insert(0,str(ROOT))
+import collector
+collector.PORT=27383
+from collector import Collector,gs,u64,i32
+spec=importlib.util.spec_from_file_location('audit_character_reader',HERE/'ark-source/tools/character_status/character_reader.py')
+mod=importlib.util.module_from_spec(spec);sys.modules[spec.name]=mod;spec.loader.exec_module(mod)
+c=Collector();c.cache_path=ROOT/'acceptance/audit_hint.json'
+dest=HERE/'capability-lab';dest.mkdir(exist_ok=True)
+
+def snapshot(label):
+    before=c.read()
+    c.core._db = {}  # Research probe: retain raw enemy IDs when handbook is unavailable.
+    reader=mod.CharacterReader(c.core)
+    assert reader.bootstrap()
+    ptrs=reader._read_container()
+    blocks=reader._batch([(p,gs.CharacterFields.READ_SIZE) for p in ptrs])
+    infos={p:reader._parse_main(p,b) for p,b in zip(ptrs,blocks) if b}
+    reader._fill_new_identities(infos)
+    reader._refresh_skills(infos)
+    reader._refresh_positions_and_blocking(infos)
+    chars=[]
+    for p,info in infos.items():
+        ident=reader._identities.get(p,{})
+        buffs=c.core._read_active_buffs(info.buff_container_ptr)
+        shield=reader._batch([(info.shield_controller_ptr,0x20)])[0] if info.shield_controller_ptr else None
+        chars.append(dict(address=p,hp=info.hp,identity=ident,skill=info.skill,grid_row=info.grid_row,grid_col=info.grid_col,
+            shield=gs.fp_to_float(u64(shield,gs.ShieldUIControllerFields.M_SHIELD_TO_SHOW)) if shield else None,
+            buffs=buffs))
+    B=gs.BattleControllerFields
+    logger=c.core._chan.transaction_read([('direct',c.core.bc_addr,B.M_LOGGER+8),('deref',0,B.M_LOGGER,0,0x40)])
+    logs=u64(logger[1],gs.BattleLoggerFields.LOGS)
+    loghead=c.core._chan.batch_read([(logs,0x20)])[0] if logs else None
+    from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader
+    loc=DeployTrackerReader(c.core.mc);loc._channel=c.core._chan
+    operation_error=None
+    try:
+        operations=loc._read_log_list(logs)
+    except Exception as exc:
+        operations=[]
+        operation_error=repr(exc)
+    after=c.read()
+    coherent=before['session']==after['session'] and before['frame']==after['frame']
+    result=dict(label=label,wall=time.time(),coherent=coherent,before=before,after=after,
+        characters=chars,verbose_recorder=u64(logger[1],0x38),operations=operations,operation_error=operation_error,operation_log_count=i32(loghead,0x18) if loghead else None)
+    (dest/(label+'.json')).write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    print('SNAPSHOT',label,'coherent',coherent,'frame',after['frame'],'verbose',result['verbose_recorder'],'logs',result['operation_log_count'],flush=True)
+    print(json.dumps(dict(rows=after['rows'],characters=[dict(address=x['address'],hp=x['hp'],shield=x['shield'],name=x['identity'].get('name'),buffs=[b for b in x['buffs'] if b.get('has_shield') or 'shield' in b.get('key','').lower()]) for x in chars]),ensure_ascii=False),flush=True)
+
+try:
+    c.connect();print('READY',flush=True)
+    input_lines=Path(sys.argv[1]).read_text(encoding='utf-8-sig').splitlines() if len(sys.argv)>1 else sys.stdin
+    for line in input_lines:
+        try:
+            cmd=json.loads(line)
+            if cmd['op']=='quit':break
+            if cmd['op']=='snapshot':snapshot(cmd['label'])
+            if cmd['op']=='roster':
+                from roster_probe import inspect
+                inspect(c,mod.CharacterReader,dest,cmd['label'])
+            if cmd['op']=='history':
+                from history_probe import inspect
+                inspect(c,dest,cmd['label'])
+            if cmd['op']=='watch':
+                from fast_capability import watch
+                watch(c,dest,cmd['label'],cmd.get('seconds',30))
+            if cmd['op']=='reconnect':c.close();c=Collector();c.cache_path=ROOT/'acceptance/audit_hint.json';c.connect();print('RECONNECTED',flush=True)
+        except Exception as e:
+            import traceback;traceback.print_exc()
+finally:c.close()
