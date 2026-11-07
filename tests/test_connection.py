@@ -382,3 +382,71 @@ def test_both_identifiers_missing_keeps_distinct_instances(adb_path):
     result = conn.detect_instances(runner=fake)
     assert result.status is conn.DetectionStatus.NEEDS_SELECTION
     assert len(result.instances) == 2
+
+
+def collector_with_fake_adb(monkeypatch):
+    import collector
+    fake = FakeAdb()
+    instance = collector.Collector(adb='adb', serial='s', log=lambda *_: None)
+    if not hasattr(instance, 'forward_registry'):
+        instance.forward_registry = conn.ForwardRegistry(fake)
+        instance.core.mc.forward_registry = instance.forward_registry
+    instance.forward_registry.run = fake
+    monkeypatch.setattr(instance.core.mc, 'adb',
+                        lambda *args, **kwargs: fake(['adb', '-s', 's', *args]))
+    return instance, fake
+
+
+def test_collector_channel_forward_conflict_and_owned_close(monkeypatch):
+    import collector
+
+    instance, fake = collector_with_fake_adb(monkeypatch)
+    channel = collector.TcpChannel(instance.core.mc, port=collector.PORT)
+    instance.core.mc._chan = channel
+    monkeypatch.setattr(channel, '_push_memsrv', lambda: True)
+    monkeypatch.setattr(channel, '_server_up', lambda: True)
+    fake.forwards[('other', collector.PORT)] = 1717
+    with pytest.raises(conn.CommandError):
+        channel._ensure_server()
+    instance.close()
+    assert fake.forwards == {('other', collector.PORT): 1717}
+    assert not any('--remove' in c for c in fake.calls)
+
+    fake.forwards.clear()
+    channel._ensure_server()
+    channel._ensure_server()  # reopening the same owned mapping is safe
+    assert fake.forwards == {('s', collector.PORT): collector.PORT}
+    instance.close()
+    assert fake.forwards == {}
+    assert any('--no-rebind' in c for c in fake.calls)
+
+
+def test_collector_close_preserves_replaced_forward(monkeypatch):
+    import collector
+
+    instance, fake = collector_with_fake_adb(monkeypatch)
+    channel = collector.TcpChannel(instance.core.mc, port=collector.PORT)
+    instance.core.mc._chan = channel
+    monkeypatch.setattr(channel, '_kill_own_nc', lambda: None)
+    monkeypatch.setattr(channel, '_push_memsrv', lambda: True)
+    monkeypatch.setattr(channel, '_server_up', lambda: True)
+    channel._ensure_server()
+    fake.forwards[('s', collector.PORT)] = 1717
+    instance.close()
+    assert fake.forwards == {('s', collector.PORT): 1717}
+    assert not any('--remove' in c for c in fake.calls)
+
+
+def test_collector_reopen_rejects_replaced_forward(monkeypatch):
+    import collector
+
+    instance, fake = collector_with_fake_adb(monkeypatch)
+    channel = collector.TcpChannel(instance.core.mc, port=collector.PORT)
+    monkeypatch.setattr(channel, '_push_memsrv', lambda: True)
+    monkeypatch.setattr(channel, '_server_up', lambda: True)
+    channel._ensure_server()
+    fake.forwards[('s', collector.PORT)] = 1717
+    with pytest.raises(conn.CommandError):
+        channel._ensure_server()
+    instance.close()
+    assert fake.forwards == {('s', collector.PORT): 1717}

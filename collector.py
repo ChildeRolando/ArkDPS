@@ -20,7 +20,7 @@ from tools.enemy_health.enemy_reader import EnemyReader
 from tools.enemy_health.memcore import TcpChannel
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
 from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
-                        EXPECTED_GAME_VERSION)
+                        EXPECTED_GAME_VERSION, ForwardRegistry)
 
 DEFAULT_ADB = r'C:\Program Files\Netease\MuMu Player 12\nx_main\adb.exe'
 DEFAULT_SERIAL = '127.0.0.1:16384'
@@ -94,6 +94,8 @@ class Collector:
         self.log = log
         self.core = EnemyReader(adb_path=adb, adb_serial=serial,
             cache_file=str(ROOT / 'runtime' / 'unused.pkl'), log=log)
+        self.forward_registry = ForwardRegistry()
+        self.core.mc.forward_registry = self.forward_registry
         # Dedicated port: do not share the upstream app's stream.
         self.names = json.loads((VENDOR / 'game_data/catalogs/char_names.json').read_text(encoding='utf-8'))
         self.last_pid_check = 0.0
@@ -276,11 +278,11 @@ class Collector:
             observed_at=time.time(), captured_monotonic=captured_monotonic, guard=guard)
 
     def close(self):
-        channel = self.core._chan or self.core.mc._chan
-        self.core.close()
-        if channel:
+        try:
+            self.core.close()
+        finally:
             try:
-                channel._kill_own_nc()
-                self.core.mc.adb('forward', '--remove', f'tcp:{PORT}')
-            except Exception:
-                pass
+                self.core.mc.close()
+            finally:
+                for serial, local in list(self.forward_registry.owned):
+                    self.forward_registry.release(serial, local)

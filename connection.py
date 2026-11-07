@@ -626,11 +626,23 @@ class ForwardRegistry:
 
     def ensure(self, adb: str, serial: str, local: int = PROJECT_FORWARD_PORT,
                remote: int = PROJECT_FORWARD_PORT) -> None:
+        key = (serial, local)
+        if key in self.owned:
+            old_adb, old_remote = self.owned[key]
+            listing = _run(self.run, [old_adb, 'forward', '--list'], 10.0)
+            if listing.returncode != 0:
+                raise CommandError((listing.stderr or listing.stdout).strip() or '无法检查 adb 转发')
+            expected = [serial, f'tcp:{local}', f'tcp:{old_remote}']
+            if any(line.split() == expected for line in listing.stdout.splitlines()):
+                if (old_adb, old_remote) == (adb, remote):
+                    return
+                raise CommandError('本地端口已有本工具的其他转发')
+            self.owned.pop(key)
         result = _run(self.run, [adb, '-s', serial, 'forward', '--no-rebind',
                                  f'tcp:{local}', f'tcp:{remote}'], 10.0)
         if result.returncode != 0:
             raise CommandError((result.stderr or result.stdout).strip() or 'adb forward 失败')
-        self.owned[(serial, local)] = (adb, remote)
+        self.owned[key] = (adb, remote)
 
     def release(self, serial: str, local: int = PROJECT_FORWARD_PORT) -> None:
         owned = self.owned.get((serial, local))

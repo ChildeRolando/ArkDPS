@@ -49,7 +49,7 @@
 
 采集器在 `connect()` 后设置同一结构；`ConnectionTarget.require_collectable()` 在版本不匹配时抛出带诊断的 `ConnectionUnavailable`。
 
-`ForwardRegistry` 使用 `adb forward --no-rebind`，占用端口时报告冲突；释放前检查当前映射仍与登记值一致，查询失败时保留登记以便重试。adb 不提供映射所有权令牌或原子条件删除，因此外部程序若在检查与删除之间替换同一端口，或替换为完全相同的映射，无法由此接口辨认。
+采集器实际通道通过 `ForwardRegistry` 使用 `adb forward --no-rebind`，占用端口时报告冲突；重连前核对登记，关闭采集器时仅释放仍与登记值一致的映射，查询失败时保留登记以便重试。adb 不提供映射所有权令牌或原子条件删除，因此外部程序若在检查与删除之间替换同一端口，或替换为完全相同的映射，无法由此接口辨认。
 
 ## 验证
 
