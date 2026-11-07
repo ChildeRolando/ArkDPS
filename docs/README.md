@@ -17,10 +17,15 @@
 - [重连后的历史数据](reconnect-research.md) — 已知证据与未决能力。
 - [MAA 实验作业目录](../acceptance/maa/README.md) — 可执行作业、回调和失败记录。
 
+## 调研与对标
+
+- [同类 DPS 工具架构调研](dps-tool-prior-art.md) — Details!/Skada/ACT/Deucalion/ArcDPS 的可借鉴设计与 ArkDPS 差距。
+
 ## 实现契约
 
 - [连接配置与 MuMu 自动检测](connection.md) — 连接目标、版本门禁和诊断。
 - [统计核心输入契约](statistics-core.md) — 离线统计核心的输入与口径。
+- [实时事件采集入口与验收](event-capture.md) — 可选观察器、共享采集入口、覆盖语义和宿主机验收命令。
 - [GUI/HUD 共用面板模型](panel-model.md) — 面板配置、排序、柱长与占比口径。
 - [ADR 0001：总伤害包含过量部分](adr/0001-damage-totals-include-overkill.md)
 - [ADR 0002：接敌伤害与治疗使用独立活跃区间](adr/0002-separate-engagement-windows.md)

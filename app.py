@@ -14,7 +14,9 @@ from tkinter import ttk, filedialog, messagebox
 
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from metrics import observation_age
+from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from battle_lifecycle import BattleRuntime
+from event_capture import CaptureRetry
 
 
 def number(value):
@@ -114,58 +116,53 @@ class App:
 
     def _collect(self):
         runtime = BattleRuntime()
-        first_connection = True
-        last_written_key = None
-        last_written_at = 0
         capture_dir=ROOT/'runtime'/'captures'
         capture_dir.mkdir(parents=True,exist_ok=True)
         capture_path=capture_dir/f'{timestamp():%Y%m%d-%H%M%S}.jsonl'
         with capture_path.open('a',encoding='utf-8') as out:
+            from capture_cli import json_value
+            def audit(kind, data):
+                if out.closed:
+                    return
+                out.write(json.dumps(dict(kind=kind, data=data), ensure_ascii=False,
+                                     default=json_value) + '\n')
+                out.flush()
             while not self.stop.is_set():
                 if self.rescan.is_set():
                     self.rescan.clear()
                     self.events.put(('scanning',True))
                     if self.collector:
-                        runtime.disconnected('relocating')
                         self.collector.close()
-                    self.collector=Collector(self.args.adb,self.args.serial,log=lambda x:print(x,flush=True))
+                    self.collector=CollectionSession(self.args.adb,self.args.serial,
+                        frida_remote=self.args.frida_remote, audit=audit,
+                        log=lambda x:print(x,flush=True))
+                    self.collector.enable_lifecycle(runtime)
                     try:
-                        force = not first_connection
-                        first_connection = False
-                        self.collector.connect(force=force, lifecycle=True)
+                        self.collector.connect()
                     except Exception as exc:
                         traceback.print_exc()
                         self.events.put(('error',str(exc)))
-                        runtime.disconnected(str(exc))
                         self.collector.close()
                         self.collector=None
                     self.events.put(('scanning',False))
                 if self.collector:
                     try:
-                        observation = runtime.poll(self.collector)
+                        sample = self.collector.read()
+                        runtime = self.collector.runtime
                         self.events.put(('lifecycle',runtime.sessions.state))
-                        sample = runtime.display_sample()
-                        if sample and observation.kind in ('sample', 'terminal', 'end'):
-                            key=(sample['session'],sample['frame'],sample['sum_damage'],
-                                 runtime.sessions.state)
-                            if key != last_written_key or time.monotonic()-last_written_at >= 5:
-                                out.write(json.dumps(sample,ensure_ascii=False)+'\n')
-                                out.flush()
-                                last_written_key=key
-                                last_written_at=time.monotonic()
+                        if sample:
                             self.events.put(('sample',sample))
+                    except CaptureRetry:
+                        self.events.put(('lifecycle', self.collector.runtime.sessions.state))
                     except BattleChanged as exc:
-                        runtime.disconnected(str(exc))
                         self.events.put(('error',str(exc)))
                         self.rescan.set()
                     except Exception as exc:
                         self.events.put(('error',str(exc)))
-                for archive in runtime.sessions.pop_archives():
-                    out.write(json.dumps({'archive_ready':archive},ensure_ascii=False)+'\n')
-                    out.flush()
                 self.stop.wait(0.2)
-            runtime.disconnected('capture_stopped')
-            out.write(json.dumps({'lifecycle_stopped':runtime.sessions.live()},ensure_ascii=False)+'\n')
+            if self.collector:
+                self.collector.close()
+                self.collector = None
             out.flush()
 
     def tick(self):
@@ -276,7 +273,27 @@ def main():
     parser.add_argument('--adb',default=DEFAULT_ADB)
     parser.add_argument('--serial',default=DEFAULT_SERIAL)
     parser.add_argument('--capture-seconds',type=float,default=0)
+    events=parser.add_mutually_exclusive_group()
+    events.add_argument('--frida-remote', default=DEFAULT_FRIDA_REMOTE,
+                        help='Frida 17.26.1 endpoint (default: %(default)s); no server is installed or started')
+    events.add_argument('--no-events', dest='frida_remote', action='store_const', const=None,
+                        help='disable event observation; retain native snapshots')
+    parser.add_argument('--wait-battle-seconds',type=float,default=180)
+    parser.add_argument('--baseline-timeout',type=float,default=90)
+    parser.add_argument('--output-dir',type=Path)
+    parser.add_argument('--stop-file',type=Path)
+    parser.add_argument('--expect-head')
+    parser.add_argument('--maa-job',type=Path)
+    parser.add_argument('--maa-log',type=Path)
+    parser.add_argument('--stage')
+    parser.add_argument('--require-progress',action='store_true')
+    parser.add_argument('--require-events',action='store_true',
+                        help='fail acceptance capture if event coverage is unavailable')
     args=parser.parse_args()
+    if args.require_events and not args.frida_remote:
+        parser.error('--require-events cannot be combined with --no-events')
+    if (args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0):
+        parser.error('capture/wait durations must be nonnegative and baseline timeout positive')
     (ROOT/'runtime').mkdir(exist_ok=True)
     # One owner for the device channel. A second launch cannot tear it down.
     instance_lock=socket.socket()
@@ -292,10 +309,8 @@ def main():
         root.destroy()
         return
     if args.capture_seconds:
-        from capture_battles import capture
-        dest=ROOT/'runtime'/f'battles-{timestamp():%Y%m%d-%H%M%S}'
-        capture(args.capture_seconds, dest, args.adb, args.serial)
-        print(dest)
+        from capture_cli import run_capture
+        run_capture(args)
         return
     log=(ROOT/'runtime'/f'app-{timestamp():%Y%m%d-%H%M%S}.log').open('a',encoding='utf-8',buffering=1)
     sys.stdout=sys.stderr=log

@@ -1,0 +1,115 @@
+// Research observer for the measured Android 2.7.91 ARM64 layout.
+// Interceptors observe calls only: no argument, return-value, or gameplay writes.
+if(Process.arch!=='arm64')throw new Error('ARM64 emulated realm required');
+const il=Process.getModuleByName('libil2cpp.so');
+function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
+function className(k){return k.add(0x10).readPointer().readCString();}
+function expectFields(k,expected){
+ const a=k.add(0x80).readPointer(),n=k.add(0x124).readU16(),seen={};
+ if(n>1000)throw new Error('invalid field metadata');
+ for(let i=0;i<n;i++){const f=a.add(i*32);if(!f.add(16).readPointer().equals(k))throw new Error('field owner mismatch');seen[f.readPointer().readCString()]=f.add(24).readS32();}
+ for(const [name,offset] of Object.entries(expected))if(seen[name]!==offset)throw new Error('unsupported layout '+className(k)+'.'+name);
+}
+const domain=api('il2cpp_domain_get','pointer',[])();
+const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
+const cfg={methods:[]};let clock;
+try{
+ const size=Memory.alloc(8), assemblies=api('il2cpp_domain_get_assemblies','pointer',['pointer','pointer'])(domain,size);
+ const imageOf=api('il2cpp_assembly_get_image','pointer',['pointer']), imageName=api('il2cpp_image_get_name','pointer',['pointer']);
+ const classCount=api('il2cpp_image_get_class_count','ulong',['pointer']),classAt=api('il2cpp_image_get_class','pointer',['pointer','ulong']);
+ let im;
+ for(let i=0;i<size.readU64().toNumber();i++){const x=imageOf(assemblies.add(i*8).readPointer());if(imageName(x).readCString()==='Assembly-CSharp.dll'){im=x;break;}}
+ if(!im)throw new Error('Assembly-CSharp not found');
+ const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController']);const found={};
+ for(let i=0,n=classCount(im);i<n;i++){
+  const k=classAt(im,i),name=className(k);if(!wanted.has(name))continue;
+  const ns=k.add(0x18).readPointer().readCString();if(ns!==(['BuffContainer','BlockDamage'].includes(name)?'':'Torappu.Battle'))continue;
+  if(found[name])throw new Error('ambiguous class '+name);found[name]=k;
+ }
+ for(const name of wanted)if(!found[name])throw new Error('class not found '+name);
+ expectFields(found.Entity,{'m_hp':0x40,'<id>k__BackingField':0x148});
+ expectFields(found.Buff,{'m_source':0x18,'m_blackboard':0xb8,'<key>k__BackingField':0x208,'<instanceUid>k__BackingField':0x218,'<hasShield>k__BackingField':0x27c});
+ expectFields(found.Modifier,{'m_source':0x10,'m_target':0x20,'m_originalSource':0x30,'m_value':0x40,'realDelta':0x58,'<targetType>k__BackingField':0x70,'<damageType>k__BackingField':0x78,'<cancelReason>k__BackingField':0x80});
+ // FIXED_FRAME_COUNT is verified from the current class metadata, not an old battle object.
+ expectFields(found.BattleController,{'s_fixedFrameCnt':0x14,'s_fixedPlayTime':0x18});
+ clock=found.BattleController.add(0xb8).readPointer().add(0x14);
+ for(const [owner,k] of Object.entries(found)){
+  if(['Modifier','BattleController'].includes(owner))continue;
+  const ma=k.add(0x98).readPointer(),mn=k.add(0x120).readU16();if(mn>2000)throw new Error('method count invalid');
+  for(let i=0;i<mn;i++){
+   const m=ma.add(i*8).readPointer();if(!m.add(0x20).readPointer().equals(k))continue;
+   const name=m.add(0x18).readPointer().readCString();
+   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || owner==='Entity'&&['ApplyModifier','OnAppliedModifier','OnTakeHeal'].includes(name)) cfg.methods.push({owner,name,address:m.readPointer().toString()});
+  }
+ }
+ for(const key of ['Entity.ApplyModifier','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar'])if(!cfg.methods.some(m=>m.owner+'.'+m.name===key))throw new Error('required method missing '+key);
+} finally {api('il2cpp_thread_detach','void',['pointer'])(thread);}
+// A callback increments epoch on entry and remains active until its native
+// invocation returns. RPC marks are serialized with these JS callbacks.
+let sequence=0, epoch=0, active=0, fatal=null, stopped=false;
+let queue=[];
+const stacks=new Map(), hooks=[];
+function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
+function fp(p){return p.readS64().toNumber()/4294967296;}
+function entityId(p){if(p.isNull())throw new Error('missing source entity');const id=str(p.add(0x148).readPointer());if(!id)throw new Error('missing source identity');return id;}
+function time(allowRetry = false) {
+ const frame = clock.readU32();
+ const game_time = fp(clock.add(4));
+ if (clock.readU32() !== frame) {
+  if (allowRetry) return null;
+  throw new Error('unstable callback clock');
+ }
+ if (!Number.isFinite(game_time) || game_time < 0) throw new Error('invalid clock');
+ return {frame, game_time};
+}
+function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer(),hasShield:p.add(0x27c).readU8()};}
+function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
+function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
+function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
+function record(source,kind,amount,when,proof){
+ if(!Number.isFinite(amount)||amount<0)throw new Error('invalid amount');
+ if(queue.length>=100000)throw new Error('event buffer overflow');
+ queue.push({sequence:++sequence,frame:when.frame,game_time:when.game_time,source,kind,amount,proof});
+}
+for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&x.name==='ApplyModifier')){
+ hooks.push(Interceptor.attach(ptr(m.address),{
+  onEnter(args){
+   active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
+   try{
+    this.when=time();
+    if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
+    if(this.name==='Entity.ApplyModifier'){this.mod=args[1];this.source=entityId(this.mod.readPointer());return;}
+    const s=stacks.get(this.tid)||[];if(!s.length)throw new Error('missing shield callback context');
+    this.buff=buff(s[s.length-1]);this.source=entityId(this.buff.source);this.bb=args[1];
+    if(own(this.source)){if(this.buff.hasShield!==1||!['shining_s_2','catsld_t_1[core]'].includes(this.buff.key))throw new Error('unverified shield');this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(args[2].add(0x30));if(!Number.isFinite(this.before)||this.before<0||!Number.isFinite(this.incoming)||this.incoming<0)throw new Error('invalid shield inputs');}
+   }catch(e){fatal=String(e);}
+  },
+  onLeave(){
+   try{
+    if(this.pushed){const s=stacks.get(this.tid);s.pop();if(!s.length)stacks.delete(this.tid);return;}
+    if(fatal||!own(this.source))return;
+    const end=time();if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
+    if(this.name==='Entity.ApplyModifier'){
+     const target=this.mod.add(0x60).readS32(),type=this.mod.add(0x68).readS32();
+     if(target!==0)return;
+     if(![1,2,3,4,5].includes(type))throw new Error('unverified modifier type');
+     record(this.source,type===4?'healing':'damage',fp(this.mod.add(0x30)),end,{method:this.name,type,target});
+    }else{
+     const after=dynamic(this.bb);
+     if(!Number.isFinite(after)||after<0||Math.abs(this.before-after-this.amount)>0.01)throw new Error('shield absorption mismatch');
+     record(this.source,'shield_absorbed',this.amount,end,{method:this.name,buff:this.buff.key,before:this.before,after,incoming:this.incoming});
+    }
+   }catch(e){fatal=String(e);}finally{if(this.started)active--;}
+  }
+ }));
+}
+rpc.exports={
+ mark() {
+  const current = time(true);
+  if (current === null) return {retry:true,error:fatal,stopped};
+  return {...current,sequence,epoch,active,error:fatal,stopped};
+ },
+ drain(){const result=queue;queue=[];return {events:result,error:fatal,stopped};},
+ stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
+};
+send({ready:true,arch:Process.arch});

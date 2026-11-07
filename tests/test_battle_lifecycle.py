@@ -9,6 +9,7 @@ from battle_lifecycle import (BattleFeed, BattleObservation, BattleRuntime,
                               BattleSessions, BattleView)
 from roster import CharacterEntry, RosterSnapshot
 from snapshot_adapter import FrameMismatch, MappingUnavailable
+from event_capture import CaptureRetry
 
 
 class FakeCollector:
@@ -185,10 +186,10 @@ def test_unstable_pair_cannot_publish_or_advance_generation(fault):
         c.roster = replace(c.roster, frame=9)
     else:
         c.sample['battle_identity'] = (500, 600)
-    with pytest.raises(FrameMismatch):
+    with pytest.raises(CaptureRetry):
         r.poll(c)
     assert total(r) == 100.
-    assert r.sessions.state == 'frozen'
+    assert r.sessions.state == 'playing'
     assert r.feed.generation == 1
     assert not r.sessions.pop_archives()
 

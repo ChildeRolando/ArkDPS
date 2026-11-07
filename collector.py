@@ -19,6 +19,7 @@ from tools.enemy_health import game_structs as gs
 from tools.enemy_health.enemy_reader import EnemyReader
 from tools.enemy_health.memcore import TcpChannel
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
+from character_catalog import load_character_names
 from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
                         EXPECTED_GAME_VERSION, ForwardRegistry)
 from roster import RosterReader, RosterSnapshot, RosterUnavailable
@@ -98,7 +99,7 @@ class Collector:
         self.forward_registry = ForwardRegistry()
         self.core.mc.forward_registry = self.forward_registry
         # Dedicated port: do not share the upstream app's stream.
-        self.names = json.loads((VENDOR / 'game_data/catalogs/char_names.json').read_text(encoding='utf-8'))
+        self.names = load_character_names()
         self.last_pid_check = 0.0
         self.cache_path = ROOT / 'runtime' / 'address_hint.json'
         self._roster_reader = None
@@ -137,7 +138,7 @@ class Collector:
             raise SampleUnavailable('发现多个有效战局，无法确认当前局；停止发布数据')
         self.core.bc_addr=valid[0]
 
-    def connect(self, force=False, lifecycle=False):
+    def connect(self, force=False, *, locate=True, lifecycle=False):
         self.log('正在连接 MuMu…')
         self._lifecycle_reader = None
         self.core.bc_addr = 0
@@ -176,19 +177,30 @@ class Collector:
         self.core._chan = self.core.mc.channel()
         self.last_pid_check = time.monotonic()
         if lifecycle:
-            from tools.enemy_health.battle_lifecycle import locate_lifecycle
-            locator = DeployTrackerReader(self.core.mc)
-            try:
-                classes = locator.scan_classes(('BattleController',))
-                if not classes or len(classes) != 1:
-                    raise SampleUnavailable('无法唯一定位战局单例类型；保留未知状态')
-                self._lifecycle_reader = locate_lifecycle(
-                    self.core.mc, next(iter(classes)), locator)
-                # Reuse the collector-owned transport; no resident observer.
-                self._lifecycle_reader.m.channel = self.core._chan
-            finally:
-                locator.close()
-            return
+            self.locate_lifecycle()
+        elif locate:
+            self.locate_battle(force=force)
+
+    def locate_lifecycle(self):
+        """Locate live singleton slots after process/version certification."""
+        if self.diagnostics.version_status != VersionStatus.COMPATIBLE:
+            raise UnsupportedVersion('版本未通过校验，拒绝定位战局', self.diagnostics)
+        from tools.enemy_health.battle_lifecycle import locate_lifecycle
+        locator = DeployTrackerReader(self.core.mc)
+        try:
+            classes = locator.scan_classes(('BattleController',))
+            if not classes or len(classes) != 1:
+                raise SampleUnavailable('无法唯一定位战局单例类型；保留未知状态')
+            self._lifecycle_reader = locate_lifecycle(self.core.mc, next(iter(classes)), locator)
+            self._lifecycle_reader.m.channel = self.core._chan
+        finally:
+            locator.close()
+
+    def locate_battle(self, force=False):
+        """Locate after a version-checked connection, allowing pre-battle hooks."""
+        if self.diagnostics.version_status != VersionStatus.COMPATIBLE:
+            raise UnsupportedVersion('版本未通过校验，拒绝定位战局', self.diagnostics)
+        self.core.bc_addr = 0
         hint = None
         try:
             hint = json.loads(self.cache_path.read_text(encoding='utf-8'))

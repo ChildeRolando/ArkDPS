@@ -128,6 +128,44 @@ def test_snapshots_replace_totals_and_duplicate_frames_are_ignored():
     assert a.result(BASE)['rows']['char_a']['damage'] == 1260
 
 
+def test_ordered_event_barrier_and_gap_do_not_change_native_totals():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 1000)], 30, 10), paired(BASE, 10))
+    a.start_events(session='battle-1', frame=10, sequence=4)
+    a.accept_event(session='battle-1', sequence=5, frame=10, game_time=30,
+                   source='char_a', kind='damage', amount=20)
+    a.update(sample([row('char_a', 1020)], 31, 11), paired(BASE, 11))
+    a.on_gap()
+    result = a.result()['rows']['char_a']
+    assert result['damage'] == 1020
+    assert result['observed_damage'] == 20
+    assert result['event_coverage_end'] == 30
+    assert not result['event_coverage_complete']
+
+
+def test_event_stream_cannot_continue_after_mapping_conflict():
+    token = entry('token_a', 3, token=True, host_key='char_a', host_uid=1)
+    changed = entry('token_a', 3, token=True, host_key='char_b', host_uid=2)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a'), row('token_a')], 0, 1),
+             roster([CHAR_A, CHAR_B, token], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.update(sample([row('char_a'), row('token_a')], 1, 2),
+             roster([CHAR_A, CHAR_B, changed], frame=2))
+    assert not a.result()['rows']['char_a']['event_coverage_complete']
+
+
+def test_shield_only_summon_uses_roster_host_without_a_counter_row():
+    token = entry('token_a', 3, token=True, host_key='char_a', host_uid=1)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a')], 0, 1), roster([CHAR_A, token], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
+                   source='token_a', kind='shield_absorbed', amount=2)
+    assert a.result()['rows']['char_a']['shield_absorbed'] == 2
+    assert a.result()['rows']['char_a']['damage'] == 0
+
+
 def test_pause_does_not_fabricate_a_rate_or_change_totals():
     a = BattleStatisticsAdapter()
     a.update(sample([row('char_a', 1000, 0)], 0, 1), paired(BASE, 1))
@@ -157,6 +195,33 @@ def test_summon_shared_key_is_counted_once_and_attributed_to_host():
     a.update(sample([row('char_242_otter', 100, 0),
                      row('token_otter', 560, 0)], 1, 2), paired(r, 2))
     assert a.result(r)['rows']['char_242_otter']['damage'] == 660
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_summon_healing_uses_the_hosts_display_name(reverse):
+    host = entry('char_108_silent', 11)
+    drone = entry('token_10000_silent_healrb', 12, token=True,
+                  host_key=host.cid, host_uid=host.unique_id)
+    r = roster([host, drone])
+    a = BattleStatisticsAdapter()
+    rows = [row(host.cid, healing=581, name='助战赫默'),
+            row(drone.cid, healing=125, name='医疗无人机')]
+    if reverse:
+        rows.reverse()
+    a.update(sample(rows, 0, 1), paired(r, 1))
+    assert a.result()['rows'][host.cid]['name'] == '助战赫默'
+    assert a.result()['rows'][host.cid]['healing'] == 706
+
+    drone_only = [row(drone.cid, healing=2500, name='医疗无人机')]
+    a.update(sample(drone_only, 1, 2), paired(r, 2))
+    assert a.result()['rows'][host.cid]['name'] == '助战赫默'
+    assert a.result()['rows'][host.cid]['healing'] == 3081
+
+    a.update(sample(drone_only, 0, 3, session='battle-2'), paired(r, 3))
+    result = a.result()['rows']
+    assert result[host.cid]['name'] == '赫默'
+    assert result[host.cid]['healing'] == 2500
+    assert drone.cid not in result
 
 
 def test_unmapped_token_is_excluded_not_guessed():

@@ -57,10 +57,14 @@ class Statistics:
         for state in self.sources.values():
             state['continuous'] = False
 
-    def invalidate_events(self):
+    def invalidate_events(self, end_time=None):
         """Close event coverage at the last reliable game time."""
         if self.event_coverage and self.event_coverage_end is None:
-            self.event_coverage_end = self.now
+            end_time = self.now if end_time is None else end_time
+            self._time(end_time)
+            if not self.last_event_time <= end_time <= self.now:
+                raise ValueError('invalid event coverage end')
+            self.event_coverage_end = end_time
 
     def snapshot(self, game_time, counters):
         """Apply a complete source-key snapshot; omitted sources become unknown.
@@ -109,35 +113,45 @@ class Statistics:
             while len(history) > 2 and history[1][0] <= cutoff:
                 history.popleft()
 
-    def correct_final_totals(self, counters):
-        """Accept monotonic terminal accounting revisions at the frozen time.
+    def settle_snapshot(self, counters):
+        """Revise authoritative totals at the already frozen battle endpoint.
 
-        The caller must verify the same ended battle and terminal native state.
-        Same-time changes remain forbidden in ordinary snapshots. These totals
-        have no new event timing, so sampled rates become unavailable; the end
-        time, engagement intervals and event/shield data never advance.
+        This is deliberately separate from ordinary snapshots. It never moves
+        the clock, reopens events or invents a rate for a same-time correction.
+        The adapter must verify the same ended battle/frame before calling it.
         """
-        if self.end_time is None or not self.baseline_ready:
-            raise ValueError('final totals require an ended observation baseline')
+        if self.end_time is None:
+            raise ValueError('only an ended battle can receive settlement revisions')
         for source, values in counters.items():
             if source not in self.owners or set(values) != {'damage', 'healing'}:
-                raise ValueError('unknown source or incomplete final counters')
-            for kind in ('damage', 'healing'):
-                self._amount(values[kind])
-                if source in self.sources and values[kind] < self.sources[source]['values'][kind]:
-                    raise ValueError('final cumulative counter decreased')
-        self.invalidate_snapshots()
+                raise ValueError('unknown source or incomplete settlement counters')
+            for kind, value in values.items():
+                self._amount(value)
+                if source in self.sources and value < self.sources[source]['values'][kind]:
+                    raise ValueError('settlement counter decreased')
+        changed = False
+        for source, state in self.sources.items():
+            if source not in counters and state['continuous']:
+                state['continuous'] = False
+                changed = True
         for source, values in counters.items():
-            state = self.sources.get(source)
-            if state is None:
-                state = self.sources[source] = dict(values={}, history=deque(),
-                                                     continuous=False, segment_start=self.now)
-            state['values'] = dict(values)
-            entry = (self.now, dict(values))
-            if state['history'] and state['history'][-1][0] == self.now:
-                state['history'][-1] = entry
-            else:
-                state['history'].append(entry)
+            prior = self.sources.get(source)
+            if prior is None or prior['values'] != values or not prior['continuous']:
+                self.sources[source] = {'values': dict(values),
+                                        'history': deque([(self.end_time, dict(values))]),
+                                        'continuous': True, 'segment_start': self.end_time}
+                changed = True
+        return changed
+
+    def correct_final_totals(self, counters):
+        """Revise terminal counters without claiming timing for any final rate."""
+        if not self.baseline_ready:
+            raise ValueError('final totals require an observation baseline')
+        changed = any(source not in self.sources or self.sources[source]['values'] != values
+                      for source, values in counters.items())
+        self.settle_snapshot(counters)
+        self.invalidate_snapshots()
+        return changed
 
     def event(self, event_id, game_time, source, kind, amount):
         """Record one reliable event: damage, healing, or actual shield absorption.
@@ -211,7 +225,8 @@ class Statistics:
             row = {'coverage_start': self.start_time,
                    'counter_snapshot_complete': complete,
                    'shield_coverage_start': self.start_time if self.event_coverage else None,
-                   'event_coverage_end': self.event_coverage_end,
+                   'event_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
+                                          else self.end_time if self.event_coverage else None),
                    'event_coverage_complete': self.event_coverage and self.event_coverage_end is None,
                    'shield_absorbed': self.shields.get(owner, 0) if self.event_coverage else None}
             for kind in ('damage', 'healing'):

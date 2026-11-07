@@ -60,7 +60,24 @@ Get-FileHash runtime/ark6-live-01/observations.jsonl -Algorithm SHA256
 
 输出目录不能复用已有 `observations.jsonl`。重放会核对归档统计和末尾汇总；缺失交接、损坏记录或截断日志会失败。结束采集只冻结仍在观察的局，不把停止插件伪装成玩家中途退出。
 
-## 实机证据（2026-11-08）
+### 整合已合入的 ARK-5（新候选实机待验收）
+
+正常窗口与 `app.py --capture-seconds` 均在连接前启用 `CollectionSession.enable_lifecycle()`，共用 `BattleRuntime` 持有的唯一统计适配器。先认证并准备默认事件观察器，再定位单例；生命周期 ID 同时用于快照、事件流、发布和归档。同一观察器跨同进程的新局继续排队，新基线的序号屏障丢弃旧局前缀；消费者先拒绝旧 feed/代次/序号，再输入事件，不为每局重复挂载同一 PID。
+
+暂时的累计/编队跨帧与观察器 retry 保留队列、不签发新代次、不关闭事件覆盖；连接失败或序列缺口才冻结相应覆盖。首个可靠终局先应用事件水位，再冻结时间。后续同帧单调累计修订同步更新发布值，事件不增加，重复稳定修订不增加修订号。`tests/test_lifecycle_events.py` 覆盖真实入口、共用 ID、终局修订、一次交接、旧事件隔离、选择器和默认事件降级。
+
+正式日志的 `lifecycle_observation` 包含原始快照、编队、屏障与 drain，`published.native_rows` 保留逐来源原生数据，`published.rows` 为窗口用的宿主归并投影，`statistics` 为共享结果。`archive_ready` 携带事件能力、错误、最后可靠样本和完整性。`lifecycle_summary` 固定结束状态，可独立复核：
+
+```powershell
+python app.py --capture-seconds 600 --baseline-timeout 240 --expect-head <最终完整SHA> --output-dir <本轮新目录> --adb 'C:/Program Files/Netease/MuMu Player 12/shell/adb.exe' --serial 127.0.0.1:16384
+python capture_battles.py --replay <本轮新目录>/capture.jsonl
+```
+
+默认端口仍为 `127.0.0.1:27043`；`--no-events` 单独验证快照降级。旧 `capture_battles.py --seconds` 仅用于快照诊断，不替代默认事件入口集成验收。原生胜负、演习和退出原因仍缺本候选实机字段证据，保持未知，不能由 MAA 完成、状态 3 或结束场景推导。
+
+2026-11-08 本轮复核没有其他活动兄弟编码运行，宿主机已释放设备。绝对路径 ADB 读到 PID 26586；MAA 6.21.4 在 `F:/Code/python/python.exe` 与已配置的 Frida Python 下都无法建立连接，日志为 `CreateOverlappablePipe failed, err 5`，回调 `ConnectFailed / Connection command failed to exec`。未执行导航、部署或消耗。新证据为 Review Loop `evidence/ark6-live-work/maa-connect-1794095141219848900` 和 `maa-connect-1794095150287986700`。须在最终候选补同图重开、切图、暂停、撤退再部署、结束/退出与元信息取证。旧设备占用不再是阻塞理由。
+
+## 既有 ARK-4 累计快照证据（2026-11-08）
 
 MuMu 12 / Android 2.7.91，1-7 演习实测（MAA Copilot 固定部署，非代理指挥）：捕获从逻辑帧 26 开始，共 203 次累计更新；夜刀累计 5030 → 5260，近期 DPS 在 46–92 之间随 5 秒窗口滚动；`present=True`，四类伤害与治疗字段可用；编队读取得到 12 个统计键，无归属错误或未知来源。暂停帧不产生新速率。
 
@@ -73,5 +90,5 @@ MuMu 12 / Android 2.7.91，1-7 演习实测（MAA Copilot 固定部署，非代�
 ## 边界
 
 - 召唤归并已用 OF-2 实机验证并发/重新部署同键与宿主归并；其他召唤体系与地图 NPC 的覆盖仍按能力报告边界。
-- 治疗速率与护盾事件需要事件采集接入（ARK-5）；本工单只验证累计快照与归属。
-- 事件采集、自动换局归档、历史持久化不在本工单。
+- ARK-5 累计/事件机制证据范围见 [事件采集](event-capture.md)；ARK-6 的新集成与跨局实机仍须单独验收。
+- 历史持久化及实际 GUI/HUD 选择器由后续工单实现；本票交付共享数据和一次归档交接契约。

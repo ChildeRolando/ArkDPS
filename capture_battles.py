@@ -14,6 +14,8 @@ import time
 from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL
 from roster import CharacterEntry, RosterSnapshot
+from event_capture import CaptureRetry
+from snapshot_adapter import AdapterError
 
 
 def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
@@ -59,6 +61,8 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
                     observation = runtime.poll(collector)
                     write({'observation': asdict(observation)})
                     summary['samples'] += int(observation.kind == 'sample')
+                except CaptureRetry as exc:
+                    write({'retry': str(exc)})
                 except Exception as exc:
                     summary['errors'] += 1
                     # poll already issued the gap, preserve that exact sequence
@@ -90,6 +94,9 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
 
 
 def replay(path):
+    lines = Path(path).read_text(encoding='utf-8').splitlines()
+    if lines and 'kind' in json.loads(lines[0]):
+        return replay_product(lines)
     sessions = None
     pending = []
     samples = archives = 0
@@ -130,6 +137,68 @@ def replay(path):
             finished = True
     if sessions is None or pending or not finished:
         raise ValueError('missing header, summary or archive handoff')
+    return dict(samples=samples, archives=archives, last_state=sessions.live())
+
+
+def observation_from_json(raw):
+    raw = dict(raw)
+    roster = raw.get('roster')
+    if roster is not None:
+        raw['roster'] = RosterSnapshot(
+            frame=roster['frame'], entries=tuple(CharacterEntry(**entry) for entry in roster['entries']),
+            present_unique_ids=frozenset(roster['present_unique_ids']), present_known=roster['present_known'])
+    return BattleObservation(**raw)
+
+
+def replay_product(lines):
+    """Verify the GUI/CLI journal, including event drains, publications and handoffs."""
+    def equal(left, right):
+        return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+    sessions = None
+    pending = []
+    samples = archives = 0
+    finished = False
+    failures = 0
+    for line in lines:
+        record = json.loads(line)
+        kind, data = record['kind'], record['data']
+        if kind == 'lifecycle_header':
+            if sessions is not None:
+                raise ValueError('duplicate lifecycle header')
+            sessions = BattleSessions(data['feed'])
+        elif kind == 'lifecycle_observation':
+            if sessions is None or finished:
+                raise ValueError('observation outside lifecycle journal')
+            observation = observation_from_json(data)
+            try:
+                sessions.consume(observation)
+            except (AdapterError, ValueError):
+                # The following recorded gap must close the failed read. It
+                # cannot publish a value or silently erase an archive signal.
+                failures += 1
+                continue
+            if observation.kind == 'gap':
+                failures = 0
+                if observation.reason == 'capture_stopped':
+                    sessions.connection = 'disconnected'
+            samples += int(observation.kind == 'sample')
+            pending.extend(sessions.pop_archives())
+        elif kind == 'archive_ready':
+            if not pending or not equal(pending.pop(0), data):
+                raise ValueError('archive differs from replayed lifecycle/events')
+            archives += 1
+        elif kind == 'published':
+            if sessions is None or failures or not equal(sessions.adapter.result(), data['statistics']):
+                raise ValueError('published statistics differ from replay')
+            if data['session'] != sessions.battle_id:
+                raise ValueError('published battle ID differs from lifecycle')
+        elif kind == 'lifecycle_summary':
+            if sessions is None or not equal(sessions.live(), data):
+                raise ValueError('summary differs from replay')
+            finished = True
+    if sessions is None or pending or not finished or failures:
+        raise ValueError('missing lifecycle header, summary or archive handoff')
     return dict(samples=samples, archives=archives, last_state=sessions.live())
 
 

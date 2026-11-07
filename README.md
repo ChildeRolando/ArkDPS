@@ -8,9 +8,12 @@
 
 ## 文档导航
 
+开发中的实时入口见[实时事件采集入口与验收](docs/event-capture.md)：窗口与命令行共用采集会话，认证连接默认尝试 `127.0.0.1:27043` 的临时事件观测；`--no-events` 关闭，`--frida-remote host:port` 覆盖端点。Frida 依赖或端点不可用时继续伤害和治疗快照，事件指标保持未知。原候选的两组实机对账与返修验证边界见该文档，首版尚未整体交付。
+
 - [文档索引](docs/README.md)：按产品设计、实验实证、实现契约分类的文档入口。
 - 要做实机实验：先读[实机实验手册](docs/experiment-playbook.md)，再查 [MAA 作业目录](acceptance/maa/README.md)。
 - 要查已测能力边界：[底层能力报告](docs/capability-validation.md)、[补充实验](docs/recovery-validation.md)。
+- 想对照同类工具：[同类 DPS 工具架构调研](docs/dps-tool-prior-art.md)。
 
 双击 `start.cmd`，打开独立置顶小窗。适配本机 MuMu 12、官方安卓客户端 **2.7.91**；需要模拟器 Root 已开启。当前机器已具备 Python 3.10 和 Tk，无需额外安装运行依赖。NumPy 是定位扫描的可选加速依赖。
 

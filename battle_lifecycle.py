@@ -12,6 +12,8 @@ import math
 import uuid
 
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError
+from event_capture import LiveEventCapture, CaptureRetry
+from event_stream import StreamGap, BarrierBusy, baseline_barrier
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ class BattleObservation:
     sample: dict | None = None
     roster: object | None = None
     reason: str = ''
+    events: dict | None = None
 
 
 class BattleFeed:
@@ -40,10 +43,10 @@ class BattleFeed:
         self.native_session = None
         self.terminal = False
 
-    def _emit(self, kind, sample=None, roster=None, reason=''):
+    def _emit(self, kind, sample=None, roster=None, reason='', events=None):
         self.sequence += 1
         return BattleObservation(self.id, self.sequence, self.generation,
-                                 kind, deepcopy(sample), roster, reason)
+                                 kind, deepcopy(sample), roster, reason, deepcopy(events))
 
     def gap(self, reason='read_unavailable'):
         return self._emit('gap', reason=reason)
@@ -57,10 +60,37 @@ class BattleFeed:
         self.terminal = False
         return self._emit('end', sample, roster, reason=reason)
 
-    def _read_pair(self, collector, before):
+    def _read_pair(self, collector, before, observer=None):
         collector.bind_battle(before['battle'][0])
+        events = None
+        mark = None
+        if observer is not None:
+            try:
+                mark = observer.mark()
+                if mark.get('error') or mark.get('stopped'):
+                    raise StreamGap('observer stopped or reported a callback error')
+                if mark.get('retry'):
+                    raise CaptureRetry('observer clock advanced')
+            except CaptureRetry:
+                raise
+            except Exception as exc:
+                events = {'error': str(exc)}
         sample = collector.read()
+        if hasattr(collector, 'event_capability'):
+            sample['event_capability'] = deepcopy(collector.event_capability)
         roster = collector.read_roster()
+        if mark is not None and events is None:
+            try:
+                end_mark = observer.mark()
+                if end_mark.get('retry'):
+                    raise CaptureRetry('observer clock advanced')
+                sequence = baseline_barrier(mark, sample, end_mark)
+                # Drain only after the lifecycle bracket below has succeeded.
+                events = dict(before=mark, after=end_mark, sequence=sequence)
+            except (CaptureRetry, BarrierBusy) as exc:
+                raise CaptureRetry(str(exc)) from exc
+            except Exception as exc:
+                events = {'error': str(exc)}
         after = collector.read_lifecycle()
         if before != after or sample['frame'] != roster.frame:
             raise FrameMismatch('生命周期或累计/编队帧在读取期间变化')
@@ -71,9 +101,14 @@ class BattleFeed:
         now = sample['game_time']
         if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
             raise FrameMismatch('游戏时间无效')
-        return sample, roster
+        if events is not None and 'error' not in events:
+            try:
+                events['drain'] = observer.drain()
+            except Exception as exc:
+                events = {'error': str(exc)}
+        return sample, roster, events
 
-    def acquire(self, collector):
+    def acquire(self, collector, observer=None):
         """Bracket cumulative/roster reads with the live singleton and flow.
 
         Failed reads are unknown. Only an observed null/destroyed singleton,
@@ -99,7 +134,8 @@ class BattleFeed:
                 from roster import RosterUnavailable
                 from tools.stage_global_state.memory import ReadFailure
                 try:
-                    sample, roster = self._read_pair(collector, before)
+                    sample, roster, events = self._read_pair(
+                        collector, before, observer if not self.terminal else None)
                 except (SampleUnavailable, RosterUnavailable, AdapterError, ReadFailure):
                     self.terminal = True
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
@@ -108,7 +144,7 @@ class BattleFeed:
                     sample['session'] = f'{self.id}:{self.generation}'
                     self.terminal = True
                     self.clock = sample['game_time']
-                    return self._emit('terminal', sample, roster)
+                    return self._emit('terminal', sample, roster, events=events)
             return self._end('finished' if self.identity == identity else 'replaced')
         if not before['ready'] or before['transiting']:
             if before.get('state') in (0, 1):
@@ -117,7 +153,7 @@ class BattleFeed:
                 self.retired_session = None
                 return observation
             return self.gap('scene_transition')
-        sample, roster = self._read_pair(collector, before)
+        sample, roster, events = self._read_pair(collector, before, observer)
         now = sample['game_time']
         if (self.terminal and identity == self.identity and
                 sample['session'] == self.native_session and now >= self.clock):
@@ -135,7 +171,7 @@ class BattleFeed:
         self.native_session = sample['session']
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
-        return self._emit('sample', sample, roster)
+        return self._emit('sample', sample, roster, events=events)
 
 
 class BattleSessions:
@@ -158,6 +194,28 @@ class BattleSessions:
         self.latest_sample = None
         self._archived = False
         self._archives = deque()
+        self.capture = None
+        self.event_status = 'unavailable'
+        self.event_error = None
+
+    def _events(self, observation):
+        evidence = observation.events
+        capability = (observation.sample or {}).get('event_capability', {})
+        if not evidence and self.event_status == 'unavailable' and capability.get('status') == 'failed':
+            self.event_status, self.event_error = 'failed', capability.get('error')
+        if not evidence or self.capture.closed:
+            return
+        try:
+            if evidence.get('error'):
+                raise StreamGap(evidence['error'])
+            sequence = baseline_barrier(evidence['before'], observation.sample, evidence['after'])
+            if sequence != evidence['sequence']:
+                raise StreamGap('event observation barrier was altered')
+            self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'])
+            self.event_status = 'recording'
+        except Exception as exc:
+            self.capture.close()
+            self.event_status, self.event_error = 'gap', str(exc)
 
     def _metadata(self, sample):
         # Backends may supply confirmed metadata, never guessed from state=3,
@@ -214,7 +272,8 @@ class BattleSessions:
             battle_id=self.battle_id, generation=self.generation,
             reason=reason, metadata=self.metadata,
             statistics=self.adapter.result(),
-            last_sample=self.latest_sample)))
+            last_sample=self.latest_sample, event_status=self.event_status,
+            event_error=self.event_error)))
         self._archived = True
         self.state = 'ended'
 
@@ -226,16 +285,32 @@ class BattleSessions:
             return
         if observation.sample['session'] != self.battle_id:
             raise ValueError('final sample does not belong to the live battle')
+        previous_adapter, previous_capture = self.adapter, self.capture
+        previous_status, previous_error = self.event_status, self.event_error
         final_adapter = deepcopy(self.adapter)
+        self.capture = deepcopy(self.capture)
+        self.capture.adapter = final_adapter
         try:
+            # Accept the last verified event watermark before freezing time.
+            # Later same-frame revisions change native counters only.
+            if final_adapter.statistics.end_time is None and observation.events:
+                final_adapter.update(observation.sample, observation.roster)
+                self.adapter = final_adapter
+                self.capture.adapter = final_adapter
+                self._events(observation)
             final_adapter.update(observation.sample, observation.roster, terminal=True)
         except (AdapterError, ValueError) as exc:
+            self.adapter, self.capture = previous_adapter, previous_capture
+            self.event_status, self.event_error = previous_status, previous_error
             self.adapter.on_gap()
             self.adapter.finish()
             self.metadata['final_sample_error'] = str(exc)
         else:
             self.adapter = final_adapter
+            if self.capture is not None:
+                self.capture.adapter = self.adapter
             self.latest_sample = deepcopy(observation.sample)
+            self.metadata.pop('final_sample_error', None)
             self._merge_metadata(observation.sample)
 
     def consume(self, observation):
@@ -260,6 +335,9 @@ class BattleSessions:
                 adapter = BattleStatisticsAdapter()
                 adapter.update(observation.sample, observation.roster)
                 self.adapter = adapter
+                self.capture = LiveEventCapture(None)
+                self.capture.adapter = adapter
+                self.event_status, self.event_error = 'unavailable', None
                 self.generation = observation.generation
                 self.battle_id = observation.sample['session']
                 self._archived = False
@@ -267,6 +345,7 @@ class BattleSessions:
             else:
                 self.adapter.update(observation.sample, observation.roster)
                 self._merge_metadata(observation.sample)
+            self._events(observation)
             self.latest_sample = deepcopy(observation.sample)
             self.state = 'playing'
             self.connection = 'connected'
@@ -298,6 +377,7 @@ class BattleSessions:
         return deepcopy(dict(battle_id=self.battle_id, state=self.state,
                              connection=self.connection, reason=self.reason,
                              metadata=self.metadata,
+                             event_status=self.event_status, event_error=self.event_error,
                              statistics=self.adapter.result() if self.adapter else None))
 
     def pop_archives(self):
@@ -333,19 +413,33 @@ class BattleRuntime:
         self.feed = BattleFeed()
         self.sessions = BattleSessions(self.feed.id)
         self.view = BattleView(self.sessions)
+        self.record = lambda observation: None
 
-    def poll(self, collector):
+    def _consume(self, observation):
+        self.record(observation)
+        self.sessions.consume(observation)
+
+    def poll(self, collector, observer=None):
+        from collector import SampleUnavailable, BattleChanged
+        from roster import RosterUnavailable
         try:
-            observation = self.feed.acquire(collector)
-            self.sessions.consume(observation)
+            observation = self.feed.acquire(collector, observer)
+            self._consume(observation)
+        except CaptureRetry:
+            raise
+        except (SampleUnavailable, RosterUnavailable, FrameMismatch) as exc:
+            if isinstance(exc, BattleChanged):
+                self._consume(self.feed.gap('process_changed'))
+                raise
+            raise CaptureRetry(str(exc)) from exc
         except Exception:
-            self.sessions.consume(self.feed.gap('read_unavailable'))
+            self._consume(self.feed.gap('read_unavailable'))
             raise
         return observation
 
     def disconnected(self, reason):
         observation = self.feed.gap(reason)
-        self.sessions.consume(observation)
+        self._consume(observation)
         self.sessions.connection = 'disconnected'
         return observation
 
@@ -355,6 +449,7 @@ class BattleRuntime:
             return None
         result = self.sessions.adapter.result()
         sample = deepcopy(self.sessions.latest_sample)
+        sample['native_rows'] = deepcopy(sample['rows'])
         total = sum(row['damage'] for row in result['rows'].values()
                     if row['damage'] is not None)
         complete = (not any(result[key] for key in
@@ -376,4 +471,11 @@ class BattleRuntime:
         sample['sum_damage'] = total
         sample['statistics_complete'] = complete
         sample['state'] = 3 if result['ended'] else 2
+        stream = self.sessions.adapter.event_stream
+        sample.update(statistics=result, battle_id=self.sessions.battle_id,
+                      lifecycle_state=self.sessions.state,
+                      event_status=self.sessions.event_status, event_error=self.sessions.event_error,
+                      snapshot_revision=result.get('snapshot_revision'),
+                      event_watermark=(dict(sequence=stream.sequence, frame=stream.frame,
+                                            game_time=stream.game_time) if stream else None))
         return sample
