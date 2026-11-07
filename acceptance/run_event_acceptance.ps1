@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Head,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [Parameter(Mandatory=$true)][string]$FridaRemote,
+    [string]$FridaRemote,
     [Parameter(Mandatory=$true)][ValidateSet('OF-8','OF-2')][string]$Stage,
     [Parameter(Mandatory=$true)][string]$MaaJob,
     [string]$MaaLog,
@@ -15,10 +15,11 @@ Push-Location -LiteralPath $captureRepo
 try {
     $captureArgs = @('-X', 'utf8', 'app.py', '--capture-seconds', "$Seconds",
         '--adb', 'C:/Program Files/Netease/MuMu Player 12/shell/adb.exe',
-        '--serial', '127.0.0.1:16384', '--frida-remote', $FridaRemote,
+        '--serial', '127.0.0.1:16384',
         '--wait-battle-seconds', '240', '--baseline-timeout', '90',
         '--expect-head', $Head, '--output-dir', $OutputDirectory,
-        '--stage', $Stage, '--maa-job', $MaaJob, '--require-progress')
+        '--stage', $Stage, '--maa-job', $MaaJob, '--require-progress', '--require-events')
+    if ($FridaRemote) { $captureArgs += @('--frida-remote', $FridaRemote) }
     if ($MaaLog) { $captureArgs += @('--maa-log', $MaaLog) }
     if ($StopFile) { $captureArgs += @('--stop-file', $StopFile) }
     & $Python @captureArgs

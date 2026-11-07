@@ -1,4 +1,4 @@
-"""Shared GUI/CLI collection lifecycle; Frida is an explicitly optional input."""
+"""Shared GUI/CLI lifecycle; default event observation can degrade to snapshots."""
 import time
 
 from collector import Collector, SampleUnavailable, BattleChanged, UnsupportedVersion
@@ -6,8 +6,11 @@ from event_capture import LiveEventCapture
 from event_stream import StreamGap
 
 
+DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
+
+
 class CollectionSession:
-    def __init__(self, adb, serial, *, frida_remote=None, audit=None, log=print,
+    def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
                  collector=None, observer_factory=None):
         self.collector = collector if collector is not None else Collector(adb, serial, log=log)
         self.frida_remote = frida_remote
@@ -25,18 +28,23 @@ class CollectionSession:
                                  'process_instance': getattr(self.collector.core.mc, 'process_instance', None)})
         if self.frida_remote:
             self.event_status = 'attaching'
-            if self.observer_factory is None:
-                from event_observer import FridaEventObserver
-                self.observer_factory = FridaEventObserver
-            self.observer = self.observer_factory(self.collector, self.frida_remote)
             try:
+                if self.observer_factory is None:
+                    from event_observer import FridaEventObserver
+                    self.observer_factory = FridaEventObserver
+                self.observer = self.observer_factory(self.collector, self.frida_remote)
                 self.observer.start()
                 self.event_status = 'ready'
                 self.audit('observer_ready', {'remote': self.frida_remote})
             except Exception as exc:
                 self.event_status, self.event_error = 'failed', str(exc)
                 self.audit('observer_error', {'reason': str(exc)})
-                raise
+                if self.observer is not None:
+                    try:
+                        self.observer.stop()
+                    except Exception as cleanup:
+                        self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+                self.observer = None
         self.capture = LiveEventCapture(self.collector, self.observer, audit=self.audit)
 
     def locate(self, *, force=False, wait_seconds=0, cancelled=None):

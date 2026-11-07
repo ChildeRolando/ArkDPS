@@ -14,7 +14,7 @@ from tkinter import ttk, filedialog, messagebox
 
 from collector import BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from metrics import Meter, observation_age
-from collection_session import CollectionSession
+from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from event_capture import CaptureRetry
 
 
@@ -250,7 +250,11 @@ def main():
     parser.add_argument('--adb',default=DEFAULT_ADB)
     parser.add_argument('--serial',default=DEFAULT_SERIAL)
     parser.add_argument('--capture-seconds',type=float,default=0)
-    parser.add_argument('--frida-remote', help='optional Frida 17.26.1 endpoint; no server is installed or started')
+    events=parser.add_mutually_exclusive_group()
+    events.add_argument('--frida-remote', default=DEFAULT_FRIDA_REMOTE,
+                        help='Frida 17.26.1 endpoint (default: %(default)s); no server is installed or started')
+    events.add_argument('--no-events', dest='frida_remote', action='store_const', const=None,
+                        help='disable event observation; retain native snapshots')
     parser.add_argument('--wait-battle-seconds',type=float,default=180)
     parser.add_argument('--baseline-timeout',type=float,default=90)
     parser.add_argument('--output-dir',type=Path)
@@ -260,7 +264,11 @@ def main():
     parser.add_argument('--maa-log',type=Path)
     parser.add_argument('--stage')
     parser.add_argument('--require-progress',action='store_true')
+    parser.add_argument('--require-events',action='store_true',
+                        help='fail acceptance capture if event coverage is unavailable')
     args=parser.parse_args()
+    if args.require_events and not args.frida_remote:
+        parser.error('--require-events cannot be combined with --no-events')
     if (args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0):
         parser.error('capture/wait durations must be nonnegative and baseline timeout positive')
     (ROOT/'runtime').mkdir(exist_ok=True)

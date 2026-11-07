@@ -48,7 +48,8 @@ def run_capture(args, *, session_factory=CollectionSession):
         raise RuntimeError('capture evidence already exists; choose a fresh output directory')
     metadata = {'head': head, 'stage': args.stage, 'frida_remote': args.frida_remote,
                 'adb': args.adb, 'serial': args.serial, 'started_at': time.time(),
-                'capture_seconds_after_baseline': args.capture_seconds}
+                'capture_seconds_after_baseline': args.capture_seconds,
+                'require_events': args.require_events}
     if args.maa_job:
         job = args.maa_job.read_bytes()
         metadata['maa_job_sha256'] = hashlib.sha256(job).hexdigest()
@@ -65,14 +66,20 @@ def run_capture(args, *, session_factory=CollectionSession):
             record = {'kind': kind, 'wall': time.time(), 'data': data}
             journal.write(json.dumps(record, ensure_ascii=False, default=json_value, allow_nan=False) + '\n')
             journal.flush()
-            if kind == 'observer_ready' or kind == 'connected' and not args.frida_remote:
-                write_json(dest / 'READY.json', {**metadata, 'status': kind})
-                print('READY', dest / 'READY.json', flush=True)
 
         session = session_factory(args.adb, args.serial, frida_remote=args.frida_remote, audit=audit)
         audit('metadata', metadata)
         try:
             session.connect()
+            if args.require_events and session.event_status != 'ready':
+                raise RuntimeError(session.event_error or 'event coverage is unavailable')
+            # Connection may have fallen back after an optional observer failure.
+            # Signal readiness only after that decision and cleanup have completed.
+            write_json(dest / 'READY.json', {**metadata,
+                                           'status': 'observer_ready' if session.event_status == 'ready' else 'connected',
+                                           'event_status': session.event_status,
+                                           'event_error': session.event_error})
+            print('READY', dest / 'READY.json', flush=True)
             session.locate(wait_seconds=args.wait_battle_seconds,
                            cancelled=(lambda: args.stop_file.exists()) if args.stop_file else None)
             baseline_deadline = time.monotonic() + args.baseline_timeout
@@ -87,7 +94,7 @@ def run_capture(args, *, session_factory=CollectionSession):
                         end = time.monotonic() + args.capture_seconds
                         first_frame = last_sample['frame']
                         print('BASELINE', last_sample['frame'], last_sample['game_time'], flush=True)
-                    if args.frida_remote and last_sample['event_status'] not in ('recording', 'finished'):
+                    if args.require_events and last_sample['event_status'] not in ('recording', 'finished'):
                         raise RuntimeError(last_sample.get('event_error') or 'event coverage is unavailable')
                 except CaptureRetry as exc:
                     counts['retries'] += 1

@@ -4,7 +4,7 @@ import pytest
 
 from collection_session import CollectionSession
 from connection import VersionStatus
-from collector import BattleChanged
+from collector import BattleChanged, UnsupportedVersion, SampleUnavailable
 from test_event_capture import Collector as SnapshotCollector, Observer, event
 
 
@@ -30,6 +30,7 @@ class LiveObserver(Observer):
     def __init__(self, collector, remote):
         super().__init__(collector)
         self.calls = collector.calls
+        self.remote = remote
 
     def start(self):
         self.calls.append('attach')
@@ -72,6 +73,101 @@ def test_shared_entry_without_frida_keeps_shields_unknown():
     assert sample['statistics']['rows']['char_a']['shield_absorbed'] is None
     assert sample['event_status'] == 'unavailable'
     current.close()
+
+
+def test_default_entry_observes_after_certification_before_locating():
+    calls = []
+    current = CollectionSession('adb', 'serial', collector=Collector(calls),
+                                observer_factory=LiveObserver)
+    try:
+        current.connect()
+        current.locate()
+        assert calls == ['transport', 'attach', 'locate']
+        assert current.observer.remote == '127.0.0.1:27043'
+        assert current.read()['event_status'] == 'recording'
+    finally:
+        current.close()
+
+
+@pytest.mark.parametrize('failure', [ModuleNotFoundError('optional frida missing'),
+                                    RuntimeError('Frida version mismatch'),
+                                    ConnectionError('remote unreachable'),
+                                    RuntimeError('attach failed')])
+@pytest.mark.parametrize('cleanup_fails', [False, True])
+def test_observer_start_failure_preserves_native_snapshots(failure, cleanup_fails):
+    calls, audit = [], []
+
+    class FailedObserver(LiveObserver):
+        def start(self):
+            super().start()
+            raise failure
+
+        def stop(self):
+            super().stop()
+            if cleanup_fails:
+                raise RuntimeError('cleanup failed')
+
+    collector = Collector(calls)
+    current = CollectionSession('adb', 'serial', collector=collector,
+                                frida_remote='remote',
+                                observer_factory=FailedObserver,
+                                audit=lambda kind, data: audit.append((kind, data)))
+    try:
+        current.connect()
+        assert current.observer is None and current.capture.observer is None
+        current.locate()
+        first = current.read()
+        collector.frame, collector.game_time, collector.damage = 2, 1, 120
+        sample = current.read()
+        assert sample['event_status'] == 'failed' and sample['event_error'] == str(failure)
+        assert first['statistics']['rows']['char_a']['damage'] == 100
+        row = sample['statistics']['rows']['char_a']
+        assert row['damage'] == 120 and row['healing'] == 0
+        assert row['shield_absorbed'] is None and row['active_damage'] is None
+        assert sample['event_watermark'] is None
+        assert calls == ['transport', 'attach', 'detach', 'locate']
+        assert ('observer_error', {'reason': str(failure)}) in audit
+        assert any(kind == 'observer_cleanup_error' for kind, _ in audit) == cleanup_fails
+    finally:
+        current.close()
+    assert calls[-1] == 'collector_close' and calls.count('detach') == 1
+
+
+def test_observer_construction_failure_also_degrades():
+    def fail(*_args):
+        raise RuntimeError('observer construction failed')
+
+    current = CollectionSession('adb', 'serial', frida_remote='remote',
+                                collector=Collector([]), observer_factory=fail)
+    try:
+        current.connect()
+        current.locate()
+        sample = current.read()
+        assert sample['statistics']['rows']['char_a']['damage'] == 100
+        assert sample['event_error'] == 'observer construction failed'
+    finally:
+        current.close()
+
+
+@pytest.mark.parametrize('failure', [UnsupportedVersion('uncertified'),
+                                    SampleUnavailable('process identity unverified')])
+def test_collector_rejection_never_attaches_or_publishes(monkeypatch, failure):
+    calls = []
+    collector = Collector(calls)
+
+    def reject(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr(collector, 'connect', reject)
+    current = CollectionSession('adb', 'serial', collector=collector, observer_factory=LiveObserver)
+    try:
+        with pytest.raises(type(failure)):
+            current.connect()
+        assert current.capture is None and 'attach' not in calls
+        with pytest.raises(RuntimeError, match='not connected'):
+            current.read()
+    finally:
+        current.close()
 
 
 def test_live_gap_keeps_native_totals_and_freezes_event_coverage():
