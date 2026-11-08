@@ -32,7 +32,7 @@
 - 读取失败由调用方调用 `on_gap()`：立即保留累计并将近期速率设为未知、累计快照标为不完整，重建近期窗口；事件覆盖关闭，接敌指标标记不完整。
 - 战局标识变化或游戏时钟回退时结束旧序列并新建观察序列，不把两局累计混在一起；时钟回退先于重复帧判定，即使新旧局恰好复用帧编号也不能忽略回退。直接调用适配器不能区分延迟旧样本与真正回退；产品入口必须先经过下面的观察代次边界。实际历史存储仍由 ARK-8 负责。
 
-## 产品生命周期与归档交接（ARK-6，实机待验证）
+## 产品生命周期与归档交接
 
 `battle_lifecycle.py` 的 `BattleFeed` 是单线程采集所有者。`Collector.connect(lifecycle=True)` 定位 BattleController 和 GameFlowController 的单例槽，允许在菜单建立连接；每次采集前后核对进程出生标识、当前单例、原生对象和场景状态，配对同帧累计与编队。读取失败不是空单例。确认的空/销毁单例、关卡到结算的场景转换、初始化阶段、新对象链或时钟回退构成结束/新观察边界；FINISHED 先进入结算冻结，暂停和撤退/再部署不构成换局边界。
 
@@ -44,13 +44,15 @@
 
 `BattleView.show_history(record)` 固定 GUI 所选记录；`gui()` 保留该选择，`hud()` 始终取当前局。`show_live()` 才恢复 GUI 跟随。这里交付数据契约，历史页面、HUD 窗口和实际存储仍由后续工单实现。原型 `app.py` 已共用 `BattleRuntime`，采集日志中的 `archive_ready` 仅作交接证据。
 
-结果与演习必须有明确来源证据。元信息契约接收带 `evidence` 的 `stage_id`、`practice`（布尔或未知）和 `outcome`（`victory` / `defeat` / `abandoned` / `unknown`）。后续部分元信息不会抹掉已有可靠字段；有证据的互相冲突值保留未知并列出 `metadata_conflicts`，`evidence_sources` 保留来源。**当前原生生命周期读取器没有验证胜负、退出原因或演习字段，实际采集均保留未知**；FINISHED、`battle_finish`、掉线和空在场列表都不证明胜利或失败。离线带证据的元信息用例只验证契约，不是这些原生字段的实机支持声明。
+元信息包含 `stage_id`、`practice`（布尔或未知）和 `outcome`（`victory`、`defeat`、`abandoned` 或 `unknown`）。Android 2.7.91 的终局结果来自经配对核验的 `BattleController.m_result`，已结束的原生值 1 和 2 分别对应胜利和失败。主动放弃需要同时观察到进行中、原生结果仍为 0、同一战局向结算页转场。缺少对应原生证据的结束保持未知。
+
+演习取自 `SquadPage.Params.isPractice`。只有采集器观察到本次开战、参数对象通过类型校验并且关卡 ID 匹配时才采信。复用旧参数、读取不稳或中途接入而没有观察到开战时保留未知。互相冲突的证据列入 `metadata_conflicts`，来源保留在 `evidence_sources`。场景切换期间短读可重试；地址范围失效时限频刷新映射并重新核验身份。
 
 ### 复核入口
 
 离线：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests -q --assert=plain`（PowerShell 用 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'`）。`tests/test_battle_lifecycle.py` 保护换局、代次、重复交接、结尾截断、缺口、视图选择和重放；`tests/test_lifecycle_reader.py` 保护原生状态读取、单例变化拒绝与短读不变零。
 
-取得独占实机窗口后，在固定候选检出运行下面的只读采集。看到 `lifecycle_ready` 后，由 MAA 按实验手册执行零理智的同图重开、切图、暂停、撤退/再部署和结束场景。采集器本身不操纵游戏。尚未取得本票实机证据，不能用既有研究探针或模拟夹具替代。
+取得独占实机窗口后，在固定候选检出运行下面的只读采集。看到 `lifecycle_ready` 后，由 MAA 按实验手册执行零理智的同图重开、切图、暂停、撤退再部署和结束场景。胜负、演习和退出的对照应同时保留 MAA 回调、产品原始记录及重放结果。采集器本身只读。
 
 ```powershell
 python capture_battles.py --seconds 300 --output runtime/ark6-live-01 --adb 'C:/Program Files/Netease/MuMu Player 12/shell/adb.exe' --serial 127.0.0.1:16384
@@ -60,13 +62,13 @@ Get-FileHash runtime/ark6-live-01/observations.jsonl -Algorithm SHA256
 
 输出目录不能复用已有 `observations.jsonl`。重放会核对归档统计和末尾汇总；缺失交接、损坏记录或截断日志会失败。结束采集只冻结仍在观察的局，不把停止插件伪装成玩家中途退出。
 
-### 整合已合入的 ARK-5（新候选实机待验收）
+### 整合已合入的 ARK-5
 
 只读字段取证已确认当前暂停的 OF-2：`LevelData.levelId` 为 `Activities/ACT3D0/level_act3d0_02`，前后快照均在逻辑帧 3084、102.79990196228027 游戏秒。读取器现将通过对象类型、字符串槽稳定性和生命周期配对校验的原生关卡 ID 传到元信息与归档；保留原生 ID，不猜显示编号。可确认的关卡 ID 改变也会在重复帧过滤前签发新代次；读取失败保留未知，不制造换局。`lifecycle_observation.lifecycle` 保留当次单例、状态、场景与关卡证据。
 
 该切图回归已在 `756a581` 上实际失败、修复后通过：同地址、同帧同时间、原生 session 不变但关卡 ID 改变时仍建立新局，不吞掉首份累计。前后测试输出保留于 Review Loop `evidence/ark6-live-work/stage-id-regression`；新增契约同时验证 stage_id 进入归档，未知演习/胜负不会被字段接入顺带填值。
 
-取证产物为 Review Loop `evidence/ark6-live-work/metadata-1794095779935419600/metadata.json`。同次检查读到 `BattleController.m_result` 的元数据声明及暂停时原始零值；这不是结束结果对照，且元数据偏移与既有实测布局存在漂移，不能直接按声明解码胜负。没有取得演习或退出字段的场景对照，相关值继续未知。`756a581` 的正式 `--no-events` 只读入口采集 8 个暂停样本、无采集错误，日志重放通过；它只证明当前局采集与清理，不证明跨局或结果字段验收。
+早期取证产物为 Review Loop `evidence/ark6-live-work/metadata-1794095779935419600/metadata.json`，覆盖暂停时关卡 ID 和原始结果零值。后续胜负、放弃与演习的场景对照和固定作业保存在同工单的宿主机证据目录。
 
 正常窗口与 `app.py --capture-seconds` 均在连接前启用 `CollectionSession.enable_lifecycle()`，共用 `BattleRuntime` 持有的唯一统计适配器。先认证并准备默认事件观察器，再定位单例；生命周期 ID 同时用于快照、事件流、发布和归档。同一观察器跨同进程的新局继续排队，新基线的序号屏障丢弃旧局前缀；消费者先拒绝旧 feed/代次/序号，再输入事件，不为每局重复挂载同一 PID。
 
