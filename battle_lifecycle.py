@@ -480,6 +480,8 @@ class BattleRuntime:
         self.feed = BattleFeed()
         self.sessions = BattleSessions(self.feed.id)
         self.view = BattleView(self.sessions)
+        # Frozen handoffs outlive the transport session during in-process rescans.
+        self.pending_history = deque()
         self.record = lambda observation: None
 
     def _consume(self, observation):

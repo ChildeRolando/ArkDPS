@@ -200,6 +200,110 @@ def test_collection_entry_persists_archives_and_diagnoses_failure_without_losing
     current.close()
 
 
+@pytest.mark.parametrize('failed_rescans', [0, 2])
+def test_failed_archive_survives_session_replacement_and_saves_once(tmp_path, failed_rescans):
+    from collection_session import CollectionSession
+    from test_collection_session import Collector
+    from event_capture import CaptureRetry
+    history, events = BattleHistory(tmp_path), []
+    runtime = BattleRuntime()
+
+    def connect():
+        session = CollectionSession('adb', 'serial', collector=Collector([]),
+                                    frida_remote=None, history=history,
+                                    audit=lambda kind, data: events.append((kind, data)))
+        session.enable_lifecycle(runtime)
+        session.connect()
+        return session
+
+    current = connect()
+    current.read()
+    battle_id = runtime.sessions.battle_id
+    lifecycle = current.collector.read_lifecycle
+    current.collector.read_lifecycle = lambda: dict(lifecycle(), battle=None)
+    with patch('battle_history.os.replace', side_effect=OSError('disk unavailable')):
+        with pytest.raises(CaptureRetry):
+            current.read()
+        current.close()
+        for _ in range(failed_rescans):
+            current = connect()
+            current.read()
+            current.close()
+    assert not history.list_recent().records
+    # app.py replaces the connection but retains the runtime and history.
+    current = connect()
+    current.read()
+    current.close()
+    result = BattleHistory(tmp_path).get(battle_id)
+    assert len(result.records) == 1 and not result.diagnostics
+    path = history.path_for(battle_id)
+    before = path.read_bytes()
+    current = connect()
+    current.read()
+    current.close()
+    assert path.read_bytes() == before
+    saved = [data for kind, data in events if kind == 'history_saved'
+             and data['battle_id'] == battle_id]
+    assert len(saved) == 1 and saved[0]['written']
+    assert len([data for kind, data in events if kind == 'archive_ready'
+                and data['battle_id'] == battle_id]) == 1
+
+
+def test_corrupt_pending_archive_does_not_block_healthy_battle_or_hide_error(tmp_path):
+    import os
+    from collection_session import CollectionSession
+    from test_collection_session import Collector
+    from event_capture import CaptureRetry
+    history, events = BattleHistory(tmp_path), []
+    collector = Collector([])
+    current = CollectionSession('adb', 'serial', collector=collector,
+                                frida_remote=None, history=history,
+                                audit=lambda kind, data: events.append((kind, data)))
+    current.enable_lifecycle()
+    current.connect()
+    current.read()
+    first_id = current.runtime.sessions.battle_id
+    lifecycle = collector.read_lifecycle
+    collector.read_lifecycle = lambda: dict(lifecycle(), battle=None)
+    replace_file = os.replace
+
+    def corrupt_commit(source, target):
+        replace_file(source, target)
+        target.write_text('{', encoding='utf-8')
+
+    with patch('battle_history.os.replace', side_effect=corrupt_commit):
+        with pytest.raises(CaptureRetry):
+            current.read()
+    corrupt_path = history.path_for(first_id)
+    assert history.get(first_id).diagnostics
+    collector.read_lifecycle = lifecycle
+    current.read()
+    second_id = current.runtime.sessions.battle_id
+    assert second_id != first_id
+    collector.read_lifecycle = lambda: dict(lifecycle(), battle=None)
+    events.clear()
+    with pytest.raises(CaptureRetry):
+        current.read()
+    assert history.get(second_id).records
+    assert corrupt_path.read_bytes() == b'{'
+    assert current.history_error
+    errors = [data for kind, data in events if kind == 'history_error']
+    assert len(errors) == 1 and errors[0]['battle_id'] == first_id
+    assert any(kind == 'history_saved' and data['battle_id'] == second_id
+               for kind, data in events)
+    current.close()
+    # Once the corrupt file is explicitly removed, the retained handoff recovers.
+    corrupt_path.unlink()
+    replacement = CollectionSession('adb', 'serial', collector=Collector([]),
+                                    frida_remote=None, history=history)
+    replacement.enable_lifecycle(current.runtime)
+    replacement.connect()
+    replacement.read()
+    replacement.close()
+    assert len(history.list_recent().records) == 2
+    assert replacement.history_error is None
+
+
 def test_missing_directory_is_empty_but_unreadable_directory_is_diagnosed(tmp_path):
     history = BattleHistory(tmp_path / 'missing')
     assert not history.list_recent().records and not history.list_recent().diagnostics

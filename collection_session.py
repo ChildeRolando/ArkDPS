@@ -1,6 +1,5 @@
 """Shared GUI/CLI lifecycle; default event observation can degrade to snapshots."""
 import time
-from collections import deque
 from dataclasses import asdict
 
 from battle_history import BattleRecord, HistoryError
@@ -28,7 +27,7 @@ class CollectionSession:
         self.closed = False
         self.history = history
         self.history_error = None
-        self._pending_history = deque()
+        self._pending_history = None
 
     def enable_lifecycle(self, runtime=None):
         """Use ordered battle generations in the GUI and capture entry points."""
@@ -36,6 +35,7 @@ class CollectionSession:
             raise RuntimeError('enable lifecycle before connecting')
         from battle_lifecycle import BattleRuntime
         self.runtime = runtime if runtime is not None else BattleRuntime()
+        self._pending_history = self.runtime.pending_history
         self.runtime.record = lambda observation: self.audit('lifecycle_observation', observation)
 
     def connect(self):
@@ -160,19 +160,22 @@ class CollectionSession:
             self.audit('archive_ready', archive)
             if self.history is not None:
                 self._pending_history.append(archive)
-        while self._pending_history:
-            archive = self._pending_history[0]
+        if self.history is None:
+            return
+        self.history_error = None
+        # Attempt each handoff once per drain. A bad record must not starve
+        # other battles or be retried indefinitely in this same read.
+        for _ in range(len(self._pending_history)):
+            archive = self._pending_history.popleft()
             try:
                 result = self.history.save(BattleRecord.from_archive(archive))
             except HistoryError as exc:
-                # The frozen handoff stays queued; disk failure cannot erase it
-                # or interrupt live statistics. Retry on the next read/close.
-                self.history_error = str(exc)
+                # Keep failures across reads, closes and transport replacement.
+                self._pending_history.append(archive)
+                if self.history_error is None:
+                    self.history_error = str(exc)
                 self.audit('history_error', dict(battle_id=archive['battle_id'], error=str(exc)))
-                break
             else:
-                self._pending_history.popleft()
-                self.history_error = None
                 self.audit('history_saved', dict(battle_id=archive['battle_id'], written=result.written,
                            diagnostics=[asdict(d) for d in result.diagnostics]))
 
