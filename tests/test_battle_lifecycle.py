@@ -91,6 +91,22 @@ def test_pause_and_retreat_redeployment_never_clear_or_archive():
     assert r.sessions.generation == first.generation
 
 
+def test_torn_lifecycle_binding_retries_without_losing_battle(monkeypatch):
+    from tools.stage_global_state.memory import ReadFailure
+
+    collector, runtime, first = begin()
+
+    def unavailable():
+        raise ReadFailure('binding_invalid')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(collector, 'read_lifecycle', unavailable)
+        with pytest.raises(CaptureRetry, match='binding_invalid'):
+            runtime.poll(collector)
+    assert not runtime.sessions.pop_archives()
+    assert runtime.poll(collector).generation == first.generation
+
+
 def test_delayed_old_sample_cannot_reopen_or_mutate_new_battle():
     c, r, first = begin()
     c.advance(time=1., frame=1, damage=5.)

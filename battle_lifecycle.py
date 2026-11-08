@@ -441,12 +441,13 @@ class BattleRuntime:
     def poll(self, collector, observer=None):
         from collector import SampleUnavailable, BattleChanged
         from roster import RosterUnavailable
+        from tools.stage_global_state.memory import ReadFailure
         try:
             observation = self.feed.acquire(collector, observer)
             self._consume(observation)
         except CaptureRetry:
             raise
-        except (SampleUnavailable, RosterUnavailable, FrameMismatch) as exc:
+        except (SampleUnavailable, RosterUnavailable, FrameMismatch, ReadFailure) as exc:
             if isinstance(exc, BattleChanged):
                 self._consume(self.feed.gap('process_changed'))
                 raise
