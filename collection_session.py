@@ -156,10 +156,12 @@ class CollectionSession:
         return sample
 
     def _drain_archives(self):
-        for archive in self.runtime.sessions.pop_archives():
+        archives = self.runtime.sessions.pop_archives()
+        if self.history is not None:
+            # Claim the entire batch before diagnostic I/O can interrupt handoff.
+            self._pending_history.extend(archives)
+        for archive in archives:
             self.audit('archive_ready', archive)
-            if self.history is not None:
-                self._pending_history.append(archive)
         if self.history is None:
             return
         self.history_error = None

@@ -304,6 +304,77 @@ def test_corrupt_pending_archive_does_not_block_healthy_battle_or_hide_error(tmp
     assert replacement.history_error is None
 
 
+@pytest.mark.parametrize('retry', ['read', 'close'])
+def test_archive_journal_failure_retains_history_and_recovers_once(tmp_path, retry):
+    from collection_session import CollectionSession
+    from test_collection_session import Collector
+    from event_capture import CaptureRetry
+    history, events = BattleHistory(tmp_path), []
+    disk_unavailable = False
+
+    def audit(kind, data):
+        if disk_unavailable and kind == 'archive_ready':
+            raise OSError('disk full writing diagnostic journal')
+        events.append((kind, data))
+
+    collector = Collector([])
+    current = CollectionSession('adb', 'serial', collector=collector,
+                                frida_remote=None, history=history, audit=audit)
+    current.enable_lifecycle()
+    current.connect()
+    current.read()
+    battle_id = current.runtime.sessions.battle_id
+    lifecycle = collector.read_lifecycle
+    collector.read_lifecycle = lambda: dict(lifecycle(), battle=None)
+    disk_unavailable = True
+    with pytest.raises(OSError, match='disk full writing diagnostic journal'):
+        current.read()
+    assert current.runtime.sessions.state == 'ended'
+    assert not history.get(battle_id).records
+    assert [a['battle_id'] for a in current.runtime.pending_history] == [battle_id]
+
+    disk_unavailable = False
+    if retry == 'read':
+        for _ in range(2):
+            with pytest.raises(CaptureRetry):
+                current.read()
+    current.close()
+    restored, = BattleHistory(tmp_path).get(battle_id).records
+    assert restored.statistics['rows']['char_a']['damage'] == 100
+    assert not current.runtime.pending_history
+    saved = [data for kind, data in events if kind == 'history_saved']
+    assert len(saved) == 1 and saved[0]['written']
+    assert len(list(tmp_path.glob('*.json'))) == 1
+
+
+def test_archive_journal_failure_retains_entire_unclaimed_batch(tmp_path):
+    from collection_session import CollectionSession
+    collector, runtime = FakeCollector(), BattleRuntime()
+    lifecycle = dict(collector.lifecycle)
+    for _ in range(2):
+        collector.lifecycle = dict(lifecycle)
+        runtime.poll(collector)
+        collector.lifecycle['battle'] = None
+        runtime.poll(collector)
+    history = BattleHistory(tmp_path)
+    current = CollectionSession('adb', 'serial', history=history)
+    current.enable_lifecycle(runtime)
+
+    def audit(kind, data):
+        if kind == 'archive_ready':
+            raise OSError('journal unavailable')
+
+    current.audit = audit
+    with pytest.raises(OSError, match='journal unavailable'):
+        current._drain_archives()
+    assert len(runtime.pending_history) == 2
+    expected = {a['battle_id'] for a in runtime.pending_history}
+    current.audit = lambda *_args: None
+    current._drain_archives()
+    assert {r.battle_id for r in history.list_recent().records} == expected
+    assert not runtime.pending_history
+
+
 def test_missing_directory_is_empty_but_unreadable_directory_is_diagnosed(tmp_path):
     history = BattleHistory(tmp_path / 'missing')
     assert not history.list_recent().records and not history.list_recent().diagnostics
