@@ -169,6 +169,11 @@ def main():
     second.config = replace(second.config, category=Category.HEALING, ranking=Ranking.RECENT,
                             rate_basis=RateBasis.ENGAGEMENT)
     app.render_panels()
+    # The fixture calls panel.motion directly. Ignore live pointer input that
+    # could replace or dismiss a tooltip while Tk processes its paint events.
+    for panel in app.panels:
+        for event in ('<Enter>', '<Leave>', '<Motion>', '<MouseWheel>'):
+            panel.canvas.unbind(event)
     args.output.mkdir(parents=True, exist_ok=True)
     receipt = dict(head=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                    code_sha256={p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
@@ -249,6 +254,9 @@ def main():
             raise RuntimeError('Black screenshots cannot satisfy visual acceptance; see receipt')
     finally:
         app.stop.set()
+        # Cancel widget-owned callbacks on their owner before the root timers.
+        for panel in app.panels:
+            panel.tooltip.hide()
         for timer in root.tk.call('after', 'info'):
             root.after_cancel(timer)
         root.destroy()
