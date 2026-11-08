@@ -100,6 +100,7 @@ class BattleFeed:
             except Exception as exc:
                 events = {'error': str(exc)}
         after = collector.read_lifecycle()
+        self.current_lifecycle = after
         if before != after or sample['frame'] != roster.frame:
             raise FrameMismatch('生命周期或累计/编队帧在读取期间变化')
         if tuple(sample['battle_identity']) != tuple(before['battle']):
@@ -152,6 +153,7 @@ class BattleFeed:
                     sample, roster, events = self._read_pair(
                         collector, before, observer if not self.terminal else None)
                 except (SampleUnavailable, RosterUnavailable, AdapterError, ReadFailure):
+                    self.current_lifecycle = before
                     self.terminal = True
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
@@ -168,7 +170,17 @@ class BattleFeed:
                 self.retired_session = None
                 return observation
             return self.gap('scene_transition')
-        sample, roster, events = self._read_pair(collector, before, observer)
+        try:
+            sample, roster, events = self._read_pair(collector, before, observer)
+        except FrameMismatch:
+            after = self.current_lifecycle
+            exit_metadata = (after.get('metadata') or {}) if after else {}
+            if (self.identity == identity and after and after.get('battle') == battle
+                    and exit_metadata.get('outcome') == 'abandoned'
+                    and exit_metadata.get('evidence')
+                    and exit_metadata.get('stage_id', self.stage) == self.stage):
+                return self._end('finished')
+            raise
         now = sample['game_time']
         if (self.terminal and not stage_changed and identity == self.identity and
                 sample['session'] == self.native_session and now >= self.clock):
@@ -332,6 +344,13 @@ class BattleSessions:
             self.metadata.pop('final_sample_error', None)
             self._merge_metadata(observation.sample)
 
+    def _merge_terminal_metadata(self, observation):
+        if self.latest_sample is None or not observation.lifecycle:
+            return
+        identity = observation.lifecycle.get('battle')
+        if identity and tuple(identity) == tuple(self.latest_sample.get('battle_identity', ())):
+            self._merge_metadata({'battle_metadata': observation.lifecycle.get('metadata') or {}})
+
     def consume(self, observation):
         if (observation.feed != self.feed_id or
                 observation.sequence <= self.sequence or
@@ -373,6 +392,7 @@ class BattleSessions:
             if (observation.generation != self.generation or self.adapter is None
                     or self._archived):
                 return False
+            self._merge_terminal_metadata(observation)
             self._terminal_update(observation)
             self.state = 'finalizing'
             self.connection = 'connected'
@@ -381,6 +401,8 @@ class BattleSessions:
                 return False
             if self.adapter is not None and self.adapter.statistics.end_time is None:
                 self.adapter.on_gap()
+            if not self._archived and observation.reason == 'finished':
+                self._merge_terminal_metadata(observation)
             if observation.sample is not None and not self._archived:
                 self._terminal_update(observation)
             self._archive(observation.reason)

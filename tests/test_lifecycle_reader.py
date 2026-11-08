@@ -98,6 +98,68 @@ def test_invalid_state_never_becomes_a_finished_or_empty_battle():
         LifecycleReader(MemoryFixture(99), 1000, 2000).sample()
 
 
+@pytest.mark.parametrize(('state', 'result', 'expected'), [
+    (3, 1, 'victory'), (3, 2, 'defeat'), (3, 0, None), (3, 3, None), (2, 2, None),
+])
+def test_native_result_requires_known_value_in_finished_state(state, result, expected):
+    memory = MemoryFixture(state)
+    block = bytearray(memory.blocks[3000])
+    struct.pack_into('<i', block, 0x22C, result)
+    memory.blocks[3000] = bytes(block)
+    metadata = LifecycleReader(memory, 1000, 2000).sample()['metadata'] or {}
+    assert metadata.get('outcome') == expected
+
+
+def test_abandon_requires_active_battle_and_its_finish_transition():
+    memory = MemoryFixture()
+    flow = bytearray(memory.blocks[4000])
+    flow[0x20] = 1
+    for offset, address, name in ((0x28, 10000, 'level_act3d0_01'),
+                                  (0x30, 11000, 'battle_finish')):
+        struct.pack_into('<Q', flow, offset, address)
+        memory.blocks[address] = bytes(0x10) + struct.pack('<i', len(name)) + name.encode('utf-16-le')
+    memory.blocks[4000] = bytes(flow)
+    assert LifecycleReader(memory, 1000, 2000).sample()['metadata']['outcome'] == 'abandoned'
+
+
+def test_practice_requires_observed_launch_and_matching_fresh_squad_args(monkeypatch):
+    memory = MemoryFixture()
+    reader = LifecycleReader(memory, 1000, 2000, lambda: [12000])
+    full_stage = 'Obt/Main/level_main_01-07'
+    short_stage = 'main_01-07'
+    for address, value in ((10000, full_stage), (16000, short_stage)):
+        memory.blocks[address] = bytes(0x10) + struct.pack('<i', len(value)) + value.encode('utf-16-le')
+    memory.pointers.update({8000 + gs.LevelDataFields.LEVEL_ID: 10000,
+                            12000 + 0x30: 13000, 14000 + 0x50: 15000})
+    memory.names[15000] = ('SquadPage', 'Torappu.UI')
+    args = bytearray(0x50)
+    args[0x28] = 1
+    struct.pack_into('<Q', args, 0x48, 16000)
+    memory.blocks[13000] = bytes(args)
+    original_identity = memory.identity
+
+    def identity(address, expected=None):
+        if address == 12000:
+            return 15000, 'SquadPage', 'Torappu.UI'
+        if address == 13000:
+            return 14000, 'Params', ''
+        if address in (10000, 16000):
+            assert expected == 'String'
+            return 17000, 'String', 'System'
+        return original_identity(address, expected)
+
+    monkeypatch.setattr(memory, 'identity', identity)
+    assert 'practice' not in reader.sample()['metadata']
+    reader.launch_pending = True
+    assert reader.sample()['metadata']['practice'] is True
+    assert reader.sample()['metadata']['practice'] is True
+    # A later launch must provide a new launch argument; a retained UI page
+    # cannot reclassify a different generation, even for the same stage.
+    reader.practice = None
+    reader.launch_pending = True
+    assert 'practice' not in reader.sample()['metadata']
+
+
 def test_memory_access_rejects_short_reads_instead_of_decoding_zero():
     channel = SimpleNamespace(batch_read=lambda requests, **kwargs: [b'\0' * 7])
     memory = MemoryAccess(SimpleNamespace(is_ptr=lambda address: True), channel)

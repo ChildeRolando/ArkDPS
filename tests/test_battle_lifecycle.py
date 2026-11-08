@@ -107,6 +107,22 @@ def test_torn_lifecycle_binding_retries_without_losing_battle(monkeypatch):
     assert runtime.poll(collector).generation == first.generation
 
 
+def test_abandon_between_bracket_reads_is_preserved_in_single_archive():
+    collector, runtime, first = begin()
+    collector.reads = 0
+    collector.after = dict(collector.lifecycle, transiting=True, target='battle_finish',
+                           metadata={'outcome': 'abandoned', 'evidence': 'native result and transition'})
+    observation = runtime.poll(collector)
+    assert observation.kind == 'end'
+    archive, = runtime.sessions.pop_archives()
+    assert archive['battle_id'] == first.sample['session']
+    assert archive['metadata']['outcome'] == 'abandoned'
+    collector.lifecycle['battle'] = None
+    collector.after = None
+    runtime.poll(collector)
+    assert not runtime.sessions.pop_archives()
+
+
 def test_delayed_old_sample_cannot_reopen_or_mutate_new_battle():
     c, r, first = begin()
     c.advance(time=1., frame=1, damage=5.)
