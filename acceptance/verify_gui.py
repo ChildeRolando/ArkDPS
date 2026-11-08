@@ -29,14 +29,46 @@ def monitors():
     found = []
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR,
                                        wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+    class MonitorInfo(ctypes.Structure):
+        _fields_ = [('size', wintypes.DWORD), ('monitor', wintypes.RECT),
+                    ('work', wintypes.RECT), ('flags', wintypes.DWORD)]
+    user = ctypes.windll.user32
+    user.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MonitorInfo)]
+    user.GetMonitorInfoW.restype = wintypes.BOOL
     def visit(handle, dc, rect, param):
         area = rect.contents
         xdpi, ydpi = ctypes.c_uint(), ctypes.c_uint()
         ctypes.windll.shcore.GetDpiForMonitor(handle, 0, ctypes.byref(xdpi), ctypes.byref(ydpi))
-        found.append(dict(bounds=[area.left, area.top, area.right, area.bottom], dpi=xdpi.value))
+        info = MonitorInfo(size=ctypes.sizeof(MonitorInfo))
+        if not user.GetMonitorInfoW(handle, ctypes.byref(info)):
+            raise OSError('GetMonitorInfoW failed')
+        work = info.work
+        found.append(dict(bounds=[area.left, area.top, area.right, area.bottom], dpi=xdpi.value,
+                          work_area=[work.left, work.top, work.right, work.bottom]))
         return True
     ctypes.windll.user32.EnumDisplayMonitors(None, None, callback_type(visit), 0)
     return found
+
+
+def tooltip_bounds(panel, root, point, work_area, screenshot=None):
+    """Open real tooltip content and check every edge against the physical work area."""
+    text = panel.tooltip.text
+    assert text, 'hover did not resolve any content'
+    panel.tooltip.hide()
+    panel.tooltip._open(text, *point)
+    root.update()
+    time.sleep(.1)
+    root.update()
+    window = panel.tooltip.window
+    x, y = window.winfo_rootx(), window.winfo_rooty()
+    bounds = [x, y, x + window.winfo_width(), y + window.winfo_height()]
+    left, top, right, bottom = work_area
+    assert left <= bounds[0] and bounds[2] <= right, (bounds, work_area)
+    assert top <= bounds[1] and bounds[3] <= bottom, (bounds, work_area)
+    if screenshot is not None:
+        assert capture_window(window, screenshot), 'black tooltip screenshot'
+    panel.tooltip.hide()
+    return dict(pointer=point, bounds=bounds, work_area=work_area)
 
 
 def capture_window(root, path):
@@ -47,6 +79,8 @@ def capture_window(root, path):
     user.GetDC.restype = wintypes.HDC
     user.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
     user.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+    user.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user.GetAncestor.restype = wintypes.HWND
     user.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     gdi.CreateCompatibleDC.argtypes = [wintypes.HDC]
     gdi.CreateCompatibleDC.restype = wintypes.HDC
@@ -63,7 +97,7 @@ def capture_window(root, path):
                     ('planes', wintypes.WORD), ('bits', wintypes.WORD), ('compression', wintypes.DWORD),
                     ('image_size', wintypes.DWORD), ('xppm', wintypes.LONG), ('yppm', wintypes.LONG),
                     ('colors', wintypes.DWORD), ('important', wintypes.DWORD)]
-    hwnd = user.GetParent(root.winfo_id())
+    hwnd = user.GetAncestor(root.winfo_id(), 2)  # GA_ROOT, including override-redirect tooltips
     width, height = root.winfo_width(), root.winfo_height()
     dc = user.GetDC(hwnd)
     if not dc:
@@ -79,6 +113,13 @@ def capture_window(root, path):
         if not gdi.GetDIBits(memory, bitmap, 0, height, raw, ctypes.byref(header), 0):
             raise OSError('GetDIBits failed for the GUI window')
         image = Image.frombuffer('RGB', (width, height), raw, 'raw', 'BGRX', 0, 1)
+        if image.getextrema() == ((0, 0), (0, 0), (0, 0)):
+            # Some Tk override-redirect wrappers do not forward PrintWindow.
+            # Request the Tk client and its children to paint into the same DC.
+            user.SendMessageW(root.winfo_id(), 0x0317, memory, 0x001E)  # WM_PRINT
+            if not gdi.GetDIBits(memory, bitmap, 0, height, raw, ctypes.byref(header), 0):
+                raise OSError('GetDIBits failed after WM_PRINT')
+            image = Image.frombuffer('RGB', (width, height), raw, 'raw', 'BGRX', 0, 1)
         image.save(path)
         return image.getextrema() != ((0, 0), (0, 0), (0, 0))
     finally:
@@ -91,12 +132,20 @@ def capture_window(root, path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scale', type=int, default=100, choices=(100, 125, 150, 200))
+    parser.add_argument('--native-scale', type=int, choices=(100, 125, 150, 200),
+                        help='Require this actual Windows display scale; do not override Tk scaling')
     parser.add_argument('--output', type=Path, default=ROOT / 'runtime/gui-validation')
     args = parser.parse_args()
     enable_dpi_awareness()
     displays = monitors()
+    if args.native_scale is not None and not any(
+            m['dpi'] == round(96 * args.native_scale / 100) for m in displays):
+        parser.error(f'Windows {args.native_scale}% display required; observed monitors: {displays}. '
+                     'Set the Windows display scale on the host, then rerun. '
+                     '--scale only tests Tk text sizing and cannot satisfy this check.')
     root = tk.Tk()
-    root.tk.call('tk', 'scaling', args.scale / 100 * 96 / 72)
+    if args.native_scale is None:
+        root.tk.call('tk', 'scaling', args.scale / 100 * 96 / 72)
     App.collect = lambda self: None  # Deliberate offline fixture; no device access.
     app = App(root, SimpleNamespace(adb='', serial='', frida_remote=None))
     data = sample()
@@ -124,13 +173,16 @@ def main():
     receipt = dict(head=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                    code_sha256={p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
                                 for p in ('app.py', 'gui_panel.py')},
-                   scale_kind='Tk text scaling, not a Windows display setting change',
-                   requested_scale=args.scale, native_monitors=displays, cases=[])
+                   scale_kind=('Native Windows display DPI; Tk scaling not overridden'
+                               if args.native_scale else 'Tk text scaling, not a Windows display setting change'),
+                   requested_scale=args.native_scale or args.scale, native_monitors=displays, cases=[])
     try:
         for monitor_index, monitor in enumerate(displays):
             left, top, right, bottom = monitor['bounds']
-            for mode, requested_width in (('wide', 1600), ('narrow', round(480*args.scale/100))):
-                width, height = min(requested_width, right-left-48), min(round(780*args.scale/100), bottom-top-80)
+            work_left, work_top, work_right, work_bottom = monitor['work_area']
+            scale = (monitor['dpi'] / 96 if args.native_scale else args.scale / 100)
+            for mode, requested_width in (('wide', 1600), ('narrow', round(480*scale))):
+                width, height = min(requested_width, right-left-48), min(round(780*scale), bottom-top-80)
                 root.geometry(f'{width}x{height}')
                 root.update()
                 hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
@@ -140,33 +192,57 @@ def main():
                 time.sleep(.25)
                 root.update()
                 panel = app.panels[0]
-                assert panel.canvas.winfo_width() >= 300 * args.scale / 100, 'panel clipped'
+                window_dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+                if args.native_scale:
+                    assert window_dpi == monitor['dpi'], 'window DPI does not match this monitor'
+                assert panel.canvas.winfo_width() >= 300 * scale, 'panel clipped'
                 for control in panel.controls.values():
                     combo = control[1]
                     assert combo.winfo_width() >= 50, 'configuration control clipped'
-                filename = f'scale-{args.scale}-monitor-{monitor_index}-{mode}.png'
+                prefix = f'native-{args.native_scale}' if args.native_scale else f'scale-{args.scale}'
+                filename = f'{prefix}-monitor-{monitor_index}-{mode}.png'
                 bbox = (root.winfo_rootx(), root.winfo_rooty(),
                         root.winfo_rootx()+root.winfo_width(), root.winfo_rooty()+root.winfo_height())
                 capture_valid = capture_window(root, args.output / filename)
                 # Avatar hover and full-number hover both use the live source row.
                 panel.motion(SimpleNamespace(x=12, y=16, x_root=bbox[0]+20, y_root=bbox[1]+200))
                 assert names[keys[0]] in panel.tooltip.text
-                panel.tooltip.hide()
-                panel.tooltip._open(names[keys[0]], bbox[0]+20, bbox[1]+200)
-                root.update()
-                assert left <= panel.tooltip.window.winfo_rootx() < right, 'tooltip on wrong monitor'
-                panel.tooltip.hide()
+                tooltips = [tooltip_bounds(panel, root, (bbox[0]+20, bbox[1]+200), monitor['work_area'])]
                 panel.motion(SimpleNamespace(x=panel.canvas.winfo_width()-20, y=16,
                                              x_root=bbox[0]+200, y_root=bbox[1]+200))
                 assert '12300.123456789' in panel.tooltip.text
-                panel.tooltip.hide()
+                # Bottom/right edges of monitors with unequal heights, including
+                # negative coordinates; use the numeric hover's full content.
+                for point in ((work_right-8, work_bottom-8), (work_left+8, work_top+8)):
+                    panel.motion(SimpleNamespace(x=panel.canvas.winfo_width()-20, y=16,
+                                                 x_root=point[0], y_root=point[1]))
+                    tooltip_file = args.output / f'{prefix}-monitor-{monitor_index}-{mode}-tooltip.png'
+                    tooltips.append(tooltip_bounds(panel, root, point, monitor['work_area'],
+                                                   tooltip_file if point[0] == work_right-8 else None))
                 panel.pin(keys[0])
                 assert '12300.123456789' in panel.detail.get()
                 panel.pin(None)
+                # Also hover a genuinely visible numeric row in the second
+                # stacked panel, after scrolling it into the outer viewport.
+                app.board.yview_moveto(1)
+                root.update()
+                lower = app.panels[-1]
+                cx, cy = lower.canvas.winfo_rootx(), lower.canvas.winfo_rooty()
+                px = min(cx + lower.canvas.winfo_width()-20, work_right-8)
+                py = min(cy + lower.canvas.winfo_height()-4,
+                         app.board.winfo_rooty()+app.board.winfo_height()-4, work_bottom-8)
+                event = SimpleNamespace(x=px-cx, y=py-cy, x_root=px, y_root=py)
+                assert 0 <= event.y < lower.canvas.winfo_height(), 'second panel is not visible'
+                assert lower.hit(event), 'no visible data row at bottom of second panel'
+                lower.motion(event)
+                tooltips.append(tooltip_bounds(lower, root, (px, py), monitor['work_area']))
+                app.board.yview_moveto(0)
+                root.update()
                 receipt['cases'].append(dict(file=filename, geometry=root.geometry(),
                     columns=app.layout_columns, monitor=monitor_index, canvas_width=panel.canvas.winfo_width(),
-                    bbox=bbox, tooltip_and_pin='pass', screenshot_valid=capture_valid))
-        (args.output / f'scale-{args.scale}.json').write_text(
+                    window_dpi=window_dpi, tk_scaling=float(root.tk.call('tk', 'scaling')),
+                    bbox=bbox, tooltips=tooltips, tooltip_and_pin='pass', screenshot_valid=capture_valid))
+        (args.output / f'{prefix}.json').write_text(
             json.dumps(receipt, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(receipt, ensure_ascii=False))
         if not all(case['screenshot_valid'] for case in receipt['cases']):

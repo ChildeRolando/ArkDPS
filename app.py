@@ -293,11 +293,12 @@ class App:
             messagebox.showinfo('HUD 尚未接入', 'HUD 窗口由后续版本提供；当前面板继续实时统计。', parent=self.root)
 
     def render_panels(self, reset=False):
+        team_complete = self.last.get('statistics_complete', False) if self.last else False
         views = render_board([p.config for p in self.panels], self.source_rows,
-                             team_complete=self.last.get('statistics_complete', False) if self.last else False)
+                             team_complete=team_complete)
         source = self.statistics.get('rows') or {}
         for panel, view in zip(self.panels, views):
-            panel.update_view(view, source, reset=reset)
+            panel.update_view(view, source, team_complete=team_complete, reset=reset)
 
     def render(self, sample):
         # Consume the unified result, never the prototype compatibility rows.

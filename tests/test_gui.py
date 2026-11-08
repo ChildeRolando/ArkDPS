@@ -206,5 +206,64 @@ def test_reliable_zero_unknown_and_waiting_empty_states(gui):
     config = gui.panels[0].config
     assert '等待可靠战斗数据' in empty_text(config, {})
     assert '尚无可靠数据' in empty_text(config, {'a': dict(damage=None)})
-    assert '已知为零' in empty_text(config, {'a': dict(damage=0, counter_snapshot_complete=True)})
+    assert '已知为零' in empty_text(config, {'a': dict(damage=0, counter_snapshot_complete=True)},
+                                  team_complete=True)
     assert '覆盖不完整' in empty_text(config, {'a': dict(damage=0, counter_snapshot_complete=False)})
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+def test_unmapped_output_never_claims_team_is_reliably_zero(gui, category):
+    from battle_lifecycle import BattleRuntime
+    from test_battle_lifecycle import FakeCollector
+
+    collector, runtime = FakeCollector(), BattleRuntime()
+    collector.sample['rows'][0].update(damage=0., healing=0., physical=0.)
+    collector.sample['rows'].append(dict(collector.sample['rows'][0], id='mystery',
+                                        damage=500., healing=200., physical=500.))
+    runtime.poll(collector)
+    data = runtime.display_sample()
+    assert data['statistics']['unknown_sources'] == ['mystery']
+    assert not data['statistics_complete']
+    assert data['statistics']['rows']['a']['counter_snapshot_complete']
+    panel = gui.panels[0]
+    panel.config = replace(panel.config, category=category)
+    publish(gui, data)
+    assert not panel.view.entries
+    text = panel.canvas.itemcget(panel.empty, 'text')
+    assert '已知为零' not in text
+    assert '已观察输出为零' in text and '未知' in text
+
+    # A complete battle with the same known zero may show reliable zero.
+    # Unknown sources remain unknown for their battle even after disappearing.
+    collector.sample['rows'].pop()
+    runtime = BattleRuntime()
+    runtime.poll(collector)
+    publish(gui, runtime.display_sample())
+    assert '已知为零' in panel.canvas.itemcget(panel.empty, 'text')
+
+
+@pytest.mark.parametrize('bounds,point', [
+    ((0, 0, 800, 560), (790, 550)),
+    ((-1080, 0, 0, 1880), (-10, 1870)),
+    ((0, -900, 1200, 0), (1190, -10)),
+])
+def test_tooltip_all_edges_stay_in_pointer_monitor_work_area(gui, monkeypatch, bounds, point):
+    import gui_panel
+
+    panel = gui.panels[0]
+    # A tall, offset neighbour must not turn the desktop's unoccupied area
+    # or the taskbar into usable space for the pointer's monitor.
+    monkeypatch.setattr(panel.canvas, 'winfo_vrootx', lambda: -1080)
+    monkeypatch.setattr(panel.canvas, 'winfo_vrooty', lambda: -900)
+    monkeypatch.setattr(panel.canvas, 'winfo_vrootwidth', lambda: 3000)
+    monkeypatch.setattr(panel.canvas, 'winfo_vrootheight', lambda: 2820)
+    monkeypatch.setattr(gui_panel, 'monitor_work_area', lambda *args: bounds, raising=False)
+    panel.tooltip._open('完整数值 12300.123456789\n近 5 秒速率 100.0\n占比 0.123456789', *point)
+    gui.root.update()
+    window = panel.tooltip.window
+    x, y = window.winfo_rootx(), window.winfo_rooty()
+    left, top, right, bottom = bounds
+    assert left <= x and x + window.winfo_width() <= right
+    assert top <= y and y + window.winfo_height() <= bottom
+    assert y + window.winfo_height() <= point[1], 'bottom edge should open above pointer'
+    panel.tooltip.hide()

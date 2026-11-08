@@ -3,6 +3,7 @@ from dataclasses import replace
 import json
 from math import gcd
 from pathlib import Path
+import sys
 import tkinter as tk
 from tkinter import ttk, font
 
@@ -45,7 +46,7 @@ def exact(value):
     return '—' if value is None else repr(value)
 
 
-def empty_text(config, source):
+def empty_text(config, source, *, team_complete=False):
     if not source:
         return '等待可靠战斗数据\n未知不会显示为零。'
     key = {Category.DAMAGE: 'damage', Category.HEALING: 'healing',
@@ -56,7 +57,7 @@ def empty_text(config, source):
         return '当前指标尚无可靠数据\n等待可靠采样；未知不记零。'
     completeness = ('event_coverage_complete' if config.category is Category.SHIELD
                     else 'counter_snapshot_complete')
-    if not all(row.get(completeness, False) for row in source.values()):
+    if not team_complete or not all(row.get(completeness, False) for row in source.values()):
         return '已观察输出为零 · 覆盖不完整\n未覆盖部分仍未知。'
     return '暂无输出（已知为零）\n近期输出归零后隐藏；累计记录保留。'
 
@@ -83,6 +84,29 @@ def detail_text(row):
     return ' · '.join(parts)
 
 
+def monitor_work_area(widget, x, y):
+    """Return the pointer monitor's usable rectangle in virtual-screen coordinates."""
+    if sys.platform == 'win32':
+        import ctypes
+        from ctypes import wintypes
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [('size', wintypes.DWORD), ('monitor', wintypes.RECT),
+                        ('work', wintypes.RECT), ('flags', wintypes.DWORD)]
+
+        user = ctypes.WinDLL('user32', use_last_error=True)
+        user.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        user.MonitorFromPoint.restype = wintypes.HMONITOR
+        user.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MonitorInfo)]
+        user.GetMonitorInfoW.restype = wintypes.BOOL
+        handle = user.MonitorFromPoint(wintypes.POINT(x, y), 2)  # nearest monitor
+        info = MonitorInfo(size=ctypes.sizeof(MonitorInfo))
+        if user.GetMonitorInfoW(handle, ctypes.byref(info)):
+            return info.work.left, info.work.top, info.work.right, info.work.bottom
+    left, top = widget.winfo_vrootx(), widget.winfo_vrooty()
+    return left, top, left + widget.winfo_vrootwidth(), top + widget.winfo_vrootheight()
+
+
 class Tooltip:
     def __init__(self, widget):
         self.widget, self.window, self.pending = widget, None, None
@@ -105,13 +129,13 @@ class Tooltip:
         ttk.Label(self.window, text=text, padding=8, wraplength=360,
                   background=SURFACE).pack()
         self.window.update_idletasks()
-        # Virtual desktop coordinates include monitors left of the primary.
-        left = self.widget.winfo_vrootx()
-        right = left + self.widget.winfo_vrootwidth()
-        top = self.widget.winfo_vrooty()
-        bottom = top + self.widget.winfo_vrootheight()
-        x = max(left, min(x + 12, right - self.window.winfo_reqwidth()))
-        y = max(top, min(y + 18, bottom - self.window.winfo_reqheight()))
+        # The virtual desktop may include space with no physical monitor.
+        # Use this monitor's work area, including negative screen coordinates.
+        left, top, right, bottom = monitor_work_area(self.widget, x, y)
+        width, height = self.window.winfo_reqwidth(), self.window.winfo_reqheight()
+        tip_y = y + 18 if y + 18 + height <= bottom else y - 12 - height
+        x = max(left, min(x + 12, right - width))
+        y = max(top, min(tip_y, bottom - height))
         self.window.geometry(f'+{x}+{y}')
         self.window.deiconify()
 
@@ -132,6 +156,7 @@ class StatisticPanel(ttk.Frame):
         self.changed = changed
         self.portraits = portraits
         self.view, self.source = None, {}
+        self.team_complete = False
         self.pinned = None
         self.order, self.items = [], {}
         self.hovering = False
@@ -217,8 +242,9 @@ class StatisticPanel(ttk.Frame):
             combo.configure(state='disabled' if key == 'rate_basis' and
                             self.config.category is Category.SHIELD else 'readonly')
 
-    def update_view(self, view, source, *, reset=False):
+    def update_view(self, view, source, *, team_complete=False, reset=False):
         self.view, self.source = view, source
+        self.team_complete = team_complete
         self.title.configure(text=view.title)
         self.sync_controls()
         if reset:
@@ -310,7 +336,8 @@ class StatisticPanel(ttk.Frame):
         self.hint.set(hint)
         self.canvas.itemconfigure(self.empty, state='hidden' if self.order else 'normal',
                                   width=max(100, width - 24),
-                                  text=empty_text(self.config, self.source))
+                                  text=empty_text(self.config, self.source,
+                                                  team_complete=self.team_complete))
         s = self.unit
         for index, key in enumerate(self.order):
             entry = entries[key]
