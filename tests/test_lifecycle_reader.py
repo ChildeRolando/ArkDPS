@@ -225,3 +225,27 @@ def test_collector_refreshes_readable_ranges_when_scene_moves_objects():
     value._lifecycle_reader = SimpleNamespace(sample=sample)
     assert value.read_lifecycle() == {'battle': None}
     assert calls == ['sample', 'refresh', 'sample']
+
+
+@pytest.mark.parametrize(('output', 'expected'), [
+    ('123 456\n\nARKDPS_PID_QUERY:0\n', 123),
+    ('\nARKDPS_PID_QUERY:1\n', 0),
+])
+def test_process_lookup_requires_device_side_status(output, expected):
+    from tools.enemy_health.memcore import MemCore
+
+    channel = SimpleNamespace(package='game', shell=lambda *args, **kwargs: output)
+    assert MemCore._pid_for_known_package(channel)[1] == expected
+
+
+@pytest.mark.parametrize('output', ['', 'error: device offline', '123\n',
+                                    '\nARKDPS_PID_QUERY:127\n',
+                                    '\nARKDPS_PID_QUERY:0\n',
+                                    'bad\nARKDPS_PID_QUERY:0\n',
+                                    '123\nARKDPS_PID_QUERY:1\n'])
+def test_failed_adb_or_pidof_output_cannot_confirm_process_exit(output):
+    from tools.enemy_health.memcore import MemCore
+
+    channel = SimpleNamespace(package='game', shell=lambda *args, **kwargs: output)
+    with pytest.raises(RuntimeError):
+        MemCore._pid_for_known_package(channel)

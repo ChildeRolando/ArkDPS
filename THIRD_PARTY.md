@@ -12,6 +12,8 @@ URL: https://github.com/Tim23333/Arknights_timer
 
 上游源码修改：vendor/ark-source/tools/enemy_health/memcore.py 将设备端服务目录改为 /data/local/tmp/ark_dps，推送前创建目录；监听只绑定 127.0.0.1；服务版本变化时只停止本工具端口的 nc，不停止其他端口的服务。
 
+ARK-6 退出修复使同文件的进程查询要求设备侧 `pidof` 状态标记，拒绝将 ADB 故障的空输出当成已确认无游戏进程；查询失败继续抛错。
+
 设备端二进制：从随附 tools/enemy_health/memsrv.c 用 Zig 0.14.1 在本机重新编译，目标 aarch64-linux-musl，静态链接、-O2。命令：
 
 ```

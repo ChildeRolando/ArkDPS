@@ -146,12 +146,14 @@ class BattleFeed:
             # A singleton replacement may be observed only after it finished.
             # It cannot provide a result for the previously observed battle.
             if self.identity == identity and not stage_changed and before.get('state') == 3 and not exiting:
-                from collector import SampleUnavailable
+                from collector import SampleUnavailable, ProcessChanged
                 from roster import RosterUnavailable
                 from tools.stage_global_state.memory import ReadFailure
                 try:
                     sample, roster, events = self._read_pair(
                         collector, before, observer if not self.terminal else None)
+                except ProcessChanged:
+                    raise
                 except (SampleUnavailable, RosterUnavailable, AdapterError, ReadFailure):
                     self.current_lifecycle = before
                     self.terminal = True
@@ -224,6 +226,7 @@ class BattleSessions:
         self.metadata = {}
         self.latest_sample = None
         self._archived = False
+        self._terminal_seen = False
         self._archives = deque()
         self.capture = None
         self.event_status = 'unavailable'
@@ -310,9 +313,7 @@ class BattleSessions:
 
     def _terminal_update(self, observation):
         if observation.sample is None:
-            self.adapter.on_gap()
-            self.adapter.finish()
-            self.metadata['final_sample_error'] = observation.reason
+            self._terminal_gap(observation.reason)
             return
         if observation.sample['session'] != self.battle_id:
             raise ValueError('final sample does not belong to the live battle')
@@ -333,9 +334,7 @@ class BattleSessions:
         except (AdapterError, ValueError) as exc:
             self.adapter, self.capture = previous_adapter, previous_capture
             self.event_status, self.event_error = previous_status, previous_error
-            self.adapter.on_gap()
-            self.adapter.finish()
-            self.metadata['final_sample_error'] = str(exc)
+            self._terminal_gap(str(exc))
         else:
             self.adapter = final_adapter
             if self.capture is not None:
@@ -343,6 +342,15 @@ class BattleSessions:
             self.latest_sample = deepcopy(observation.sample)
             self.metadata.pop('final_sample_error', None)
             self._merge_metadata(observation.sample)
+
+    def _terminal_gap(self, reason):
+        # Close unreliable coverage, but leave the endpoint pending until a
+        # reliable terminal pair or confirmed departure supplies the boundary.
+        self.adapter.on_gap()
+        self.capture.close()
+        if self.event_status == 'recording':
+            self.event_status, self.event_error = 'gap', reason
+        self.metadata['final_sample_error'] = reason
 
     def _merge_terminal_metadata(self, observation):
         if self.latest_sample is None or not observation.lifecycle:
@@ -362,7 +370,7 @@ class BattleSessions:
             if observation.generation <= 0 or observation.sample['session'] != f'{self.feed_id}:{observation.generation}':
                 raise ValueError('sample does not match its observation generation')
             if observation.generation == self.generation and (
-                    self._archived or (self.adapter is not None and
+                    self._archived or self._terminal_seen or (self.adapter is not None and
                                        self.adapter.statistics.end_time is not None)):
                 return False
             # A guarded new generation retires the old battle even if the new
@@ -379,6 +387,7 @@ class BattleSessions:
                 self.generation = observation.generation
                 self.battle_id = observation.sample['session']
                 self._archived = False
+                self._terminal_seen = False
                 self.metadata = self._metadata(observation.sample)
             else:
                 self.adapter.update(observation.sample, observation.roster)
@@ -392,6 +401,7 @@ class BattleSessions:
             if (observation.generation != self.generation or self.adapter is None
                     or self._archived):
                 return False
+            self._terminal_seen = True
             self._merge_terminal_metadata(observation)
             self._terminal_update(observation)
             self.state = 'finalizing'
@@ -406,11 +416,11 @@ class BattleSessions:
             if observation.sample is not None and not self._archived:
                 self._terminal_update(observation)
             self._archive(observation.reason)
-            self.connection = 'connected'
+            self.connection = 'disconnected' if observation.reason == 'process_changed' else 'connected'
         elif observation.kind == 'gap':
             self.freeze(observation.reason)
         else:
-            self.connection = 'connected'
+            self.connection = 'disconnected' if observation.reason == 'process_changed' else 'connected'
         self.sequence = observation.sequence
         return True
 
@@ -461,7 +471,7 @@ class BattleRuntime:
         self.sessions.consume(observation)
 
     def poll(self, collector, observer=None):
-        from collector import SampleUnavailable, BattleChanged
+        from collector import SampleUnavailable, BattleChanged, ProcessChanged
         from roster import RosterUnavailable
         from tools.stage_global_state.memory import ReadFailure
         try:
@@ -470,6 +480,10 @@ class BattleRuntime:
         except CaptureRetry:
             raise
         except (SampleUnavailable, RosterUnavailable, FrameMismatch, ReadFailure) as exc:
+            if isinstance(exc, ProcessChanged):
+                self.feed.current_lifecycle = None
+                self._consume(self.feed._end('process_changed'))
+                raise
             if isinstance(exc, BattleChanged):
                 self._consume(self.feed.gap('process_changed'))
                 raise

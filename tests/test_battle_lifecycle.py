@@ -505,3 +505,103 @@ def test_active_sample_cannot_reopen_a_finalizing_generation():
     assert r.sessions.state == 'finalizing'
     assert total(r) == 175.
     assert not r.sessions.pop_archives()
+
+
+@pytest.mark.parametrize('change', ['exit', 'pid', 'birth'])
+@pytest.mark.parametrize('bracket', ['before', 'after'])
+@pytest.mark.parametrize('terminal', [False, True])
+def test_confirmed_process_change_archives_without_waiting_for_a_new_battle(change, bracket, terminal):
+    from collector import Collector, BattleChanged
+
+    c, r, first = begin()
+    lifecycle = c.read_lifecycle
+    c._lifecycle_reader = SimpleNamespace(sample=lifecycle)
+    c._lifecycle_maps_refresh_at = float('-inf')
+    lookups = []
+
+    def lookup():
+        lookups.append(True)
+        changed = bracket == 'before' or len(lookups) > 1
+        pid = (0 if change == 'exit' else 20) if changed and change != 'birth' else 10
+        return 'package', pid
+
+    def shell(*args, **kwargs):
+        birth = 2 if change == 'birth' and (bracket == 'before' or len(lookups) > 1) else 1
+        return 'boot\n10 (game) ' + ' '.join(['0'] * 19 + [str(birth)])
+
+    c.core.mc._pid_for_known_package = lookup
+    c.core.mc.shell = shell
+    c.read_lifecycle = lambda: Collector.read_lifecycle(c)
+    c.advance(damage=175.)
+    if terminal:
+        c.lifecycle.update(state=3, ready=False)
+    for _ in range(2):
+        with pytest.raises(BattleChanged):
+            r.poll(c)
+    record, = r.sessions.pop_archives()
+    assert record['battle_id'] == first.sample['session']
+    assert record['statistics']['ended']
+    assert record['statistics']['rows']['a']['damage'] == 100.
+    assert record['last_sample']['frame'] == 10
+    assert record['metadata']['outcome'] == 'unknown'
+    assert r.sessions.state == 'ended'
+    assert r.sessions.connection == 'disconnected'
+    assert r.feed.identity is None
+    assert not r.sessions.consume(replace(first, sequence=999))
+    assert not r.sessions.pop_archives()
+
+
+def test_unconfirmed_process_read_failure_keeps_the_live_generation(monkeypatch):
+    from collector import Collector
+
+    c, r, first = begin()
+    c._lifecycle_reader = SimpleNamespace(sample=lambda: None)
+    c.core.mc._pid_for_known_package = lambda: ('package', 10)
+    c.core.mc.shell = lambda *args, **kwargs: ''
+    with monkeypatch.context() as patch:
+        patch.setattr(c, 'read_lifecycle', lambda: Collector.read_lifecycle(c))
+        with pytest.raises(CaptureRetry):
+            r.poll(c)
+    assert not r.sessions.pop_archives()
+    assert r.poll(c).generation == first.generation
+    assert total(r) == 100.
+
+
+@pytest.mark.parametrize('fault', ['roster', 'mapping'])
+def test_recovered_terminal_pair_establishes_endpoint_after_a_failed_final_read(fault, monkeypatch):
+    from roster import RosterUnavailable
+
+    c, r, first = begin()
+    c.lifecycle.update(state=3, ready=False)
+    c.advance(time=11., frame=11, damage=175.)
+    with monkeypatch.context() as patch:
+        if fault == 'roster':
+            def unavailable():
+                raise RosterUnavailable('transient final read')
+            patch.setattr(c, 'read_roster', unavailable)
+        else:
+            patch.setitem(c.sample, 'rows', [dict(c.sample['rows'][0], id='unknown')])
+        r.poll(c)
+    assert r.sessions.state == 'finalizing'
+    assert total(r) == 100.
+    assert not r.sessions.pop_archives()
+    r.disconnected('transport_lost')
+    assert not r.sessions.consume(replace(first, sequence=r.sessions.sequence + 1))
+    r.poll(c)
+    assert total(r) == 175.
+    assert r.sessions.adapter.statistics.end_time == 11.
+    c.advance(time=11., frame=11, damage=180.)
+    r.poll(c)
+    # Once a reliable endpoint exists, only same-frame/time corrections apply.
+    c.advance(time=12., frame=12, damage=200.)
+    r.poll(c)
+    assert total(r) == 180.
+    c.lifecycle['battle'] = None
+    r.poll(c)
+    record, = r.sessions.pop_archives()
+    assert record['battle_id'] == first.sample['session']
+    assert record['statistics']['game_time'] == 11.
+    assert record['statistics']['rows']['a']['damage'] == 180.
+    assert record['statistics']['rows']['a']['recent_damage'] is None
+    assert record['last_sample']['frame'] == 11
+    assert record['metadata']['final_sample_error']

@@ -236,3 +236,75 @@ def test_confirmed_stage_switch_with_reused_addresses_and_monotonic_clock_starts
         assert archive['metadata']['stage_id'] == 'level_a'
     finally:
         session.close()
+
+
+def test_process_exit_handoff_is_immediate_once_and_replayable(tmp_path):
+    from types import SimpleNamespace
+    from collector import Collector as NativeCollector, BattleChanged
+    from capture_battles import replay
+    from capture_cli import json_value
+
+    session, collector, _, records = connected()
+    try:
+        first = session.read()
+        collector.core.mc._pid_for_known_package = lambda: ('', 0)
+        collector._lifecycle_reader = SimpleNamespace(sample=lambda: None)
+        collector.read_lifecycle = lambda: NativeCollector.read_lifecycle(collector)
+        for _ in range(2):
+            with pytest.raises(BattleChanged):
+                session.read()
+        archive, = [data for kind, data in records if kind == 'archive_ready']
+        assert archive['battle_id'] == first['battle_id']
+        assert archive['statistics']['ended']
+        assert session.runtime.sessions.connection == 'disconnected'
+    finally:
+        session.close()
+    path = tmp_path / 'exit.jsonl'
+    path.write_text('\n'.join(json.dumps(dict(kind=kind, data=data), default=json_value)
+                              for kind, data in records), encoding='utf-8')
+    result = replay(path)
+    assert result['archives'] == 1
+    assert result['last_state']['state'] == 'ended'
+    assert result['last_state']['connection'] == 'disconnected'
+
+
+def test_terminal_read_recovery_updates_totals_but_never_recovers_missing_events(monkeypatch):
+    from roster import RosterUnavailable
+
+    session, collector, _, records = connected()
+    try:
+        first = session.read()
+        advance(session, collector)
+        session.read()
+        collector.state, collector.frame, collector.game_time, collector.damage = 3, 3, 2, 175
+        session.observer.sequence = session.observer.epoch = 2
+        session.observer.events = [event(2, frame=3, game_time=2, amount=55)]
+
+        def unavailable():
+            raise RosterUnavailable('one terminal short read')
+
+        with monkeypatch.context() as patch:
+            patch.setattr(collector, 'read_roster', unavailable)
+            with pytest.raises(CaptureRetry):
+                session.read()
+        assert session.runtime.sessions.state == 'finalizing'
+        assert session.capture.closed
+        recovered = session.read()
+        row = recovered['statistics']['rows']['char_a']
+        assert row['damage'] == 175
+        assert row['observed_damage'] == 20
+        assert row['event_coverage_end'] == 1
+        assert not row['event_coverage_complete']
+        assert row['recent_damage'] is None
+        assert recovered['event_status'] == 'gap'
+        collector.state = 1
+        with pytest.raises(CaptureRetry):
+            session.read()
+        archive, = [data for kind, data in records if kind == 'archive_ready']
+        assert archive['battle_id'] == first['battle_id']
+        assert archive['statistics']['game_time'] == 2
+        assert archive['statistics']['rows']['char_a'] == row
+        assert archive['last_sample']['frame'] == 3
+        assert 'final_sample_error' not in archive['metadata']
+    finally:
+        session.close()

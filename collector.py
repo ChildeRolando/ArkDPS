@@ -41,6 +41,10 @@ class BattleChanged(SampleUnavailable):
     pass
 
 
+class ProcessChanged(BattleChanged):
+    """A successful lookup confirmed process absence or a different identity."""
+
+
 class UnsupportedVersion(SampleUnavailable):
     """The transport works, but statistics for this game version are unverified.
 
@@ -237,7 +241,7 @@ class Collector:
         if time.monotonic() - self.last_pid_check > 2:
             _package, pid = self.core.mc._pid_for_known_package()
             if pid != self.core.mc.pid:
-                raise BattleChanged('游戏进程已变化，正在重新定位')
+                raise ProcessChanged('游戏进程已变化，正在重新定位')
             self.last_pid_check = time.monotonic()
         channel = self.core._chan
         headers = channel.transaction_read(self._base_ops())
@@ -318,7 +322,7 @@ class Collector:
         # Cached metadata must never be reused across PID/birth reuse.
         _package, pid = self.core.mc._pid_for_known_package()
         if pid != self.core.mc.pid:
-            raise BattleChanged('游戏进程已变化')
+            raise ProcessChanged('游戏进程已变化')
         raw = self.core.mc.shell(
             f'cat /proc/sys/kernel/random/boot_id /proc/{int(pid)}/stat', timeout=5)
         try:
@@ -327,7 +331,7 @@ class Collector:
         except (ValueError, IndexError) as exc:
             raise SampleUnavailable('无法核对游戏进程出生标识') from exc
         if identity != self.core.mc.process_instance:
-            raise BattleChanged('游戏进程出生标识已变化')
+            raise ProcessChanged('游戏进程出生标识已变化')
         self.last_pid_check = time.monotonic()
         try:
             return self._lifecycle_reader.sample()

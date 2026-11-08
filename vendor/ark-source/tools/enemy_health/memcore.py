@@ -1340,7 +1340,15 @@ class MemCore:
             if package and package not in packages:
                 packages.append(package)
         for package in packages:
-            pid_s = self.shell(f'pidof {package}', timeout=8).strip()
+            # shell() returns stdout even when ADB fails. Require a device-side
+            # status marker so offline/timeout output cannot confirm an exit.
+            raw = self.shell(f'pidof {package}; printf "\\nARKDPS_PID_QUERY:%s\\n" "$?"', timeout=8)
+            pid_s, marker, status = raw.rpartition('\nARKDPS_PID_QUERY:')
+            pid_s, status = pid_s.strip(), status.strip()
+            if not marker or status not in ('0', '1') or (status == '1' and pid_s):
+                raise RuntimeError('Unable to confirm game process lookup')
+            if status == '0' and (not pid_s or any(not pid.isdecimal() for pid in pid_s.split())):
+                raise RuntimeError('Invalid game process lookup output')
             if pid_s:
                 return package, int(pid_s.split()[0])
         return '', 0
