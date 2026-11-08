@@ -93,6 +93,14 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
     return summary
 
 
+def same_archive(actual, recorded):
+    # Pre-history journals did not contain snapshot interval history. Keep
+    # their existing evidence replayable; new journals verify the field too.
+    if 'snapshot_intervals' not in recorded:
+        actual = {key: value for key, value in actual.items() if key != 'snapshot_intervals'}
+    return json.dumps(actual, sort_keys=True) == json.dumps(recorded, sort_keys=True)
+
+
 def replay(path):
     lines = Path(path).read_text(encoding='utf-8').splitlines()
     if lines and 'kind' in json.loads(lines[0]):
@@ -124,8 +132,7 @@ def replay(path):
             samples += int(raw['kind'] == 'sample')
             pending.extend(sessions.pop_archives())
         elif 'archive_ready' in value:
-            if (not pending or json.dumps(pending.pop(0), sort_keys=True) !=
-                    json.dumps(value['archive_ready'], sort_keys=True)):
+            if not pending or not same_archive(pending.pop(0), value['archive_ready']):
                 raise ValueError('archive differs from replayed lifecycle/statistics')
             archives += 1
         elif 'summary' in value:
@@ -185,7 +192,7 @@ def replay_product(lines):
             samples += int(observation.kind == 'sample')
             pending.extend(sessions.pop_archives())
         elif kind == 'archive_ready':
-            if not pending or not equal(pending.pop(0), data):
+            if not pending or not same_archive(pending.pop(0), data):
                 raise ValueError('archive differs from replayed lifecycle/events')
             archives += 1
         elif kind == 'published':

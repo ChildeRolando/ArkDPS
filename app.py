@@ -16,6 +16,7 @@ from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROO
 from metrics import observation_age
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from battle_lifecycle import BattleRuntime
+from battle_history import BattleHistory
 from event_capture import CaptureRetry
 
 
@@ -36,6 +37,7 @@ class App:
         self.rescan.set()
         self.last = None
         self.collector = None
+        self.history = BattleHistory(ROOT / 'runtime' / 'history')
         self.last_frame_change = 0
         self.frame = None
         self.error = ''
@@ -134,7 +136,7 @@ class App:
                     if self.collector:
                         self.collector.close()
                     self.collector=CollectionSession(self.args.adb,self.args.serial,
-                        frida_remote=self.args.frida_remote, audit=audit,
+                        frida_remote=self.args.frida_remote, audit=audit, history=self.history,
                         log=lambda x:print(x,flush=True))
                     self.collector.enable_lifecycle(runtime)
                     try:

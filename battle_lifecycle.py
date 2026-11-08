@@ -210,8 +210,8 @@ class BattleFeed:
 class BattleSessions:
     """Live statistics, independent connection state, and archive signals.
 
-    pop_archives transfers immutable copies once in this process. The future
-    history store must deduplicate by battle_id for durable idempotence.
+    pop_archives transfers independent copies once in this process. The history
+    store deduplicates by battle_id for durable idempotence.
     """
 
     def __init__(self, feed_id):
@@ -231,6 +231,16 @@ class BattleSessions:
         self.capture = None
         self.event_status = 'unavailable'
         self.event_error = None
+        self.snapshot_intervals = []
+        self._snapshot_open = False
+
+    def _snapshot_accepted(self):
+        now = self.adapter.last_game_time
+        if self._snapshot_open:
+            self.snapshot_intervals[-1][1] = now
+        else:
+            self.snapshot_intervals.append([now, now])
+            self._snapshot_open = True
 
     def _events(self, observation):
         evidence = observation.events
@@ -294,6 +304,7 @@ class BattleSessions:
         if connection is not None:
             self.connection = connection
         self.reason = reason
+        self._snapshot_open = False
         if self.adapter is not None and not self._archived:
             self.adapter.on_gap()
             self.state = 'frozen'
@@ -307,7 +318,7 @@ class BattleSessions:
             reason=reason, metadata=self.metadata,
             statistics=self.adapter.result(),
             last_sample=self.latest_sample, event_status=self.event_status,
-            event_error=self.event_error)))
+            event_error=self.event_error, snapshot_intervals=self.snapshot_intervals)))
         self._archived = True
         self.state = 'ended'
 
@@ -340,6 +351,7 @@ class BattleSessions:
             if self.capture is not None:
                 self.capture.adapter = self.adapter
             self.latest_sample = deepcopy(observation.sample)
+            self._snapshot_accepted()
             self.metadata.pop('final_sample_error', None)
             self._merge_metadata(observation.sample)
 
@@ -347,6 +359,7 @@ class BattleSessions:
         # Close unreliable coverage, but leave the endpoint pending until a
         # reliable terminal pair or confirmed departure supplies the boundary.
         self.adapter.on_gap()
+        self._snapshot_open = False
         self.capture.close()
         if self.event_status == 'recording':
             self.event_status, self.event_error = 'gap', reason
@@ -389,11 +402,14 @@ class BattleSessions:
                 self._archived = False
                 self._terminal_seen = False
                 self.metadata = self._metadata(observation.sample)
+                self.snapshot_intervals = []
+                self._snapshot_open = False
             else:
                 self.adapter.update(observation.sample, observation.roster)
                 self._merge_metadata(observation.sample)
             self._events(observation)
             self.latest_sample = deepcopy(observation.sample)
+            self._snapshot_accepted()
             self.state = 'playing'
             self.connection = 'connected'
             self.reason = ''
@@ -458,7 +474,7 @@ class BattleView:
 
 
 class BattleRuntime:
-    """Shared collector/statistics path for GUI, HUD and future history store."""
+    """Shared collector/statistics path for GUI, HUD and history storage."""
 
     def __init__(self):
         self.feed = BattleFeed()
