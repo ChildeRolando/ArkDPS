@@ -141,3 +141,25 @@ def test_collector_checks_process_birth_before_using_cached_metadata(birth):
         with pytest.raises(error):
             value.read_lifecycle()
         assert not reads
+
+
+def test_collector_refreshes_readable_ranges_when_scene_moves_objects():
+    value = collector.Collector.__new__(collector.Collector)
+    calls = []
+    fields = ['0'] * 19 + ['10']
+    value._lifecycle_maps_refresh_at = float('-inf')
+    value.core = SimpleNamespace(mc=SimpleNamespace(
+        pid=123, process_instance=('boot', 10),
+        _pid_for_known_package=lambda: ('package', 123),
+        shell=lambda *args, **kwargs: 'boot\n123 (game) ' + ' '.join(fields),
+        reload_maps=lambda: calls.append('refresh')))
+
+    def sample():
+        calls.append('sample')
+        if 'refresh' not in calls:
+            raise ReadFailure('binding_invalid')
+        return {'battle': None}
+
+    value._lifecycle_reader = SimpleNamespace(sample=sample)
+    assert value.read_lifecycle() == {'battle': None}
+    assert calls == ['sample', 'refresh', 'sample']

@@ -18,6 +18,7 @@ sys.path.insert(0, str(VENDOR))
 from tools.enemy_health import game_structs as gs
 from tools.enemy_health.enemy_reader import EnemyReader
 from tools.enemy_health.memcore import TcpChannel
+from tools.stage_global_state.memory import ReadFailure
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
 from character_catalog import load_character_names
 from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
@@ -104,6 +105,7 @@ class Collector:
         self.cache_path = ROOT / 'runtime' / 'address_hint.json'
         self._roster_reader = None
         self._lifecycle_reader = None
+        self._lifecycle_maps_refresh_at = float('-inf')
         self.adb_path = adb
         self.serial = serial
         self.diagnostics = ConnectionDiagnostics(
@@ -327,7 +329,16 @@ class Collector:
         if identity != self.core.mc.process_instance:
             raise BattleChanged('游戏进程出生标识已变化')
         self.last_pid_check = time.monotonic()
-        return self._lifecycle_reader.sample()
+        try:
+            return self._lifecycle_reader.sample()
+        except ReadFailure as exc:
+            if exc.reason != 'binding_invalid' or self.last_pid_check - self._lifecycle_maps_refresh_at < 1:
+                raise
+            # Scene loads can allocate objects outside the process's cached
+            # readable ranges. Refresh the ranges, then repeat all identity checks.
+            self._lifecycle_maps_refresh_at = self.last_pid_check
+            self.core.mc.reload_maps()
+            return self._lifecycle_reader.sample()
 
     def bind_battle(self, address):
         """Bind only the live singleton selected by the lifecycle reader."""
