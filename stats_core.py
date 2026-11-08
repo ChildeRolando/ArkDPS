@@ -143,6 +143,16 @@ class Statistics:
                 changed = True
         return changed
 
+    def correct_final_totals(self, counters):
+        """Revise terminal counters without claiming timing for any final rate."""
+        if not self.baseline_ready:
+            raise ValueError('final totals require an observation baseline')
+        changed = any(source not in self.sources or self.sources[source]['values'] != values
+                      for source, values in counters.items())
+        self.settle_snapshot(counters)
+        self.invalidate_snapshots()
+        return changed
+
     def event(self, event_id, game_time, source, kind, amount):
         """Record one reliable event: damage, healing, or actual shield absorption.
 

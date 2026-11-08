@@ -253,11 +253,18 @@ class BattleStatisticsAdapter:
         self.owner_map.owners[cid] = owner
         return True
 
-    def update(self, sample: dict, roster: RosterSnapshot) -> AdapterUpdate | None:
+    def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False) -> AdapterUpdate | None:
         """Apply one cumulative snapshot; returns None for duplicate frames."""
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
             raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
+        if terminal and (sample.get('state') != 3 or self.statistics is None
+                         or sample['session'] != self.session or self.last_game_time is None):
+            raise FrameMismatch('结算修订必须属于已有观察战局的原生结束状态')
+        if terminal and (sample['game_time'] < self.last_game_time or
+                         (self.statistics.end_time is not None and
+                          sample['game_time'] != self.statistics.end_time)):
+            raise FrameMismatch('结算修订不能改变冻结的游戏时间')
         if self.statistics is None or sample['session'] != self.session:
             if self.statistics is not None:
                 self._freeze()
@@ -268,9 +275,7 @@ class BattleStatisticsAdapter:
         if settling and (frame != self.last_frame or game_time != self.statistics.end_time
                          or sample.get('state') != 3):
             raise FrameMismatch('结算修订必须属于同局、同帧、同时间的结束快照')
-        if not settling and self.last_frame is not None and frame == self.last_frame:
-            return None
-        if not settling and self.last_game_time is not None:
+        if not settling and self.last_game_time is not None and not terminal:
             if game_time < self.last_game_time:
                 # A battle clock cannot move backwards in one session. Treat it
                 # as a new observation session rather than mixing samples.
@@ -279,6 +284,8 @@ class BattleStatisticsAdapter:
                 self._begin(sample, roster)
             elif game_time == self.last_game_time:
                 return None
+        if self.last_frame is not None and frame == self.last_frame and not terminal and not settling:
+            return None
         roster_map = build_owner_map(roster)
         # New roster evidence can map tokens that were not attributable when
         # the session started. Never change an existing mapping in-place.
@@ -328,7 +335,13 @@ class BattleStatisticsAdapter:
             # mapping/layout problem, not a legitimate empty battle.
             if sample.get('rows'):
                 raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
-        if settling:
+        if terminal:
+            if self.statistics.end_time is None:
+                if game_time > self.last_game_time:
+                    self.statistics.snapshot(game_time, counters)
+                self.finish(game_time)
+            changed = self.statistics.correct_final_totals(counters)
+        elif settling:
             changed = self.statistics.settle_snapshot(counters)
         else:
             self.statistics.snapshot(game_time, counters)
@@ -352,11 +365,12 @@ class BattleStatisticsAdapter:
     def finish(self, game_time: float | None = None) -> dict:
         if self.statistics is None or self.last_game_time is None:
             return self.last_result or {'rows': {}}
+        if self.statistics.end_time is not None:
+            return self.last_result or self.statistics.result()
         end = game_time if game_time is not None else self.last_game_time
         if self.event_stream is not None:
             if (not self.event_stream.closed and self.event_stream.game_time == end
                     and self.statistics.now == end):
-                # The final watermark proves coverage through the battle end.
                 self.event_stream.closed = True
             else:
                 self.event_stream.stop()

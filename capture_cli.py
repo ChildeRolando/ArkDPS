@@ -57,6 +57,7 @@ def run_capture(args, *, session_factory=CollectionSession):
     counts = {'samples': 0, 'retries': 0}
     last_sample = None
     first_frame = None
+    progressed = False
     failure = None
     with (dest / 'capture.jsonl').open('x', encoding='utf-8') as journal:
         def audit(kind, data):
@@ -68,6 +69,8 @@ def run_capture(args, *, session_factory=CollectionSession):
             journal.flush()
 
         session = session_factory(args.adb, args.serial, frida_remote=args.frida_remote, audit=audit)
+        if isinstance(session, CollectionSession):
+            session.enable_lifecycle()
         audit('metadata', metadata)
         try:
             session.connect()
@@ -92,8 +95,9 @@ def run_capture(args, *, session_factory=CollectionSession):
                     counts['samples'] += 1
                     if end is None:
                         end = time.monotonic() + args.capture_seconds
-                        first_frame = last_sample['frame']
+                        first_frame = (last_sample.get('session'), last_sample['frame'])
                         print('BASELINE', last_sample['frame'], last_sample['game_time'], flush=True)
+                    progressed |= (last_sample.get('session'), last_sample['frame']) != first_frame
                     if args.require_events and last_sample['event_status'] not in ('recording', 'finished'):
                         raise RuntimeError(last_sample.get('event_error') or 'event coverage is unavailable')
                 except CaptureRetry as exc:
@@ -104,7 +108,7 @@ def run_capture(args, *, session_factory=CollectionSession):
                 time.sleep(.1)
             if not counts['samples']:
                 raise RuntimeError('capture stopped without a reliable baseline')
-            if args.require_progress and last_sample['frame'] == first_frame:
+            if args.require_progress and not progressed:
                 raise RuntimeError('capture contains no observed battle progression')
         except BaseException as exc:
             failure = f'{type(exc).__name__}: {exc}'

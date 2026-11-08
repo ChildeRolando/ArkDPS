@@ -18,6 +18,7 @@ sys.path.insert(0, str(VENDOR))
 from tools.enemy_health import game_structs as gs
 from tools.enemy_health.enemy_reader import EnemyReader
 from tools.enemy_health.memcore import TcpChannel
+from tools.stage_global_state.memory import ReadFailure
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
 from character_catalog import load_character_names
 from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
@@ -38,6 +39,10 @@ class SampleUnavailable(RuntimeError):
 
 class BattleChanged(SampleUnavailable):
     pass
+
+
+class ProcessChanged(BattleChanged):
+    """A successful lookup confirmed process absence or a different identity."""
 
 
 class UnsupportedVersion(SampleUnavailable):
@@ -103,6 +108,8 @@ class Collector:
         self.last_pid_check = 0.0
         self.cache_path = ROOT / 'runtime' / 'address_hint.json'
         self._roster_reader = None
+        self._lifecycle_reader = None
+        self._lifecycle_maps_refresh_at = float('-inf')
         self.adb_path = adb
         self.serial = serial
         self.diagnostics = ConnectionDiagnostics(
@@ -137,8 +144,9 @@ class Collector:
             raise SampleUnavailable('发现多个有效战局，无法确认当前局；停止发布数据')
         self.core.bc_addr=valid[0]
 
-    def connect(self, force=False, *, locate=True):
+    def connect(self, force=False, *, locate=True, lifecycle=False):
         self.log('正在连接 MuMu…')
+        self._lifecycle_reader = None
         self.core.bc_addr = 0
         # MemCore owns its channel; its creation uses the class port default.
         TcpChannel.PORT = PORT
@@ -174,8 +182,25 @@ class Collector:
         self.diagnostics.version_status = VersionStatus.COMPATIBLE
         self.core._chan = self.core.mc.channel()
         self.last_pid_check = time.monotonic()
-        if locate:
+        if lifecycle:
+            self.locate_lifecycle()
+        elif locate:
             self.locate_battle(force=force)
+
+    def locate_lifecycle(self):
+        """Locate live singleton slots after process/version certification."""
+        if self.diagnostics.version_status != VersionStatus.COMPATIBLE:
+            raise UnsupportedVersion('版本未通过校验，拒绝定位战局', self.diagnostics)
+        from tools.enemy_health.battle_lifecycle import locate_lifecycle
+        locator = DeployTrackerReader(self.core.mc)
+        try:
+            classes = locator.scan_classes(('BattleController',))
+            if not classes or len(classes) != 1:
+                raise SampleUnavailable('无法唯一定位战局单例类型；保留未知状态')
+            self._lifecycle_reader = locate_lifecycle(self.core.mc, next(iter(classes)), locator)
+            self._lifecycle_reader.m.channel = self.core._chan
+        finally:
+            locator.close()
 
     def locate_battle(self, force=False):
         """Locate after a version-checked connection, allowing pre-battle hooks."""
@@ -216,7 +241,7 @@ class Collector:
         if time.monotonic() - self.last_pid_check > 2:
             _package, pid = self.core.mc._pid_for_known_package()
             if pid != self.core.mc.pid:
-                raise BattleChanged('游戏进程已变化，正在重新定位')
+                raise ProcessChanged('游戏进程已变化，正在重新定位')
             self.last_pid_check = time.monotonic()
         channel = self.core._chan
         headers = channel.transaction_read(self._base_ops())
@@ -283,11 +308,50 @@ class Collector:
         session = ':'.join(map(str, (*self.core.mc.process_instance, self.core.mc.pid,
             self.core.bc_addr, u64(values[1], L.STATS), u64(values[0], B.LEVEL_DATA))))
         return dict(session=session, frame=frame, game_time=game_time,
+            battle_identity=(self.core.bc_addr, u64(values[0], B.UNITY_CACHED_PTR)),
             damage_basis='client character counters; includes overkill; excludes healing',
             state=state, speed=i32(values[0], B.M_SPEED_LEVEL), rows=rows,
             global_total=abs(global_total), sum_damage=sum(r['damage'] for r in rows),
             read_ms=round((time.perf_counter() - started) * 1000, 2),
             observed_at=time.time(), captured_monotonic=captured_monotonic, guard=guard)
+
+    def read_lifecycle(self):
+        if self._lifecycle_reader is None:
+            raise SampleUnavailable('生命周期尚未连接')
+        # This check brackets every paired acquisition, including menu polls.
+        # Cached metadata must never be reused across PID/birth reuse.
+        _package, pid = self.core.mc._pid_for_known_package()
+        if pid != self.core.mc.pid:
+            raise ProcessChanged('游戏进程已变化')
+        raw = self.core.mc.shell(
+            f'cat /proc/sys/kernel/random/boot_id /proc/{int(pid)}/stat', timeout=5)
+        try:
+            boot, stat = raw.strip().split('\n', 1)
+            identity = (boot.strip(), int(stat.rsplit(')', 1)[1].split()[19]))
+        except (ValueError, IndexError) as exc:
+            raise SampleUnavailable('无法核对游戏进程出生标识') from exc
+        if identity != self.core.mc.process_instance:
+            raise ProcessChanged('游戏进程出生标识已变化')
+        self.last_pid_check = time.monotonic()
+        try:
+            return self._lifecycle_reader.sample()
+        except ReadFailure as exc:
+            if exc.reason != 'binding_invalid' or self.last_pid_check - self._lifecycle_maps_refresh_at < 1:
+                raise
+            # Scene loads can allocate objects outside the process's cached
+            # readable ranges. Refresh the ranges, then repeat all identity checks.
+            self._lifecycle_maps_refresh_at = self.last_pid_check
+            self.core.mc.reload_maps()
+            return self._lifecycle_reader.sample()
+
+    def bind_battle(self, address):
+        """Bind only the live singleton selected by the lifecycle reader."""
+        if self.core.bc_addr == address and self.core._bc_static_fields:
+            return
+        self.core.bc_addr = address
+        self._roster_reader = None
+        if not self.core._resolve_battle_clock():
+            raise SampleUnavailable('未能验证当前单例的逻辑时钟')
 
     def read_roster(self, max_attempts: int = 8) -> RosterSnapshot:
         """Read stable statistic keys, host mapping and live membership.

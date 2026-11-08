@@ -106,15 +106,32 @@ class LiveEventCapture:
             raise
         try:
             self.adapter.update(sample, roster)
-            if self.baseline_sequence is None:
-                self.baseline_sequence = sequence
-                self.adapter.start_events(session=sample['session'], frame=sample['frame'],
-                                          sequence=sequence)
             try:
                 drained = self.observer.drain()
             except Exception as exc:
                 raise StreamGap(f'observer drain unavailable: {exc}') from exc
             self.audit('drain', drained)
+            return self.ingest(sample, roster, sequence, drained)
+        except MappingUnavailable as exc:
+            if self.baseline_sequence is None and self.adapter.statistics is None:
+                raise CaptureRetry(str(exc)) from exc
+            self.close()
+            raise
+        except Exception:
+            self.close()
+            raise
+
+    def ingest(self, sample, roster, sequence, drained):
+        """Apply an acquired barrier/drain to the lifecycle-owned adapter.
+
+        Acquisition has already bracketed the singleton and updated the native
+        baseline. The observation generation is checked before reaching here.
+        """
+        try:
+            if self.baseline_sequence is None:
+                self.baseline_sequence = sequence
+                self.adapter.start_events(session=sample['session'], frame=sample['frame'],
+                                          sequence=sequence)
             if drained.get('error') or drained.get('stopped'):
                 raise StreamGap('observer stopped or reported a callback error')
             self.pending.extend(drained['events'])

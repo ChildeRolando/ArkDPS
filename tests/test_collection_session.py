@@ -13,7 +13,21 @@ class Collector(SnapshotCollector):
         super().__init__()
         self.calls = calls
         self.diagnostics = SimpleNamespace(connection_ok=True, version_status=VersionStatus.COMPATIBLE)
-        self.core = SimpleNamespace(mc=SimpleNamespace(pid=123))
+        self.core = SimpleNamespace(mc=SimpleNamespace(pid=123, process_instance=('boot', 1)))
+        self.state = 2
+
+    def locate_lifecycle(self):
+        self.calls.append('lifecycle')
+
+    def read_lifecycle(self):
+        return dict(battle=(100, 200), state=self.state, ready=self.state == 2,
+                    transiting=False, source='level_a', target='')
+
+    def bind_battle(self, address):
+        assert address == 100
+
+    def read(self):
+        return dict(super().read(), battle_identity=(100, 200), state=self.state)
 
     def connect(self, *, locate):
         assert locate is False
@@ -183,6 +197,25 @@ def test_live_gap_keeps_native_totals_and_freezes_event_coverage():
     assert row['damage'] == 120 and row['event_coverage_end'] == 0
     assert not row['event_coverage_complete']
     current.close()
+
+
+def test_observer_drain_exception_degrades_instead_of_stopping_snapshots(monkeypatch):
+    current, collector, _ = session()
+    try:
+        current.connect()
+        current.locate()
+        current.read()
+        collector.frame, collector.game_time, collector.damage = 2, 1, 120
+        def fail():
+            raise ConnectionError('drain disconnected')
+        monkeypatch.setattr(current.observer, 'drain', fail)
+        sample = current.read()
+        assert sample['event_status'] == 'gap'
+        assert 'drain disconnected' in sample['event_error']
+        assert sample['statistics']['rows']['char_a']['damage'] == 120
+        assert sample['statistics']['rows']['char_a']['event_coverage_end'] == 0
+    finally:
+        current.close()
 
 
 def test_native_resources_are_closed_even_if_observer_cleanup_fails(monkeypatch):

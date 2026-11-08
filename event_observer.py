@@ -14,6 +14,19 @@ class ObserverStatus(str, Enum):
     FAILED = 'failed'
 
 
+def _while_live(operation, released):
+    if released():
+        return
+    try:
+        operation()
+    except Exception as exc:
+        if not released():
+            raise
+        from frida import InvalidOperationError
+        if not isinstance(exc, InvalidOperationError):
+            raise
+
+
 class FridaEventObserver:
     def __init__(self, collector, remote):
         self.collector = collector
@@ -84,20 +97,20 @@ class FridaEventObserver:
         try:
             if self.script is not None:
                 try:
-                    self.script.unload()
+                    _while_live(self.script.unload, lambda: self.script.is_destroyed)
                 finally:
                     self.script = None
         finally:
             if self.session is not None:
                 try:
-                    self.session.detach()
+                    _while_live(self.session.detach, lambda: self.session.is_detached)
                 finally:
                     self.session = None
 
     def stop(self):
         try:
             if self.script is not None and self.status == ObserverStatus.READY:
-                self.script.exports_sync.stop()
+                _while_live(lambda: self.script.exports_sync.stop(), lambda: self.script.is_destroyed)
         finally:
             self.status = ObserverStatus.STOPPED
             self._release()

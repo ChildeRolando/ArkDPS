@@ -31,9 +31,14 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
     end_sequence = last['event_watermark']['sequence']
     by_sequence = {}
     for record in records:
-        if record['kind'] != 'drain':
+        if record['kind'] == 'lifecycle_observation':
+            evidence = record['data'].get('events') or {}
+            drain = evidence.get('drain', {})
+        elif record['kind'] == 'drain':
+            drain = record['data']
+        else:
             continue
-        for event in record['data']['events']:
+        for event in drain.get('events', []):
             sequence = event['sequence']
             if sequence in by_sequence and by_sequence[sequence] != event:
                 raise ValueError('conflicting replay in raw events')
@@ -78,10 +83,10 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 partial.append(event['sequence'])
             if amount == 0:
                 zeros.append(event['sequence'])
-    native = {row['id']: row for row in last['rows']}
+    native = {row['id']: row for row in last.get('native_rows', last['rows'])}
     references = {}
     for publication in publications:
-        for raw in publication['rows']:
+        for raw in publication.get('native_rows', publication['rows']):
             references.setdefault(raw['id'], (raw, publication['event_watermark']['sequence'],
                                                publication['game_time']))
     counter_deltas = {}

@@ -1,5 +1,9 @@
 # 实时事件采集入口与验收
 
+当前主线 ARK-5 已在 `af18904ab89b417c87665f9dbfa731e2348cfa7a` 获独立 PASS，并合入 `b999a4c9a236331b95a07cfa0e90e8dd97e9d6be`。234 项回归及默认入口、启动失败降级、显式关闭的新实机证据通过。宿主机已在 2026-11-07 22:37:54Z 结束设备操作；下文早期“待返修/独占”是历史过程，当前串行占用以最新讨论为准。
+
+ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期模式，`BattleRuntime` 分配 ID，快照和 `LiveEventCapture.ingest()` 共用一个适配器。跨帧重试保留队列；新局重建基线并隔离旧事件；同进程不因换局重挂载。首个终局先处理可靠水位再冻结，累计修订与一次归档沿用同局 ID。新日志的 `lifecycle_observation.events` 保留屏障/drain，`published.native_rows` 保留原生来源，`rows` 为窗口投影；独立对账器兼容两种日志。新候选的跨局实机尚未验收，范围和当前 MAA 错误证据见 [生命周期交接](snapshot-adapter.md)。
+
 `app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 命令行模式共用 `CollectionSession`。通过进程身份和游戏版本校验后，默认向本机已验证端点 `127.0.0.1:27043` 尝试临时事件观测；`--frida-remote host:port` 可覆盖端点，`--no-events` 显式关闭。API 的默认值同样为该端点，传入 `frida_remote=None` 关闭，可供 ARK-11 设置入口使用。Frida 17.26.1 客户端、同版服务及端口转发须由调用方准备；采集器结束时卸载自己的脚本，不安装或启动服务、不使用 eternalize。
 
 连接先校验进程与游戏版本，再准备观察器，最后定位战局。因此观察器可以在进入关卡前就绪。`Collector.connect()` 的默认行为保持同时定位；`connect(locate=False)` 允许提前挂载，之后调用 `locate_battle()`。
@@ -12,7 +16,7 @@
 
 ## 宿主机实机操作
 
-设备仅由宿主机协调者操作。先按[实验手册](experiment-playbook.md)核对关卡、零理智、实验编队和部署；保留 MAA 回调，禁止理智药、源石和养成。采集命令不导航或部署。
+设备由当前取得窗口的执行角色串行操作，开测前核对兄弟运行和宿主机最新占用。先按[实验手册](experiment-playbook.md)核对关卡、零理智、实验编队和部署；保留 MAA 回调，禁止理智药、源石和养成。采集命令不导航或部署。
 
 用 `acceptance/prepare_event_job.py <原作业> <新作业>` 派生固定作业：在原部署序列之前增加暂停、45 秒主机等待和恢复。这样首次定位扫描及编队快照有时间建立基线；游戏时间保持冻结。保留原作业和派生作业，不能将等待时间当作游戏时间。OF-8 使用 `of8-shield-break.json`，OF-2 使用纠正山技能策略的 `of2-summon-shield.json`，山 S2 仍只使用一次。
 

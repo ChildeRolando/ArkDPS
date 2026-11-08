@@ -30,9 +30,72 @@
 
 - 首帧建立基线，近期速率从开始观察即计时，不足 5 秒使用实际观察时长；暂停或重复帧不生成新快照，也不制造速率。
 - 读取失败由调用方调用 `on_gap()`：立即保留累计并将近期速率设为未知、累计快照标为不完整，重建近期窗口；事件覆盖关闭，接敌指标标记不完整。
-- 战局标识变化或游戏时钟回退时结束旧序列并新建观察序列，不把两局累计混在一起。自动归档由后续工单负责。
+- 战局标识变化或游戏时钟回退时结束旧序列并新建观察序列，不把两局累计混在一起；时钟回退先于重复帧判定，即使新旧局恰好复用帧编号也不能忽略回退。直接调用适配器不能区分延迟旧样本与真正回退；产品入口必须先经过下面的观察代次边界。实际历史存储仍由 ARK-8 负责。
 
-## 实机证据（2026-11-08）
+## 产品生命周期与归档交接
+
+`battle_lifecycle.py` 的 `BattleFeed` 是单线程采集所有者。`Collector.connect(lifecycle=True)` 定位 BattleController 和 GameFlowController 的单例槽，允许在菜单建立连接；每次采集前后核对进程出生标识、当前单例、原生对象和场景状态，配对同帧累计与编队。读取失败不是空单例。确认的空/销毁单例、关卡到结算的场景转换、初始化阶段、新对象链或时钟回退构成结束/新观察边界；FINISHED 先进入结算冻结，暂停和撤退/再部署不构成换局边界。
+
+每份 `BattleObservation` 保留采集时签发的 `feed`、单调 `sequence` 和 `generation`。消费者不能在出队时给旧样本重新签代次。`BattleSessions` 丢弃外来 feed、旧序号和旧代次；内部 Statistics 会话使用 `feed:generation`，不把可复用地址作为持久战局 ID。进程重启须重新连接和定位元数据。所有地址、帧及时间完全相同且整个生命周期都未被观察到时，无法推断漏掉了几局；本入口不恢复未观察到的整局事件。
+
+连接状态 `connection` 与战局 `state` 独立：读取/连接失败冻结统计、关闭可靠覆盖，保留累计；不会因超时把旧局判失败或清零。成功确认游戏进程缺失、PID 或出生标识替换时，立即结束旧代次、以原战局 ID 交接一次归档并将连接标为断开；无需等下一局。进程查询要求设备侧命令状态标记，ADB 失败或无效输出不能作为退出证据。停止插件仍只冻结观察，不等于游戏退出。
+
+首个原生状态 3 进入 `finalizing`，拒绝该代次迟到的活动样本。若累计/编队配对失败，保留旧累计并关闭不可靠覆盖，终局时间暂不确认；同代次恢复后的首个可靠终局配对可以推进时间、更新最终累计与最后可靠样本，随后仅接受同帧同时间的单调累计修订。事件缺口不会被累计恢复补成完整，快照近期速率保持未知。始终无法恢复时，确认离场后按最后可靠样本结束。确认离场/换局时才交接一次归档，不能以轮询次数或墙钟等待猜测结算完成。该边界及实机回归来源见 [统计核心契约](statistics-core.md#同帧终局累计的回归证据)。新局归属暂不可用也不能丢失旧局的归档信号。
+
+`pop_archives()` 将待交接记录转移给调用方，每个已观察战局在本进程只交接一次。记录包含 `battle_id`、代次、结束原因、元信息、冻结统计与最后可靠样本的独立副本；消费端修改副本不能改变实时统计。未来持久化必须以 `battle_id` 幂等写入，此队列不是磁盘存储或跨进程事务承诺。
+
+`BattleView.show_history(record)` 固定 GUI 所选记录；`gui()` 保留该选择，`hud()` 始终取当前局。`show_live()` 才恢复 GUI 跟随。这里交付数据契约，历史页面、HUD 窗口和实际存储仍由后续工单实现。原型 `app.py` 已共用 `BattleRuntime`，采集日志中的 `archive_ready` 仅作交接证据。
+
+### 进程退出与终局短读回归
+
+`tests/test_battle_lifecycle.py` 覆盖活动/终局期间、配对前/后确认进程退出或身份替换：不再开局也只归档一次，保留旧累计、未知结果，拒绝迟到活动样本。终局短读与归属失败恢复测试验证首个可靠端点、最终累计和最后样本，之后仍拒绝不同帧/时间的修订。这两组新增复现在 `27e8efe` 的实现上实际为 8 failed、1 passed，修复后通过。
+
+`tests/test_lifecycle_reader.py` 验证设备侧进程查询的成功、无进程与错误输出边界；`tests/test_lifecycle_events.py` 验证正式入口立即交接和日志重放，以及终局短读恢复后仍保留原事件覆盖端点、已观察事件分子和未知近期速率。确定性回归不代表新候选已完成宿主机游戏进程退出验收。
+
+宿主机 `27e8efe807cf43f2accbfd6d1610d4a7a4ddf725` 的四局证据保存在 Review Loop `evidence/ark6-live-work/host-acceptance/final-27e8efe`：单进程单挂载、758 个有效样本、4 个独立 ID 各归档一次，覆盖 OF-1 胜利/同图重开/暂停/撤退再部署/放弃、OF-8 自然失败和 1-7 演习。该原始流可重放，但不覆盖本节两项故障。新候选的进程退出实机补验由宿主机使用 MAA Copilot 与 CloseDown 串行执行；MuMu 16384 留给该验收。
+
+元信息包含 `stage_id`、`practice`（布尔或未知）和 `outcome`（`victory`、`defeat`、`abandoned` 或 `unknown`）。Android 2.7.91 的终局结果来自经配对核验的 `BattleController.m_result`，已结束的原生值 1 和 2 分别对应胜利和失败。主动放弃需要同时观察到进行中、原生结果仍为 0、同一战局向结算页转场。缺少对应原生证据的结束保持未知。
+
+演习取自 `SquadPage.Params.isPractice`。只有采集器观察到本次开战、参数对象通过类型校验并且关卡 ID 匹配时才采信。复用旧参数、读取不稳或中途接入而没有观察到开战时保留未知。互相冲突的证据列入 `metadata_conflicts`，来源保留在 `evidence_sources`。场景切换期间短读可重试；地址范围失效时限频刷新映射并重新核验身份。
+
+### 复核入口
+
+离线：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests -q --assert=plain`（PowerShell 用 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'`）。`tests/test_battle_lifecycle.py` 保护换局、代次、重复交接、结尾截断、缺口、视图选择和重放；`tests/test_lifecycle_reader.py` 保护原生状态读取、单例变化拒绝与短读不变零。
+
+取得独占实机窗口后，在固定候选检出运行下面的只读采集。看到 `lifecycle_ready` 后，由 MAA 按实验手册执行零理智的同图重开、切图、暂停、撤退再部署和结束场景。胜负、演习和退出的对照应同时保留 MAA 回调、产品原始记录及重放结果。采集器本身只读。
+
+```powershell
+python capture_battles.py --seconds 300 --output runtime/ark6-live-01 --adb 'C:/Program Files/Netease/MuMu Player 12/shell/adb.exe' --serial 127.0.0.1:16384
+python capture_battles.py --replay runtime/ark6-live-01/observations.jsonl
+Get-FileHash runtime/ark6-live-01/observations.jsonl -Algorithm SHA256
+```
+
+输出目录不能复用已有 `observations.jsonl`。重放会核对归档统计和末尾汇总；缺失交接、损坏记录或截断日志会失败。结束采集只冻结仍在观察的局，不把停止插件伪装成玩家中途退出。
+
+### 整合已合入的 ARK-5
+
+只读字段取证已确认当前暂停的 OF-2：`LevelData.levelId` 为 `Activities/ACT3D0/level_act3d0_02`，前后快照均在逻辑帧 3084、102.79990196228027 游戏秒。读取器现将通过对象类型、字符串槽稳定性和生命周期配对校验的原生关卡 ID 传到元信息与归档；保留原生 ID，不猜显示编号。可确认的关卡 ID 改变也会在重复帧过滤前签发新代次；读取失败保留未知，不制造换局。`lifecycle_observation.lifecycle` 保留当次单例、状态、场景与关卡证据。
+
+该切图回归已在 `756a581` 上实际失败、修复后通过：同地址、同帧同时间、原生 session 不变但关卡 ID 改变时仍建立新局，不吞掉首份累计。前后测试输出保留于 Review Loop `evidence/ark6-live-work/stage-id-regression`；新增契约同时验证 stage_id 进入归档，未知演习/胜负不会被字段接入顺带填值。
+
+早期取证产物为 Review Loop `evidence/ark6-live-work/metadata-1794095779935419600/metadata.json`，覆盖暂停时关卡 ID 和原始结果零值。后续胜负、放弃与演习的场景对照和固定作业保存在同工单的宿主机证据目录。
+
+正常窗口与 `app.py --capture-seconds` 均在连接前启用 `CollectionSession.enable_lifecycle()`，共用 `BattleRuntime` 持有的唯一统计适配器。先认证并准备默认事件观察器，再定位单例；生命周期 ID 同时用于快照、事件流、发布和归档。同一观察器跨同进程的新局继续排队，新基线的序号屏障丢弃旧局前缀；消费者先拒绝旧 feed/代次/序号，再输入事件，不为每局重复挂载同一 PID。
+
+暂时的累计/编队跨帧与观察器 retry 保留队列、不签发新代次、不关闭事件覆盖；连接失败或序列缺口才冻结相应覆盖。首个可靠终局先应用事件水位，再冻结时间。后续同帧单调累计修订同步更新发布值，事件不增加，重复稳定修订不增加修订号。`tests/test_lifecycle_events.py` 覆盖真实入口、共用 ID、终局修订、一次交接、旧事件隔离、选择器和默认事件降级。
+
+正式日志的 `lifecycle_observation` 包含原始快照、编队、屏障与 drain，`published.native_rows` 保留逐来源原生数据，`published.rows` 为窗口用的宿主归并投影，`statistics` 为共享结果。`archive_ready` 携带事件能力、错误、最后可靠样本和完整性。`lifecycle_summary` 固定结束状态，可独立复核：
+
+```powershell
+python app.py --capture-seconds 600 --baseline-timeout 240 --expect-head <最终完整SHA> --output-dir <本轮新目录> --adb 'C:/Program Files/Netease/MuMu Player 12/shell/adb.exe' --serial 127.0.0.1:16384
+python capture_battles.py --replay <本轮新目录>/capture.jsonl
+```
+
+默认端口仍为 `127.0.0.1:27043`；`--no-events` 单独验证快照降级。旧 `capture_battles.py --seconds` 仅用于快照诊断，不替代默认事件入口集成验收。原生胜负、演习和退出原因仍缺本候选实机字段证据，保持未知，不能由 MAA 完成、状态 3 或结束场景推导。
+
+2026-11-08 本轮复核没有其他活动兄弟编码运行，宿主机已释放设备。绝对路径 ADB 读到 PID 26586；MAA 6.21.4 在 `F:/Code/python/python.exe` 与已配置的 Frida Python 下都无法建立连接，日志为 `CreateOverlappablePipe failed, err 5`，回调 `ConnectFailed / Connection command failed to exec`。未执行导航、部署或消耗。新证据为 Review Loop `evidence/ark6-live-work/maa-connect-1794095141219848900` 和 `maa-connect-1794095150287986700`。须在最终候选补同图重开、切图、暂停、撤退再部署、结束/退出与元信息取证。旧设备占用不再是阻塞理由。
+
+## 既有 ARK-4 累计快照证据（2026-11-08）
 
 MuMu 12 / Android 2.7.91，1-7 演习实测（MAA Copilot 固定部署，非代理指挥）：捕获从逻辑帧 26 开始，共 203 次累计更新；夜刀累计 5030 → 5260，近期 DPS 在 46–92 之间随 5 秒窗口滚动；`present=True`，四类伤害与治疗字段可用；编队读取得到 12 个统计键，无归属错误或未知来源。暂停帧不产生新速率。
 
@@ -45,5 +108,5 @@ MuMu 12 / Android 2.7.91，1-7 演习实测（MAA Copilot 固定部署，非代�
 ## 边界
 
 - 召唤归并已用 OF-2 实机验证并发/重新部署同键与宿主归并；其他召唤体系与地图 NPC 的覆盖仍按能力报告边界。
-- 治疗速率与护盾事件需要事件采集接入（ARK-5）；本工单只验证累计快照与归属。
-- 事件采集、自动换局归档、历史持久化不在本工单。
+- ARK-5 累计/事件机制证据范围见 [事件采集](event-capture.md)；ARK-6 的新集成与跨局实机仍须单独验收。
+- 历史持久化及实际 GUI/HUD 选择器由后续工单实现；本票交付共享数据和一次归档交接契约。

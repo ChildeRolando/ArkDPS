@@ -72,3 +72,21 @@ def test_event_and_published_totals_cannot_hide_a_native_delta_mismatch(tmp_path
     path.write_text('\n'.join(json.dumps(record) for record in records))
     with pytest.raises(ValueError, match='amount mismatch'):
         module.verify(tmp_path)
+
+
+def test_lifecycle_envelope_uses_native_sources_and_preserves_raw_proofs(tmp_path):
+    records, path = evidence(tmp_path)
+    first, last = records[0]['data'], records[2]['data']
+    first['native_rows'] = [{'id': 'token_cathy', 'damage': 100, 'healing': 0}]
+    last['native_rows'] = [{'id': 'token_cathy', 'damage': 100, 'healing': 0}]
+    # GUI rows are an owner projection and cannot substitute for source totals.
+    first['rows'] = last['rows'] = [{'id': 'char_cathy', 'damage': 999}]
+    events = records[1]['data']
+    records[1] = {'kind': 'lifecycle_observation', 'data': {
+        'generation': 1, 'events': {'drain': events}}}
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    assert module.verify(tmp_path)['shield_totals']['char_cathy'] == 2
+    last['native_rows'][0]['damage'] = 110
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='amount mismatch'):
+        module.verify(tmp_path)

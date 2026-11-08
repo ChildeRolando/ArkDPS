@@ -1,0 +1,217 @@
+{
+  "source": {
+    "capture": "of8-aef6051-01/product/capture.jsonl",
+    "head": "aef605125f6f02e9fe09ed3404e3f46249769f1c",
+    "sha256": "066f2b1224f530e0c73465f7a81ea88b017d9369a3ee4292c9b17c060e2f027f",
+    "record_indices": [
+      1855,
+      1858
+    ]
+  },
+  "pairs": [
+    {
+      "before": {
+        "frame": 2964,
+        "game_time": 98.79990577697754,
+        "sequence": 120,
+        "epoch": 552,
+        "active": 0,
+        "error": null,
+        "stopped": false
+      },
+      "sample": {
+        "session": "23701d07-5612-4816-8a87-f6c64969bc0d:3602604:32573:137662963672640:137662949960352:137662832760240",
+        "frame": 2964,
+        "game_time": 98.79990577697754,
+        "damage_basis": "client character counters; includes overkill; excludes healing",
+        "state": 3,
+        "speed": 1,
+        "rows": [
+          {
+            "id": "char_502_nblade",
+            "name": "夜刀",
+            "damage": 11565.0,
+            "physical": 11565.0,
+            "arts": 0.0,
+            "true": 0.0,
+            "elemental": 0.0,
+            "healing": 0.0,
+            "raw_output": -11565.0
+          },
+          {
+            "id": "char_147_shining",
+            "name": "闪灵",
+            "damage": 0.0,
+            "physical": 0.0,
+            "arts": 0.0,
+            "true": 0.0,
+            "elemental": 0.0,
+            "healing": 11710.5009765625,
+            "raw_output": 0.0
+          },
+          {
+            "id": "char_017_huang",
+            "name": "煌",
+            "damage": 28985.8828125,
+            "physical": 28985.8828125,
+            "arts": 0.0,
+            "true": 0.0,
+            "elemental": 0.0,
+            "healing": 0.0,
+            "raw_output": -28985.8828125
+          }
+        ],
+        "global_total": 35736.4375,
+        "sum_damage": 40550.8828125,
+        "read_ms": 7.75,
+        "observed_at": 1794088693.0751352,
+        "captured_monotonic": 68294.718,
+        "guard": {
+          "attempts": 1,
+          "start": 2964,
+          "end": 2964,
+          "complete": true
+        }
+      },
+      "roster": {
+        "frame": 2964,
+        "entries": [
+          {
+            "cid": "char_502_nblade",
+            "unique_id": 2147483650,
+            "is_token": false,
+            "is_predefined": false,
+            "host_key": null,
+            "host_uid": null,
+            "player_side": 0
+          },
+          {
+            "cid": "char_147_shining",
+            "unique_id": 2147483741,
+            "is_token": false,
+            "is_predefined": false,
+            "host_key": null,
+            "host_uid": null,
+            "player_side": 0
+          },
+          {
+            "cid": "char_017_huang",
+            "unique_id": 2147483784,
+            "is_token": false,
+            "is_predefined": false,
+            "host_key": null,
+            "host_uid": null,
+            "player_side": 0
+          }
+        ],
+        "present_unique_ids": [
+          2147483741,
+          2147483784
+        ],
+        "present_known": true
+      },
+      "after": {
+        "frame": 2964,
+        "game_time": 98.79990577697754,
+        "sequence": 120,
+        "epoch": 552,
+        "active": 0,
+        "error": null,
+        "stopped": false
+      }
+    },
+    {
+      "sample": {
+        "session": "23701d07-5612-4816-8a87-f6c64969bc0d:3602604:32573:137662963672640:137662949960352:137662832760240",
+        "frame": 2964,
+        "game_time": 98.79990577697754,
+        "damage_basis": "client character counters; includes overkill; excludes healing",
+        "state": 3,
+        "speed": 1,
+        "rows": [
+          {
+            "id": "char_502_nblade",
+            "name": "夜刀",
+            "damage": 11565.0,
+            "physical": 11565.0,
+            "arts": 0.0,
+            "true": 0.0,
+            "elemental": 0.0,
+            "healing": 0.0,
+            "raw_output": -11565.0
+          },
+          {
+            "id": "char_147_shining",
+            "name": "闪灵",
+            "damage": 0.0,
+            "physical": 0.0,
+            "arts": 0.0,
+            "true": 0.0,
+            "elemental": 0.0,
+            "healing": 11710.5009765625,
+            "raw_output": 0.0
+          },
+          {
+            "id": "char_017_huang",
+            "name": "煌",
+            "damage": 31899.103515625,
+            "physical": 31899.103515625,
+            "arts": 0.0,
+            "true": 0.0,
+            "elemental": 0.0,
+            "healing": 0.0,
+            "raw_output": -31899.103515625
+          }
+        ],
+        "global_total": 37898.6953125,
+        "sum_damage": 43464.103515625,
+        "read_ms": 91.99,
+        "observed_at": 1794088693.2799437,
+        "captured_monotonic": 68294.843,
+        "guard": {
+          "attempts": 1,
+          "start": 2964,
+          "end": 2964,
+          "complete": true
+        }
+      },
+      "roster": {
+        "frame": 2964,
+        "entries": [
+          {
+            "cid": "char_502_nblade",
+            "unique_id": 2147483650,
+            "is_token": false,
+            "is_predefined": false,
+            "host_key": null,
+            "host_uid": null,
+            "player_side": 0
+          },
+          {
+            "cid": "char_147_shining",
+            "unique_id": 2147483741,
+            "is_token": false,
+            "is_predefined": false,
+            "host_key": null,
+            "host_uid": null,
+            "player_side": 0
+          },
+          {
+            "cid": "char_017_huang",
+            "unique_id": 2147483784,
+            "is_token": false,
+            "is_predefined": false,
+            "host_key": null,
+            "host_uid": null,
+            "player_side": 0
+          }
+        ],
+        "present_unique_ids": [
+          2147483741,
+          2147483784
+        ],
+        "present_known": true
+      }
+    }
+  ]
+}
