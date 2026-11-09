@@ -300,6 +300,25 @@ def test_presence_is_reported_per_owner_and_retired_rows_keep_totals():
     assert result['present_known'] is True
 
 
+def test_detached_summon_output_does_not_mark_its_departed_host_present():
+    from panel_model import Category, PanelConfig, render_panel, rows_from_statistics
+    token = entry('token_heal', 3, token=True, host_key='char_a', host_uid=1)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a'), row('token_heal', healing=250)], 0, 1),
+             roster([CHAR_A, token], present=(1, 3), frame=1))
+    assert a.result()['rows']['char_a']['present'] is True
+    a.update(sample([row('char_a'), row('token_heal', healing=375)], 1, 2),
+             roster([CHAR_A, token], present=(3,), frame=2))
+    result = a.result()
+    owner = result['rows']['char_a']
+    assert owner['healing'] == 375
+    assert set(owner['sources']) == {'char_a', 'token_heal'}
+    assert owner['present'] is False
+    panel = render_panel(PanelConfig(category=Category.HEALING), rows_from_statistics(result))
+    assert panel.entries[0].value == 375
+    assert panel.entries[0].portrait_muted
+
+
 def test_unknown_presence_ids_are_reported():
     r = roster([CHAR_A], present=(1, 777))
     a = BattleStatisticsAdapter()

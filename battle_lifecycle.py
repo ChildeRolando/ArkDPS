@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import deque
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 import uuid
 
@@ -488,12 +488,24 @@ class BattleRuntime:
         self.record(observation)
         self.sessions.consume(observation)
 
-    def poll(self, collector, observer=None):
+    def poll(self, collector, observer=None, *, prepare_observer=None):
+        """Prepare event recovery only after the feed confirms a new battle."""
         from collector import SampleUnavailable, BattleChanged, ProcessChanged
         from roster import RosterUnavailable
         from tools.stage_global_state.memory import ReadFailure
         try:
             observation = self.feed.acquire(collector, observer)
+            if (prepare_observer is not None and observation.kind == 'sample'
+                    and observation.generation != self.sessions.generation):
+                retry, observer = prepare_observer(observation)
+                if retry:
+                    # Preserve the confirmed native snapshot and archive the
+                    # old battle before a new observer barrier can be busy.
+                    # Its event coverage starts only at the fresh paired mark.
+                    native = dict(observation.sample,
+                                  event_capability=deepcopy(collector.event_capability))
+                    self._consume(replace(observation, sample=native, events=None))
+                    observation = self.feed.acquire(collector, observer)
             self._consume(observation)
         except CaptureRetry:
             raise

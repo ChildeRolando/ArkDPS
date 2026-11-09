@@ -168,6 +168,15 @@ lib.AsstStart(handle)
 lib.AsstStop(handle); lib.AsstDestroy(handle)
 ```
 
+Multica 在 Windows 非提权沙箱内执行 MAA 时，连接前开启 MaaCore 的 ADB Lite。默认后端通过命名管道读取 ADB 子进程输出。ARK-13 的对照复现中，管道读端创建成功，写端在 `CreateFileW` 返回 `ERROR_ACCESS_DENIED (5)`。ADB Lite 通过已运行的 ADB server 执行支持的命令，可以保留沙箱限制和原有 MuMu 实例。
+
+```python
+if not asst.set_instance_option(InstanceOptionType.adblite_enabled, '1'):
+    raise RuntimeError('MaaCore refused ADB Lite')
+```
+
+先用 `python acceptance/maa_preflight.py <MAA目录> <MuMu的adb.exe> <设备序列号> <新产物目录>` 做连接预检。目录中保留连接回调、MaaCore 日志和 `result.json`。脚本不提交游戏作业。只有排查旧后端时才加 `--native-adb`。ADB Lite 与 Frida 端点分别验证，部分 ADB 命令可能仍会退回旧后端，须以实际作业回调和采集日志确认结果。
+
 已实际踩过的坑：
 
 - `AsstLoadResource` 要传包含 `resource` 的根目录，不是 `resource` 自身。

@@ -29,6 +29,38 @@ def advance(session, collector, *, terminal=False):
     session.observer.events = [event(1)]
 
 
+@pytest.mark.parametrize('before_baseline', [True, False])
+@pytest.mark.parametrize('probe_error', [
+    'Error: unverified shield', 'Error: missing source identity',
+    'Error: shield absorption mismatch',
+])
+def test_unverified_shield_is_unknown_or_incomplete_instead_of_reliable_zero(before_baseline, probe_error):
+    from panel_model import Category, PanelConfig, render_panel, rows_from_statistics
+    session, collector, _, _ = connected()
+    try:
+        if not before_baseline:
+            baseline = session.read()
+            assert baseline['statistics']['rows']['char_a']['shield_absorbed'] == 0
+            assert baseline['statistics']['rows']['char_a']['event_coverage_complete']
+        # The probe reports this fatal mark for an unverified owned shield.
+        session.observer.error = probe_error
+        collector.frame, collector.game_time, collector.damage = 2, 1, 135
+        sample = session.read()
+        row = sample['statistics']['rows']['char_a']
+        assert not row['event_coverage_complete']
+        assert row['shield_absorbed'] == (None if before_baseline else 0)
+        assert sample['event_status'] in ('failed', 'gap')
+        view = render_panel(PanelConfig(category=Category.SHIELD),
+                            rows_from_statistics(sample['statistics']))
+        assert not view.share_known and not view.entries
+        collector.frame, collector.game_time, collector.damage = 3, 2, 145
+        current = session.read()['statistics']['rows']['char_a']
+        assert current['damage'] == 145
+        assert not current['event_coverage_complete']
+    finally:
+        session.close()
+
+
 def test_product_snapshot_events_final_revision_and_archive_have_one_id():
     session, collector, calls, records = connected()
     try:

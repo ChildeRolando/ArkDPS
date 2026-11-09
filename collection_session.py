@@ -28,6 +28,7 @@ class CollectionSession:
         self.history = history
         self.history_error = None
         self._pending_history = None
+        self._observer_generation = None
 
     def enable_lifecycle(self, runtime=None):
         """Use ordered battle generations in the GUI and capture entry points."""
@@ -44,29 +45,55 @@ class CollectionSession:
                                  'pid': self.collector.core.mc.pid,
                                  'process_instance': getattr(self.collector.core.mc, 'process_instance', None)})
         if self.frida_remote:
-            self.event_status = 'attaching'
-            try:
-                if self.observer_factory is None:
-                    from event_observer import FridaEventObserver
-                    self.observer_factory = FridaEventObserver
-                self.observer = self.observer_factory(self.collector, self.frida_remote)
-                self.observer.start()
-                self.event_status = 'ready'
-                self.audit('observer_ready', {'remote': self.frida_remote})
-            except Exception as exc:
-                self.event_status, self.event_error = 'failed', str(exc)
-                self.audit('observer_error', {'reason': str(exc)})
-                if self.observer is not None:
-                    try:
-                        self.observer.stop()
-                    except Exception as cleanup:
-                        self.audit('observer_cleanup_error', {'reason': str(cleanup)})
-                self.observer = None
+            self._attach_observer()
         self.capture = LiveEventCapture(self.collector, self.observer, audit=self.audit)
         if self.runtime is not None:
             self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
             self.collector.locate_lifecycle()
             self.audit('lifecycle_header', {'feed': self.runtime.feed.id})
+
+    def _attach_observer(self):
+        self.event_status, self.event_error = 'attaching', None
+        try:
+            if self.observer_factory is None:
+                from event_observer import FridaEventObserver
+                self.observer_factory = FridaEventObserver
+            self.observer = self.observer_factory(self.collector, self.frida_remote)
+            self.observer.start()
+            self.event_status = 'ready'
+            self.audit('observer_ready', {'remote': self.frida_remote})
+        except Exception as exc:
+            self.event_status, self.event_error = 'failed', str(exc)
+            self.audit('observer_error', {'reason': str(exc)})
+            if self.observer is not None:
+                try:
+                    self.observer.stop()
+                except Exception as cleanup:
+                    self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+            self.observer = None
+
+    def _prepare_battle_observer(self, observation):
+        generation = observation.generation
+        previous, self._observer_generation = self._observer_generation, generation
+        error = (observation.events or {}).get('error')
+        if (previous is None or previous == generation or not self.frida_remote or
+                (self.event_status not in ('failed', 'gap') and not error)):
+            return False, self.observer
+        # The feed has confirmed a different battle. A failed attempt belongs
+        # to this generation even when its first event barrier needs a retry.
+        old_status, old_error = self.event_status, error or self.event_error
+        if self.observer is not None:
+            try:
+                self.observer.stop()
+            except Exception as cleanup:
+                self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+            self.observer = None
+        self._attach_observer()
+        self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
+        self.audit('observer_retry', dict(generation=generation, previous_status=old_status,
+                                         previous_error=old_error, event_status=self.event_status,
+                                         event_error=self.event_error))
+        return True, self.observer
 
     def locate(self, *, force=False, wait_seconds=0, cancelled=None):
         if self.runtime is not None:
@@ -130,7 +157,8 @@ class CollectionSession:
         from snapshot_adapter import FrameMismatch
         from roster import RosterUnavailable
         try:
-            observation = self.runtime.poll(self.collector, self.observer)
+            observation = self.runtime.poll(self.collector, self.observer,
+                                           prepare_observer=self._prepare_battle_observer)
         except (CaptureRetry, FrameMismatch, RosterUnavailable, SampleUnavailable) as exc:
             if isinstance(exc, BattleChanged):
                 raise
