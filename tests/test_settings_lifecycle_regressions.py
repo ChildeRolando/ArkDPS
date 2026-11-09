@@ -14,7 +14,7 @@ from tray import TrayIcon
 
 
 def test_production_gui_rejects_failed_dpi_before_any_tk(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, 'argv', ['app.py'])
+    monkeypatch.setattr(sys, 'argv', ['app.py', '--legacy-tk'])
     monkeypatch.setattr(app_module, 'ROOT', tmp_path)
     monkeypatch.setattr(app_module, 'enable_dpi_awareness', lambda: False)
     monkeypatch.setattr(app_module.tk, 'Tk', lambda: pytest.fail('Tk created without DPI awareness'))

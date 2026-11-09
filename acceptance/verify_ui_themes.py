@@ -56,7 +56,8 @@ def finish(root, app):
 
 def run(output, restore):
     output.mkdir(parents=True, exist_ok=True)
-    enable_dpi_awareness()
+    if not enable_dpi_awareness():
+        raise RuntimeError('DPI awareness 初始化失败；未创建验收窗口')
     pointer = wintypes.POINT()
     user = ctypes.WinDLL('user32', use_last_error=True)
     restore_pointer = user.GetCursorPos(ctypes.byref(pointer))

@@ -818,7 +818,16 @@ def main():
     parser.add_argument('--require-progress',action='store_true')
     parser.add_argument('--require-events',action='store_true',
                         help='fail acceptance capture if event coverage is unavailable')
+    parser.add_argument('--legacy-tk', action='store_true',
+                        help='explicit legacy test/diagnostic UI; the product default is WPF')
     args=parser.parse_args()
+    if not args.capture_seconds and not args.legacy_tk:
+        if args.require_events and args.frida_remote == '':
+            parser.error('--require-events cannot be combined with --no-events')
+        if args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0:
+            parser.error('capture/wait durations must be nonnegative and baseline timeout positive')
+        from desktop_launcher import launch
+        return launch(args)
     # Headless capture must not migrate/quarantine GUI-only layout files or
     # consume diagnostics that can only be displayed by the next GUI launch.
     layout_store = loaded_layout = None
@@ -877,4 +886,4 @@ def main():
 
 
 if __name__=='__main__':
-    main()
+    raise SystemExit(main())

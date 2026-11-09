@@ -1,6 +1,8 @@
 # GUI/HUD 共用面板模型与排序口径
 
-实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI、`hud.py` 的 HUD 和 `gui_history.py` 的历史窗口使用该模型，共享同一口径。
+当前 WPF 展示通过 `desktop_bridge.py` 只读消费 `panel_model.py`，C# 不重算排行/柱长/占比；运行与验收见 [桌面运行时](desktop-runtime.md)。以下 Tk 文件和 ARK-9/10/12 章节保留原实现/验收背景，除共享统计规则外，不代表 WPF 的实机验收已完成。
+
+共享模型实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI、`hud.py` 的 HUD 和 `gui_history.py` 的历史窗口使用该模型，共享同一口径。
 
 ## 配置与运行状态分离
 

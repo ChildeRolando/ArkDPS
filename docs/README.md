@@ -24,6 +24,8 @@
 
 ## 实现契约
 
+- [WPF 桌面运行时与同包分发](desktop-runtime.md) — C#/Python 所有权、唯一 stdio v1 协议、运行时与可选依赖打包、离线验收边界。
+
 - [连接配置与 MuMu 自动检测](connection.md) — 连接目标、版本门禁和诊断。
 - [统计核心输入契约](statistics-core.md) — 离线统计核心的输入与口径。
 - [累计、生命周期与本地战绩](snapshot-adapter.md#本地战绩ark-8) — 冻结交接、版本化 BattleRecord、最近 100 局读取及故障诊断。
@@ -31,6 +33,7 @@
 - [GUI/HUD 共用面板模型](panel-model.md) — 面板配置、排序、柱长与占比口径。
 - [设置、托盘与窗口配置恢复](settings-and-layout.md) — 布局版本与迁移、可达位置、托盘生命周期、事件观测开关与退出清理。
 - [ADR 0001：总伤害包含过量部分](adr/0001-damage-totals-include-overkill.md)
+- [ADR 0003：WPF 展示与 Python 子进程](adr/0003-wpf-python-worker.md)
 - [ADR 0002：接敌伤害与治疗使用独立活跃区间](adr/0002-separate-engagement-windows.md)
 
 ## 维护约定
