@@ -5,6 +5,8 @@ import sys
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from ui_theme import refresh_surfaces
+
 from gui_panel import StatisticPanel, BG, SECONDARY
 
 
@@ -64,7 +66,7 @@ class HudWindow:
         header = ttk.Frame(self.window, padding=(8, 4))
         header.grid(row=0, column=0, sticky='ew')
         header.columnconfigure(0, weight=1)
-        self.handle = ttk.Label(header, text='HUD · 拖动此处移动', foreground=SECONDARY)
+        self.handle = ttk.Label(header, text='HUD · 拖动此处移动', style='Secondary.TLabel')
         self.handle.grid(row=0, column=0, sticky='ew')
         ttk.Button(header, text='GUI', command=app.show_gui).grid(row=0, column=1, padx=4)
         ttk.Button(header, text='关闭', command=self.close).grid(row=0, column=2)
@@ -78,7 +80,7 @@ class HudWindow:
         footer.grid(row=2, column=0, sticky='ew')
         footer.columnconfigure(0, weight=1)
         self.status = tk.StringVar(value='等待可靠战斗数据')
-        self.status_label = ttk.Label(footer, textvariable=self.status, foreground=SECONDARY)
+        self.status_label = ttk.Label(footer, textvariable=self.status, style='Secondary.TLabel')
         self.status_label.grid(row=0, column=0, sticky='ew')
         grip = ttk.Sizegrip(footer)
         grip.grid(row=0, column=1, sticky='se')
@@ -89,6 +91,7 @@ class HudWindow:
         self.window.deiconify()
         self.window.update_idletasks()
         self.install_controls()
+        refresh_surfaces(self.window)
         self.ready = True
         if placement and placement.locked:
             try:
@@ -103,7 +106,7 @@ class HudWindow:
                         command=self.toggle_lock).pack(anchor='w')
         row = ttk.Frame(host)
         row.pack(fill='x', pady=(4, 0))
-        ttk.Label(row, text='HUD 透明度', foreground=SECONDARY).pack(side='left')
+        ttk.Label(row, text='HUD 透明度', style='Secondary.TLabel').pack(side='left')
         current = round(float(self.window.attributes('-alpha')) * 100)
         self.opacity = tk.DoubleVar(value=current)
         ttk.Scale(row, from_=70, to=100, variable=self.opacity,

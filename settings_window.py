@@ -16,6 +16,8 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+from ui_theme import refresh_surfaces
+
 from connection import ConnectionConfig, detect_instances
 from gui_panel import BG, SECONDARY
 
@@ -114,7 +116,7 @@ class SettingsWindow(tk.Toplevel):
         self.address = tk.StringVar(value=config.serial or '')
         self.address_entry = ttk.Entry(connection, textvariable=self.address)
         self.address_entry.grid(row=2, column=1, sticky='ew', padx=8, pady=(6, 0))
-        self.address_hint = ttk.Label(connection, text='', foreground=SECONDARY)
+        self.address_hint = ttk.Label(connection, text='', style='Secondary.TLabel')
         self.address_hint.grid(row=3, column=1, sticky='w', padx=8, pady=(2, 0))
         detect_row = ttk.Frame(connection)
         detect_row.grid(row=4, column=0, columnspan=3, sticky='ew', pady=(8, 0))
@@ -125,14 +127,14 @@ class SettingsWindow(tk.Toplevel):
             if config != app.connection_config else
             '可留空 ADB 路径，按已安装位置与环境变量查找。'))
         ttk.Label(detect_row, textvariable=self.detection_note,
-                  foreground=SECONDARY).pack(side='left', padx=8)
+                  style='Secondary.TLabel').pack(side='left', padx=8)
         self.listing = tk.Listbox(connection, height=4, activestyle='none',
                                   bg='#26343d', fg='#edf2f4', selectbackground='#305569',
                                   highlightthickness=0, exportselection=False)
         self.listing.grid(row=5, column=0, columnspan=3, sticky='ew', pady=(8, 0))
         self.listing.bind('<<ListboxSelect>>', self.select_instance)
         self.connection_status = tk.StringVar(value='')
-        ttk.Label(connection, textvariable=self.connection_status, foreground=SECONDARY,
+        ttk.Label(connection, textvariable=self.connection_status, style='Secondary.TLabel',
                   wraplength=640).grid(row=6, column=0, columnspan=3, sticky='ew',
                                        pady=(6, 0))
 
@@ -152,13 +154,13 @@ class SettingsWindow(tk.Toplevel):
             row=1, column=0, sticky='w', pady=(8, 4))
         self.override_note = tk.StringVar(value='')
         ttk.Label(events, textvariable=self.override_note, wraplength=650,
-                  foreground='#f1bc82').grid(row=2, column=0, sticky='ew')
+                  style='Warning.TLabel').grid(row=2, column=0, sticky='ew')
         self.event_state_label = tk.StringVar(value='')
         ttk.Label(events, textvariable=self.event_state_label, wraplength=650,
-                  foreground=SECONDARY).grid(row=3, column=0, sticky='ew')
+                  style='Secondary.TLabel').grid(row=3, column=0, sticky='ew')
         self.error_state = tk.StringVar(value='')
         ttk.Label(events, textvariable=self.error_state, wraplength=650,
-                  foreground='#f1bc82').grid(row=4, column=0, sticky='ew', pady=(6, 0))
+                  style='Warning.TLabel').grid(row=4, column=0, sticky='ew', pady=(6, 0))
 
         actions = ttk.Frame(body)
         actions.grid(row=4, column=0, sticky='ew', pady=(14, 0))
@@ -169,6 +171,7 @@ class SettingsWindow(tk.Toplevel):
         self.refresh_status()
         self._status_after = self.after(500, self._poll_status)
         self._poll_after = self.after(100, self._poll_detection)
+        refresh_surfaces(self)
         self.lift()
 
     # -- state -------------------------------------------------------------

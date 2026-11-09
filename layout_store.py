@@ -2,8 +2,9 @@
 
 Version 1 is the detached :class:`panel_model.PanelCollection` document written
 by earlier builds (panels only). Version 2 adds GUI window geometry, one
-placement per HUD and the event-observation preference. A version 1 document is
-migrated in memory and rewritten as version 2 on the next save.
+placement per HUD and the event-observation preference. Version 3 adds the
+application theme. Older documents migrate in memory and write version 3 on
+the next save.
 
 A damaged or future-version file is never overwritten silently: it is moved to
 ``layout.json.corrupt-<timestamp>`` and the caller receives a warning plus the
@@ -27,7 +28,7 @@ from typing import Iterable, Sequence
 from panel_model import PanelConfig
 
 ROOT = Path(__file__).resolve().parent
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 DEFAULT_GUI = (960, 700)
 DEFAULT_GUI_MINIMUM = (440, 500)
 DEFAULT_HUD_MINIMUM = (350, 230)
@@ -117,8 +118,11 @@ class Layout:
     huds: tuple[HudPlacement, ...] = ()
     gui: GuiGeometry | None = None
     event_observation: bool = True
+    theme: str = 'lone-trail'
 
     def __post_init__(self):
+        if self.theme not in ('lone-trail', 'original'):
+            raise ValueError('未知皮肤')
         if not self.panels:
             raise ValueError('至少需要一个面板')
         ids = [panel.panel_id for panel in self.panels]
@@ -129,7 +133,7 @@ class Layout:
             raise ValueError('同一面板只能有一个 HUD')
 
     def to_dict(self) -> dict:
-        return {'version': LAYOUT_VERSION,
+        return {'version': LAYOUT_VERSION, 'theme': self.theme,
                 'event_observation': bool(self.event_observation),
                 'gui': self.gui.to_dict() if self.gui else None,
                 'panels': [panel.to_dict() for panel in self.panels],
@@ -219,8 +223,10 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
             raise ValueError('布局文件没有可用面板')
         warnings.append('已从旧版（仅面板）布局迁移')
         return Layout(panels=panels), warnings, migrated_from
-    if version != LAYOUT_VERSION:
+    if version not in (2, LAYOUT_VERSION):
         raise ValueError(f'不支持的布局版本 {version}（当前 {LAYOUT_VERSION}）')
+    if version == 2:
+        migrated_from = 2
     panels = _parse_panels(raw.get('panels'), warnings)
     if not panels:
         raise ValueError('布局文件没有可用面板')
@@ -235,8 +241,12 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
         except ValueError as exc:
             warnings.append(f'GUI 窗口几何无效，已使用默认位置：{exc}')
     huds = _parse_huds(raw.get('huds'), panels, warnings)
+    theme = raw.get('theme', 'lone-trail')
+    if theme not in ('lone-trail', 'original'):
+        warnings.append('皮肤设置无效，已使用孤星')
+        theme = 'lone-trail'
     return Layout(panels=panels, huds=huds, gui=gui,
-                  event_observation=event), warnings, migrated_from
+                  event_observation=event, theme=theme), warnings, migrated_from
 
 
 class LayoutStore:

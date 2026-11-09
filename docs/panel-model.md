@@ -91,7 +91,7 @@ GUI 测试要求可创建 Tk 窗口。截图脚本另外需要 Pillow，仅用�
 “历史与分享”打开独立非模态 `HistoryWindow`；无需连接游戏即可读取 `BattleHistory.list_recent()`。
 列表显示最近 100 局的关卡、演习/正式/未知、胜负/退出/未知、最后可靠游戏时刻和观察日期；
 观察日期缺失时明确使用记录日期，不推断真实开局时间。刷新只更新列表，保留当前所选副本，
-包括已经被保留数淘汰的所选局。损坏与不支持版本的读取诊断可见，健康记录继续可读。
+包括已经被保留数淘汰或被搜索/结果/模式筛选隐藏的所选局。搜索索引每次刷新构建，不在每次键入时反复复制完整战绩。损坏与不支持版本的读取诊断可见，健康记录继续可读。
 
 历史面板持有独立 `PanelConfig`，只读消费 `BattleRecord.statistics`，不修改 App 的
 `last`、`current_battle`、实时源面板或采集生命周期，不把历史结果送入 HUD 回调。
@@ -181,3 +181,9 @@ python acceptance/verify_hud.py --hit-test-only --output runtime/hud-validation-
 可读性、置顶、拖动、锁定穿透及 GUI 恢复；不能用部分回执替代这份证据。
 ARK-10 交付评审时，宿主会话已补齐同候选默认原生点击 `PASS` 回执（路由 HUD → 下层窗口 → HUD）
 与 30.7 秒单屏录像；录像捕获工具和来源未登记，不外推到其他直播捕获模式。
+
+## 全局皮肤与原生交互（ARK-19）
+
+`ui_theme.py` 只拥有展示；`panel_model.py`、BattleRecord、统计与采集链路未改动。速率切换不改变排行/贡献条/占比分母；主题切换不重新调用排序、不清除 pin/hover、不重建 canvas 行或 native HUD。主题选择在现有布局中持久化，契约见[设置与布局](settings-and-layout.md)。
+
+`tests/test_ui_theme.py` 检查双主题状态区别、布局迁移、主题切换前后对象/值/行身份及 HUD 几何锁定不变、筛选/换局历史隔离、冻结 PNG 主题和文字对比度。`acceptance/verify_ui_themes.py` 以明确标注的合成数据驱动真实 Windows 窗口，保存双皮肤主窗/HUD/历史/设置/完整 PNG；Win32 SendInput 验证解锁 → 锁定 → 解锁时点击落到 HUD → 私有测试下层窗口 → HUD。托盘原生回调恢复后可从源面板解锁，独立进程检查主题及锁定 HUD 恢复。**这些不是实际游戏收到点击的证据，也不等于物理托盘图标双击验收。**

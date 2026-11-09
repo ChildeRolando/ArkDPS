@@ -54,7 +54,7 @@ def test_version_one_panel_collection_is_migrated(tmp_path):
     assert result.layout.huds == () and result.layout.gui is None
     assert result.layout.event_observation is True
     store.save(result.layout)
-    assert json.loads(path.read_text(encoding='utf-8'))['version'] == 2
+    assert json.loads(path.read_text(encoding='utf-8'))['version'] == ls.LAYOUT_VERSION
 
 
 def test_bare_panel_document_without_version_is_accepted_as_legacy(tmp_path):
