@@ -124,3 +124,13 @@ def test_frozen_module_relative_resources_are_mirrored(monkeypatch):
     assert (ROOT / paths[1], 'tools/enemy_health') in resources
     assert (ROOT / paths[2], 'game_data') in resources
     assert (ROOT / paths[3], 'tools/enemy_health') not in resources
+
+
+def test_builder_rejects_unpinned_toolchain(monkeypatch):
+    expected = dict(line.split('==') for line in (ROOT / 'requirements-windows.txt').read_text().splitlines()
+                    if line and not line.startswith('#'))
+    monkeypatch.setattr(builder.importlib.metadata, 'version', expected.__getitem__)
+    assert builder.toolchain_versions() == expected
+    monkeypatch.setattr(builder.importlib.metadata, 'version', lambda _: 'wrong')
+    with pytest.raises(RuntimeError, match='toolchain mismatch'):
+        builder.toolchain_versions()

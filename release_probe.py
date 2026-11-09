@@ -63,6 +63,8 @@ class LiveProbe:
         self.app, self.output = app, output.resolve()
         self.output.mkdir(parents=True, exist_ok=False)
         self.points, self.resources, self.errors = [], [], []
+        self.initial_layout = app.loaded.layout.to_dict()
+        self.initial_history_ids = [record.battle_id for record in app.history.list_recent().records]
         self.started = time.monotonic()
         if getattr(sys, 'frozen', False):
             self.head = load_manifest(ROOT, verify=True)['head']
@@ -123,6 +125,7 @@ class LiveProbe:
             elapsed_seconds=elapsed, published_samples=len(self.points), groups=groups,
             cpu_percent_one_core=cpu_percent, resources=self.resources, errors=self.errors,
             points=self.points, shutdown=self.app.shutdown_report,
+            layout_loaded=self.initial_layout, history_loaded=self.initial_history_ids,
             connection=self.app.connection_diagnostic, event_status=self.app.event_status,
             event_error=self.app.event_error,
             status='RECORDED' if groups and not self.errors and

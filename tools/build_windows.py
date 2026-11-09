@@ -30,6 +30,19 @@ def candidate_head(expected=None):
     return head
 
 
+def toolchain_versions():
+    packages = {}
+    for line in (ROOT / 'requirements-windows.txt').read_text(encoding='utf-8').splitlines():
+        if not line.strip() or line.startswith('#'):
+            continue
+        name, expected = line.split('==')
+        actual = importlib.metadata.version(name)
+        if actual != expected:
+            raise RuntimeError(f'toolchain mismatch: {name} requires {expected}, got {actual}')
+        packages[name] = actual
+    return packages
+
+
 def tracked_data():
     """Explicit tracked resources only: never captures, settings, caches or secrets."""
     paths = git('ls-files', 'vendor', 'assets', 'docs').splitlines()
@@ -79,7 +92,8 @@ def build(output, expected=None):
         raise RuntimeError('the candidate toolchain requires CPython 3.10.10')
     head = candidate_head(expected)
     config = json.loads((ROOT / 'release.json').read_text(encoding='utf-8'))
-    if importlib.metadata.version('frida') != config['frida_version']:
+    packages = toolchain_versions()
+    if packages['frida'] != config['frida_version']:
         raise RuntimeError('event client version does not match release.json')
     # A new directory is a guard against publishing stale PyInstaller output.
     output = output.resolve()
@@ -103,8 +117,7 @@ def build(output, expected=None):
         subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
     folder = output / 'dist/ArkDPS'
     copy_runtime_licenses(folder / 'licenses')
-    packages = {name: importlib.metadata.version(name) for name in
-                ('pyinstaller', 'pyinstaller-hooks-contrib', 'frida', 'typing_extensions')}
+    candidate_head(head)  # Reject changes made while PyInstaller was running.
     manifest = dict(schema_version=1, head=head, release=config,
                     python=platform.python_version(), build_platform=platform.platform(),
                     packages=packages, files=inventory(folder))
