@@ -171,3 +171,93 @@ def test_ci_desktop_preparation_requires_verified_resolution(monkeypatch):
     monkeypatch.setattr(display, 'ChangeDisplaySettingsW', lambda *args: -2)
     with pytest.raises(OSError, match='CI display change failed'):
         module.prepare(display)
+
+
+@pytest.mark.parametrize('expected', [None, HEAD])
+@pytest.mark.parametrize('dirty', [' M app.py\n', '?? local_probe.py\n'])
+def test_source_live_probe_rejects_dirty_candidate_before_measurement(
+        tmp_path, monkeypatch, expected, dirty):
+    import collector
+    import release_probe
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(collector, 'ROOT', tmp_path)
+    monkeypatch.setattr(release_probe.sys, 'frozen', False, raising=False)
+    commands = []
+    def git(command, **kwargs):
+        commands.append(command)
+        assert kwargs['cwd'] == tmp_path
+        return HEAD if command[1] == 'rev-parse' else dirty
+    monkeypatch.setattr(release_probe.subprocess, 'check_output', git)
+    monkeypatch.setattr(release_probe.LiveProbe, 'sample_resources', lambda self: None)
+    app = Mock()
+    app.history.list_recent.return_value.records = []
+    app.panels = [object()]
+    output = tmp_path / 'measurement'
+    with pytest.raises(RuntimeError, match='uncommitted changes'):
+        release_probe.LiveProbe(app, output, 1, 1, expected)
+    assert commands[-1] == ['git', 'status', '--porcelain', '--untracked-files=normal']
+    assert not output.exists()
+    app.create_hud.assert_not_called()
+    app.root.after.assert_not_called()
+
+
+def test_source_live_probe_clean_candidate_still_measures(tmp_path, monkeypatch):
+    import collector
+    import release_probe
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(collector, 'ROOT', tmp_path)
+    monkeypatch.setattr(release_probe.sys, 'frozen', False, raising=False)
+    monkeypatch.setattr(release_probe.subprocess, 'check_output',
+                        lambda command, **kwargs: HEAD if command[1] == 'rev-parse' else '')
+    monkeypatch.setattr(release_probe.LiveProbe, 'sample_resources', lambda self: None)
+    app = Mock()
+    app.history.list_recent.return_value.records = []
+    app.panels = [object()]
+    probe = release_probe.LiveProbe(app, tmp_path / 'measurement', 1, 1, HEAD)
+    assert probe.head == HEAD and probe.output.is_dir()
+    app.create_hud.assert_called_once_with(app.panels[0])
+    app.root.after.assert_called_once_with(1000, app.quit)
+
+
+@pytest.mark.parametrize('expected', [None, HEAD])
+@pytest.mark.parametrize('damage', ['modified', 'missing'])
+def test_frozen_capture_rejects_damaged_bundle_before_evidence_or_connect(
+        tmp_path, monkeypatch, expected, damage):
+    stub_git_and_clock(monkeypatch)
+    monkeypatch.setattr(capture_cli.sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(capture_cli, '__file__', str(tmp_path / 'capture_cli.py'))
+    manifest(tmp_path)
+    if damage == 'modified':
+        (tmp_path / 'resource.txt').write_text('modified')
+    else:
+        (tmp_path / 'resource.txt').unlink()
+    def no_git(*args, **kwargs):
+        raise AssertionError('portable artifact must not require Git')
+    monkeypatch.setattr(capture_cli.subprocess, 'check_output', no_git)
+    args = options(tmp_path)
+    args.expect_head = expected
+    before = len(Session.instances)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        capture_cli.run_capture(args, session_factory=Session)
+    assert len(Session.instances) == before
+    assert not args.output_dir.exists()
+
+
+@pytest.mark.parametrize('seconds', ['nan', 'inf', '-inf', '0', '-1'])
+def test_gui_acceptance_rejects_nonfinite_or_nonpositive_duration_before_startup(
+        tmp_path, monkeypatch, seconds, capsys):
+    import app
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(app.sys, 'argv', ['app.py', '--acceptance-output', str(tmp_path / 'out'),
+                                        '--acceptance-seconds=' + seconds])
+    layout = Mock(side_effect=AssertionError('must reject before layout or GUI startup'))
+    monkeypatch.setattr(app, 'LayoutStore', layout)
+    with pytest.raises(SystemExit) as exc:
+        app.main()
+    assert exc.value.code == 2
+    assert 'positive' in capsys.readouterr().err
+    layout.assert_not_called()
+    assert not (tmp_path / 'out').exists()

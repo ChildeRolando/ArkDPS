@@ -36,7 +36,7 @@ def run_capture(args, *, session_factory=CollectionSession):
     frozen = getattr(sys, 'frozen', False)
     if frozen:
         from release_identity import load_manifest
-        head = load_manifest(root)['head']
+        head = load_manifest(root, verify=True)['head']
     else:
         head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     if args.expect_head and head != args.expect_head:

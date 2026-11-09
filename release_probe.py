@@ -61,17 +61,22 @@ class LiveProbe:
         from collector import ROOT
         from release_identity import load_manifest
         self.app, self.output = app, output.resolve()
+        if getattr(sys, 'frozen', False):
+            self.head = load_manifest(ROOT, verify=True)['head']
+        else:
+            self.head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+            dirty = subprocess.check_output(
+                ['git', 'status', '--porcelain', '--untracked-files=normal'],
+                cwd=ROOT, text=True).strip()
+            if dirty:
+                raise RuntimeError('candidate worktree has uncommitted changes')
+        if expected and expected != self.head:
+            raise RuntimeError('live acceptance candidate mismatch')
         self.output.mkdir(parents=True, exist_ok=False)
         self.points, self.resources, self.errors = [], [], []
         self.initial_layout = app.loaded.layout.to_dict()
         self.initial_history_ids = [record.battle_id for record in app.history.list_recent().records]
         self.started = time.monotonic()
-        if getattr(sys, 'frozen', False):
-            self.head = load_manifest(ROOT, verify=True)['head']
-        else:
-            self.head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-        if expected and expected != self.head:
-            raise RuntimeError('live acceptance candidate mismatch')
         while len(app.panels) < panels:
             app.duplicate_panel(app.panels[0])
         while len(app.panels) > panels:

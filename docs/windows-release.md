@@ -50,7 +50,13 @@ $head = git rev-parse HEAD
 输出目录必须不存在；脏 checkout 或 HEAD 不符直接失败。不创建 commit/tag/Release，不修改现有安装。
 PyInstaller onedir 的 `--contents-directory .` 保持资源和 `runtime/` 的原布局，不能擅自改为 `_internal`。
 仅将 git 跟踪的 vendor/assets/docs 和显式的产品文档/事件探针加入数据文件，不含测试、设置、捕获或凭据。
-二进制绑定 manifest HEAD；便携命令行采集无需安装 Git。源码采集仍要求 Git，并保留 `--expect-head` 的脏树门禁。
+二进制绑定 manifest HEAD；便携命令行采集无需安装 Git，但在连接或写 READY/summary 之前必须验证
+manifest 中全部逐文件摘要；文件缺失或被替换直接失败，不能仅凭 HEAD 字段标注候选身份。
+源码采集仍要求 Git，并保留 `--expect-head` 的脏树门禁。
+源码 GUI 测量无论是否传 `--expect-head`，均须在创建测量目录、挂接采样或调整面板之前以
+`git status --porcelain --untracked-files=normal` 拒绝已修改、暂存或未跟踪的非忽略文件；
+HEAD 比较本身不能证明源码等于候选。测量期间不要修改源码或工件。
+`tests/test_windows_release.py` 固化上述身份回归条件；这些测试不是替代本候选实机证据。
 
 ## 产物自检（不等于实机验收）
 
@@ -99,6 +105,7 @@ Get-Content ./live-single/measurement.json
 汇总只使用同战局内逻辑帧和游戏时间均前进的相邻样本，暂停/菜单/跨局不算战斗；
 `RECORDED` 只表示有有效点且正常退出，不代表独立发布 PASS。`INCOMPLETE` 明确表示缺少战斗或诊断失败。
 不控制游戏速度、不制造战斗样本，时长至少覆盖每格 30 秒有效战斗；全局资源指标不假称按速度分组。
+`--acceptance-seconds` 必须为有限正数；NaN、无穷、零及负数在读取布局和创建 GUI 之前由参数解析拒绝。
 
 采样间隔必须由实际连续发布的单调时钟求差，不拿配置的 200ms 当实测；渲染延迟包含队列与 Tk 更新完成，
 不能用采集 `read_ms` 替代。记录速度的原生 `timeScale`，暂停和菜单样本不得充当 1×/2×性能样本。

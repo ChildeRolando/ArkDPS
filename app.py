@@ -1,6 +1,7 @@
 """Native multi-panel statistics GUI; one shared read-only collection session."""
 import argparse
 import json
+import math
 import queue
 import socket
 import sys
@@ -807,8 +808,9 @@ def main():
     if args.self_test is not None:
         from release_smoke import run_smoke
         raise SystemExit(run_smoke(args.self_test))
-    if args.acceptance_output and (args.capture_seconds or args.acceptance_seconds <= 0):
-        parser.error('GUI acceptance requires a positive duration and no headless capture')
+    if args.acceptance_output and (args.capture_seconds or
+            not math.isfinite(args.acceptance_seconds) or args.acceptance_seconds <= 0):
+        parser.error('GUI acceptance requires a finite positive duration and no headless capture')
     # Headless capture must not migrate/quarantine GUI-only layout files or
     # consume diagnostics that can only be displayed by the next GUI launch.
     layout_store = loaded_layout = None
