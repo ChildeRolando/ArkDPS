@@ -19,14 +19,15 @@ class CollectionSession:
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
         self.observer = None
+        self._pending_observers = []
         self.capture = None
         self.audit = audit or (lambda *_args: None)
         self.event_status = 'unavailable'
         self.event_error = None
         self.runtime = None
         self.closed = False
-        # Retain cleanup failures even when a failed observer is discarded for
-        # snapshot fallback or a later retry succeeds. Shutdown must report them.
+        # Retain cleanup failures and retired observers across snapshot fallback
+        # and battle retries. Shutdown must retry releases and report failures.
         self.cleanup_errors = {}
         self.history = history
         self.history_error = None
@@ -68,13 +69,22 @@ class CollectionSession:
         except Exception as exc:
             self.event_status, self.event_error = 'failed', str(exc)
             self.audit('observer_error', {'reason': str(exc)})
-            if self.observer is not None:
-                try:
-                    self.observer.stop()
-                except Exception as cleanup:
-                    self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
-                    self.audit('observer_cleanup_error', {'reason': str(cleanup)})
-            self.observer = None
+            self._retire_observer()
+
+    def _retire_observer(self):
+        """Remove an unusable observer from capture, not from cleanup ownership."""
+        observer, self.observer = self.observer, None
+        if observer is None:
+            return
+        try:
+            observer.stop()
+        except BaseException as cleanup:
+            # Store the owner before audit I/O or an interrupt can escape.
+            self._pending_observers.append(observer)
+            self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
+            self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+            if not isinstance(cleanup, Exception):
+                raise
 
     def _prepare_battle_observer(self, observation):
         generation = observation.generation
@@ -86,13 +96,7 @@ class CollectionSession:
         # The feed has confirmed a different battle. A failed attempt belongs
         # to this generation even when its first event barrier needs a retry.
         old_status, old_error = self.event_status, error or self.event_error
-        if self.observer is not None:
-            try:
-                self.observer.stop()
-            except Exception as cleanup:
-                self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
-                self.audit('observer_cleanup_error', {'reason': str(cleanup)})
-            self.observer = None
+        self._retire_observer()
         self._attach_observer()
         self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
         self.audit('observer_retry', dict(generation=generation, previous_status=old_status,
@@ -229,11 +233,15 @@ class CollectionSession:
                 self.audit('coverage_closed', self.capture.adapter.result())
         except BaseException as exc:
             errors.append(('capture', exc))
-        try:
-            if self.observer is not None:
-                self.observer.stop()
-        except BaseException as exc:
-            errors.append(('observer', exc))
+        for observer in tuple(self._pending_observers) + ((self.observer,)
+                                                        if self.observer is not None else ()):
+            try:
+                observer.stop()
+            except BaseException as exc:
+                errors.append(('observer', exc))
+            else:
+                if observer in self._pending_observers:
+                    self._pending_observers.remove(observer)
         try:
             self.collector.close()
         except BaseException as exc:

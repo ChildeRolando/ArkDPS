@@ -20,6 +20,7 @@ import time
 import tkinter as tk
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -37,7 +38,8 @@ from tray import TrayIcon, WM_LBUTTONDBLCLK, WM_TRAY_CALLBACK, _user32  # noqa: 
 from verify_gui import capture_window, monitors  # noqa: E402
 
 TRACKED = ('app.py', 'connection.py', 'hud.py', 'layout_store.py',
-           'settings_window.py', 'tray.py', 'gui_panel.py', 'panel_model.py')
+           'settings_window.py', 'tray.py', 'gui_panel.py', 'panel_model.py',
+           'collection_session.py', 'event_observer.py', 'acceptance/verify_settings.py')
 
 
 def settle(root, rounds=8):
@@ -127,15 +129,45 @@ def real_device_checks():
     return receipt
 
 
+def create_root():
+    if not enable_dpi_awareness():
+        raise RuntimeError('DPI awareness could not be enabled before Tk initialization')
+    return tk.Tk()
+
+
+def run_restore(state: Path, output: Path, head: str):
+    """Accept only successful, current-candidate evidence from this child run."""
+    child_path = output / 'restore-receipt.json'
+    run_id = uuid4().hex
+    try:
+        child_path.unlink(missing_ok=True)
+        child = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), '--phase', 'restore',
+             '--state', str(state), '--output', str(output), '--run-id', run_id],
+            capture_output=True, text=True, timeout=300, cwd=str(ROOT))
+        if child.returncode != 0:
+            return {'status': 'FAIL', 'returncode': child.returncode,
+                    'error': child.stderr[-2000:] or 'restore process failed'}
+        result = json.loads(child_path.read_text(encoding='utf-8'))
+        if not isinstance(result, dict):
+            raise ValueError('restore receipt is not an object')
+        if result.get('run_id') != run_id or result.get('head') != head:
+            raise ValueError('restore receipt does not match this run and candidate')
+        if result.get('phase') != 'restore' or result.get('status') != 'PASS':
+            raise ValueError('restore phase did not pass')
+        return result
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return {'status': 'FAIL', 'error': str(exc)}
+
+
 def phase_main(output: Path):
     output.mkdir(parents=True, exist_ok=True)
     state = output / 'state'
     state.mkdir(exist_ok=True)
     for stale in state.glob('*'):
         stale.unlink()
-    root = tk.Tk()
+    root = create_root()
     App.collect = lambda self: None
-    enable_dpi_awareness()
     layout_store = LayoutStore(state / 'layout.json')
     connection_store = ConnectionConfigStore(state / 'connection.json')
     tray_box = {}
@@ -297,14 +329,7 @@ def phase_main(output: Path):
         except tk.TclError:
             pass
 
-    child = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), '--phase', 'restore',
-         '--state', str(state), '--output', str(output)],
-        capture_output=True, text=True, timeout=300, cwd=str(ROOT))
-    child_path = output / 'restore-receipt.json'
-    receipt['restart'] = (json.loads(child_path.read_text(encoding='utf-8'))
-                          if child_path.exists() else
-                          {'status': 'FAIL', 'error': child.stderr[-2000:]})
+    receipt['restart'] = run_restore(state, output, receipt['head'])
     if receipt['restart'].get('status') != 'PASS':
         receipt['errors'].append('restart phase failed')
     receipt['screenshots_sha256'] = {
@@ -317,12 +342,14 @@ def phase_main(output: Path):
     return 0 if receipt['status'] == 'PASS' else 1
 
 
-def phase_restore(state: Path, output: Path):
+def phase_restore(state: Path, output: Path, run_id=None):
     state, output = Path(state), Path(output)
-    receipt = {'phase': 'restore', 'checks': {}, 'screenshots': {}, 'errors': []}
+    receipt = {'phase': 'restore', 'run_id': run_id,
+               'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT,
+                                               text=True).strip(),
+               'checks': {}, 'screenshots': {}, 'errors': []}
     App.collect = lambda self: None
-    enable_dpi_awareness()
-    root = tk.Tk()
+    root = create_root()
     saved = json.loads((state / 'layout.json').read_text(encoding='utf-8'))
     work_areas = monitor_work_areas()
     checks = receipt['checks']
@@ -478,11 +505,12 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT / 'runtime/settings-validation')
     parser.add_argument('--phase', choices=('main', 'restore'), default='main')
     parser.add_argument('--state', type=Path)
+    parser.add_argument('--run-id', help='Parent-generated restore evidence identity')
     args = parser.parse_args()
     if args.phase == 'restore':
         if not args.state:
             parser.error('--phase restore requires --state')
-        return phase_restore(args.state, args.output)
+        return phase_restore(args.state, args.output, args.run_id)
     return phase_main(args.output)
 
 

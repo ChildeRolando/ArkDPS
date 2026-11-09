@@ -47,13 +47,23 @@ def event_label(status, error=None):
 
 
 def enable_dpi_awareness():
-    if sys.platform == 'win32':
-        import ctypes
-        # System-aware fallback for older Windows; per-monitor coordinates on current Windows.
+    """Set awareness before creating windows; return whether it is effective."""
+    if sys.platform != 'win32':
+        return True
+    import ctypes
+    try:
+        user = ctypes.windll.user32
+        if user.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return True
+        # An embedding host or a prior call may already have selected PMv2.
+        user.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        return bool(user.AreDpiAwarenessContextsEqual(
+            ctypes.c_void_p(user.GetThreadDpiAwarenessContext()), ctypes.c_void_p(-4)))
+    except (AttributeError, OSError):
         try:
-            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+            return ctypes.windll.shcore.SetProcessDpiAwareness(1) == 0
         except (AttributeError, OSError):
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            return False
 
 
 class App:
@@ -368,6 +378,8 @@ class App:
             issues.append('采集会话未关闭')
         observer_released = not cleanup_errors.get('observer')
         if session is not None:
+            if getattr(session, '_pending_observers', []):
+                observer_released = False
             observer = getattr(session, 'observer', None)
             if observer is not None:
                 observer_released = (observer_released and

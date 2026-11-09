@@ -87,7 +87,8 @@ def test_failed_start_observer_cleanup_is_not_forgotten_after_snapshot_fallback(
                                 collector=SimpleNamespace(close=lambda: None))
     current._attach_observer()
     assert current.observer is None
-    current.close()
+    with pytest.raises(RuntimeError, match='startup detach refused'):
+        current.close()
     report = App.verify_shutdown(SimpleNamespace(session=current))
     assert not report['ok'] and not report['observer_released']
     assert 'startup detach refused' in ' '.join(report['issues'])

@@ -25,6 +25,7 @@
 - 版本 1 是早期只含 `panels` 的 `PanelCollection` 文档；读取时迁移为版本 2（无 GUI/HUD、事件观测默认开启），下次保存写回版本 2。
 - 无 `version` 但含 `panels` 的文档按版本 1 接受。未知或更高版本不静默覆盖：原文件移动为 `layout.json.corrupt-<时间戳>`，本次使用默认布局并显示诊断。
 - 无法解析的 JSON、空面板列表或没有可用面板同样视为损坏：备份、诊断、默认布局。单个无效/重复面板或 HUD 条目会跳过并累计警告；HUD 必须引用仍存在的面板。
+- 备份移动失败时仍可使用默认布局，但明确提示“原文件备份失败”，并禁止该 `LayoutStore` 后续保存，避免锁定稍后解除后覆盖未备份原件；用户先备份原文件、解除锁定并重启，再恢复正常保存。
 - 首次启动只创建“伤害 / 本局总量 / 近 5 秒 DPS”面板，且不打开 HUD。
 - 透明度限制在 0.7–1.0；坐标绝对值上限 100000，尺寸上限 20000；`bool` 不作为坐标。
 
@@ -43,7 +44,8 @@ GUI 位置在窗口正常状态时由 `<Configure>` 记录；隐藏/最小化期
 - 托盘使用 Win32 `Shell_NotifyIcon`，仅标准库 `ctypes`，图标为 `assets/arkdps.ico`；菜单为“打开主窗口 / 退出 ArkDPS”。双击图标恢复 GUI。
 - 托盘可用时，关闭 GUI 只 `withdraw` 主窗；已打开的 HUD 和共享采集会话继续运行，随后保存布局。托盘回调或双击恢复主窗。
 - 托盘不可用（无桌面 shell、创建失败）时记录诊断，关闭 GUI 退回原行为：有 HUD 时最小化到任务栏，没有 HUD 时结束应用。
-- 只有显式“退出应用”或托盘“退出 ArkDPS”才停止应用：保存布局、停止采集线程、销毁 HUD、删除托盘图标、释放本工具创建的 ADB 转发。退出时 `verify_shutdown()` 核对采集会话关闭结果、观察器 script/session 释放结果与 `ForwardRegistry.owned` 为空，结果写入 `runtime/app-*.log` 与 `App.shutdown_report`。观察器卸载或 detach 失败仍继续尝试其余资源清理，并保留失败句柄供重试；`CollectionSession.cleanup_errors` 按资源保留清理异常（包括降级到快照前被丢弃的观察器），关闭全部成功且无既有清理错误后才置 `closed=True`。任何清理异常都会进入报告 `issues` 并令 `ok=false`；后续重试成功不抹去本次会话发生过的清理失败，不再凭空句柄或预先置位的关闭标记推断成功。
+- 只有显式“退出应用”或托盘“退出 ArkDPS”才停止应用：保存布局、停止采集线程、销毁 HUD、删除托盘图标、释放本工具创建的 ADB 转发。退出时 `verify_shutdown()` 核对采集会话关闭结果、观察器 script/session 释放结果与 `ForwardRegistry.owned` 为空，结果写入 `runtime/app-*.log` 与 `App.shutdown_report`。观察器卸载或 detach 失败仍继续尝试其余资源清理，并保留失败句柄供重试；`CollectionSession.cleanup_errors` 按资源保留清理异常（包括降级到快照前退休的观察器），关闭全部成功且无既有清理错误后才置 `closed=True`。任何清理异常都会进入报告 `issues` 并令 `ok=false`；后续重试成功不抹去本次会话发生过的清理失败，不再凭空句柄或预先置位的关闭标记推断成功。
+- 启动或换局时观察器停止失败，实例转入 `CollectionSession._pending_observers`，只退出实时事件输入，不退出资源所有权。`close()` 对所有待释放实例和当前观察器分别重试，某一实例失败或中断不妨碍其他观察器及 collector 的释放；仅成功停止的退休实例移出待释放列表。
 - 关闭 HUD 仅关闭该显示；删除源面板前关闭其 HUD，再保存布局。关闭最后一个 HUD 且 GUI 处于隐藏/最小化时恢复 GUI，避免只剩托盘图标。
 
 托盘图标消息循环位于独立线程；菜单命令通过应用事件队列回到 Tk 主线程，绝不从托盘线程直接操作 Tk。
@@ -83,7 +85,11 @@ python -m pytest tests -q --assert=plain
 python acceptance/verify_settings.py --output runtime/settings-validation
 ```
 
-验收脚本用合成统计和合成多实例载荷驱动真实 Tk 窗口与系统托盘，再做一次**子进程重启**核对面板、HUD 位置/尺寸/透明度/锁定和 GUI 几何；移除显示器与 DPI 变化以注入工作区模拟，另外真实创建并释放一个本工具自己的 adb 转发。
+验收脚本用合成统计和合成多实例载荷驱动真实 Tk 窗口与系统托盘，再做一次**子进程重启**核对面板、HUD 位置/尺寸/透明度/锁定和 GUI 几何；移除显示器与 DPI 变化以注入工作区模拟，另外真实创建并释放一个本工具自己的 adb 转发。主阶段与重启阶段均在创建任何 Tk 窗口前设置并检查 DPI awareness；设置失败不继续几何验收。
+
+重启前先删除旧的 `restore-receipt.json`，要求子进程退出码为 0，并验证新回执的 `phase=restore`、`status=PASS`、当前候选 `head` 与本次父进程生成的 `run_id`。丢失/损坏回执、超时、非零退出或候选/运行身份不符均明确失败，复用输出目录也不能借用旧 PASS。回执的 `code_sha256` 同时记录采集会话、事件观察器和验收脚本本身。
+
+`tests/test_settings_review_regressions.py` 以故障注入固定启动/换局清理失败后的句柄重试、多个退休实例释放失败时的隔离、备份失败后原文件保护，以及重启回执新鲜度和 DPI 初始化顺序。前六个用例在候选 `4b30e9e0e47c987c45673755145aa0e54ebbb2e1` 上实际失败（两条句柄丢失、两条备份诊断缺失、两条旧 PASS 被接纳），修复后通过；`tests/test_collection_session.py` 和 `tests/test_shutdown_failures.py` 同时要求退出再次尝试并传播持续的清理失败。
 
 ## 验收记录与未覆盖边界
 

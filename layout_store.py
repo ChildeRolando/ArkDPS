@@ -245,6 +245,7 @@ class LayoutStore:
     def __init__(self, path: Path | str | None = None):
         self.path = Path(path) if path else ROOT / 'runtime' / 'layout.json'
         self.last_backup: Path | None = None
+        self._save_error = None
 
     def _preserve_corrupt(self) -> Path | None:
         if not self.path.exists():
@@ -259,6 +260,7 @@ class LayoutStore:
             return None
 
     def load(self) -> LayoutLoadResult:
+        self._save_error = None
         if not self.path.exists():
             return LayoutLoadResult(Layout.default(), True)
         try:
@@ -267,6 +269,9 @@ class LayoutStore:
         except (OSError, ValueError) as exc:
             backup = self._preserve_corrupt()
             note = f'；原文件已备份为 {backup.name}' if backup else ''
+            if backup is None:
+                self._save_error = '原文件备份失败，已禁止保存布局；请备份原文件后重启'
+                note = '；' + self._save_error
             return LayoutLoadResult(Layout.default(), False,
                                     f'布局配置无法读取，已使用默认布局：{exc}{note}',
                                     backup=backup)
@@ -274,6 +279,8 @@ class LayoutStore:
                                 migrated_from=migrated)
 
     def save(self, layout: Layout) -> None:
+        if self._save_error:
+            raise OSError(self._save_error)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(layout.to_dict(), ensure_ascii=False, indent=2) + '\n'
         fd, tmp = tempfile.mkstemp(prefix='.layout-', suffix='.json',
