@@ -31,10 +31,13 @@ internal static class Screenshot
         foreach(var entry in view.Get("entries").Items())
         {
             var item=new RowItem{Entry=entry};var row=new Grid{Margin=new Thickness(24,0,24,0),MinHeight=72,Background=Theme.Resource("Console")};
-            row.ColumnDefinitions.Add(new(){Width=new GridLength(66)});row.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});row.ColumnDefinitions.Add(new(){Width=new GridLength(180)});
+            row.ColumnDefinitions.Add(new(){Width=new GridLength(66)});row.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});row.ColumnDefinitions.Add(new(){Width=new GridLength(280)});
             var portrait=new Image{Source=item.Portrait,Width=40,Height=40,Margin=new Thickness(10,8,10,16)};row.Children.Add(portrait);
             var text=new StackPanel{Margin=new Thickness(0,9,12,16)};text.Children.Add(Inspector.Text(item.Name,16,true,"ConsoleInk"));text.Children.Add(Inspector.Text(item.Presence,11,false,"ConsoleMuted"));Grid.SetColumn(text,1);row.Children.Add(text);
-            var values=new StackPanel{Margin=new Thickness(0,8,12,16),HorizontalAlignment=HorizontalAlignment.Right};values.Children.Add(Inspector.Text(entry.Text("exact_value"),18,true,"ConsoleInk"));values.Children.Add(Inspector.Text(item.Secondary,12,false,"ConsoleMuted"));Grid.SetColumn(values,2);row.Children.Add(values);
+            var values=new StackPanel{Margin=new Thickness(0,8,12,16),HorizontalAlignment=HorizontalAlignment.Right};
+            var exact=Inspector.Text(entry.Text("exact_value"),18,true,"ConsoleInk");exact.FontFamily=new FontFamily("Bahnschrift");exact.TextWrapping=TextWrapping.NoWrap;exact.TextAlignment=TextAlignment.Right;
+            var secondary=Inspector.Text(item.Secondary,12,false,"ConsoleMuted");secondary.TextAlignment=TextAlignment.Right;
+            values.Children.Add(exact);values.Children.Add(secondary);Grid.SetColumn(values,2);row.Children.Add(values);
             var bar=new ContributionBar{Data=entry,Height=7,VerticalAlignment=VerticalAlignment.Bottom,Margin=new Thickness(0,0,12,9)};Grid.SetColumn(bar,1);Grid.SetColumnSpan(bar,2);row.Children.Add(bar);document.Children.Add(row);
         }
         if(!view.Get("entries").Items().Any())document.Children.Add(Inspector.Text(view.Text("empty_text"),16,false,"Muted",new Thickness(24,20,24,20)));
