@@ -132,8 +132,11 @@ def test_lifecycle_can_bind_without_optional_squad_metadata(monkeypatch):
     ]
 
 
-@pytest.mark.parametrize('failure', [None, 'build', 'slot', 'identity', 'singleton', 'ambiguous'])
-def test_lifecycle_uses_build_checked_slots_or_falls_back(monkeypatch, failure):
+@pytest.mark.parametrize('case', [
+    'slots', 'definitions', 'build', 'slot', 'definition_missing',
+    'definition_identity', 'identity', 'singleton', 'ambiguous',
+])
+def test_lifecycle_uses_build_checked_classes_or_falls_back(monkeypatch, case):
     from tools.enemy_health import battle_lifecycle as native
 
     memory = MemoryFixture()
@@ -144,7 +147,7 @@ def test_lifecycle_uses_build_checked_slots_or_falls_back(monkeypatch, failure):
         (base, base + 0xC515000, 'r--p', library),
         (base + 0xC515000, base + 0xD34F000, 'rw-p', library),
     ]
-    if failure == 'ambiguous':
+    if case == 'ambiguous':
         memory.mc.regions.extend([
             (base * 2, base * 2 + 0xC515000, 'r--p', library),
             (base * 2 + 0xC515000, base * 2 + 0xD34F000, 'rw-p', library),
@@ -154,12 +157,22 @@ def test_lifecycle_uses_build_checked_slots_or_falls_back(monkeypatch, failure):
     memory.names[6100] = ('UnrelatedParent', 'Torappu')
     memory.pointers[6000 + 0x58] = 6100
     addresses = {'BattleController': 1000, 'GameFlowController': 2000, 'SquadPage': 5000}
-    if failure == 'slot':
+    if case == 'slot':
         addresses['SquadPage'] = 0x200241D7
-    elif failure == 'identity':
+    elif case == 'identity':
         addresses['SquadPage'] = 2000
-    elif failure == 'singleton':
+    elif case == 'singleton':
         addresses['BattleController'] = 6000
+    if case in ('definitions', 'definition_missing', 'definition_identity'):
+        addresses['BattleController'] = 0x20014C9B
+        addresses['SquadPage'] = 0x200241D7
+        table = 0x8000000000
+        memory.blocks[base + native._CLASS_DEFINITION_TABLE_RVA] = struct.pack('<Q', table)
+        battle_entry = table + 8 * native._CLASS_DEFINITION_INDICES['BattleController']
+        squad_entry = table + 8 * native._CLASS_DEFINITION_INDICES['SquadPage']
+        memory.blocks[battle_entry] = struct.pack('<Q', 1000)
+        memory.blocks[squad_entry] = struct.pack(
+            '<Q', {'definitions': 5000, 'definition_missing': 0, 'definition_identity': 2000}[case])
     for name, rva in native._CLASS_SLOT_RVAS.items():
         memory.blocks[base + rva] = struct.pack('<Q', addresses[name])
 
@@ -167,7 +180,7 @@ def test_lifecycle_uses_build_checked_slots_or_falls_back(monkeypatch, failure):
 
     def read_code(address, size):
         note_reads.append((address, size))
-        return bytes(size) if failure == 'build' else native._BUILD_NOTE
+        return bytes(size) if case == 'build' else native._BUILD_NOTE
 
     memory.read_code = read_code
     monkeypatch.setattr(native, 'MemoryAccess', lambda *_: memory)
@@ -181,8 +194,8 @@ def test_lifecycle_uses_build_checked_slots_or_falls_back(monkeypatch, failure):
     reader = native.locate_lifecycle(memory.mc, None, locator, channel=object())
     assert reader.sample()['ready']
     assert reader.battle_klass == 1000
-    assert len(scans) == (0 if failure is None else 1)
-    assert note_reads == ([] if failure == 'ambiguous' else [
+    assert len(scans) == (0 if case in ('slots', 'definitions') else 1)
+    assert note_reads == ([] if case == 'ambiguous' else [
         (base + native._BUILD_NOTE_RVA, len(native._BUILD_NOTE)),
     ])
 
