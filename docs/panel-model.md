@@ -37,7 +37,7 @@ python -m pytest tests/test_panel_model.py -q --assert=plain
 ## 边界
 
 - 护盾最近 5 秒与接敌速率依赖 ARK-5 的事件数据；模型已支持 `recent_shield`，但当前适配器尚未提供。
-- 托盘与布局持久化由 ARK-11 交付；历史浏览与分享见下节 ARK-12。
+- 托盘、连接/事件设置与布局持久化见[设置、托盘与窗口配置恢复](settings-and-layout.md)；历史浏览与分享见下节 ARK-12。
 
 ## 实时 GUI（ARK-9）
 

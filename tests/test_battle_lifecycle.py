@@ -465,15 +465,16 @@ def test_gui_worker_failure_still_closes_its_owned_collector():
     from app import App
     window = App.__new__(App)
     window.events = queue.Queue()
-    window.collector = SimpleNamespace(closed=False)
-    window.collector.close = lambda: setattr(window.collector, 'closed', True)
+    owned = SimpleNamespace(closed=False)
+    owned.close = lambda: setattr(owned, 'closed', True)
+    window.collector = owned
 
     def disk_failure():
         raise OSError('capture log unavailable')
 
     window._collect = disk_failure
     window.collect()
-    assert window.collector.closed
+    assert owned.closed and window.collector is None
     assert window.events.get() == ('error', 'capture log unavailable')
 
 

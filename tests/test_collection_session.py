@@ -143,8 +143,14 @@ def test_observer_start_failure_preserves_native_snapshots(failure, cleanup_fail
         assert ('observer_error', {'reason': str(failure)}) in audit
         assert any(kind == 'observer_cleanup_error' for kind, _ in audit) == cleanup_fails
     finally:
-        current.close()
-    assert calls[-1] == 'collector_close' and calls.count('detach') == 1
+        if cleanup_fails:
+            with pytest.raises(RuntimeError, match='cleanup failed'):
+                current.close()
+        else:
+            current.close()
+    assert calls[-1] == 'collector_close'
+    assert calls.count('detach') == (2 if cleanup_fails else 1)
+    assert bool(current._pending_observers) == cleanup_fails
 
 
 def test_observer_construction_failure_also_degrades():

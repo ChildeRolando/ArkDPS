@@ -572,6 +572,36 @@ def resolve_target(config: ConnectionConfig,
     raise ConnectionUnavailable(result.message or '没有可用连接', diag)
 
 
+def resolve_configured(config: ConnectionConfig,
+                       runner: Runner | None = None) -> ConnectionTarget:
+    """Resolve a connection setting, honoring auto-detection and a preference.
+
+    ``auto_detect`` off uses the stored address as a manual target. With it on,
+    a unique certified instance is selected automatically; with several, the
+    stored address is used only when it still names one of the candidates,
+    otherwise the caller must ask the player to choose.
+    """
+    if not config.auto_detect:
+        if not config.serial:
+            adb = resolve_adb_path(config.adb_path)
+            diag = ConnectionDiagnostics(
+                status=DetectionStatus.NO_INSTANCE, adb_path=adb,
+                message='自动检测已关闭；请在连接设置中填写实例地址或重新开启自动检测。')
+            raise ConnectionUnavailable(diag.message, diag)
+        return resolve_target(ConnectionConfig(config.adb_path, config.serial, False),
+                              runner)
+    result = detect_instances(config.adb_path, runner)
+    diag = result.diagnostics()
+    if result.status is DetectionStatus.READY_UNIQUE and result.selected_serial:
+        return ConnectionTarget(result.adb_path, result.selected_serial, 'auto', diag)
+    if result.status is DetectionStatus.NEEDS_SELECTION:
+        if config.serial and any(config.serial in instance.serials
+                                 for instance in result.candidates):
+            return ConnectionTarget(result.adb_path, config.serial, 'selected', diag)
+        raise ConnectionUnavailable('发现多个 MuMu 实例，请选择要连接的实例。', diag)
+    raise ConnectionUnavailable(result.message or '没有可用连接', diag)
+
+
 def _parse_version(output: str) -> str | None:
     match = re.search(r'versionName=([^\s]+)', output)
     return match.group(1) if match else None
