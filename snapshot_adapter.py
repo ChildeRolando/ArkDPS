@@ -396,7 +396,7 @@ class BattleStatisticsAdapter:
                 owners_present[owner] = any(
                     entry.unique_id in present_ids
                     for entry in roster.entries
-                    if self.owner_map.owners.get(entry.cid) == owner)
+                    if entry.cid == owner and not entry.is_token)
         rows = {}
         for owner, row in result['rows'].items():
             enriched = dict(row)
