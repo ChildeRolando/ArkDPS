@@ -220,15 +220,26 @@ class LifecycleReader:
 
 
 def locate_lifecycle(mc, battle_klass, locator):
-    """One metadata-only lookup per clock location, never in the polling loop."""
-    classes = locator.scan_classes(('GameFlowController',), namespace='Torappu')
-    if not classes or len(classes) != 1:
-        raise ReadFailure('flow_class_unavailable')
-    memory = MemoryAccess(mc, mc.channel())
+    """Locate singleton slots together, reusing the battle class if supplied."""
+    namespaces = {'GameFlowController': 'Torappu', SQUAD_PAGE[0]: SQUAD_PAGE[1]}
+    if battle_klass is None:
+        namespaces['BattleController'] = 'Torappu.Battle'
     try:
-        squads = locator.scan_classes(('SquadPage',), namespace=SQUAD_PAGE[1]) or {}
+        classes = locator.scan_class_metadata(namespaces) or {}
     except (OSError, RuntimeError):
-        squads = {}
+        # The optional squad metadata must not prevent the live battle from binding.
+        del namespaces[SQUAD_PAGE[0]]
+        classes = locator.scan_class_metadata(namespaces) or {}
+    if battle_klass is None:
+        battles = [addr for addr, name in classes.items() if name == 'BattleController']
+        if len(battles) != 1:
+            raise ReadFailure('无法唯一定位战局单例类型；保留未知状态')
+        battle_klass = battles[0]
+    flows = [addr for addr, name in classes.items() if name == 'GameFlowController']
+    if len(flows) != 1:
+        raise ReadFailure('flow_class_unavailable')
+    squads = {addr: name for addr, name in classes.items() if name == SQUAD_PAGE[0]}
+    memory = MemoryAccess(mc, mc.channel())
 
     def locate_squads():
         # Borrow the product channel for the bounded, once-per-launch lookup.
@@ -240,4 +251,4 @@ def locate_lifecycle(mc, battle_klass, locator):
         finally:
             locator._channel = None
 
-    return LifecycleReader(memory, battle_klass, next(iter(classes)), locate_squads if squads else None)
+    return LifecycleReader(memory, battle_klass, flows[0], locate_squads if squads else None)

@@ -68,6 +68,70 @@ class MemoryFixture:
             raise ReadFailure('unsupported_layout')
 
 
+def test_lifecycle_metadata_shares_two_scans_and_keeps_namespaces(monkeypatch):
+    locator = collector.DeployTrackerReader(SimpleNamespace(
+        regions=[(0x1000, 0x10000, 'rw-p', '')], is_ptr=lambda address: address >= 0x1000,
+        adb_serial='lifecycle-scan-fixture', package='game', pid=1, process_instance=('boot', 1),
+    ))
+    targets = {'BattleController': 'Torappu.Battle',
+               'GameFlowController': 'Torappu', 'SquadPage': 'Torappu.UI'}
+    name_addresses = dict(zip(targets, (0x2000, 0x2100, 0x2200)))
+    headers = {0x3010: (0x2000, 0x5000), 0x3110: (0x2100, 0x5100),
+               0x3210: (0x2200, 0x5200), 0x3310: (0x2000, 0x5100)}
+    hits = {name.encode('ascii') + b'\0': [address] for name, address in name_addresses.items()}
+    hits.update({struct.pack('<Q', address): [ref for ref, header in headers.items() if header[0] == address]
+                 for address in name_addresses.values()})
+    memory = {address - 1: b'\0' for address in name_addresses.values()}
+    memory.update({address: name.encode('ascii') + b'\0' for name, address in name_addresses.items()})
+    memory.update({ref: struct.pack('<QQ', *header) for ref, header in headers.items()})
+    memory.update({0x5000: b'Torappu.Battle\0', 0x5100: b'Torappu\0', 0x5200: b'Torappu.UI\0'})
+    scans = []
+
+    def scan(regions, needles):
+        scans.append(tuple(needles))
+        return {needle: hits[needle] for needle in needles}
+
+    monkeypatch.setattr(locator, '_device_scan_regions', scan)
+    monkeypatch.setattr(locator, '_scan_read_many',
+                        lambda requests: [memory.get(address) for address, _ in requests])
+    expected = {0x3000: 'BattleController', 0x3100: 'GameFlowController', 0x3200: 'SquadPage'}
+    assert locator.scan_class_metadata(targets) == expected
+    assert scans == [
+        tuple(name.encode('ascii') + b'\0' for name in targets),
+        tuple(struct.pack('<Q', address) for address in name_addresses.values()),
+    ]
+
+    # A different namespace cannot be substituted, even when the name matches.
+    memory[0x5200] = b'Torappu\0'
+    scans.clear()
+    assert locator.scan_class_metadata(targets) == {0x3000: 'BattleController', 0x3100: 'GameFlowController'}
+    assert scans == [(b'SquadPage\0',), (struct.pack('<Q', 0x2200),)]
+
+
+def test_lifecycle_can_bind_without_optional_squad_metadata(monkeypatch):
+    from tools.enemy_health import battle_lifecycle as native
+
+    memory = MemoryFixture()
+    memory.mc.channel = lambda: None
+    monkeypatch.setattr(native, 'MemoryAccess', lambda *_: memory)
+    scans = []
+
+    def scan(namespaces):
+        scans.append(tuple(namespaces))
+        if 'SquadPage' in namespaces:
+            raise OSError('scan interrupted')
+        return {1000: 'BattleController', 2000: 'GameFlowController'}
+
+    locator = SimpleNamespace(scan_class_metadata=scan)
+    reader = native.locate_lifecycle(memory.mc, None, locator)
+    assert reader.sample()['ready']
+    assert reader.locate_squads is None
+    assert scans == [
+        ('GameFlowController', 'SquadPage', 'BattleController'),
+        ('GameFlowController', 'BattleController'),
+    ]
+
+
 @pytest.mark.parametrize('state', [0, 1, 2, 3])
 def test_native_state_is_preserved_separately_from_readiness(state):
     memory = MemoryFixture(state)

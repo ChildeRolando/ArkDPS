@@ -138,6 +138,7 @@ STR_CHARS = 0x14
 SCAN_CAP = 32 * 1024 * 1024   # 单次读取上限 32MB
 SCAN_WORKERS = 4              # adb 并发 (4 路即饱和)
 DEVICE_SCAN_CAP = 256 * 1024 * 1024
+DEVICE_SCAN_MAX_NEEDLES = 256  # memsrv v5 per request
 
 
 # ============================================================
@@ -425,17 +426,20 @@ class DeployTrackerReader:
         ch = self._get_channel()
         needles = list(dict.fromkeys(needles))
         out = {nd: [] for nd in needles}
+        batches = [needles[i:i + DEVICE_SCAN_MAX_NEEDLES]
+                   for i in range(0, len(needles), DEVICE_SCAN_MAX_NEEDLES)]
         started = time.perf_counter()
         scanned = calls = 0
         for start, end in regions:
             addr = start
             while addr < end:
                 size = min(DEVICE_SCAN_CAP, end - addr)
-                found = ch.scan(addr, size, needles)
-                scanned += size
-                calls += 1
-                for nd in needles:
-                    out[nd].extend(found.get(nd) or [])
+                for batch in batches:
+                    found = ch.scan(addr, size, batch)
+                    scanned += size
+                    calls += 1
+                    for nd in batch:
+                        out[nd].extend(found.get(nd) or [])
                 addr += size
         self._status(f'[扫描计时] 区域搜索 {scanned / 1048576:.1f} MiB / '
                      f'{calls} 次请求 / {time.perf_counter() - started:.3f}s')
@@ -445,7 +449,7 @@ class DeployTrackerReader:
         started = time.perf_counter()
         class_names = tuple(dict.fromkeys(class_names))
         try:
-            result = self._scan_class_objects_impl(class_names, namespace=namespace)
+            result = self._scan_class_objects_impl(dict.fromkeys(class_names, namespace))
             if result is not None:
                 for name in class_names:
                     result.setdefault(name, set())
@@ -455,32 +459,49 @@ class DeployTrackerReader:
 
     def scan_classes(self, class_names, *, namespace="Torappu.Battle"):
         """Locate metadata only, for static fields/getters; never scan instances."""
+        return self.scan_class_metadata(dict.fromkeys(class_names, namespace))
+
+    def scan_class_metadata(self, namespaces):
+        """Locate {class name: namespace} together in two device memory passes."""
         started = time.perf_counter()
         try:
-            return self._scan_class_objects_impl(
-                class_names, namespace=namespace, classes_only=True)
+            return self._scan_class_objects_impl(namespaces, classes_only=True)
         finally:
             self._status(f'[扫描计时] 类元数据定位 {time.perf_counter() - started:.3f}s')
 
-    def _scan_class_objects_impl(self, class_names, *, namespace="Torappu.Battle", classes_only=False):
-        """一次设备侧扫描返回指定命名空间内多个类的对象地址。
-
-        多个类共用三遍大范围扫描（类名、Il2CppClass 引用、对象 klass 指针），
-        既让关卡信息先产出，又避免随后定位操作记录时重新扫描数 GB 内存。
-        """
+    def _scan_class_objects_impl(self, namespaces, *, classes_only=False):
         rw_regions = [(s, e) for s, e, perms, _name in self.mc.regions if "rw" in perms]
         if not rw_regions:
             self._class_scan_failure_reason = (
                 "读取到的进程内存映射中没有任何 rw 区域，无法搜索 IL2CPP 类名")
             self._status("  主路径失败: " + self._class_scan_failure_reason)
             return None
-        class_names = tuple(dict.fromkeys(class_names))
         from .class_scan_cache import lookup, remember
-        cached = lookup(self.mc, namespace, class_names, self._scan_read_many)
-        if cached:
+        groups = {}
+        for name, namespace in namespaces.items():
+            groups.setdefault(namespace, []).append(name)
+        classes, missing = {}, {}
+        for namespace, names in groups.items():
+            cached = lookup(self.mc, namespace, names, self._scan_read_many)
+            if cached:
+                classes.update(cached)
+            else:
+                missing.update(dict.fromkeys(names, namespace))
+        if missing:
+            found = self._scan_uncached_classes(rw_regions, missing)
+            if found is None:
+                return None
+            for namespace in groups:
+                remember(self.mc, namespace, {addr: name for addr, name in found.items()
+                                              if namespaces[name] == namespace})
+            classes.update(found)
+        elif classes:
             self._status('[定位复用] 类身份实时验证通过' +
                          ('；仅定位类元数据' if classes_only else '；仍重新扫描当前对象'))
-            return cached if classes_only else self._scan_objects_for_classes(cached)
+        return classes if classes_only or not classes else self._scan_objects_for_classes(classes)
+
+    def _scan_uncached_classes(self, rw_regions, namespaces):
+        class_names = tuple(namespaces)
         class_needles = {name: name.encode("ascii") + b"\x00" for name in class_names}
         self._status("共享扫描: 设备侧搜索 " + " / ".join(class_names) + " klass ...")
         name_scan = self._device_scan_regions(rw_regions, list(class_needles.values()))
@@ -507,7 +528,7 @@ class DeployTrackerReader:
                 "所有 rw 区域均未找到 BattleInOut/BattleController 类名字符串；"
                 "可能未进入游戏进程、IL2CPP 元数据布局变化或扫描区域不完整")
             self._status("  主路径失败: " + self._class_scan_failure_reason)
-            return {} if classes_only else {name: set() for name in class_names}
+            return {}
 
         name_needles = {addr: struct.pack("<Q", addr) for addr in names_by_addr}
         ref_scan = self._device_scan_regions(rw_regions, list(name_needles.values()))
@@ -528,29 +549,29 @@ class DeployTrackerReader:
                 candidates.append((ref - 0x10, names_by_addr[addr], namespace_ptr))
         strings = self._scan_read_many([(ptr, 128) for _, _, ptr in candidates])
         for (klass, name, _), raw in zip(candidates, strings):
-            if raw and b'\0' in raw and raw.split(b'\0', 1)[0] == namespace.encode('ascii'):
+            expected = namespaces[name].encode('ascii')
+            if raw and b'\0' in raw and raw.split(b'\0', 1)[0] == expected:
                 klass_names[klass] = name
         klass_counts = {
             name: sum(1 for value in klass_names.values() if value == name)
             for name in class_names
         }
-        self._status(f"  {namespace} Il2CppClass 命中 " + ", ".join(
-            f"{name}={klass_counts[name]}" for name in class_names))
+        self._status("  Il2CppClass 命中 " + ", ".join(
+            f"{namespaces[name]}.{name}={klass_counts[name]}" for name in class_names))
         if not klass_names:
             found_names = ", ".join(sorted(set(names_by_addr.values())))
             self._class_scan_failure_reason = (
-                f"已找到类名字符串 ({found_names})，但没有解析出 namespace="
-                f"{namespace} 的 Il2CppClass；Il2CppClass.name/namespace 偏移可能已漂移")
+                f"已找到类名字符串 ({found_names})，但没有解析出对应命名空间的 Il2CppClass；"
+                "Il2CppClass.name/namespace 偏移可能已漂移")
             self._status("  主路径失败: " + self._class_scan_failure_reason)
-            return {} if classes_only else {name: set() for name in class_names}
+            return {}
         if "BattleController" in class_names and not klass_counts.get("BattleController"):
             self._class_scan_failure_reason = (
                 f"类名扫描命中 BattleController={name_counts.get('BattleController', 0)}，"
                 "但没有解析出 Torappu.Battle.BattleController 的 Il2CppClass；"
                 "Il2CppClass.name/namespace 偏移可能已漂移")
 
-        remember(self.mc, namespace, klass_names)
-        return klass_names if classes_only else self._scan_objects_for_classes(klass_names)
+        return klass_names
 
     def _scan_read_many(self, requests):
         """Bound discovery batches; never enroll them in a realtime frame plan."""
