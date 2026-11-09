@@ -38,20 +38,26 @@ def set_clickthrough(window, locked):
 
 
 class HudWindow:
-    def __init__(self, app, source):
+    def __init__(self, app, source, placement=None):
         self.app, self.source = app, source
         self.locked = False
         self.drag_origin = None
+        self.ready = False
         self.window = tk.Toplevel(app.root)
         self.window.withdraw()
         self.window.title('ArkDPS HUD · ' + source.config.display_title)
         self.window.overrideredirect(True)
         self.window.configure(bg=BG, highlightbackground=SECONDARY, highlightthickness=1)
         self.window.attributes('-topmost', True)
-        self.window.attributes('-alpha', .9)
         unit = source.unit
-        self.window.geometry(f'{round(380*unit)}x{round(360*unit)}')
         self.window.minsize(round(350*unit), round(230*unit))
+        self.window.attributes('-alpha', placement.opacity if placement else .9)
+        if placement:
+            width, height = (max(round(350*unit), placement.width),
+                             max(round(230*unit), placement.height))
+            self.window.geometry(f'{width}x{height}+{placement.x}+{placement.y}')
+        else:
+            self.window.geometry(f'{round(380*unit)}x{round(360*unit)}')
         self.window.protocol('WM_DELETE_WINDOW', self.close)
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(1, weight=1)
@@ -83,6 +89,12 @@ class HudWindow:
         self.window.deiconify()
         self.window.update_idletasks()
         self.install_controls()
+        self.ready = True
+        if placement and placement.locked:
+            try:
+                self.set_locked(True)
+            except OSError as exc:
+                app.record_warning('HUD 恢复锁定失败，已保持可交互：' + str(exc))
 
     def install_controls(self):
         host = self.source.hud_controls
@@ -92,10 +104,11 @@ class HudWindow:
         row = ttk.Frame(host)
         row.pack(fill='x', pady=(4, 0))
         ttk.Label(row, text='HUD 透明度', foreground=SECONDARY).pack(side='left')
-        self.opacity = tk.DoubleVar(value=90)
+        current = round(float(self.window.attributes('-alpha')) * 100)
+        self.opacity = tk.DoubleVar(value=current)
         ttk.Scale(row, from_=70, to=100, variable=self.opacity,
                   command=self.set_opacity).pack(side='left', fill='x', expand=True, padx=6)
-        self.opacity_label = ttk.Label(row, text='90%', width=5)
+        self.opacity_label = ttk.Label(row, text=f'{current}%', width=5)
         self.opacity_label.pack(side='left')
 
     def wrap_status(self, _event=None):
@@ -105,6 +118,11 @@ class HudWindow:
         value = max(70., min(100., float(value)))
         self.window.attributes('-alpha', value / 100)
         self.opacity_label.configure(text=f'{value:.0f}%')
+        self.layout_changed()
+
+    def layout_changed(self):
+        if self.ready:
+            self.app.hud_layout_changed(self)
 
     def toggle_lock(self):
         try:
@@ -121,6 +139,7 @@ class HudWindow:
         self.panel.tooltip.hide()
         self.panel.set_hover(False)
         self.handle.configure(text='HUD · 已锁定（在 GUI 解锁）' if locked else 'HUD · 拖动此处移动')
+        self.layout_changed()
 
     def begin_drag(self, event):
         if not self.locked:
@@ -133,6 +152,7 @@ class HudWindow:
             # A leading '-' in Tk geometry means distance from the right edge.
             # '+-500' instead denotes absolute virtual-desktop x=-500.
             self.window.geometry(f'+{left+event.x_root-x}+{top+event.y_root-y}')
+            self.layout_changed()
 
     def begin_resize(self, event):
         if not self.locked:
@@ -145,18 +165,33 @@ class HudWindow:
             minimum = self.window.minsize()
             self.window.geometry(f'{max(minimum[0], width+event.x_root-x)}x'
                                  f'{max(minimum[1], height+event.y_root-y)}')
+            self.layout_changed()
 
     def update_view(self, view, source, *, team_complete=False, reset=False):
         self.panel.config = self.source.config
         self.window.title('ArkDPS HUD · ' + view.title)
         self.panel.update_view(view, source, team_complete=team_complete, reset=reset)
 
-    def close(self):
+    def placement(self):
+        """Current geometry and presentation state for layout persistence."""
+        return dict(
+            panel_id=self.source.config.panel_id,
+            x=self.window.winfo_x(), y=self.window.winfo_y(),
+            width=self.window.winfo_width(), height=self.window.winfo_height(),
+            opacity=float(self.window.attributes('-alpha')), locked=bool(self.locked))
+
+    def _destroy(self):
+        self.ready = False
         self.panel.tooltip.hide()
         for widget in self.source.hud_controls.winfo_children():
             widget.destroy()
         self.window.destroy()
         self.app.huds.pop(self.source.config.panel_id, None)
-        # ARK-11 adds the tray. Until then never leave an invisible app running.
-        if not self.app.huds and self.app.root.state() in ('withdrawn', 'iconic'):
-            self.app.show_gui()
+
+    def close(self):
+        self._destroy()
+        self.app.hud_closed(self)
+
+    def destroy_for_quit(self):
+        """Explicit quit: never restore the GUI while the app is shutting down."""
+        self._destroy()

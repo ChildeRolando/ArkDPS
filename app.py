@@ -24,6 +24,12 @@ from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from battle_lifecycle import BattleRuntime
 from battle_history import BattleHistory
 from event_capture import CaptureRetry
+from connection import (ConnectionConfig, ConnectionConfigStore,
+                        ConnectionUnavailable, resolve_configured)
+import layout_store as layout_module
+from layout_store import (GuiGeometry, HudPlacement, Layout, LayoutStore,
+                          clamp_geometry)
+from tray import TrayIcon
 
 
 def timestamp():
@@ -51,9 +57,43 @@ def enable_dpi_awareness():
 
 
 class App:
-    def __init__(self, root, args):
+    def __init__(self, root, args, *, layout_store=None, connection_store=None,
+                 tray_factory=None, work_area_provider=None, layout_load=None):
         self.root, self.args = root, args
         self.events = queue.Queue()
+        self.layout_store = layout_store
+        self.connection_store = connection_store
+        self.work_area_provider = work_area_provider or layout_module.monitor_work_areas
+        self.loading = True
+        self.quitting = False
+        self.tray = None
+        self.settings_window = None
+        self.save_after = None
+        self.warnings = []
+        self.loaded = (layout_load if layout_load is not None else
+                       (layout_store.load() if layout_store is not None
+                        else layout_module.LayoutLoadResult(Layout.default(), True)))
+        self.layout = self.loaded.layout
+        if self.loaded.warning:
+            self.warnings.append(self.loaded.warning)
+        adb_arg = getattr(args, 'adb', '') or None
+        serial_arg = getattr(args, 'serial', '') or None
+        self.connection_config = ConnectionConfig(adb_path=adb_arg, serial=serial_arg,
+                                                  auto_detect=serial_arg is None)
+        if self.connection_store is not None:
+            loaded_connection = self.connection_store.load()
+            self.connection_config = loaded_connection.config
+            if not loaded_connection.ok and loaded_connection.warning:
+                self.warnings.append(loaded_connection.warning)
+        self.apply_command_line_connection(adb_arg, serial_arg)
+        self.events_enabled = getattr(args, 'frida_remote', None) is not None
+        self.frida_remote = getattr(args, 'frida_remote', None)
+        self.connection_diagnostic = None
+        self.event_status = None
+        self.event_error = None
+        self.session = None
+        self.shutdown_report = None
+        self.last_gui_geometry = self.layout.gui
         self.stop = threading.Event()
         self.rescan = threading.Event()
         self.rescan.set()
@@ -77,9 +117,9 @@ class App:
         self.hud_request = self.create_hud
         self.portraits = PortraitAtlas(root)
         root.title('ArkDPS · 实时统计')
-        root.geometry('960x700')
         unit = max(1, font.nametofont('TkDefaultFont').metrics('linespace') / 17)
         root.minsize(round(440*unit), round(500*unit))
+        self.restore_gui_geometry()
         root.configure(bg=BG)
         root.protocol('WM_DELETE_WINDOW', self.close)
         style = ttk.Style(root)
@@ -124,15 +164,217 @@ class App:
         bottom = ttk.Frame(root, padding=12)
         bottom.grid(row=4, column=0, sticky='ew')
         ttk.Button(bottom, text='新建面板', command=self.add_panel).pack(side='left')
+        ttk.Button(bottom, text='设置', command=self.open_settings).pack(side='left', padx=(8, 0))
         self.scan_button = ttk.Button(bottom, text='重新定位', command=self.rescan.set)
         self.scan_button.pack(side='left', padx=8)
         self.export_button = ttk.Button(bottom, text='历史与分享', command=self.export)
         self.export_button.pack(side='left')
         ttk.Button(bottom, text='退出应用', command=self.quit).pack(side='right')
-        self.add_panel(PanelConfig())
+        for config in self.layout.panels:
+            self.add_panel(config)
+        self.restore_huds()
+        self.start_tray(tray_factory)
+        self.loading = False
+        root.bind('<Configure>', self.root_configured, add='+')
         self.worker=threading.Thread(target=self.collect,daemon=True)
         self.worker.start()
         root.after(100,self.tick)
+
+    # -- connection settings, layout persistence and tray ------------------
+    def apply_command_line_connection(self, adb, serial):
+        """A CLI value overrides the stored setting for this launch only."""
+        config = self.connection_config
+        if adb:
+            config = ConnectionConfig(adb, config.serial, config.auto_detect)
+        if serial:
+            config = ConnectionConfig(config.adb_path, serial, False)
+        self.connection_config = config
+
+    def work_areas(self):
+        try:
+            return list(self.work_area_provider())
+        except Exception as exc:  # a display API failure never blocks startup
+            self.record_warning('无法读取显示器布局：' + str(exc))
+            return []
+
+    def restore_gui_geometry(self):
+        geometry = self.layout.gui
+        if geometry is None:
+            self.root.geometry('%dx%d' % layout_module.DEFAULT_GUI)
+            return
+        minimum = tuple(self.root.minsize())
+        fitted = clamp_geometry(geometry, self.work_areas(),
+                                minimum=(max(200, minimum[0]), max(200, minimum[1])))
+        self.last_gui_geometry = fitted
+        self.root.geometry(f'{fitted.width}x{fitted.height}+{fitted.x}+{fitted.y}')
+
+    def hud_minimum(self, panel):
+        return (round(350*panel.unit), round(230*panel.unit))
+
+    def restore_huds(self):
+        by_panel = {panel.config.panel_id: panel for panel in self.panels}
+        for placement in self.layout.huds:
+            panel = by_panel.get(placement.panel_id)
+            if panel is None:
+                continue
+            try:
+                self.create_hud(panel, placement=placement)
+            except Exception as exc:
+                self.record_warning('HUD 恢复失败：' + str(exc))
+
+    def start_tray(self, tray_factory=None):
+        if tray_factory is None:
+            return
+        try:
+            tray = tray_factory(self)
+            self.tray = tray
+            if not tray.start():
+                reason = getattr(tray, 'error', None) or '未知原因'
+                self.record_warning('系统托盘不可用：' + str(reason) +
+                                    '；关闭 GUI 时保留任务栏恢复入口。')
+                self.tray = None
+        except Exception as exc:
+            self.record_warning('系统托盘初始化失败：' + str(exc))
+            self.tray = None
+
+    def open_settings(self):
+        from settings_window import SettingsWindow
+        window = self.settings_window
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            return window
+        self.settings_window = SettingsWindow(self)
+        return self.settings_window
+
+    def apply_connection(self, config, events_enabled):
+        """Persist connection/event choices and ask the worker to reconnect."""
+        self.connection_config = config
+        self.events_enabled = bool(events_enabled)
+        self.frida_remote = DEFAULT_FRIDA_REMOTE if self.events_enabled else None
+        if self.connection_store is not None:
+            try:
+                self.connection_store.save(config)
+            except OSError as exc:
+                self.record_warning('连接配置保存失败：' + str(exc))
+        self.connection_diagnostic = None
+        self.event_status, self.event_error = None, None
+        self.event_state = event_label(None)
+        self.connection = '正在按新设置重新连接…'
+        self.save_layout_now()
+        self.rescan.set()
+        return True
+
+    def set_connection_diagnostic(self, diagnostic):
+        self.connection_diagnostic = diagnostic or None
+
+    def connection_diagnostic_text(self):
+        parts = [self.connection]
+        diag = self.connection_diagnostic or {}
+        version = {'compatible': '游戏版本已兼容', 'incompatible': '游戏版本不兼容',
+                   'not_installed': '未安装明日方舟客户端',
+                   'unknown': '游戏版本未知'}.get(diag.get('version_status'))
+        if version:
+            parts.append(version)
+        instances = diag.get('instances') or []
+        if diag.get('status') == 'needs_selection' and len(instances) > 1:
+            parts.append(f'检测到 {len(instances)} 个实例，请在设置中选择')
+        if diag.get('message') and diag.get('status') not in (None, 'ready_unique'):
+            parts.append(diag['message'])
+        if not self.events_enabled:
+            parts.append('事件观测已关闭 · 仅使用快照')
+        return ' · '.join(part for part in parts if part)
+
+    def record_warning(self, text):
+        if text and text not in self.warnings:
+            self.warnings.append(text)
+            print('警告：' + text, flush=True)
+
+    def hud_layout_changed(self, _hud):
+        self.schedule_layout_save()
+
+    def hud_closed(self, _hud):
+        self.schedule_layout_save(delay=0)
+        if not self.huds and self.root.state() in ('withdrawn', 'iconic'):
+            self.show_gui()
+
+    def root_configured(self, event):
+        if event.widget is not self.root or self.root.state() != 'normal':
+            return
+        self.last_gui_geometry = GuiGeometry(
+            self.root.winfo_x(), self.root.winfo_y(),
+            self.root.winfo_width(), self.root.winfo_height())
+        self.schedule_layout_save()
+
+    def schedule_layout_save(self, delay=600):
+        if self.loading or self.layout_store is None:
+            return
+        if self.save_after is not None:
+            try:
+                self.root.after_cancel(self.save_after)
+            except tk.TclError:
+                pass
+            self.save_after = None
+        self.save_after = self.root.after(max(0, int(delay)), self.save_layout_now)
+
+    def snapshot_layout(self):
+        huds = []
+        for hud in self.huds.values():
+            try:
+                huds.append(HudPlacement(**hud.placement()))
+            except (tk.TclError, TypeError, ValueError, AttributeError):
+                continue
+        gui = self.last_gui_geometry
+        if self.root.state() == 'normal':
+            gui = GuiGeometry(self.root.winfo_x(), self.root.winfo_y(),
+                              self.root.winfo_width(), self.root.winfo_height())
+        return Layout(panels=tuple(panel.config for panel in self.panels),
+                      huds=tuple(huds), gui=gui,
+                      event_observation=self.events_enabled)
+
+    def save_layout_now(self):
+        if self.save_after is not None:
+            try:
+                self.root.after_cancel(self.save_after)
+            except tk.TclError:
+                pass
+            self.save_after = None
+        if self.layout_store is None:
+            return False
+        try:
+            self.layout_store.save(self.snapshot_layout())
+        except (OSError, ValueError) as exc:
+            self.record_warning('布局保存失败：' + str(exc))
+            return False
+        return True
+
+    def verify_shutdown(self):
+        """Check that this app's own observer, session and forwards are gone."""
+        session = self.session
+        issues = []
+        session_closed = session is None or bool(getattr(session, 'closed', False))
+        if not session_closed:
+            issues.append('采集会话未关闭')
+        observer_released = True
+        if session is not None:
+            observer = getattr(session, 'observer', None)
+            if observer is not None:
+                observer_released = (getattr(observer, 'script', None) is None and
+                                     getattr(observer, 'session', None) is None)
+                if not observer_released:
+                    issues.append('事件观察器未释放')
+        forwards_released = True
+        collector = getattr(session, 'collector', None) if session is not None else None
+        registry = getattr(collector, 'forward_registry', None)
+        owned = getattr(registry, 'owned', {}) if registry is not None else {}
+        if owned:
+            forwards_released = False
+            issues.append(f'仍有 {len(owned)} 个 ADB 转发未释放')
+        report = dict(ok=not issues, session_closed=session_closed,
+                      observer_released=observer_released,
+                      forwards_released=forwards_released, issues=issues)
+        print('退出清理核对：' + json.dumps(report, ensure_ascii=False), flush=True)
+        return report
 
     def collect(self):
         try:
@@ -163,21 +405,51 @@ class App:
                     self.events.put(('scanning',True))
                     if self.collector:
                         self.collector.close()
-                    self.collector=CollectionSession(self.args.adb,self.args.serial,
-                        frida_remote=self.args.frida_remote, audit=audit, history=self.history,
-                        log=lambda x:print(x,flush=True))
-                    self.collector.enable_lifecycle(runtime)
+                        self.collector = None
                     try:
-                        self.collector.connect()
-                        diag = self.collector.collector.diagnostics
-                        self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏版本 {diag.version_actual} 已兼容'))
+                        target = resolve_configured(self.connection_config)
+                    except ConnectionUnavailable as exc:
+                        diagnostic = exc.diagnostics.as_dict() if exc.diagnostics else None
+                        self.events.put(('connection_diagnostic', diagnostic))
+                        self.events.put(('connection', str(exc)))
+                        self.events.put(('event', (None, None)))
+                        self.events.put(('scanning', False))
                     except Exception as exc:
                         traceback.print_exc()
-                        self.events.put(('error',str(exc)))
-                        self.events.put(('connection', '连接或版本校验失败；停止发布实时数值'))
-                        self.collector.close()
-                        self.collector=None
-                    self.events.put(('scanning',False))
+                        self.events.put(('error', str(exc)))
+                        self.events.put(('connection', '连接设置解析失败；停止发布实时数值'))
+                        self.events.put(('scanning', False))
+                    else:
+                        self.events.put(('connection_diagnostic',
+                                         target.diagnostics.as_dict()))
+                        remote = self.frida_remote
+                        try:
+                            self.collector=CollectionSession(
+                                target.adb_path, target.serial, frida_remote=remote,
+                                audit=audit, history=self.history,
+                                log=lambda x:print(x,flush=True))
+                            self.session = self.collector
+                            self.collector.enable_lifecycle(runtime)
+                            self.collector.connect()
+                            diag = self.collector.collector.diagnostics
+                            self.events.put(('connection_diagnostic', diag.as_dict()))
+                            self.events.put(('event', (self.collector.event_status,
+                                                       self.collector.event_error)))
+                            self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏版本 {diag.version_actual} 已兼容'))
+                        except Exception as exc:
+                            traceback.print_exc()
+                            self.events.put(('error',str(exc)))
+                            diagnostic = getattr(exc, 'diagnostics', None)
+                            if diagnostic is not None:
+                                self.events.put(('connection_diagnostic',
+                                                 diagnostic.as_dict()))
+                            self.events.put(('connection', '连接或版本校验失败；停止发布实时数值'))
+                            if self.collector is not None:
+                                try:
+                                    self.collector.close()
+                                finally:
+                                    self.collector=None
+                        self.events.put(('scanning', False))
                 if self.collector:
                     try:
                         sample = self.collector.read()
@@ -220,8 +492,22 @@ class App:
                     self.scan_button.configure(state='disabled' if value else 'normal')
                     if value:
                         self.error=''
+                elif kind=='connection_diagnostic':
+                    self.connection_diagnostic=value
+                elif kind=='event':
+                    self.event_status,self.event_error=value
+                    if value[0]:
+                        self.event_state=event_label(value[0], value[1])
+                elif kind=='tray':
+                    if value=='show':
+                        self.show_gui()
+                    elif value=='quit':
+                        self.quit()
+                        return
         except queue.Empty:
             pass
+        if self.quitting:
+            return
         age=observation_age(self.last)
         if self.scanning:
             label='正在定位 · 保留上次记录' if self.last else '正在定位本局…'
@@ -244,7 +530,10 @@ class App:
         self.status.set(label)
         for hud in self.huds.values():
             hud.status.set(label + ' · ' + self.event_state)
-        self.diagnostics.set(self.connection + '\n' + self.event_state + ('\n' + self.error if self.error else ''))
+        warning = '\n'.join(self.warnings)
+        self.diagnostics.set(self.connection + '\n' + self.event_state +
+                             ('\n' + warning if warning else '') +
+                             ('\n' + self.error if self.error else ''))
         self.status_label.configure(foreground='#f1bc82' if self.error or (self.last and age>2 and not self.scanning) else '#edf2f4')
         self.root.after(100,self.tick)
 
@@ -269,14 +558,19 @@ class App:
     def add_panel(self, config=None):
         if config is None:
             config = PanelConfig(panel_id=uuid4().hex)
-        panel = StatisticPanel(self.panel_host, config, changed=lambda p: self.render_panels(),
+        panel = StatisticPanel(self.panel_host, config, changed=self.panel_changed,
                                duplicate=self.duplicate_panel, delete=self.delete_panel,
                                open_hud=self.open_hud, portraits=self.portraits)
         self.panels.append(panel)
         self.update_panel_actions()
         self.layout_panels()
         self.render_panels()
+        self.schedule_layout_save()
         return panel
+
+    def panel_changed(self, _panel=None):
+        self.render_panels()
+        self.schedule_layout_save(delay=0)
 
     def duplicate_panel(self, panel):
         return self.add_panel(replace(panel.config, panel_id=uuid4().hex))
@@ -293,6 +587,7 @@ class App:
         panel.destroy()
         self.update_panel_actions()
         self.layout_panels()
+        self.schedule_layout_save(delay=0)
 
     def update_panel_actions(self):
         for panel in self.panels:
@@ -302,12 +597,20 @@ class App:
         if self.hud_request:
             return self.hud_request(panel)
 
-    def create_hud(self, panel):
+    def create_hud(self, panel, placement=None):
         hud = self.huds.get(panel.config.panel_id)
         if hud is None:
-            hud = self.huds[panel.config.panel_id] = HudWindow(self, panel)
+            if placement is not None:
+                fitted = clamp_geometry(placement.geometry, self.work_areas(),
+                                        minimum=self.hud_minimum(panel))
+                placement = HudPlacement(placement.panel_id, fitted.x, fitted.y,
+                                         fitted.width, fitted.height,
+                                         placement.opacity, placement.locked)
+            hud = HudWindow(self, panel, placement)
+            self.huds[panel.config.panel_id] = hud
         hud.window.lift()
         self.render_huds()
+        self.schedule_layout_save(delay=0)
         return hud
 
     def render_huds(self, reset=False):
@@ -344,7 +647,9 @@ class App:
         self.current_battle = battle
         seconds = self.statistics.get('game_time', sample['game_time'])
         self.clock.set(f'游戏时间 {int(seconds)//60:02}:{seconds%60:04.1f} · {len(self.source_rows)} 个统计条目')
-        self.event_state = event_label(sample.get('event_status'), sample.get('event_error'))
+        self.event_status = sample.get('event_status')
+        self.event_error = sample.get('event_error')
+        self.event_state = event_label(self.event_status, self.event_error)
         self.render_panels(reset=reset)
         self.render_huds(reset=reset)
         self.export_button.configure(state='normal')
@@ -359,15 +664,38 @@ class App:
             window.lift()
 
     def close(self):
-        if self.huds:
-            # Keep a taskbar recovery route even if every HUD is click-through.
-            # ARK-11 replaces this with tray restoration.
+        """Window close hides the GUI; only explicit quit stops collection."""
+        self.save_layout_now()
+        if self.tray is not None:
+            # HUDs and collection keep running; the tray restores this window.
+            self.root.withdraw()
+        elif self.huds:
+            # Without a tray keep a taskbar recovery route for locked HUDs.
             self.root.iconify()
         else:
             self.quit()
 
     def quit(self):
+        if self.quitting:
+            return
+        self.quitting = True
+        self.save_layout_now()
         self.stop.set()
+        for hud in list(self.huds.values()):
+            hud.destroy_for_quit()
+        window = self.settings_window
+        if window is not None:
+            try:
+                window.close()
+            except tk.TclError:
+                pass
+        self.settings_window = None
+        if self.tray is not None:
+            try:
+                self.tray.stop()
+            except Exception as exc:
+                self.record_warning('系统托盘清理失败：' + str(exc))
+            self.tray = None
         self.root.withdraw()
         self.finish_close()
 
@@ -375,18 +703,23 @@ class App:
         if self.worker.is_alive():
             self.root.after(100,self.finish_close)
         else:
+            self.shutdown_report = self.verify_shutdown()
             self.root.destroy()
 
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--adb',default=DEFAULT_ADB)
-    parser.add_argument('--serial',default=DEFAULT_SERIAL)
+    parser.add_argument('--adb', default=None,
+                        help='override the saved adb path for this launch')
+    parser.add_argument('--serial', default=None,
+                        help='override the saved instance address for this launch')
     parser.add_argument('--capture-seconds',type=float,default=0)
     events=parser.add_mutually_exclusive_group()
-    events.add_argument('--frida-remote', default=DEFAULT_FRIDA_REMOTE,
-                        help='Frida 17.26.1 endpoint (default: %(default)s); no server is installed or started')
-    events.add_argument('--no-events', dest='frida_remote', action='store_const', const=None,
+    events.add_argument('--frida-remote', default=None,
+                        help='Frida 17.26.1 endpoint; default comes from the saved '
+                             'event-observation setting (initially %s); no server is installed or started'
+                             % DEFAULT_FRIDA_REMOTE)
+    events.add_argument('--no-events', dest='frida_remote', action='store_const', const='',
                         help='disable event observation; retain native snapshots')
     parser.add_argument('--wait-battle-seconds',type=float,default=180)
     parser.add_argument('--baseline-timeout',type=float,default=90)
@@ -400,6 +733,17 @@ def main():
     parser.add_argument('--require-events',action='store_true',
                         help='fail acceptance capture if event coverage is unavailable')
     args=parser.parse_args()
+    layout_store = LayoutStore()
+    loaded_layout = layout_store.load()
+    if args.frida_remote is None:
+        if args.capture_seconds:
+            # Headless capture has no settings window; keep the old default.
+            args.frida_remote = DEFAULT_FRIDA_REMOTE
+        else:
+            args.frida_remote = (DEFAULT_FRIDA_REMOTE
+                                 if loaded_layout.layout.event_observation else None)
+    elif args.frida_remote == '':
+        args.frida_remote = None
     if args.require_events and not args.frida_remote:
         parser.error('--require-events cannot be combined with --no-events')
     if (args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0):
@@ -419,6 +763,9 @@ def main():
         root.destroy()
         return
     if args.capture_seconds:
+        # Headless capture has no settings window; keep the documented defaults.
+        args.adb = args.adb or DEFAULT_ADB
+        args.serial = args.serial or DEFAULT_SERIAL
         from capture_cli import run_capture
         run_capture(args)
         return
@@ -426,7 +773,15 @@ def main():
     sys.stdout=sys.stderr=log
     enable_dpi_awareness()
     root=tk.Tk()
-    App(root,args)
+
+    def tray_factory(app):
+        return TrayIcon('ArkDPS · 实时统计',
+                        lambda action: app.events.put(('tray', action)),
+                        icon_path=ROOT / 'assets' / 'arkdps.ico')
+
+    App(root, args, layout_store=layout_store,
+        connection_store=ConnectionConfigStore(), tray_factory=tray_factory,
+        layout_load=loaded_layout)
     root.mainloop()
 
 
