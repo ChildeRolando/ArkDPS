@@ -9,6 +9,7 @@ import subprocess
 import time
 
 from collection_session import CollectionSession
+from battle_history import BattleHistory
 from event_capture import CaptureRetry
 
 
@@ -70,6 +71,7 @@ def run_capture(args, *, session_factory=CollectionSession):
 
         session = session_factory(args.adb, args.serial, frida_remote=args.frida_remote, audit=audit)
         if isinstance(session, CollectionSession):
+            session.history = BattleHistory(root / 'runtime' / 'history')
             session.enable_lifecycle()
         audit('metadata', metadata)
         try:

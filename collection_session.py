@@ -1,5 +1,8 @@
 """Shared GUI/CLI lifecycle; default event observation can degrade to snapshots."""
 import time
+from dataclasses import asdict
+
+from battle_history import BattleRecord, HistoryError
 
 from collector import Collector, SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_capture import LiveEventCapture
@@ -11,7 +14,7 @@ DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
 
 class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
-                 collector=None, observer_factory=None):
+                 collector=None, observer_factory=None, history=None):
         self.collector = collector if collector is not None else Collector(adb, serial, log=log)
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
@@ -22,6 +25,9 @@ class CollectionSession:
         self.event_error = None
         self.runtime = None
         self.closed = False
+        self.history = history
+        self.history_error = None
+        self._pending_history = None
 
     def enable_lifecycle(self, runtime=None):
         """Use ordered battle generations in the GUI and capture entry points."""
@@ -29,6 +35,7 @@ class CollectionSession:
             raise RuntimeError('enable lifecycle before connecting')
         from battle_lifecycle import BattleRuntime
         self.runtime = runtime if runtime is not None else BattleRuntime()
+        self._pending_history = self.runtime.pending_history
         self.runtime.record = lambda observation: self.audit('lifecycle_observation', observation)
 
     def connect(self):
@@ -149,8 +156,30 @@ class CollectionSession:
         return sample
 
     def _drain_archives(self):
-        for archive in self.runtime.sessions.pop_archives():
+        archives = self.runtime.sessions.pop_archives()
+        if self.history is not None:
+            # Claim the entire batch before diagnostic I/O can interrupt handoff.
+            self._pending_history.extend(archives)
+        for archive in archives:
             self.audit('archive_ready', archive)
+        if self.history is None:
+            return
+        self.history_error = None
+        # Attempt each handoff once per drain. A bad record must not starve
+        # other battles or be retried indefinitely in this same read.
+        for _ in range(len(self._pending_history)):
+            archive = self._pending_history.popleft()
+            try:
+                result = self.history.save(BattleRecord.from_archive(archive))
+            except HistoryError as exc:
+                # Keep failures across reads, closes and transport replacement.
+                self._pending_history.append(archive)
+                if self.history_error is None:
+                    self.history_error = str(exc)
+                self.audit('history_error', dict(battle_id=archive['battle_id'], error=str(exc)))
+            else:
+                self.audit('history_saved', dict(battle_id=archive['battle_id'], written=result.written,
+                           diagnostics=[asdict(d) for d in result.diagnostics]))
 
     def close(self):
         if self.closed:
