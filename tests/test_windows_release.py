@@ -134,3 +134,40 @@ def test_builder_rejects_unpinned_toolchain(monkeypatch):
     monkeypatch.setattr(builder.importlib.metadata, 'version', lambda _: 'wrong')
     with pytest.raises(RuntimeError, match='toolchain mismatch'):
         builder.toolchain_versions()
+
+
+def test_ci_desktop_preparation_never_changes_user_desktop(monkeypatch):
+    spec = importlib.util.spec_from_file_location('prepare_ci', ROOT / 'tools/prepare_windows_ci.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+    class NoDisplayAccess:
+        def __getattr__(self, name):
+            raise AssertionError('user display must not be touched')
+    with pytest.raises(RuntimeError, match='restricted'):
+        module.prepare(NoDisplayAccess())
+
+
+def test_ci_desktop_preparation_requires_verified_resolution(monkeypatch):
+    spec = importlib.util.spec_from_file_location('prepare_ci', ROOT / 'tools/prepare_windows_ci.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+    monkeypatch.setenv('RUNNER_OS', 'Windows')
+    class Display:
+        calls = []
+        dimensions = (1024, 768)
+        def EnumDisplaySettingsW(self, name, index, pointer):
+            pointer._obj.width, pointer._obj.height = self.dimensions
+            return True
+        def ChangeDisplaySettingsW(self, pointer, flag):
+            self.calls.append(flag)
+            if flag == 0:
+                self.dimensions = (pointer._obj.width, pointer._obj.height)
+            return 0
+    display = Display()
+    assert module.prepare(display) == dict(before=[1024, 768], after=[1920, 1080])
+    assert display.calls == [2, 0]
+    monkeypatch.setattr(display, 'ChangeDisplaySettingsW', lambda *args: -2)
+    with pytest.raises(OSError, match='CI display change failed'):
+        module.prepare(display)
