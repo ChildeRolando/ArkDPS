@@ -124,14 +124,14 @@ def run(output, restore):
         # which would accidentally test an unrelated desktop application.
         underlay = tk.Toplevel(root)
         underlay.title('ARK-19 · 离线单屏点击验收（非游戏）')
-        underlay.geometry('800x650+50+50')
+        underlay.geometry('800x650+700+50')
         canvas = tk.Canvas(underlay, bg='#26343d')
         canvas.pack(fill='both', expand=True)
         canvas.create_text(24, 24, anchor='nw', fill='white', text='离线测试窗口 · 非游戏')
         hits = []
         canvas.bind('<Button-1>', lambda e: hits.append('underlay'))
         hud.panel.canvas.bind('<Button-1>', lambda e: hits.append('hud'), add='+')
-        hud.window.geometry('420x400+100+150')
+        hud.window.geometry('420x400+800+150')
         settle(root)
         user = _user32()
         user.WindowFromPoint.argtypes = [wintypes.POINT]
@@ -148,12 +148,19 @@ def run(output, restore):
             start = len(hits)
             for locked in (False, True, False):
                 hud.set_locked(locked)
+                # An unlocked HUD click can activate its GUI owner, raising
+                # it above the underlay. Restore the test scene each time,
+                # as a player would foreground the game before using a HUD.
+                underlay.lift()
+                underlay.focus_force()
+                hud.window.lift()
                 settle(root)
                 actual = user.GetAncestor(user.WindowFromPoint(wintypes.POINT(*point)), 2)
                 assert actual == window_handle(underlay if locked else hud.window), (theme, locked, actual, point, underlay.geometry(), underlay.winfo_viewable(), hud.window.geometry(), hud.panel.canvas.winfo_geometry())
                 native_click(root, *point)
             assert hits[start:] == ['hud', 'underlay', 'hud'], hits
             receipt['native_clicks'][theme] = hits[start:]
+        receipt['input_scene'] = {'underlay': underlay.geometry(), 'hud': hud.window.geometry()}
         underlay.destroy()
         browser.query.set('不存在的关卡')
         assert not browser.listing.get_children()
@@ -206,6 +213,10 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT / 'runtime/ui-theme-validation')
     parser.add_argument('--restore', action='store_true')
     args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    if not args.restore:
+        # Invalidate old success evidence before touching native windows.
+        (args.output / 'receipt.json').write_text(json.dumps({'status': 'RUNNING'}), 'utf-8')
     result = run(args.output, args.restore)
     if not args.restore:
         child = subprocess.run([sys.executable, str(Path(__file__).resolve()), '--restore',
@@ -213,7 +224,7 @@ def main():
         assert child.returncode == 0, child.stderr
         result['restart'] = json.loads(child.stdout)
         result['files_sha256'] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-                                  for p in ROOT.glob('*.py')}
+                                  for p in [*ROOT.glob('*.py'), Path(__file__).resolve()]}
         result['screenshots_sha256'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                         for p in args.output.glob('*.png')}
         (args.output / 'receipt.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), 'utf-8')
