@@ -194,11 +194,8 @@ class Collector:
         from tools.enemy_health.battle_lifecycle import locate_lifecycle
         locator = DeployTrackerReader(self.core.mc)
         try:
-            classes = locator.scan_classes(('BattleController',))
-            if not classes or len(classes) != 1:
-                raise SampleUnavailable('无法唯一定位战局单例类型；保留未知状态')
-            self._lifecycle_reader = locate_lifecycle(self.core.mc, next(iter(classes)), locator)
-            self._lifecycle_reader.m.channel = self.core._chan
+            self._lifecycle_reader = locate_lifecycle(
+                self.core.mc, None, locator, channel=self.core._chan)
         finally:
             locator.close()
 
