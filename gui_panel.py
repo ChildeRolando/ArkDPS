@@ -150,7 +150,8 @@ class Tooltip:
 
 
 class StatisticPanel(ttk.Frame):
-    def __init__(self, parent, config, *, changed, duplicate, delete, open_hud, portraits):
+    def __init__(self, parent, config, *, changed, duplicate, delete, open_hud, portraits,
+                 compact=False):
         super().__init__(parent, padding=10, relief='solid', borderwidth=1)
         self.config = config
         self.changed = changed
@@ -175,6 +176,8 @@ class StatisticPanel(ttk.Frame):
                               ('打开到 HUD', lambda: open_hud(self))):
             ttk.Button(actions, text=text, command=command).pack(side='left', padx=(0, 6))
         self.delete_button = actions.winfo_children()[1]
+        self.hud_controls = ttk.Frame(self)
+        self.hud_controls.grid(row=7, column=0, sticky='ew', pady=(6, 0))
         settings = ttk.Frame(self)
         settings.grid(row=2, column=0, sticky='ew')
         self.controls = {}
@@ -225,6 +228,12 @@ class StatisticPanel(ttk.Frame):
         self.detail_label.grid(row=5, column=0, sticky='ew', pady=(8, 0))
         ttk.Button(self, text='收起详情', command=lambda: self.pin(None)).grid(
             row=6, column=0, sticky='w', pady=(5, 0))
+        self.compact = compact
+        if compact:
+            for widget in (actions, settings, self.detail_label, self.hud_controls):
+                widget.grid_remove()
+            for widget in self.grid_slaves(row=6):
+                widget.grid_remove()
 
     def configure_panel(self, _event=None):
         values = {key: next(k for k, label in labels.items() if label == variable.get())
