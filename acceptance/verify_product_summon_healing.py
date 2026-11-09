@@ -70,6 +70,14 @@ if detached_rosters:
     detached=[e for e in heals if e['frame']>detached_rosters[0]['frame']]
 if args.require_detached and not detached:
     raise ValueError('no healing after independently confirmed host departure')
+if args.require_detached:
+    by_frame={r['frame']:r for r in rosters if r['present_known']}
+    for publication in publications:
+        roster=by_frame.get(publication['frame'])
+        owner=publication['statistics']['rows'].get(host)
+        if roster is not None and owner is not None and host_uid not in roster['present_unique_ids']:
+            if owner['present']:
+                raise ValueError('a departed host was marked present because its summon survived')
 print(json.dumps(dict(head=summary['head'],samples=len(publications),heal_events=len(heals),
     native_healing_start=baseline.get(token,{}).get('healing',0),native_healing_end=native[token]['healing'],
     observed_healing=total,actual_hp_restored=effective,overheal=total-effective,
