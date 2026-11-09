@@ -25,6 +25,9 @@ class CollectionSession:
         self.event_error = None
         self.runtime = None
         self.closed = False
+        # Retain cleanup failures even when a failed observer is discarded for
+        # snapshot fallback or a later retry succeeds. Shutdown must report them.
+        self.cleanup_errors = {}
         self.history = history
         self.history_error = None
         self._pending_history = None
@@ -69,6 +72,7 @@ class CollectionSession:
                 try:
                     self.observer.stop()
                 except Exception as cleanup:
+                    self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
                     self.audit('observer_cleanup_error', {'reason': str(cleanup)})
             self.observer = None
 
@@ -86,6 +90,7 @@ class CollectionSession:
             try:
                 self.observer.stop()
             except Exception as cleanup:
+                self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
                 self.audit('observer_cleanup_error', {'reason': str(cleanup)})
             self.observer = None
         self._attach_observer()
@@ -130,6 +135,7 @@ class CollectionSession:
                 try:
                     self.observer.stop()
                 except Exception as cleanup:
+                    self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
                     self.audit('observer_cleanup_error', {'reason': str(cleanup)})
             result = self.capture.snapshot()
         sample = dict(self.capture.last_sample)
@@ -212,7 +218,7 @@ class CollectionSession:
     def close(self):
         if self.closed:
             return
-        self.closed = True
+        errors = []
         try:
             if self.runtime is not None:
                 self._drain_archives()
@@ -221,11 +227,21 @@ class CollectionSession:
             if self.capture is not None:
                 self.capture.close()
                 self.audit('coverage_closed', self.capture.adapter.result())
-        finally:
-            try:
-                if self.observer is not None:
-                    self.observer.stop()
-            finally:
-                self.collector.close()
-                self.event_status = 'stopped'
-                self.audit('stopped', {})
+        except Exception as exc:
+            errors.append(('capture', exc))
+        try:
+            if self.observer is not None:
+                self.observer.stop()
+        except Exception as exc:
+            errors.append(('observer', exc))
+        try:
+            self.collector.close()
+        except Exception as exc:
+            errors.append(('collector', exc))
+        for resource, exc in errors:
+            self.cleanup_errors.setdefault(resource, []).append(str(exc))
+        self.closed = not self.cleanup_errors
+        self.event_status = 'stopped'
+        self.audit('stopped', {'cleanup_errors': self.cleanup_errors} if self.cleanup_errors else {})
+        if errors:
+            raise errors[0][1]

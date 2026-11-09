@@ -351,3 +351,18 @@ def test_settings_apply_only_persists_edited_connection_preferences(configured_a
     reopened.apply()
     assert connection.load().config == expected
     reopened.close()
+
+
+def test_connection_failure_clears_previous_event_status_in_gui_and_hud(app_at):
+    app, _, _ = app_at
+    hud = app.open_hud(app.panels[0])
+    app.events.put(('event', ('recording', None)))
+    app.tick()
+    assert '事件观测中' in app.diagnostics.get()
+    assert '事件观测中' in hud.status.get()
+    app.events.put(('event', (None, None)))
+    app.tick()
+    assert app.event_status is app.event_error is None
+    assert app.event_state == event_label(None, None)
+    assert '事件观测中' not in app.diagnostics.get()
+    assert '事件观测中' not in hud.status.get()

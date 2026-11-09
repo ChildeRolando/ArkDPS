@@ -211,3 +211,41 @@ def test_tray_quit_through_tick_does_not_schedule_after_destroy(monkeypatch, tmp
     assert destroyed == [True]
     assert scheduled == []
     assert app.quitting and app.stop.is_set()
+
+
+def test_menu_uses_pointer_width_prototypes_for_wide_native_handles(monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+    import tray as native_tray
+
+    calls = []
+    menu_handle, window_handle = 0x12345678ABCDEF01, 0x23456789ABCDEF02
+
+    class Function:
+        def __init__(self, name, result=1):
+            self.name, self.result = name, result
+            self.argtypes = self.restype = None
+
+        def __call__(self, *args):
+            calls.append((self.name, args))
+            return self.result
+
+    user = SimpleNamespace(**{name: Function(name) for name in (
+        'AppendMenuW', 'TrackPopupMenu', 'GetCursorPos', 'SetForegroundWindow',
+        'PostMessageW', 'DestroyMenu')})
+    user.CreatePopupMenu = Function('CreatePopupMenu', menu_handle)
+    monkeypatch.setattr(native_tray, '_user32', lambda: user)
+    emitted = []
+    icon = TrayIcon('test', emitted.append)
+    icon.hwnd = window_handle
+    icon._show_menu()
+    assert user.DestroyMenu.argtypes == [wintypes.HMENU]
+    assert user.DestroyMenu.restype == wintypes.BOOL
+    assert user.PostMessageW.argtypes == [wintypes.HWND, wintypes.UINT,
+                                          wintypes.WPARAM, wintypes.LPARAM]
+    assert user.PostMessageW.restype == wintypes.BOOL
+    assert ('DestroyMenu', (menu_handle,)) in calls
+    message = next(args for name, args in calls if name == 'PostMessageW')
+    assert message[0].value == window_handle
+    assert ctypes.sizeof(wintypes.HMENU) == ctypes.sizeof(ctypes.c_void_p)
+    assert emitted == ['show']

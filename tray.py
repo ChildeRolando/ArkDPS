@@ -273,7 +273,13 @@ class TrayIcon:
 
     def _show_menu(self):
         user = _user32()
+        user.CreatePopupMenu.argtypes = []
         user.CreatePopupMenu.restype = wintypes.HMENU
+        user.DestroyMenu.argtypes = [wintypes.HMENU]
+        user.DestroyMenu.restype = wintypes.BOOL
+        user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                      wintypes.WPARAM, wintypes.LPARAM]
+        user.PostMessageW.restype = wintypes.BOOL
         user.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT,
                                      ctypes.c_size_t, wintypes.LPCWSTR]
         user.AppendMenuW.restype = wintypes.BOOL

@@ -361,17 +361,23 @@ class App:
         """Check that this app's own observer, session and forwards are gone."""
         session = self.session
         issues = []
-        session_closed = session is None or bool(getattr(session, 'closed', False))
+        cleanup_errors = getattr(session, 'cleanup_errors', {}) if session is not None else {}
+        session_closed = ((session is None or bool(getattr(session, 'closed', False)))
+                          and not cleanup_errors)
         if not session_closed:
             issues.append('采集会话未关闭')
-        observer_released = True
+        observer_released = not cleanup_errors.get('observer')
         if session is not None:
             observer = getattr(session, 'observer', None)
             if observer is not None:
-                observer_released = (getattr(observer, 'script', None) is None and
+                observer_released = (observer_released and
+                                     not getattr(observer, 'cleanup_errors', {}) and
+                                     getattr(observer, 'script', None) is None and
                                      getattr(observer, 'session', None) is None)
-                if not observer_released:
-                    issues.append('事件观察器未释放')
+        if not observer_released:
+            issues.append('事件观察器释放未确认')
+        for resource, errors in cleanup_errors.items():
+            issues.extend(f'{resource} 清理失败：{error}' for error in errors)
         forwards_released = True
         collector = getattr(session, 'collector', None) if session is not None else None
         registry = getattr(collector, 'forward_registry', None)
@@ -505,8 +511,7 @@ class App:
                     self.connection_diagnostic=value
                 elif kind=='event':
                     self.event_status,self.event_error=value
-                    if value[0]:
-                        self.event_state=event_label(value[0], value[1])
+                    self.event_state=event_label(value[0], value[1])
                 elif kind=='tray':
                     if value=='show':
                         self.show_gui()
@@ -742,8 +747,12 @@ def main():
     parser.add_argument('--require-events',action='store_true',
                         help='fail acceptance capture if event coverage is unavailable')
     args=parser.parse_args()
-    layout_store = LayoutStore()
-    loaded_layout = layout_store.load()
+    # Headless capture must not migrate/quarantine GUI-only layout files or
+    # consume diagnostics that can only be displayed by the next GUI launch.
+    layout_store = loaded_layout = None
+    if not args.capture_seconds:
+        layout_store = LayoutStore()
+        loaded_layout = layout_store.load()
     if args.frida_remote is None:
         if args.capture_seconds:
             # Headless capture has no settings window; keep the old default.
