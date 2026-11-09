@@ -1,0 +1,49 @@
+name: Windows regression and portable candidate
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10.10'
+          architecture: x64
+      - name: Install pinned candidate toolchain
+        run: python -m pip install -r requirements-windows.txt pytest==8.3.5
+      - name: Native Windows regression
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest tests -q --assert=plain
+      - name: Build exact clean checkout
+        shell: pwsh
+        run: python tools/build_windows.py --output runtime/ci-build --expect-head (git rev-parse HEAD)
+      - name: Verify extracted artifact without source imports
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem runtime/ci-build/*.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath runtime/extracted
+          $exe = (Resolve-Path runtime/extracted/ArkDPS/ArkDPS.exe).Path
+          $out = Join-Path $env:RUNNER_TEMP artifact-smoke
+          $p = Start-Process -FilePath $exe -ArgumentList @('--self-test', $out) -Wait -PassThru -WorkingDirectory $env:RUNNER_TEMP
+          if ($p.ExitCode -ne 0) { throw "Artifact verification failed: $($p.ExitCode)" }
+          $receipt = Get-Content (Join-Path $out receipt.json) -Raw | ConvertFrom-Json
+          if ($receipt.status -ne 'PASS' -or -not $receipt.frozen) { throw 'Missing artifact PASS' }
+          Copy-Item $out runtime/artifact-smoke -Recurse
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-candidate-${{ github.sha }}
+          path: |
+            runtime/ci-build/*.zip
+            runtime/ci-build/artifact.json
+            runtime/ci-build/build.log
+            runtime/artifact-smoke/
+          if-no-files-found: warn

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 from collection_session import CollectionSession
@@ -32,10 +33,15 @@ def write_json(path, value):
 
 def run_capture(args, *, session_factory=CollectionSession):
     root = Path(__file__).resolve().parent
-    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    frozen = getattr(sys, 'frozen', False)
+    if frozen:
+        from release_identity import load_manifest
+        head = load_manifest(root)['head']
+    else:
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     if args.expect_head and head != args.expect_head:
         raise RuntimeError(f'candidate mismatch: expected {args.expect_head}, got {head}')
-    if args.expect_head:
+    if args.expect_head and not frozen:
         dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=normal'],
                                         cwd=root, text=True).strip()
         if dirty:
