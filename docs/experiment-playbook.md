@@ -185,6 +185,17 @@ if not asst.set_instance_option(InstanceOptionType.adblite_enabled, '1'):
 - `SingleStep` 的多动作接口不遵循这里使用的 `post_delay` 等待方式；研究控制器要显式等待。
 - 导航失败（停在结算页或未展开的关卡页）不是战斗样本；修正导航后重跑，失败回调保留。
 
+### 6.1 OF-8 导航实测（MAA v6.22.0）
+
+本次使用 MAA v6.22.0 和 MuMu 默认 ARM64 模拟环境，未修改游戏设置。
+
+- `Custom` 的 `task_names` 是候选入口任务名列表，不是串行 itinerary。一次传入 `Terminal-Entry`、`ToOF`、`ChapterSwipeToTheLeft` 只运行首条路线并停在 `TerminalDefault`。要串联，追加独立的 `Custom` tasks，或在任务定义中显式设置 `next`。
+- 单独运行 `ToOF` 可从终端导航到 OF 地图，但地图本身不足以启动文件式 Copilot；须点击目标关卡进入详情页并到达 `BattleStartPre`。曾从地图直接调用 Copilot，任务回报 completed，但未能证明实际开战。
+- OF-8 位于地图右侧。十次向左滑动耗尽自定义 OCR task（`ExceededLimit`）；UI 中正确方向是向右。改用 `SlowlySwipeToTheRight` 后四次滑动识别到 `OF-8`（OCR 0.999161），点击区域 `[482,419,152,48]`，随后 OCR 确认详情页 `开始行动`（0.999278）。
+- 可靠链路：终端入口 → 独立 `ToOF` `Custom` task → 自定义 OCR 循环向右滑动定位 OF-8 → 确认详情页 OCR 为 `开始行动` → 用 stage JSON 文件名启动 Copilot。不能把任务完成当作开战证明；需核对回调和当前画面。
+
+最终从详情页运行已启动 `BattleProcessTask`，回调出现夜刀、闪灵、煌的部署动作；配置的暂停点显示 `Mission Failed`。这不是成功通关，也不表示临时导航配置已成为生产验收任务。
+
 ## 7. 采样、暂停与判定
 
 1. 进入战斗前挂好事件探针；内存采集器可以先启动并等待战局。
