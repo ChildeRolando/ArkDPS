@@ -93,20 +93,21 @@ def test_failed_start_observer_cleanup_is_not_forgotten_after_snapshot_fallback(
     assert 'startup detach refused' in ' '.join(report['issues'])
 
 
-def test_all_close_errors_are_retained_without_skipping_other_resources():
+@pytest.mark.parametrize('error_type', [RuntimeError, KeyboardInterrupt])
+def test_all_close_errors_are_retained_without_skipping_other_resources(error_type):
     calls = []
 
     def fail(resource):
         def close():
             calls.append(resource)
-            raise RuntimeError(resource + ' close refused')
+            raise error_type(resource + ' close refused')
         return close
 
     current = CollectionSession('adb', 'serial', collector=SimpleNamespace(
         close=fail('collector'), forward_registry=SimpleNamespace(owned={})))
     current.capture = SimpleNamespace(close=fail('capture'))
     current.observer = SimpleNamespace(stop=fail('observer'), script=None, session=None)
-    with pytest.raises(RuntimeError, match='capture close refused'):
+    with pytest.raises(error_type, match='capture close refused'):
         current.close()
     assert calls == ['capture', 'observer', 'collector']
     assert set(current.cleanup_errors) == {'capture', 'observer', 'collector'}
@@ -118,3 +119,20 @@ def test_all_close_errors_are_retained_without_skipping_other_resources():
     assert not report['observer_released']
     for resource in calls:
         assert resource + ' close refused' in ' '.join(report['issues'])
+
+
+def test_interrupted_unload_still_attempts_detach_and_retains_failed_handle():
+    calls = []
+
+    def unload():
+        calls.append('unload')
+        raise KeyboardInterrupt('unload interrupted')
+
+    observer = FridaEventObserver(SimpleNamespace(), 'unused')
+    observer.script = SimpleNamespace(is_destroyed=False, unload=unload)
+    observer.session = SimpleNamespace(is_detached=False, detach=lambda: calls.append('detach'))
+    with pytest.raises(KeyboardInterrupt, match='unload interrupted'):
+        observer.stop()
+    assert calls == ['unload', 'detach']
+    assert observer.session is None and observer.script is not None
+    assert observer.cleanup_errors == {'script': 'unload interrupted'}

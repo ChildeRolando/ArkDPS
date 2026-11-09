@@ -98,6 +98,7 @@ class FridaEventObserver:
         # Both releases must be attempted. Keep failed handles available for a
         # retry; clearing a Python reference is not evidence of remote release.
         errors = {}
+        interrupted = None
         for name, method, released in (('script', 'unload', 'is_destroyed'),
                                        ('session', 'detach', 'is_detached')):
             resource = getattr(self, name)
@@ -106,11 +107,15 @@ class FridaEventObserver:
             try:
                 _while_live(getattr(resource, method),
                             lambda: getattr(resource, released))
-            except Exception as exc:
+            except BaseException as exc:
                 errors[name] = str(exc)
+                if not isinstance(exc, Exception):
+                    interrupted = exc
             else:
                 setattr(self, name, None)
         self.cleanup_errors = errors
+        if interrupted is not None:
+            raise interrupted
         if errors:
             raise RuntimeError('; '.join(f'{name}: {error}' for name, error in errors.items()))
 

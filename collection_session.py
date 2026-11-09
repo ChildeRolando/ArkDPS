@@ -227,16 +227,16 @@ class CollectionSession:
             if self.capture is not None:
                 self.capture.close()
                 self.audit('coverage_closed', self.capture.adapter.result())
-        except Exception as exc:
+        except BaseException as exc:
             errors.append(('capture', exc))
         try:
             if self.observer is not None:
                 self.observer.stop()
-        except Exception as exc:
+        except BaseException as exc:
             errors.append(('observer', exc))
         try:
             self.collector.close()
-        except Exception as exc:
+        except BaseException as exc:
             errors.append(('collector', exc))
         for resource, exc in errors:
             self.cleanup_errors.setdefault(resource, []).append(str(exc))
