@@ -1,6 +1,6 @@
 # GUI/HUD 共用面板模型与排序口径
 
-实现于 `panel_model.py`，供后续 GUI（ARK-9/10/11/12）与 HUD 共用。
+实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI 已使用该模型，后续 HUD 和历史页面复用同一口径。
 
 ## 配置与运行状态分离
 
@@ -37,4 +37,51 @@ python -m pytest tests/test_panel_model.py -q --assert=plain
 ## 边界
 
 - 护盾最近 5 秒与接敌速率依赖 ARK-5 的事件数据；模型已支持 `recent_shield`，但当前适配器尚未提供。
-- 界面像素、交互、头像资源与多面板布局由后续 GUI/HUD 工单验收。
+- HUD 实际窗口、托盘、布局持久化和历史浏览仍由 ARK-10/11/12 交付。
+
+## 实时 GUI（ARK-9）
+
+`App.render` 只将 `sample.statistics` 交给 `rows_from_statistics` / `render_board`，
+不使用兼容投影的旧 `sample.rows` 或全局平均 DPS。多面板共享同一份结果，
+各自持有不可变 `PanelConfig`，更改配置不修改统计、来源行或其他面板。
+新建使用默认配置，复制分配新 ID，删除不影响战局记录；最后一个面板保留。
+
+`StatisticPanel` 只负责原生显示：伤害分段柱、治疗/护盾柱、离场灰像、姓名与未舍入数值悬停、
+按 owner ID 固定的分类/累计/活跃时间/覆盖/来源详情。近期行隐藏时固定详情继续更新，换局清除固定选择。
+复用 Canvas 项；鼠标停在列表时保留顺序并持续更新数值，离开后恢复精确排序。
+方向键选择，回车固定；外层面板与各列表分别有滚动条。
+空态区分等待数据、未知、可靠零和不完整覆盖下的已观察零。
+可靠零同时要求调用方 `statistics_complete` 与每个已映射条目的相应覆盖完整；
+存在未归属来源时，即使所有已映射条目均为零，也只提示“已观察输出为零，未覆盖部分仍未知”。
+提示框按指针所在显示器的工作区限制全部四边，避开任务栏；底部不足时向上展开，
+不把高低不同显示器组成的虚拟桌面空白区域当成可见屏幕。
+
+“打开到 HUD”保留入口与明确的未接入提示。ARK-10 可安装 `App.hud_request(panel)`，
+读取源面板的 `config` / `view`；不建立第二套采集。HUD 尚未交付时不创建任何 Toplevel。
+删除源面板前发出 `<<PanelDeleting>>` Tcl 事件，附面板 ID。
+
+本票没有引入新统计规则或数据源。采集、归属、覆盖仍由现有核心拥有；新增窗口组件
+只隔离绘制、鼠标/键盘状态和独立配置，防止把 UI 选择写回共享统计。
+
+### 验证与复现
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+python -m pytest tests -q --assert=plain
+python acceptance/verify_gui.py --scale 100
+python acceptance/verify_gui.py --scale 125
+python acceptance/verify_gui.py --scale 150
+python acceptance/verify_gui.py --scale 200
+# 宿主机先在 Windows 显示设置中将至少一块屏幕设为 125%（或用 150）：
+python acceptance/verify_gui.py --native-scale 125
+```
+
+GUI 测试要求可创建 Tk 窗口。截图脚本另外需要 Pillow，仅用于验收，不是产品依赖。
+脚本使用明确标注的离线样本，不操作游戏；遍历真实显示器并覆盖宽窄布局，检查
+完整数值、详情、负坐标副屏与高低不同双屏的 tooltip 四边和实际下方面板悬停，
+输出截图与 JSON（含 HEAD、代码摘要、工作区、窗口 DPI 和提示框完整边界）。
+`--scale` 调整 Tk 字体缩放，**不更改 Windows 显示设置**；它不能证明实际 Windows 缩放验收通过。
+`--native-scale` 不覆盖 Tk 缩放，要求至少一块显示器具有所选百分比的真实 DPI，并检查
+窗口移动后的 DPI 与该显示器一致。两屏均为 96 DPI 时，`--native-scale 125` 必须以退出码 2
+拒绝验收，须在宿主机实际设置后重跑；混合 DPI 热切换仍需单独验证。
+全黑截图导致验收脚本失败，不能作为视觉通过证据。

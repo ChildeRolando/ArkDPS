@@ -1,4 +1,4 @@
-"""Small always-on-top local DPS window; no network service or game writes."""
+"""Native multi-panel statistics GUI; one shared read-only collection session."""
 import argparse
 import json
 import queue
@@ -10,9 +10,14 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, font
+from dataclasses import replace
+from uuid import uuid4
 
-from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
+from panel_model import PanelConfig, render_board, rows_from_statistics
+from gui_panel import StatisticPanel, PortraitAtlas, BG, TEXT, SECONDARY
+
+from collector import BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from metrics import observation_age
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from battle_lifecycle import BattleRuntime
@@ -20,12 +25,28 @@ from battle_history import BattleHistory
 from event_capture import CaptureRetry
 
 
-def number(value):
-    return '—' if value is None else f'{value:,.1f}'
-
-
 def timestamp():
     return datetime.now(timezone(timedelta(hours=8)))
+
+
+def event_label(status, error=None):
+    labels = {'recording': '事件观测中 · 护盾仅含观测区间',
+              'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观测',
+              'gap': '事件中断 · 仅保留已覆盖区间；伤害/治疗快照继续',
+              'failed': '事件不可用 · 使用伤害/治疗快照',
+              'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
+              'finished': '事件观测已结束 · 保留已覆盖区间'}
+    return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
+
+
+def enable_dpi_awareness():
+    if sys.platform == 'win32':
+        import ctypes
+        # System-aware fallback for older Windows; per-monitor coordinates on current Windows.
+        try:
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except (AttributeError, OSError):
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
 
 
 class App:
@@ -43,65 +64,67 @@ class App:
         self.error = ''
         self.scanning = False
         self.battle_status = 'waiting'
-        root.title('明日方舟 · 局内伤害')
-        root.geometry(f'580x366+{max(0, root.winfo_screenwidth()-610)}+75')
-        root.minsize(520, 310)
-        root.attributes('-topmost', True)
-        root.configure(bg='#182127')
+        self.panels = []
+        self.source_rows = []
+        self.statistics = {}
+        self.current_battle = None
+        self.connection = '尚未连接'
+        self.event_state = '等待事件能力诊断'
+        self.hud_request = None  # ARK-10 installs a handler receiving the source panel.
+        self.portraits = PortraitAtlas(root)
+        root.title('ArkDPS · 实时统计')
+        root.geometry('960x700')
+        unit = max(1, font.nametofont('TkDefaultFont').metrics('linespace') / 17)
+        root.minsize(round(440*unit), round(500*unit))
+        root.configure(bg=BG)
         root.protocol('WM_DELETE_WINDOW', self.close)
         style = ttk.Style(root)
         style.theme_use('clam')
-        style.configure('.', font=('Microsoft YaHei UI', 10), background='#182127', foreground='#edf2f4')
-        style.configure('TButton', padding=(10, 6), background='#33434d', foreground='#edf2f4', borderwidth=0)
+        style.configure('.', font=('Microsoft YaHei UI', 10), background=BG, foreground=TEXT)
+        style.configure('TButton', padding=(8, 5), background='#33434d', foreground=TEXT)
         style.map('TButton', background=[('active', '#485e6b'), ('disabled', '#26343d')])
-        style.configure('TCheckbutton', background='#182127', foreground='#edf2f4')
-        style.map('TCheckbutton', background=[('active', '#26343d')])
-        style.configure('Treeview', background='#182127', fieldbackground='#182127', foreground='#edf2f4',
-                        rowheight=34, borderwidth=0, font=('Microsoft YaHei UI', 10))
-        style.configure('Treeview.Heading', background='#26343d', foreground='#b9d2de', padding=(6, 7),
-                        font=('Microsoft YaHei UI', 9))
-        style.map('Treeview', background=[('selected', '#305569')])
+        style.map('TCombobox', fieldbackground=[('readonly', '#26343d')],
+                  foreground=[('readonly', TEXT)])
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(2, weight=1)
-        top = ttk.Frame(root, padding=(16, 10, 16, 5))
+        root.rowconfigure(3, weight=1)
+        top = ttk.Frame(root, padding=(12, 10))
         top.grid(row=0, column=0, sticky='ew')
         top.columnconfigure(0, weight=1)
         self.status = tk.StringVar(value='准备连接…')
-        self.status_label = ttk.Label(top, textvariable=self.status, font=('Microsoft YaHei UI', 11, 'bold'))
+        self.status_label = ttk.Label(top, textvariable=self.status,
+                                      font=('Microsoft YaHei UI', 11, 'bold'))
         self.status_label.grid(row=0, column=0, sticky='w')
-        self.pin = tk.BooleanVar(value=True)
+        self.pin = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text='置顶', variable=self.pin,
-            command=lambda: root.attributes('-topmost', self.pin.get())).grid(row=0, column=1)
+                        command=lambda: root.attributes('-topmost', self.pin.get())).grid(row=0, column=1)
         self.clock = tk.StringVar(value='等待本局数据')
-        ttk.Label(root, textvariable=self.clock, foreground='#b9d2de', padding=(16, 0, 16, 10)).grid(row=1, column=0, sticky='w')
-        table_frame = ttk.Frame(root, padding=(12, 0))
-        table_frame.grid(row=2, column=0, sticky='nsew')
-        table_frame.columnconfigure(0, weight=1)
-        table_frame.rowconfigure(0, weight=1)
-        self.table = ttk.Treeview(table_frame, columns=('name','total','dps','recent'), show='headings', selectmode='browse', height=5)
-        for key, title, width, anchor in (
-            ('name','干员',140,'w'), ('total','总伤害',125,'e'),
-            ('dps','全局 DPS',112,'e'), ('recent','近 5 秒 DPS ≈',130,'e')):
-            self.table.heading(key, text=title, anchor=anchor)
-            self.table.column(key, width=width, minwidth=85, anchor=anchor, stretch=True)
-        self.table.grid(row=0, column=0, sticky='nsew')
-        bar = ttk.Scrollbar(table_frame, orient='vertical', command=self.table.yview)
+        ttk.Label(root, textvariable=self.clock, padding=(12, 0)).grid(row=1, column=0, sticky='w')
+        self.diagnostics = tk.StringVar(value=self.connection)
+        self.diagnostic_label = ttk.Label(root, textvariable=self.diagnostics, foreground=SECONDARY,
+                                          padding=(12, 6), wraplength=860)
+        self.diagnostic_label.grid(row=2, column=0, sticky='ew')
+        container = ttk.Frame(root)
+        container.grid(row=3, column=0, sticky='nsew')
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+        self.board = tk.Canvas(container, bg=BG, highlightthickness=0, width=1)
+        self.board.grid(row=0, column=0, sticky='nsew')
+        bar = ttk.Scrollbar(container, command=self.board.yview)
         bar.grid(row=0, column=1, sticky='ns')
-        self.table.configure(yscrollcommand=bar.set)
-        self.table.bind('<<TreeviewSelect>>', self.select)
-        self.detail = tk.StringVar(value='等待可靠采样；近 5 秒指标从开始观察时计时。')
-        ttk.Label(root, textvariable=self.detail, foreground='#b9d2de', wraplength=530,
-                  padding=(16,8,16,4), font=('Microsoft YaHei UI',9)).grid(row=3,column=0,sticky='ew')
-        self.summary = tk.StringVar(value='合计 —')
-        ttk.Label(root,textvariable=self.summary,padding=(16,2,16,4)).grid(row=4,column=0,sticky='w')
-        bottom=ttk.Frame(root,padding=(16,6,16,12))
-        bottom.grid(row=5,column=0,sticky='ew')
-        bottom.columnconfigure(0,weight=1)
-        ttk.Label(bottom,text='含过量伤害 · 按游戏时间',foreground='#b9d2de',font=('Microsoft YaHei UI',9)).grid(row=0,column=0,sticky='w')
-        self.scan_button=ttk.Button(bottom,text='重新定位',command=self.rescan.set)
-        self.scan_button.grid(row=0,column=1,padx=(0,8))
-        self.export_button=ttk.Button(bottom,text='导出本局',command=self.export,state='disabled')
-        self.export_button.grid(row=0,column=2)
+        self.board.configure(yscrollcommand=bar.set)
+        self.panel_host = ttk.Frame(self.board)
+        self.host_window = self.board.create_window(0, 0, window=self.panel_host, anchor='nw')
+        self.panel_host.bind('<Configure>', lambda e: self.board.configure(scrollregion=self.board.bbox('all')))
+        self.board.bind('<Configure>', self.layout_panels)
+        self.board.bind('<MouseWheel>', self.scroll_board)
+        bottom = ttk.Frame(root, padding=12)
+        bottom.grid(row=4, column=0, sticky='ew')
+        ttk.Button(bottom, text='新建面板', command=self.add_panel).pack(side='left')
+        self.scan_button = ttk.Button(bottom, text='重新定位', command=self.rescan.set)
+        self.scan_button.pack(side='left', padx=8)
+        self.export_button = ttk.Button(bottom, text='导出本局', command=self.export, state='disabled')
+        self.export_button.pack(side='left')
+        self.add_panel(PanelConfig())
         self.worker=threading.Thread(target=self.collect,daemon=True)
         self.worker.start()
         root.after(100,self.tick)
@@ -141,9 +164,12 @@ class App:
                     self.collector.enable_lifecycle(runtime)
                     try:
                         self.collector.connect()
+                        diag = self.collector.collector.diagnostics
+                        self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏版本 {diag.version_actual} 已兼容'))
                     except Exception as exc:
                         traceback.print_exc()
                         self.events.put(('error',str(exc)))
+                        self.events.put(('connection', '连接或版本校验失败；停止发布实时数值'))
                         self.collector.close()
                         self.collector=None
                     self.events.put(('scanning',False))
@@ -178,11 +204,12 @@ class App:
                         self.frame=(value['session'],value['frame'])
                         self.last_frame_change=value['captured_monotonic']
                     self.render(value)
+                elif kind=='connection':
+                    self.connection=value
                 elif kind=='error':
                     self.error=value
                 elif kind=='lifecycle':
                     self.battle_status=value
-                    self.error=''
                 elif kind=='scanning':
                     self.scanning=value
                     self.scan_button.configure(state='disabled' if value else 'normal')
@@ -195,13 +222,12 @@ class App:
             label='正在定位 · 保留上次记录' if self.last else '正在定位本局…'
         elif self.error:
             label='读取中断 · 显示最后有效记录' if self.last else '等待战斗数据'
-            self.detail.set(self.error)
         elif not self.last:
             label='等待战斗数据'
         elif self.battle_status=='ended':
-            label='战斗结束'
+            label='历史 · 战斗结束'
         elif self.battle_status=='finalizing':
-            label='战斗结束 · 等待结算确认'
+            label='历史 · 等待结算确认'
         elif self.battle_status=='frozen':
             label='战局冻结 · 保留最后有效记录'
         elif age>2:
@@ -211,38 +237,83 @@ class App:
         else:
             label='正在统计'
         self.status.set(label)
+        self.diagnostics.set(self.connection + '\n' + self.event_state + ('\n' + self.error if self.error else ''))
         self.status_label.configure(foreground='#f1bc82' if self.error or (self.last and age>2 and not self.scanning) else '#edf2f4')
         self.root.after(100,self.tick)
 
-    def render(self,sample):
-        seconds=sample['game_time']
-        self.clock.set(f'游戏时间 {int(seconds)//60:02}:{seconds%60:04.1f}    ·    {len(sample["rows"])} 个统计条目')
-        live_ids=set()
-        for idx,row in enumerate(sample['rows']):
-            key=row['id'];live_ids.add(key)
-            values=(row['name'],number(row['damage']),number(row['dps']),number(row['recent_dps']))
-            if self.table.exists(key):
-                if tuple(map(str,self.table.item(key,'values')))!=tuple(map(str,values)):
-                    self.table.item(key,values=values)
-                self.table.move(key,'',idx)
-            else:
-                self.table.insert('',idx,iid=key,values=values)
-        for key in self.table.get_children():
-            if key not in live_ids:self.table.delete(key)
-        total_label = '干员合计' if sample.get('statistics_complete', True) else '已知累计（数据不全）'
-        self.summary.set(f'{total_label} {number(sample["sum_damage"])}    ·    全局 DPS {number(sample["sum_damage"]/seconds if seconds>0 else None)}')
-        self.export_button.configure(state='normal')
-        self.select()
+    def scroll_board(self, event):
+        self.board.yview_scroll(-int(event.delta / 120), 'units')
+        return 'break'
 
-    def select(self,_event=None):
-        if not self.last:return
-        chosen=self.table.selection()
-        row=next((r for r in self.last['rows'] if chosen and r['id']==chosen[0]),None)
-        if row:
-            share = f'{row["share"]:.1%}' if row['share'] is not None else '—（全队数据不全）'
-            self.detail.set(f'{row["name"]} · 占比 {share} · 物理 {number(row["physical"])} · 法术 {number(row["arts"])} · 真实 {number(row["true"])} · 元素伤害 {number(row["elemental"])}')
+    def layout_panels(self, _event=None):
+        width = max(1, self.board.winfo_width())
+        self.board.itemconfigure(self.host_window, width=width)
+        self.diagnostic_label.configure(wraplength=max(200, width - 24))
+        unit = max(1, font.nametofont('TkDefaultFont').metrics('linespace') / 17)
+        columns = max(1, min(len(self.panels), int(width / (390 * unit))))
+        for col in range(max(len(self.panels), getattr(self, 'layout_columns', 0))):
+            self.panel_host.columnconfigure(col, weight=0, minsize=0, uniform='')
+        for col in range(columns):
+            self.panel_host.columnconfigure(col, weight=1, uniform='panel')
+        for index, panel in enumerate(self.panels):
+            panel.grid(row=index // columns, column=index % columns, sticky='nsew', padx=6, pady=6)
+        self.layout_columns = columns
+
+    def add_panel(self, config=None):
+        if config is None:
+            config = PanelConfig(panel_id=uuid4().hex)
+        panel = StatisticPanel(self.panel_host, config, changed=lambda p: self.render_panels(),
+                               duplicate=self.duplicate_panel, delete=self.delete_panel,
+                               open_hud=self.open_hud, portraits=self.portraits)
+        self.panels.append(panel)
+        self.update_panel_actions()
+        self.layout_panels()
+        self.render_panels()
+        return panel
+
+    def duplicate_panel(self, panel):
+        return self.add_panel(replace(panel.config, panel_id=uuid4().hex))
+
+    def delete_panel(self, panel):
+        if len(self.panels) == 1:
+            return
+        # Consumers can close linked displays before the source disappears.
+        self.root.event_generate('<<PanelDeleting>>', data=panel.config.panel_id)
+        self.panels.remove(panel)
+        panel.destroy()
+        self.update_panel_actions()
+        self.layout_panels()
+
+    def update_panel_actions(self):
+        for panel in self.panels:
+            panel.delete_button.configure(state='normal' if len(self.panels) > 1 else 'disabled')
+
+    def open_hud(self, panel):
+        if self.hud_request:
+            self.hud_request(panel)
         else:
-            self.detail.set('选中干员查看伤害分类。近 5 秒 DPS 为采样估算；“—”表示观察不足。')
+            messagebox.showinfo('HUD 尚未接入', 'HUD 窗口由后续版本提供；当前面板继续实时统计。', parent=self.root)
+
+    def render_panels(self, reset=False):
+        team_complete = self.last.get('statistics_complete', False) if self.last else False
+        views = render_board([p.config for p in self.panels], self.source_rows,
+                             team_complete=team_complete)
+        source = self.statistics.get('rows') or {}
+        for panel, view in zip(self.panels, views):
+            panel.update_view(view, source, team_complete=team_complete, reset=reset)
+
+    def render(self, sample):
+        # Consume the unified result, never the prototype compatibility rows.
+        self.statistics = sample.get('statistics') or {}
+        self.source_rows = rows_from_statistics(self.statistics)
+        battle = sample.get('battle_id', sample.get('session'))
+        reset = battle != self.current_battle
+        self.current_battle = battle
+        seconds = self.statistics.get('game_time', sample['game_time'])
+        self.clock.set(f'游戏时间 {int(seconds)//60:02}:{seconds%60:04.1f} · {len(self.source_rows)} 个统计条目')
+        self.event_state = event_label(sample.get('event_status'), sample.get('event_error'))
+        self.render_panels(reset=reset)
+        self.export_button.configure(state='normal')
 
     def export(self):
         if not self.last:return
@@ -316,6 +387,7 @@ def main():
         return
     log=(ROOT/'runtime'/f'app-{timestamp():%Y%m%d-%H%M%S}.log').open('a',encoding='utf-8',buffering=1)
     sys.stdout=sys.stderr=log
+    enable_dpi_awareness()
     root=tk.Tk()
     App(root,args)
     root.mainloop()
