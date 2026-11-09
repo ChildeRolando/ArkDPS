@@ -28,7 +28,7 @@ class FakeTray:
         self.started = True
         return self.available
 
-    def stop(self):
+    def stop(self, timeout=5.0):
         self.stopped = True
         self.available = False
 
@@ -249,3 +249,32 @@ def test_menu_uses_pointer_width_prototypes_for_wide_native_handles(monkeypatch)
     assert message[0].value == window_handle
     assert ctypes.sizeof(wintypes.HMENU) == ctypes.sizeof(ctypes.c_void_p)
     assert emitted == ['show']
+
+
+@pytest.mark.parametrize('open_hud', [False, True])
+def test_lost_tray_restores_hidden_gui_and_close_keeps_taskbar(monkeypatch, tmp_path,
+                                                             native_root, open_hud):
+    made = []
+    def factory(app):
+        icon = FakeTray()
+        made.append(icon)
+        return icon
+
+    app = launch_tray(native_root, monkeypatch, tmp_path, factory)
+    if open_hud:
+        app.open_hud(app.panels[0])
+    app.close()
+    assert native_root.state() == 'withdrawn'
+    made[0].available = False
+    made[0].error = 'Explorer refused NIM_ADD'
+    app.events.put(('tray', 'unavailable'))
+    app.tick()
+    native_root.update()
+    assert native_root.state() == 'normal'
+    assert any('Explorer refused' in text for text in app.warnings)
+    app.close()
+    native_root.update()
+    assert native_root.state() == 'iconic'
+    assert not app.stop.is_set()
+    assert app.tray is made[0]  # still owns the native thread until explicit quit
+    assert not app.verify_shutdown()['ok']

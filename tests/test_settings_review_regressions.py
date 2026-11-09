@@ -9,6 +9,7 @@ import pytest
 from collection_session import CollectionSession
 from event_observer import FridaEventObserver
 from layout_store import LayoutStore
+from test_gui import native_root  # noqa: F401
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'acceptance'))
 import verify_settings as verify
 
@@ -182,3 +183,39 @@ def test_pending_observers_survive_repeated_close_failures_without_starving_othe
     current.close()
     assert calls[-4:] == [0, 1, 'active', 'collector']
     assert not current._pending_observers
+
+
+@pytest.mark.parametrize('saved_preference', [False, True])
+def test_restore_rejects_wrong_event_preference(tmp_path, monkeypatch, saved_preference,
+                                               native_root):
+    from app import App
+    from layout_store import GuiGeometry, Layout
+    from test_window_restore import reset_root
+
+    state, output = tmp_path / 'state', tmp_path / 'evidence'
+    state.mkdir()
+    output.mkdir()
+    LayoutStore(state / 'layout.json').save(Layout(
+        panels=Layout.default().panels, gui=GuiGeometry(60, 70, 1000, 760),
+        event_observation=saved_preference))
+    monkeypatch.setattr(App, 'collect', lambda self: None)
+    monkeypatch.setattr(verify, 'create_root', lambda: native_root)
+    monkeypatch.setattr(native_root, 'destroy', lambda: None)
+    monkeypatch.setattr(verify, 'monitor_work_areas', lambda: [(0, 0, 1920, 1040)])
+    monkeypatch.setattr(verify, 'capture_window', lambda *_: None)
+    calls = []
+
+    def factory(*args, **kwargs):
+        app = App(*args, **kwargs)
+        if not calls:
+            app.events_enabled = not saved_preference
+        calls.append(app)
+        return app
+
+    monkeypatch.setattr(verify, 'App', factory)
+    try:
+        assert verify.phase_restore(state, output, 'injected-preference-regression') == 1
+        receipt = json.loads((output / 'restore-receipt.json').read_text(encoding='utf-8'))
+        assert receipt['errors'] == ['events_preference_matches']
+    finally:
+        reset_root(native_root)

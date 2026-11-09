@@ -83,6 +83,7 @@ class TrayIcon:
         self._thread: threading.Thread | None = None
         self._started = threading.Event()
         self._stopped = threading.Event()
+        self._cancel = threading.Event()
         self._wndproc_ref = None
         self._class_name = f'ArkDPSTray{id(self):x}'
         self._icon = None
@@ -99,24 +100,43 @@ class TrayIcon:
             return self.available
         self._thread = threading.Thread(target=self._run, name='ArkDPS tray', daemon=True)
         self._thread.start()
-        self._started.wait(timeout)
+        if not self._started.wait(timeout):
+            self.error = '系统托盘启动超时'
+            self.stop(timeout=0)
+            return False
         return self.available
 
-    def stop(self, timeout: float = 5.0) -> None:
-        if self._thread is not None and self.hwnd:
+    def stop(self, timeout: float = 5.0) -> bool:
+        self._cancel.set()
+        self.available = False
+        thread = self._thread
+        if thread is None:
+            return True
+        if thread.is_alive() and self.hwnd:
             user = _user32()
             user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
                                           wintypes.WPARAM, wintypes.LPARAM]
-            user.PostMessageW(self.hwnd, WM_CLOSE, 0, 0)
-            self._thread.join(timeout)
+            user.PostMessageW.restype = wintypes.BOOL
+            if not user.PostMessageW(self.hwnd, WM_CLOSE, 0, 0):
+                self.error = '无法请求系统托盘退出'
+        # Join even if startup has not created a native window yet. A timed
+        # out caller retains ownership until this thread actually terminates.
+        thread.join(timeout)
+        if thread.is_alive():
+            self.error = self.error or '系统托盘清理等待超时'
+            return False
         self._thread = None
-        self.available = False
+        return True
 
     # -- internals ---------------------------------------------------------
     def _run(self):
         try:
             self._create_window()
+            if self._cancel.is_set():
+                return
             self._add_icon()
+            if self._cancel.is_set():
+                return
             self.available = True
             self._started.set()
             self._message_loop()
@@ -124,12 +144,16 @@ class TrayIcon:
             self.error = str(exc)
         finally:
             try:
-                self._remove_icon()
+                try:
+                    self._remove_icon()
+                finally:
+                    self._destroy_window()
             finally:
-                self._destroy_window()
                 self.available = False
                 self._started.set()
                 self._stopped.set()
+                if not self._cancel.is_set():
+                    self._emit('unavailable')
 
     def _create_window(self):
         global wndproc_type
@@ -262,12 +286,19 @@ class TrayIcon:
             return 0
         elif self._taskbar_created and message == self._taskbar_created:
             # Explorer restarted; the previous icon no longer exists.
+            self.available = False
+            if self._cancel.is_set():
+                return 0
             try:
-                if self._nid is not None:
-                    shell = _shell32()
-                    shell.Shell_NotifyIconW(NIM_ADD, ctypes.byref(self._nid))
-            except OSError:
-                pass
+                shell = _shell32()
+                if self._nid is None or not shell.Shell_NotifyIconW(
+                        NIM_ADD, ctypes.byref(self._nid)):
+                    raise OSError('无法重新注册系统托盘图标')
+            except OSError as exc:
+                self.error = str(exc)
+                self._emit('unavailable')
+            else:
+                self.available = True
             return 0
         return _user32().DefWindowProcW(hwnd, message, wparam, lparam)
 

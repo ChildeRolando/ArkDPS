@@ -370,6 +370,7 @@ def phase_restore(state: Path, output: Path, run_id=None):
             if hasattr(app.panels[0].config, 'to_dict') else None
         checks['panels_match'] = checks['panel_configs'] == saved['panels']
         checks['events_enabled'] = app.events_enabled
+        checks['events_preference_matches'] = app.events_enabled == saved['event_observation']
         restored_huds = {}
         for placement in saved['huds']:
             hud = app.huds.get(placement['panel_id'])
@@ -478,7 +479,7 @@ def phase_restore(state: Path, output: Path, run_id=None):
         receipt['shutdown'] = app_corrupt.shutdown_report
         checks['shutdown_clean'] = bool(receipt['shutdown'] and receipt['shutdown']['ok'])
 
-        required = ('panels_match', 'huds_match', 'gui_inside_work_area',
+        required = ('panels_match', 'huds_match', 'events_preference_matches', 'gui_inside_work_area',
                     'gui_matches_saved', 'removed_display_reachable',
                     'removed_display_hud_reachable', 'changed_dpi_fits',
                     'corrupt_default', 'shutdown_clean')

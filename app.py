@@ -109,6 +109,8 @@ class App:
         self.event_status = None
         self.event_error = None
         self.session = None
+        self.retired_sessions = []
+        self.collection_cleanup_pending = False
         self.shutdown_report = None
         self.last_gui_geometry = self.layout.gui
         self.stop = threading.Event()
@@ -217,8 +219,7 @@ class App:
     def restore_gui_geometry(self):
         geometry = self.layout.gui
         if geometry is None:
-            self.root.geometry('%dx%d' % layout_module.DEFAULT_GUI)
-            return
+            geometry = GuiGeometry(0, 0, *layout_module.DEFAULT_GUI)
         minimum = tuple(self.root.minsize())
         fitted = clamp_geometry(geometry, self.work_areas(),
                                 minimum=(max(200, minimum[0]), max(200, minimum[1])))
@@ -249,10 +250,23 @@ class App:
                 reason = getattr(tray, 'error', None) or '未知原因'
                 self.record_warning('系统托盘不可用：' + str(reason) +
                                     '；关闭 GUI 时保留任务栏恢复入口。')
-                self.tray = None
+                self.stop_tray()
         except Exception as exc:
             self.record_warning('系统托盘初始化失败：' + str(exc))
-            self.tray = None
+            self.stop_tray()
+
+    def stop_tray(self, timeout=5.0):
+        if self.tray is None:
+            return True
+        try:
+            if self.tray.stop(timeout=timeout) is False:
+                self.record_warning('系统托盘仍在清理；保留线程所有权并等待退出。')
+                return False
+        except Exception as exc:
+            self.record_warning('系统托盘清理失败：' + str(exc))
+            return False
+        self.tray = None
+        return True
 
     def open_settings(self):
         from settings_window import SettingsWindow
@@ -369,7 +383,23 @@ class App:
 
     def verify_shutdown(self):
         """Check that this app's own observer, session and forwards are gone."""
-        session = self.session
+        sessions = list(getattr(self, 'retired_sessions', []))
+        if self.session is not None and self.session not in sessions:
+            sessions.append(self.session)
+        reports = [App.verify_session_shutdown(session) for session in sessions]
+        issues = [issue for report in reports for issue in report['issues']]
+        if getattr(self, 'tray', None) is not None:
+            issues.append('系统托盘线程退出未确认')
+        report = dict(ok=not issues,
+                      session_closed=all(item['session_closed'] for item in reports),
+                      observer_released=all(item['observer_released'] for item in reports),
+                      forwards_released=all(item['forwards_released'] for item in reports),
+                      issues=issues)
+        print('退出清理核对：' + json.dumps(report, ensure_ascii=False), flush=True)
+        return report
+
+    @staticmethod
+    def verify_session_shutdown(session):
         issues = []
         cleanup_errors = getattr(session, 'cleanup_errors', {}) if session is not None else {}
         session_closed = ((session is None or bool(getattr(session, 'closed', False)))
@@ -400,8 +430,26 @@ class App:
         report = dict(ok=not issues, session_closed=session_closed,
                       observer_released=observer_released,
                       forwards_released=forwards_released, issues=issues)
-        print('退出清理核对：' + json.dumps(report, ensure_ascii=False), flush=True)
         return report
+
+    def release_collector(self):
+        # A failed close retires input but not ownership; only an explicit
+        # rescan retries it. Do not open another session over live resources.
+        if self.collector is None:
+            return True
+        self.collection_cleanup_pending = True
+        try:
+            self.collector.close()
+        except Exception as exc:
+            self.events.put(('error', '旧采集会话清理失败：' + str(exc)))
+            self.events.put(('connection', '清理未完成；修复后请重新定位或应用设置重试'))
+            self.events.put(('event', ('gap', str(exc))))
+            return False
+        if getattr(self.collector, 'cleanup_errors', {}):
+            self.retired_sessions.append(self.collector)
+        self.collector = None
+        self.collection_cleanup_pending = False
+        return True
 
     def collect(self):
         try:
@@ -410,8 +458,7 @@ class App:
             traceback.print_exc()
             self.events.put(('error',str(exc)))
         finally:
-            if self.collector:
-                self.collector.close()
+            self.release_collector()
 
     def _collect(self):
         runtime = BattleRuntime()
@@ -430,9 +477,10 @@ class App:
                 if self.rescan.is_set():
                     self.rescan.clear()
                     self.events.put(('scanning',True))
-                    if self.collector:
-                        self.collector.close()
-                        self.collector = None
+                    if not self.release_collector():
+                        self.events.put(('scanning', False))
+                        self.stop.wait(0.2)
+                        continue
                     try:
                         target = resolve_configured(self.connection_config)
                     except ConnectionUnavailable as exc:
@@ -471,13 +519,9 @@ class App:
                                 self.events.put(('connection_diagnostic',
                                                  diagnostic.as_dict()))
                             self.events.put(('connection', '连接或版本校验失败；停止发布实时数值'))
-                            if self.collector is not None:
-                                try:
-                                    self.collector.close()
-                                finally:
-                                    self.collector=None
+                            self.release_collector()
                         self.events.put(('scanning', False))
-                if self.collector:
+                if self.collector and not self.collection_cleanup_pending:
                     try:
                         sample = self.collector.read()
                         runtime = self.collector.runtime
@@ -492,9 +536,7 @@ class App:
                     except Exception as exc:
                         self.events.put(('error',str(exc)))
                 self.stop.wait(0.2)
-            if self.collector:
-                self.collector.close()
-                self.collector = None
+            self.release_collector()
             out.flush()
 
     def tick(self):
@@ -530,6 +572,11 @@ class App:
                     elif value=='quit':
                         self.quit()
                         return
+                    elif value=='unavailable':
+                        self.record_warning('系统托盘不可用：' +
+                                            str(getattr(self.tray, 'error', '') or '图标已丢失'))
+                        if self.root.state() == 'withdrawn':
+                            self.show_gui()
         except queue.Empty:
             pass
         if self.quitting:
@@ -659,7 +706,7 @@ class App:
         source = self.statistics.get('rows') or {}
         for panel, view in zip(self.panels, views):
             panel.update_view(view, source, team_complete=team_complete, reset=reset)
-        self.render_huds()
+        self.render_huds(reset=reset)
 
     def render(self, sample):
         # Consume the unified result, never the prototype compatibility rows.
@@ -677,7 +724,6 @@ class App:
         self.event_error = sample.get('event_error')
         self.event_state = event_label(self.event_status, self.event_error)
         self.render_panels(reset=reset)
-        self.render_huds(reset=reset)
         self.export_button.configure(state='normal')
 
     def export(self):
@@ -692,14 +738,12 @@ class App:
     def close(self):
         """Window close hides the GUI; only explicit quit stops collection."""
         self.save_layout_now()
-        if self.tray is not None:
+        if self.tray is not None and self.tray.available:
             # HUDs and collection keep running; the tray restores this window.
             self.root.withdraw()
-        elif self.huds:
-            # Without a tray keep a taskbar recovery route for locked HUDs.
-            self.root.iconify()
         else:
-            self.quit()
+            # A lost tray must never strand a hidden GUI, even without a HUD.
+            self.root.iconify()
 
     def quit(self):
         if self.quitting:
@@ -716,17 +760,13 @@ class App:
             except tk.TclError:
                 pass
         self.settings_window = None
-        if self.tray is not None:
-            try:
-                self.tray.stop()
-            except Exception as exc:
-                self.record_warning('系统托盘清理失败：' + str(exc))
-            self.tray = None
+        self.stop_tray()
         self.root.withdraw()
         self.finish_close()
 
     def finish_close(self):
-        if self.worker.is_alive():
+        tray_stopped = self.stop_tray(timeout=0)
+        if self.worker.is_alive() or not tray_stopped:
             self.root.after(100,self.finish_close)
         else:
             self.shutdown_report = self.verify_shutdown()
@@ -778,6 +818,8 @@ def main():
         parser.error('--require-events cannot be combined with --no-events')
     if (args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0):
         parser.error('capture/wait durations must be nonnegative and baseline timeout positive')
+    if not args.capture_seconds and not enable_dpi_awareness():
+        raise SystemExit('DPI awareness 初始化失败；未创建 GUI，请检查 Windows 显示环境')
     (ROOT/'runtime').mkdir(exist_ok=True)
     # One owner for the device channel. A second launch cannot tear it down.
     instance_lock=socket.socket()
@@ -801,7 +843,6 @@ def main():
         return
     log=(ROOT/'runtime'/f'app-{timestamp():%Y%m%d-%H%M%S}.log').open('a',encoding='utf-8',buffering=1)
     sys.stdout=sys.stderr=log
-    enable_dpi_awareness()
     root=tk.Tk()
 
     def tray_factory(app):
