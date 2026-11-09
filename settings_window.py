@@ -138,17 +138,23 @@ class SettingsWindow(tk.Toplevel):
         events.columnconfigure(0, weight=1)
         ttk.Label(events, text='事件观测', font=('Microsoft YaHei UI', 12, 'bold')).grid(
             row=0, column=0, sticky='w')
-        self.events = tk.BooleanVar(value=app.events_enabled)
+        # The switch edits the persisted preference, not this run's effective
+        # state: a one-shot --no-events/--frida-remote override must not be
+        # written back by an unrelated apply.
+        self.events = tk.BooleanVar(value=app.event_observation)
         ttk.Checkbutton(events,
                         text='启用事件观测（护盾实际吸收与接敌区间；认证环境默认开启）',
                         variable=self.events, command=self.sync_fields).grid(
             row=1, column=0, sticky='w', pady=(8, 4))
+        self.override_note = tk.StringVar(value='')
+        ttk.Label(events, textvariable=self.override_note, wraplength=650,
+                  foreground='#f1bc82').grid(row=2, column=0, sticky='ew')
         self.event_state_label = tk.StringVar(value='')
         ttk.Label(events, textvariable=self.event_state_label, wraplength=650,
-                  foreground=SECONDARY).grid(row=2, column=0, sticky='ew')
+                  foreground=SECONDARY).grid(row=3, column=0, sticky='ew')
         self.error_state = tk.StringVar(value='')
         ttk.Label(events, textvariable=self.error_state, wraplength=650,
-                  foreground='#f1bc82').grid(row=3, column=0, sticky='ew', pady=(6, 0))
+                  foreground='#f1bc82').grid(row=4, column=0, sticky='ew', pady=(6, 0))
 
         actions = ttk.Frame(body)
         actions.grid(row=4, column=0, sticky='ew', pady=(14, 0))
@@ -177,6 +183,10 @@ class SettingsWindow(tk.Toplevel):
         self.connection_status.set(self.app.connection_diagnostic_text())
 
     def refresh_status(self):
+        overridden = self.app.events_enabled != self.app.event_observation
+        self.override_note.set(
+            ('本次启动由命令行%s事件观测；此处开关保存下次启动的偏好，应用后立即生效。'
+             % ('启用' if self.app.events_enabled else '关闭')) if overridden else '')
         state, text = event_setting_status(
             enabled=self.events.get(), event_status=self.app.event_status,
             event_error=self.app.event_error,

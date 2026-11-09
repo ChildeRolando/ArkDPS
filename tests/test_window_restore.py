@@ -190,3 +190,27 @@ def test_preloaded_damaged_layout_diagnostic_reaches_the_app(tmp_path, monkeypat
     native_root.update()
     assert any('默认布局' in warning for warning in app.warnings)
     assert app.panels[0].config == PanelConfig()
+
+
+def test_single_launch_no_events_override_keeps_saved_preference(
+        tmp_path, monkeypatch, native_root):
+    """A one-shot --no-events launch must not clear the saved event preference."""
+    path = tmp_path / 'layout.json'
+    first = launch(native_root, monkeypatch, path)
+    assert first.events_enabled is True and first.event_observation is True
+    assert first.save_layout_now()
+    assert LayoutStore(path).load().layout.event_observation is True
+
+    # Same as `--no-events`: events are off for this run only.
+    off = launch(native_root, monkeypatch, path, events=None)
+    assert off.events_enabled is False and off.event_observation is True
+    monkeypatch.setattr(off, 'finish_close', lambda: None)
+    off.close()
+    native_root.update()
+    assert LayoutStore(path).load().layout.event_observation is True
+
+    # An ordinary restart derives event observation from the kept preference.
+    saved = LayoutStore(path).load().layout
+    again = launch(native_root, monkeypatch, path,
+                   events='remote' if saved.event_observation else None)
+    assert again.events_enabled is True and again.event_observation is True

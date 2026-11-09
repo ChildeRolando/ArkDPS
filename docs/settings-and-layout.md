@@ -59,7 +59,7 @@ GUI 位置在窗口正常状态时由 `<Configure>` 记录；隐藏/最小化期
 
 ## 事件观测开关
 
-设置中的开关默认开启（认证环境），写入布局文件的 `event_observation`；`--no-events` 仍可单次关闭，`--frida-remote` 可覆盖端点。设置页用 `event_setting_status()` 区分：
+设置中的开关默认开启（认证环境），写入布局文件的 `event_observation`；`--no-events` 仍可单次关闭，`--frida-remote` 可覆盖端点。布局的自动保存与退出保存只写回该长期偏好，不会把本次启动的命令行覆盖结果写回；只有设置页的“应用并重新连接”会更新它。设置页用 `event_setting_status()` 区分：
 
 | 状态 | 显示 |
 | --- | --- |

@@ -74,6 +74,10 @@ class App:
                        (layout_store.load() if layout_store is not None
                         else layout_module.LayoutLoadResult(Layout.default(), True)))
         self.layout = self.loaded.layout
+        # Long-lived event-observation preference from the layout file. It is
+        # updated only by an explicit settings apply; one-shot command-line
+        # overrides change ``events_enabled`` for this run without rewriting it.
+        self.event_observation = self.layout.event_observation
         if self.loaded.warning:
             self.warnings.append(self.loaded.warning)
         adb_arg = getattr(args, 'adb', '') or None
@@ -250,6 +254,7 @@ class App:
     def apply_connection(self, config, events_enabled):
         """Persist connection/event choices and ask the worker to reconnect."""
         self.connection_config = config
+        self.event_observation = bool(events_enabled)
         self.events_enabled = bool(events_enabled)
         self.frida_remote = DEFAULT_FRIDA_REMOTE if self.events_enabled else None
         if self.connection_store is not None:
@@ -330,7 +335,7 @@ class App:
                               self.root.winfo_width(), self.root.winfo_height())
         return Layout(panels=tuple(panel.config for panel in self.panels),
                       huds=tuple(huds), gui=gui,
-                      event_observation=self.events_enabled)
+                      event_observation=self.event_observation)
 
     def save_layout_now(self):
         if self.save_after is not None:

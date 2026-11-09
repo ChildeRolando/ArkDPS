@@ -259,3 +259,21 @@ def test_settings_reopens_a_single_window(app_at):
 def test_event_label_still_covers_degraded_states():
     assert event_label('gap') != event_label('failed')
     assert '快照' in event_label('failed')
+
+
+def test_settings_apply_keeps_saved_preference_under_command_line_override(app_at, root):
+    app, layout, _connection = app_at
+    # This run has events off while the persisted preference stays enabled,
+    # exactly like a `--no-events` launch over an enabled layout.
+    assert app.events_enabled is False and app.event_observation is True
+    window = SettingsWindow(app, detect=lambda adb: FakeDetection(detection_payload()))
+    assert window.events.get() is True
+    assert '命令行' in window.override_note.get()
+    window.apply()
+    root.update()
+    stored = json.loads((layout.path).read_text(encoding='utf-8'))
+    assert stored['event_observation'] is True
+    assert app.events_enabled is True and app.frida_remote is not None
+    window.refresh_status()
+    assert window.override_note.get() == ''
+    window.close()
