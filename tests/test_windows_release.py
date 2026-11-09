@@ -111,3 +111,16 @@ def test_real_windows_process_resources_are_positive():
     result = process_resources()
     assert result['private_bytes'] > 0 and result['working_set_bytes'] > 0
     assert result['cpu_seconds'] >= 0
+
+
+def test_frozen_module_relative_resources_are_mirrored(monkeypatch):
+    paths = ['vendor/ark-source/tools/enemy_health/bin/memsrv',
+             'vendor/ark-source/tools/enemy_health/generated_offsets.json',
+             'vendor/ark-source/game_data/manifest.json',
+             'vendor/ark-source/tools/enemy_health/memcore.py']
+    monkeypatch.setattr(builder, 'git', lambda *args: '\n'.join(paths))
+    resources = builder.tracked_data()
+    assert (ROOT / paths[0], 'tools/enemy_health/bin') in resources
+    assert (ROOT / paths[1], 'tools/enemy_health') in resources
+    assert (ROOT / paths[2], 'game_data') in resources
+    assert (ROOT / paths[3], 'tools/enemy_health') not in resources

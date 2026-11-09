@@ -41,6 +41,12 @@ def run_smoke(output):
             receipt['checks']['bundle_hashes'] = len(manifest['files'])
         receipt['checks']['frida'] = frida.__version__
         assert frida.__version__ == '17.26.1'
+        from tools.enemy_health import memcore
+        from tools.game_data import bundle_root
+        binary = Path(memcore.__file__).parent / 'bin/memsrv'
+        assert binary.is_file() and binary.read_bytes().startswith(b'ELF'), 'missing device reader binary'
+        assert bundle_root() is not None, 'missing versioned game data'
+        receipt['checks']['device_reader_resources'] = True
         collector = Collector()
         assert collector.names and load_character_names()
         collector.close()  # Unconnected: no device commands.

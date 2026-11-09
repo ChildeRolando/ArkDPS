@@ -35,7 +35,16 @@ def tracked_data():
     paths = git('ls-files', 'vendor', 'assets', 'docs').splitlines()
     paths += ['event_probe_android2791.js', 'README.md', 'THIRD_PARTY.md',
               'LICENSE', 'CHANGELOG.md', 'release.json', 'requirements-windows.txt']
-    return [(ROOT / path, Path(path).parent.as_posix()) for path in paths]
+    resources = [(ROOT / path, Path(path).parent.as_posix()) for path in paths]
+    # Frozen imported tools.* modules have __file__ at <bundle>/tools/,
+    # not at their source pathex vendor/ark-source/tools/. Mirror only data
+    # into that import layout; keep the original vendor subtree for provenance.
+    prefix = 'vendor/ark-source/'
+    for path in paths:
+        if (path.startswith((prefix + 'tools/', prefix + 'game_data/'))
+                and not path.endswith('.py')):
+            resources.append((ROOT / path, Path(path[len(prefix):]).parent.as_posix()))
+    return resources
 
 
 def copy_runtime_licenses(destination):
