@@ -10,7 +10,7 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, font
+from tkinter import ttk, messagebox, font
 from dataclasses import replace
 from uuid import uuid4
 
@@ -122,7 +122,7 @@ class App:
         ttk.Button(bottom, text='新建面板', command=self.add_panel).pack(side='left')
         self.scan_button = ttk.Button(bottom, text='重新定位', command=self.rescan.set)
         self.scan_button.pack(side='left', padx=8)
-        self.export_button = ttk.Button(bottom, text='导出本局', command=self.export, state='disabled')
+        self.export_button = ttk.Button(bottom, text='历史与分享', command=self.export)
         self.export_button.pack(side='left')
         self.add_panel(PanelConfig())
         self.worker=threading.Thread(target=self.collect,daemon=True)
@@ -316,18 +316,13 @@ class App:
         self.export_button.configure(state='normal')
 
     def export(self):
-        if not self.last:return
-        path=filedialog.asksaveasfilename(parent=self.root,title='导出当前战斗记录',
-            initialdir=str(ROOT/'runtime'),initialfile=f'战斗统计-{timestamp():%Y%m%d-%H%M%S}.json',
-            defaultextension='.json',filetypes=[('JSON 战斗记录','*.json')])
-        if path:
-            payload=dict(self.last,exported_at=timestamp().isoformat(),
-                data_age_seconds=round(observation_age(self.last),2),
-                capture_status='unavailable' if self.error else 'locating' if self.scanning else 'current' if observation_age(self.last)<2 else 'stale')
-            try:
-                Path(path).write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
-            except OSError as exc:
-                messagebox.showerror('导出失败',str(exc),parent=self.root)
+        from gui_history import HistoryWindow
+        window = getattr(self, 'history_window', None)
+        if window is None or not window.winfo_exists():
+            self.history_window = HistoryWindow(self)
+        else:
+            window.deiconify()
+            window.lift()
 
     def close(self):
         self.stop.set()
