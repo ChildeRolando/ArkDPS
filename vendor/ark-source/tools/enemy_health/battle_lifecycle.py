@@ -15,6 +15,18 @@ FINISHED_RESULTS = {1: 'victory', 2: 'defeat'}
 SQUAD_PAGE = ('SquadPage', 'Torappu.UI')
 
 
+# Official Android 2.7.91 ARM64 libil2cpp.so. These writable, file-backed slots
+# match full class scans and are filled by IL2CPP with this process's addresses.
+_BUILD_NOTE_RVA = 0x3980
+_BUILD_NOTE = bytes.fromhex(
+    '040000001400000003000000474e550077700271cee91e0d79e4e78f302a20b6aa54e6f9')
+_CLASS_SLOT_RVAS = {
+    'BattleController': 0xCF2E378,
+    'GameFlowController': 0xCF37258,
+    'SquadPage': 0xCF4AC00,
+}
+
+
 class LifecycleTracker:
     """Debounce readiness, not exit; emit each transition once per instance."""
 
@@ -219,17 +231,37 @@ class LifecycleReader:
                     source=source, target=target, state=state, metadata=metadata)
 
 
-def locate_lifecycle(mc, battle_klass, locator):
-    """Locate singleton slots together, reusing the battle class if supplied."""
-    namespaces = {'GameFlowController': 'Torappu', SQUAD_PAGE[0]: SQUAD_PAGE[1]}
-    if battle_klass is None:
-        namespaces['BattleController'] = 'Torappu.Battle'
-    try:
-        classes = locator.scan_class_metadata(namespaces) or {}
-    except (OSError, RuntimeError):
-        # The optional squad metadata must not prevent the live battle from binding.
-        del namespaces[SQUAD_PAGE[0]]
-        classes = locator.scan_class_metadata(namespaces) or {}
+def _read_lifecycle_class_slots(memory, namespaces):
+    offsets = [_CLASS_SLOT_RVAS[name] for name in namespaces]
+    module = [region for region in memory.mc.regions if region[3].endswith('/libil2cpp.so')]
+    # MuMu can map several read-only copies. Only the loaded image has
+    # these slot RVAs inside a writable segment of the same file.
+    bases = [
+        base for base, end, perms, path in module
+        if 'r' in perms and base + _BUILD_NOTE_RVA + len(_BUILD_NOTE) <= end
+        and any(name == path and 'rw' in flags and
+                lo <= base + min(offsets) and base + max(offsets) + 8 <= hi
+                for lo, hi, flags, name in module)
+    ]
+    if len(bases) != 1:
+        raise ReadFailure('class_slot_image_unavailable')
+    base = bases[0]
+    if memory.read_code(base + _BUILD_NOTE_RVA, len(_BUILD_NOTE)) != _BUILD_NOTE:
+        raise ReadFailure('class_slot_build_mismatch')
+    values = memory.read_many([(base + offset, 8) for offset in offsets], structural_check=True)
+    classes = {}
+    for (name, namespace), raw in zip(namespaces.items(), values):
+        address, = struct.unpack('<Q', raw)
+        # An unused IL2CPP type slot can still hold an odd metadata token.
+        if address & 7 or not memory.mc.is_ptr(address):
+            raise ReadFailure('class_slot_identity_unavailable')
+        if memory.class_identity(address) != (name, namespace):
+            raise ReadFailure('class_slot_identity_unavailable')
+        classes[address] = name
+    return classes
+
+
+def _bind_lifecycle(memory, battle_klass, locator, classes):
     if battle_klass is None:
         battles = [addr for addr, name in classes.items() if name == 'BattleController']
         if len(battles) != 1:
@@ -239,7 +271,6 @@ def locate_lifecycle(mc, battle_klass, locator):
     if len(flows) != 1:
         raise ReadFailure('flow_class_unavailable')
     squads = {addr: name for addr, name in classes.items() if name == SQUAD_PAGE[0]}
-    memory = MemoryAccess(mc, mc.channel())
 
     def locate_squads():
         # Borrow the product channel for the bounded, once-per-launch lookup.
@@ -252,3 +283,28 @@ def locate_lifecycle(mc, battle_klass, locator):
             locator._channel = None
 
     return LifecycleReader(memory, battle_klass, flows[0], locate_squads if squads else None)
+
+
+def locate_lifecycle(mc, battle_klass, locator, *, channel=None):
+    """Locate singleton slots, using versioned module slots when available."""
+    namespaces = {'GameFlowController': 'Torappu', SQUAD_PAGE[0]: SQUAD_PAGE[1]}
+    if battle_klass is None:
+        namespaces['BattleController'] = 'Torappu.Battle'
+    if channel is not None:
+        memory = MemoryAccess(mc, channel)
+        try:
+            classes = _read_lifecycle_class_slots(memory, namespaces)
+            reader = _bind_lifecycle(memory, battle_klass, locator, classes)
+        except (OSError, RuntimeError):
+            locator._status('[定位] 类型槽未通过校验，使用批量扫描')
+        else:
+            locator._status('[定位] libil2cpp 类型槽校验通过')
+            return reader
+    try:
+        classes = locator.scan_class_metadata(namespaces) or {}
+    except (OSError, RuntimeError):
+        # The optional squad metadata must not prevent the live battle from binding.
+        del namespaces[SQUAD_PAGE[0]]
+        classes = locator.scan_class_metadata(namespaces) or {}
+    memory = MemoryAccess(mc, mc.channel() if channel is None else channel)
+    return _bind_lifecycle(memory, battle_klass, locator, classes)

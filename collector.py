@@ -194,8 +194,8 @@ class Collector:
         from tools.enemy_health.battle_lifecycle import locate_lifecycle
         locator = DeployTrackerReader(self.core.mc)
         try:
-            self._lifecycle_reader = locate_lifecycle(self.core.mc, None, locator)
-            self._lifecycle_reader.m.channel = self.core._chan
+            self._lifecycle_reader = locate_lifecycle(
+                self.core.mc, None, locator, channel=self.core._chan)
         finally:
             locator.close()
 
