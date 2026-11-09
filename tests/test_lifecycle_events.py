@@ -30,7 +30,11 @@ def advance(session, collector, *, terminal=False):
 
 
 @pytest.mark.parametrize('before_baseline', [True, False])
-def test_unverified_shield_is_unknown_or_incomplete_instead_of_reliable_zero(before_baseline):
+@pytest.mark.parametrize('probe_error', [
+    'Error: unverified shield', 'Error: missing source identity',
+    'Error: shield absorption mismatch',
+])
+def test_unverified_shield_is_unknown_or_incomplete_instead_of_reliable_zero(before_baseline, probe_error):
     from panel_model import Category, PanelConfig, render_panel, rows_from_statistics
     session, collector, _, _ = connected()
     try:
@@ -39,7 +43,7 @@ def test_unverified_shield_is_unknown_or_incomplete_instead_of_reliable_zero(bef
             assert baseline['statistics']['rows']['char_a']['shield_absorbed'] == 0
             assert baseline['statistics']['rows']['char_a']['event_coverage_complete']
         # The probe reports this fatal mark for an unverified owned shield.
-        session.observer.error = 'Error: unverified shield'
+        session.observer.error = probe_error
         collector.frame, collector.game_time, collector.damage = 2, 1, 135
         sample = session.read()
         row = sample['statistics']['rows']['char_a']
