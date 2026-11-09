@@ -1,6 +1,6 @@
 # GUI/HUD 共用面板模型与排序口径
 
-实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI 和 `gui_history.py` 历史窗口使用该模型，HUD 复用同一口径。
+实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI、`hud.py` 的 HUD 和 `gui_history.py` 的历史窗口使用该模型，共享同一口径。
 
 ## 配置与运行状态分离
 
@@ -37,7 +37,7 @@ python -m pytest tests/test_panel_model.py -q --assert=plain
 ## 边界
 
 - 护盾最近 5 秒与接敌速率依赖 ARK-5 的事件数据；模型已支持 `recent_shield`，但当前适配器尚未提供。
-- HUD 实际窗口、托盘、布局持久化由 ARK-10/11 交付；历史浏览与分享见下节 ARK-12。
+- 托盘与布局持久化由 ARK-11 交付；历史浏览与分享见下节 ARK-12。
 
 ## 实时 GUI（ARK-9）
 
@@ -56,8 +56,8 @@ python -m pytest tests/test_panel_model.py -q --assert=plain
 提示框按指针所在显示器的工作区限制全部四边，避开任务栏；底部不足时向上展开，
 不把高低不同显示器组成的虚拟桌面空白区域当成可见屏幕。
 
-“打开到 HUD”保留入口与明确的未接入提示。ARK-10 可安装 `App.hud_request(panel)`，
-读取源面板的 `config` / `view`；不建立第二套采集。HUD 尚未交付时不创建任何 Toplevel。
+“打开到 HUD”经 `App.hud_request(panel)` 创建或唤起该源面板唯一的紧凑窗口；首次启动不创建 HUD。
+HUD 读取源面板的 `config`，不建立第二套采集。
 删除源面板前发出 `<<PanelDeleting>>` Tcl 事件，附面板 ID。
 
 本票没有引入新统计规则或数据源。采集、归属、覆盖仍由现有核心拥有；新增窗口组件
@@ -137,3 +137,47 @@ python acceptance/verify_history.py --scale 200 --output runtime/ark12-ui-200
 新的 MuMu 实机验收。HUD 检查针对 ARK-9 的实时源回调契约；实际 HUD 窗口集成由 ARK-10/14 验收。
 
 本次只增加只读展示与分享边界；统计、战局身份和历史写入仍由原有模块拥有。
+
+## 紧凑 HUD（ARK-10）
+
+`HudWindow` 只拥有原生窗口和交互状态；复用 `StatisticPanel(compact=True)` 的同一绘制组件，
+隐藏配置及长详情，保留排序、分段柱、未知占比、部分覆盖提示、悬停数值及独立滚动。
+`App.live_statistics` / `live_source_rows` 直接引用最新只读统计结果，不持有第二个统计核心。
+`render_huds` 始终用实时引用和源面板配置生成视图；GUI 历史展示可替换其自身的
+`statistics` / `source_rows` 并调用 `render_panels`，不会把历史数值发布到 HUD。
+换局时重置 HUD 的固定选择和列表位置；类别、排行、速率变化立即跟随源面板。
+
+每个 HUD 独立管理位置、大小和 70–100% 不透明度，始终置顶。GUI 源面板提供锁定入口；
+Windows 对 Tk 外层 HWND 设置 `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE`，
+解锁移除后两者。原生调用失败不宣称锁定成功。锁定后自身按钮与拖动也穿透。
+拖动使用绝对虚拟桌面坐标；Tk 的负号通常表示相对右边距离，副屏负坐标须使用 `+-x`。
+`test_drag_across_negative_virtual_desktop_coordinates` 已复现旧拖动写法失败，并验证修正通过。
+
+关闭 HUD 不调用采集会话的关闭/归档/删除接口；删除源面板先关闭其 HUD。
+有 HUD 时关闭 GUI 暂时最小化到任务栏，使全体 HUD 锁定时仍可恢复 GUI 解锁；
+ARK-11 用托盘补齐最终关闭行为。最后一个 HUD 关闭时若 GUI 不可见，则恢复 GUI。
+“退出应用”仍设置共享停止事件，并等待原采集线程关闭自身资源。
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+python -m pytest tests/test_hud.py -q --assert=plain
+python acceptance/verify_hud.py --output runtime/hud-validation
+# 受限桌面只做原生命中测试、窗口绘制与生命周期检查：
+python acceptance/verify_hud.py --hit-test-only --output runtime/hud-validation-partial
+```
+
+验收脚本只使用标明的合成统一快照，不操作游戏、不改系统 DPI；截图只绘制自己的窗口。
+默认路径实际通过 Win32 输入点击 HUD、锁定后的下层窗口和再次解锁的 HUD。
+`--hit-test-only` 使用 `WindowFromPoint` 验证相同路由，不证明实际鼠标点击或直播捕获；
+其回执明确标为 `PARTIAL_INPUT_DESKTOP_UNVERIFIED`，不可作为完整验收通过。
+脚本另外检查 GUI/HUD 数值对账、历史隔离、GUI 不可见时换局、独立尺寸和透明度、
+源面板删除及 HUD 关闭不停止共享会话；记录 HEAD、源码和截图 SHA-256。
+
+当前执行环境已通过 431 项全量回归，其中 13 项 HUD 测试通过，含锁定后关闭 GUI 的任务栏恢复行为。
+受限桌面的原生命中测试完成 HUD → 下层窗口 → HUD 路由，三类 HUD 与 GUI 截图已检查。
+实际输入路径被 `GetCursorPos` / `SetCursorPos` 的 Win32 错误 5 阻塞，该环境未能验证单屏直播捕获。
+进程启动间歇性报 `CreateProcessAsUserW failed: 5` / `spawnSync EPERM`，串行重试后已完成最终回归。
+解除验收阻塞须在可访问输入桌面的宿主会话运行默认验收脚本，并实际核查单屏直播中的
+可读性、置顶、拖动、锁定穿透及 GUI 恢复；不能用部分回执替代这份证据。
+ARK-10 交付评审时，宿主会话已补齐同候选默认原生点击 `PASS` 回执（路由 HUD → 下层窗口 → HUD）
+与 30.7 秒单屏录像；录像捕获工具和来源未登记，不外推到其他直播捕获模式。

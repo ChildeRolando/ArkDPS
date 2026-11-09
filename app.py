@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from panel_model import PanelConfig, render_board, rows_from_statistics
 from gui_panel import StatisticPanel, PortraitAtlas, BG, TEXT, SECONDARY
+from hud import HudWindow
 
 from collector import BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from metrics import observation_age
@@ -70,7 +71,10 @@ class App:
         self.current_battle = None
         self.connection = '尚未连接'
         self.event_state = '等待事件能力诊断'
-        self.hud_request = None  # ARK-10 installs a handler receiving the source panel.
+        self.huds = {}
+        self.live_statistics, self.live_source_rows = {}, []
+        self.live_complete = False
+        self.hud_request = self.create_hud
         self.portraits = PortraitAtlas(root)
         root.title('ArkDPS · 实时统计')
         root.geometry('960x700')
@@ -124,6 +128,7 @@ class App:
         self.scan_button.pack(side='left', padx=8)
         self.export_button = ttk.Button(bottom, text='历史与分享', command=self.export)
         self.export_button.pack(side='left')
+        ttk.Button(bottom, text='退出应用', command=self.quit).pack(side='right')
         self.add_panel(PanelConfig())
         self.worker=threading.Thread(target=self.collect,daemon=True)
         self.worker.start()
@@ -237,6 +242,8 @@ class App:
         else:
             label='正在统计'
         self.status.set(label)
+        for hud in self.huds.values():
+            hud.status.set(label + ' · ' + self.event_state)
         self.diagnostics.set(self.connection + '\n' + self.event_state + ('\n' + self.error if self.error else ''))
         self.status_label.configure(foreground='#f1bc82' if self.error or (self.last and age>2 and not self.scanning) else '#edf2f4')
         self.root.after(100,self.tick)
@@ -277,6 +284,9 @@ class App:
     def delete_panel(self, panel):
         if len(self.panels) == 1:
             return
+        hud = self.huds.get(panel.config.panel_id)
+        if hud:
+            hud.close()
         # Consumers can close linked displays before the source disappears.
         self.root.event_generate('<<PanelDeleting>>', data=panel.config.panel_id)
         self.panels.remove(panel)
@@ -290,9 +300,28 @@ class App:
 
     def open_hud(self, panel):
         if self.hud_request:
-            self.hud_request(panel)
-        else:
-            messagebox.showinfo('HUD 尚未接入', 'HUD 窗口由后续版本提供；当前面板继续实时统计。', parent=self.root)
+            return self.hud_request(panel)
+
+    def create_hud(self, panel):
+        hud = self.huds.get(panel.config.panel_id)
+        if hud is None:
+            hud = self.huds[panel.config.panel_id] = HudWindow(self, panel)
+        hud.window.lift()
+        self.render_huds()
+        return hud
+
+    def render_huds(self, reset=False):
+        # Always current battle, even when the GUI is displaying a saved record.
+        huds = list(self.huds.values())
+        views = render_board([h.source.config for h in huds], self.live_source_rows,
+                             team_complete=self.live_complete)
+        for hud, view in zip(huds, views):
+            hud.update_view(view, self.live_statistics.get('rows') or {},
+                            team_complete=self.live_complete, reset=reset)
+
+    def show_gui(self):
+        self.root.deiconify()
+        self.root.lift()
 
     def render_panels(self, reset=False):
         team_complete = self.last.get('statistics_complete', False) if self.last else False
@@ -301,11 +330,15 @@ class App:
         source = self.statistics.get('rows') or {}
         for panel, view in zip(self.panels, views):
             panel.update_view(view, source, team_complete=team_complete, reset=reset)
+        self.render_huds()
 
     def render(self, sample):
         # Consume the unified result, never the prototype compatibility rows.
         self.statistics = sample.get('statistics') or {}
         self.source_rows = rows_from_statistics(self.statistics)
+        self.live_statistics = self.statistics
+        self.live_source_rows = self.source_rows
+        self.live_complete = sample.get('statistics_complete', False)
         battle = sample.get('battle_id', sample.get('session'))
         reset = battle != self.current_battle
         self.current_battle = battle
@@ -313,6 +346,7 @@ class App:
         self.clock.set(f'游戏时间 {int(seconds)//60:02}:{seconds%60:04.1f} · {len(self.source_rows)} 个统计条目')
         self.event_state = event_label(sample.get('event_status'), sample.get('event_error'))
         self.render_panels(reset=reset)
+        self.render_huds(reset=reset)
         self.export_button.configure(state='normal')
 
     def export(self):
@@ -325,6 +359,14 @@ class App:
             window.lift()
 
     def close(self):
+        if self.huds:
+            # Keep a taskbar recovery route even if every HUD is click-through.
+            # ARK-11 replaces this with tray restoration.
+            self.root.iconify()
+        else:
+            self.quit()
+
+    def quit(self):
         self.stop.set()
         self.root.withdraw()
         self.finish_close()
