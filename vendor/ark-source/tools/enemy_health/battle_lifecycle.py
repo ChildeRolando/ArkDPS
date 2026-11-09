@@ -26,6 +26,16 @@ _CLASS_SLOT_RVAS = {
     'SquadPage': 0xCF4AC00,
 }
 
+# The same build's il2cpp_image_get_class implementation looks up already
+# materialized classes through this type-definition table. In the lobby
+# its entries are populated before the individual usage slots are resolved.
+_CLASS_DEFINITION_TABLE_RVA = 0xD38B4B8
+_CLASS_DEFINITION_INDICES = {
+    'BattleController': 10186,
+    'GameFlowController': 1328,
+    'SquadPage': 18479,
+}
+
 
 class LifecycleTracker:
     """Debounce readiness, not exit; emit each transition once per instance."""
@@ -249,10 +259,25 @@ def _read_lifecycle_class_slots(memory, namespaces):
     if memory.read_code(base + _BUILD_NOTE_RVA, len(_BUILD_NOTE)) != _BUILD_NOTE:
         raise ReadFailure('class_slot_build_mismatch')
     values = memory.read_many([(base + offset, 8) for offset in offsets], structural_check=True)
+    addresses = [struct.unpack('<Q', raw)[0] for raw in values]
+    # The low bit marks an unresolved usage token, not a live pointer.
+    pending = [(index, name) for index, name in enumerate(namespaces) if addresses[index] & 1]
+    if pending:
+        table_slot = base + _CLASS_DEFINITION_TABLE_RVA
+        if not memory.mc.is_ptr(table_slot + 7):
+            raise ReadFailure('class_definition_table_unavailable')
+        raw, = memory.read_many([(table_slot, 8)], structural_check=True)
+        table, = struct.unpack('<Q', raw)
+        entries = [table + 8 * _CLASS_DEFINITION_INDICES[name] for _, name in pending]
+        if (table & 7 or not memory.mc.is_ptr(table) or
+                any(not memory.mc.is_ptr(entry + 7) for entry in entries)):
+            raise ReadFailure('class_definition_table_unavailable')
+        values = memory.read_many([(entry, 8) for entry in entries], structural_check=True)
+        for (index, _), raw in zip(pending, values):
+            addresses[index], = struct.unpack('<Q', raw)
+
     classes = {}
-    for (name, namespace), raw in zip(namespaces.items(), values):
-        address, = struct.unpack('<Q', raw)
-        # An unused IL2CPP type slot can still hold an odd metadata token.
+    for (name, namespace), address in zip(namespaces.items(), addresses):
         if address & 7 or not memory.mc.is_ptr(address):
             raise ReadFailure('class_slot_identity_unavailable')
         if memory.class_identity(address) != (name, namespace):
@@ -286,7 +311,7 @@ def _bind_lifecycle(memory, battle_klass, locator, classes):
 
 
 def locate_lifecycle(mc, battle_klass, locator, *, channel=None):
-    """Locate singleton slots, using versioned module slots when available."""
+    """Locate singleton slots using the verified build metadata when available."""
     namespaces = {'GameFlowController': 'Torappu', SQUAD_PAGE[0]: SQUAD_PAGE[1]}
     if battle_klass is None:
         namespaces['BattleController'] = 'Torappu.Battle'
@@ -296,9 +321,9 @@ def locate_lifecycle(mc, battle_klass, locator, *, channel=None):
             classes = _read_lifecycle_class_slots(memory, namespaces)
             reader = _bind_lifecycle(memory, battle_klass, locator, classes)
         except (OSError, RuntimeError):
-            locator._status('[定位] 类型槽未通过校验，使用批量扫描')
+            locator._status('[定位] 构建元数据未通过校验，使用批量扫描')
         else:
-            locator._status('[定位] libil2cpp 类型槽校验通过')
+            locator._status('[定位] libil2cpp 构建元数据校验通过')
             return reader
     try:
         classes = locator.scan_class_metadata(namespaces) or {}
