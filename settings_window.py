@@ -83,7 +83,8 @@ class SettingsWindow(tk.Toplevel):
         self.instance_rows: list[dict] = []
         self._poll_after = None
         self._status_after = None
-        config = app.connection_config
+        # The form edits long-lived preferences, not one-shot CLI overrides.
+        config = app.connection_preference
         self.title('ArkDPS · 设置')
         self.geometry('720x680')
         self.configure(bg=BG)
@@ -119,7 +120,10 @@ class SettingsWindow(tk.Toplevel):
         detect_row.grid(row=4, column=0, columnspan=3, sticky='ew', pady=(8, 0))
         self.detect_button = ttk.Button(detect_row, text='检测实例', command=self.start_detection)
         self.detect_button.pack(side='left')
-        self.detection_note = tk.StringVar(value='可留空 ADB 路径，按已安装位置与环境变量查找。')
+        self.detection_note = tk.StringVar(value=(
+            '当前连接含单次命令行覆盖；此页编辑长期配置，应用后使用表单值。'
+            if config != app.connection_config else
+            '可留空 ADB 路径，按已安装位置与环境变量查找。'))
         ttk.Label(detect_row, textvariable=self.detection_note,
                   foreground=SECONDARY).pack(side='left', padx=8)
         self.listing = tk.Listbox(connection, height=4, activestyle='none',

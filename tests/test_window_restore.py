@@ -214,3 +214,26 @@ def test_single_launch_no_events_override_keeps_saved_preference(
     again = launch(native_root, monkeypatch, path,
                    events='remote' if saved.event_observation else None)
     assert again.events_enabled is True and again.event_observation is True
+
+
+@pytest.mark.parametrize('has_saved_config', [False, True])
+def test_settings_apply_does_not_restore_cli_connection_overrides_on_restart(
+        tmp_path, monkeypatch, native_root, has_saved_config):
+    path = tmp_path / 'layout.json'
+    store = ConnectionConfigStore(tmp_path / 'connection.json')
+    preference = (ConnectionConfig(adb_path='saved-adb', serial='saved-instance',
+                                   auto_detect=True)
+                  if has_saved_config else ConnectionConfig())
+    if has_saved_config:
+        store.save(preference)
+    app = launch(native_root, monkeypatch, path, args=SimpleNamespace(
+        adb='launch-adb', serial='launch-instance', frida_remote='custom-endpoint'))
+    assert app.connection_config == ConnectionConfig('launch-adb', 'launch-instance', False)
+    window = app.open_settings()
+    window.events.set(False)  # An event-only edit must not promote CLI fields.
+    window.apply()
+    window.close()
+    assert store.load().config == preference
+    again = launch(native_root, monkeypatch, path, events=None)
+    assert again.connection_config == preference
+    assert again.event_observation is False and again.frida_remote is None

@@ -3,7 +3,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-import tkinter as tk
 
 import connection as conn
 from app import App, event_label
@@ -11,27 +10,29 @@ from connection import ConnectionConfigStore
 from layout_store import LayoutStore
 from settings_window import SettingsWindow, event_setting_status
 from test_connection import FakeAdb, device_line, identity
+from test_gui import native_root  # noqa: F401 (reuse the session Tk interpreter)
 import settings_window
 
 
 @pytest.fixture
-def root():
-    window = tk.Tk()
-    yield window
-    for timer in window.tk.call('after', 'info'):
-        try:
-            window.after_cancel(timer)
-        except tk.TclError:
-            pass
-    for widget in list(window.winfo_children()):
-        try:
+def root(native_root):
+    # Reuse the same real Tk interpreter as the GUI/HUD/restore tests; repeatedly
+    # creating interpreters on Windows can fail while sourcing init.tcl.
+    def clear():
+        for widget in list(native_root.winfo_children()):
+            if isinstance(widget, SettingsWindow):
+                widget.close()
+        for timer in native_root.tk.call('after', 'info'):
+            native_root.after_cancel(timer)
+        native_root.unbind('<Configure>')
+        native_root.deiconify()
+        for widget in list(native_root.winfo_children()):
             widget.destroy()
-        except tk.TclError:
-            pass
-    try:
-        window.destroy()
-    except tk.TclError:
-        pass
+        native_root.update()
+
+    clear()
+    yield native_root
+    clear()
 
 
 @pytest.fixture
@@ -277,3 +278,76 @@ def test_settings_apply_keeps_saved_preference_under_command_line_override(app_a
     window.refresh_status()
     assert window.override_note.get() == ''
     window.close()
+
+
+@pytest.fixture
+def configured_app(root, monkeypatch, tmp_path):
+    """A launch whose one-shot connection values differ from saved preferences."""
+    monkeypatch.setattr(App, 'collect', lambda self: None)
+    connection = ConnectionConfigStore(tmp_path / 'connection.json')
+    preference = conn.ConnectionConfig(adb_path=r'C:\Saved\adb.exe',
+                                       serial='127.0.0.1:16416', auto_detect=True)
+    connection.save(preference)
+    app = App(root, SimpleNamespace(adb=r'C:\Launch\adb.exe',
+                                    serial='127.0.0.1:16500',
+                                    frida_remote='127.0.0.1:55927'),
+              layout_store=LayoutStore(tmp_path / 'layout.json'),
+              connection_store=connection,
+              work_area_provider=lambda: [(0, 0, 1920, 1040)])
+    root.update()
+    return app, connection, preference
+
+
+@pytest.mark.parametrize('toggle_events', [False, True])
+def test_settings_apply_preserves_custom_frida_endpoint(configured_app, toggle_events):
+    app, _connection, _preference = configured_app
+    endpoint = app.frida_remote
+    window = SettingsWindow(app)
+    if toggle_events:
+        window.events.set(False)
+        window.apply()
+        assert app.frida_remote is None
+        window.events.set(True)
+    window.apply()
+    assert app.events_enabled is True
+    assert app.frida_remote == endpoint == '127.0.0.1:55927'
+    window.close()
+
+
+@pytest.mark.parametrize('edit', ['none', 'events', 'adb', 'address', 'auto'])
+def test_settings_apply_only_persists_edited_connection_preferences(configured_app, edit):
+    from dataclasses import replace
+
+    app, connection, preference = configured_app
+    assert app.connection_config.adb_path == r'C:\Launch\adb.exe'
+    assert app.connection_config.serial == '127.0.0.1:16500'
+    assert app.connection_config.auto_detect is False
+    window = SettingsWindow(app)
+    assert window.adb.get() == preference.adb_path
+    assert window.address.get() == preference.serial
+    assert window.auto.get() == preference.auto_detect
+    assert '命令行覆盖' in window.detection_note.get()
+    expected = preference
+    if edit == 'events':
+        window.events.set(False)
+    elif edit == 'adb':
+        window.adb.set(r'C:\Edited\adb.exe')
+        expected = replace(preference, adb_path=r'C:\Edited\adb.exe')
+    elif edit == 'address':
+        window.address.set('127.0.0.1:16600')
+        expected = replace(preference, serial='127.0.0.1:16600')
+    elif edit == 'auto':
+        window.auto.set(False)
+        expected = replace(preference, auto_detect=False)
+    window.apply()
+    assert connection.load().config == expected
+    assert app.connection_config == expected
+    # Repeated apply/reopen must not resurrect the one-shot launch overrides.
+    window.close()
+    reopened = SettingsWindow(app)
+    assert reopened.adb.get() == expected.adb_path
+    assert reopened.address.get() == expected.serial
+    assert reopened.auto.get() == expected.auto_detect
+    reopened.apply()
+    assert connection.load().config == expected
+    reopened.close()

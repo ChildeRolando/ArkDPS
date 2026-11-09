@@ -82,16 +82,19 @@ class App:
             self.warnings.append(self.loaded.warning)
         adb_arg = getattr(args, 'adb', '') or None
         serial_arg = getattr(args, 'serial', '') or None
-        self.connection_config = ConnectionConfig(adb_path=adb_arg, serial=serial_arg,
-                                                  auto_detect=serial_arg is None)
+        self.connection_preference = ConnectionConfig()
         if self.connection_store is not None:
             loaded_connection = self.connection_store.load()
-            self.connection_config = loaded_connection.config
+            self.connection_preference = loaded_connection.config
             if not loaded_connection.ok and loaded_connection.warning:
                 self.warnings.append(loaded_connection.warning)
+        self.connection_config = self.connection_preference
         self.apply_command_line_connection(adb_arg, serial_arg)
         self.events_enabled = getattr(args, 'frida_remote', None) is not None
-        self.frida_remote = getattr(args, 'frida_remote', None)
+        # Retain the launch endpoint even while observation is switched off;
+        # applying unrelated settings must not replace a custom Frida bridge.
+        self.event_endpoint = getattr(args, 'frida_remote', None) or DEFAULT_FRIDA_REMOTE
+        self.frida_remote = self.event_endpoint if self.events_enabled else None
         self.connection_diagnostic = None
         self.event_status = None
         self.event_error = None
@@ -253,10 +256,11 @@ class App:
 
     def apply_connection(self, config, events_enabled):
         """Persist connection/event choices and ask the worker to reconnect."""
+        self.connection_preference = config
         self.connection_config = config
         self.event_observation = bool(events_enabled)
         self.events_enabled = bool(events_enabled)
-        self.frida_remote = DEFAULT_FRIDA_REMOTE if self.events_enabled else None
+        self.frida_remote = self.event_endpoint if self.events_enabled else None
         if self.connection_store is not None:
             try:
                 self.connection_store.save(config)
