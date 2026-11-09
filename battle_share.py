@@ -61,11 +61,13 @@ def write_export(path, payload, *, history_directory, overwrite=False):
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        # Recheck aliases after writing. No-overwrite uses an exclusive atomic link,
-        # so a file created while the save dialog was open cannot be overwritten.
+        # Recheck aliases after writing. Windows rename is atomic and refuses an
+        # existing destination, including on filesystems without hard-link support.
         export_path(target, history_directory)
         if overwrite:
             os.replace(temporary, target)
+        elif os.name == 'nt':
+            os.rename(temporary, target)
         else:
             os.link(temporary, target)
     finally:

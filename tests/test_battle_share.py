@@ -1,4 +1,5 @@
 import json
+import os
 from unittest.mock import patch
 
 import pytest
@@ -46,7 +47,7 @@ def test_export_exclusive_then_confirmed_replacement(tmp_path):
     assert not list(tmp_path.glob('.arkdps-share-*'))
 
 
-@pytest.mark.parametrize('operation', ['fsync', 'replace', 'link'])
+@pytest.mark.parametrize('operation', ['fsync', 'replace', 'publish'])
 def test_atomic_failures_preserve_existing_export_and_archive(tmp_path, operation):
     history = BattleHistory(tmp_path / 'history')
     original = record()
@@ -54,10 +55,11 @@ def test_atomic_failures_preserve_existing_export_and_archive(tmp_path, operatio
     archived = history.path_for(original.battle_id).read_bytes()
     target = tmp_path / 'share.json'
     target.write_bytes(b'previous complete file')
-    with patch('battle_share.os.' + operation, side_effect=OSError('disk unavailable')):
+    api = ('rename' if os.name == 'nt' else 'link') if operation == 'publish' else operation
+    with patch('battle_share.os.' + api, side_effect=OSError('disk unavailable')):
         with pytest.raises(OSError):
             write_export(target, json_bytes(original), history_directory=history.directory,
-                         overwrite=operation != 'link')
+                         overwrite=operation != 'publish')
     assert target.read_bytes() == b'previous complete file'
     assert history.path_for(original.battle_id).read_bytes() == archived
     assert not list(tmp_path.glob('.arkdps-share-*'))
