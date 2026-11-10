@@ -74,6 +74,8 @@ public partial class MainWindow
         Require(Stage.Text=="OF-8 汐斯塔狂想曲","live stage display was not resolved");
         foreach(var item in State.Get("history").Items())
         {
+            // ARK-23 synthetic archives intentionally carry a non-levelId stage.
+            if(item.Text("battle_id").StartsWith("ark-23-"))continue;
             string label=item.Get("labels").Items().First().Text();
             Require(!label.Contains('/'),"history stage label leaked the native levelId");
             Require(item.Text("stage_detail").Contains('/'),"history stage detail lost the raw levelId");

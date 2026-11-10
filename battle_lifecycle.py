@@ -75,8 +75,10 @@ class BattleFeed:
         if observer is not None:
             try:
                 mark = observer.mark()
-                if mark.get('error') or mark.get('stopped'):
-                    raise StreamGap('observer stopped or reported a callback error')
+                if mark.get('error'):
+                    raise StreamGap(f"observer callback error: {mark['error']}")
+                if mark.get('stopped'):
+                    raise StreamGap('observer stopped')
                 if mark.get('retry'):
                     raise CaptureRetry('observer clock advanced')
             except CaptureRetry:
