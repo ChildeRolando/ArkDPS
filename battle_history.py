@@ -17,10 +17,14 @@ POLICIES = {
     'damage': 'native_cumulative_including_overkill',
     'healing': 'native_cumulative_including_overheal',
     'shield_absorbed': 'observed_actual_absorption_only',
+    'overkill': 'observed_settlement_value_minus_actual_hp_at_kill_after_shield',
     'recent': 'cumulative_delta_game_time_window_up_to_5s',
     'engagement': 'observed_events_separate_damage_healing_union_1.5s_tail',
     'ownership': 'verified_statistics_source_to_owner_no_guessing',
 }
+# Files written before overkill existed keep their original policy map and are
+# read with overkill unknown rather than being rejected as unsupported.
+LEGACY_POLICIES = {key: value for key, value in POLICIES.items() if key != 'overkill'}
 _LOCK = RLock()
 
 
@@ -105,7 +109,9 @@ class BattleRecord:
             _date(data['recorded_at'])
             if data['observed_at'] is not None:
                 _date(data['observed_at'])
-            _require(data['policies'] == POLICIES, 'unsupported statistics policies')
+            _require(data['policies'] in (POLICIES, LEGACY_POLICIES),
+                     'unsupported statistics policies')
+            data['policies'] = deepcopy(POLICIES)
             _number(data['duration'], 'duration')
             metadata = data['metadata']
             _require(isinstance(metadata, dict), 'invalid metadata')
@@ -126,17 +132,39 @@ class BattleRecord:
             _number(stats['coverage_start'], 'coverage_start')
             _require(stats['coverage_start'] <= data['duration'], 'coverage starts after end')
             _require(isinstance(stats['rows'], dict), 'invalid statistics rows')
+            for key, default in (('overkill_damage', None),
+                                 ('overkill_coverage_complete', False),
+                                 ('overkill_coverage_start', None),
+                                 ('overkill_coverage_end', None)):
+                stats.setdefault(key, default)
+            _number(stats['overkill_damage'], 'overkill_damage', nullable=True)
+            _require(type(stats['overkill_coverage_complete']) is bool,
+                     'invalid overkill_coverage_complete')
+            _number(stats['overkill_coverage_start'], 'overkill_coverage_start', nullable=True)
+            _number(stats['overkill_coverage_end'], 'overkill_coverage_end', nullable=True)
+            if stats['overkill_coverage_start'] is not None:
+                _require(stats['overkill_coverage_end'] is not None
+                         and 0 <= stats['overkill_coverage_start']
+                         <= stats['overkill_coverage_end'] <= data['duration'],
+                         'invalid overkill coverage interval')
             for owner, row in stats['rows'].items():
                 _require(bool(owner) and isinstance(row, dict), 'invalid owner row')
+                for key, default in (('overkill_damage', None),
+                                     ('overkill_coverage_complete', False),
+                                     ('overkill_coverage_start', None),
+                                     ('overkill_coverage_end', None)):
+                    row.setdefault(key, default)
                 for metric in ('damage', 'healing', 'shield_absorbed', 'recent_damage',
                                'recent_healing', 'engagement_damage', 'engagement_healing',
                                'active_damage', 'active_healing', 'observed_damage', 'observed_healing',
-                               'shield_coverage_start', 'event_coverage_end'):
+                               'shield_coverage_start', 'event_coverage_end',
+                               'overkill_damage', 'overkill_coverage_start',
+                               'overkill_coverage_end'):
                     _number(row[metric], metric, nullable=True)
                 _number(row['coverage_start'], 'row coverage_start')
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')
                 for flag in ('counter_snapshot_complete', 'event_coverage_complete',
-                             'types_available', 'types_stale'):
+                             'overkill_coverage_complete', 'types_available', 'types_stale'):
                     _require(type(row[flag]) is bool, f'invalid {flag}')
                 _require(row['present'] is None or type(row['present']) is bool, 'invalid presence')
                 _require(isinstance(row['sources'], list) and
@@ -153,6 +181,10 @@ class BattleRecord:
                 if start is not None:
                     _require(end is not None and 0 <= start <= end <= data['duration'],
                              'invalid event coverage interval')
+                start, end = row['overkill_coverage_start'], row['overkill_coverage_end']
+                if start is not None:
+                    _require(end is not None and 0 <= start <= end <= data['duration'],
+                             'invalid overkill coverage interval')
             for field in ('unknown_sources', 'unmapped_tokens', 'ambiguous_sources',
                           'mapping_conflicts', 'missing_fields'):
                 _require(isinstance(stats[field], list) and

@@ -65,3 +65,11 @@ ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期�
 - OF-2：事件 1–92，凯瑟琳装置吸收 155.779993，归宿主 `char_4162_cathy`，部分破盾序号 51，11 条零吸收回调不增加累计。
 
 复核命令分别为 `python acceptance/verify_live_events.py <OF-8目录>/product --source-owner char_147_shining=char_147_shining --require-partial` 和 `python acceptance/verify_live_events.py <OF-2目录>/product --source-owner token_10041_cathy_catsld=char_4162_cathy --require-partial --require-zero`。这两组来自显式指定端点的原候选，不能外推为返修提交的默认启动或缺依赖实机验证。`tests/test_collection_session.py` 覆盖默认启用、关闭、认证拒绝、启动失败清理后继续快照与运行中断；`tests/test_capture_cli.py` 覆盖正式参数默认值及普通/严格验收模式的降级行为。
+
+## ARK-25：伤害事件的过量证据
+
+`event_probe_android2791.js` 在 `Entity.ApplyModifier` 返回时，对 `targetType=0` 的伤害事件追加目标 ID、签名 `realDelta`、目标 HP 前后、`killed`、`type`/`targetType`/`cancelReason` 以及同帧已验证护盾吸收量。`amount` 仍取结算后的 `m_value`，因此护盾/抵挡已从过量的基数中排除；`shield_absorbed` 只作审计，不再次扣减。
+
+证据只在 HP 差值与 `realDelta` 一致、目标 ID 可读且符号正确时序列化。任一读取失败不关闭伤害/治疗/护盾事件流，只让该次伤害缺少证据，统计层随即将对应干员的过量标为未知。`Statistics` 只在目标实际 HP 归零时计算 `amount - (-realDelta)`，并在 `overkill_coverage_complete` 中记录事件覆盖与证据完整性；旧探针或旧历史没有这些字段时过量未知，不补零。
+
+本节的 JS 偏移与实机行为尚未在设备上验证（依赖 ARK-21）；当前验收使用合成事件覆盖普通命中、击杀、护盾完全吸收、召唤归属与覆盖缺失。设备恢复后须至少补一局击杀样本的逐干员总伤害/过量对账。

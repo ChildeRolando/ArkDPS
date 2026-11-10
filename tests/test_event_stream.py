@@ -96,3 +96,19 @@ def test_invalid_watermark_closes_coverage(frame, game_time):
     with pytest.raises(StreamGap):
         receiver.watermark(session='battle', sequence=10, frame=frame, game_time=game_time)
     assert stats.result()['rows']['host']['event_coverage_end'] == 30
+
+
+def test_overkill_evidence_crosses_the_ordered_receiver_and_is_compared_on_replay():
+    stats, receiver = stream()
+    event = dict(session='battle', sequence=11, frame=900, game_time=30,
+                 source='token', kind='damage', amount=200,
+                 target='enemy_1', real_delta=-44, hp_before=44, hp_after=0,
+                 killed=True, target_type=0, damage_type=1, shield_absorbed=0)
+    receiver.accept(**event)
+    row = stats.result()['rows']['host']
+    assert row['overkill_damage'] == 156
+    assert row['overkill_coverage_complete'] is True
+    receiver.accept(**event)
+    with pytest.raises(StreamGap):
+        receiver.accept(**{**event, 'hp_before': 45})
+    assert stats.result()['rows']['host']['overkill_coverage_complete'] is False

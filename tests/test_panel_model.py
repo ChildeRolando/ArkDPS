@@ -259,6 +259,7 @@ def test_rows_from_statistics_maps_adapter_fields():
         'active_damage': 2.5, 'active_healing': 1.5,
         'damage_by_type': {'physical': 10}, 'present': True,
         'counter_snapshot_complete': True, 'event_coverage_complete': False,
+        'overkill_damage': 6, 'overkill_coverage_complete': True,
         'sources': ['A', 'token'],
     }}}
     row = rows_from_statistics(result)[0]
@@ -266,7 +267,13 @@ def test_rows_from_statistics_maps_adapter_fields():
         'A', '灰烬', 10, 2, 3)
     assert row.recent_shield is None
     assert row.event_complete is False
+    assert row.overkill == 6 and row.overkill_complete is True
     assert row.sources == ('A', 'token')
+    detail = render_panel(total(), [row]).entries[0].detail
+    assert detail['overkill_damage'] == 6
+    assert detail['overkill_coverage_complete'] is True
+    # Overkill never changes the ranking basis or the damage denominator.
+    assert detail['damage'] == 10
 
 
 def test_share_denominator_includes_retired_and_zero_rows():

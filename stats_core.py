@@ -1,8 +1,10 @@
 """Offline statistics core. Times are game seconds; inputs must be reliable.
 
 Snapshots own damage/healing totals and sampled recent rates. Event callbacks own
-engagement rates and shield absorption; never add damage/heal events to totals.
-Source keys identify distinct client statistic entries, not transient entities.
+engagement rates, shield absorption and event-derived overkill; never add
+damage/heal events to totals. Overkill is a subset of the already inclusive
+native damage total and is never subtracted from it. Source keys identify
+distinct client statistic entries, not transient entities.
 """
 from collections import deque
 from math import isfinite
@@ -24,6 +26,11 @@ class Statistics:
         self.last_event_time = start_time
         self.engagement = {}
         self.shields = {}
+        # Per-owner overkill is only published for a continuously covered event
+        # stream in which every damage event carried verifiable target HP and
+        # settlement evidence. Any unverifiable damage event makes it unknown.
+        self.overkill = {}
+        self.overkill_incomplete = set()
 
     @staticmethod
     def _time(value):
@@ -153,12 +160,60 @@ class Statistics:
         self.invalidate_snapshots()
         return changed
 
-    def event(self, event_id, game_time, source, kind, amount):
+    @staticmethod
+    def _optional_number(value):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and isfinite(value))
+
+    def _overkill(self, amount, *, target, real_delta, hp_before, hp_after,
+                  killed, target_type, damage_type, cancel_reason):
+        """Derive one hit's overkill from native settlement evidence.
+
+        ``amount`` is the modifier value applied to HP after shield/block
+        settlement, so absorbed damage is already excluded. ``real_delta`` is
+        the native signed HP delta (negative for damage). Only a target whose
+        HP actually reached zero can have overkill. Returns ``(known, value)``;
+        any missing or contradictory field keeps the whole per-owner metric
+        unknown instead of publishing a guess or zero.
+        """
+        if (not isinstance(target, str) or not target
+                or type(killed) is not bool
+                or target_type is not None and (type(target_type) is not int)
+                or damage_type is not None and (type(damage_type) is not int)
+                or cancel_reason is not None and (type(cancel_reason) is not int)
+                or not all(self._optional_number(v) for v in
+                           (real_delta, hp_before, hp_after))
+                or real_delta > 0 or hp_before < 0 or hp_after < 0):
+            return False, 0.0
+        actual = -real_delta
+        tolerance = max(0.01, amount * 1e-6)
+        if actual > amount + tolerance:
+            return False, 0.0
+        if abs((hp_before - hp_after) - actual) > tolerance:
+            return False, 0.0
+        if killed and hp_after > tolerance:
+            return False, 0.0
+        if not killed and hp_after <= tolerance:
+            return False, 0.0
+        return True, (max(0.0, amount - actual) if killed else 0.0)
+
+    def event(self, event_id, game_time, source, kind, amount, *,
+              target=None, real_delta=None, hp_before=None, hp_after=None,
+              killed=None, target_type=None, damage_type=None,
+              cancel_reason=None, shield_absorbed=None):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
         Duplicate IDs with identical payload are ignored; conflicts are rejected.
         Inputs must arrive in game-time order. Shield expiration and replacement
         are not absorption and have no accepted event kind.
+
+        Damage events may carry overkill evidence: the applied settlement value
+        is ``amount``; ``real_delta`` is the native signed HP delta (negative
+        for damage), ``hp_before``/``hp_after`` the target HP, ``killed`` the
+        explicit endpoint, ``target_type``/``damage_type``/``cancel_reason``/
+        ``shield_absorbed`` the native context. Missing or inconsistent
+        evidence keeps overkill
+        unknown; it never becomes zero and never changes the native totals.
         """
         self._time(game_time)
         self._amount(amount)
@@ -166,7 +221,11 @@ class Statistics:
             raise ValueError('event coverage or baseline is unavailable')
         if not event_id or source not in self.owners or kind not in ('damage', 'healing', 'shield_absorbed'):
             raise ValueError('invalid event identity, source or kind')
-        payload = (game_time, source, kind, amount)
+        evidence = (target, real_delta, hp_before, hp_after, killed,
+                    target_type, damage_type, cancel_reason, shield_absorbed)
+        if kind != 'damage' and any(value is not None for value in evidence):
+            raise ValueError('overkill evidence is only valid for damage')
+        payload = (game_time, source, kind, amount, evidence)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
@@ -176,6 +235,15 @@ class Statistics:
         self.events[event_id] = payload
         self.last_event_time = game_time
         owner = self.owners[source]
+        if kind == 'damage':
+            known, overkill = self._overkill(
+                amount, target=target, real_delta=real_delta, hp_before=hp_before,
+                hp_after=hp_after, killed=killed, target_type=target_type,
+                damage_type=damage_type, cancel_reason=cancel_reason)
+            if known:
+                self.overkill[owner] = self.overkill.get(owner, 0.0) + overkill
+            else:
+                self.overkill_incomplete.add(owner)
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
         elif amount > 0:
@@ -222,13 +290,20 @@ class Statistics:
             registered = [s for s, o in self.owners.items() if o == owner]
             complete = all(s in self.sources and self.sources[s]['continuous'] and
                            self.sources[s]['history'][-1][0] == self.now for s in registered)
+            overkill_known = (bool(self.event_coverage) and self.event_coverage_end is None
+                              and owner not in self.overkill_incomplete)
             row = {'coverage_start': self.start_time,
                    'counter_snapshot_complete': complete,
                    'shield_coverage_start': self.start_time if self.event_coverage else None,
                    'event_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                           else self.end_time if self.event_coverage else None),
                    'event_coverage_complete': self.event_coverage and self.event_coverage_end is None,
-                   'shield_absorbed': self.shields.get(owner, 0) if self.event_coverage else None}
+                   'shield_absorbed': self.shields.get(owner, 0) if self.event_coverage else None,
+                   'overkill_damage': (self.overkill.get(owner, 0.0) if overkill_known else None),
+                   'overkill_coverage_complete': overkill_known,
+                   'overkill_coverage_start': self.start_time if self.event_coverage else None,
+                   'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
+                                             else self.end_time if self.event_coverage else None)}
             for kind in ('damage', 'healing'):
                 row[kind] = sum(self.sources[s]['values'][kind] for s in sources) if sources else None
                 start = max([self.start_time, self.now - 5] +
@@ -253,5 +328,13 @@ class Statistics:
                     row['active_' + kind] = 0 if self.event_coverage else None
                     row['observed_' + kind] = 0 if self.event_coverage else None
             rows[owner] = row
+        overkill_complete = bool(rows) and all(
+            row['overkill_coverage_complete'] for row in rows.values())
         return {'session': self.session, 'game_time': self.now, 'ended': self.end_time is not None,
-                'coverage_start': self.start_time, 'rows': rows}
+                'coverage_start': self.start_time, 'rows': rows,
+                'overkill_damage': (sum(row['overkill_damage'] for row in rows.values())
+                                    if overkill_complete else None),
+                'overkill_coverage_complete': overkill_complete,
+                'overkill_coverage_start': self.start_time if self.event_coverage else None,
+                'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
+                                          else self.end_time if self.event_coverage else None)}

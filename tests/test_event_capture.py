@@ -213,3 +213,21 @@ def test_clock_retry_does_not_hide_a_real_observer_error():
     with pytest.raises(StreamGap):
         capture.sample()
     assert capture.closed
+
+
+def test_probe_overkill_evidence_reaches_the_published_result():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    observer.sequence = observer.epoch = 1
+    observer.events = [{**event(1, amount=200),
+                        'target': 'enemy_1046_agent', 'real_delta': -44,
+                        'hp_before': 44., 'hp_after': 0., 'killed': True,
+                        'target_type': 0, 'damage_type': 1,
+                        'cancel_reason': 0, 'shield_absorbed': 0.}]
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    row = capture.sample()['rows']['char_a']
+    assert row['damage'] == 120 and row['observed_damage'] == 200
+    assert row['overkill_damage'] == 156
+    assert row['overkill_coverage_complete'] is True

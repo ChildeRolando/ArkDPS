@@ -458,3 +458,42 @@ def test_committed_record_readback_failure_does_not_prune_and_retry_recovers(tmp
     assert history.get('battle:0').records
     assert not history.save(candidate).written
     assert len(list(tmp_path.glob('*.json'))) == 100
+
+
+def test_overkill_fields_round_trip_and_old_records_stay_readable_as_unknown(tmp_path):
+    data = record().to_dict()
+    row = data['statistics']['rows']['a']
+    row.update(overkill_damage=156., overkill_coverage_complete=True,
+               overkill_coverage_start=0., overkill_coverage_end=12.)
+    data['statistics'].update(overkill_damage=156., overkill_coverage_complete=True,
+                              overkill_coverage_start=0., overkill_coverage_end=12.)
+    value = BattleRecord.from_dict(data)
+    history = BattleHistory(tmp_path)
+    history.save(value)
+    restored = history.get(value.battle_id).records[0]
+    assert restored.statistics['rows']['a']['overkill_damage'] == 156.
+    assert restored.statistics['overkill_damage'] == 156.
+    assert restored.to_dict()['policies']['overkill'].startswith('observed_')
+
+    legacy = record(1).to_dict()
+    for key in ('overkill_damage', 'overkill_coverage_complete',
+                'overkill_coverage_start', 'overkill_coverage_end'):
+        legacy['statistics'].pop(key)
+        for legacy_row in legacy['statistics']['rows'].values():
+            legacy_row.pop(key, None)
+    legacy['policies'] = {key: val for key, val in legacy['policies'].items()
+                          if key != 'overkill'}
+    restored_legacy = BattleRecord.from_dict(legacy)
+    legacy_row = restored_legacy.statistics['rows']['a']
+    assert legacy_row['overkill_damage'] is None
+    assert legacy_row['overkill_coverage_complete'] is False
+    assert restored_legacy.statistics['overkill_damage'] is None
+    assert restored_legacy.to_dict()['policies']['overkill'].startswith('observed_')
+
+
+def test_invalid_overkill_coverage_is_rejected():
+    data = record().to_dict()
+    data['statistics']['rows']['a'].update(overkill_coverage_start=12.,
+                                           overkill_coverage_end=5.)
+    with pytest.raises(HistoryError, match='overkill coverage'):
+        BattleRecord.from_dict(data)

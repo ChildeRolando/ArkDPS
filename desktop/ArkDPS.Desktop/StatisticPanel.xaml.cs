@@ -30,7 +30,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Value => Entry.Text("display_value");
     public string Presence => (Entry.Bool("portrait_muted") ? "已离场" : "统计条目") + (Entry.Bool("incomplete") ? " · 部分覆盖" : "");
     public string Secondary => Entry.Text("share_display") + (Entry.Text("rate_label").Length > 0 ? "   " + Entry.Text("rate_display") + "/s" : "");
-    public string Tooltip => Name + "\n排行原值 " + Entry.Text("exact_value") + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Exact("rate") + "\n占比 " + Entry.Exact("share");
+    public string Tooltip => Name + "\n排行原值 " + Entry.Text("exact_value") + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Exact("rate") + "\n占比 " + Entry.Exact("share") + "\n过量伤害 " + Entry.Get("detail").Exact("overkill_damage") + "（总伤害含过量）";
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }

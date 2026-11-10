@@ -159,6 +159,10 @@ class PanelSourceRow:
     active_damage: float | None = None
     active_healing: float | None = None
     damage_by_type: Mapping[str, float] = field(default_factory=dict)
+    # Event-derived overkill is a subset of damage, never part of the ranking
+    # denominator. It stays None unless the whole event stream proved it.
+    overkill: float | None = None
+    overkill_complete: bool = False
     counter_complete: bool = True
     event_complete: bool = True
     sources: tuple[str, ...] = ()
@@ -211,6 +215,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             active_healing=row.get('active_healing'),
             damage_by_type=row.get('damage_by_type') or {},
             recent_damage_by_type=row.get('recent_damage_by_type') or {},
+            overkill=row.get('overkill_damage'),
+            overkill_complete=bool(row.get('overkill_coverage_complete', False)),
             recent_damage_window=row.get('recent_damage_window'),
             recent_healing_window=row.get('recent_healing_window'),
             recent_shield_window=row.get('recent_shield_window'),
@@ -362,6 +368,8 @@ def render_panel(config: PanelConfig,
             detail={'damage_by_type': dict(row.damage_by_type),
                     'damage': row.damage, 'healing': row.healing,
                     'shield_absorbed': row.shield,
+                    'overkill_damage': row.overkill,
+                    'overkill_coverage_complete': row.overkill_complete,
                     'active_damage': row.active_damage,
                     'active_healing': row.active_healing,
                     'sources': list(row.sources)}))

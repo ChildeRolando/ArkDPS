@@ -22,6 +22,7 @@
 每行除 `Statistics` 的总伤害/总治疗/近期速率/接敌速率/覆盖信息外，还包含：
 
 - `damage_by_type`：按稳定来源键分别保留物理/法术/真实/元素四类累计，再按宿主求和；`types_available` 表示至少一个来源有可靠分类，`types_stale` 表示任一已登记来源的分类不是当前值（包含缺失情况），保留各来源上次可靠值，部分和不代表完整分类。
+- `overkill_damage`、`overkill_coverage_complete`、`overkill_coverage_start`、`overkill_coverage_end`：事件派生的过量伤害及其覆盖。它只在事件流连续覆盖、且每次伤害都有目标、`realDelta`、HP 前后与击杀标记时发布；任一证据缺失或矛盾时该行及全队合计为 `None`，`overkill_coverage_complete=False`。原生总伤害不受影响，过量也不从总伤害扣除。
 - `present`：该归属是否有在场单位；默认使用最近接受的编队快照。在场列表不可读或非空槽位读取失败时，整个归属快照被拒绝。
 - `sources`：归并到该干员的稳定统计键。
 - `unknown_sources`、`unmapped_tokens`、`ambiguous_sources`、`missing_fields`、`mapping_conflicts`：无法可靠归属或字段缺失的诊断。存在统计条目但完全无法归属时拒绝发布，而不是输出零。

@@ -43,6 +43,8 @@ public sealed class Inspector : Border
         profile.Children.Add(name);body.Children.Add(profile);
         Section("累计贡献");
         Pair("伤害 · 含过量",row.Exact("damage")); Pair("治疗 · 含过量",row.Exact("healing")); Pair("有效护盾 · 已观察",row.Exact("shield_absorbed"));
+        Pair("过量伤害 · 事件派生",row.Exact("overkill_damage"));
+        body.Children.Add(Text(OverkillNote(row),11,false,"Muted",new Thickness(0,6,0,0)));
         Section("独立接敌速率");
         Pair("DPS",row.Exact("engagement_damage"));Pair("HPS",row.Exact("engagement_healing"));
         Pair("伤害活跃秒",row.Exact("active_damage"));Pair("治疗活跃秒",row.Exact("active_healing"));
@@ -58,6 +60,13 @@ public sealed class Inspector : Border
         Section("归属来源");
         string sources=string.Join("\n",row.Get("sources").Items().Select(x=>x.Text()));
         body.Children.Add(Text(sources.Length>0 ? sources : "—",10,false,"Muted"));
+    }
+    private static string OverkillNote(JsonElement row)
+    {
+        if(row.Bool("overkill_coverage_complete") && row.Get("overkill_damage").ValueKind==JsonValueKind.Number)
+            return "总伤害仍含过量；过量只用于查看，不改变伤害排行、柱长或占比，并已排除护盾/抵挡吸收。";
+        if(!row.Bool("event_coverage_complete")) return "总伤害仍含过量；事件覆盖不完整，过量未知（不记零）。";
+        return "总伤害仍含过量；目标或实际扣血证据不足，过量未知（不记零）。";
     }
     private void Section(string title)
     {

@@ -83,3 +83,11 @@ def test_wpf_quit_is_bounded_and_never_modal():
     quit_body = window[window.index('internal async Task Quit'):]
     assert 'MessageBox' not in quit_body
     assert 'Task.WhenAny' in quit_body and 'WriteQuitLog' in quit_body
+
+
+def test_wpf_surfaces_event_derived_overkill_without_redefining_damage():
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')
+    assert '"伤害 · 含过量"' in inspector
+    assert '过量伤害 · 事件派生' in inspector and 'overkill_damage' in inspector
+    assert '总伤害含过量' in screenshot and 'overkill_damage' in screenshot
