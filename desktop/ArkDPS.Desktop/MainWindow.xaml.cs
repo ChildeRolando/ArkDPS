@@ -45,8 +45,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;
-        HistoryPanel.PinRequested=id=>HistoryInspector.Pin(id,HistoryPanel.View.Get("source"));
+        HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;HistoryPanel.RateActionRequested=HandleRateAction;
+        HistoryPanel.PinRequested=id=>HistoryInspector.Pin(id,HistoryPanel.View);
         Outcome.SelectedIndex=0;Practice.SelectedIndex=0;
         poll.Tick+=async(_,_)=>await Poll();
         save.Tick+=async(_,_)=>{save.Stop();await SavePlacement();};
@@ -137,14 +137,14 @@ public partial class MainWindow : Window
             if(!Panels.TryGetValue(id,out var panel))
             {
                 panel=new StatisticPanel{Command=Command,HudRequested=id=>OpenHud(id),
-                    LockRequested=ToggleLock,AlphaRequested=ChangeAlpha};
-                panel.PinRequested=owner=>{activePanel=id;LiveInspector.Pin(owner,Panels[id].View.Get("source"));};
+                    LockRequested=ToggleLock,AlphaRequested=ChangeAlpha,RateActionRequested=HandleRateAction};
+                panel.PinRequested=owner=>{activePanel=id;LiveInspector.Pin(owner,Panels[id].View);};
                 Panels.Add(id,panel);PanelHost.Children.Add(panel);
             }
             panel.Update(view,views.Length>1);
             if(Huds.TryGetValue(id,out var hud)) {hud.Update(view,Status.Text+" · "+EventStatus.Text);panel.HudState(true,hud.Locked,hud.Opacity);}
             else panel.HudState(false,false,.9);
-            if(activePanel==id) LiveInspector.Update(view.Get("source"));
+            if(activePanel==id) LiveInspector.Update(view);
         }
         if(!initialized)
         {
@@ -194,7 +194,7 @@ public partial class MainWindow : Window
     {
         if(!Panels.ContainsKey(id)) return;
         if(Huds.TryGetValue(id,out var existing)){if(!existing.Locked)existing.Activate();return;}
-        var hud=new HudWindow(id,ShowGui);Huds.Add(id,hud);
+        var hud=new HudWindow(id,ShowGui);hud.Panel.RateActionRequested=HandleRateAction;Huds.Add(id,hud);
         hud.PlacementChanged+=()=>{SyncHudControls(id);ScheduleSave();};
         hud.ClosedByUser+=()=>{Huds.Remove(id);SyncHudControls(id);if(Huds.Count==0 && (!IsVisible || WindowState==WindowState.Minimized))ShowGui();ScheduleSave();};
         hud.Show();
@@ -234,6 +234,12 @@ public partial class MainWindow : Window
         if(page=="history") await Command("history_refresh");
     }
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
+    // 事件不可用时的恢复入口：重试会重新连接采集（不重启应用）；否则打开连接设置。
+    private async void HandleRateAction(string action)
+    {
+        if(action=="retry"){ShowGui();Navigate("live");await Command("rescan");}
+        else if(action=="settings"){ShowGui();Navigate("settings");}
+    }
     private async void Rescan(object sender,RoutedEventArgs e)=>await Command("rescan");
     private async void SkinChanged(object sender,SelectionChangedEventArgs e)
     {

@@ -29,7 +29,8 @@ from connection import (ConnectionConfig, ConnectionConfigStore, detect_instance
 from event_capture import CaptureRetry
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
-from panel_model import PanelConfig, render_panel, rows_from_statistics, team_status
+from panel_model import (EventAvailability, PanelConfig, detail_rates, render_panel,
+                        rows_from_statistics, team_status)
 import stage_names
 
 PROTOCOL_VERSION = 1
@@ -143,13 +144,18 @@ class DesktopState:
         return 'live', '正在统计'
 
     @staticmethod
-    def view(config, statistics):
+    def view(config, statistics, complete=None, event=None):
         source = statistics.get('rows') or {}
-        complete, reason, note = team_status(statistics)
-        view = asdict(render_panel(config, rows_from_statistics(statistics),
+        if complete is None:
+            complete, reason, note = team_status(statistics)
+        else:
+            reason, note = '', ''
+        rows = rows_from_statistics(statistics)
+        view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
-                                   team_note=note))
+                                   team_note=note, event=event))
         view['empty_text'] = empty_text(config, source, complete)
+        view['rates'] = detail_rates(rows, event)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source
@@ -173,12 +179,17 @@ class DesktopState:
         if self.selected:
             selected_stage = record_stage(self.selected)
             selected_stats = record_statistics(self.selected)
-            selected = dict(battle_id=self.selected.battle_id, labels=record_labels(self.selected),
-                            stage=selected_stage.label, stage_detail=selected_stage.detail,
-                            view=self.view(self.history_config, selected_stats),
-                            record=self.selected.to_dict())
+            selected = dict(
+                battle_id=self.selected.battle_id, labels=record_labels(self.selected),
+                stage=selected_stage.label, stage_detail=selected_stage.detail,
+                view=self.view(self.history_config, selected_stats, None,
+                               EventAvailability(status=self.selected.event_status,
+                                                 error=self.selected.event_error, live=False)),
+                record=self.selected.to_dict())
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
+        live_event = EventAvailability(status=sample.get('event_status', self.event_status),
+                                       error=sample.get('event_error', self.event_error), live=True)
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     status=status, status_text=label, error=self.error,
@@ -189,7 +200,7 @@ class DesktopState:
                     stage=live_stage.label if has_live_stage else None,
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
-                    panels=[self.view(p, stats) for p in self.layout.panels],
+                    panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
                     history=history, history_selected=selected, history_notice=self.history_notice)
 
     def persist(self, layout):

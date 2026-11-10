@@ -29,8 +29,8 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Initial => Name.Length > 0 ? Name[..1] : "?";
     public string Value => Entry.Text("display_value");
     public string Presence => (Entry.Bool("portrait_muted") ? "已离场" : "统计条目") + (Entry.Bool("incomplete") ? " · 部分覆盖" : "");
-    public string Secondary => Entry.Text("share_display") + (Entry.Text("rate_label").Length > 0 ? "   " + Entry.Text("rate_display") + "/s" : "");
-    public string Tooltip => Name + "\n排行原值 " + Json.UiText(Entry.Text("exact_value")) + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + "\n占比 " + Entry.Text("share_display") + "\n过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + "（总伤害含过量）";
+    public string Secondary => Entry.Text("share_display") + (Entry.Text("rate_text").Length > 0 ? "   " + Entry.Text("rate_text") : "");
+    public string Tooltip => Name + "\n排行原值 " + Json.UiText(Entry.Text("exact_value")) + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "") + "\n占比 " + Entry.Text("share_display") + "\n过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + "（总伤害含过量）";
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
@@ -141,7 +141,7 @@ public sealed class OrbitalSurface : FrameworkElement
 public partial class StatisticPanel : UserControl
 {
     internal Func<string,Dictionary<string,object?>?,Task>? Command;
-    internal Action<string>? HudRequested, PinRequested, LockRequested;
+    internal Action<string>? HudRequested, PinRequested, LockRequested, RateActionRequested;
     internal Action<string,double>? AlphaRequested;
     private readonly ObservableCollection<RowItem> items=new();
     private JsonElement view;
@@ -157,6 +157,18 @@ public partial class StatisticPanel : UserControl
         var config=value.Get("config");
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         Rate.IsEnabled=config.Text("category")!="shield";
+        // The engagement column depends on event observation. Never leave it as a
+        // silently blank column: show the reason and a retry/settings entry while
+        // still allowing a switch back to the five-second window.
+        var isEngagement=config.Text("category")!="shield" && config.Text("rate_basis")=="engagement";
+        var reason=value.Text("rate_reason");
+        var action=isEngagement ? value.Text("rate_action") : "";
+        RateNotice.Text=reason;
+        RateNotice.Visibility=isEngagement && reason.Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        RateNoticePanel.Visibility=RateNotice.Visibility;
+        RateAction.Content=value.Text("rate_action_label");
+        RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        Rate.ToolTip=isEngagement && reason.Length>0 ? reason : null;
         RateHeading.Text=(value.Text("rate_label").Length>0 ? value.Text("rate_label")+" /s · " : "")+"占比";
         Actions.Visibility=IsHistory||IsHud ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
@@ -208,6 +220,7 @@ public partial class StatisticPanel : UserControl
     private async void Duplicate(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_duplicate",new(){["panel_id"]=PanelId});}
     private async void Delete(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_delete",new(){["panel_id"]=PanelId});}
     private void OpenHud(object sender,RoutedEventArgs e) => HudRequested?.Invoke(PanelId);
+    private void RateActionClicked(object sender,RoutedEventArgs e) => RateActionRequested?.Invoke(view.Text("rate_action"));
     private void RowSelected(object sender,SelectionChangedEventArgs e) {if(!updating && Rows.SelectedItem is RowItem item) PinRequested?.Invoke(item.Id);}
     private void HoldOrder(object sender,MouseEventArgs e) => hold=true;
     private void ReleaseOrder(object sender,MouseEventArgs e) {hold=false;if(view.ValueKind==JsonValueKind.Object) Update(view,DeleteButton.IsEnabled);}

@@ -12,8 +12,11 @@ from unittest.mock import patch
 
 import pytest
 
+from battle_history import BattleHistory, BattleRecord
 from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, serve
 from layout_store import LayoutStore
+from panel_model import PanelConfig
+from stats_core import Statistics
 from test_battle_history import record
 from test_battle_share import exported_record
 from test_gui import sample
@@ -623,6 +626,71 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
         except queue.Empty:
             break
     assert ('history', None) in events
+
+
+def event_sample(status, error, statistics):
+    data = sample()
+    data.update(battle_id='battle-a', session='a', frame=670,
+                event_status=status, event_error=error,
+                statistics=statistics)
+    return data
+
+
+def test_engagement_without_events_explains_itself_and_recovers_in_same_panel(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', sample())
+    config = dict(state.layout.panels[0].to_dict(), rate_basis='engagement')
+    cmd(state, 'panel_update', config=config)
+    panel_id = state.layout.panels[0].panel_id
+    view = state.snapshot()['panels'][0]
+    assert view['config']['panel_id'] == panel_id
+    assert view['rate_available'] is False
+    assert '事件观测未连接' in view['rate_reason']
+    assert view['rate_action'] == 'retry' and view['rate_action_label']
+    assert all(entry['rate'] is None for entry in view['entries'])
+    assert all(entry['rate_text'] == '—' for entry in view['entries'])
+
+    # The same running panel must recover automatically once events arrive.
+    stats = Statistics('battle-a', 0, event_coverage=True)
+    stats.register_source('a', 'a')
+    stats.register_source('b', 'b')
+    stats.snapshot(0, {key: {'damage': 100, 'healing': 0} for key in ('a', 'b')})
+    stats.advance(1)
+    stats.event('damage-1', 1, 'a', 'damage', 100)
+    stats.advance(2)
+    state.accept('sample', event_sample('recording', None, stats.result()))
+    view = state.snapshot()['panels'][0]
+    assert view['config']['panel_id'] == panel_id
+    assert view['rate_available'] is True and view['rate_reason'] == ''
+    by_owner = {entry['owner_id']: entry for entry in view['entries']}
+    assert by_owner['a']['rate'] == pytest.approx(100)
+    assert by_owner['a']['rate_text'] == '100/s'
+    assert by_owner['b']['rate'] is None
+    assert by_owner['b']['rate_state'] == 'no_engagement'
+    assert by_owner['b']['rate_text'] == '无接敌'
+
+
+def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path):
+    state = DesktopState(tmp_path)
+    archived = record().to_dict()
+    archived['event_status'] = 'failed'
+    archived['event_error'] = 'unable to connect to remote frida-server'
+    BattleHistory(tmp_path / 'history').save(BattleRecord.from_dict(archived))
+    state.refresh_history()
+    state.selected = state.records[archived['battle_id']]
+    state.history_config = PanelConfig.from_dict(
+        dict(panel_id='history', category='damage', ranking='total',
+             rate_basis='engagement'))
+    selected = state.snapshot()['history_selected']
+    view = selected['view']
+    assert selected['record']['event_status'] == 'failed'
+    assert view['rate_available'] is False
+    assert '该局事件观测未连接' in view['rate_reason']
+    assert '无法补采' in view['rate_hint']
+    assert view['rate_action'] == 'settings'
+    assert all(entry['rate'] is None for entry in view['entries'])
+    assert all(entry['rate_text'] == '—' for entry in view['entries'])
+    assert all(entry['rate_state'] != 'no_engagement' for entry in view['entries'])
 
 
 def test_finished_history_record_publishes_team_shares(tmp_path):

@@ -50,6 +50,76 @@ CATEGORY_LABELS = {Category.DAMAGE: '伤害', Category.HEALING: '治疗',
 RANKING_LABELS = {Ranking.TOTAL: '本局总量', Ranking.RECENT: '最近 5 秒'}
 RATE_LABELS = {RateBasis.RECENT_5S: '近 5 秒', RateBasis.ENGAGEMENT: '接敌'}
 
+@dataclass(frozen=True)
+class EventAvailability:
+    """Event capability that explains the engagement rate column.
+
+    A missing, failed or interrupted observer never becomes a zero rate or a
+    wall-clock substitute; it is reported as an explicit unavailable state so
+    the UI cannot present "no data" as a measured value.
+    """
+
+    status: str | None = None
+    error: str | None = None
+    live: bool = True
+
+
+def _error_summary(error: str | None, limit: int = 120) -> str:
+    if not error:
+        return ''
+    text = ' '.join(str(error).split())
+    return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, str]:
+    """Return ``(available, reason, hint, action, action_label)``.
+
+    Only a live or recorded event stream certifies engagement data. Every
+    other state carries a readable reason and a recovery entry.
+    """
+    if event is None or event.status in ('recording', 'finished'):
+        return True, '', '', '', ''
+    error = _error_summary(event.error)
+    detail = f'（{error}）' if error else ''
+    if event.live:
+        if event.status == 'failed':
+            reason = f'接敌数据不可用：事件观测未连接{detail}'
+            hint = ('接敌 DPS/HPS 与活跃时间需要事件观测；可重试事件观测，'
+                    '或打开连接设置检查 Frida 端点。')
+            action, label = 'retry', '重试事件观测'
+        elif event.status == 'gap':
+            reason = f'接敌数据已中断：仅保留已覆盖区间{detail}'
+            hint = '未覆盖区间保持未知且不补零；重试事件观测后新覆盖数据会自动显示。'
+            action, label = 'retry', '重试事件观测'
+        elif event.status == 'incompatible':
+            reason = '接敌数据不可用：事件观测与当前游戏版本不兼容'
+            hint = '请更新支持的游戏版本或检查连接设置后再重新定位。'
+            action, label = 'settings', '打开连接设置'
+        elif event.status in ('unavailable', 'stopped'):
+            reason = ('接敌数据不可用：事件观测已关闭'
+                      if event.status == 'unavailable'
+                      else '接敌数据不可用：事件观测已停止')
+            hint = '在连接设置中开启事件观测并重新定位后，接敌数据会自动恢复。'
+            action, label = 'settings', '打开连接设置'
+        elif event.status is None:
+            reason = '接敌数据尚未可用：等待事件能力诊断'
+            hint = '等待事件观测诊断；长时间无结果请打开连接设置检查 Frida 端点。'
+            action, label = 'settings', '打开连接设置'
+        else:
+            reason = '接敌数据尚未可用：事件观测正在建立'
+            hint = '等待同帧事件基线；长时间未就绪请打开连接设置检查 Frida 端点。'
+            action, label = 'settings', '打开连接设置'
+    else:
+        if event.status == 'failed':
+            reason = f'接敌数据不可用：该局事件观测未连接{detail}'
+        elif event.status == 'gap':
+            reason = f'接敌数据不完整：该局事件观测中途中断{detail}'
+        else:
+            reason = '接敌数据不可用：该局未开启事件观测'
+        hint = '历史记录无法补采事件；开启事件观测后新战局会记录接敌数据。'
+        action, label = 'settings', '打开连接设置'
+    return False, reason, hint, action, label
+
 
 def format_compact(value: float | None) -> str:
     """Integer display with 1/K/M units; calculation and sorting stay raw."""
@@ -175,6 +245,10 @@ class PanelSourceRow:
     recent_healing_window: tuple[float, float] | None = None
     recent_shield_window: tuple[float, float] | None = None
     recent_damage_by_type: Mapping[str, float] = field(default_factory=dict)
+    # Event-observed totals exist (0 is a reliable zero); None means that event
+    # coverage never covered this row.
+    observed_damage: float | None = None
+    observed_healing: float | None = None
 
     def total(self, category: Category) -> float | None:
         return {Category.DAMAGE: self.damage,
@@ -191,6 +265,20 @@ class PanelSourceRow:
             return self.engagement_damage
         if category is Category.HEALING:
             return self.engagement_healing
+        return None
+
+    def active(self, category: Category) -> float | None:
+        if category is Category.DAMAGE:
+            return self.active_damage
+        if category is Category.HEALING:
+            return self.active_healing
+        return None
+
+    def observed(self, category: Category) -> float | None:
+        if category is Category.DAMAGE:
+            return self.observed_damage
+        if category is Category.HEALING:
+            return self.observed_healing
         return None
 
     def recent_window(self, category: Category) -> tuple[float, float] | None:
@@ -217,6 +305,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             engagement_healing=row.get('engagement_healing'),
             active_damage=row.get('active_damage'),
             active_healing=row.get('active_healing'),
+            observed_damage=row.get('observed_damage'),
+            observed_healing=row.get('observed_healing'),
             damage_by_type=row.get('damage_by_type') or {},
             recent_damage_by_type=row.get('recent_damage_by_type') or {},
             overkill=row.get('overkill_damage'),
@@ -252,6 +342,11 @@ class PanelEntry:
     segments: tuple[dict, ...]
     segments_complete: bool
     detail: dict
+    # value | no_engagement | unknown | unavailable | unsupported
+    rate_state: str = 'value'
+    # Complete display text for the rate column: '123/s', '无接敌' or '—'.
+    rate_text: str = ''
+    rate_note: str = ''
 
 
 @dataclass
@@ -266,6 +361,11 @@ class PanelView:
     rate_supported: bool
     rate_label: str
     metric_label: str
+    rate_available: bool = True
+    rate_reason: str = ''
+    rate_hint: str = ''
+    rate_action: str = ''
+    rate_action_label: str = ''
     # Present even when shares are known: names sources excluded from the team.
     share_note: str = ''
 
@@ -393,11 +493,48 @@ def _segments(row: PanelSourceRow, ranking: Ranking) -> tuple[tuple[dict, ...], 
     return tuple(segments), abs(known - total) <= max(0.01, total * 1e-6)
 
 
+def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
+                  available: bool, *, engagement: bool = True) -> tuple[str, str, str]:
+    """Classify one row's rate column without inventing a value."""
+    if _finite(rate):
+        return 'value', f'{format_compact(rate)}/s', ''
+    if not engagement:
+        return 'unknown', '—', ''
+    observed, active = row.observed(category), row.active(category)
+    if available and row.event_complete and observed == 0 and active == 0:
+        return 'no_engagement', '无接敌', '已覆盖区间内未观察到接敌事件（可靠零）'
+    if available:
+        return 'unknown', '—', '该干员事件覆盖不完整，接敌数据未知'
+    return 'unavailable', '—', '接敌数据不可用：需要事件观测（不以 0 或墙钟替代）'
+
+
+def detail_rates(rows: Iterable[PanelSourceRow],
+                 event: EventAvailability | None = None) -> dict:
+    """Per-owner engagement display state for both damage and healing.
+
+    Detail views use the same classification as the panel rate column so a
+    reliable zero, an unknown operator and an unavailable observer never look
+    alike.
+    """
+    available, *_ = rate_notice(event)
+    result: dict[str, dict] = {}
+    for row in rows:
+        kinds = {}
+        for kind, category in (('damage', Category.DAMAGE), ('healing', Category.HEALING)):
+            raw = row.engagement(category)
+            state, text, note = _rate_display(
+                row, category, raw if _finite(raw) else None, available)
+            kinds[kind] = {'state': state, 'text': text, 'note': note}
+        result[row.owner_id] = kinds
+    return result
+
+
 def render_panel(config: PanelConfig,
                  rows: Iterable[PanelSourceRow], *,
                  team_complete: bool = True,
                  team_reason: str = '',
-                 team_note: str = '') -> PanelView:
+                 team_note: str = '',
+                 event: EventAvailability | None = None) -> PanelView:
     """Build one panel view; unknown metrics are omitted, never zero-filled.
 
     ``team_complete=False`` means the caller knows some team members or sources
@@ -405,6 +542,11 @@ def render_panel(config: PanelConfig,
     subset as if it were the whole team. ``team_reason`` names the blocking
     sources, and ``team_note`` reports sources excluded from the team
     denominator (shown even when shares are known).
+
+    ``event`` describes the event-observation capability. When it is absent or
+    degraded the engagement rate column reports a readable reason and recovery
+    entry instead of silently rendering empty values. Data that was never
+    observed stays unknown; it is never replaced by zero or a wall-clock rate.
     """
     rows = list(rows)
     category, ranking = config.category, config.ranking
@@ -412,6 +554,13 @@ def render_panel(config: PanelConfig,
                     RANKING_LABELS[ranking])
     rate_supported = category is not Category.SHIELD
     rate_label = RATE_LABELS[config.rate_basis] if rate_supported else ''
+    if rate_supported:
+        rate_available, rate_reason, rate_hint, rate_action, rate_action_label = rate_notice(event)
+    else:
+        rate_available, rate_reason, rate_hint, rate_action, rate_action_label = (
+            True, '', '', '', '')
+    if rate_available and event is not None and any(not row.event_complete for row in rows):
+        rate_hint = '部分干员事件覆盖不完整；未覆盖区间保持未知，不补零。'
 
     values: dict[str, float] = {}
     complete: dict[str, bool] = {}
@@ -456,11 +605,16 @@ def render_panel(config: PanelConfig,
         share = (value / team_denominator
                  if share_known and team_denominator > 0 else None)
         rate = None
+        rate_state, rate_text, rate_note = (
+            ('unsupported', '', '') if not rate_supported else ('unknown', '—', ''))
         if rate_supported:
             rate = (row.recent(category) if config.rate_basis is RateBasis.RECENT_5S
                     else row.engagement(category))
             if not _finite(rate):
                 rate = None
+            rate_state, rate_text, rate_note = _rate_display(
+                row, category, rate, rate_available,
+                engagement=config.rate_basis is RateBasis.ENGAGEMENT)
         entries.append(PanelEntry(
             owner_id=owner, name=row.name, value=value,
             bar_ratio=(value / max_value) if max_value > 0 else 0.0,
@@ -480,13 +634,20 @@ def render_panel(config: PanelConfig,
                     'overkill_coverage_complete': row.overkill_complete,
                     'active_damage': row.active_damage,
                     'active_healing': row.active_healing,
-                    'sources': list(row.sources)}))
+                    'observed_damage': row.observed_damage,
+                    'observed_healing': row.observed_healing,
+                    'event_coverage_complete': row.event_complete,
+                    'sources': list(row.sources)},
+            rate_state=rate_state, rate_text=rate_text, rate_note=rate_note))
     entries.sort(key=lambda e: (-e.value, e.name, e.owner_id))
     return PanelView(config=config, title=config.display_title, entries=entries,
                      total=sum(displayed.values()), denominator=team_denominator,
                      share_known=share_known, share_reason=share_reason,
                      rate_supported=rate_supported, rate_label=rate_label,
-                     metric_label=metric_label, share_note=team_note)
+                     metric_label=metric_label, share_note=team_note,
+                     rate_available=rate_available, rate_reason=rate_reason,
+                     rate_hint=rate_hint, rate_action=rate_action,
+                     rate_action_label=rate_action_label)
 
 
 def render_board(configs: Iterable[PanelConfig],

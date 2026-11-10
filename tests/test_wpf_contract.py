@@ -131,6 +131,33 @@ def test_history_page_entry_auto_refreshes_and_keeps_manual_button():
     assert 'Click="RefreshHistory"' in xaml
 
 
+def test_engagement_unavailable_has_reason_and_recovery_entry_in_wpf():
+    xaml = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml').read_text('utf-8')
+    assert 'x:Name="RateNotice"' in xaml and 'x:Name="RateAction"' in xaml
+    panel = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml.cs').read_text('utf-8')
+    # The compact rate text now comes from the model, including '无接敌' and '—',
+    # so the UI cannot append a unit to an unknown value.
+    assert 'Entry.Text("rate_text")' in panel
+    assert 'rate_display") + "/s"' not in panel
+    for field in ('rate_reason', 'rate_action', 'rate_action_label', 'rate_note'):
+        assert field in panel
+    assert 'Rate.ToolTip' in panel and 'RateNoticePanel.Visibility' in panel
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    assert 'rate_reason' in inspector and 'rate_hint' in inspector
+    assert '未建立事件覆盖' in inspector and '不补零' in inspector
+    window = (ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml.cs').read_text('utf-8')
+    assert 'HandleRateAction' in window
+    assert 'Command("rescan")' in window and 'Navigate("settings")' in window
+
+
+def test_model_view_carries_explicit_event_rate_contract_fields():
+    source = (ROOT/'panel_model.py').read_text('utf-8')
+    for field in ('rate_available', 'rate_reason', 'rate_hint', 'rate_action',
+                  'rate_action_label', 'rate_state', 'rate_text', 'rate_note'):
+        assert field in source
+    assert '不以 0 或墙钟替代' in source
+
+
 def test_wpf_surfaces_event_derived_overkill_without_redefining_damage():
     inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
     screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')

@@ -3,7 +3,7 @@
  xmlns:local="clr-namespace:ArkDPS.Desktop" MinWidth="350">
  <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="3" Margin="0,0,12,16">
   <Grid>
-   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
    <DockPanel Margin="16,14,12,10">
     <WrapPanel x:Name="Actions" DockPanel.Dock="Right">
      <Button Content="HUD" Click="OpenHud" ToolTip="从本面板打开单屏 HUD" Padding="9,4"/>
@@ -22,7 +22,13 @@
      <ComboBoxItem Content="近 5 秒" Tag="recent_5s"/><ComboBoxItem Content="接敌" Tag="engagement"/>
     </ComboBox>
    </WrapPanel>
-   <Grid x:Name="Plot" Grid.Row="2" Background="{DynamicResource Console}" MinHeight="235">
+   <Border x:Name="RateNoticePanel" Grid.Row="2" Visibility="Collapsed" Margin="16,0,16,12" Background="{DynamicResource Inset}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="3" Padding="10,8">
+    <DockPanel>
+     <Button x:Name="RateAction" DockPanel.Dock="Right" Click="RateActionClicked" Padding="8,3" VerticalAlignment="Center" Margin="10,0,0,0"/>
+     <TextBlock x:Name="RateNotice" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Muted}"/>
+    </DockPanel>
+   </Border>
+   <Grid x:Name="Plot" Grid.Row="3" Background="{DynamicResource Console}" MinHeight="235">
     <local:OrbitalSurface IsHitTestVisible="False" Opacity="0.65"/>
     <Grid Margin="16,12,16,8">
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -53,7 +59,7 @@
      <TextBlock x:Name="Empty" Grid.Row="1" Foreground="{DynamicResource ConsoleMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="270" TextAlignment="Center" FontSize="14"/>
     </Grid>
    </Grid>
-   <StackPanel Grid.Row="3" Margin="16,10,16,12">
+   <StackPanel Grid.Row="4" Margin="16,10,16,12">
     <WrapPanel x:Name="Legend">
      <Rectangle Fill="#E5484D" Width="7" Height="7" Margin="0,0,4,0"/><TextBlock Text="物理" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,14,0"/>
      <Rectangle Fill="#3D8BFD" Width="7" Height="7" Margin="0,0,4,0"/><TextBlock Text="法术" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,14,0"/>
@@ -63,7 +69,7 @@
     </WrapPanel>
     <TextBlock x:Name="Coverage" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,7,0,0" TextWrapping="Wrap"/>
    </StackPanel>
-   <WrapPanel x:Name="HudControls" Grid.Row="4" Margin="16,0,16,12" Visibility="Collapsed">
+   <WrapPanel x:Name="HudControls" Grid.Row="5" Margin="16,0,16,12" Visibility="Collapsed">
     <Button x:Name="LockButton" Content="锁定 HUD" Click="ToggleLock" Padding="10,5"/>
     <TextBlock Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="4,0,8,0"/>
     <Slider x:Name="Alpha" Minimum="0.7" Maximum="1" Value="0.9" Width="95" TickFrequency="0.01" ValueChanged="OpacityChanged" VerticalAlignment="Center" AutomationProperties.Name="HUD 透明度"/>
