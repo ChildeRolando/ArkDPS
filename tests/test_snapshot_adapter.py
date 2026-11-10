@@ -502,3 +502,86 @@ def test_changed_owner_evidence_does_not_increase_cached_source():
     assert r['rows']['char_a']['damage'] == 150
     assert r['rows']['char_a']['counter_snapshot_complete'] is False
     assert 'token_a' in r['mapping_conflicts']
+
+
+def test_event_evidence_publishes_overkill_and_a_missing_observer_keeps_it_unknown():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 1000)], 30, 10), paired(BASE, 10))
+    a.start_events(session='battle-1', frame=10, sequence=4)
+    a.accept_event(session='battle-1', sequence=5, frame=10, game_time=30,
+                   source='char_a', kind='damage', amount=200, target='enemy',
+                   real_delta=-44, hp_before=44, hp_after=0, killed=True,
+                   target_type=0, damage_type=1, shield_absorbed=0)
+    a.update(sample([row('char_a', 1200)], 31, 11), paired(BASE, 11))
+    result = a.result()
+    assert result['rows']['char_a']['overkill_damage'] == 156
+    assert result['rows']['char_a']['overkill_coverage_complete'] is True
+    assert result['overkill_damage'] == 156
+    assert result['rows']['char_a']['damage'] == 1200
+
+    plain = BattleStatisticsAdapter()
+    plain.update(sample([row('char_a', 1000)], 30, 10), paired(BASE, 10))
+    assert plain.result()['rows']['char_a']['overkill_damage'] is None
+    assert plain.result()['rows']['char_a']['overkill_coverage_complete'] is False
+    assert plain.result()['overkill_damage'] is None
+
+
+def test_known_map_trap_is_excluded_from_the_team_instead_of_blocking():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('trap_321_shnbox', 0)], 0, 1),
+                   roster([CHAR_A], frame=1))
+    result = adapter.result()
+    assert result['unknown_sources'] == []
+    assert result['non_team_sources'] == ['trap_321_shnbox']
+    assert result['non_team_output'] == {'trap_321_shnbox': {'damage': 0.0, 'healing': 0.0}}
+    assert result['totals_complete'] is True
+    assert result['rows']['char_a']['counter_snapshot_complete'] is True
+    assert 'trap_321_shnbox' not in result['rows']
+
+
+def test_trap_output_is_named_but_never_attributed_or_zero_filled():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('trap_321_shnbox', 500)], 0, 1),
+                   roster([CHAR_A], frame=1))
+    result = adapter.result()
+    assert result['rows']['char_a']['damage'] == 100
+    assert result['non_team_output']['trap_321_shnbox']['damage'] == 500
+    assert result['totals_complete'] is True
+
+
+def test_unmapped_operator_namespace_still_blocks_team_totals():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('char_mystery', 50)], 0, 1),
+                   roster([CHAR_A], frame=1))
+    result = adapter.result()
+    assert result['unknown_sources'] == ['char_mystery']
+    assert result['non_team_sources'] == []
+    assert result['totals_complete'] is False
+
+
+def test_battle_end_keeps_final_totals_and_retires_recent_rates():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100)], 0, 1), roster([CHAR_A], frame=1))
+    adapter.update(sample([row('char_a', 200)], 1, 2), roster([CHAR_A], frame=2))
+    adapter.on_end()
+    result = adapter.result()
+    assert result['ended'] is False
+    assert result['totals_complete'] is True
+    assert result['rows']['char_a']['counter_snapshot_complete'] is True
+    assert result['rows']['char_a']['recent_damage'] is None
+    finished = adapter.finish()
+    assert finished['totals_complete'] is True
+    assert finished['rows']['char_a']['recent_damage'] is None
+
+
+def test_ambiguous_trap_key_is_not_reclassified_as_non_team():
+    trap = entry('trap_321_shnbox', 7)
+    trap_predefined = entry('trap_321_shnbox', 7, predefined=True)
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('trap_321_shnbox', 0)], 0, 1),
+                   roster([CHAR_A, trap, trap_predefined], frame=1))
+    result = adapter.result()
+    assert 'trap_321_shnbox' in result['ambiguous_sources']
+    assert result['non_team_sources'] == []
+    assert result['unknown_sources'] == ['trap_321_shnbox']
+    assert result['totals_complete'] is False

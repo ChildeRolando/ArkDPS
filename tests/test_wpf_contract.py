@@ -1,4 +1,5 @@
 """Build/distribution and display contract checks that run without WPF or ADB."""
+import ast
 import importlib.util
 from pathlib import Path
 import re
@@ -33,6 +34,42 @@ def test_runtime_unpack_refuses_traversal(tmp_path, member):
     with pytest.raises(ValueError, match='Unsafe archive'):
         package.unpack(source, tmp_path/'extract')
     assert not (tmp_path/'escape.py').exists()
+
+
+def bridge_import_closure():
+    """Repo-root modules a portable worker loads when it imports desktop_bridge."""
+    pending, seen = ['desktop_bridge'], set()
+    while pending:
+        module = pending.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        tree = ast.parse((ROOT/(module + '.py')).read_text('utf-8'))
+        for node in tree.body:  # module scope only: that is what an import runs
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                names = [node.module or '']
+            else:
+                continue
+            for name in names:
+                top = name.split('.')[0]
+                if (ROOT/(top + '.py')).is_file():
+                    pending.append(top)
+    return seen
+
+
+def test_portable_collector_ships_every_module_the_worker_imports():
+    # The portable package seeds collector/ from BACKEND alone and its embedded
+    # interpreter cannot see the repository, so a missing repo-root module fails
+    # the package smoke (`python -I -c "import desktop_bridge"`) and then the
+    # installed worker. Derive the requirement from the imports themselves so a
+    # new helper module cannot be forgotten here again.
+    missing = sorted(name + '.py' for name in bridge_import_closure()
+                     if name + '.py' not in package.BACKEND)
+    assert missing == []
+    for name in package.BACKEND:
+        assert (ROOT/name).is_file(), name
 
 
 def contrast(a, b):
@@ -119,3 +156,24 @@ def test_model_view_carries_explicit_event_rate_contract_fields():
                   'rate_action_label', 'rate_state', 'rate_text', 'rate_note'):
         assert field in source
     assert '不以 0 或墙钟替代' in source
+
+
+def test_wpf_surfaces_event_derived_overkill_without_redefining_damage():
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')
+    assert '"伤害 · 含过量"' in inspector
+    assert '过量伤害 · 事件派生' in inspector and 'overkill_damage' in inspector
+    assert '总伤害含过量' in screenshot and 'overkill_damage' in screenshot
+
+
+def test_wpf_user_facing_numbers_use_at_most_one_decimal():
+    bridge = (ROOT/'desktop/ArkDPS.Desktop/BridgeClient.cs').read_text('utf-8')
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')
+    panel = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml.cs').read_text('utf-8')
+    assert 'public static string Ui(' in bridge and 'ToString("0.#"' in bridge
+    assert '.Exact(' not in inspector
+    assert 'Json.UiText(entry.Text("exact_value"))' in screenshot
+    assert '0.###' not in screenshot
+    assert 'Entry.Exact("rate")' not in panel and 'Entry.Exact("share")' not in panel
+    assert 'Json.UiText(Entry.Text("exact_value"))' in panel

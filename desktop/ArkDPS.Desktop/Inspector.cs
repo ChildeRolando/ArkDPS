@@ -43,12 +43,19 @@ public sealed class Inspector : Border
         name.Children.Add(Text(row.Get("present").ValueKind switch{JsonValueKind.True=>"在场",JsonValueKind.False=>"已离场 · 累计保留",_=>"在场状态未知"},11,false,"Muted"));
         profile.Children.Add(name);body.Children.Add(profile);
         Section("累计贡献");
-        Pair("伤害 · 含过量",row.Exact("damage")); Pair("治疗 · 含过量",row.Exact("healing")); Pair("有效护盾 · 已观察",row.Exact("shield_absorbed"));
+        Pair("伤害 · 含过量",row.Ui("damage")); Pair("治疗 · 含过量",row.Ui("healing")); Pair("有效护盾 · 已观察",row.Ui("shield_absorbed"));
+        Pair("过量伤害 · 事件派生",row.Ui("overkill_damage"));
+        if(row.Bool("overkill_type_complete"))
+        {
+            var overkillTypes=row.Get("overkill_damage_by_type");
+            body.Children.Add(Text("物理 "+overkillTypes.Ui("physical")+" · 法术 "+overkillTypes.Ui("arts")+" · 元素 "+overkillTypes.Ui("elemental")+" · 真实 "+overkillTypes.Ui("true"),10,false,"Muted",new Thickness(0,2,0,0)));
+        }
+        body.Children.Add(Text(OverkillNote(row),11,false,"Muted",new Thickness(0,6,0,0)));
         Section("独立接敌速率");
         var rates=view.Get("rates").Get(owner);
         var damageRate=rates.Get("damage");var healingRate=rates.Get("healing");
         Pair("DPS",RateText(row,damageRate,"engagement_damage"));Pair("HPS",RateText(row,healingRate,"engagement_healing"));
-        Pair("伤害活跃秒",row.Exact("active_damage"));Pair("治疗活跃秒",row.Exact("active_healing"));
+        Pair("伤害活跃秒",row.Ui("active_damage"));Pair("治疗活跃秒",row.Ui("active_healing"));
         // 事件不可用、未就绪或中断时，接敌列必须说明原因，而不是只留空值。
         var rateNote=damageRate.Text("note");
         if(rateNote.Length==0) rateNote=healingRate.Text("note");
@@ -60,17 +67,19 @@ public sealed class Inspector : Border
         Section("伤害构成 · 精确原值");
         var types=row.Get("damage_by_type");
         foreach(var (key,label,color) in new[]{("physical","物理","#E5484D"),("arts","法术","#3D8BFD"),("elemental","元素","#9B5CF6"),("true","真实","#FFFFFF")})
-            Pair(label,types.Exact(key),color);
+            Pair(label,types.Ui(key),color);
         Section("观测覆盖");
-        Pair("快照起点",row.Exact("coverage_start"));
-        Pair("事件起点",row.Exact("shield_coverage_start"));Pair("事件终点",row.Exact("event_coverage_end"));
+        Pair("快照起点",row.Ui("coverage_start"));
+        Pair("事件起点",row.Ui("shield_coverage_start"));Pair("事件终点",row.Ui("event_coverage_end"));
         body.Children.Add(Text(row.Bool("counter_snapshot_complete") ? "累计快照完整" : "累计快照不完整",11,false,"Muted",new Thickness(0,10,0,0)));
         // 未建立事件覆盖与“覆盖到某点后中断”必须可区分；未覆盖区间不补零。
         bool events=row.Get("shield_coverage_start").ValueKind==JsonValueKind.Number;
         string coverage=!events ? "未建立事件覆盖 · 接敌与护盾保持未知，不补零"
             : row.Bool("event_coverage_complete") ? "事件覆盖完整"
-            : "事件仅覆盖到 "+row.Exact("event_coverage_end")+" 游戏秒 · 之后未知，不补零";
+            : "事件仅覆盖到 "+row.Ui("event_coverage_end")+" 游戏秒 · 之后未知，不补零";
         body.Children.Add(Text(coverage,11,false,"Muted"));
+        if(row.Bool("shield_unknown"))
+            body.Children.Add(Text("护盾事件不完整 · 伤害/接敌/过量继续",11,false,"Muted"));
         Section("归属来源");
         string sources=string.Join("\n",row.Get("sources").Items().Select(x=>x.Text()));
         body.Children.Add(Text(sources.Length>0 ? sources : "—",10,false,"Muted"));
@@ -78,9 +87,16 @@ public sealed class Inspector : Border
     private static string RateText(JsonElement row,JsonElement rate,string exact)
     {
         // 可靠零、未知与事件不可用由模型分类；这里只展示，不重新计算统计。
-        if(rate.Text("state")=="value") return row.Exact(exact);
+        if(rate.Text("state")=="value") return row.Ui(exact);
         var text=rate.Text("text");
-        return text.Length>0 ? text : row.Exact(exact);
+        return text.Length>0 ? text : row.Ui(exact);
+    }
+    private static string OverkillNote(JsonElement row)
+    {
+        if(row.Bool("overkill_coverage_complete") && row.Get("overkill_damage").ValueKind==JsonValueKind.Number)
+            return "总伤害仍含过量；过量只用于查看，不改变伤害排行、柱长或占比，并已排除护盾/抵挡吸收。";
+        if(!row.Bool("event_coverage_complete")) return "总伤害仍含过量；事件覆盖不完整，过量未知（不记零）。";
+        return "总伤害仍含过量；目标或实际扣血证据不足，过量未知（不记零）。";
     }
     private void Section(string title)
     {

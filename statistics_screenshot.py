@@ -12,6 +12,13 @@ from panel_model import Category
 from ui_theme import PALETTES, theme_key
 
 
+def display_number(value):
+    """User-visible numbers keep at most one decimal in the panel's 0.# form."""
+    if value is None:
+        return '—'
+    return f'{value:.1f}'.rstrip('0').rstrip('.')
+
+
 class _Bitmap:
     """Own native resources for one image; drawing never touches desktop windows."""
     def __init__(self):
@@ -144,13 +151,15 @@ def statistics_png(parent, record, config, *, theme=None):
             y += height + 10
         text('ArkDPS · 历史统计 · ' + view.title, bold=True)
         text(' · '.join(record_labels(record)))
-        text('伤害含过量；治疗含过量；护盾仅实际吸收。未知显示 —，* 表示覆盖不完整。')
+        text('总伤害含过量；治疗含过量；过量伤害为事件派生且不改变排行；护盾仅实际吸收。未知显示 —，* 表示覆盖不完整。')
         text(f'{view.metric_label} · 速率：{view.rate_label or "不可用"} · '
              '近期统计仅含最后可靠时刻前的已观察窗口。')
         if config.category is Category.DAMAGE:
             text('物理（红） / 法术（蓝） / 元素（紫） / 真实（白）；灰条表示分类未完整覆盖。')
         if not view.share_known:
             text(view.share_reason)
+        if view.share_note:
+            text(view.share_note)
         text('快照覆盖（游戏秒）：' + repr(data['snapshot_intervals']) +
              '\n事件状态：' + data['event_status'] + '；原因：' + (data['event_error'] or '—'))
         if not view.entries:
@@ -162,9 +171,10 @@ def statistics_png(parent, record, config, *, theme=None):
             name = entry.name + (' · 已离场' if entry.portrait_muted else '')
             name_height = image.text(name, 20, y, 430, measure=True)
             row = data['statistics']['rows'][entry.owner_id]
-            coverage = (f'快照起点 {row["coverage_start"]!r} 秒 · 事件 '
-                        f'{row["shield_coverage_start"]!r} → {row["event_coverage_end"]!r} 秒'
-                        .replace('None', '—'))
+            coverage = (f'快照起点 {display_number(row.get("coverage_start"))} 秒 · 事件 '
+                        f'{display_number(row.get("shield_coverage_start"))} → '
+                        f'{display_number(row.get("event_coverage_end"))} 秒 · '
+                        f'过量 {display_number(row.get("overkill_damage"))}')
             rows.append((entry, name, y, name_height, coverage))
             y += max(68, name_height + 40) + 26
         text('JSON 导出保留原值、来源与逐指标覆盖起止；此图采用当前面板的类别、排行与速率。')

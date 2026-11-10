@@ -2,8 +2,8 @@ import pytest
 
 from panel_model import (Category, DAMAGE_COLORS, EventAvailability, PanelCollection,
                          PanelConfig, PanelSourceRow, Ranking, RateBasis, detail_rates,
-                         format_compact, render_board, render_panel,
-                         rows_from_statistics)
+                         format_compact, non_team_note, render_board, render_panel,
+                         rows_from_statistics, team_status)
 from stats_core import Statistics
 
 
@@ -262,6 +262,7 @@ def test_rows_from_statistics_maps_adapter_fields():
         'active_damage': 2.5, 'active_healing': 1.5,
         'damage_by_type': {'physical': 10}, 'present': True,
         'counter_snapshot_complete': True, 'event_coverage_complete': False,
+        'overkill_damage': 6, 'overkill_coverage_complete': True,
         'sources': ['A', 'token'],
     }}}
     row = rows_from_statistics(result)[0]
@@ -269,7 +270,13 @@ def test_rows_from_statistics_maps_adapter_fields():
         'A', '灰烬', 10, 2, 3)
     assert row.recent_shield is None
     assert row.event_complete is False
+    assert row.overkill == 6 and row.overkill_complete is True
     assert row.sources == ('A', 'token')
+    detail = render_panel(total(), [row]).entries[0].detail
+    assert detail['overkill_damage'] == 6
+    assert detail['overkill_coverage_complete'] is True
+    # Overkill never changes the ranking basis or the damage denominator.
+    assert detail['damage'] == 10
 
 
 def test_share_denominator_includes_retired_and_zero_rows():
@@ -378,3 +385,73 @@ def test_detail_rates_distinguish_zero_unknown_and_unavailable():
     assert unavailable['damage']['state'] == 'unavailable'
     assert unavailable['damage']['text'] == '—'
     assert unknown['A']['damage']['text'] == '无接敌'
+
+
+def test_overkill_segments_are_typed_and_only_on_the_totals_basis():
+    row = src('A', damage=1000, recent_damage=100)
+    row.damage_by_type = {'physical': 600, 'arts': 400}
+    row.overkill = 156
+    row.overkill_by_type = {'physical': 100, 'arts': 56, 'elemental': 0, 'true': 0}
+    row.overkill_type_complete = True
+    view = render_panel(PanelConfig(ranking=Ranking.TOTAL), [row])
+    segments = {segment['kind']: segment for segment in view.entries[0].segments}
+    assert segments['physical']['overkill_ratio'] == pytest.approx(100 / 600)
+    assert segments['arts']['overkill_ratio'] == pytest.approx(56 / 400)
+    recent = render_panel(PanelConfig(ranking=Ranking.RECENT), [row])
+    assert all('overkill_ratio' not in segment for segment in recent.entries[0].segments)
+    row.overkill_type_complete = False
+    incomplete = render_panel(PanelConfig(ranking=Ranking.TOTAL), [row])
+    assert all('overkill_ratio' not in segment for segment in incomplete.entries[0].segments)
+    assert incomplete.entries[0].detail['overkill_damage'] == 156
+
+
+def test_team_status_names_blocking_and_classified_sources():
+    stats = {'totals_complete': True,
+             'rows': {'A': {'name': 'A', 'counter_snapshot_complete': True}},
+             'unknown_sources': ['char_mystery'],
+             'non_team_sources': ['trap_321_shnbox'],
+             'non_team_output': {'trap_321_shnbox': {'damage': 500., 'healing': 0.}}}
+    complete, reason, note = team_status(stats)
+    assert complete is False
+    assert '未归属统计来源：char_mystery' in reason
+    assert 'trap_321_shnbox' in note and '未归属输出' in note and '500' in note
+    assert '已排除非队伍来源' in note
+
+
+def test_team_status_is_complete_without_unknown_sources():
+    stats = {'totals_complete': True,
+             'rows': {'A': {'name': 'A', 'counter_snapshot_complete': True}},
+             'non_team_sources': ['trap_321_shnbox'],
+             'non_team_output': {'trap_321_shnbox': {'damage': 0., 'healing': 0.}}}
+    complete, reason, note = team_status(stats)
+    assert complete is True and reason == ''
+    assert '未观察到输出' in note
+
+
+def test_team_status_does_not_claim_an_incomplete_snapshot_for_a_diagnostic_only_gap():
+    stats = {'totals_complete': False,
+             'rows': {'A': {'name': 'A', 'counter_snapshot_complete': True}},
+             'unknown_sources': ['char_mystery']}
+    complete, reason, _ = team_status(stats)
+    assert complete is False
+    assert '未归属统计来源：char_mystery' in reason
+    assert '累计快照不完整' not in reason
+
+
+def test_non_team_note_renders_the_classification_label(monkeypatch):
+    import source_classification as rules
+    monkeypatch.setattr(rules, 'NON_TEAM_CLASSES',
+                        rules.NON_TEAM_CLASSES + (('npc_', 'npc', '剧情 NPC'),))
+    stats = {'non_team_sources': ['trap_321_shnbox', 'npc_77'],
+             'non_team_output': {'trap_321_shnbox': {'damage': 0., 'healing': 0.},
+                                 'npc_77': {'damage': None, 'healing': None}}}
+    note = non_team_note(stats)
+    assert 'trap_321_shnbox（非队伍地图装置/陷阱，未观察到输出）' in note
+    assert 'npc_77（剧情 NPC，输出未知）' in note
+
+
+def test_render_panel_keeps_non_team_note_when_shares_are_known():
+    rows = [src('A', damage=100), src('B', damage=300)]
+    view = render_panel(total(), rows, team_note='已排除非队伍来源：trap_x')
+    assert view.share_known is True
+    assert view.share_note == '已排除非队伍来源：trap_x'

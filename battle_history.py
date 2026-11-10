@@ -17,10 +17,27 @@ POLICIES = {
     'damage': 'native_cumulative_including_overkill',
     'healing': 'native_cumulative_including_overheal',
     'shield_absorbed': 'observed_actual_absorption_only',
+    'overkill': 'observed_incoming_value_minus_verified_shield_absorption_minus_actual_hp_at_kill',
+    'overkill_by_type': 'observed_overkill_grouped_by_native_damage_type',
     'recent': 'cumulative_delta_game_time_window_up_to_5s',
     'engagement': 'observed_events_separate_damage_healing_union_1.5s_tail',
     'ownership': 'verified_statistics_source_to_owner_no_guessing',
 }
+# Files written before overkill existed keep their original policy map and are
+# read with overkill unknown rather than being rejected as unsupported. ARK-25
+# records written before per-type grouping are accepted the same way.
+PRE_BY_TYPE_POLICIES = {key: value for key, value in POLICIES.items()
+                        if key != 'overkill_by_type'}
+LEGACY_POLICIES = {key: value for key, value in POLICIES.items()
+                   if key not in ('overkill', 'overkill_by_type')}
+# The first ARK-25 candidate recorded a policy name that treated the native
+# settlement value as post-shield. Keep those files readable instead of
+# rejecting them; their stored values are still validated as before.
+_PREVIOUS_OVERKILL_POLICY = 'observed_settlement_value_minus_actual_hp_at_kill_after_shield'
+ACCEPTED_POLICIES = (
+    POLICIES, PRE_BY_TYPE_POLICIES, LEGACY_POLICIES,
+    {**POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY},
+    {**PRE_BY_TYPE_POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY})
 _LOCK = RLock()
 
 
@@ -105,7 +122,9 @@ class BattleRecord:
             _date(data['recorded_at'])
             if data['observed_at'] is not None:
                 _date(data['observed_at'])
-            _require(data['policies'] == POLICIES, 'unsupported statistics policies')
+            _require(data['policies'] in ACCEPTED_POLICIES,
+                     'unsupported statistics policies')
+            data['policies'] = deepcopy(POLICIES)
             _number(data['duration'], 'duration')
             metadata = data['metadata']
             _require(isinstance(metadata, dict), 'invalid metadata')
@@ -126,18 +145,55 @@ class BattleRecord:
             _number(stats['coverage_start'], 'coverage_start')
             _require(stats['coverage_start'] <= data['duration'], 'coverage starts after end')
             _require(isinstance(stats['rows'], dict), 'invalid statistics rows')
+            for key, default in (('overkill_damage', None),
+                                 ('overkill_coverage_complete', False),
+                                 ('overkill_coverage_start', None),
+                                 ('overkill_coverage_end', None)):
+                stats.setdefault(key, default)
+            _number(stats['overkill_damage'], 'overkill_damage', nullable=True)
+            _require(type(stats['overkill_coverage_complete']) is bool,
+                     'invalid overkill_coverage_complete')
+            _number(stats['overkill_coverage_start'], 'overkill_coverage_start', nullable=True)
+            _number(stats['overkill_coverage_end'], 'overkill_coverage_end', nullable=True)
+            if stats['overkill_coverage_start'] is not None:
+                _require(stats['overkill_coverage_end'] is not None
+                         and 0 <= stats['overkill_coverage_start']
+                         <= stats['overkill_coverage_end'] <= data['duration'],
+                         'invalid overkill coverage interval')
             for owner, row in stats['rows'].items():
                 _require(bool(owner) and isinstance(row, dict), 'invalid owner row')
+                for key, default in (('overkill_damage', None),
+                                     ('overkill_damage_by_type', None),
+                                     ('overkill_type_complete', False),
+                                     ('shield_unknown', False),
+                                     ('overkill_coverage_complete', False),
+                                     ('overkill_coverage_start', None),
+                                     ('overkill_coverage_end', None)):
+                    row.setdefault(key, default)
                 for metric in ('damage', 'healing', 'shield_absorbed', 'recent_damage',
                                'recent_healing', 'engagement_damage', 'engagement_healing',
                                'active_damage', 'active_healing', 'observed_damage', 'observed_healing',
-                               'shield_coverage_start', 'event_coverage_end'):
+                               'shield_coverage_start', 'event_coverage_end',
+                               'overkill_damage', 'overkill_coverage_start',
+                               'overkill_coverage_end'):
                     _number(row[metric], metric, nullable=True)
                 _number(row['coverage_start'], 'row coverage_start')
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')
                 for flag in ('counter_snapshot_complete', 'event_coverage_complete',
-                             'types_available', 'types_stale'):
+                             'overkill_coverage_complete', 'overkill_type_complete',
+                             'shield_unknown', 'types_available', 'types_stale'):
                     _require(type(row[flag]) is bool, f'invalid {flag}')
+                by_type = row['overkill_damage_by_type']
+                _require(by_type is None or
+                         (isinstance(by_type, dict) and
+                          set(by_type) <= {'physical', 'arts', 'elemental', 'true'}),
+                         'invalid overkill damage types')
+                if by_type is not None:
+                    for value in by_type.values():
+                        _number(value, 'overkill damage type')
+                if row['overkill_type_complete']:
+                    _require(by_type is not None,
+                             'overkill type completeness without typed values')
                 _require(row['present'] is None or type(row['present']) is bool, 'invalid presence')
                 _require(isinstance(row['sources'], list) and
                          all(isinstance(s, str) and s for s in row['sources']), 'invalid sources')
@@ -153,10 +209,32 @@ class BattleRecord:
                 if start is not None:
                     _require(end is not None and 0 <= start <= end <= data['duration'],
                              'invalid event coverage interval')
+                start, end = row['overkill_coverage_start'], row['overkill_coverage_end']
+                if start is not None:
+                    _require(end is not None and 0 <= start <= end <= data['duration'],
+                             'invalid overkill coverage interval')
             for field in ('unknown_sources', 'unmapped_tokens', 'ambiguous_sources',
                           'mapping_conflicts', 'missing_fields'):
                 _require(isinstance(stats[field], list) and
                          all(isinstance(s, str) for s in stats[field]), f'invalid {field}')
+            # Optional ARK-24 fields: records written before the totals/rate
+            # split lack them, but a present value must never be malformed.
+            if 'totals_complete' in stats:
+                _require(type(stats['totals_complete']) is bool, 'invalid totals_complete')
+            if 'non_team_sources' in stats:
+                _require(isinstance(stats['non_team_sources'], list) and
+                         all(isinstance(s, str) and s for s in stats['non_team_sources']),
+                         'invalid non_team_sources')
+            if 'non_team_output' in stats:
+                output = stats['non_team_output']
+                _require(isinstance(output, dict), 'invalid non_team_output')
+                for cid, values in output.items():
+                    _require(isinstance(cid, str) and bool(cid) and isinstance(values, dict),
+                             'invalid non_team_output entry')
+                    _require(set(values) == {'damage', 'healing'},
+                             'invalid non_team_output counters')
+                    for value in values.values():
+                        _number(value, 'non_team_output', nullable=True)
             sample = data['last_sample']
             _require(isinstance(sample, dict) and sample.get('session') == battle_id,
                      'last sample battle_id mismatch')

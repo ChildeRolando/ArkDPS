@@ -20,7 +20,8 @@ from uuid import uuid4
 
 from battle_history import BattleHistory, BattleRecord
 from battle_lifecycle import BattleRuntime
-from battle_share import json_bytes, record_complete, record_labels, record_stage, write_export
+from battle_share import (json_bytes, record_labels, record_stage, record_statistics,
+                         write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
@@ -29,7 +30,7 @@ from event_capture import CaptureRetry
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
 from panel_model import (EventAvailability, PanelConfig, detail_rates, render_panel,
-                        rows_from_statistics)
+                        rows_from_statistics, team_status)
 import stage_names
 
 PROTOCOL_VERSION = 1
@@ -143,10 +144,16 @@ class DesktopState:
         return 'live', '正在统计'
 
     @staticmethod
-    def view(config, statistics, complete, event=None):
+    def view(config, statistics, complete=None, event=None):
         source = statistics.get('rows') or {}
+        if complete is None:
+            complete, reason, note = team_status(statistics)
+        else:
+            reason, note = '', ''
         rows = rows_from_statistics(statistics)
-        view = asdict(render_panel(config, rows, team_complete=complete, event=event))
+        view = asdict(render_panel(config, rows,
+                                   team_complete=complete, team_reason=reason,
+                                   team_note=note, event=event))
         view['empty_text'] = empty_text(config, source, complete)
         view['rates'] = detail_rates(rows, event)
         for entry in view['entries']:
@@ -171,11 +178,11 @@ class DesktopState:
         selected = None
         if self.selected:
             selected_stage = record_stage(self.selected)
+            selected_stats = record_statistics(self.selected)
             selected = dict(
                 battle_id=self.selected.battle_id, labels=record_labels(self.selected),
                 stage=selected_stage.label, stage_detail=selected_stage.detail,
-                view=self.view(self.history_config, self.selected.statistics,
-                               record_complete(self.selected),
+                view=self.view(self.history_config, selected_stats, None,
                                EventAvailability(status=self.selected.event_status,
                                                  error=self.selected.event_error, live=False)),
                 record=self.selected.to_dict())
@@ -193,8 +200,7 @@ class DesktopState:
                     stage=live_stage.label if has_live_stage else None,
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
-                    panels=[self.view(p, stats, sample.get('statistics_complete', False), live_event)
-                            for p in self.layout.panels],
+                    panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
                     history=history, history_selected=selected, history_notice=self.history_notice)
 
     def persist(self, layout):

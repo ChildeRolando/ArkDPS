@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping
 
+from source_classification import classify_unmapped_source
+
 DAMAGE_COLORS = {
     'physical': '#e5484d',   # red
     'arts': '#3d8bfd',       # blue
@@ -229,6 +231,12 @@ class PanelSourceRow:
     active_damage: float | None = None
     active_healing: float | None = None
     damage_by_type: Mapping[str, float] = field(default_factory=dict)
+    # Event-derived overkill is a subset of damage, never part of the ranking
+    # denominator. It stays None unless the whole event stream proved it.
+    overkill: float | None = None
+    overkill_by_type: Mapping[str, float] | None = None
+    overkill_complete: bool = False
+    overkill_type_complete: bool = False
     counter_complete: bool = True
     event_complete: bool = True
     sources: tuple[str, ...] = ()
@@ -301,6 +309,10 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             observed_healing=row.get('observed_healing'),
             damage_by_type=row.get('damage_by_type') or {},
             recent_damage_by_type=row.get('recent_damage_by_type') or {},
+            overkill=row.get('overkill_damage'),
+            overkill_by_type=row.get('overkill_damage_by_type'),
+            overkill_complete=bool(row.get('overkill_coverage_complete', False)),
+            overkill_type_complete=bool(row.get('overkill_type_complete', False)),
             recent_damage_window=row.get('recent_damage_window'),
             recent_healing_window=row.get('recent_healing_window'),
             recent_shield_window=row.get('recent_shield_window'),
@@ -354,10 +366,96 @@ class PanelView:
     rate_hint: str = ''
     rate_action: str = ''
     rate_action_label: str = ''
+    # Present even when shares are known: names sources excluded from the team.
+    share_note: str = ''
 
 
 def _finite(value: float | None) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value)
+
+
+DIAGNOSTIC_LABELS = (
+    ('unknown_sources', '未归属统计来源'),
+    ('unmapped_tokens', '未确认归属的召唤物'),
+    ('ambiguous_sources', '归属歧义统计来源'),
+    ('mapping_conflicts', '归属冲突统计来源'),
+    ('missing_fields', '字段缺失统计来源'),
+)
+
+
+def _name_list(value) -> list[str]:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def non_team_label(cid: str) -> str:
+    """Class label for a proven non-team source, from the classification rules."""
+    classified = classify_unmapped_source(cid)
+    return classified[1] if classified else '非队伍来源'
+
+
+def non_team_note(statistics: Mapping) -> str:
+    """Name sources proven not to be team members, with any excluded output."""
+    names = _name_list(statistics.get('non_team_sources'))
+    if not names:
+        return ''
+    output = statistics.get('non_team_output')
+    output = output if isinstance(output, Mapping) else {}
+    parts = []
+    for cid in names:
+        values = output.get(cid)
+        values = values if isinstance(values, Mapping) else {}
+        damage, healing = values.get('damage'), values.get('healing')
+        known = _finite(damage) or _finite(healing)
+        label = non_team_label(cid)
+        if (_finite(damage) and damage > 0) or (_finite(healing) and healing > 0):
+            parts.append(f'{cid}（{label}，未归属输出：伤害 {format_compact(damage)}，'
+                         f'治疗 {format_compact(healing)}）')
+        elif not known:
+            parts.append(f'{cid}（{label}，输出未知）')
+        else:
+            parts.append(f'{cid}（{label}，未观察到输出）')
+    return '已排除非队伍来源：' + '；'.join(parts)
+
+
+def team_status(statistics: Mapping) -> tuple[bool, str, str]:
+    """Return ``(complete, blocking_reason, non_team_note)`` for a team panel.
+
+    Completeness follows the adapter's cumulative-totals marker; per-row
+    ``counter_snapshot_complete`` remains the fallback for records written
+    before that marker existed. Unattributed or ambiguous sources make shares
+    unknown and are named, while proven non-team sources are excluded from the
+    denominator and reported separately instead of blocking the whole team.
+    """
+    result = statistics if isinstance(statistics, Mapping) else {}
+    gaps = []
+    for key, label in DIAGNOSTIC_LABELS:
+        names = _name_list(result.get(key))
+        if names:
+            gaps.append(f'{label}：{"、".join(names)}')
+    raw_rows = result.get('rows')
+    rows = raw_rows if isinstance(raw_rows, Mapping) else {}
+    if 'totals_complete' in result:
+        complete = bool(result['totals_complete'])
+    else:
+        complete = all(isinstance(row, Mapping)
+                       and bool(row.get('counter_snapshot_complete'))
+                       for row in rows.values())
+    if not complete:
+        # Name the rows that are actually uncertified. When every row's own
+        # cumulative snapshot is certified, the panel is blocked by an
+        # unattributed source instead, and claiming an incomplete snapshot
+        # here would contradict the rows shown next to the reason.
+        stale = [str(row.get('name') or owner) for owner, row in rows.items()
+                 if isinstance(row, Mapping) and not row.get('counter_snapshot_complete')]
+        if stale:
+            gaps.append('累计快照不完整：' + '、'.join(stale))
+        elif not gaps:
+            gaps.append('累计快照不完整')
+    reason = ('' if not gaps else
+              '队伍数据不完整，无法计算全队同口径占比（' + '；'.join(gaps) + '）')
+    return (not gaps), reason, non_team_note(result)
 
 
 def _metric_complete(row: PanelSourceRow, category: Category,
@@ -381,9 +479,17 @@ def _segments(row: PanelSourceRow, ranking: Ranking) -> tuple[tuple[dict, ...], 
         if not _finite(value) or value <= 0:
             continue
         known += value
-        segments.append({'kind': kind, 'value': value,
-                         'ratio': min(1.0, value / total),
-                         'color': DAMAGE_COLORS[kind]})
+        segment = {'kind': kind, 'value': value,
+                   'ratio': min(1.0, value / total),
+                   'color': DAMAGE_COLORS[kind]}
+        # Overkill is marked only on the totals basis: the five-second window
+        # does not derive a separate event-window overkill value.
+        if ranking is Ranking.TOTAL and row.overkill_type_complete and row.overkill_by_type:
+            overkill = row.overkill_by_type.get(kind)
+            if _finite(overkill) and overkill > 0:
+                segment['overkill'] = overkill
+                segment['overkill_ratio'] = min(1.0, overkill / value)
+        segments.append(segment)
     return tuple(segments), abs(known - total) <= max(0.01, total * 1e-6)
 
 
@@ -426,12 +532,16 @@ def detail_rates(rows: Iterable[PanelSourceRow],
 def render_panel(config: PanelConfig,
                  rows: Iterable[PanelSourceRow], *,
                  team_complete: bool = True,
+                 team_reason: str = '',
+                 team_note: str = '',
                  event: EventAvailability | None = None) -> PanelView:
     """Build one panel view; unknown metrics are omitted, never zero-filled.
 
     ``team_complete=False`` means the caller knows some team members or sources
     are missing; shares are then reported as unknown instead of using a local
-    subset as if it were the whole team.
+    subset as if it were the whole team. ``team_reason`` names the blocking
+    sources, and ``team_note`` reports sources excluded from the team
+    denominator (shown even when shares are known).
 
     ``event`` describes the event-observation capability. When it is absent or
     degraded the engagement rate column reports a readable reason and recovery
@@ -483,7 +593,8 @@ def render_panel(config: PanelConfig,
                    and all(complete.values()) and team_denominator > 0)
     share_reason = ('' if share_known else
                     ('近期窗口不完整或不一致，无法计算全队同口径占比'
-                     if not window_known else '队伍数据不完整，无法计算全队同口径占比'))
+                     if not window_known else
+                     team_reason or '队伍数据不完整，无法计算全队同口径占比'))
     max_value = max(displayed.values(), default=0.0)
 
     entries: list[PanelEntry] = []
@@ -516,6 +627,11 @@ def render_panel(config: PanelConfig,
             detail={'damage_by_type': dict(row.damage_by_type),
                     'damage': row.damage, 'healing': row.healing,
                     'shield_absorbed': row.shield,
+                    'overkill_damage': row.overkill,
+                    'overkill_damage_by_type': (dict(row.overkill_by_type)
+                                                if row.overkill_type_complete else None),
+                    'overkill_type_complete': row.overkill_type_complete,
+                    'overkill_coverage_complete': row.overkill_complete,
                     'active_damage': row.active_damage,
                     'active_healing': row.active_healing,
                     'observed_damage': row.observed_damage,
@@ -528,7 +644,7 @@ def render_panel(config: PanelConfig,
                      total=sum(displayed.values()), denominator=team_denominator,
                      share_known=share_known, share_reason=share_reason,
                      rate_supported=rate_supported, rate_label=rate_label,
-                     metric_label=metric_label,
+                     metric_label=metric_label, share_note=team_note,
                      rate_available=rate_available, rate_reason=rate_reason,
                      rate_hint=rate_hint, rate_action=rate_action,
                      rate_action_label=rate_action_label)
@@ -536,7 +652,10 @@ def render_panel(config: PanelConfig,
 
 def render_board(configs: Iterable[PanelConfig],
                  rows: Iterable[PanelSourceRow], *,
-                 team_complete: bool = True) -> list[PanelView]:
+                 team_complete: bool = True,
+                 team_reason: str = '',
+                 team_note: str = '') -> list[PanelView]:
     rows = list(rows)
-    return [render_panel(config, rows, team_complete=team_complete)
+    return [render_panel(config, rows, team_complete=team_complete,
+                         team_reason=team_reason, team_note=team_note)
             for config in configs]
