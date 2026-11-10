@@ -1,0 +1,4 @@
+# Development/CI only; not installed into either portable runtime.
+# Pillow independently decodes PNG output in tests and builds portrait assets.
+pytest==8.3.5
+Pillow==12.3.0

@@ -212,3 +212,51 @@ def test_png_save_freezes_skin_before_nested_dialog(gui, tmp_path, monkeypatch):
     monkeypatch.setattr('gui_history.filedialog.asksaveasfilename', dialog)
     w.export_png()
     assert json.loads(Image.open(target).info['ArkDPS.selection'])['theme'] == 'lone-trail'
+
+
+def test_native_png_runtime_works_when_pillow_cannot_be_imported():
+    """A fresh interpreter blocks PIL before importing the actual exporter."""
+    from pathlib import Path
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    program = r'''import importlib.abc, json, struct, sys
+sys.path[:0] = sys.argv[1:]
+class NoPillow(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "PIL" or fullname.startswith("PIL."):
+            raise ModuleNotFoundError("Pillow deliberately unavailable", name=fullname)
+sys.meta_path.insert(0, NoPillow())
+import tkinter as tk
+from statistics_screenshot import statistics_png
+from panel_model import PanelConfig
+from test_battle_history import record
+root = tk.Tk()
+root.withdraw()
+try:
+    for theme in ("lone-trail", "original"):
+        root._ark_theme = theme
+        raw = statistics_png(root, record(1), PanelConfig(panel_id="png-runtime"))
+        assert raw[:8] == bytes.fromhex("89504e470d0a1a0a")
+        width, height = struct.unpack("!II", raw[16:24])
+        assert width == 960 and height > 0
+        cursor = 8
+        selection = None
+        while cursor < len(raw):
+            size = struct.unpack("!I", raw[cursor:cursor+4])[0]
+            kind = raw[cursor+4:cursor+8]
+            payload = raw[cursor+8:cursor+8+size]
+            if kind == b"tEXt" and payload.startswith(b"ArkDPS.selection" + bytes([0])):
+                selection = json.loads(payload.split(bytes([0]), 1)[1])
+            cursor += size + 12
+        assert selection["theme"] == theme and selection["owners"] == ["a"]
+        assert not any(name == "PIL" or name.startswith("PIL.") for name in sys.modules)
+        print(theme, width, height, "PNG without Pillow")
+finally:
+    root.destroy()
+'''
+    result = subprocess.run([sys.executable, '-I', '-X', 'utf8', '-c', program,
+        str(root), str(root/'tests')], cwd=root, capture_output=True, text=True,
+        encoding='utf-8', timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count('PNG without Pillow') == 2

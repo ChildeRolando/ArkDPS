@@ -51,7 +51,10 @@ Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新
 
 ## 可复核验收
 
+测试依赖由根目录 `requirements-test.txt` 固定，包含用于独立解码验证 PNG 的 Pillow；它不进入 Python worker 运行时。WPF 统计 PNG 由 .NET `PngBitmapEncoder` 生成，旧 Tk 导出由 Win32 GDI 与标准库生成；不能因测试导入 `PIL` 就把 Pillow 当作产品运行时依赖，也不能漏装测试依赖或跳过 PNG 断言。
+
 ```powershell
+python -m pip install -r requirements-test.txt
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 python -m pytest tests -q --assert=plain
 python acceptance/verify_wpf.py --output runtime/wpf-source
