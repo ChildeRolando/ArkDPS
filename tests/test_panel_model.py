@@ -2,7 +2,8 @@ import pytest
 
 from panel_model import (Category, DAMAGE_COLORS, PanelCollection, PanelConfig,
                          PanelSourceRow, Ranking, RateBasis, format_compact,
-                         render_board, render_panel, rows_from_statistics)
+                         render_board, render_panel, rows_from_statistics,
+                         team_status)
 from stats_core import Statistics
 
 
@@ -275,3 +276,33 @@ def test_share_denominator_includes_retired_and_zero_rows():
     view = render_panel(total(), rows)
     assert view.denominator == 400
     assert view.entries[0].share == pytest.approx(0.75)
+
+
+def test_team_status_names_blocking_and_classified_sources():
+    stats = {'totals_complete': True,
+             'rows': {'A': {'name': 'A', 'counter_snapshot_complete': True}},
+             'unknown_sources': ['char_mystery'],
+             'non_team_sources': ['trap_321_shnbox'],
+             'non_team_output': {'trap_321_shnbox': {'damage': 500., 'healing': 0.}}}
+    complete, reason, note = team_status(stats)
+    assert complete is False
+    assert '未归属统计来源：char_mystery' in reason
+    assert 'trap_321_shnbox' in note and '未归属输出' in note and '500' in note
+    assert '已排除非队伍来源' in note
+
+
+def test_team_status_is_complete_without_unknown_sources():
+    stats = {'totals_complete': True,
+             'rows': {'A': {'name': 'A', 'counter_snapshot_complete': True}},
+             'non_team_sources': ['trap_321_shnbox'],
+             'non_team_output': {'trap_321_shnbox': {'damage': 0., 'healing': 0.}}}
+    complete, reason, note = team_status(stats)
+    assert complete is True and reason == ''
+    assert '未观察到输出' in note
+
+
+def test_render_panel_keeps_non_team_note_when_shares_are_known():
+    rows = [src('A', damage=100), src('B', damage=300)]
+    view = render_panel(total(), rows, team_note='已排除非队伍来源：trap_x')
+    assert view.share_known is True
+    assert view.share_note == '已排除非队伍来源：trap_x'

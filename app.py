@@ -15,7 +15,7 @@ from tkinter import ttk, messagebox, font
 from dataclasses import replace
 from uuid import uuid4
 
-from panel_model import PanelConfig, render_board, rows_from_statistics
+from panel_model import PanelConfig, render_board, rows_from_statistics, team_status
 from gui_panel import StatisticPanel, PortraitAtlas, BG
 from hud import HudWindow
 from ui_theme import apply_theme, palette, THEME_LABELS
@@ -135,6 +135,7 @@ class App:
         self.huds = {}
         self.live_statistics, self.live_source_rows = {}, []
         self.live_complete = False
+        self.live_reason = self.live_note = ''
         self.hud_request = self.create_hud
         self.portraits = PortraitAtlas(root)
         root.title('ArkDPS · 实时统计')
@@ -711,7 +712,8 @@ class App:
         # Always current battle, even when the GUI is displaying a saved record.
         huds = list(self.huds.values())
         views = render_board([h.source.config for h in huds], self.live_source_rows,
-                             team_complete=self.live_complete)
+                             team_complete=self.live_complete,
+                             team_reason=self.live_reason, team_note=self.live_note)
         for hud, view in zip(huds, views):
             hud.update_view(view, self.live_statistics.get('rows') or {},
                             team_complete=self.live_complete, reset=reset)
@@ -721,9 +723,10 @@ class App:
         self.root.lift()
 
     def render_panels(self, reset=False):
-        team_complete = self.last.get('statistics_complete', False) if self.last else False
+        team_complete, team_reason, team_note = team_status(self.statistics)
         views = render_board([p.config for p in self.panels], self.source_rows,
-                             team_complete=team_complete)
+                             team_complete=team_complete,
+                             team_reason=team_reason, team_note=team_note)
         source = self.statistics.get('rows') or {}
         for panel, view in zip(self.panels, views):
             panel.update_view(view, source, team_complete=team_complete, reset=reset)
@@ -735,7 +738,7 @@ class App:
         self.source_rows = rows_from_statistics(self.statistics)
         self.live_statistics = self.statistics
         self.live_source_rows = self.source_rows
-        self.live_complete = sample.get('statistics_complete', False)
+        self.live_complete, self.live_reason, self.live_note = team_status(self.statistics)
         battle = sample.get('battle_id', sample.get('session'))
         reset = battle != self.current_battle
         self.current_battle = battle

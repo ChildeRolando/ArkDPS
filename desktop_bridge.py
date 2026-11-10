@@ -20,7 +20,8 @@ from uuid import uuid4
 
 from battle_history import BattleHistory, BattleRecord
 from battle_lifecycle import BattleRuntime
-from battle_share import json_bytes, record_complete, record_labels, record_stage, write_export
+from battle_share import (json_bytes, record_complete, record_labels, record_stage,
+                         record_statistics, write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
@@ -28,7 +29,7 @@ from connection import (ConnectionConfig, ConnectionConfigStore, detect_instance
 from event_capture import CaptureRetry
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
-from panel_model import PanelConfig, render_panel, rows_from_statistics
+from panel_model import PanelConfig, render_panel, rows_from_statistics, team_status
 import stage_names
 
 PROTOCOL_VERSION = 1
@@ -142,9 +143,12 @@ class DesktopState:
         return 'live', '正在统计'
 
     @staticmethod
-    def view(config, statistics, complete):
+    def view(config, statistics):
         source = statistics.get('rows') or {}
-        view = asdict(render_panel(config, rows_from_statistics(statistics), team_complete=complete))
+        complete, reason, note = team_status(statistics)
+        view = asdict(render_panel(config, rows_from_statistics(statistics),
+                                   team_complete=complete, team_reason=reason,
+                                   team_note=note))
         view['empty_text'] = empty_text(config, source, complete)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
@@ -168,10 +172,11 @@ class DesktopState:
         selected = None
         if self.selected:
             selected_stage = record_stage(self.selected)
+            selected_stats = record_statistics(self.selected)
             selected = dict(battle_id=self.selected.battle_id, labels=record_labels(self.selected),
                             stage=selected_stage.label, stage_detail=selected_stage.detail,
-                            view=self.view(self.history_config, self.selected.statistics,
-                                           record_complete(self.selected)), record=self.selected.to_dict())
+                            view=self.view(self.history_config, selected_stats),
+                            record=self.selected.to_dict())
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
@@ -184,7 +189,7 @@ class DesktopState:
                     stage=live_stage.label if has_live_stage else None,
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
-                    panels=[self.view(p, stats, sample.get('statistics_complete', False)) for p in self.layout.panels],
+                    panels=[self.view(p, stats) for p in self.layout.panels],
                     history=history, history_selected=selected, history_notice=self.history_notice)
 
     def persist(self, layout):

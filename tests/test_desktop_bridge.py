@@ -623,3 +623,27 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
         except queue.Empty:
             break
     assert ('history', None) in events
+
+
+def test_finished_history_record_publishes_team_shares(tmp_path):
+    from battle_history import BattleHistory
+    BattleHistory(tmp_path / 'history').save(record())
+    state = DesktopState(tmp_path)
+    selected = state.snapshot()['history_selected']
+    assert selected['view']['share_known'] is True
+    assert selected['view']['entries'][0]['share'] == 1.
+    assert 'share_note' in selected['view']
+
+
+def test_live_panel_surfaces_a_classified_non_team_source(tmp_path):
+    state = DesktopState(tmp_path)
+    data = sample()
+    data['statistics'].update(
+        totals_complete=True,
+        non_team_sources=['trap_321_shnbox'],
+        non_team_output={'trap_321_shnbox': {'damage': 500., 'healing': 0.}})
+    state.accept('sample', data)
+    view = state.snapshot()['panels'][0]
+    assert view['share_known'] is True
+    assert 'trap_321_shnbox' in view['share_note']
+    assert '未归属输出' in view['share_note']

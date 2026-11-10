@@ -157,6 +157,24 @@ class BattleRecord:
                           'mapping_conflicts', 'missing_fields'):
                 _require(isinstance(stats[field], list) and
                          all(isinstance(s, str) for s in stats[field]), f'invalid {field}')
+            # Optional ARK-24 fields: records written before the totals/rate
+            # split lack them, but a present value must never be malformed.
+            if 'totals_complete' in stats:
+                _require(type(stats['totals_complete']) is bool, 'invalid totals_complete')
+            if 'non_team_sources' in stats:
+                _require(isinstance(stats['non_team_sources'], list) and
+                         all(isinstance(s, str) and s for s in stats['non_team_sources']),
+                         'invalid non_team_sources')
+            if 'non_team_output' in stats:
+                output = stats['non_team_output']
+                _require(isinstance(output, dict), 'invalid non_team_output')
+                for cid, values in output.items():
+                    _require(isinstance(cid, str) and bool(cid) and isinstance(values, dict),
+                             'invalid non_team_output entry')
+                    _require(set(values) == {'damage', 'healing'},
+                             'invalid non_team_output counters')
+                    for value in values.values():
+                        _number(value, 'non_team_output', nullable=True)
             sample = data['last_sample']
             _require(isinstance(sample, dict) and sample.get('session') == battle_id,
                      'last sample battle_id mismatch')
