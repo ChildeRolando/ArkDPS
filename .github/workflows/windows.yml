@@ -16,6 +16,10 @@ jobs:
         with:
           python-version: '3.10.10'
           architecture: x64
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
       - name: Install pinned candidate toolchain
         run: python -m pip install -r requirements-windows.txt -r requirements-test.txt
       - name: Prepare isolated native-test desktop
@@ -24,6 +28,8 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: python -m pytest tests -q --assert=plain
+      - name: Build WPF desktop (net10.0-windows)
+        run: dotnet build desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj --configuration Release --nologo
       - name: Build exact clean checkout
         shell: pwsh
         run: python tools/build_windows.py --output runtime/ci-build --expect-head (git rev-parse HEAD)
