@@ -28,7 +28,8 @@ from connection import (ConnectionConfig, ConnectionConfigStore, detect_instance
 from event_capture import CaptureRetry
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
-from panel_model import PanelConfig, render_panel, rows_from_statistics
+from panel_model import (EventAvailability, PanelConfig, detail_rates, render_panel,
+                        rows_from_statistics)
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
@@ -136,10 +137,12 @@ class DesktopState:
         return 'live', '正在统计'
 
     @staticmethod
-    def view(config, statistics, complete):
+    def view(config, statistics, complete, event=None):
         source = statistics.get('rows') or {}
-        view = asdict(render_panel(config, rows_from_statistics(statistics), team_complete=complete))
+        rows = rows_from_statistics(statistics)
+        view = asdict(render_panel(config, rows, team_complete=complete, event=event))
         view['empty_text'] = empty_text(config, source, complete)
+        view['rates'] = detail_rates(rows, event)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source
@@ -157,9 +160,15 @@ class DesktopState:
                                 search=(' '.join(labels) + ' ' + names).casefold()))
         selected = None
         if self.selected:
-            selected = dict(battle_id=self.selected.battle_id, labels=record_labels(self.selected),
-                            view=self.view(self.history_config, self.selected.statistics,
-                                           record_complete(self.selected)), record=self.selected.to_dict())
+            selected = dict(
+                battle_id=self.selected.battle_id, labels=record_labels(self.selected),
+                view=self.view(self.history_config, self.selected.statistics,
+                               record_complete(self.selected),
+                               EventAvailability(status=self.selected.event_status,
+                                                 error=self.selected.event_error, live=False)),
+                record=self.selected.to_dict())
+        live_event = EventAvailability(status=sample.get('event_status', self.event_status),
+                                       error=sample.get('event_error', self.event_error), live=True)
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     status=status, status_text=label, error=self.error,
@@ -168,7 +177,8 @@ class DesktopState:
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
                     stage=(sample.get('battle_metadata') or {}).get('stage_id'),
-                    panels=[self.view(p, stats, sample.get('statistics_complete', False)) for p in self.layout.panels],
+                    panels=[self.view(p, stats, sample.get('statistics_complete', False), live_event)
+                            for p in self.layout.panels],
                     history=history, history_selected=selected, history_notice=self.history_notice)
 
     def persist(self, layout):

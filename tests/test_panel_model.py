@@ -1,14 +1,16 @@
 import pytest
 
-from panel_model import (Category, DAMAGE_COLORS, PanelCollection, PanelConfig,
-                         PanelSourceRow, Ranking, RateBasis, format_compact,
-                         render_board, render_panel, rows_from_statistics)
+from panel_model import (Category, DAMAGE_COLORS, EventAvailability, PanelCollection,
+                         PanelConfig, PanelSourceRow, Ranking, RateBasis, detail_rates,
+                         format_compact, render_board, render_panel,
+                         rows_from_statistics)
 from stats_core import Statistics
 
 
 def src(owner, *, damage=None, healing=None, shield=None, recent_damage=None,
         recent_healing=None, recent_shield=None, engagement_damage=None,
         engagement_healing=None, active_damage=None, active_healing=None,
+        observed_damage=None, observed_healing=None,
         present=True, types=None, counter_complete=True, event_complete=True,
         sources=(), recent_window=(0, 5), recent_types=None):
     return PanelSourceRow(
@@ -18,6 +20,7 @@ def src(owner, *, damage=None, healing=None, shield=None, recent_damage=None,
         engagement_damage=engagement_damage,
         engagement_healing=engagement_healing,
         active_damage=active_damage, active_healing=active_healing,
+        observed_damage=observed_damage, observed_healing=observed_healing,
         damage_by_type=types or {}, counter_complete=counter_complete,
         event_complete=event_complete, sources=sources,
         recent_damage_window=recent_window, recent_healing_window=recent_window,
@@ -275,3 +278,103 @@ def test_share_denominator_includes_retired_and_zero_rows():
     view = render_panel(total(), rows)
     assert view.denominator == 400
     assert view.entries[0].share == pytest.approx(0.75)
+
+
+def engagement_config():
+    return PanelConfig(ranking=Ranking.TOTAL, rate_basis=RateBasis.ENGAGEMENT)
+
+
+def test_event_unavailable_explains_engagement_and_never_zero_fills():
+    rows = [src('A', damage=1000, engagement_damage=None)]
+    view = render_panel(engagement_config(), rows,
+                        event=EventAvailability('failed',
+                                                'unable to connect to remote frida-server'))
+    assert view.rate_available is False
+    assert '事件观测未连接' in view.rate_reason
+    assert 'unable to connect to remote frida-server' in view.rate_reason
+    assert (view.rate_action, view.rate_action_label) == ('retry', '重试事件观测')
+    assert '事件观测' in view.rate_hint
+    entry = view.entries[0]
+    assert entry.rate is None
+    assert entry.rate_text == '—'
+    assert entry.rate_state == 'unavailable'
+    assert entry.rate_note and '不以 0 或墙钟替代' in entry.rate_note
+    # 合理推断的 0 值冒充未知是被禁止的。
+    assert '0' not in entry.rate_text
+
+
+def test_event_recovered_engagement_uses_tail_window_and_active_time():
+    stats = Statistics('battle', 0, event_coverage=True)
+    stats.register_source('a', 'A')
+    stats.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    for index, game_time in enumerate((0, 1, 4)):
+        stats.advance(game_time)
+        stats.event(str(index), game_time, 'a', 'damage', 100)
+    stats.advance(4.5)
+    result = stats.result()
+    view = render_panel(engagement_config(), rows_from_statistics(result),
+                        event=EventAvailability('recording'))
+    entry = view.entries[0]
+    assert view.rate_available is True and view.rate_reason == ''
+    assert entry.rate == pytest.approx(result['rows']['A']['engagement_damage'])
+    assert entry.rate == pytest.approx(100)   # 300 observed / 3 active game seconds
+    assert entry.rate_text == '100/s'
+    assert entry.detail['active_damage'] == pytest.approx(3)
+    assert entry.detail['observed_damage'] == pytest.approx(300)
+
+
+def test_zero_event_operator_is_reliable_zero_not_unknown():
+    rows = [src('A', damage=10, engagement_damage=None, active_damage=0,
+                observed_damage=0, observed_healing=0),
+            src('B', damage=10, engagement_damage=None, active_damage=None,
+                observed_damage=None)]
+    view = render_panel(engagement_config(), rows, event=EventAvailability('recording'))
+    by_owner = {entry.owner_id: entry for entry in view.entries}
+    assert by_owner['A'].rate is None
+    assert by_owner['A'].rate_state == 'no_engagement'
+    assert by_owner['A'].rate_text == '无接敌'
+    assert '可靠零' in by_owner['A'].rate_note
+    assert by_owner['B'].rate_state == 'unknown'
+    assert by_owner['B'].rate_text == '—'
+    assert by_owner['A'].rate_text != by_owner['B'].rate_text
+
+
+def test_event_coverage_closed_mid_battle_keeps_prefix_and_marks_gap():
+    rows = [src('A', damage=100, engagement_damage=50, active_damage=2,
+                observed_damage=100, event_complete=False)]
+    view = render_panel(engagement_config(), rows,
+                        event=EventAvailability('gap', 'observer stopped'))
+    entry = view.entries[0]
+    assert entry.rate == pytest.approx(50) and entry.rate_text == '50/s'
+    assert view.rate_available is False
+    assert '中断' in view.rate_reason and 'observer stopped' in view.rate_reason
+    assert (view.rate_action, view.rate_action_label) == ('retry', '重试事件观测')
+    assert '不补零' in view.rate_hint
+
+
+def test_history_event_incomplete_reason_is_explicit_and_not_backfilled():
+    rows = [src('A', damage=100, engagement_damage=None, active_damage=None,
+                observed_damage=None, event_complete=False)]
+    view = render_panel(engagement_config(), rows,
+                        event=EventAvailability('failed', 'observer unavailable', live=False))
+    assert view.rate_available is False
+    assert '该局事件观测未连接' in view.rate_reason
+    assert '无法补采' in view.rate_hint
+    assert (view.rate_action, view.rate_action_label) == ('settings', '打开连接设置')
+    entry = view.entries[0]
+    assert entry.rate is None and entry.rate_text == '—'
+    assert entry.rate_state == 'unavailable'
+
+
+def test_detail_rates_distinguish_zero_unknown_and_unavailable():
+    rows = [src('A', damage=10, engagement_damage=None, engagement_healing=None,
+                active_damage=0, active_healing=0, observed_damage=0,
+                observed_healing=0)]
+    available = detail_rates(rows, EventAvailability('recording'))['A']
+    assert available['damage']['state'] == 'no_engagement'
+    assert available['healing']['state'] == 'no_engagement'
+    unknown = detail_rates(rows, EventAvailability('recording'))
+    unavailable = detail_rates(rows, EventAvailability('failed', 'observer unavailable'))['A']
+    assert unavailable['damage']['state'] == 'unavailable'
+    assert unavailable['damage']['text'] == '—'
+    assert unknown['A']['damage']['text'] == '无接敌'
