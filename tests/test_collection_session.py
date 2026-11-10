@@ -235,6 +235,33 @@ def test_native_resources_are_closed_even_if_observer_cleanup_fails(monkeypatch)
     assert calls[-1] == 'collector_close'
 
 
+def test_final_stopped_audit_failure_is_retained_and_retried_without_reclosing_resources():
+    calls, stopped_records = [], []
+    fail_once = True
+
+    def audit(kind, data):
+        nonlocal fail_once
+        if kind == 'stopped':
+            stopped_records.append(data)
+            if fail_once:
+                fail_once = False
+                raise OSError('audit disk full')
+
+    collector = Collector(calls)
+    current = CollectionSession('adb', 'serial', collector=collector, audit=audit)
+    with pytest.raises(OSError, match='audit disk full'):
+        current.close()
+    assert not current.closed
+    assert current.cleanup_errors == {'audit': ['audit disk full']}
+    assert calls.count('collector_close') == 1
+
+    current.close()
+    assert not current.closed  # historical audit failures remain reportable
+    assert calls.count('collector_close') == 1
+    assert len(stopped_records) == 2
+    assert stopped_records[-1] == {'cleanup_errors': {'audit': ['audit disk full']}}
+
+
 def test_final_watermark_clips_intervals_without_creating_a_gap(monkeypatch):
     current, collector, _ = session()
     current.connect()

@@ -7,8 +7,9 @@ import sys
 import zlib
 
 from battle_share import record_labels, record_view, record_complete
-from gui_panel import BG, TEXT, SECONDARY, empty_text
+from gui_panel import BG, SECONDARY, empty_text
 from panel_model import Category
+from ui_theme import PALETTES, theme_key
 
 
 class _Bitmap:
@@ -127,8 +128,10 @@ def encode_png(width, height, rgb, selection):
             chunk(b'tEXt', provenance) + chunk(b'IDAT', zlib.compress(scanlines)) + chunk(b'IEND', b''))
 
 
-def statistics_png(parent, record, config):
+def statistics_png(parent, record, config, *, theme=None):
     """Render all rows from a frozen record; no scroll position or live sample is read."""
+    key = theme if theme is not None else theme_key(parent)
+    p = PALETTES[key]
     view = record_view(record, config)
     data = record.to_dict()
     image = _Bitmap()
@@ -144,6 +147,8 @@ def statistics_png(parent, record, config):
         text('伤害含过量；治疗含过量；护盾仅实际吸收。未知显示 —，* 表示覆盖不完整。')
         text(f'{view.metric_label} · 速率：{view.rate_label or "不可用"} · '
              '近期统计仅含最后可靠时刻前的已观察窗口。')
+        if config.category is Category.DAMAGE:
+            text('物理（红） / 法术（蓝） / 元素（紫） / 真实（白）；灰条表示分类未完整覆盖。')
         if not view.share_known:
             text(view.share_reason)
         text('快照覆盖（游戏秒）：' + repr(data['snapshot_intervals']) +
@@ -165,14 +170,16 @@ def statistics_png(parent, record, config):
         text('JSON 导出保留原值、来源与逐指标覆盖起止；此图采用当前面板的类别、排行与速率。')
         height = y + 10
         image.allocate(960, height)
+        image.rectangle(0, 0, 960, height, p.background)
         for value, top, bold in elements:
-            image.text(value, 20, top, 920, bold=bold, color=TEXT if bold else SECONDARY)
+            image.text(value, 20, top, 920, bold=bold, color=p.accent if bold else p.secondary)
         for entry, name, top, name_height, coverage in rows:
-            image.text(name, 20, top, 430, color=SECONDARY if entry.portrait_muted else TEXT)
+            image.rectangle(12, top-4, 936, max(54, name_height+23)+2, p.plot)
+            image.text(name, 20, top, 430, color=p.plot_secondary if entry.portrait_muted else p.plot_text)
             image.text(entry.display_value + (' *' if entry.incomplete else '') + '  ' + entry.share_display,
-                       480, top, 460, bold=True, color=TEXT, right=True)
+                       480, top, 460, bold=True, color=p.plot_text, right=True)
             image.text(entry.rate_display if view.rate_supported else '速率 —',
-                       800, top+32, 140, right=True)
+                       800, top+32, 140, color=p.plot_secondary, right=True)
             start, width = 20, 760 * entry.bar_ratio
             segments = entry.segments if entry.segments_complete else ()
             if not segments:
@@ -183,9 +190,9 @@ def statistics_png(parent, record, config):
                 if segment_width >= 1:
                     image.rectangle(start, top+name_height+10, segment_width, 9, segment['color'])
                 start += segment_width
-            image.text(coverage, 20, top+max(54, name_height+23), 920)
+            image.text(coverage, 20, top+max(54, name_height+23), 920, color=p.secondary)
         return encode_png(960, height, image.rgb(960, height),
-                          dict(battle_id=record.battle_id, panel=config.to_dict(),
+                          dict(battle_id=record.battle_id, panel=config.to_dict(), theme=key,
                                owners=[e.owner_id for e in view.entries]))
     finally:
         image.close()

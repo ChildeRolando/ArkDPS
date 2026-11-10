@@ -1,4 +1,5 @@
 """Offline native Windows smoke for the exact extracted artifact, not game acceptance."""
+import importlib.util
 import json
 from pathlib import Path
 import platform
@@ -39,6 +40,8 @@ def run_smoke(output):
             receipt['release'] = manifest['release']
             assert ROOT == Path(sys.executable).resolve().parent, 'portable runtime location changed'
             receipt['checks']['bundle_hashes'] = len(manifest['files'])
+            assert importlib.util.find_spec('PIL') is None, 'Pillow is test-only, not a portable runtime dependency'
+            receipt['checks']['pillow_runtime_absent'] = True
         receipt['checks']['frida'] = frida.__version__
         assert frida.__version__ == '17.26.1'
         from tools.enemy_health import memcore
@@ -109,6 +112,9 @@ def run_smoke(output):
         saved = BattleHistory(output / 'history').get(record.battle_id).records[0]
         (output / 'statistics.json').write_bytes(json_bytes(saved))
         (output / 'statistics.png').write_bytes(statistics_png(root, saved, app.panels[0].config))
+        if receipt['frozen']:
+            assert not any(name == 'PIL' or name.startswith('PIL.') for name in sys.modules), 'PNG export imported Pillow'
+            receipt['checks']['png_without_pillow'] = True
         history = HistoryWindow(app)
         root.update()
         assert len(history.records) == 1

@@ -16,8 +16,9 @@ from dataclasses import replace
 from uuid import uuid4
 
 from panel_model import PanelConfig, render_board, rows_from_statistics
-from gui_panel import StatisticPanel, PortraitAtlas, BG, TEXT, SECONDARY
+from gui_panel import StatisticPanel, PortraitAtlas, BG
 from hud import HudWindow
+from ui_theme import apply_theme, palette, THEME_LABELS
 
 from collector import BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from metrics import observation_age
@@ -140,31 +141,40 @@ class App:
         unit = max(1, font.nametofont('TkDefaultFont').metrics('linespace') / 17)
         root.minsize(round(440*unit), round(500*unit))
         self.restore_gui_geometry()
-        root.configure(bg=BG)
+        self.theme = self.layout.theme
+        apply_theme(root, self.theme)
         root.protocol('WM_DELETE_WINDOW', self.close)
-        style = ttk.Style(root)
-        style.theme_use('clam')
-        style.configure('.', font=('Microsoft YaHei UI', 10), background=BG, foreground=TEXT)
-        style.configure('TButton', padding=(8, 5), background='#33434d', foreground=TEXT)
-        style.map('TButton', background=[('active', '#485e6b'), ('disabled', '#26343d')])
-        style.map('TCombobox', fieldbackground=[('readonly', '#26343d')],
-                  foreground=[('readonly', TEXT)])
         root.columnconfigure(0, weight=1)
         root.rowconfigure(3, weight=1)
         top = ttk.Frame(root, padding=(12, 10))
         top.grid(row=0, column=0, sticky='ew')
         top.columnconfigure(0, weight=1)
+        brand = ttk.Frame(top)
+        brand.grid(row=0, column=0, sticky='ew', columnspan=2, pady=(0, 10))
+        ttk.Label(brand, text='ArkDPS', style='Brand.TLabel').pack(side='left')
+        self.theme_choice = tk.StringVar(value=THEME_LABELS[self.theme])
+        theme_box = ttk.Combobox(brand, textvariable=self.theme_choice,
+                                values=list(THEME_LABELS.values()), state='readonly', width=22)
+        theme_box.pack(side='right')
+        theme_box.bind('<<ComboboxSelected>>', self.choose_theme)
+        ttk.Label(brand, text='皮肤 ', style='Secondary.TLabel').pack(side='right')
+        nav = ttk.Frame(top)
+        nav.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, 10))
+        ttk.Label(nav, text='本局统计', font=('Microsoft YaHei UI', 14, 'bold')).pack(side='left')
+        ttk.Button(nav, text='连接设置', command=self.open_settings).pack(side='right')
+        self.export_button = ttk.Button(nav, text='历史战绩', command=self.export)
+        self.export_button.pack(side='right', padx=8)
         self.status = tk.StringVar(value='准备连接…')
         self.status_label = ttk.Label(top, textvariable=self.status,
                                       font=('Microsoft YaHei UI', 11, 'bold'))
-        self.status_label.grid(row=0, column=0, sticky='w')
+        self.status_label.grid(row=2, column=0, sticky='w')
         self.pin = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text='置顶', variable=self.pin,
-                        command=lambda: root.attributes('-topmost', self.pin.get())).grid(row=0, column=1)
+                        command=lambda: root.attributes('-topmost', self.pin.get())).grid(row=2, column=1)
         self.clock = tk.StringVar(value='等待本局数据')
         ttk.Label(root, textvariable=self.clock, padding=(12, 0)).grid(row=1, column=0, sticky='w')
         self.diagnostics = tk.StringVar(value=self.connection)
-        self.diagnostic_label = ttk.Label(root, textvariable=self.diagnostics, foreground=SECONDARY,
+        self.diagnostic_label = ttk.Label(root, textvariable=self.diagnostics, style='Secondary.TLabel',
                                           padding=(12, 6), wraplength=860)
         self.diagnostic_label.grid(row=2, column=0, sticky='ew')
         container = ttk.Frame(root)
@@ -184,21 +194,30 @@ class App:
         bottom = ttk.Frame(root, padding=12)
         bottom.grid(row=4, column=0, sticky='ew')
         ttk.Button(bottom, text='新建面板', command=self.add_panel).pack(side='left')
-        ttk.Button(bottom, text='设置', command=self.open_settings).pack(side='left', padx=(8, 0))
         self.scan_button = ttk.Button(bottom, text='重新定位', command=self.rescan.set)
         self.scan_button.pack(side='left', padx=8)
-        self.export_button = ttk.Button(bottom, text='历史与分享', command=self.export)
-        self.export_button.pack(side='left')
+        ttk.Button(bottom, text='收起到托盘', command=self.close).pack(side='left')
         ttk.Button(bottom, text='退出应用', command=self.quit).pack(side='right')
         for config in self.layout.panels:
             self.add_panel(config)
         self.restore_huds()
         self.start_tray(tray_factory)
+        apply_theme(root, self.theme)
         self.loading = False
         root.bind('<Configure>', self.root_configured, add='+')
         self.worker=threading.Thread(target=self.collect,daemon=True)
         self.worker.start()
         root.after(100,self.tick)
+
+    def choose_theme(self, _event=None):
+        key = next(k for k, label in THEME_LABELS.items() if label == self.theme_choice.get())
+        self.set_theme(key)
+
+    def set_theme(self, key):
+        apply_theme(self.root, key)
+        self.theme = key
+        self.theme_choice.set(THEME_LABELS[key])
+        self.schedule_layout_save(delay=0)
 
     # -- connection settings, layout persistence and tray ------------------
     def apply_command_line_connection(self, adb, serial):
@@ -364,7 +383,7 @@ class App:
                               self.root.winfo_width(), self.root.winfo_height())
         return Layout(panels=tuple(panel.config for panel in self.panels),
                       huds=tuple(huds), gui=gui,
-                      event_observation=self.event_observation)
+                      event_observation=self.event_observation, theme=self.theme)
 
     def save_layout_now(self):
         if self.save_after is not None:
@@ -586,7 +605,7 @@ class App:
         if self.scanning:
             label='正在定位 · 保留上次记录' if self.last else '正在定位本局…'
         elif self.error:
-            label='读取中断 · 显示最后有效记录' if self.last else '等待战斗数据'
+            label='连接断开 / 读取中断 · 显示最后有效记录' if self.last else '连接断开 · 等待重新定位'
         elif not self.last:
             label='等待战斗数据'
         elif self.battle_status=='ended':
@@ -608,7 +627,8 @@ class App:
         self.diagnostics.set(self.connection + '\n' + self.event_state +
                              ('\n' + warning if warning else '') +
                              ('\n' + self.error if self.error else ''))
-        self.status_label.configure(foreground='#f1bc82' if self.error or (self.last and age>2 and not self.scanning) else '#edf2f4')
+        p = palette(self.root)
+        self.status_label.configure(foreground=p.warning if self.error or (self.last and age>2 and not self.scanning) else p.text)
         self.root.after(100,self.tick)
 
     def scroll_board(self, event):
@@ -804,6 +824,8 @@ def main():
     parser.add_argument('--require-progress',action='store_true')
     parser.add_argument('--require-events',action='store_true',
                         help='fail acceptance capture if event coverage is unavailable')
+    parser.add_argument('--legacy-tk', action='store_true',
+                        help='explicit legacy test/diagnostic UI; the product default is WPF')
     args=parser.parse_args()
     if args.self_test is not None:
         from release_smoke import run_smoke
@@ -811,6 +833,16 @@ def main():
     if args.acceptance_output and (args.capture_seconds or
             not math.isfinite(args.acceptance_seconds) or args.acceptance_seconds <= 0):
         parser.error('GUI acceptance requires a finite positive duration and no headless capture')
+    # ARK-14's explicit measurement mode and frozen Tk artifact remain legacy
+    # paths. Neither may redirect to the source-only WPF launcher.
+    if (not args.capture_seconds and not args.legacy_tk and
+            not args.acceptance_output and not getattr(sys, 'frozen', False)):
+        if args.require_events and args.frida_remote == '':
+            parser.error('--require-events cannot be combined with --no-events')
+        if args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0:
+            parser.error('capture/wait durations must be nonnegative and baseline timeout positive')
+        from desktop_launcher import launch
+        return launch(args)
     # Headless capture must not migrate/quarantine GUI-only layout files or
     # consume diagnostics that can only be displayed by the next GUI launch.
     layout_store = loaded_layout = None
@@ -883,4 +915,4 @@ def main():
 
 
 if __name__=='__main__':
-    main()
+    raise SystemExit(main())

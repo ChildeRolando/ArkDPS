@@ -1,5 +1,7 @@
 # 实时事件采集入口与验收
 
+当前 WPF 桌面由 `desktop_bridge.py` 子进程消费同一 `CollectionSession`，不修改本页采集语义；UI/worker 协议与分发见 [桌面运行时](desktop-runtime.md)。以下 Tk 入口和旧候选实机记录为历史证据，不自动认证新的 WPF。
+
 当前主线 ARK-5 已在 `af18904ab89b417c87665f9dbfa731e2348cfa7a` 获独立 PASS，并合入 `b999a4c9a236331b95a07cfa0e90e8dd97e9d6be`。234 项回归及默认入口、启动失败降级、显式关闭的新实机证据通过。宿主机已在 2026-11-07 22:37:54Z 结束设备操作；下文早期“待返修/独占”是历史过程，当前串行占用以最新讨论为准。
 
 ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期模式，`BattleRuntime` 分配 ID，快照和 `LiveEventCapture.ingest()` 共用一个适配器。跨帧重试保留队列；新局重建基线并隔离旧事件；同进程不因换局重挂载。首个终局先处理可靠水位再冻结，累计修订与一次归档沿用同局 ID。新日志的 `lifecycle_observation.events` 保留屏障/drain，`published.native_rows` 保留原生来源，`rows` 为窗口投影；独立对账器兼容两种日志。新候选的跨局实机尚未验收，范围和当前 MAA 错误证据见 [生命周期交接](snapshot-adapter.md)。

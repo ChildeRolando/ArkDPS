@@ -1,5 +1,12 @@
 # Windows 候选构建与发布验收
 
+## 适用范围：ARK-14 旧 Tk 候选
+
+本页保留合入 main 的 ARK-14 PyInstaller/Tk 候选构建、自检及历史验收契约；它不是 ARK-19 当前 WPF 发行入口。
+WPF 的 .NET 10 + Python worker、`ArkDPS.Desktop.exe`、同包运行时及配置路径以 [桌面运行时](desktop-runtime.md) 为准。
+`tools/build_windows.py` 的冻结 `ArkDPS.exe` 仍进入旧 Tk；源码默认进入 WPF。
+显式 `--self-test` / `--acceptance-output` 保留旧候选自检/测量含义，不把 Tk 证据当作 WPF 验收，也不据此授权实机操作。
+
 ## 状态与权威来源
 
 ARK-14 的 ready-for-agent 发布规范。`release.json` 拥有候选版本、平台、兼容目标及对外发布授权状态；
@@ -40,12 +47,14 @@ Windows 10、干净 Windows 安装、多开、其他游戏版本/模拟器及原
 
 ```powershell
 python -m venv .venv-build
-.venv-build/Scripts/python.exe -m pip install -r requirements-windows.txt pytest==8.3.5
+.venv-build/Scripts/python.exe -m pip install -r requirements-windows.txt -r requirements-test.txt
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 .venv-build/Scripts/python.exe -m pytest tests -q --assert=plain
 $head = git rev-parse HEAD
 .venv-build/Scripts/python.exe tools/build_windows.py --output runtime/release-build --expect-head $head
 ```
+
+`requirements-test.txt` 单独固定 pytest 与 Pillow（Python 包名 `PIL`）：后者用于独立解码/检查导出 PNG，亦可供头像资源重建使用，不是产品 PNG 编码器。旧 Tk 产物用 Win32 GDI + 标准库 PNG 编码，WPF 用 .NET `PngBitmapEncoder`；两种运行时均不需要 Pillow。CI 在干净环境同时安装构建与测试清单，不能依赖开发机全局包。PyInstaller 继续排除 PIL/pytest；冻结自检必须在找不到 PIL 的情况下实际生成 PNG，并在回执中记录 `pillow_runtime_absent` / `png_without_pillow`。
 
 输出目录必须不存在；脏 checkout 或 HEAD 不符直接失败。不创建 commit/tag/Release，不修改现有安装。
 PyInstaller onedir 的 `--contents-directory .` 保持资源和 `runtime/` 的原布局，不能擅自改为 `_internal`。

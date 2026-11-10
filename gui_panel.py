@@ -7,6 +7,8 @@ import sys
 import tkinter as tk
 from tkinter import ttk, font
 
+from ui_theme import palette, theme_key
+
 from panel_model import (Category, Ranking, RateBasis, CATEGORY_LABELS,
                          RANKING_LABELS, RATE_LABELS)
 
@@ -65,23 +67,23 @@ def empty_text(config, source, *, team_complete=False):
 def detail_text(row):
     if row is None:
         return '点击头像固定详情；方向键选择，回车固定。'
-    parts = [row.get('name', '未知干员')]
-    for label, key in (('伤害（含过量）', 'damage'), ('治疗（含过量）', 'healing'),
-                       ('有效护盾（观测区间）', 'shield_absorbed'),
-                       ('伤害活跃秒', 'active_damage'), ('治疗活跃秒', 'active_healing')):
-        parts.append(f'{label} {exact(row.get(key))}')
-    for key, label in (('physical', '物理'), ('arts', '法术'),
-                       ('elemental', '元素'), ('true', '真实')):
-        parts.append(f'{label} {exact((row.get("damage_by_type") or {}).get(key))}')
-    parts.append(f'快照覆盖起点 {exact(row.get("coverage_start"))}')
-    parts.append(f'事件覆盖 {exact(row.get("shield_coverage_start"))} → '
-                 f'{exact(row.get("event_coverage_end"))}（— 终点表示仍在观测或不可用）')
+    status = {True: '在场', False: '已离场', None: '在场状态未知'}.get(row.get('present'))
+    lines = [f'干员详情 · {row.get("name", "未知干员")} · {status}',
+             f'伤害（含过量） {exact(row.get("damage"))}    治疗（含过量） {exact(row.get("healing"))}',
+             f'有效护盾（观测区间） {exact(row.get("shield_absorbed"))}',
+             f'接敌 DPS {exact(row.get("engagement_damage"))}    HPS {exact(row.get("engagement_healing"))}',
+             f'伤害活跃秒 {exact(row.get("active_damage"))}    治疗活跃秒 {exact(row.get("active_healing"))}']
+    lines.append(' · '.join(label + ' ' + exact((row.get('damage_by_type') or {}).get(key))
+                 for key, label in (('physical', '物理'), ('arts', '法术'),
+                                    ('elemental', '元素'), ('true', '真实'))))
+    lines.append(f'快照覆盖起点 {exact(row.get("coverage_start"))} · 事件 '
+                 f'{exact(row.get("shield_coverage_start"))} → {exact(row.get("event_coverage_end"))}')
     if not row.get('counter_snapshot_complete', False):
-        parts.append('累计数据不完整')
+        lines.append('累计数据不完整')
     if not row.get('event_coverage_complete', False):
-        parts.append('事件未完整覆盖；未知不记零')
-    parts.append('来源 ' + ('、'.join(row.get('sources') or ()) or '—'))
-    return ' · '.join(parts)
+        lines.append('事件未完整覆盖；未知不记零；— 终点表示仍在观测或不可用')
+    lines.append('来源 ' + ('、'.join(row.get('sources') or ()) or '—'))
+    return chr(10).join(lines)
 
 
 def monitor_work_area(widget, x, y):
@@ -127,7 +129,7 @@ class Tooltip:
         self.window.withdraw()
         self.window.overrideredirect(True)
         ttk.Label(self.window, text=text, padding=8, wraplength=360,
-                  background=SURFACE).pack()
+                  style='PanelMuted.TLabel').pack()
         self.window.update_idletasks()
         # The virtual desktop may include space with no physical monitor.
         # Use this monitor's work area, including negative screen coordinates.
@@ -152,7 +154,7 @@ class Tooltip:
 class StatisticPanel(ttk.Frame):
     def __init__(self, parent, config, *, changed, duplicate, delete, open_hud, portraits,
                  history=False, compact=False):
-        super().__init__(parent, padding=10, relief='solid', borderwidth=1)
+        super().__init__(parent, padding=12, relief='solid', borderwidth=1, style='Panel.TFrame')
         self.config = config
         self.changed = changed
         self.portraits = portraits
@@ -166,10 +168,10 @@ class StatisticPanel(ttk.Frame):
         self.row_height = round(56 * self.unit)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(4, weight=1)
-        self.title = ttk.Label(self, text=config.display_title,
+        self.title = ttk.Label(self, text=config.display_title, style='PanelTitle.TLabel',
                                font=('Microsoft YaHei UI', 11, 'bold'))
         self.title.grid(row=0, column=0, sticky='w')
-        actions = ttk.Frame(self)
+        actions = ttk.Frame(self, style='PanelInner.TFrame')
         actions.grid(row=1, column=0, sticky='ew', pady=(6, 8))
         for text, command in (('复制', lambda: duplicate(self)),
                               ('删除', lambda: delete(self)),
@@ -178,9 +180,9 @@ class StatisticPanel(ttk.Frame):
         self.delete_button = actions.winfo_children()[1]
         if history:
             actions.grid_remove()
-        self.hud_controls = ttk.Frame(self)
+        self.hud_controls = ttk.Frame(self, style='PanelInner.TFrame')
         self.hud_controls.grid(row=7, column=0, sticky='ew', pady=(6, 0))
-        settings = ttk.Frame(self)
+        settings = ttk.Frame(self, style='PanelInner.TFrame')
         settings.grid(row=2, column=0, sticky='ew')
         self.controls = {}
         for col, (key, label, labels) in enumerate((
@@ -188,9 +190,9 @@ class StatisticPanel(ttk.Frame):
                 ('ranking', '排行', RANKING_LABELS),
                 ('rate_basis', '速率', RATE_LABELS))):
             settings.columnconfigure(col, weight=1, uniform='setting')
-            box = ttk.Frame(settings)
+            box = ttk.Frame(settings, style='PanelInner.TFrame')
             box.grid(row=0, column=col, sticky='ew', padx=(0, 6))
-            ttk.Label(box, text=label, foreground=SECONDARY).pack(anchor='w')
+            ttk.Label(box, text=label, style='PanelMuted.TLabel').pack(anchor='w')
             variable = tk.StringVar(value=labels[getattr(config, key)])
             combo = ttk.Combobox(box, textvariable=variable, values=list(labels.values()),
                                  state='readonly', width=8)
@@ -198,22 +200,25 @@ class StatisticPanel(ttk.Frame):
             combo.bind('<<ComboboxSelected>>', self.configure_panel)
             self.controls[key] = (variable, combo, labels)
         self.hint = tk.StringVar(value='等待可靠数据；未知不会显示为零。')
-        self.hint_label = ttk.Label(self, textvariable=self.hint, foreground=SECONDARY,
+        self.hint_label = ttk.Label(self, textvariable=self.hint, style='PanelMuted.TLabel',
                                    wraplength=330)
         self.hint_label.grid(row=3, column=0, sticky='ew', pady=(8, 4))
-        body = ttk.Frame(self)
+        body = ttk.Frame(self, style='PanelInner.TFrame')
         body.grid(row=4, column=0, sticky='nsew')
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
         self.canvas = tk.Canvas(body, bg=BG, highlightthickness=1,
                                 highlightbackground=SURFACE, highlightcolor=SECONDARY,
                                 height=round(224 * self.unit), width=1, takefocus=True)
+        self.canvas.theme_role = 'plot'
         self.canvas.grid(row=0, column=0, sticky='nsew')
         scrollbar = ttk.Scrollbar(body, command=self.canvas.yview)
         scrollbar.grid(row=0, column=1, sticky='ns')
         self.canvas.configure(yscrollcommand=scrollbar.set)
         self.empty = self.canvas.create_text(12, 24, anchor='nw', fill=SECONDARY,
                                              font=('Microsoft YaHei UI', 10), text='等待可靠数据')
+        self.orbits = [self.canvas.create_oval(0, 0, 1, 1, width=1, tags='orbit') for _ in range(3)]
+        self.canvas.tag_lower('orbit')
         self.tooltip = Tooltip(self.canvas)
         self.canvas.bind('<Configure>', lambda e: self.draw())
         self.canvas.bind('<Enter>', lambda e: self.set_hover(True))
@@ -226,16 +231,23 @@ class StatisticPanel(ttk.Frame):
         self.canvas.bind('<Return>', lambda e: self.pin(self.pinned))
         self.detail = tk.StringVar(value=detail_text(None))
         self.detail_label = ttk.Label(self, textvariable=self.detail, wraplength=330,
-                                     foreground=SECONDARY, font=('Microsoft YaHei UI', 9))
+                                     style='PanelMuted.TLabel', font=('Microsoft YaHei UI', 9))
         self.detail_label.grid(row=5, column=0, sticky='ew', pady=(8, 0))
         ttk.Button(self, text='收起详情', command=lambda: self.pin(None)).grid(
             row=6, column=0, sticky='w', pady=(5, 0))
         self.compact = compact
+        self.apply_palette()
         if compact:
             for widget in (actions, settings, self.detail_label, self.hud_controls):
                 widget.grid_remove()
             for widget in self.grid_slaves(row=6):
                 widget.grid_remove()
+
+    def apply_palette(self):
+        p = palette(self)
+        self.canvas.configure(bg=p.plot, highlightbackground=p.border, highlightcolor=p.accent)
+        self.canvas.itemconfigure(self.empty, fill=p.plot_secondary)
+        self.draw()
 
     def configure_panel(self, _event=None):
         values = {key: next(k for k, label in labels.items() if label == variable.get())
@@ -326,7 +338,15 @@ class StatisticPanel(ttk.Frame):
         self.tooltip.show(text, event.x_root, event.y_root)
 
     def draw(self):
+        p = palette(self)
         width = max(1, self.canvas.winfo_width())
+        height = max(100, self.canvas.winfo_height())
+        for index, item in enumerate(self.orbits):
+            cx, cy = width * .77, height * .65
+            rx, ry = (55 + index*30)*self.unit, (35 + index*22)*self.unit
+            self.canvas.coords(item, cx-rx, cy-ry, cx+rx, cy+ry)
+            self.canvas.itemconfigure(item, outline=p.plot_selection,
+                state='normal' if theme_key(self) == 'lone-trail' else 'hidden')
         # Canvas may briefly be unmapped during layout; its width then is 1.
         # Wrap using the containing panel to avoid requesting a tall 100px column.
         wrap_width = max(100, self.winfo_width() - 20)
@@ -343,6 +363,10 @@ class StatisticPanel(ttk.Frame):
                 (self.view.rate_label + (' HPS' if self.config.category is Category.HEALING else ' DPS')
                  if self.view.rate_supported else '仅实际吸收') +
                 (' · 悬停暂停排序' if self.hovering else ' · 按原始值排序'))
+        if self.compact:
+            hint = self.view.metric_label + ' · ' + (self.view.rate_label or '有效吸收')
+        if not self.compact and self.config.category is Category.DAMAGE:
+            hint += chr(10) + '物理（红） / 法术（蓝） / 元素（紫） / 真实（白）；灰条表示分类未完整覆盖'
         if not self.view.share_known:
             hint += '\n' + self.view.share_reason
         if any(entry.incomplete for entry in self.view.entries):
@@ -365,11 +389,11 @@ class StatisticPanel(ttk.Frame):
             background, avatar, initials, name, amount, rate, *bars, portrait = self.items[key]
             y = index * self.row_height
             self.canvas.coords(background, 0, y, width, y + self.row_height - 1)
-            self.canvas.itemconfigure(background, fill='#305569' if key == self.pinned else BG)
+            self.canvas.itemconfigure(background, fill=p.plot_selection if key == self.pinned else p.plot)
             self.canvas.coords(avatar, 6*s, y+7*s, 42*s, y+43*s)
-            self.canvas.itemconfigure(avatar, fill='#3c454b' if entry.portrait_muted else '#305569')
+            self.canvas.itemconfigure(avatar, fill=p.plot_selection)
             self.canvas.coords(initials, 24*s, y+25*s)
-            self.canvas.itemconfigure(initials, text=entry.name[:2], fill=SECONDARY if entry.portrait_muted else TEXT,
+            self.canvas.itemconfigure(initials, text=entry.name[:2], fill=p.plot_secondary if entry.portrait_muted else p.plot_text,
                                       font=('Microsoft YaHei UI', 10))
             image = self.portraits.get(key, entry.portrait_muted, max(4, round(36*s / 4)*4))
             self.canvas.coords(portrait, 24*s, y+25*s)
@@ -382,15 +406,15 @@ class StatisticPanel(ttk.Frame):
             if short_name != entry.name:
                 short_name = short_name[:-1] + '…'
             self.canvas.coords(name, 52*s, y+16*s)
-            self.canvas.itemconfigure(name, text=short_name, anchor='w', fill=TEXT,
+            self.canvas.itemconfigure(name, text=short_name, anchor='w', fill=p.plot_text,
                                       font=('Microsoft YaHei UI', 10))
             self.canvas.coords(amount, width-10*s, y+16*s)
             self.canvas.itemconfigure(amount, text=entry.display_value + (' *' if entry.incomplete else '') +
-                                      '  ' + entry.share_display, anchor='e', fill=TEXT,
+                                      '  ' + entry.share_display, anchor='e', fill=p.plot_text,
                                       font=('Microsoft YaHei UI', 10, 'bold'))
             self.canvas.coords(rate, width-10*s, y+38*s)
             self.canvas.itemconfigure(rate, text=entry.rate_display if self.view.rate_supported else '',
-                                      anchor='e', fill=SECONDARY, font=('Microsoft YaHei UI', 9))
+                                      anchor='e', fill=p.plot_secondary, font=('Microsoft YaHei UI', 9))
             start, bar_width = 52*s, max(1, width - 140*s) * entry.bar_ratio
             segments = entry.segments if entry.segments_complete else ()
             if not segments:

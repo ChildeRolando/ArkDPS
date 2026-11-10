@@ -10,6 +10,9 @@ acceptance/battle-candidates.json
 .env
 .env.*
 !.env.example
+# Native WPF build artifacts
+desktop/**/bin/
+desktop/**/obj/
 .venv-build/
 dist/
 build/

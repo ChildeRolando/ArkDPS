@@ -261,3 +261,15 @@ def test_gui_acceptance_rejects_nonfinite_or_nonpositive_duration_before_startup
     assert 'positive' in capsys.readouterr().err
     layout.assert_not_called()
     assert not (tmp_path / 'out').exists()
+
+
+def test_clean_ci_installs_declared_png_test_decoder():
+    def pins(name):
+        return dict(line.split('==') for line in (ROOT/name).read_text('utf-8').splitlines()
+                    if line.strip() and not line.startswith('#'))
+    testing = pins('requirements-test.txt')
+    assert all(part.isdigit() for part in testing['Pillow'].split('.'))
+    assert 'pytest' in testing
+    assert 'Pillow' not in pins('requirements-windows.txt')
+    workflow = (ROOT/'.github/workflows/windows.yml').read_text('utf-8')
+    assert '-r requirements-windows.txt -r requirements-test.txt' in workflow
