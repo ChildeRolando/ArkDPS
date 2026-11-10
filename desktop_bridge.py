@@ -113,6 +113,10 @@ class DesktopState:
             self.event_status, self.event_error = value
         elif kind == 'lifecycle':
             self.lifecycle = value
+        elif kind == 'history':
+            # A record was committed by the collection owner: re-read the list
+            # now instead of polling the directory on every snapshot.
+            self.refresh_history()
         elif kind == 'scanning':
             self.scanning = value
             if value:
@@ -317,6 +321,7 @@ class CollectionWorker:
                                     self.session = CollectionSession(target.adb_path, target.serial,
                                         frida_remote=self.endpoint if enabled else None,
                                         history=self.history, audit=audit,
+                                        on_history=lambda: self.events.put(('history', None)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
                                     self.session.enable_lifecycle(runtime)
                                     self.session.connect()

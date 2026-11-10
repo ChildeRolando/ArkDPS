@@ -458,3 +458,40 @@ def test_committed_record_readback_failure_does_not_prune_and_retry_recovers(tmp
     assert history.get('battle:0').records
     assert not history.save(candidate).written
     assert len(list(tmp_path.glob('*.json'))) == 100
+
+
+def test_new_archive_notifies_display_owner_once_and_never_on_failure(tmp_path, monkeypatch):
+    from collection_session import CollectionSession
+    collector, runtime = FakeCollector(), BattleRuntime()
+    history = BattleHistory(tmp_path)
+    notices = []
+    current = CollectionSession('adb', 'serial', history=history,
+                                on_history=lambda: notices.append(1))
+    current.enable_lifecycle(runtime)
+    runtime.poll(collector)
+    collector.lifecycle['battle'] = None
+    runtime.poll(collector)
+    archive, = runtime.sessions.pop_archives()
+
+    current._pending_history.append(archive)
+    current._drain_archives()
+    assert notices == [1] and history.list_recent().records
+
+    # A duplicate handoff writes nothing and must not re-read the list.
+    current._pending_history.append(archive)
+    current._drain_archives()
+    assert notices == [1]
+
+    # A failed write leaves the record pending and announces nothing.
+    def fail(_record):
+        raise HistoryError('disk full')
+    monkeypatch.setattr(history, 'save', fail)
+    new = archive.copy()
+    new['battle_id'] = 'battle:failed'
+    new['statistics'] = dict(archive['statistics'], session='battle:failed',
+                             adapter_session='battle:failed')
+    new['last_sample'] = dict(archive['last_sample'], session='battle:failed')
+    current._pending_history.append(new)
+    current._drain_archives()
+    assert notices == [1]
+    assert [a['battle_id'] for a in current._pending_history] == ['battle:failed']

@@ -83,3 +83,12 @@ def test_wpf_quit_is_bounded_and_never_modal():
     quit_body = window[window.index('internal async Task Quit'):]
     assert 'MessageBox' not in quit_body
     assert 'Task.WhenAny' in quit_body and 'WriteQuitLog' in quit_body
+
+
+def test_history_page_entry_auto_refreshes_and_keeps_manual_button():
+    window = (ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml.cs').read_text('utf-8')
+    navigate = window[window.index('internal async Task Navigate'):]
+    navigate = navigate[:navigate.index('private async void AddPanel')]
+    assert 'history_refresh' in navigate
+    xaml = (ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml').read_text('utf-8')
+    assert 'Click="RefreshHistory"' in xaml
