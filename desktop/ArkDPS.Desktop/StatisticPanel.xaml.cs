@@ -135,7 +135,10 @@ public partial class StatisticPanel : UserControl
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         DeleteButton.IsEnabled=canDelete;
         Legend.Visibility=config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
-        Coverage.Text=value.Bool("share_known") ? "全队同口径占比 · 点击干员固定明细" : value.Text("share_reason");
+        var note=value.Text("share_note");
+        Coverage.Text=(value.Bool("share_known")
+            ? "全队同口径占比 · 点击干员固定明细"
+            : value.Text("share_reason"))+(note.Length>0 ? " · "+note : "");
         if(IsHud){Plot.MinHeight=80;Rows.MinHeight=35;Rows.MaxHeight=double.PositiveInfinity;}
         if(IsHud) Coverage.Text="跟随源面板 · "+value.Text("metric_label");
         var incoming=value.Get("entries").Items().ToArray();

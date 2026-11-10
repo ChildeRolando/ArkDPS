@@ -27,6 +27,8 @@ def test_terminal_totals_do_not_advance_event_time_or_invent_a_sampled_rate():
     assert result['game_time'] == stats.end_time == 1
     assert row['damage'] == 150 and row['healing'] == 65
     assert row['recent_damage'] is None and row['recent_healing'] is None
+    assert row['counter_snapshot_complete'] is True
+    assert result['totals_complete'] is True
     assert row['active_damage'] == before['active_damage']
     assert row['observed_damage'] == before['observed_damage'] == 20
     with pytest.raises(ValueError):
@@ -76,6 +78,8 @@ def test_native_terminal_fixture_updates_totals_without_advancing_time():
     assert result['rows']['char_017_huang']['damage'] == 31899.103515625
     assert result['game_time'] == 98.79990577697754
     assert result['rows']['char_017_huang']['recent_damage'] is None
+    assert result['rows']['char_017_huang']['counter_snapshot_complete'] is True
+    assert result['totals_complete'] is True
     assert result['ended']
     # Repeated completion freezes and archives the same corrected result.
     assert adapter.finish() == adapter.finish()

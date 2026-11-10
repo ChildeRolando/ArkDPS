@@ -16,6 +16,7 @@ from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import Statistics
 from event_stream import EventStream, StreamGap
+from source_classification import classify_unmapped_source
 
 DAMAGE_TYPES = ('physical', 'arts', 'true', 'elemental')
 
@@ -115,6 +116,7 @@ class AdapterUpdate:
     game_time: float
     result: dict
     unknown_sources: tuple[str, ...] = ()
+    non_team_sources: tuple[str, ...] = ()
     unmapped_tokens: tuple[str, ...] = ()
     missing_fields: tuple[str, ...] = ()
     roster_frame: int | None = None
@@ -137,6 +139,8 @@ class BattleStatisticsAdapter:
         self.last_types: dict[str, dict[str, float]] = {}
         self.types_current: set[str] = set()
         self.unknown_sources: set[str] = set()
+        self.non_team_sources: dict[str, tuple[str, str]] = {}
+        self.unattributed_output: dict[str, dict[str, float]] = {}
         self.missing_fields: set[str] = set()
         self.session_switches = 0
         self.same_time_changes = 0
@@ -161,6 +165,24 @@ class BattleStatisticsAdapter:
             self.statistics.invalidate_events()
             self.last_result = self.statistics.result()
             self.types_current.clear()
+
+    def on_end(self) -> None:
+        """Freeze a battle boundary that is not a collection gap.
+
+        A vanished or FINISHED singleton confirms the end; it does not mean a
+        read failed. Reliability rules differ by concern: close event coverage
+        and stop certifying rate windows, but keep the last complete cumulative
+        counters as final totals so settlement and history can share the team
+        denominator. A real collection gap must use :meth:`on_gap` instead.
+        """
+        if self.statistics is None:
+            return
+        if self.event_stream is not None:
+            self.event_stream.stop()
+        self.statistics.seal_totals()
+        self.statistics.invalidate_rates()
+        self.types_current.clear()
+        self.last_result = self.statistics.result()
 
     def _freeze(self) -> None:
         if self.statistics is not None and self.last_game_time is not None:
@@ -191,6 +213,8 @@ class BattleStatisticsAdapter:
         self.last_types = {}
         self.types_current = set()
         self.unknown_sources = set(mapping.unknown_token_cids)
+        self.non_team_sources = {}
+        self.unattributed_output = {}
         self.missing_fields = set()
         self.mapping_conflicts = set()
         self.last_roster = None
@@ -309,13 +333,26 @@ class BattleStatisticsAdapter:
             self.event_stream.stop()
         counters: dict[str, dict[str, float]] = {}
         types_update: dict[str, dict[str, float]] = {}
+        roster_keys = {entry.cid for entry in roster.entries}
         for row in sample.get('rows', ()):
             cid = row.get('id')
             if not isinstance(cid, str) or not cid:
                 continue
             owner = self.owner_map.owners.get(cid)
             if owner is None or cid in blocked or owner in blocked:
-                self.unknown_sources.add(cid)
+                counter = _counter(row)
+                if counter is not None:
+                    self.unattributed_output[cid] = counter
+                # Ambiguous or conflicting keys may still hide team output;
+                # only a key with no owner evidence at all can be classified.
+                classified = (classify_unmapped_source(cid, roster_keys)
+                              if owner is None and cid not in blocked else None)
+                if classified is None:
+                    self.unknown_sources.add(cid)
+                    self.non_team_sources.pop(cid, None)
+                else:
+                    self.non_team_sources[cid] = classified
+                    self.unknown_sources.discard(cid)
                 continue
             counter = _counter(row)
             if counter is None:
@@ -323,6 +360,7 @@ class BattleStatisticsAdapter:
                 continue
             if not self._register(cid, owner):
                 continue
+            self.non_team_sources.pop(cid, None)
             counters[cid] = counter
             name = row.get('name')
             if cid == owner and name and name != owner:
@@ -358,6 +396,7 @@ class BattleStatisticsAdapter:
         return AdapterUpdate(
             session=self.session, game_time=game_time, result=self.last_result,
             unknown_sources=tuple(sorted(self.unknown_sources)),
+            non_team_sources=tuple(sorted(self.non_team_sources)),
             unmapped_tokens=tuple(sorted(self.owner_map.unknown_token_cids)),
             missing_fields=tuple(sorted(self.missing_fields)),
             roster_frame=roster.frame)
@@ -366,7 +405,9 @@ class BattleStatisticsAdapter:
         if self.statistics is None or self.last_game_time is None:
             return self.last_result or {'rows': {}}
         if self.statistics.end_time is not None:
-            return self.last_result or self.statistics.result()
+            self.statistics.seal_totals()
+            self.last_result = self.statistics.result()
+            return self.last_result
         end = game_time if game_time is not None else self.last_game_time
         if self.event_stream is not None:
             if (not self.event_stream.closed and self.event_stream.game_time == end
@@ -375,6 +416,9 @@ class BattleStatisticsAdapter:
             else:
                 self.event_stream.stop()
         self.statistics.finish(end)
+        # A frozen battle has no future observation: last reliable cumulative
+        # counters are final. A gap-invalidated source stays unknown.
+        self.statistics.seal_totals()
         self.last_result = self.statistics.result()
         self.finished_session = self.session
         return self.last_result
@@ -421,10 +465,21 @@ class BattleStatisticsAdapter:
         result['present_known'] = present_known
         result['unknown_present_unique_ids'] = sorted(unknown_present)
         result['unknown_sources'] = sorted(self.unknown_sources)
+        result['non_team_sources'] = sorted(self.non_team_sources)
+        result['non_team_output'] = {
+            cid: dict(values) for cid, values in sorted(self.unattributed_output.items())
+            if cid in self.non_team_sources}
         result['unmapped_tokens'] = sorted(self.owner_map.unknown_token_cids)
         result['ambiguous_sources'] = sorted(self.owner_map.ambiguous_cids)
         result['mapping_conflicts'] = sorted(self.mapping_conflicts)
         result['missing_fields'] = sorted(self.missing_fields)
+        # Team totals require every source to be attributed: an unattributable
+        # (or ambiguous) source may hide team output, so it overrides the core
+        # per-source completeness flag. Classified non-team sources do not.
+        result['totals_complete'] = bool(result.get('totals_complete')) and not (
+            self.unknown_sources or self.owner_map.unknown_token_cids
+            or self.owner_map.ambiguous_cids or self.mapping_conflicts
+            or self.missing_fields)
         result['adapter_session'] = self.session
         result['snapshot_revision'] = self.snapshot_revision
         return result

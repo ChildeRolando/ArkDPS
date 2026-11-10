@@ -4,7 +4,8 @@ from tkinter import ttk, filedialog, messagebox, font
 
 from ui_theme import refresh_surfaces, theme_key
 
-from battle_share import record_labels, record_view, record_complete, json_bytes, export_path, write_export
+from battle_share import (record_labels, record_view, record_complete, record_statistics,
+                          json_bytes, export_path, write_export)
 from gui_panel import StatisticPanel, BG, SECONDARY
 from panel_model import PanelConfig
 
@@ -183,8 +184,8 @@ class HistoryWindow(tk.Toplevel):
 
     def render(self, reset=False):
         if self.selected is not None:
-            data = self.selected.to_dict()
-            self.panel.update_view(record_view(self.selected, self.panel.config), data['statistics']['rows'],
+            statistics = record_statistics(self.selected)
+            self.panel.update_view(record_view(self.selected, self.panel.config), statistics['rows'],
                                    team_complete=record_complete(self.selected), reset=reset)
 
     def save(self, extension, produce):

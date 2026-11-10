@@ -5,7 +5,8 @@ from unittest.mock import patch
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
-from battle_share import json_bytes, record_labels, record_view, write_export
+from battle_share import (json_bytes, record_labels, record_statistics, record_view,
+                          write_export)
 from panel_model import PanelConfig, Category
 from test_battle_history import record
 
@@ -98,3 +99,71 @@ def test_historical_shares_use_frozen_coverage_not_optional_compatibility_flag()
     assert view.entries[0].share == 1.
     data['statistics']['unknown_sources'] = ['unmapped']
     assert not record_view(BattleRecord.from_dict(data), PanelConfig()).share_known
+
+
+def _complete_record():
+    data = record().to_dict()
+    stats = data['statistics']
+    for key in ('unknown_sources', 'unmapped_tokens', 'ambiguous_sources',
+                'mapping_conflicts', 'missing_fields'):
+        stats[key] = []
+    stats['rows']['a']['counter_snapshot_complete'] = True
+    return data
+
+
+def test_classified_non_team_source_is_named_without_blocking_shares():
+    data = _complete_record()
+    stats = data['statistics']
+    stats['non_team_sources'] = ['trap_321_shnbox']
+    stats['non_team_output'] = {'trap_321_shnbox': {'damage': 0., 'healing': 0.}}
+    stats['totals_complete'] = True
+    view = record_view(BattleRecord.from_dict(data), PanelConfig())
+    assert view.share_known and view.entries[0].share == 1.
+    assert 'trap_321_shnbox' in view.share_note
+    assert '已排除非队伍来源' in view.share_note
+
+
+def test_real_unknown_source_still_blocks_shares_and_is_named():
+    data = _complete_record()
+    stats = data['statistics']
+    stats['totals_complete'] = True
+    stats['unknown_sources'] = ['char_mystery']
+    view = record_view(BattleRecord.from_dict(data), PanelConfig())
+    assert not view.share_known
+    assert 'char_mystery' in view.share_reason
+    assert '未归属统计来源' in view.share_reason
+
+
+def test_legacy_record_is_recomputed_from_finished_native_evidence():
+    data = _complete_record()
+    stats = data['statistics']
+    stats.pop('totals_complete')
+    stats.pop('non_team_sources')
+    stats.pop('non_team_output')
+    stats['unknown_sources'] = ['trap_321_shnbox']
+    for row in stats['rows'].values():
+        row['counter_snapshot_complete'] = False
+    data['last_sample']['state'] = 3
+    data['last_sample']['guard'] = {'complete': True, 'start': 10, 'end': 10}
+    normalized = record_statistics(BattleRecord.from_dict(data))
+    assert normalized['totals_complete'] is True
+    assert normalized['unknown_sources'] == []
+    assert normalized['non_team_sources'] == ['trap_321_shnbox']
+    view = record_view(BattleRecord.from_dict(data), PanelConfig())
+    assert view.share_known
+    assert 'trap_321_shnbox' in view.share_note
+
+
+def test_legacy_record_without_finished_evidence_stays_incomplete():
+    data = _complete_record()
+    stats = data['statistics']
+    stats.pop('totals_complete')
+    stats.pop('non_team_sources')
+    stats.pop('non_team_output')
+    for row in stats['rows'].values():
+        row['counter_snapshot_complete'] = False
+    data['last_sample']['state'] = 2
+    data['last_sample']['guard'] = {'complete': True, 'start': 10, 'end': 10}
+    view = record_view(BattleRecord.from_dict(data), PanelConfig())
+    assert not view.share_known
+    assert '累计快照不完整' in view.share_reason
