@@ -40,6 +40,7 @@
 - [ADR 0001：总伤害包含过量部分](adr/0001-damage-totals-include-overkill.md)
 - [ADR 0003：WPF 展示与 Python 子进程](adr/0003-wpf-python-worker.md)
 - [ADR 0002：接敌伤害与治疗使用独立活跃区间](adr/0002-separate-engagement-windows.md)
+- [ADR 0004：V2 显式 root 选项与随包分发设备端 Frida server](adr/0004-v2-root-opt-in-frida-server.md)
 
 ## 维护约定
 
