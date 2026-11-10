@@ -13,3 +13,7 @@ acceptance/battle-candidates.json
 # Native WPF build artifacts
 desktop/**/bin/
 desktop/**/obj/
+.venv-build/
+dist/
+build/
+*.spec

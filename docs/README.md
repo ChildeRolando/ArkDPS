@@ -22,6 +22,11 @@
 
 - [同类 DPS 工具架构调研](dps-tool-prior-art.md) — Details!/Skada/ACT/Deucalion/ArcDPS 的可借鉴设计与 ArkDPS 差距。
 
+## 发布
+
+- [ARK-14 旧 Tk Windows 候选构建和发布验收](windows-release.md) — 保留便携安装/升级、精确产物、离线自检、CI 与独立实机矩阵；当前 WPF 入口见桌面运行时。
+- [变更日志](../CHANGELOG.md) — 候选版本的变化与交付状态。
+
 ## 实现契约
 
 - [WPF 桌面运行时与同包分发](desktop-runtime.md) — C#/Python 所有权、唯一 stdio v1 协议、运行时与可选依赖打包、离线验收边界。

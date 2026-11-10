@@ -249,3 +249,43 @@ def test_rescan_retains_effective_cli_target_until_explicit_settings_apply(tmp_p
     serve(io.StringIO(''.join(json.dumps(c)+chr(10) for c in commands)), io.StringIO(), state, worker)
     assert worker.requests == [(override, False)]
     assert state.connection != override
+
+
+@pytest.mark.parametrize('frozen', [False, True])
+def test_main_merge_self_test_precedes_wpf_and_legacy_startup(tmp_path, monkeypatch, frozen):
+    import app
+    import desktop_launcher
+    import release_smoke
+    calls = []
+    monkeypatch.setattr(sys, 'frozen', frozen, raising=False)
+    monkeypatch.setattr(sys, 'argv', ['app.py', '--self-test', str(tmp_path/'smoke')])
+    monkeypatch.setattr(release_smoke, 'run_smoke', lambda output: calls.append(output) or 7)
+    monkeypatch.setattr(desktop_launcher, 'launch', lambda _: pytest.fail('self-test launched WPF'))
+    monkeypatch.setattr(app, 'LayoutStore', lambda: pytest.fail('self-test loaded production settings'))
+    with pytest.raises(SystemExit) as exc:
+        app.main()
+    assert exc.value.code == 7
+    assert calls == [tmp_path/'smoke']
+    assert not (tmp_path/'smoke').exists()  # mocked self-test; no GUI/collector
+
+
+@pytest.mark.parametrize('mode', ['explicit-tk', 'measurement', 'frozen-tk'])
+def test_main_merge_legacy_release_modes_do_not_launch_source_wpf(tmp_path, monkeypatch, mode):
+    import app
+    import desktop_launcher
+    class ReachedLegacyLayout(Exception):
+        pass
+    arguments = ['app.py']
+    if mode == 'explicit-tk':
+        arguments.append('--legacy-tk')
+    elif mode == 'measurement':
+        arguments += ['--acceptance-output', str(tmp_path/'measure'), '--acceptance-seconds', '1']
+    monkeypatch.setattr(sys, 'argv', arguments)
+    monkeypatch.setattr(sys, 'frozen', mode == 'frozen-tk', raising=False)
+    monkeypatch.setattr(desktop_launcher, 'launch', lambda _: pytest.fail('legacy mode launched WPF'))
+    def stop_before_gui_or_collection():
+        raise ReachedLegacyLayout()
+    monkeypatch.setattr(app, 'LayoutStore', stop_before_gui_or_collection)
+    with pytest.raises(ReachedLegacyLayout):
+        app.main()
+    assert not (tmp_path/'measure').exists()

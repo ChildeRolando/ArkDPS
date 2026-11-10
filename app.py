@@ -1,6 +1,7 @@
 """Native multi-panel statistics GUI; one shared read-only collection session."""
 import argparse
 import json
+import math
 import queue
 import socket
 import sys
@@ -795,6 +796,11 @@ class App:
 
 def main():
     parser=argparse.ArgumentParser()
+    parser.add_argument('--self-test', type=Path, metavar='NEW_OUTPUT_DIR',
+                        help='offline native-window and bundle verification; no game access')
+    parser.add_argument('--acceptance-output', type=Path, help='new directory for real GUI measurements')
+    parser.add_argument('--acceptance-seconds', type=float, default=60)
+    parser.add_argument('--acceptance-panels', type=int, choices=(1, 3), default=1)
     parser.add_argument('--adb', default=None,
                         help='override the saved adb path for this launch')
     parser.add_argument('--serial', default=None,
@@ -821,7 +827,16 @@ def main():
     parser.add_argument('--legacy-tk', action='store_true',
                         help='explicit legacy test/diagnostic UI; the product default is WPF')
     args=parser.parse_args()
-    if not args.capture_seconds and not args.legacy_tk:
+    if args.self_test is not None:
+        from release_smoke import run_smoke
+        raise SystemExit(run_smoke(args.self_test))
+    if args.acceptance_output and (args.capture_seconds or
+            not math.isfinite(args.acceptance_seconds) or args.acceptance_seconds <= 0):
+        parser.error('GUI acceptance requires a finite positive duration and no headless capture')
+    # ARK-14's explicit measurement mode and frozen Tk artifact remain legacy
+    # paths. Neither may redirect to the source-only WPF launcher.
+    if (not args.capture_seconds and not args.legacy_tk and
+            not args.acceptance_output and not getattr(sys, 'frozen', False)):
         if args.require_events and args.frida_remote == '':
             parser.error('--require-events cannot be combined with --no-events')
         if args.capture_seconds < 0 or args.wait_battle_seconds < 0 or args.baseline_timeout <= 0:
@@ -879,10 +894,24 @@ def main():
                         lambda action: app.events.put(('tray', action)),
                         icon_path=ROOT / 'assets' / 'arkdps.ico')
 
-    App(root, args, layout_store=layout_store,
+    app = App(root, args, layout_store=layout_store,
         connection_store=ConnectionConfigStore(), tray_factory=tray_factory,
         layout_load=loaded_layout)
+    probe = None
+    if args.acceptance_output:
+        from release_probe import LiveProbe
+        try:
+            probe = LiveProbe(app, args.acceptance_output, args.acceptance_seconds,
+                              args.acceptance_panels, args.expect_head)
+        except Exception:
+            app.quit()
+            while app.shutdown_report is None:
+                root.update()
+                time.sleep(.03)
+            raise
     root.mainloop()
+    if probe is not None:
+        probe.finish()
 
 
 if __name__=='__main__':

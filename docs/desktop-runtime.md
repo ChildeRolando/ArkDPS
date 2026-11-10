@@ -10,6 +10,8 @@
 - 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。
 - Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。旧 Tk 模块仅供 `python app.py --legacy-tk` 和既有回归诊断使用，正常启动不创建 Tk 窗口。命令行 `--capture-seconds` 路径不变。
 
+合入 ARK-14 发布工具后，`app.py --self-test <新目录>` 先进入旧 Tk 离线自检；`--acceptance-output` 先验证有限正时长，再进入旧 Tk 测量。PyInstaller 冻结的旧 `ArkDPS.exe` 仍用 Tk，不尝试构建或启动源码 WPF；普通源码入口和 WPF 同包入口保持不变。旧构建/自检契约见 [Windows 旧候选](windows-release.md)，不继承其真实设备验收结论。
+
 ## 唯一协议：stdio JSON Lines v1
 
 依照 ARK-19 最新修正，当前始终是一对父子进程，因此使用重定向的 stdin/stdout；**不使用 Named Pipes、TCP 或第三方 IPC 依赖**。只有未来有独立 worker 生命周期或多客户端需求时才重新评估 Named Pipes。
