@@ -9,6 +9,11 @@ distinct client statistic entries, not transient entities.
 from collections import deque
 from math import isfinite
 
+# Native DamageType values used by the verified 2.7.91 event probe.
+# 0=NONE, 4=HEAL and unknown values cannot be attributed to a damage segment.
+NATIVE_DAMAGE_TYPES = {1: 'physical', 2: 'arts', 3: 'true', 5: 'elemental'}
+DAMAGE_TYPE_KEYS = ('physical', 'arts', 'elemental', 'true')
+
 
 class Statistics:
     def __init__(self, session, start_time, *, event_coverage=False):
@@ -31,6 +36,10 @@ class Statistics:
         # settlement evidence. Any unverifiable damage event makes it unknown.
         self.overkill = {}
         self.overkill_incomplete = set()
+        # Per-type overkill is a separate subset. It stays unknown if a lethal
+        # event has overkill but no recognised native damage type.
+        self.overkill_by_type = {}
+        self.overkill_type_incomplete = set()
 
     @staticmethod
     def _time(value):
@@ -242,6 +251,13 @@ class Statistics:
                 damage_type=damage_type, cancel_reason=cancel_reason)
             if known:
                 self.overkill[owner] = self.overkill.get(owner, 0.0) + overkill
+                if overkill > 0:
+                    type_key = NATIVE_DAMAGE_TYPES.get(damage_type)
+                    if type_key is None:
+                        self.overkill_type_incomplete.add(owner)
+                    else:
+                        per_type = self.overkill_by_type.setdefault(owner, {})
+                        per_type[type_key] = per_type.get(type_key, 0.0) + overkill
             else:
                 self.overkill_incomplete.add(owner)
         if kind == 'shield_absorbed':
@@ -275,7 +291,12 @@ class Statistics:
                 break
         baseline = before[1][kind]
         if before[0] < start:
-            if after is None or after[0] - before[0] > 1:
+            # The window is five game seconds. A bracket wider than the window is
+            # a real collection gap, not a normal sampling interval; normal 2x
+            # sampling is roughly 1.7 game seconds. Interpolating the boundary
+            # keeps the five-second rate available without requiring a sample at
+            # exactly start.
+            if after is None or after[0] - before[0] > 5:
                 return None
             fraction = (start - before[0]) / (after[0] - before[0])
             baseline += fraction * (after[1][kind] - baseline)
@@ -292,6 +313,7 @@ class Statistics:
                            self.sources[s]['history'][-1][0] == self.now for s in registered)
             overkill_known = (bool(self.event_coverage) and self.event_coverage_end is None
                               and owner not in self.overkill_incomplete)
+            overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
             row = {'coverage_start': self.start_time,
                    'counter_snapshot_complete': complete,
                    'shield_coverage_start': self.start_time if self.event_coverage else None,
@@ -300,6 +322,10 @@ class Statistics:
                    'event_coverage_complete': self.event_coverage and self.event_coverage_end is None,
                    'shield_absorbed': self.shields.get(owner, 0) if self.event_coverage else None,
                    'overkill_damage': (self.overkill.get(owner, 0.0) if overkill_known else None),
+                   'overkill_damage_by_type': ({key: self.overkill_by_type.get(owner, {}).get(key, 0.0)
+                                                for key in DAMAGE_TYPE_KEYS}
+                                               if overkill_type_known else None),
+                   'overkill_type_complete': overkill_type_known,
                    'overkill_coverage_complete': overkill_known,
                    'overkill_coverage_start': self.start_time if self.event_coverage else None,
                    'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None

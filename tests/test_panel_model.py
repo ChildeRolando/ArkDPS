@@ -282,3 +282,21 @@ def test_share_denominator_includes_retired_and_zero_rows():
     view = render_panel(total(), rows)
     assert view.denominator == 400
     assert view.entries[0].share == pytest.approx(0.75)
+
+
+def test_overkill_segments_are_typed_and_only_on_the_totals_basis():
+    row = src('A', damage=1000, recent_damage=100)
+    row.damage_by_type = {'physical': 600, 'arts': 400}
+    row.overkill = 156
+    row.overkill_by_type = {'physical': 100, 'arts': 56, 'elemental': 0, 'true': 0}
+    row.overkill_type_complete = True
+    view = render_panel(PanelConfig(ranking=Ranking.TOTAL), [row])
+    segments = {segment['kind']: segment for segment in view.entries[0].segments}
+    assert segments['physical']['overkill_ratio'] == pytest.approx(100 / 600)
+    assert segments['arts']['overkill_ratio'] == pytest.approx(56 / 400)
+    recent = render_panel(PanelConfig(ranking=Ranking.RECENT), [row])
+    assert all('overkill_ratio' not in segment for segment in recent.entries[0].segments)
+    row.overkill_type_complete = False
+    incomplete = render_panel(PanelConfig(ranking=Ranking.TOTAL), [row])
+    assert all('overkill_ratio' not in segment for segment in incomplete.entries[0].segments)
+    assert incomplete.entries[0].detail['overkill_damage'] == 156

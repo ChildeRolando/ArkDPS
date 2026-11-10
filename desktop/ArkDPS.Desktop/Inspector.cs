@@ -44,6 +44,11 @@ public sealed class Inspector : Border
         Section("累计贡献");
         Pair("伤害 · 含过量",row.Exact("damage")); Pair("治疗 · 含过量",row.Exact("healing")); Pair("有效护盾 · 已观察",row.Exact("shield_absorbed"));
         Pair("过量伤害 · 事件派生",row.Exact("overkill_damage"));
+        if(row.Bool("overkill_type_complete"))
+        {
+            var overkillTypes=row.Get("overkill_damage_by_type");
+            body.Children.Add(Text("物理 "+overkillTypes.Exact("physical")+" · 法术 "+overkillTypes.Exact("arts")+" · 元素 "+overkillTypes.Exact("elemental")+" · 真实 "+overkillTypes.Exact("true"),10,false,"Muted",new Thickness(0,2,0,0)));
+        }
         body.Children.Add(Text(OverkillNote(row),11,false,"Muted",new Thickness(0,6,0,0)));
         Section("独立接敌速率");
         Pair("DPS",row.Exact("engagement_damage"));Pair("HPS",row.Exact("engagement_healing"));

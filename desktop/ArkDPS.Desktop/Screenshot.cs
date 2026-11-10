@@ -32,7 +32,7 @@ internal static class Screenshot
         var header=new StackPanel{Background=Theme.Resource("Console"),Margin=new Thickness(0)};
         header.Children.Add(Inspector.Text("ArkDPS / "+view.Text("title"),26,true,"ConsoleInk",new Thickness(24,22,24,12)));
         header.Children.Add(Inspector.Text(string.Join(" · ",selected.Get("labels").Items().Select(x=>x.Text())),12,false,"ConsoleMuted",new Thickness(24,0,24,18)));document.Children.Add(header);
-        document.Children.Add(Inspector.Text("总伤害含过量 · 治疗含过量 · 过量伤害为事件派生且不改变排行 · 护盾仅实际吸收 · 未知为 —",12,false,"Muted",new Thickness(24,18,24,4)));
+        document.Children.Add(Inspector.Text("总伤害含过量 · 治疗含过量 · 过量伤害为事件派生且不改变排行 · 斜纹 = 按属性过量（事件/root） · 护盾仅实际吸收 · 未知为 —",12,false,"Muted",new Thickness(24,18,24,4)));
         document.Children.Add(Inspector.Text(view.Text("metric_label")+" / "+view.Text("rate_label")+"速率 · 原始值排序",12,false,"Muted",new Thickness(24,0,24,14)));
         foreach(var entry in view.Get("entries").Items())
         {

@@ -18,13 +18,18 @@ POLICIES = {
     'healing': 'native_cumulative_including_overheal',
     'shield_absorbed': 'observed_actual_absorption_only',
     'overkill': 'observed_settlement_value_minus_actual_hp_at_kill_after_shield',
+    'overkill_by_type': 'observed_overkill_grouped_by_native_damage_type',
     'recent': 'cumulative_delta_game_time_window_up_to_5s',
     'engagement': 'observed_events_separate_damage_healing_union_1.5s_tail',
     'ownership': 'verified_statistics_source_to_owner_no_guessing',
 }
 # Files written before overkill existed keep their original policy map and are
-# read with overkill unknown rather than being rejected as unsupported.
-LEGACY_POLICIES = {key: value for key, value in POLICIES.items() if key != 'overkill'}
+# read with overkill unknown rather than being rejected as unsupported. ARK-25
+# records written before per-type grouping are accepted the same way.
+PRE_BY_TYPE_POLICIES = {key: value for key, value in POLICIES.items()
+                        if key != 'overkill_by_type'}
+LEGACY_POLICIES = {key: value for key, value in POLICIES.items()
+                   if key not in ('overkill', 'overkill_by_type')}
 _LOCK = RLock()
 
 
@@ -109,7 +114,7 @@ class BattleRecord:
             _date(data['recorded_at'])
             if data['observed_at'] is not None:
                 _date(data['observed_at'])
-            _require(data['policies'] in (POLICIES, LEGACY_POLICIES),
+            _require(data['policies'] in (POLICIES, PRE_BY_TYPE_POLICIES, LEGACY_POLICIES),
                      'unsupported statistics policies')
             data['policies'] = deepcopy(POLICIES)
             _number(data['duration'], 'duration')
@@ -150,6 +155,8 @@ class BattleRecord:
             for owner, row in stats['rows'].items():
                 _require(bool(owner) and isinstance(row, dict), 'invalid owner row')
                 for key, default in (('overkill_damage', None),
+                                     ('overkill_damage_by_type', None),
+                                     ('overkill_type_complete', False),
                                      ('overkill_coverage_complete', False),
                                      ('overkill_coverage_start', None),
                                      ('overkill_coverage_end', None)):
@@ -164,8 +171,20 @@ class BattleRecord:
                 _number(row['coverage_start'], 'row coverage_start')
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')
                 for flag in ('counter_snapshot_complete', 'event_coverage_complete',
-                             'overkill_coverage_complete', 'types_available', 'types_stale'):
+                             'overkill_coverage_complete', 'overkill_type_complete',
+                             'types_available', 'types_stale'):
                     _require(type(row[flag]) is bool, f'invalid {flag}')
+                by_type = row['overkill_damage_by_type']
+                _require(by_type is None or
+                         (isinstance(by_type, dict) and
+                          set(by_type) <= {'physical', 'arts', 'elemental', 'true'}),
+                         'invalid overkill damage types')
+                if by_type is not None:
+                    for value in by_type.values():
+                        _number(value, 'overkill damage type')
+                if row['overkill_type_complete']:
+                    _require(by_type is not None,
+                             'overkill type completeness without typed values')
                 _require(row['present'] is None or type(row['present']) is bool, 'invalid presence')
                 _require(isinstance(row['sources'], list) and
                          all(isinstance(s, str) and s for s in row['sources']), 'invalid sources')

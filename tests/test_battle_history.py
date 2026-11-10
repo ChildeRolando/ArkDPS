@@ -464,7 +464,10 @@ def test_overkill_fields_round_trip_and_old_records_stay_readable_as_unknown(tmp
     data = record().to_dict()
     row = data['statistics']['rows']['a']
     row.update(overkill_damage=156., overkill_coverage_complete=True,
-               overkill_coverage_start=0., overkill_coverage_end=12.)
+               overkill_coverage_start=0., overkill_coverage_end=12.,
+               overkill_damage_by_type={'physical': 100., 'arts': 56.,
+                                        'elemental': 0., 'true': 0.},
+               overkill_type_complete=True)
     data['statistics'].update(overkill_damage=156., overkill_coverage_complete=True,
                               overkill_coverage_start=0., overkill_coverage_end=12.)
     value = BattleRecord.from_dict(data)
@@ -472,17 +475,31 @@ def test_overkill_fields_round_trip_and_old_records_stay_readable_as_unknown(tmp
     history.save(value)
     restored = history.get(value.battle_id).records[0]
     assert restored.statistics['rows']['a']['overkill_damage'] == 156.
+    assert restored.statistics['rows']['a']['overkill_damage_by_type']['physical'] == 100.
+    assert restored.statistics['rows']['a']['overkill_type_complete'] is True
     assert restored.statistics['overkill_damage'] == 156.
-    assert restored.to_dict()['policies']['overkill'].startswith('observed_')
+    assert restored.to_dict()['policies']['overkill_by_type'].startswith('observed_')
+
+    # ARK-25 records written before per-type grouping remain readable.
+    pre_by_type = record(2).to_dict()
+    for legacy_row in pre_by_type['statistics']['rows'].values():
+        legacy_row.pop('overkill_damage_by_type', None)
+        legacy_row.pop('overkill_type_complete', None)
+    pre_by_type['policies'] = {key: val for key, val in pre_by_type['policies'].items()
+                               if key != 'overkill_by_type'}
+    restored_pre = BattleRecord.from_dict(pre_by_type)
+    assert restored_pre.statistics['rows']['a']['overkill_damage_by_type'] is None
+    assert restored_pre.statistics['rows']['a']['overkill_type_complete'] is False
 
     legacy = record(1).to_dict()
     for key in ('overkill_damage', 'overkill_coverage_complete',
-                'overkill_coverage_start', 'overkill_coverage_end'):
-        legacy['statistics'].pop(key)
+                'overkill_coverage_start', 'overkill_coverage_end',
+                'overkill_damage_by_type', 'overkill_type_complete'):
+        legacy['statistics'].pop(key, None)
         for legacy_row in legacy['statistics']['rows'].values():
             legacy_row.pop(key, None)
     legacy['policies'] = {key: val for key, val in legacy['policies'].items()
-                          if key != 'overkill'}
+                          if key not in ('overkill', 'overkill_by_type')}
     restored_legacy = BattleRecord.from_dict(legacy)
     legacy_row = restored_legacy.statistics['rows']['a']
     assert legacy_row['overkill_damage'] is None
