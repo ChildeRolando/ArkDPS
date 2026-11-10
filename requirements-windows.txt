@@ -1,0 +1,11 @@
+# Windows x64, CPython 3.10.10; build-only tooling plus the bundled event client.
+# The application does not install or start a Frida server.
+pyinstaller==6.9.0
+pyinstaller-hooks-contrib==2024.7
+altgraph==0.17.4
+packaging==24.1
+pefile==2023.2.7
+pywin32-ctypes==0.2.3
+setuptools==70.3.0
+frida==17.26.1
+typing_extensions==4.15.0

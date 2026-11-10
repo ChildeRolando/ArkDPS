@@ -22,6 +22,11 @@
 
 - [同类 DPS 工具架构调研](dps-tool-prior-art.md) — Details!/Skada/ACT/Deucalion/ArcDPS 的可借鉴设计与 ArkDPS 差距。
 
+## 发布
+
+- [Windows 候选构建和发布验收](windows-release.md) — 便携安装/升级、精确产物、离线自检、CI 与独立实机矩阵。
+- [变更日志](../CHANGELOG.md) — 候选版本的变化与交付状态。
+
 ## 实现契约
 
 - [连接配置与 MuMu 自动检测](connection.md) — 连接目标、版本门禁和诊断。

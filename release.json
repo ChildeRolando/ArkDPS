@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0-rc.1",
+  "channel": "candidate",
+  "platform": "windows-x64",
+  "game_version": "2.7.91",
+  "emulator": "MuMu Player 12",
+  "frida_version": "17.26.1",
+  "distribution": "portable-zip",
+  "public_release_authorized": false
+}

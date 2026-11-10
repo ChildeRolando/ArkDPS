@@ -4,3 +4,5 @@ acceptance/capabilities/*.jsonl -text whitespace=blank-at-eol,blank-at-eof,space
 acceptance/recovery/*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 acceptance/recovery/*.jsonl -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 acceptance/recovery/*.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# Keep the checked-in upstream notice byte-identical to its recorded SHA-256.
+assets/licenses/*.txt -text

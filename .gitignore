@@ -10,3 +10,7 @@ acceptance/battle-candidates.json
 .env
 .env.*
 !.env.example
+.venv-build/
+dist/
+build/
+*.spec

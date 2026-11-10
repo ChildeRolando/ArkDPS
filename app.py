@@ -1,6 +1,7 @@
 """Native multi-panel statistics GUI; one shared read-only collection session."""
 import argparse
 import json
+import math
 import queue
 import socket
 import sys
@@ -775,6 +776,11 @@ class App:
 
 def main():
     parser=argparse.ArgumentParser()
+    parser.add_argument('--self-test', type=Path, metavar='NEW_OUTPUT_DIR',
+                        help='offline native-window and bundle verification; no game access')
+    parser.add_argument('--acceptance-output', type=Path, help='new directory for real GUI measurements')
+    parser.add_argument('--acceptance-seconds', type=float, default=60)
+    parser.add_argument('--acceptance-panels', type=int, choices=(1, 3), default=1)
     parser.add_argument('--adb', default=None,
                         help='override the saved adb path for this launch')
     parser.add_argument('--serial', default=None,
@@ -799,6 +805,12 @@ def main():
     parser.add_argument('--require-events',action='store_true',
                         help='fail acceptance capture if event coverage is unavailable')
     args=parser.parse_args()
+    if args.self_test is not None:
+        from release_smoke import run_smoke
+        raise SystemExit(run_smoke(args.self_test))
+    if args.acceptance_output and (args.capture_seconds or
+            not math.isfinite(args.acceptance_seconds) or args.acceptance_seconds <= 0):
+        parser.error('GUI acceptance requires a finite positive duration and no headless capture')
     # Headless capture must not migrate/quarantine GUI-only layout files or
     # consume diagnostics that can only be displayed by the next GUI launch.
     layout_store = loaded_layout = None
@@ -850,10 +862,24 @@ def main():
                         lambda action: app.events.put(('tray', action)),
                         icon_path=ROOT / 'assets' / 'arkdps.ico')
 
-    App(root, args, layout_store=layout_store,
+    app = App(root, args, layout_store=layout_store,
         connection_store=ConnectionConfigStore(), tray_factory=tray_factory,
         layout_load=loaded_layout)
+    probe = None
+    if args.acceptance_output:
+        from release_probe import LiveProbe
+        try:
+            probe = LiveProbe(app, args.acceptance_output, args.acceptance_seconds,
+                              args.acceptance_panels, args.expect_head)
+        except Exception:
+            app.quit()
+            while app.shutdown_report is None:
+                root.update()
+                time.sleep(.03)
+            raise
     root.mainloop()
+    if probe is not None:
+        probe.finish()
 
 
 if __name__=='__main__':
