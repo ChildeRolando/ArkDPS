@@ -75,7 +75,7 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 - 使用本地 SDK 10.0.403 实际构建 `net10.0-windows`，0 warning / 0 error；源版原生 WPF 验收通过，包含真实错误版本 worker 拒绝、握手后模拟 worker 崩溃与非零退出可观测、卡住响应的 UI 过期提示、双皮肤 HWND/位置/尺寸/透明度/锁定不变、私有窗口点击路由、合成换局及新进程配置恢复。
 - 自包含发布及带 Python 3.12.10 / Frida 17.26.1 的单包已实际构建和离线清洁解压运行，完成 v1 配置升级、显式 legacy 回退再进入 WPF；未删除 Tk 回退入口。精确候选、包摘要和截图摘要随构建回执交付。
 - 继承的 V1 红/蓝/紫/白语义色未通过通用分类色校验（蓝/紫的 CVD/正常视觉距离及白色 lightness/chroma）；不擅自改写固定语义色，也不声称色盲安全，提供文字图例和精确明细。
-- 实机项已不再等待设备交接：候选 `f7d59d9` 已在 MuMu（真实 collector、96 DPI、主屏 1920×1080 + 负坐标副屏）完成穿透点击、物理托盘双击、真实换局/历史隔离、双皮肤切换与导出，结果见下节。混合 DPI（125/150/200%）仍无硬件可测，退出/重启项仍未通过。
+- 实机项已不再等待设备交接：候选 `f7d59d9` 已在 MuMu（真实 collector、96 DPI、主屏 1920×1080 + 负坐标副屏）完成穿透点击、物理托盘双击、真实换局/历史隔离、双皮肤切换与导出；`f7d59d9` 上失败的退出/重启在修复候选 `0ca9f18` 上通过。混合 DPI（125/150/200%）仍无硬件可测。
 
 ## PR #21 当前候选离线复验（2026-11-10）
 
@@ -94,7 +94,22 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 | Windows 通知区物理托盘双击恢复 | **PASS** | `real-tray-receipt.json`：主窗隐藏时采集继续（帧 1479→1537），原生双击真实 Shell 图标后恢复，解锁后 HUD 恢复命中 |
 | 真实换局 + 历史/HUD 隔离 | **PASS** | `live-history-isolation-receipt.json`：第二局开始后 HUD 跟随新局，正在查看的第一局战绩与归档未被替换 |
 | 实机双皮肤切换、历史 JSON 与完整排行 PNG 导出 | **PASS** | `08-lone-trail-live-*.png`、`11-original-history-live-*.png`、`real-export-receipt.json` |
-| 正常退出 / 主题重启恢复 | **未通过** | 点击「退出」后 18 秒主进程仍未结束，重启恢复无法执行 |
+| 正常退出 / 主题重启恢复 | **f7d59d9 未通过；0ca9f18 通过** | 见“退出有界性修复”与“修复后实机复验” |
 | 混合 DPI（125/150/200%） | **未覆盖** | 仅有 96 DPI 硬件 |
 
-退出失败的实际记录：20:46:12.81 点击「退出」，`layout.json` 已写盘；worker 审计在同一秒内写入 `{"kind":"stopped","data":{}}` 且无 `cleanup_errors`，说明采集清理已完成，问题在 WPF 退出路径。该路径有两处可复现的有界性缺陷：`BridgeClient.DisposeAsync` 用 `Process.WaitForExitAsync()` 等待 worker，它同时等待被重定向的 stderr 管道 EOF，实测中存活孙进程持有该继承句柄时该等待永不返回（已用模拟 worker 在离线验收中稳定复现）；清理失败提示又是模态 `MessageBox`，会直接阻塞 `Application.Shutdown`。修复后退出改为有界等待（quit 5 秒、进程退出 10 秒），超时写诊断并仅结束本进程持有的子进程句柄（不按进程名清理），退出期间不再弹模态框。正常退出与主题重启恢复须在修复后的精确新 head 上重跑实机项，本次不宣称其通过。
+退出失败的实际记录：20:46:12.81 点击「退出」，`layout.json` 已写盘；worker 审计在同一秒内写入 `{"kind":"stopped","data":{}}` 且无 `cleanup_errors`，说明采集清理已完成，问题在 WPF 退出路径。该路径有两处可复现的有界性缺陷：`BridgeClient.DisposeAsync` 用 `Process.WaitForExitAsync()` 等待 worker，它同时等待被重定向的 stderr 管道 EOF，实测中存活孙进程持有该继承句柄时该等待永不返回（已用模拟 worker 在离线验收中稳定复现）；清理失败提示又是模态 `MessageBox`，会直接阻塞 `Application.Shutdown`。修复后退出改为有界等待（quit 5 秒、进程退出 10 秒），超时写诊断并仅结束本进程持有的子进程句柄（不按进程名清理），退出期间不再弹模态框。
+
+## 退出有界性修复（候选 0ca9f18）
+
+- `BridgeClient.DisposeAsync` 不再使用 `Process.WaitForExitAsync()`：该 API 同时等待重定向 stderr 的 EOF，存活孙进程持有继承句柄时会永久阻塞。改为有界等待进程本身退出（quit 5 秒、退出 10 秒）；超时写 `[exit]` 诊断到 worker 日志，只 `Kill()` 本进程持有的子进程句柄（不按名称清理），随后仍继续关闭。
+- `MainWindow.Quit` 以 20 秒看门狗兜底，清理失败只写 `runtime/wpf-quit.log`，退出期间不再弹模态 `MessageBox`。
+- 离线验收新增两条回归并通过：`worker that ignores quit is ended by handle inside the bounded exit window and logged`、`exit follows the worker process, not EOF on a pipe held by a surviving grandchild`；`tests/test_wpf_contract.py` 同时锁定“不得使用无界 `WaitForExitAsync()`、Quit 路径不得出现 MessageBox”。
+- 实际运行：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests -q --assert=plain` **679 passed**；`acceptance/verify_wpf.py` 生成 `PASS_OFFLINE_WPF`（首次启动 + 新进程重启恢复）；`dotnet publish -r win-x64 --self-contained` 成功，0 warning / 0 error。
+
+### 修复后实机复验（候选 0ca9f18）
+
+同一 MuMu 实例、同一真实 collector（`--adb` 指向 MuMu adb、`--serial 127.0.0.1:16384`、`--frida-remote 127.0.0.1:27043`），状态页显示 `已连接 127.0.0.1:16384 · 游戏 2.7.91`。
+
+- **正常退出**：点击主窗「退出」后进程 250 ms 结束（重启后的第二次为 281 ms），退出码 0；worker 审计最后一条为 `{"kind":"stopped","data":{}}`，无 `cleanup_errors`；退出后无 `desktop_bridge.py` 进程、27380 端口无监听；`runtime/wpf-quit.log` 未生成（无清理失败）。
+- **主题重启恢复**：先在 `孤星 · LONE TRAIL` 会话切到「原始界面」并退出；新进程从同一 `layout.json` 启动后皮肤为「原始界面」、HUD 物理几何 `[1220,200,455,485]`、透明度 `0.83`、扩展样式 `0x8080128`（`WS_EX_TRANSPARENT|WS_EX_NOACTIVATE`，锁定）全部一致。
+- **边界**：本轮退出/重启复验时的 collector 处于“已连接、等待战斗数据”状态，没有进行中的战斗；`f7d59d9` 失败那次的 worker 审计显示清理已完成，退出等待与战斗内采集数据无关。战斗中的退出未在本轮复测。
