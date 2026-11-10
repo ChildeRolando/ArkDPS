@@ -20,7 +20,7 @@ from uuid import uuid4
 
 from battle_history import BattleHistory, BattleRecord
 from battle_lifecycle import BattleRuntime
-from battle_share import json_bytes, record_complete, record_labels, write_export
+from battle_share import json_bytes, record_complete, record_labels, record_stage, write_export
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
@@ -29,6 +29,7 @@ from event_capture import CaptureRetry
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
 from panel_model import PanelConfig, render_panel, rows_from_statistics
+import stage_names
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
@@ -68,7 +69,8 @@ class DesktopState:
         self.connection_store = ConnectionConfigStore(directory / 'connection.json')
         config = self.connection_store.load()
         self.connection = config.config
-        self.warnings = [x for x in (loaded.warning, config.warning) if x]
+        self.warnings = [x for x in (loaded.warning, config.warning,
+                                     stage_names.catalog().warning) if x]
         self.history = BattleHistory(directory / 'history')
         self.records = {}
         self.selected = None
@@ -152,14 +154,22 @@ class DesktopState:
         history = []
         for record in self.records.values():
             labels = record_labels(record)
+            stage = record_stage(record)
             names = ' '.join(row.get('name', '') for row in record.statistics['rows'].values())
+            # Readable labels and the native id both match, so old records stay searchable.
+            search = ' '.join(labels) + ' ' + names + ' ' + (stage.raw or '')
             history.append(dict(battle_id=record.battle_id, labels=labels,
-                                search=(' '.join(labels) + ' ' + names).casefold()))
+                                stage=stage.label, stage_detail=stage.detail,
+                                search=search.casefold()))
         selected = None
         if self.selected:
+            selected_stage = record_stage(self.selected)
             selected = dict(battle_id=self.selected.battle_id, labels=record_labels(self.selected),
+                            stage=selected_stage.label, stage_detail=selected_stage.detail,
                             view=self.view(self.history_config, self.selected.statistics,
                                            record_complete(self.selected)), record=self.selected.to_dict())
+        live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
+        has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     status=status, status_text=label, error=self.error,
@@ -167,7 +177,9 @@ class DesktopState:
                     event_text=event_label(self.event_status, self.event_error),
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
-                    stage=(sample.get('battle_metadata') or {}).get('stage_id'),
+                    stage=live_stage.label if has_live_stage else None,
+                    stage_raw=live_stage.raw, stage_detail=live_stage.detail,
+                    stage_known=live_stage.known,
                     panels=[self.view(p, stats, sample.get('statistics_complete', False)) for p in self.layout.panels],
                     history=history, history_selected=selected, history_notice=self.history_notice)
 

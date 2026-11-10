@@ -10,6 +10,8 @@
 - 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建唯一审计 JSONL 文件，不追加到先前运行的记录。
 - Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。旧 Tk 模块仅供 `python app.py --legacy-tk` 和既有回归诊断使用，正常启动不创建 Tk 窗口。命令行 `--capture-seconds` 路径不变。
 
+关卡名称由 Python 统一解析：`stage_names.py` 读取随包的 `vendor/ark-source/game_data/catalogs/stage_names.json`，把原生 `stage_id`（如 `Obt/Main/level_main_01-07`）翻译成玩家可读名称（`1-7`）。实时 `stage`、历史 `labels[0]`、PNG 与导出的 `display.stage` 共用同一解析；原始 `stage_id` 原样保留在历史、`stage_raw`、`stage_detail` 与导出中，UI 不改写它。目录缺失、无法解析或与 manifest `data_version` 不一致时，`warnings`/`history_notice` 明确提示版本问题并退回可读短码（如 `rogue6_1-3`），不显示内部路径，也不影响战绩读取。
+
 合入 ARK-14 发布工具后，`app.py --self-test <新目录>` 先进入旧 Tk 离线自检；`--acceptance-output` 先验证有限正时长，再进入旧 Tk 测量。PyInstaller 冻结的旧 `ArkDPS.exe` 仍用 Tk，不尝试构建或启动源码 WPF；普通源码入口和 WPF 同包入口保持不变。旧构建/自检契约见 [Windows 旧候选](windows-release.md)，不继承其真实设备验收结论。
 
 ## 唯一协议：stdio JSON Lines v1

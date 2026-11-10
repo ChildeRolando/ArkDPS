@@ -14,6 +14,7 @@ import pytest
 from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, serve
 from layout_store import LayoutStore
 from test_battle_history import record
+from test_battle_share import exported_record
 from test_gui import sample
 
 
@@ -153,7 +154,7 @@ def test_export_exact_json_and_archive_protection(tmp_path):
     original = record()
     target = tmp_path / 'share.json'
     cmd(state, 'export', format='json', path=str(target), record=original.to_dict())
-    assert json.loads(target.read_text('utf-8')) == original.to_dict()
+    assert exported_record(target.read_text('utf-8'))[1] == original.to_dict()
     with pytest.raises(FileExistsError):
         cmd(state, 'export', format='json', path=str(target), record=original.to_dict())
     with pytest.raises(ValueError, match='历史目录'):

@@ -19,6 +19,7 @@ internal sealed class HistoryItem
     public string Id=>Data.Text("battle_id");
     private string[] Labels=>Data.Get("labels").Items().Select(x=>x.Text()).ToArray();
     public string Stage=>Labels.ElementAtOrDefault(0)??"关卡未知";
+    public string StageDetail=>Data.Text("stage_detail");
     public string Summary=>string.Join(" · ",Labels.Skip(1).Take(3));
     public string Date=>Labels.LastOrDefault()??"";
 }
@@ -117,6 +118,7 @@ public partial class MainWindow : Window
         Status.Text=state.Text("status_text");EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         Stage.Text=state.Text("stage").Length>0 ? state.Text("stage") : "关卡未知";
+        Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
         var seconds=state.Get("game_time");double t=seconds.TryNumber();Clock.Text=seconds.ValueKind==JsonValueKind.Number ? $"游戏时间 {(int)t/60:00}:{t%60:00.0}" : "游戏时间 —";
         Footer.Text=state.Text("connection_text");
         if(App.BridgeArguments.Contains("--offline")) ModeLabel.Text="离线验收 · 合成数据 · 不访问游戏";
@@ -243,7 +245,8 @@ public partial class MainWindow : Window
         HistoryNotice.Text=State.Text("history_notice");
         if(!available)return;
         if(historyBattle!=selected.Text("battle_id")){historyBattle=selected.Text("battle_id");HistoryInspector.Reset();HistoryPanel.ClearSelection();}
-        HistorySummary.Text="历史 · "+string.Join(" · ",selected.Get("labels").Items().Select(x=>x.Text()))+"\n所选副本独立于实时战斗；实时 HUD 继续跟随新局。";
+        HistorySummary.Text="历史 · "+string.Join(" · ",selected.Get("labels").Items().Select(x=>x.Text()))+"\n"+
+            selected.Text("stage_detail")+"\n所选副本独立于实时战斗；实时 HUD 继续跟随新局。";
         HistoryPanel.Update(selected.Get("view"));HistoryInspector.Update(selected.Get("view").Get("source"));
     }
     private void ApplyHistoryFilter()

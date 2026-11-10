@@ -38,6 +38,10 @@ Arknights / 上海鹰角网络科技有限公司，仅用于学习与交流；�
 
 ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff758505380322c0cf519fe` 的 `tools/stage_global_state/memory.py`，保留其有界精确只读实现；包入口精简为该子集的说明，不导入未随附的 Timeline 应用。`tools/enemy_health/battle_lifecycle.py` 的读取结果增加已读取的原生 `state` 字段，供产品区分初始化、运行和结束，并增加经过对象类型及字符串槽稳定性校验的可选 `LevelData.levelId` 元信息；其余单例与场景读守卫保留。未验证的胜负、演习和退出原因不推断。新增产品观察代次、队列交接及视图契约位于仓库根目录 `battle_lifecycle.py`，没有复制上游完整应用。
 
+## 关卡名称目录（ARK-26）
+
+`vendor/ark-source/game_data/catalogs/stage_names.json` 由 `tools/build_stage_names.py` 在构建期生成，运行时只读取该紧凑目录，不访问游戏文件。数据来自 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) 固定提交 `6f63c14e27b847ef74b53b00fe51fc322b3cd7ff` 的 `zh_CN/gamedata/excel/stage_table.json`、`roguelike_topic_table.json` 与 `zone_table.json`；生成工具核验三份文件的 SHA-256 与大小，目录内记录来源提交及逐文件摘要。上游数据同样来自游戏客户端解包，版权归 Hypergryph / 上海鹰角网络科技有限公司，仅用于学习与交流；本项目未使用其程序代码，也不代表游戏厂商认可。目录的 `bundle_data_version` 与本仓库 `vendor/ark-source/game_data/manifest.json` 的 `data_version` 对齐；数据包升级而未重建目录时，应用显式提示版本不匹配并退回可读短码，不静默显示内部路径。
+
 
 ## Windows 桌面运行时分发（ARK-19）
 

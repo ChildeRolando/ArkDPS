@@ -26,7 +26,8 @@ BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'bat
            'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py',
            'connection.py', 'event_capture.py', 'event_observer.py', 'event_stream.py',
            'character_catalog.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
-           'roster.py', 'snapshot_adapter.py', 'stats_core.py', 'event_probe_android2791.js')
+           'roster.py', 'snapshot_adapter.py', 'stage_names.py', 'stats_core.py',
+           'event_probe_android2791.js')
 
 
 def digest(path):

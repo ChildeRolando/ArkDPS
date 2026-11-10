@@ -10,6 +10,12 @@ from panel_model import PanelConfig, Category
 from test_battle_history import record
 
 
+def exported_record(payload):
+    """Split the export into its display-only block and the versioned record."""
+    data = json.loads(payload)
+    return data.pop('display'), data
+
+
 def test_export_is_exact_versioned_record_with_unknown_zero_precision_and_coverage():
     data = record(practice=None, outcome='unknown').to_dict()
     row = data['statistics']['rows']['a']
@@ -18,7 +24,9 @@ def test_export_is_exact_versioned_record_with_unknown_zero_precision_and_covera
                event_coverage_complete=False, sources=['a', 'token_a'])
     data['event_error'] = 'sequence gap'
     original = BattleRecord.from_dict(data)
-    assert json.loads(json_bytes(original)) == data
+    display, exported = exported_record(json_bytes(original))
+    assert exported == data
+    assert display['stage']['stage_name'] == record_labels(original)[0]
     assert original.to_dict() == data
     assert '结果未知' in record_labels(original)
     view = record_view(original, PanelConfig(category=Category.SHIELD))
@@ -84,7 +92,9 @@ def test_export_to_missing_or_non_directory_parent_preserves_record(tmp_path):
     with pytest.raises(OSError):
         write_export(target, json_bytes(original), history_directory=tmp_path / 'history')
     assert not target.exists()
-    assert json.loads(json_bytes(original)) == original.to_dict()
+    display, exported = exported_record(json_bytes(original))
+    assert exported == original.to_dict()
+    assert display['stage']['stage_id'] == original.metadata['stage_id']
 
 
 def test_historical_shares_use_frozen_coverage_not_optional_compatibility_flag():

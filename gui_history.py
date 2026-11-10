@@ -4,9 +4,11 @@ from tkinter import ttk, filedialog, messagebox, font
 
 from ui_theme import refresh_surfaces, theme_key
 
-from battle_share import record_labels, record_view, record_complete, json_bytes, export_path, write_export
+from battle_share import (record_labels, record_stage, record_view, record_complete,
+                         json_bytes, export_path, write_export)
 from gui_panel import StatisticPanel, BG, SECONDARY
 from panel_model import PanelConfig
+import stage_names
 
 
 class HistoryWindow(tk.Toplevel):
@@ -127,8 +129,11 @@ class HistoryWindow(tk.Toplevel):
         self.record_search = {}
         for key, record in self.records.items():
             labels = record_labels(record)
+            stage = record_stage(record)
             names = ' '.join(row.get('name', '') for row in record.statistics['rows'].values())
-            self.record_search[key] = (labels, (' '.join(labels) + ' ' + names).casefold())
+            # Keep the native id searchable so older habits and raw ids still match.
+            self.record_search[key] = (labels, (' '.join(labels) + ' ' + names + ' '
+                                                + (stage.raw or '')).casefold())
         self.filter_records()
         selected = any(self.selected and r.battle_id == self.selected.battle_id
                        for r in self.records.values())
@@ -138,6 +143,8 @@ class HistoryWindow(tk.Toplevel):
         if result.diagnostics:
             text += f'\n读取诊断 {len(result.diagnostics)} 条：' + '；'.join(
                 f'{d.code}: {d.message[:120]}' for d in result.diagnostics[:3])
+        if stage_names.catalog().warning:
+            text += '\n' + stage_names.catalog().warning
         self.notice.set(text)
 
     def filter_records(self):
@@ -173,7 +180,8 @@ class HistoryWindow(tk.Toplevel):
         if not reset:
             return
         self.selected = record
-        self.summary.set('历史 · ' + ' · '.join(record_labels(record)) + '\n'
+        self.summary.set('历史 · ' + ' · '.join(record_labels(record)) + '\n' +
+                         record_stage(record).detail + '\n'
                          '伤害含过量；治疗含过量；护盾仅实际吸收；近期为终点前已观察窗口。\n'
                          '事件：' + record.to_dict()['event_status'] + ' · ' +
                          (record.to_dict()['event_error'] or '无额外诊断'))

@@ -17,7 +17,7 @@ from test_battle_history import record
 
 def seed(directory):
     directory.mkdir(parents=True, exist_ok=True)
-    original = record(stage_id='OF-8 · 合成验收', practice=True, outcome='victory').to_dict()
+    original = record(stage_id='Obt/Main/level_main_01-07', practice=True, outcome='victory').to_dict()
     row = original['statistics']['rows']['a']
     rows = {}
     names = [('char_002_amiya', '阿米娅'), ('char_017_huang', '煌'),
@@ -43,9 +43,10 @@ def seed(directory):
     archive = BattleRecord.from_dict(original)
     history = BattleHistory(directory / 'history')
     history.save(archive)
-    history.save(record(1, stage_id='OF-2 · 合成验收', practice=None, outcome='unknown'))
+    history.save(record(1, stage_id='Obt/Roguelike/RO6/level_rogue6_1-3',
+                        practice=None, outcome='unknown'))
     sample = dict(battle_id='synthetic-live', session='synthetic-live', frame=360,
-        game_time=12., battle_metadata={'stage_id': 'OF-8 · 合成验收'},
+        game_time=12., battle_metadata={'stage_id': 'Activities/ACT3D0/level_act3d0_08'},
         captured_monotonic=time.monotonic(), statistics_complete=True,
         event_status='failed', event_error='合成样本 · 未连接游戏',
         statistics=original['statistics'], rows=[{'id':'legacy','damage':999999999}])

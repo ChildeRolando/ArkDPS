@@ -11,6 +11,7 @@ from gui_history import HistoryWindow
 from panel_model import Category, Ranking, RateBasis
 from statistics_screenshot import statistics_png
 from test_battle_history import record
+from test_battle_share import exported_record
 from test_gui import gui, native_root, sample, publish
 
 
@@ -95,14 +96,14 @@ def test_json_dialog_freezes_selection_and_reports_write_failure(browser, tmp_pa
         return str(target)
     with patch('gui_history.filedialog.asksaveasfilename', side_effect=dialog):
         browser.export_json()
-    assert json.loads(target.read_bytes()) == original
+    assert exported_record(target.read_bytes())[1] == original
     with patch('gui_history.filedialog.asksaveasfilename', return_value=str(target)), \
          patch('gui_history.messagebox.askyesno', return_value=True), \
          patch('gui_history.write_export', side_effect=OSError('disk full')), \
          patch('gui_history.messagebox.showerror') as error:
         browser.export_json()
     assert 'disk full' in error.call_args.args[1]
-    assert json.loads(target.read_bytes()) == original
+    assert exported_record(target.read_bytes())[1] == original
     assert len(browser.history.list_recent().records) == 4
 
 
@@ -125,7 +126,7 @@ def test_confirmed_ui_replacement_preserves_record_precision(browser, tmp_path):
          patch('gui_history.messagebox.askyesno', return_value=True) as confirm:
         browser.export_json()
     confirm.assert_called_once()
-    assert json.loads(target.read_bytes()) == browser.selected.to_dict()
+    assert exported_record(target.read_bytes())[1] == browser.selected.to_dict()
 
 
 def decode_png(payload):
