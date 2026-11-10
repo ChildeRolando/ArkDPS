@@ -5,7 +5,9 @@ from pathlib import Path
 import tempfile
 
 from battle_history import BattleRecord
-from panel_model import render_panel, rows_from_statistics
+from panel_model import (DIAGNOSTIC_LABELS, render_panel, rows_from_statistics,
+                         team_status)
+from source_classification import classify_unmapped_source
 import stage_names
 
 
@@ -27,18 +29,109 @@ def record_stage(record):
     return stage_names.resolve(record.metadata['stage_id'])
 
 
+def _legacy_totals_complete(stats, sample):
+    """Infer cumulative-totals completeness for pre-ARK-24 records.
+
+    Earlier builds cleared every source's ``counter_snapshot_complete`` at the
+    battle boundary, so a False flag on an ended record does not by itself mean
+    a collection gap. Fall back only on positive evidence: the frozen result is
+    ended, no diagnostic reports an unknown/incomplete source, the final native
+    sample is a complete FINISHED (state 3) frame, and every row's sources were
+    present in that sample with both cumulative counters.
+    """
+    if stats.get('ended') is not True:
+        return False
+    if any(stats.get(key) for key, _ in DIAGNOSTIC_LABELS):
+        return False
+    guard = sample.get('guard')
+    guard = guard if isinstance(guard, dict) else {}
+    native_rows = sample.get('rows')
+    if (sample.get('state') != 3 or guard.get('complete') is not True
+            or not isinstance(native_rows, list)):
+        return False
+    native_ids = {item.get('id') for item in native_rows if isinstance(item, dict)}
+    for row in stats['rows'].values():
+        if row.get('damage') is None or row.get('healing') is None:
+            return False
+        if not set(row.get('sources') or ()) <= native_ids:
+            return False
+    return True
+
+
+def _native_output(sample):
+    """Last native cumulative rows, used only to label unmapped sources."""
+    rows = sample.get('rows')
+    if not isinstance(rows, list):
+        return {}
+    return {item.get('id'): item for item in rows if isinstance(item, dict)}
+
+
+def _legacy_non_team(stats, native):
+    """Move recognised non-team keys out of a pre-ARK-24 unknown list.
+
+    Old records classified nothing, so a known map-device key was written as
+    unknown and blocked shares forever. The classification rule is pure over
+    the statistic key; output amounts come from the record's final native rows.
+    """
+    unknown = stats.get('unknown_sources') or []
+    if not isinstance(unknown, list):
+        return
+    blocked = set()
+    for key in ('unmapped_tokens', 'ambiguous_sources', 'mapping_conflicts'):
+        blocked.update(item for item in stats.get(key) or () if isinstance(item, str))
+    remaining, moved, output = [], [], {}
+    for cid in unknown:
+        if (isinstance(cid, str) and cid not in blocked
+                and classify_unmapped_source(cid) is not None):
+            moved.append(cid)
+            row = native.get(cid) or {}
+            damage, healing = row.get('damage'), row.get('healing')
+            valid = (isinstance(damage, (int, float)) and damage >= 0
+                     and isinstance(healing, (int, float)) and healing >= 0)
+            output[cid] = {'damage': damage if valid else None,
+                           'healing': healing if valid else None}
+        else:
+            remaining.append(cid)
+    stats['unknown_sources'] = remaining
+    stats['non_team_sources'] = sorted(moved)
+    stats['non_team_output'] = output
+
+
+def record_statistics(record):
+    """Return frozen statistics with totals completeness resolved for display.
+
+    New records carry ``totals_complete`` and the source classification from
+    the statistics core. Legacy records are normalized from the evidence
+    above, including reclassifying recognised non-team keys; missing totals
+    stay incomplete instead of being zero-filled.
+    """
+    stats = record.statistics
+    sample = record.to_dict().get('last_sample') or {}
+    if 'non_team_sources' not in stats:
+        _legacy_non_team(stats, _native_output(sample))
+    if 'totals_complete' not in stats:
+        complete = _legacy_totals_complete(stats, sample)
+        stats['totals_complete'] = complete
+        if complete:
+            for row in stats['rows'].values():
+                row['counter_snapshot_complete'] = True
+    return stats
+
+
+def record_status(record):
+    return team_status(record_statistics(record))
+
+
 def record_view(record, config):
-    data = record.to_dict()
-    return render_panel(config, rows_from_statistics(data['statistics']), team_complete=record_complete(record))
+    complete, reason, note = record_status(record)
+    return render_panel(config, rows_from_statistics(record_statistics(record)),
+                        team_complete=complete, team_reason=reason, team_note=note)
 
 
 def record_complete(record):
     # Same completeness rule as BattleRuntime.display_sample, applied to the frozen
     # result. last_sample is native input, not the live compatibility projection.
-    stats = record.statistics
-    return (not any(stats[key] for key in ('unknown_sources', 'unmapped_tokens',
-                'ambiguous_sources', 'mapping_conflicts', 'missing_fields')) and
-            all(row['counter_snapshot_complete'] for row in stats['rows'].values()))
+    return record_status(record)[0]
 
 
 def json_bytes(record):

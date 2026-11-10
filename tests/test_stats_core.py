@@ -352,3 +352,68 @@ def test_overkill_with_unrecognised_damage_type_keeps_total_but_hides_types():
     assert row['overkill_coverage_complete'] is True
     assert row['overkill_type_complete'] is False
     assert row['overkill_damage_by_type'] is None
+
+
+def test_settlement_keeps_totals_complete_and_retires_rate_windows():
+    s = Statistics('battle', 0)
+    s.register_source('a', 'A')
+    s.register_source('b', 'B')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0},
+                   'b': {'damage': 200, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 150, 'healing': 0},
+                   'b': {'damage': 250, 'healing': 0}})
+    assert s.result()['totals_complete'] is True
+    s.finish(1)
+    s.correct_final_totals({'a': {'damage': 160, 'healing': 0},
+                            'b': {'damage': 250, 'healing': 0}})
+    result = s.result()
+    assert result['ended'] is True and result['totals_complete'] is True
+    assert result['rows']['A']['damage'] == 160
+    for row in result['rows'].values():
+        assert row['counter_snapshot_complete'] is True
+        assert row['recent_damage'] is None and row['recent_healing'] is None
+
+
+def test_collection_gap_requires_a_new_complete_snapshot():
+    s = Statistics('battle', 0)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 150, 'healing': 0}})
+    s.invalidate_snapshots()
+    result = s.result()
+    assert result['totals_complete'] is False
+    assert result['rows']['A']['counter_snapshot_complete'] is False
+    assert result['rows']['A']['damage'] == 150  # retained, never zero-filled
+    s.snapshot(2, {'a': {'damage': 220, 'healing': 0}})
+    assert s.result()['totals_complete'] is True
+    assert s.result()['rows']['A']['damage'] == 220
+
+
+def test_end_seals_the_retained_total_of_a_source_that_left():
+    s = Statistics('battle', 0)
+    s.register_source('host', 'H')
+    s.register_source('token', 'H')
+    s.snapshot(0, {'host': {'damage': 100, 'healing': 0},
+                   'token': {'damage': 300, 'healing': 0}})
+    s.snapshot(1, {'host': {'damage': 140, 'healing': 0}})
+    row = s.result()['rows']['H']
+    assert row['damage'] == 440 and row['counter_snapshot_complete'] is False
+    s.finish(1)
+    s.seal_totals()
+    row = s.result()['rows']['H']
+    assert row['damage'] == 440
+    assert row['counter_snapshot_complete'] is True
+    assert row['recent_damage'] is None
+
+
+def test_unrecovered_gap_is_not_sealed_by_the_battle_end():
+    s = Statistics('battle', 0)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 150, 'healing': 0}})
+    s.invalidate_snapshots()
+    s.finish(1)
+    s.seal_totals()
+    result = s.result()
+    assert result['totals_complete'] is False
+    assert result['rows']['A']['counter_snapshot_complete'] is False

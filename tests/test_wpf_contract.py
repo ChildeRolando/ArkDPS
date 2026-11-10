@@ -1,4 +1,5 @@
 """Build/distribution and display contract checks that run without WPF or ADB."""
+import ast
 import importlib.util
 from pathlib import Path
 import re
@@ -33,6 +34,42 @@ def test_runtime_unpack_refuses_traversal(tmp_path, member):
     with pytest.raises(ValueError, match='Unsafe archive'):
         package.unpack(source, tmp_path/'extract')
     assert not (tmp_path/'escape.py').exists()
+
+
+def bridge_import_closure():
+    """Repo-root modules a portable worker loads when it imports desktop_bridge."""
+    pending, seen = ['desktop_bridge'], set()
+    while pending:
+        module = pending.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        tree = ast.parse((ROOT/(module + '.py')).read_text('utf-8'))
+        for node in tree.body:  # module scope only: that is what an import runs
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                names = [node.module or '']
+            else:
+                continue
+            for name in names:
+                top = name.split('.')[0]
+                if (ROOT/(top + '.py')).is_file():
+                    pending.append(top)
+    return seen
+
+
+def test_portable_collector_ships_every_module_the_worker_imports():
+    # The portable package seeds collector/ from BACKEND alone and its embedded
+    # interpreter cannot see the repository, so a missing repo-root module fails
+    # the package smoke (`python -I -c "import desktop_bridge"`) and then the
+    # installed worker. Derive the requirement from the imports themselves so a
+    # new helper module cannot be forgotten here again.
+    missing = sorted(name + '.py' for name in bridge_import_closure()
+                     if name + '.py' not in package.BACKEND)
+    assert missing == []
+    for name in package.BACKEND:
+        assert (ROOT/name).is_file(), name
 
 
 def contrast(a, b):

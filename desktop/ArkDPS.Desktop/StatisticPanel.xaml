@@ -61,7 +61,7 @@
      <Rectangle Fill="#FFFFFF" Stroke="#687D83" Width="7" Height="7" Margin="0,0,4,0"/><TextBlock Text="真实" Foreground="{DynamicResource Muted}" FontSize="11"/>
      <TextBlock x:Name="OverkillLegend" Text="▨ 斜纹 = 按属性过量（事件）" Foreground="{DynamicResource Muted}" FontSize="11" Margin="14,0,0,0" Visibility="Collapsed"/>
     </WrapPanel>
-    <TextBlock x:Name="Coverage" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,7,0,0"/>
+    <TextBlock x:Name="Coverage" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,7,0,0" TextWrapping="Wrap"/>
    </StackPanel>
    <WrapPanel x:Name="HudControls" Grid.Row="4" Margin="16,0,16,12" Visibility="Collapsed">
     <Button x:Name="LockButton" Content="锁定 HUD" Click="ToggleLock" Padding="10,5"/>

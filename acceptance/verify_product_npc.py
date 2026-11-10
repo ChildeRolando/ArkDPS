@@ -29,10 +29,19 @@ for cid in ('char_391_rosmon', 'char_264_f12yin', 'char_502_nblade'):
     near(native[cid]['damage'], rows[cid]['damage'])
     if rows[cid]['sources']!=[cid]:
         raise ValueError('unrelated sources were merged into known NPC/player')
-if ('trap_024_npcsld' not in last['statistics']['unknown_sources']
-        or last['statistics_complete'] or any(r['share'] is not None for r in last['rows'])
-        or set(last['statistics']['unknown_present_unique_ids'])!={2,3,4,5}):
-    raise ValueError('unknown trap output was silently attributed or marked complete')
+# ARK-24: a recognised map trap is a non-team source. It must be classified
+# and named with its output, never attributed to a team row, and it must not
+# block the team denominator forever.
+trap = 'trap_024_npcsld'
+stats = last['statistics']
+if (trap not in stats['non_team_sources'] or trap in stats['unknown_sources']
+        or trap not in stats['non_team_output']
+        or any(trap in r['sources'] for r in rows.values())):
+    raise ValueError('known map trap was attributed to the team or left unclassified')
+near(stats['non_team_output'][trap]['damage'], native[trap]['damage'])
+if (not last['statistics_complete'] or any(r['share'] is None for r in last['rows'])
+        or set(stats['unknown_present_unique_ids'])!={2,3,4,5}):
+    raise ValueError('complete team counters did not produce shares or NPC presence was lost')
 present = [s for s in samples if s['statistics']['rows'].get('char_502_nblade',{}).get('present')]
 if not present:
     raise ValueError('unit was never present')
@@ -54,7 +63,8 @@ if any(r['data'].get('what')=='CopilotAction'
     raise ValueError('departure window contains a confounding retreat action')
 print(json.dumps(dict(head=summary['head'], samples=len(samples), first_frame=first['frame'],
     last_frame=last['frame'], npc_damage=native['char_391_rosmon']['damage'],
-    player_damage=native['char_264_f12yin']['damage'], unknown_trap_damage=native['trap_024_npcsld']['damage'],
+    player_damage=native['char_264_f12yin']['damage'],
+    classified_non_team_trap_damage=stats['non_team_output']['trap_024_npcsld']['damage'],
     departed_unit_damage=native['char_502_nblade']['damage'], departed_samples=len(departed),
     hp_reference_samples=len(hp), unknown_present_unique_ids=last['statistics']['unknown_present_unique_ids'],
     boundary='No same-frame HP=0 was captured for Yato; certify retained departure total, not an independently proven death mechanism.',

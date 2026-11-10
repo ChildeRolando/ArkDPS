@@ -370,6 +370,8 @@ class StatisticPanel(ttk.Frame):
             hint += chr(10) + '物理（红） / 法术（蓝） / 元素（紫） / 真实（白）；灰条表示分类未完整覆盖'
         if not self.view.share_known:
             hint += '\n' + self.view.share_reason
+        if not self.compact and self.view.share_note:
+            hint += '\n' + self.view.share_note
         if any(entry.incomplete for entry in self.view.entries):
             hint += '\n* 表示覆盖不完整；悬停可查看未舍入数值。'
         self.hint.set(hint)

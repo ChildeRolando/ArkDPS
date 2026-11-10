@@ -158,6 +158,8 @@ def statistics_png(parent, record, config, *, theme=None):
             text('物理（红） / 法术（蓝） / 元素（紫） / 真实（白）；灰条表示分类未完整覆盖。')
         if not view.share_known:
             text(view.share_reason)
+        if view.share_note:
+            text(view.share_note)
         text('快照覆盖（游戏秒）：' + repr(data['snapshot_intervals']) +
              '\n事件状态：' + data['event_status'] + '；原因：' + (data['event_error'] or '—'))
         if not view.entries:

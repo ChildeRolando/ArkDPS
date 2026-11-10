@@ -114,9 +114,38 @@ class Statistics:
         self.end_time = game_time
 
     def invalidate_snapshots(self):
-        """Mark a known collection gap; retain totals but restart rate windows."""
+        """Mark a known collection gap; retain totals but stop certifying them.
+
+        A gap is not a battle boundary. Retained cumulative values stay
+        displayable, but they cannot be called totals-complete until a later
+        complete snapshot re-establishes every source; rate windows restart
+        from the first reliable snapshot after the gap.
+        """
         for state in self.sources.values():
             state['continuous'] = False
+            state['totals_valid'] = False
+            state['totals_time'] = None
+
+    def invalidate_rates(self):
+        """Stop certifying rate windows without touching cumulative totals.
+
+        Used at a battle boundary: the ended battle's cumulative counters stay
+        authoritative while no rate can be observed past the endpoint.
+        """
+        for state in self.sources.values():
+            state['continuous'] = False
+
+    def seal_totals(self):
+        """Accept every reliable cumulative value as final for this battle.
+
+        A battle boundary is not a collection gap: a source that disappeared
+        from the final snapshot (for example a summon that left) cannot add
+        more output, so its last observed cumulative is final. Sources whose
+        totals were invalidated by an unrecovered gap stay unknown.
+        """
+        for state in self.sources.values():
+            if state['totals_valid']:
+                state['totals_time'] = self.now
 
     def invalidate_events(self, end_time=None):
         """Close event coverage at the last reliable game time."""
@@ -155,15 +184,20 @@ class Statistics:
         for source, state in self.sources.items():
             if source not in counters:
                 state['continuous'] = False
+                state['totals_time'] = None
         for source, values in counters.items():
             state = self.sources.get(source)
             if state is None:
-                state = self.sources[source] = {'values': dict(values), 'history': deque(), 'continuous': True, 'segment_start': game_time}
+                state = self.sources[source] = {'values': dict(values), 'history': deque(),
+                                                'continuous': True, 'segment_start': game_time,
+                                                'totals_valid': True, 'totals_time': game_time}
             elif not state['continuous']:
                 state['history'].clear()
                 state['continuous'] = True
                 state['segment_start'] = game_time
             state['values'] = dict(values)
+            state['totals_valid'] = True
+            state['totals_time'] = game_time
             history = state['history']
             entry = (game_time, dict(values))
             if history and history[-1][0] == game_time:
@@ -200,8 +234,12 @@ class Statistics:
             if prior is None or prior['values'] != values or not prior['continuous']:
                 self.sources[source] = {'values': dict(values),
                                         'history': deque([(self.end_time, dict(values))]),
-                                        'continuous': True, 'segment_start': self.end_time}
+                                        'continuous': True, 'segment_start': self.end_time,
+                                        'totals_valid': True, 'totals_time': self.end_time}
                 changed = True
+            else:
+                prior['totals_valid'] = True
+                prior['totals_time'] = self.end_time
         return changed
 
     def correct_final_totals(self, counters):
@@ -211,7 +249,8 @@ class Statistics:
         changed = any(source not in self.sources or self.sources[source]['values'] != values
                       for source, values in counters.items())
         self.settle_snapshot(counters)
-        self.invalidate_snapshots()
+        self.seal_totals()
+        self.invalidate_rates()
         return changed
 
     @staticmethod
@@ -372,8 +411,10 @@ class Statistics:
         for owner in owners:
             sources = [s for s, o in self.owners.items() if o == owner and s in self.sources]
             registered = [s for s, o in self.owners.items() if o == owner]
-            complete = all(s in self.sources and self.sources[s]['continuous'] and
-                           self.sources[s]['history'][-1][0] == self.now for s in registered)
+            # Totals completeness never borrows rate-window continuity: a
+            # settlement or battle boundary retires rates, not final counters.
+            complete = all(s in self.sources and self.sources[s]['totals_valid'] and
+                           self.sources[s]['totals_time'] == self.now for s in registered)
             overkill_known = (bool(self.event_coverage) and self.event_coverage_end is None
                               and not self.all_overkill_unknown
                               and owner not in self.overkill_incomplete)
@@ -434,7 +475,9 @@ class Statistics:
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())
         return {'session': self.session, 'game_time': self.now, 'ended': self.end_time is not None,
-                'coverage_start': self.start_time, 'rows': rows,
+                'coverage_start': self.start_time,
+                'totals_complete': all(row['counter_snapshot_complete'] for row in rows.values()),
+                'rows': rows,
                 'overkill_damage': (sum(row['overkill_damage'] for row in rows.values())
                                     if overkill_complete else None),
                 'overkill_coverage_complete': overkill_complete,

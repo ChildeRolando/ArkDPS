@@ -14,6 +14,7 @@ import uuid
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError
 from event_capture import LiveEventCapture, CaptureRetry
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
+from panel_model import team_status
 
 
 @dataclass(frozen=True)
@@ -428,7 +429,9 @@ class BattleSessions:
             if observation.generation != self.generation:
                 return False
             if self.adapter is not None and self.adapter.statistics.end_time is None:
-                self.adapter.on_gap()
+                # A vanished/finished battle is a boundary, not a read gap:
+                # keep the last complete counters as final totals.
+                self.adapter.on_end()
             if not self._archived and observation.reason == 'finished':
                 self._merge_terminal_metadata(observation)
             if observation.sample is not None and not self._archived:
@@ -540,10 +543,7 @@ class BattleRuntime:
         sample['native_rows'] = deepcopy(sample['rows'])
         total = sum(row['damage'] for row in result['rows'].values()
                     if row['damage'] is not None)
-        complete = (not any(result[key] for key in
-                            ('unknown_sources', 'unmapped_tokens', 'ambiguous_sources',
-                             'mapping_conflicts', 'missing_fields')) and
-                    all(row['counter_snapshot_complete'] for row in result['rows'].values()))
+        complete, _, _ = team_status(result)
         sample['rows'] = []
         for owner, row in result['rows'].items():
             if row['damage'] is None:

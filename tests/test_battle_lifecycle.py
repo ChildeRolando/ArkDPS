@@ -606,3 +606,40 @@ def test_recovered_terminal_pair_establishes_endpoint_after_a_failed_final_read(
     assert record['statistics']['rows']['a']['recent_damage'] is None
     assert record['last_sample']['frame'] == 11
     assert record['metadata']['final_sample_error']
+
+
+def test_normal_end_without_a_settlement_sample_keeps_final_totals():
+    from panel_model import PanelConfig, render_panel, rows_from_statistics
+
+    c, r, _ = begin()
+    c.advance()
+    r.poll(c)
+    c.lifecycle['battle'] = None
+    observation = r.poll(c)
+    assert observation.kind == 'end' and observation.reason == 'battle_absent'
+    archive, = r.sessions.pop_archives()
+    stats = archive['statistics']
+    assert stats['totals_complete'] is True
+    assert stats['rows']['a']['counter_snapshot_complete'] is True
+    assert stats['rows']['a']['recent_damage'] is None
+    view = render_panel(PanelConfig(), rows_from_statistics(stats))
+    assert view.share_known and view.share_reason == ''
+    assert view.entries[0].share == 1.
+
+
+def test_mid_battle_gap_then_end_keeps_totals_but_not_completeness():
+    from panel_model import team_status
+
+    c, r, _ = begin()
+    c.advance()
+    r.poll(c)
+    r.disconnected('read_unavailable')
+    c.lifecycle['battle'] = None
+    r.poll(c)
+    archive, = r.sessions.pop_archives()
+    stats = archive['statistics']
+    assert stats['rows']['a']['damage'] == 150.  # retained, not zero-filled
+    assert stats['totals_complete'] is False
+    assert stats['rows']['a']['counter_snapshot_complete'] is False
+    complete, reason, _ = team_status(stats)
+    assert complete is False and '累计快照不完整' in reason
