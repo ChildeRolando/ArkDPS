@@ -76,7 +76,7 @@ public partial class MainWindow
             "def send(c,ok=True,kind='state',result=None): print(json.dumps(dict(version=1,id=c['id'],ok=ok,kind=kind,result=result,error='expected' if not ok else None)),flush=True)",
             "hello=json.loads(sys.stdin.readline()); send(hello,kind='hello',result=dict(transport='stdio-jsonl'))",
             "first=json.loads(sys.stdin.readline()); send(first,ok=False,kind='error')",
-            "second=json.loads(sys.stdin.readline()); send(second)",
+            "second=json.loads(sys.stdin.readline()); send(second,kind='snapshot')",
             "quit=json.loads(sys.stdin.readline()); send(quit,kind='bye')"});
         var errorReply=new BridgeClient(errorRoot,App.Python,Array.Empty<string>());
         bool validErrorPreserved=false,recoveredAfterError=false;

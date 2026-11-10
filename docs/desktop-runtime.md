@@ -76,3 +76,10 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 - 自包含发布及带 Python 3.12.10 / Frida 17.26.1 的单包已实际构建和离线清洁解压运行，完成 v1 配置升级、显式 legacy 回退再进入 WPF；未删除 Tk 回退入口。精确候选、包摘要和截图摘要随构建回执交付。
 - 继承的 V1 红/蓝/紫/白语义色未通过通用分类色校验（蓝/紫的 CVD/正常视觉距离及白色 lightness/chroma）；不擅自改写固定语义色，也不声称色盲安全，提供文字图例和精确明细。
 - ARK-14 尚未交接设备，当前严格没有启动第二个实机采集器，也未操作 MuMu。WPF 的实际游戏点击、物理托盘双击和真实 DPI/游戏换局仍待设备释放后串行验收；这不是整票/首版发布完成声明。
+
+## PR #21 当前候选离线复验（2026-11-10）
+
+- 通过 `ARKDPS_DOTNET` 指向任务本地 .NET SDK 10.0.403，`net10.0-windows` 构建成功，0 warning / 0 error。
+- `python acceptance/verify_wpf.py --output <新建隔离目录>` 生成 `PASS_OFFLINE_WPF` 回执；源版 WPF 首次启动与重启恢复均通过。回执包含 stdio JSONL 错误边界、两个主题、合成历史/HUD、私有 HWND 点击路由及截图 SHA-256。
+- 首次运行暴露的是验收夹具错误：fake worker 对第二个 `snapshot` 请求返回了默认 `kind=state`；将夹具响应改为 `kind=snapshot` 后完整离线验收通过。该次失败不是产品 WPF/worker 故障。
+- 此验收只使用合成数据和模拟 worker；没有访问 MuMu、启动 collector 或证明游戏点击穿透。物理托盘双击仍为 `NOT VERIFIED`，实机与正式 Multica Review Loop 仍未闭环。
