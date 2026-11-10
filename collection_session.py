@@ -1,6 +1,7 @@
 """Shared GUI/CLI lifecycle; default event observation can degrade to snapshots."""
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 from battle_history import BattleRecord, HistoryError
 
@@ -10,12 +11,15 @@ from event_stream import StreamGap
 
 
 DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
+ROOT = Path(__file__).resolve().parent
 
 
 class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
-                 collector=None, observer_factory=None, history=None):
+                 collector=None, observer_factory=None, history=None,
+                 frida_server=None, manage_server=False, server_factory=None):
         self.collector = collector if collector is not None else Collector(adb, serial, log=log)
+        self.log = log
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
         self.observer = None
@@ -24,6 +28,7 @@ class CollectionSession:
         self.audit = audit or (lambda *_args: None)
         self.event_status = 'unavailable'
         self.event_error = None
+        self.event_diagnostic = None
         self.runtime = None
         self.closed = False
         self._resources_closed = False
@@ -34,6 +39,11 @@ class CollectionSession:
         self.history_error = None
         self._pending_history = None
         self._observer_generation = None
+        # Device-side event service owned by this session, never by another tool.
+        self.frida_server = frida_server
+        self.manage_server = bool(manage_server)
+        self.server_factory = server_factory
+        self.server = None
 
     def enable_lifecycle(self, runtime=None):
         """Use ordered battle generations in the GUI and capture entry points."""
@@ -59,18 +69,76 @@ class CollectionSession:
 
     def _attach_observer(self):
         self.event_status, self.event_error = 'attaching', None
+        self.event_diagnostic = None
         try:
+            endpoint = self.frida_remote
+            if self.manage_server:
+                endpoint = self._ensure_event_server()
             if self.observer_factory is None:
                 from event_observer import FridaEventObserver
                 self.observer_factory = FridaEventObserver
-            self.observer = self.observer_factory(self.collector, self.frida_remote)
+            self.observer = self.observer_factory(self.collector, endpoint)
             self.observer.start()
             self.event_status = 'ready'
-            self.audit('observer_ready', {'remote': self.frida_remote})
+            self.audit('observer_ready', {'remote': endpoint})
         except Exception as exc:
-            self.event_status, self.event_error = 'failed', str(exc)
-            self.audit('observer_error', {'reason': str(exc)})
+            message = getattr(exc, 'message', None) or str(exc)
+            self.event_status, self.event_error = 'failed', message
+            if self.server is not None:
+                diagnostic = self.server.diagnostic().as_dict()
+                if diagnostic.get('state') != 'ready':
+                    self.event_diagnostic = diagnostic
+            if self.event_diagnostic is None:
+                self.event_diagnostic = dict(state='failed', code='attach_failed',
+                                             message=message, hint='检查 Frida 端点后重试事件观测。',
+                                             steps={'attach': 'failed'})
+            self.audit('observer_error', {'reason': message,
+                                          **({'code': self.event_diagnostic.get('code'),
+                                              'steps': self.event_diagnostic.get('steps')}
+                                             if self.event_diagnostic.get('code') != 'attach_failed'
+                                             else {})})
             self._retire_observer()
+
+    def _ensure_event_server(self):
+        """Start (or reuse) the device-side frida-server this session owns."""
+        from event_service import FridaServerManager
+        if self.server is None:
+            factory = self.server_factory or FridaServerManager
+            self.server = factory(self.collector.adb_path, self.collector.serial,
+                                  server_path=self.frida_server, asset_root=ROOT,
+                                  forwards=getattr(self.collector, 'forward_registry', None),
+                                  log=self.log if hasattr(self, 'log') else (lambda _text: None))
+        diagnostic = self.server.ensure()
+        self.frida_remote = self.server.address
+        self.event_diagnostic = diagnostic.as_dict()
+        self.audit('event_server_ready', diagnostic.as_dict())
+        return self.frida_remote
+
+    def retry_events(self):
+        """Retry a failed preparation inside this app session, not only next battle.
+
+        A runtime gap in an observed battle is deliberately not remounted: the
+        existing contract keeps the reliable prefix and waits for the next battle.
+        """
+        if self.frida_remote is None:
+            return self.event_status, self.event_error, self.event_diagnostic
+        if self.capture is None:
+            raise RuntimeError('collection session is not connected')
+        if self.event_status in ('ready', 'recording'):
+            return self.event_status, self.event_error, self.event_diagnostic
+        if self.event_status == 'gap':
+            self.event_error = '事件在战斗中断开，将在下一局自动重试；本局保留已覆盖区间'
+            return self.event_status, self.event_error, self.event_diagnostic
+        old_status, old_error = self.event_status, self.event_error
+        self._retire_observer()
+        self._attach_observer()
+        self.collector.event_capability = dict(status=self.event_status,
+                                               error=self.event_error)
+        self.audit('observer_manual_retry', dict(previous_status=old_status,
+                                                 previous_error=old_error,
+                                                 event_status=self.event_status,
+                                                 event_error=self.event_error))
+        return self.event_status, self.event_error, self.event_diagnostic
 
     def _retire_observer(self):
         """Remove an unusable observer from capture, not from cleanup ownership."""
@@ -244,6 +312,15 @@ class CollectionSession:
                 else:
                     if observer in self._pending_observers:
                         self._pending_observers.remove(observer)
+            if self.server is not None:
+                try:
+                    self.server.stop()
+                except BaseException as exc:
+                    errors.append(('event_server', exc))
+                    if not isinstance(exc, Exception):
+                        raise
+                else:
+                    self.server = None
             try:
                 self.collector.close()
             except BaseException as exc:

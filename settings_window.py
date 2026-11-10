@@ -35,10 +35,27 @@ EVENT_STATE_LABELS = {
 
 _DEPENDENCY_WORDS = ('frida', 'module', 'import', 'required', '依赖', '未安装')
 
+_EVENT_CODE_TEXT = {
+    'missing_server': '缺少设备端 frida-server 资源 · 请使用包含该资源的完整发行包',
+    'sha_mismatch': '设备端 frida-server 校验失败 · 文件已损坏或被替换',
+    'abi_mismatch': '设备端 frida-server 架构与设备不匹配',
+    'version_mismatch': '设备端 frida-server 版本不符',
+    'no_root': '设备未授予 root · 无法启动 frida-server',
+    'device_unreachable': '无法连接设备',
+    'push_failed': '无法推送设备端 frida-server',
+    'start_failed': '设备端 frida-server 启动失败',
+    'port_in_use': '事件端口被占用 · 未终止其他程序的进程',
+    'forward_failed': 'ADB 端口转发失败 · 未移除其他程序的转发',
+    'server_unresponsive': '设备端 frida-server 未响应',
+    'attach_failed': 'Frida 依赖或观测端点不可用',
+}
+
 
 def event_setting_status(*, enabled: bool, event_status: str | None,
                          event_error: str | None, version_status: str | None,
-                         connection_ok: bool | None = None) -> tuple[str, str]:
+                         connection_ok: bool | None = None,
+                         event_code: str | None = None,
+                         event_hint: str | None = None) -> tuple[str, str]:
     """Return ``(state, user_text)`` for the event-observation setting.
 
     States: ``active``, ``disabled``, ``dependency_missing``, ``interrupted``,
@@ -56,6 +73,11 @@ def event_setting_status(*, enabled: bool, event_status: str | None,
         return ('disabled', '已关闭 · 仅使用伤害/治疗快照；护盾与接敌区间保持未知，'
                             '不会记为零。')
     if event_status == 'failed':
+        text = _EVENT_CODE_TEXT.get(event_code or '')
+        if text:
+            hint = f'；{event_hint}' if event_hint else ''
+            return ('dependency_missing', '事件观测未就绪：' + text + detail + hint +
+                    '。' + SNAPSHOT_FALLBACK)
         text = (event_error or '').lower()
         if any(word in text for word in _DEPENDENCY_WORDS):
             return ('dependency_missing',
@@ -165,6 +187,8 @@ class SettingsWindow(tk.Toplevel):
         actions = ttk.Frame(body)
         actions.grid(row=4, column=0, sticky='ew', pady=(14, 0))
         ttk.Button(actions, text='应用并重新连接', command=self.apply).pack(side='left')
+        ttk.Button(actions, text='重试事件观测', command=self.retry_events).pack(
+            side='left', padx=6)
         ttk.Button(actions, text='关闭', command=self.close).pack(side='right')
         self.sync_fields()
         self.show_existing_diagnostics()
@@ -198,7 +222,9 @@ class SettingsWindow(tk.Toplevel):
             enabled=self.events.get(), event_status=self.app.event_status,
             event_error=self.app.event_error,
             version_status=(self.app.connection_diagnostic or {}).get('version_status'),
-            connection_ok=(self.app.connection_diagnostic or {}).get('connection_ok'))
+            connection_ok=(self.app.connection_diagnostic or {}).get('connection_ok'),
+            event_code=(self.app.event_diagnostic or {}).get('code'),
+            event_hint=(self.app.event_diagnostic or {}).get('hint'))
         self.event_state_label.set(text)
         self.error_state.set('' if state == 'active' or state == 'disabled' else
                              '设置页仅显示诊断；未覆盖的指标保持未知。')
@@ -290,6 +316,10 @@ class SettingsWindow(tk.Toplevel):
         self.detection_note.set(f'已选择 {serial}；应用后重新连接该实例。')
 
     # -- apply / close -----------------------------------------------------
+    def retry_events(self):
+        if self.app.retry_events():
+            self.event_state_label.set('正在重试事件观测…')
+
     def apply(self):
         adb = self.adb.get().strip() or None
         address = self.address.get().strip() or None

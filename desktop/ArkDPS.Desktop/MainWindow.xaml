@@ -91,8 +91,10 @@
      <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" Padding="24">
       <StackPanel><TextBlock Text="事件观测与连接诊断" FontSize="20" FontWeight="Bold"/>
        <CheckBox x:Name="EventsEnabled" Content="启用事件观测 · 护盾实际吸收 / 独立接敌区间"/>
-       <TextBlock Text="事件不可用时沿用伤害 / 治疗累计快照。覆盖前的护盾未知，不显示为零。" Foreground="{DynamicResource Muted}" Margin="0,0,0,12"/>
-       <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}"/>
+       <TextBlock Text="事件不可用时沿用伤害 / 治疗累计快照。覆盖前的护盾未知，不显示为零。" Foreground="{DynamicResource Muted}" Margin="0,0,0,8"/>
+       <Button x:Name="RetryEventsButton" Content="重试事件观测" Click="RetryEvents" HorizontalAlignment="Left" Margin="0,0,0,8" AutomationProperties.Name="重试事件观测"/>
+       <TextBlock x:Name="EventDiagnostic" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+       <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}" TextWrapping="Wrap"/>
        <Button Content="应用设置并重新定位" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,20,0,0"/>
       </StackPanel>
      </Border>

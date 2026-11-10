@@ -366,3 +366,35 @@ def test_connection_failure_clears_previous_event_status_in_gui_and_hud(app_at):
     assert app.event_state == event_label(None, None)
     assert '事件观测中' not in app.diagnostics.get()
     assert '事件观测中' not in hud.status.get()
+
+
+def test_event_setting_status_names_the_failed_device_server_step():
+    state, text = event_setting_status(
+        enabled=True, event_status='failed',
+        event_error='设备未授予 root，无法启动终端 frida-server。',
+        version_status='compatible', event_code='no_root',
+        event_hint='在 MuMu 中开启 root 并重启模拟器后，点击「重试事件观测」。')
+    assert state == 'dependency_missing'
+    assert 'root' in text
+    assert '重试事件观测' in text
+    assert '快照' in text
+
+
+def test_closed_and_failed_events_read_differently():
+    closed, _text = event_setting_status(
+        enabled=False, event_status=None, event_error=None, version_status='compatible')
+    failed, _text = event_setting_status(
+        enabled=True, event_status='failed', event_error='缺少设备端 frida-server 资源',
+        version_status='compatible', event_code='missing_server', event_hint='使用完整发行包')
+    assert closed == 'disabled'
+    assert failed == 'dependency_missing'
+
+
+def test_app_retry_reports_when_events_are_off_or_not_connected():
+    from app import App
+    app = App.__new__(App)
+    app.events_enabled, app.frida_remote, app.collector = False, None, None
+    app.collection_cleanup_pending = False
+    assert app.retry_events() is False and '已关闭' in app.event_state
+    app.events_enabled, app.frida_remote = True, '127.0.0.1:27043'
+    assert app.retry_events() is False and '尚未连接' in app.event_state

@@ -39,7 +39,8 @@ from verify_gui import capture_window, monitors  # noqa: E402
 
 TRACKED = ('app.py', 'connection.py', 'hud.py', 'layout_store.py',
            'settings_window.py', 'tray.py', 'gui_panel.py', 'panel_model.py',
-           'collection_session.py', 'event_observer.py', 'acceptance/verify_settings.py')
+           'collection_session.py', 'event_observer.py', 'event_service.py',
+           'acceptance/verify_settings.py')
 
 
 def settle(root, rounds=8):
@@ -307,7 +308,7 @@ def phase_main(output: Path):
         app.save_layout_now()
         saved = json.loads((state / 'layout.json').read_text(encoding='utf-8'))
         receipt['layout']['saved'] = saved
-        assert saved['version'] == 2 and saved['huds']
+        assert saved['version'] == 3 and saved['huds']
 
         app.quit()
         deadline = time.monotonic() + 10

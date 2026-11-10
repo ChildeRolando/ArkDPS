@@ -41,7 +41,9 @@ ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff75850538032
 
 ## Windows 桌面运行时分发（ARK-19）
 
-`tools/package_windows.py` 从官方 Python.org HTTPS 地址取得 CPython 3.12.10 embeddable x64，并使用固定 SHA-256 核验；原始 `python/LICENSE.txt` 保留在分发目录。自包含 .NET 10 / WPF 产物随包分发，保留 .NET `LICENSE.txt` 与 `ThirdPartyNotices.txt` 于 `licenses/`。默认完整包还保留 PyPI `frida==17.26.1` wheel 的 `dist-info/licenses/COPYING`（wxWindows Library Licence 3.1）及元数据，不将该许可改写为本仓库许可。Python 3.12 不需要其仅针对 Python <3.11 的 typing_extensions 依赖。安装包不包含 Frida server 或 ADB，也不安装/启动设备服务；明确 `--without-events` 仅生成无 Frida 的累计快照变体。
+`tools/package_windows.py` 从官方 Python.org HTTPS 地址取得 CPython 3.12.10 embeddable x64，并使用固定 SHA-256 核验；原始 `python/LICENSE.txt` 保留在分发目录。自包含 .NET 10 / WPF 产物随包分发，保留 .NET `LICENSE.txt` 与 `ThirdPartyNotices.txt` 于 `licenses/`。默认完整包还保留 PyPI `frida==17.26.1` wheel 的 `dist-info/licenses/COPYING`（wxWindows Library Licence 3.1）及元数据，不将该许可改写为本仓库许可。Python 3.12 不需要其仅针对 Python <3.11 的 typing_extensions 依赖。安装包不包含 ADB，也不安装 ADB 服务；明确 `--without-events` 仅生成无 Frida 的累计快照变体。
+
+默认完整包另外从官方 `frida/frida` 17.26.1 Release 取得 `frida-server-17.26.1-android-x86_64.xz`，构建时对压缩包与解压后二进制分别以固定 SHA-256 核验，放入 `collector/frida-server/` 并写入同目录 `manifest.json`。该二进制与 Frida 客户端同属 wxWindows Library Licence 3.1；许可证文本随客户端 wheel 的 `dist-info/licenses/COPYING` 分发。运行期由 `event_service.py` 再次校验清单摘要与 ELF 架构，按需推送到设备 `/data/local/tmp/ark_dps/`，并在退出时只停止本进程启动的进程、移除本进程创建的转发。
 
 ## ARK-14 旧 Tk 便携候选的运行时
 

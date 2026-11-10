@@ -153,6 +153,8 @@ public partial class MainWindow : Window
         var diag=state.Get("diagnostic");
         ConnectionDiagnostics.Text=state.Text("connection_text")+"\n"+state.Text("event_text")+"\n"+
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected")+"\n"+diag.Text("message")+"\n"+diag.Text("error");
+        EventDiagnostic.Text=EventDiagnosticText(state.Get("event_diagnostic"));
+        RetryEventsButton.IsEnabled=state.Text("event_code").Length>0;
         applying=false;ArrangePanels();
         if(changed){InvalidateVisualTree(this);foreach(var hud in Huds.Values)InvalidateVisualTree(hud);}
     }
@@ -160,6 +162,21 @@ public partial class MainWindow : Window
     {
         if(obj is UIElement ui) ui.InvalidateVisual();
         for(int i=0;i<VisualTreeHelper.GetChildrenCount(obj);i++) InvalidateVisualTree(VisualTreeHelper.GetChild(obj,i));
+    }
+    private static string EventDiagnosticText(JsonElement eventDiagnostic)
+    {
+        if(eventDiagnostic.ValueKind!=JsonValueKind.Object) return "事件服务：等待连接后的准备诊断。";
+        var stepsElement=eventDiagnostic.Get("steps");
+        var steps=stepsElement.ValueKind==JsonValueKind.Object
+            ? string.Join(" · ",stepsElement.EnumerateObject().Select(x=>x.Name+"="+x.Value.Text()))
+            : "—";
+        var ports=eventDiagnostic.Text("local_port").Length>0 ? eventDiagnostic.Text("local_port")+"→"+eventDiagnostic.Text("remote_port") : "—";
+        var server=eventDiagnostic.Text("server_path").Length>0 ? eventDiagnostic.Text("server_path") : "—";
+        var message=eventDiagnostic.Text("message")+" "+eventDiagnostic.Text("hint");
+        return "事件服务："+(eventDiagnostic.Text("code").Length>0 ? eventDiagnostic.Text("code") : "ready")+" · "+message+"\n"+
+            "服务 "+server+" → "+eventDiagnostic.Text("device_path")+" · ABI "+eventDiagnostic.Text("abi")+"\n"+
+            "进程 "+eventDiagnostic.Text("pid")+" · 转发 "+ports+" · 自有转发 "+eventDiagnostic.Bool("forward")+"\n"+
+            "步骤 "+steps;
     }
     private void InitializeSettings()
     {
@@ -289,6 +306,12 @@ public partial class MainWindow : Window
     private void ChooseInstance(object sender,SelectionChangedEventArgs e)
     {
         if(Instances.SelectedItem is ListBoxItem item){Serial.Text=(string)item.Tag;AutoDetect.IsChecked=false;}
+    }
+    private async void RetryEvents(object sender,RoutedEventArgs e)
+    {
+        RetryEventsButton.IsEnabled=false;
+        try { await Command("event_retry"); }
+        catch(Exception ex) { ErrorText.Text=ex.Message; }
     }
     private async void ApplySettings(object sender,RoutedEventArgs e)
     {

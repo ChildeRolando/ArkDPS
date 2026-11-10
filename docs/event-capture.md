@@ -6,13 +6,15 @@
 
 ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期模式，`BattleRuntime` 分配 ID，快照和 `LiveEventCapture.ingest()` 共用一个适配器。跨帧重试保留队列；新局重建基线并隔离旧事件；同进程不因换局重挂载。首个终局先处理可靠水位再冻结，累计修订与一次归档沿用同局 ID。新日志的 `lifecycle_observation.events` 保留屏障/drain，`published.native_rows` 保留原生来源，`rows` 为窗口投影；独立对账器兼容两种日志。新候选的跨局实机尚未验收，范围和当前 MAA 错误证据见 [生命周期交接](snapshot-adapter.md)。
 
-`app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 命令行模式共用 `CollectionSession`。通过进程身份和游戏版本校验后，默认向本机已验证端点 `127.0.0.1:27043` 尝试临时事件观测；`--frida-remote host:port` 可覆盖端点，`--no-events` 显式关闭。API 的默认值同样为该端点，传入 `frida_remote=None` 关闭，可供 ARK-11 设置入口使用。Frida 17.26.1 客户端、同版服务及端口转发须由调用方准备；采集器结束时卸载自己的脚本，不安装或启动服务、不使用 eternalize。
+`app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 命令行模式共用 `CollectionSession`。通过进程身份和游戏版本校验后，默认向本机端点 `127.0.0.1:27043` 尝试事件观测；`--frida-remote host:port` 表示调用方已准备该端点（此时不部署服务），`--no-events` 显式关闭。API 的默认值同样为该端点，传入 `frida_remote=None` 关闭，可供 ARK-11 设置入口使用。
+
+默认事件路径由 ArkDPS 自行闭环：`event_service.FridaServerManager` 从包内 `collector/frida-server/` 读取与设备 ABI 匹配的 Frida 17.26.1 服务，校验清单 SHA-256 与 ELF 架构，仅在设备文件缺失或摘要不一致时推送到 `/data/local/tmp/ark_dps/`，在设备上再次校验 `--version`，以 `-D` 启动在自有回环端口，并用现有 `ForwardRegistry` 建立本进程独占的 `adb forward`。端口 27043-27052 中设备端监听或本地绑定被占用时换用下一个，从不终止 `pidof frida-server` 式的全部实例，也不移除其他程序的转发。退出、断开、换设备时只移除本进程创建的转发并终止本进程记录的 PID；证书、脚本和 `eternalize` 均未启用。
 
 连接先校验进程与游戏版本，再准备观察器，最后定位战局。因此观察器可以在进入关卡前就绪。`Collector.connect()` 的默认行为保持同时定位；`connect(locate=False)` 允许提前挂载，之后调用 `locate_battle()`。
 
 快照与编队暂时跨帧、`SampleUnavailable` 或 `RosterUnavailable` 会重试，保留观察器队列，不制造事件缺口。基线要求前后标记同帧同时间、序号及回调入口计数一致，并且没有在途回调。后续同样取得稳定配对，再提交有序事件和水位。真实换局/时钟回退拒绝串局；观察器丢失、来源冲突或序列缺口封存事件覆盖，正常采集入口仍可继续原生累计。未知护盾机制关闭覆盖。自然结束只有最终水位已到结束时间时才保持覆盖完整，接敌尾部按结束时间截断。
 
-输出中的 `statistics` 是统计核心与宿主归并结果；原来的原生 `rows` 仍供现有伤害窗口使用。`event_status` 为 `unavailable`（用户关闭）、`attaching`、`ready`、`recording`、`failed`（启动失败）、`gap`（运行中断）、`finished` 或 `stopped`；`event_error`、`event_watermark` 与每行覆盖字段必须一起保留。依赖缺失、Frida 版本不符、远端不可达或挂载失败时，清理已创建的观察器，保留失败原因，继续原生伤害和治疗快照，护盾与接敌时间保持未知；运行中断只保留已观察的可靠前缀。不会在当前局重挂载，下一局新建会话时按认证条件重新尝试。未经认证的游戏版本或无法确认的进程身份仍拒绝整个连接，不发布数值。新字段的显示界面由后续 GUI/HUD 工单负责。
+输出中的 `statistics` 是统计核心与宿主归并结果；原来的原生 `rows` 仍供现有伤害窗口使用。`event_status` 为 `unavailable`（用户关闭）、`attaching`、`ready`、`recording`、`failed`（准备/启动/挂载失败）、`gap`（运行中断）、`finished` 或 `stopped`；`event_error`、`event_watermark` 与每行覆盖字段必须一起保留。准备失败时同时返回 `event_diagnostic`：`code` 区分 `missing_server`、`sha_mismatch`、`abi_mismatch`、`version_mismatch`、`no_root`、`device_unreachable`、`push_failed`、`start_failed`、`port_in_use`、`forward_failed`、`server_unresponsive` 或 `attach_failed`，`steps` 指出失败的具体步骤，`hint` 给出下一步。失败时清理已创建的观察器，继续原生伤害和治疗快照，护盾与接敌时间保持未知；可以通过桌面端「重试事件观测」在当前应用会话内重新准备并挂载，不必等到下一局或重启应用。运行中断（`gap`）只保留已观察的可靠前缀，不在当前局重挂载，下一局自动重试。`unavailable`（用户明确关闭）与 `failed`（准备失败）必须使用不同文案和恢复入口。未经认证的游戏版本或无法确认的进程身份仍拒绝整个连接，不发布数值。
 
 普通命令行采集允许上述降级，`READY.json` 在连接与可选观察器启动/清理完成后写入，并包含 `event_status` 和 `event_error`。验收使用 `--require-events` 要求事件覆盖，启动失败不写 READY，运行缺口记录失败并清理退出；该选项不能与 `--no-events` 合用。`acceptance/run_event_acceptance.ps1` 已固定传入此选项，避免把快照降级误记为事件验收通过。
 

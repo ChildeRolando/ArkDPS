@@ -38,8 +38,8 @@ def event_label(status, error=None):
     labels = {'recording': '事件观测中 · 护盾仅含观测区间',
               'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观测',
               'gap': '事件中断 · 伤害/治疗快照继续',
-              'failed': '事件不可用 · 使用伤害/治疗快照',
-              'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
+              'failed': '事件不可用 · 使用伤害/治疗快照（未就绪，可重试事件观测）',
+              'unavailable': '事件观测已关闭 · 仅使用伤害/治疗快照',
               'finished': '事件观测结束 · 保留已覆盖区间'}
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
@@ -80,6 +80,7 @@ class DesktopState:
         self.connection_text = '等待定位本局'
         self.diagnostic = None
         self.event_status = self.event_error = self.lifecycle = None
+        self.event_diagnostic = None
         self.scanning = False
         self.history_notice = ''
         self.refresh_history()
@@ -111,6 +112,8 @@ class DesktopState:
             self.diagnostic = value
         elif kind == 'event':
             self.event_status, self.event_error = value
+        elif kind == 'event_diagnostic':
+            self.event_diagnostic = value
         elif kind == 'lifecycle':
             self.lifecycle = value
         elif kind == 'scanning':
@@ -165,6 +168,8 @@ class DesktopState:
                     status=status, status_text=label, error=self.error,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
                     event_text=event_label(self.event_status, self.event_error),
+                    event_diagnostic=self.event_diagnostic,
+                    event_code=(self.event_diagnostic or {}).get('code', ''),
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
                     stage=(sample.get('battle_metadata') or {}).get('stage_id'),
@@ -254,11 +259,13 @@ class DesktopState:
 
 class CollectionWorker:
     """Owns the sole CollectionSession, never references WPF or pipe objects."""
-    def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE):
+    def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE, manage_server=True):
         self.history, self.endpoint = state.history, endpoint
+        self.manage_server = manage_server
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
         self.stop = threading.Event()
+        self.retry = threading.Event()
         self.session = None
         self.cleanup_error = ''
         self.retired_errors = []
@@ -267,6 +274,13 @@ class CollectionWorker:
     def request(self, config, enabled):
         self.effective = (config, enabled)
         self.requests.put(self.effective)
+
+    def retry_events(self):
+        """Queue an in-session retry of a failed event-service preparation."""
+        if self.session is None:
+            raise RuntimeError('尚未连接；请等待定位完成后再重试事件观测')
+        self.retry.set()
+        self.events.put(('warning', '已请求重试事件观测'))
 
     def release(self):
         if self.session is None:
@@ -316,6 +330,7 @@ class CollectionWorker:
                                     self.events.put(('diagnostic', target.diagnostics.as_dict()))
                                     self.session = CollectionSession(target.adb_path, target.serial,
                                         frida_remote=self.endpoint if enabled else None,
+                                        manage_server=self.manage_server and bool(enabled),
                                         history=self.history, audit=audit,
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
                                     self.session.enable_lifecycle(runtime)
@@ -323,6 +338,11 @@ class CollectionWorker:
                                     diag = self.session.collector.diagnostics
                                     self.events.put(('diagnostic', diag.as_dict()))
                                     self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}'))
+                                    self.events.put(('event',
+                                                     (getattr(self.session, 'event_status', None),
+                                                      getattr(self.session, 'event_error', None))))
+                                    self.events.put(('event_diagnostic',
+                                                     getattr(self.session, 'event_diagnostic', None)))
                                     usable = True
                                 except Exception as exc:
                                     diag = getattr(exc, 'diagnostics', None)
@@ -331,6 +351,15 @@ class CollectionWorker:
                                     self.events.put(('error', str(exc)))
                                     self.release()
                             self.events.put(('scanning', False))
+                        if self.retry.is_set():
+                            self.retry.clear()
+                            if usable and self.session is not None:
+                                try:
+                                    status, error, diagnostic = self.session.retry_events()
+                                    self.events.put(('event', (status, error)))
+                                    self.events.put(('event_diagnostic', diagnostic))
+                                except Exception as exc:
+                                    self.events.put(('error', f'重试事件观测失败：{exc}'))
                         if usable and self.session is not None:
                             try:
                                 sample = self.session.read()
@@ -408,6 +437,11 @@ def serve(input_stream, output, state, worker=None):
                 if worker:
                     worker.request(*worker.effective)
                 result, kind = None, 'state'
+            elif op == 'event_retry':
+                if worker is None:
+                    raise RuntimeError('离线模式没有可重试的事件观测')
+                worker.retry_events()
+                result, kind = None, 'state'
             else:
                 result = state.command(cmd)
                 if op == 'connection_apply' and worker:
@@ -457,7 +491,9 @@ def main():
     state = DesktopState(args.state_dir)
     if args.fixture:
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))
-    worker = None if args.offline else CollectionWorker(state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE)
+    worker = None if args.offline else CollectionWorker(
+        state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE,
+        manage_server=args.frida_remote is None)
     if worker:
         worker.request(replace(state.connection, adb_path=args.adb or state.connection.adb_path,
                                serial=args.serial or state.connection.serial,

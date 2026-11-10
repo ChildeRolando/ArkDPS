@@ -42,8 +42,8 @@ def event_label(status, error=None):
     labels = {'recording': '事件观测中 · 护盾仅含观测区间',
               'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观测',
               'gap': '事件中断 · 仅保留已覆盖区间；伤害/治疗快照继续',
-              'failed': '事件不可用 · 使用伤害/治疗快照',
-              'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
+              'failed': '事件不可用 · 使用伤害/治疗快照（未就绪，可重试事件观测）',
+              'unavailable': '事件观测已关闭 · 仅使用伤害/治疗快照',
               'finished': '事件观测已结束 · 保留已覆盖区间'}
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
@@ -107,9 +107,14 @@ class App:
         # applying unrelated settings must not replace a custom Frida bridge.
         self.event_endpoint = getattr(args, 'frida_remote', None) or DEFAULT_FRIDA_REMOTE
         self.frida_remote = self.event_endpoint if self.events_enabled else None
+        # The default endpoint deploys and starts the bundled device server; an
+        # explicit --frida-remote means the caller prepared that endpoint.
+        self.manage_event_server = bool(self.events_enabled) and bool(
+            getattr(args, 'manage_events', False))
         self.connection_diagnostic = None
         self.event_status = None
         self.event_error = None
+        self.event_diagnostic = None
         self.session = None
         self.retired_sessions = []
         self.collection_cleanup_pending = False
@@ -117,6 +122,7 @@ class App:
         self.last_gui_geometry = self.layout.gui
         self.stop = threading.Event()
         self.rescan = threading.Event()
+        self.event_retry = threading.Event()
         self.rescan.set()
         self.last = None
         self.collector = None
@@ -298,6 +304,18 @@ class App:
         self.settings_window = SettingsWindow(self)
         return self.settings_window
 
+    def retry_events(self):
+        """Retry a failed event-service preparation without reconnecting."""
+        if not self.events_enabled or self.frida_remote is None:
+            self.event_state = '事件观测已关闭；先在设置中启用后重试。'
+            return False
+        if self.collector is None or self.collection_cleanup_pending:
+            self.event_state = '尚未连接；请等待定位完成后再重试事件观测。'
+            return False
+        self.event_state = '正在重试事件观测…'
+        self.event_retry.set()
+        return True
+
     def apply_connection(self, config, events_enabled):
         """Persist connection/event choices and ask the worker to reconnect."""
         self.connection_preference = config
@@ -305,6 +323,8 @@ class App:
         self.event_observation = bool(events_enabled)
         self.events_enabled = bool(events_enabled)
         self.frida_remote = self.event_endpoint if self.events_enabled else None
+        self.manage_event_server = bool(events_enabled) and bool(
+            getattr(self.args, 'manage_events', False))
         if self.connection_store is not None:
             try:
                 self.connection_store.save(config)
@@ -438,6 +458,9 @@ class App:
                                      getattr(observer, 'session', None) is None)
         if not observer_released:
             issues.append('事件观察器释放未确认')
+        server = getattr(session, 'server', None) if session is not None else None
+        if server is not None and getattr(server, 'pid', None) is not None:
+            issues.append('设备端 frida-server 未停止')
         for resource, errors in cleanup_errors.items():
             issues.extend(f'{resource} 清理失败：{error}' for error in errors)
         forwards_released = True
@@ -521,6 +544,7 @@ class App:
                         try:
                             self.collector=CollectionSession(
                                 target.adb_path, target.serial, frida_remote=remote,
+                                manage_server=getattr(self, 'manage_event_server', False),
                                 audit=audit, history=self.history,
                                 log=lambda x:print(x,flush=True))
                             self.session = self.collector
@@ -530,6 +554,8 @@ class App:
                             self.events.put(('connection_diagnostic', diag.as_dict()))
                             self.events.put(('event', (self.collector.event_status,
                                                        self.collector.event_error)))
+                            self.events.put(('event_diagnostic',
+                                             getattr(self.collector, 'event_diagnostic', None)))
                             self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏版本 {diag.version_actual} 已兼容'))
                         except Exception as exc:
                             traceback.print_exc()
@@ -541,6 +567,16 @@ class App:
                             self.events.put(('connection', '连接或版本校验失败；停止发布实时数值'))
                             self.release_collector()
                         self.events.put(('scanning', False))
+                event_retry = getattr(self, 'event_retry', None)
+                if event_retry is not None and event_retry.is_set():
+                    event_retry.clear()
+                    if self.collector and not self.collection_cleanup_pending:
+                        try:
+                            status, error, diagnostic = self.collector.retry_events()
+                            self.events.put(('event', (status, error)))
+                            self.events.put(('event_diagnostic', diagnostic))
+                        except Exception as exc:
+                            self.events.put(('error', '重试事件观测失败：' + str(exc)))
                 if self.collector and not self.collection_cleanup_pending:
                     try:
                         sample = self.collector.read()
@@ -586,6 +622,8 @@ class App:
                 elif kind=='event':
                     self.event_status,self.event_error=value
                     self.event_state=event_label(value[0], value[1])
+                elif kind=='event_diagnostic':
+                    self.event_diagnostic=value
                 elif kind=='tray':
                     if value=='show':
                         self.show_gui()
@@ -808,8 +846,8 @@ def main():
     parser.add_argument('--capture-seconds',type=float,default=0)
     events=parser.add_mutually_exclusive_group()
     events.add_argument('--frida-remote', default=None,
-                        help='Frida 17.26.1 endpoint; default comes from the saved '
-                             'event-observation setting (initially %s); no server is installed or started'
+                        help='已由调用方准备的 Frida 17.26.1 端点；默认使用保存的事件设置 '
+                             '(初始 %s)，由 ArkDPS 自行部署并启动包内设备端服务'
                              % DEFAULT_FRIDA_REMOTE)
     events.add_argument('--no-events', dest='frida_remote', action='store_const', const='',
                         help='disable event observation; retain native snapshots')
@@ -827,6 +865,9 @@ def main():
     parser.add_argument('--legacy-tk', action='store_true',
                         help='explicit legacy test/diagnostic UI; the product default is WPF')
     args=parser.parse_args()
+    # An omitted --frida-remote is the managed default: ArkDPS deploys and
+    # starts its bundled device server. An explicit endpoint stays caller-owned.
+    args.manage_events = args.frida_remote is None
     if args.self_test is not None:
         from release_smoke import run_smoke
         raise SystemExit(run_smoke(args.self_test))

@@ -5,6 +5,8 @@
   "game_version": "2.7.91",
   "emulator": "MuMu Player 12",
   "frida_version": "17.26.1",
+  "frida_server": "17.26.1",
+  "frida_server_abi": "x86_64",
   "distribution": "portable-zip",
   "public_release_authorized": false
 }

@@ -5,7 +5,7 @@
 ## 进程与所有权
 
 - `desktop/ArkDPS.Desktop` 是 .NET 10 / C# / WPF 原生 UI：主窗、统计面板、历史页、连接表单、固定干员报告、HUD、托盘与 PNG 均由 WPF 绘制；不是 Tk 换皮，也没有 WebView。
-- WPF 启动一个 `desktop_bridge.py` 子进程。只有 Python 可以调用 `ConnectionConfig` / `CollectionSession` / `BattleRuntime` / `BattleHistory`；C# 不读游戏内存，不执行 ADB，不重新计算统计或占比。`DesktopState.view` 只调用既有 `render_panel`。
+- WPF 启动一个 `desktop_bridge.py` 子进程。只有 Python 可以调用 `ConnectionConfig` / `CollectionSession` / `BattleRuntime` / `BattleHistory`；C# 不读游戏内存，不执行 ADB，不重新计算统计或占比。`DesktopState.view` 只调用既有 `render_panel`。`snapshot` 额外携带 `event_diagnostic`（`code`/`steps`/`hint`/服务路径/设备路径/PID/端口/自有转发），设置页据此显示具体失败步骤和「重试事件观测」入口。
 - GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次；最终 `stopped` 审计写入失败纳入 `cleanup_errors`，即使资源已释放也必须报告。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
 - 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建唯一审计 JSONL 文件，不追加到先前运行的记录。
 - Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。旧 Tk 模块仅供 `python app.py --legacy-tk` 和既有回归诊断使用，正常启动不创建 Tk 窗口。命令行 `--capture-seconds` 路径不变。
@@ -24,6 +24,7 @@
 | `snapshot` / `snapshot` | 约每 200ms 请求；包含状态/错误文字、战局标识、既有模型的完整面板视图、配置及所选历史副本。 |
 | 面板、主题、位置、历史、连接与导出命令 / `state` | Python 校验并持久化，再返回新状态；没有第二套 C# 配置文件或统计源。 |
 | 任意失败 / `error` | `ok: false`、可读 error；状态不伪造为成功，UI 保留最后有效值并提示。 |
+| `event_retry` / `state` | 在当前应用会话内重试准备失败的事件服务并重新挂载观察器；`gap` 不在本局重挂载。 |
 | `quit` / `bye` | bye 只在采集清理完成后发送；清理失败返回 error，UI 等待退出并显示失败。 |
 
 stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
@@ -43,7 +44,7 @@ python tools/package_windows.py --output runtime/packages
 - self-contained .NET/WPF 程序；
 - 固定 CPython 3.12.10 embeddable x64 运行时及其许可；
 - 同一次构建的 Python collector 源码、采集必需 vendor 子集、离线头像；
-- 默认包含固定 Frida 17.26.1 Windows abi3 客户端 wheel 及许可。`--without-events` 是明确的累计快照版变体，不是下载失败时的静默降级；客户端不等于设备 Frida 服务，包不安装/启动服务，不随包分发用户的 ADB。
+- 默认包含固定 Frida 17.26.1 Windows abi3 客户端 wheel、同版 MuMu x86_64 设备端 `frida-server` 及许可。`--without-events` 是明确的累计快照版变体，不是下载失败时的静默降级。设备端二进制在构建时按固定 SHA-256 核验；运行期由 Python worker 校验架构/摘要/设备版本，按需推送、启动并在退出时只清理自己创建的进程与转发。包不随包分发用户的 ADB。
 
 Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新的隔离目录；ZIP 拒绝路径穿越/符号链接/超大展开。Python `._pth` 仅白名单包内目录，不读系统 Python、用户 site-packages 或 `PYTHONPATH`。没有全局 pip install。
 

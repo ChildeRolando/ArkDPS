@@ -17,3 +17,6 @@ desktop/**/obj/
 dist/
 build/
 *.spec
+
+# Verified frida-server assets for source runs (packaged builds fetch them)
+/frida-server/

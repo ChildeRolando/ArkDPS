@@ -83,3 +83,25 @@ def test_wpf_quit_is_bounded_and_never_modal():
     quit_body = window[window.index('internal async Task Quit'):]
     assert 'MessageBox' not in quit_body
     assert 'Task.WhenAny' in quit_body and 'WriteQuitLog' in quit_body
+
+
+def test_package_ships_the_verified_device_server_asset():
+    assert package.FRIDA_SERVER_VERSION == '17.26.1'
+    assert package.FRIDA_SERVER_ABI == 'x86_64'
+    assert 'android-x86_64.xz' in package.FRIDA_SERVER_URL
+    assert '17.26.1' in package.FRIDA_SERVER_URL
+    assert len(package.FRIDA_SERVER_XZ_SHA256) == 64 and len(package.FRIDA_SERVER_SHA256) == 64
+    assert 'event_service.py' in package.BACKEND
+    source = (ROOT/'tools/package_windows.py').read_text('utf-8')
+    assert "collector / 'frida-server'" in source
+    assert 'FRIDA_SERVER_SHA256' in source
+
+
+def test_package_decompresses_frida_server_without_overwriting(tmp_path):
+    import lzma
+    archive = tmp_path/'server.xz'
+    archive.write_bytes(lzma.compress(b'device-server'))
+    target = tmp_path/'server'
+    assert package.unpack_xz(archive, target).read_bytes() == b'device-server'
+    with pytest.raises(FileExistsError):
+        package.unpack_xz(archive, target)
