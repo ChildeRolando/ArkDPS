@@ -47,6 +47,10 @@ try{
 // A callback increments epoch on entry and remains active until its native
 // invocation returns. RPC marks are serialized with these JS callbacks.
 let sequence=0, epoch=0, active=0, fatal=null, stopped=false;
+// Recoverable per-event gaps do not close the whole event stream.
+const unknownSources=new Set();
+let shieldUnknown=false;
+let damageUnknown=false;
 let queue=[];
 const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
@@ -101,45 +105,59 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     this.when=time();
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
     if(this.name==='Entity.ApplyModifier'){
-     this.mod=args[1];this.source=entityId(this.mod.readPointer());
+     this.mod=args[1];
+     try{this.source=entityId(this.mod.readPointer());}catch(e){this.ignore=true;return;}
+     if(!own(this.source)){this.ignore=true;return;}
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
      return;
     }
-    const s=stacks.get(this.tid)||[];if(!s.length)throw new Error('missing shield callback context');
-    this.buff=buff(s[s.length-1]);this.source=entityId(this.buff.source);this.bb=args[1];
+    const s=stacks.get(this.tid)||[];if(!s.length){shieldUnknown=true;this.ignore=true;return;}
+    this.buff=buff(s[s.length-1]);this.bb=args[1];
+    try{this.source=entityId(this.buff.source);}catch(e){this.ignore=true;return;}
+    if(!own(this.source)){this.ignore=true;return;}
     try{this.damageTarget=args[2].add(0x10).readPointer();}catch(e){this.damageTarget=null;}
-    if(own(this.source)){if(this.buff.hasShield!==1||!['shining_s_2','catsld_t_1[core]'].includes(this.buff.key))throw new Error('unverified shield');this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(args[2].add(0x30));if(!Number.isFinite(this.before)||this.before<0||!Number.isFinite(this.incoming)||this.incoming<0)throw new Error('invalid shield inputs');}
-   }catch(e){fatal=String(e);}
+    if(this.buff.hasShield!==1||!['shining_s_2','catsld_t_1[core]'].includes(this.buff.key)){shieldUnknown=true;this.ignore=true;return;}
+    this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(args[2].add(0x30));
+    if(!Number.isFinite(this.before)||this.before<0||!Number.isFinite(this.incoming)||this.incoming<0){shieldUnknown=true;this.ignore=true;return;}
+   }catch(e){
+    if(this.name==='Entity.ApplyModifier'){if(this.source&&own(this.source))unknownSources.add(this.source);else damageUnknown=true;}
+    else shieldUnknown=true;
+    this.ignore=true;
+   }
   },
   onLeave(){
    try{
     if(this.pushed){const s=stacks.get(this.tid);s.pop();if(!s.length)stacks.delete(this.tid);return;}
-    if(fatal||!own(this.source))return;
+    if(this.ignore||!this.source||!own(this.source))return;
     const end=time();if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
     if(this.name==='Entity.ApplyModifier'){
      const target=this.mod.add(0x60).readS32(),type=this.mod.add(0x68).readS32();
      if(target!==0)return;
-     if(![1,2,3,4,5].includes(type))throw new Error('unverified modifier type');
+     if(![1,2,3,4,5].includes(type)){unknownSources.add(this.source);return;}
      const kind=type===4?'healing':'damage';
      const evidence=kind==='damage'?overkillEvidence(this.mod,this.target,this.hpBefore,end.frame):null;
-     record(this.source,kind,fp(this.mod.add(0x30)),end,{method:this.name,type,target},evidence);
+     try{record(this.source,kind,fp(this.mod.add(0x30)),end,{method:this.name,type,target},evidence);}catch(e){fatal=String(e);}
     }else{
      const after=dynamic(this.bb);
-     if(!Number.isFinite(after)||after<0||Math.abs(this.before-after-this.amount)>0.01)throw new Error('shield absorption mismatch');
-     record(this.source,'shield_absorbed',this.amount,end,{method:this.name,buff:this.buff.key,before:this.before,after,incoming:this.incoming});
+     if(!Number.isFinite(after)||after<0||Math.abs(this.before-after-this.amount)>0.01){shieldUnknown=true;return;}
+     try{record(this.source,'shield_absorbed',this.amount,end,{method:this.name,buff:this.buff.key,before:this.before,after,incoming:this.incoming});}catch(e){fatal=String(e);}
      noteShield(this.when.frame,this.damageTarget,this.amount);
     }
-   }catch(e){fatal=String(e);}finally{if(this.started)active--;}
+   }catch(e){
+    if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);}
+    else shieldUnknown=true;
+   }finally{if(this.started)active--;}
   }
  }));
 }
 rpc.exports={
  mark() {
   const current = time(true);
-  if (current === null) return {retry:true,error:fatal,stopped};
-  return {...current,sequence,epoch,active,error:fatal,stopped};
+  const quality={unknown_sources:[...unknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown};
+  if (current === null) return {retry:true,error:fatal,stopped,...quality};
+  return {...current,sequence,epoch,active,error:fatal,stopped,...quality};
  },
- drain(){const result=queue;queue=[];return {events:result,error:fatal,stopped};},
+ drain(){const result=queue;queue=[];return {events:result,error:fatal,stopped,unknown_sources:[...unknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown};},
  stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
 };
 send({ready:true,arch:Process.arch});

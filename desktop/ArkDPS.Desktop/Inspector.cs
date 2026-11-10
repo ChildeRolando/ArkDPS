@@ -62,6 +62,8 @@ public sealed class Inspector : Border
         Pair("事件起点",row.Exact("shield_coverage_start"));Pair("事件终点",row.Exact("event_coverage_end"));
         body.Children.Add(Text(row.Bool("counter_snapshot_complete") ? "累计快照完整" : "累计快照不完整",11,false,"Muted",new Thickness(0,10,0,0)));
         body.Children.Add(Text(row.Bool("event_coverage_complete") ? "事件完整覆盖" : "事件部分覆盖 · 未知不记零",11,false,"Muted"));
+        if(row.Bool("shield_unknown"))
+            body.Children.Add(Text("护盾事件不完整 · 伤害/接敌/过量继续",11,false,"Muted"));
         Section("归属来源");
         string sources=string.Join("\n",row.Get("sources").Items().Select(x=>x.Text()));
         body.Children.Add(Text(sources.Length>0 ? sources : "—",10,false,"Muted"));

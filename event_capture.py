@@ -39,9 +39,15 @@ class LiveEventCapture:
             self.close()
             raise StreamGap(f'observer unavailable: {exc}') from exc
         self.audit('observer_mark', mark)
-        if not isinstance(mark, dict) or mark.get('error') or mark.get('stopped'):
+        if not isinstance(mark, dict):
             self.close()
-            raise StreamGap('observer stopped or reported a callback error')
+            raise StreamGap('invalid observer mark')
+        if mark.get('error'):
+            self.close()
+            raise StreamGap(f"observer callback error: {mark['error']}")
+        if mark.get('stopped'):
+            self.close()
+            raise StreamGap('observer stopped')
         if mark.get('retry') is True:
             raise CaptureRetry('observer clock advanced during the frame read')
         return mark
@@ -121,6 +127,18 @@ class LiveEventCapture:
             self.close()
             raise
 
+    def _apply_quality(self, payload):
+        """Keep recoverable per-event gaps scoped to overkill/shield."""
+        statistics = self.adapter.statistics
+        if statistics is None:
+            return
+        for source in payload.get('unknown_sources') or ():
+            statistics.mark_overkill_unknown(source)
+        if payload.get('damage_unknown'):
+            statistics.mark_all_overkill_unknown()
+        if payload.get('shield_unknown'):
+            statistics.mark_shields_unknown()
+
     def ingest(self, sample, roster, sequence, drained):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.
 
@@ -132,8 +150,11 @@ class LiveEventCapture:
                 self.baseline_sequence = sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],
                                           sequence=sequence)
-            if drained.get('error') or drained.get('stopped'):
-                raise StreamGap('observer stopped or reported a callback error')
+            if drained.get('error'):
+                raise StreamGap(f"observer callback error: {drained['error']}")
+            if drained.get('stopped'):
+                raise StreamGap('observer stopped')
+            self._apply_quality(drained)
             self.pending.extend(drained['events'])
             while self.pending:
                 event = self.pending[0]

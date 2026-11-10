@@ -40,6 +40,10 @@ class Statistics:
         # event has overkill but no recognised native damage type.
         self.overkill_by_type = {}
         self.overkill_type_incomplete = set()
+        self.unknown_overkill_sources = set()
+        self.all_overkill_unknown = False
+        # Shield-only uncertainty must not close damage/overkill coverage.
+        self.shield_unknown = False
 
     @staticmethod
     def _time(value):
@@ -57,6 +61,26 @@ class Statistics:
         if source in self.owners and self.owners[source] != owner:
             raise ValueError('source ownership cannot change within a session')
         self.owners[source] = owner
+        if source in self.unknown_overkill_sources:
+            self.overkill_incomplete.add(owner)
+
+    def mark_overkill_unknown(self, source):
+        """Record a probe-level event gap for one source without closing coverage."""
+        if not source:
+            return
+        owner = self.owners.get(source)
+        if owner is None:
+            self.unknown_overkill_sources.add(source)
+        else:
+            self.overkill_incomplete.add(owner)
+
+    def mark_all_overkill_unknown(self):
+        """A damage event could not be attributed; keep other metrics but hide overkill."""
+        self.all_overkill_unknown = True
+
+    def mark_shields_unknown(self):
+        """Shield events were incomplete; keep damage, overkill and engagement."""
+        self.shield_unknown = True
 
     def advance(self, game_time):
         self._time(game_time)
@@ -312,6 +336,7 @@ class Statistics:
             complete = all(s in self.sources and self.sources[s]['continuous'] and
                            self.sources[s]['history'][-1][0] == self.now for s in registered)
             overkill_known = (bool(self.event_coverage) and self.event_coverage_end is None
+                              and not self.all_overkill_unknown
                               and owner not in self.overkill_incomplete)
             overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
             row = {'coverage_start': self.start_time,
@@ -320,7 +345,9 @@ class Statistics:
                    'event_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                           else self.end_time if self.event_coverage else None),
                    'event_coverage_complete': self.event_coverage and self.event_coverage_end is None,
-                   'shield_absorbed': self.shields.get(owner, 0) if self.event_coverage else None,
+                   'shield_absorbed': (self.shields.get(owner, 0)
+                                       if self.event_coverage and not self.shield_unknown else None),
+                   'shield_unknown': self.shield_unknown,
                    'overkill_damage': (self.overkill.get(owner, 0.0) if overkill_known else None),
                    'overkill_damage_by_type': ({key: self.overkill_by_type.get(owner, {}).get(key, 0.0)
                                                 for key in DAMAGE_TYPE_KEYS}

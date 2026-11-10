@@ -157,6 +157,7 @@ class BattleRecord:
                 for key, default in (('overkill_damage', None),
                                      ('overkill_damage_by_type', None),
                                      ('overkill_type_complete', False),
+                                     ('shield_unknown', False),
                                      ('overkill_coverage_complete', False),
                                      ('overkill_coverage_start', None),
                                      ('overkill_coverage_end', None)):
@@ -172,7 +173,7 @@ class BattleRecord:
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')
                 for flag in ('counter_snapshot_complete', 'event_coverage_complete',
                              'overkill_coverage_complete', 'overkill_type_complete',
-                             'types_available', 'types_stale'):
+                             'shield_unknown', 'types_available', 'types_stale'):
                     _require(type(row[flag]) is bool, f'invalid {flag}')
                 by_type = row['overkill_damage_by_type']
                 _require(by_type is None or
