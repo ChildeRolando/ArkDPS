@@ -2,8 +2,8 @@ import pytest
 
 from panel_model import (Category, DAMAGE_COLORS, PanelCollection, PanelConfig,
                          PanelSourceRow, Ranking, RateBasis, format_compact,
-                         render_board, render_panel, rows_from_statistics,
-                         team_status)
+                         non_team_note, render_board, render_panel,
+                         rows_from_statistics, team_status)
 from stats_core import Statistics
 
 
@@ -299,6 +299,28 @@ def test_team_status_is_complete_without_unknown_sources():
     complete, reason, note = team_status(stats)
     assert complete is True and reason == ''
     assert '未观察到输出' in note
+
+
+def test_team_status_does_not_claim_an_incomplete_snapshot_for_a_diagnostic_only_gap():
+    stats = {'totals_complete': False,
+             'rows': {'A': {'name': 'A', 'counter_snapshot_complete': True}},
+             'unknown_sources': ['char_mystery']}
+    complete, reason, _ = team_status(stats)
+    assert complete is False
+    assert '未归属统计来源：char_mystery' in reason
+    assert '累计快照不完整' not in reason
+
+
+def test_non_team_note_renders_the_classification_label(monkeypatch):
+    import source_classification as rules
+    monkeypatch.setattr(rules, 'NON_TEAM_CLASSES',
+                        rules.NON_TEAM_CLASSES + (('npc_', 'npc', '剧情 NPC'),))
+    stats = {'non_team_sources': ['trap_321_shnbox', 'npc_77'],
+             'non_team_output': {'trap_321_shnbox': {'damage': 0., 'healing': 0.},
+                                 'npc_77': {'damage': None, 'healing': None}}}
+    note = non_team_note(stats)
+    assert 'trap_321_shnbox（非队伍地图装置/陷阱，未观察到输出）' in note
+    assert 'npc_77（剧情 NPC，输出未知）' in note
 
 
 def test_render_panel_keeps_non_team_note_when_shares_are_known():

@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping
 
+from source_classification import classify_unmapped_source
+
 DAMAGE_COLORS = {
     'physical': '#e5484d',   # red
     'arts': '#3d8bfd',       # blue
@@ -277,6 +279,12 @@ def _name_list(value) -> list[str]:
     return [item for item in value if isinstance(item, str) and item]
 
 
+def non_team_label(cid: str) -> str:
+    """Class label for a proven non-team source, from the classification rules."""
+    classified = classify_unmapped_source(cid)
+    return classified[1] if classified else '非队伍来源'
+
+
 def non_team_note(statistics: Mapping) -> str:
     """Name sources proven not to be team members, with any excluded output."""
     names = _name_list(statistics.get('non_team_sources'))
@@ -290,13 +298,14 @@ def non_team_note(statistics: Mapping) -> str:
         values = values if isinstance(values, Mapping) else {}
         damage, healing = values.get('damage'), values.get('healing')
         known = _finite(damage) or _finite(healing)
+        label = non_team_label(cid)
         if (_finite(damage) and damage > 0) or (_finite(healing) and healing > 0):
-            parts.append(f'{cid}（未归属输出：伤害 {format_compact(damage)}，'
+            parts.append(f'{cid}（{label}，未归属输出：伤害 {format_compact(damage)}，'
                          f'治疗 {format_compact(healing)}）')
         elif not known:
-            parts.append(f'{cid}（非队伍地图装置/陷阱，输出未知）')
+            parts.append(f'{cid}（{label}，输出未知）')
         else:
-            parts.append(f'{cid}（非队伍地图装置/陷阱，未观察到输出）')
+            parts.append(f'{cid}（{label}，未观察到输出）')
     return '已排除非队伍来源：' + '；'.join(parts)
 
 
@@ -324,9 +333,16 @@ def team_status(statistics: Mapping) -> tuple[bool, str, str]:
                        and bool(row.get('counter_snapshot_complete'))
                        for row in rows.values())
     if not complete:
+        # Name the rows that are actually uncertified. When every row's own
+        # cumulative snapshot is certified, the panel is blocked by an
+        # unattributed source instead, and claiming an incomplete snapshot
+        # here would contradict the rows shown next to the reason.
         stale = [str(row.get('name') or owner) for owner, row in rows.items()
                  if isinstance(row, Mapping) and not row.get('counter_snapshot_complete')]
-        gaps.append('累计快照不完整' + ('：' + '、'.join(stale) if stale else ''))
+        if stale:
+            gaps.append('累计快照不完整：' + '、'.join(stale))
+        elif not gaps:
+            gaps.append('累计快照不完整')
     reason = ('' if not gaps else
               '队伍数据不完整，无法计算全队同口径占比（' + '；'.join(gaps) + '）')
     return (not gaps), reason, non_team_note(result)

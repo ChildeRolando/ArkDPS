@@ -20,8 +20,8 @@ from uuid import uuid4
 
 from battle_history import BattleHistory, BattleRecord
 from battle_lifecycle import BattleRuntime
-from battle_share import (json_bytes, record_complete, record_labels, record_stage,
-                         record_statistics, write_export)
+from battle_share import (json_bytes, record_labels, record_stage, record_statistics,
+                         write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
