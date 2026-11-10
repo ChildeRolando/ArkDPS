@@ -6,6 +6,7 @@ import tempfile
 
 from battle_history import BattleRecord
 from panel_model import render_panel, rows_from_statistics
+import stage_names
 
 
 OUTCOMES = {'victory': '胜利', 'defeat': '失败', 'abandoned': '退出', 'unknown': '结果未知'}
@@ -17,8 +18,13 @@ def record_labels(record):
     practice = {True: '演习', False: '正式', None: '演习状态未知'}[metadata['practice']]
     date = data['observed_at'] or data['recorded_at']
     date_label = '最后观察' if data['observed_at'] else '记录时间（观察时间未知）'
-    return (metadata['stage_id'] or '关卡未知', practice, OUTCOMES[metadata['outcome']],
+    return (stage_names.resolve(metadata['stage_id']).label, practice, OUTCOMES[metadata['outcome']],
             f'{data["duration"]:.1f} 秒（最后可靠游戏时刻）', f'{date_label} {date}')
+
+
+def record_stage(record):
+    """Readable stage label plus the untouched native stage_id."""
+    return stage_names.resolve(record.metadata['stage_id'])
 
 
 def record_view(record, config):
@@ -36,8 +42,12 @@ def record_complete(record):
 
 
 def json_bytes(record):
-    # Validate a fresh copy; do not export compact display values or compatibility rows.
+    # Validate a fresh copy; never replace raw values with compact display values
+    # or compatibility rows.
     data = BattleRecord.from_dict(record.to_dict()).to_dict()
+    # The raw stage_id stays authoritative; the display block only adds the
+    # resolved name so exported JSON is readable without the catalog.
+    data['display'] = {'stage': stage_names.display_fields(data['metadata']['stage_id'])}
     return (json.dumps(data, ensure_ascii=False, allow_nan=False, indent=2) + '\n').encode('utf-8')
 
 

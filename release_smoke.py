@@ -22,6 +22,7 @@ def run_smoke(output):
         from app import App, enable_dpi_awareness
         from collector import ROOT, Collector
         from character_catalog import load_character_names
+        from stage_names import catalog as stage_catalog
         from connection import ConnectionConfigStore, ConnectionConfig
         from layout_store import LayoutStore
         from battle_history import BattleHistory, BattleRecord
@@ -50,6 +51,8 @@ def run_smoke(output):
         assert binary.is_file() and binary.read_bytes().startswith(b'ELF'), 'missing device reader binary'
         assert bundle_root() is not None, 'missing versioned game data'
         receipt['checks']['device_reader_resources'] = True
+        assert stage_catalog().stages and not stage_catalog().warning, 'missing stage name catalog'
+        receipt['checks']['stage_names'] = len(stage_catalog().stages)
         collector = Collector()
         assert collector.names and load_character_names()
         collector.close()  # Unconnected: no device commands.

@@ -70,6 +70,15 @@ public partial class MainWindow
         finally{try{await crashing.DisposeAsync();}catch(IOException){exitObserved=true;}}
         Require(crashObserved && exitObserved,"worker crash / nonzero exit not observable");
         checks.Add("simulated worker crash after valid hello rejects snapshots and reports nonzero exit");
+        // Display names come from the Python catalog, never the native path.
+        Require(Stage.Text=="OF-8 汐斯塔狂想曲","live stage display was not resolved");
+        foreach(var item in State.Get("history").Items())
+        {
+            string label=item.Get("labels").Items().First().Text();
+            Require(!label.Contains('/'),"history stage label leaked the native levelId");
+            Require(item.Text("stage_detail").Contains('/'),"history stage detail lost the raw levelId");
+        }
+        checks.Add("live and history stage labels resolved from native levelId; raw id kept in detail");
         string partialRoot=Path.Combine(output,"partial-worker");Directory.CreateDirectory(partialRoot);
         File.WriteAllLines(Path.Combine(partialRoot,"desktop_bridge.py"),new[]{
             "import json,sys",
@@ -301,7 +310,7 @@ public partial class MainWindow
             await Command("panel_add");string second=Panels.Keys.Last();
             await Command("panel_update",new(){["config"]=new{panel_id=second,category="healing",ranking="total",rate_basis="recent_5s"}});
         }
-        var archive=State.Get("history").Items().FirstOrDefault(x=>x.Text("search").Contains("of-8"));
+        var archive=State.Get("history").Items().FirstOrDefault(x=>x.Text("search").Contains("level_main_01-07"));
         if(archive.ValueKind==JsonValueKind.Object)await Command("history_select",new(){["battle_id"]=archive.Text("battle_id")});
         var source=Panels[id].View.Get("source");string owner=source.EnumerateObject().First().Name;
         activePanel=id;LiveInspector.Pin(owner,source);

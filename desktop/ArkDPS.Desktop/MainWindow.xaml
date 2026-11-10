@@ -61,7 +61,7 @@
        </WrapPanel>
       </StackPanel>
       <ListBox x:Name="HistoryList" SelectionChanged="SelectHistory">
-       <ListBox.ItemTemplate><DataTemplate><Border Padding="10,12" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1"><StackPanel><TextBlock Text="{Binding Stage}" FontSize="16" FontWeight="Bold"/><TextBlock Text="{Binding Summary}" FontSize="11" Margin="0,5,0,0"/><TextBlock Text="{Binding Date}" FontSize="10" Margin="0,4,0,0"/></StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
+       <ListBox.ItemTemplate><DataTemplate><Border Padding="10,12" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" ToolTip="{Binding StageDetail}"><StackPanel><TextBlock Text="{Binding Stage}" FontSize="16" FontWeight="Bold"/><TextBlock Text="{Binding Summary}" FontSize="11" Margin="0,5,0,0"/><TextBlock Text="{Binding Date}" FontSize="10" Margin="0,4,0,0"/></StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
       </ListBox>
      </DockPanel>
     </Border>

@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tests'))
 from app import App, enable_dpi_awareness
 from battle_history import BattleHistory, BattleRecord
-from battle_share import json_bytes, write_export
+from battle_share import json_bytes, record_labels, write_export
 from panel_model import Category, Ranking, RateBasis
 from statistics_screenshot import statistics_png
 from test_battle_history import record
@@ -33,8 +33,10 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     history = BattleHistory(output / 'history')
+    stage_ids = ('Obt/Main/level_main_01-07', 'Activities/ACT3D0/level_act3d0_08',
+                 'Obt/Roguelike/RO6/level_rogue6_1-3', 'Obt/Unknown/level_offline_9-9')
     for index in range(101):
-        data = record(index, stage_id='离线验收样本-OF-2', practice=index % 2 == 0,
+        data = record(index, stage_id=stage_ids[index % 4], practice=index % 2 == 0,
                       outcome=('victory', 'defeat', 'abandoned', 'unknown')[index % 4]).to_dict()
         base = data['statistics']['rows']['a']
         rows = {}
@@ -53,6 +55,8 @@ def main():
         history.save(BattleRecord.from_dict(data))
     result = history.list_recent()
     assert len(result.records) == 100 and result.records[0].battle_id == 'battle:100'
+    labels = {record_labels(item)[0] for item in result.records}
+    assert {'1-7', 'OF-8 汐斯塔狂想曲', '急不可耐', 'offline_9-9'} <= labels
     archive_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in history.directory.glob('*.json')}
     enable_dpi_awareness()
     root = tk.Tk()
@@ -109,7 +113,11 @@ def main():
                                 sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
         write_export(output / 'selected.json', json_bytes(selected),
                      history_directory=history.directory, overwrite=True)
-        assert json.loads((output / 'selected.json').read_bytes()) == selected.to_dict()
+        shared = json.loads((output / 'selected.json').read_bytes())
+        display = shared.pop('display')
+        assert display['stage']['stage_id'] == selected.metadata['stage_id']
+        assert display['stage']['stage_name'] == record_labels(selected)[0]
+        assert shared == selected.to_dict()
         # A live boundary while the history window is open must leave its selection frozen.
         next_sample = sample()
         next_sample['battle_id'] = 'offline-next-battle'

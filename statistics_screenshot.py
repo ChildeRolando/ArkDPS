@@ -193,6 +193,8 @@ def statistics_png(parent, record, config, *, theme=None):
             image.text(coverage, 20, top+max(54, name_height+23), 920, color=p.secondary)
         return encode_png(960, height, image.rgb(960, height),
                           dict(battle_id=record.battle_id, panel=config.to_dict(), theme=key,
+                               stage=record_labels(record)[0],
+                               stage_id=record.metadata['stage_id'],
                                owners=[e.owner_id for e in view.entries]))
     finally:
         image.close()
