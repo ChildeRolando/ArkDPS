@@ -286,58 +286,60 @@ class CollectionWorker:
                     stream.write(json.dumps(dict(kind=kind, data=data), ensure_ascii=False,
                                             default=json_value) + '\n')
                     stream.flush()
-                usable = False
-                current_config, current_enabled = None, False
-                while not self.stop.is_set():
-                    try:
-                        config, enabled = self.requests.get_nowait()
-                    except queue.Empty:
-                        config = None
-                    if config is not None:
-                        current_config, current_enabled = config, enabled
-                        usable = False
-                        self.events.put(('scanning', True))
-                        if self.release():
-                            try:
-                                target = resolve_configured(config)
-                                self.events.put(('diagnostic', target.diagnostics.as_dict()))
-                                self.session = CollectionSession(target.adb_path, target.serial,
-                                    frida_remote=self.endpoint if enabled else None,
-                                    history=self.history, audit=audit,
-                                    log=lambda x: print(x, file=sys.stderr, flush=True))
-                                self.session.enable_lifecycle(runtime)
-                                self.session.connect()
-                                diag = self.session.collector.diagnostics
-                                self.events.put(('diagnostic', diag.as_dict()))
-                                self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}'))
-                                usable = True
-                            except Exception as exc:
-                                diag = getattr(exc, 'diagnostics', None)
-                                if diag:
-                                    self.events.put(('diagnostic', diag.as_dict()))
-                                self.events.put(('error', str(exc)))
-                                self.release()
-                        self.events.put(('scanning', False))
-                    if usable and self.session is not None:
+                try:
+                    usable = False
+                    current_config, current_enabled = None, False
+                    while not self.stop.is_set():
                         try:
-                            sample = self.session.read()
-                            runtime = self.session.runtime
-                            self.events.put(('lifecycle', runtime.sessions.state))
-                            if sample:
-                                self.events.put(('sample', sample))
-                        except CaptureRetry:
-                            self.events.put(('lifecycle', self.session.runtime.sessions.state))
-                        except BattleChanged as exc:
-                            self.events.put(('error', str(exc)))
-                            self.request(current_config, current_enabled)
-                        except Exception as exc:
-                            self.events.put(('error', str(exc)))
-                    self.stop.wait(.2)
+                            config, enabled = self.requests.get_nowait()
+                        except queue.Empty:
+                            config = None
+                        if config is not None:
+                            current_config, current_enabled = config, enabled
+                            usable = False
+                            self.events.put(('scanning', True))
+                            if self.release():
+                                try:
+                                    target = resolve_configured(config)
+                                    self.events.put(('diagnostic', target.diagnostics.as_dict()))
+                                    self.session = CollectionSession(target.adb_path, target.serial,
+                                        frida_remote=self.endpoint if enabled else None,
+                                        history=self.history, audit=audit,
+                                        log=lambda x: print(x, file=sys.stderr, flush=True))
+                                    self.session.enable_lifecycle(runtime)
+                                    self.session.connect()
+                                    diag = self.session.collector.diagnostics
+                                    self.events.put(('diagnostic', diag.as_dict()))
+                                    self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}'))
+                                    usable = True
+                                except Exception as exc:
+                                    diag = getattr(exc, 'diagnostics', None)
+                                    if diag:
+                                        self.events.put(('diagnostic', diag.as_dict()))
+                                    self.events.put(('error', str(exc)))
+                                    self.release()
+                            self.events.put(('scanning', False))
+                        if usable and self.session is not None:
+                            try:
+                                sample = self.session.read()
+                                runtime = self.session.runtime
+                                self.events.put(('lifecycle', runtime.sessions.state))
+                                if sample:
+                                    self.events.put(('sample', sample))
+                            except CaptureRetry:
+                                self.events.put(('lifecycle', self.session.runtime.sessions.state))
+                            except BattleChanged as exc:
+                                self.events.put(('error', str(exc)))
+                                self.request(current_config, current_enabled)
+                            except Exception as exc:
+                                self.events.put(('error', str(exc)))
+                        self.stop.wait(.2)
+                finally:
+                    # Session shutdown writes final audit records; keep its sink open.
+                    self.release()
         except Exception as exc:
             self.events.put(('error', str(exc)))
             traceback.print_exc(file=sys.stderr)
-        finally:
-            self.release()
 
     def close(self):
         self.stop.set()

@@ -194,6 +194,54 @@ def test_cleanup_failure_keeps_session_owned_and_prevents_successful_release(tmp
     assert worker.retired_errors  # successful retry cannot erase prior failure
 
 
+def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    diagnostics = SimpleNamespace(
+        as_dict=lambda: {'status': 'ready'},
+        selected_serial='127.0.0.1:16384',
+        version_actual='test',
+    )
+    target = SimpleNamespace(adb_path='adb', serial='127.0.0.1:16384', diagnostics=diagnostics)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+
+    state = DesktopState(tmp_path/'state')
+    worker = CollectionWorker(state)
+
+    class Session:
+        cleanup_errors = {}
+
+        def __init__(self, *_args, audit, **_kwargs):
+            self.audit = audit
+            self.collector = SimpleNamespace(diagnostics=diagnostics)
+            self.runtime = None
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+
+        def connect(self):
+            worker.stop.set()
+
+        def read(self):
+            return None
+
+        def close(self):
+            self.audit('session_closed', {})
+
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(state.connection, False)
+    worker.run()
+
+    assert worker.cleanup_error == ''
+    assert worker.session is None
+    audit_path = next((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    assert json.loads(audit_path.read_text('utf-8').splitlines()[-1]) == {
+        'kind': 'session_closed', 'data': {},
+    }
+
+
 def test_quit_ack_is_after_collector_cleanup(tmp_path):
     order = []
     class Worker:
