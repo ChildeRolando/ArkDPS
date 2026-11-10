@@ -110,3 +110,12 @@ def test_model_view_carries_explicit_event_rate_contract_fields():
                   'rate_action_label', 'rate_state', 'rate_text', 'rate_note'):
         assert field in source
     assert '不以 0 或墙钟替代' in source
+
+
+def test_history_page_entry_auto_refreshes_and_keeps_manual_button():
+    window = (ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml.cs').read_text('utf-8')
+    navigate = window[window.index('internal async Task Navigate'):]
+    navigate = navigate[:navigate.index('private async void AddPanel')]
+    assert 'history_refresh' in navigate
+    xaml = (ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml').read_text('utf-8')
+    assert 'Click="RefreshHistory"' in xaml

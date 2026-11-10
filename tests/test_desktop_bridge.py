@@ -4,6 +4,7 @@ from dataclasses import replace
 import io
 import json
 from pathlib import Path
+import queue
 import subprocess
 import sys
 import time
@@ -618,3 +619,74 @@ def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path)
     assert all(entry['rate'] is None for entry in view['entries'])
     assert all(entry['rate_text'] == '—' for entry in view['entries'])
     assert all(entry['rate_state'] != 'no_engagement' for entry in view['entries'])
+
+
+def test_history_event_refreshes_records_before_the_next_snapshot(tmp_path):
+    class Worker:
+        def __init__(self):
+            self.events = queue.Queue()
+        def close(self):
+            pass
+    state = DesktopState(tmp_path)
+    first = record(1)
+    state.history.save(first)
+    cmd(state, 'history_refresh')
+    selected = state.selected
+    new = record(2)
+    state.history.save(new)
+    assert all(x['battle_id'] != new.battle_id for x in state.snapshot()['history'])
+    worker = Worker()
+    # This is exactly what CollectionSession's on_history callback enqueues.
+    worker.events.put(('history', None))
+    output = io.StringIO()
+    serve(io.StringIO('{"version":1,"op":"hello"}\n{"version":1,"op":"quit"}\n'),
+          output, state, worker)
+    reply = json.loads(output.getvalue().splitlines()[0])
+    assert [x['battle_id'] for x in reply['state']['history']] == [new.battle_id, first.battle_id]
+    assert reply['state']['history_selected']['battle_id'] == first.battle_id
+    assert state.selected is selected
+
+
+def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    diagnostics = SimpleNamespace(as_dict=lambda: {'status': 'ready'},
+                                  selected_serial='127.0.0.1:16384', version_actual='test')
+    target = SimpleNamespace(adb_path='adb', serial='127.0.0.1:16384', diagnostics=diagnostics)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+    state = DesktopState(tmp_path/'state')
+    worker = CollectionWorker(state)
+    sessions = []
+
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, *_args, audit=None, on_history=None, **_kwargs):
+            self.audit = audit
+            self.on_history = on_history
+            self.collector = SimpleNamespace(diagnostics=diagnostics)
+            self.runtime = None
+            sessions.append(self)
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            worker.stop.set()
+        def read(self):
+            return None
+        def close(self):
+            pass
+
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(state.connection, False)
+    worker.thread.start()
+    worker.thread.join()
+    assert len(sessions) == 1
+    sessions[0].on_history()
+    events = []
+    while True:
+        try:
+            events.append(worker.events.get_nowait())
+        except queue.Empty:
+            break
+    assert ('history', None) in events

@@ -68,7 +68,7 @@
     <DockPanel Grid.Column="1">
      <StackPanel DockPanel.Dock="Top" Margin="0,0,12,12">
       <WrapPanel><Button Content="收起 / 展开列表" Click="ToggleHistoryList"/><Button x:Name="ExportJson" Content="导出 JSON" Click="SaveJson" IsEnabled="False"/><Button x:Name="ExportPng" Content="完整排行 PNG" Click="SavePng" IsEnabled="False" Style="{StaticResource Primary}"/></WrapPanel>
-      <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；采集归档后刷新列表。" Foreground="{DynamicResource Muted}" Margin="0,10,0,0"/>
+      <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；完成对局归档后自动出现。" Foreground="{DynamicResource Muted}" Margin="0,10,0,0"/>
       <TextBlock x:Name="HistoryNotice" Foreground="{DynamicResource AccentText}" FontSize="11" Margin="0,4,0,0"/>
      </StackPanel>
      <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel><local:StatisticPanel x:Name="HistoryPanel"/><local:Inspector x:Name="HistoryInspector" Margin="0,0,12,0"/></StackPanel></ScrollViewer>

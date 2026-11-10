@@ -28,7 +28,7 @@
 
 `snapshot` 的面板视图还包含事件可用性字段（`rate_available`/`rate_reason`/`rate_hint`/`rate_action`/`rate_action_label`）和逐行速率分类（`rate_state`/`rate_text`/`rate_note`）。WPF 只在接敌口径下显示原因与入口；`retry` 调用既有 `rescan`（不重启应用），`settings` 导航到连接设置。字段语义由 [panel-model](panel-model.md#事件不可用时的接敌展示ark-22) 拥有。
 
-stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
+stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。历史页是拉取式缓存：每次进入页面发送 `history_refresh`；采集会话每成功提交一条新战绩就推送一次 `history` 事件（仅 `result.written` 为真时），`serve` 在下一条 `snapshot` 前重新 `list_recent()`，所以打开的历史页也会自动出现新局。自动刷新保留当前选中副本、详情与筛选条件，不按轮询扫描目录；「刷新」按钮只作手动兜底。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
 
 ## 同包分发
 
@@ -85,6 +85,14 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 - `python acceptance/verify_wpf.py --output <新建隔离目录>` 生成 `PASS_OFFLINE_WPF` 回执；源版 WPF 首次启动与重启恢复均通过。回执包含 stdio JSONL 错误边界、两个主题、合成历史/HUD、私有 HWND 点击路由及截图 SHA-256。
 - 首次运行暴露的是验收夹具错误：fake worker 对第二个 `snapshot` 请求返回了默认 `kind=state`；将夹具响应改为 `kind=snapshot` 后完整离线验收通过。该次失败不是产品 WPF/worker 故障。
 - 此验收只使用合成数据和模拟 worker；没有访问 MuMu、启动 collector 或证明游戏点击穿透。物理托盘双击在离线回执中仍为 `NOT VERIFIED`，因为离线验收无法定位真实 Shell 通知图标。
+
+## ARK-23 历史页自动刷新离线复验（2026-11-10）
+
+- 进入历史页自动发送 `history_refresh`；采集会话归档成功后经 worker 事件刷新 `records`，打开的历史页无需点「刷新」。
+  自动刷新保留当前选中副本、详情和搜索/结果/模式筛选；没有可读记录时回到空态，手动刷新仍可用。
+- 完整 Python 回归实际运行 683 项通过，新增用例覆盖：只有新落盘记录才通知且重复交接/写入失败不通知、worker 事件到 `snapshot` 的刷新、页面进入自动刷新的 WPF 契约。归档通知优先于诊断写入，日志失败不会隐藏已落盘的新局；通知用例在改动前的基线上 4 项全部失败。
+- `python acceptance/verify_wpf.py --output <新建隔离目录>` 在首次启动与重启阶段均生成 `PASS_OFFLINE_WPF`；回执包含「进入历史页自动读取归档」与「归档后自动更新且保留选中/筛选」两项 UI 级检查。两项检查都用真实 `BattleRecord` 文件：进入页面检查在运行中落盘一条新记录后进入页面；归档更新检查由验收 worker 经真实 `BattleHistory.save` 写入并推送 `history` 事件，再经真实 `DesktopState`/`serve`/poll 链路送达 WPF，不是直接改写快照状态。
+- 其中一次重启阶段在既有私有窗口点击路由检查处失败（`locked HUD point is not private underlay`），重新运行同一验收后完整通过；该检查与历史刷新无关，属于本机窗口层叠波动，未据以宣称通过。验收仍只使用合成数据，没有访问 MuMu 或游戏进程。
 
 ## 实机验收状态（候选 f7d59d9，2026-11-10）
 

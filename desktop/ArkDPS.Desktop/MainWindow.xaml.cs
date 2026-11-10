@@ -26,6 +26,7 @@ internal sealed class HistoryItem
 public partial class MainWindow : Window
 {
     private BridgeClient? bridge;
+    private const string EmptyHistoryText="暂无可读战绩；完成对局归档后自动出现。";
     private readonly DispatcherTimer poll=new(){Interval=TimeSpan.FromMilliseconds(200)};
     private readonly DispatcherTimer save=new(){Interval=TimeSpan.FromMilliseconds(600)};
     internal readonly Dictionary<string,StatisticPanel> Panels=new();
@@ -218,21 +219,24 @@ public partial class MainWindow : Window
     {
         foreach(string id in Huds.Keys.ToArray())if(Huds[id].Locked)ToggleLock(id);
     }
-    private void Navigate(object sender,RoutedEventArgs e)=>Navigate((string)((Button)sender).Tag);
-    internal void Navigate(string page)
+    private async void Navigate(object sender,RoutedEventArgs e)=>await Navigate((string)((Button)sender).Tag);
+    internal async Task Navigate(string page)
     {
         route=page;LivePage.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         PageTitle.Text=page switch{"history"=>"历史战绩","settings"=>"连接设置",_=>"本局统计"};
         AddPanelButton.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;ArrangePanels();
+        // The list is a pull cache owned by Python: re-read it on every entry so a
+        // battle finished a moment ago is visible without pressing 刷新.
+        if(page=="history") await Command("history_refresh");
     }
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
     // 事件不可用时的恢复入口：重试会重新连接采集（不重启应用）；否则打开连接设置。
     private async void HandleRateAction(string action)
     {
-        if(action=="retry"){ShowGui();Navigate("live");await Command("rescan");}
-        else if(action=="settings"){ShowGui();Navigate("settings");}
+        if(action=="retry"){ShowGui();await Navigate("live");await Command("rescan");}
+        else if(action=="settings"){ShowGui();await Navigate("settings");}
     }
     private async void Rescan(object sender,RoutedEventArgs e)=>await Command("rescan");
     private async void SkinChanged(object sender,SelectionChangedEventArgs e)
@@ -247,7 +251,16 @@ public partial class MainWindow : Window
         var selected=State.Get("history_selected");
         bool available=selected.ValueKind==JsonValueKind.Object;ExportJson.IsEnabled=ExportPng.IsEnabled=available;
         HistoryNotice.Text=State.Text("history_notice");
-        if(!available)return;
+        if(!available)
+        {
+            // No readable record: show the empty state instead of a stale detail.
+            if(historyBattle.Length>0)
+            {
+                historyBattle="";HistoryInspector.Reset();HistoryPanel.ClearSelection();
+                HistorySummary.Text=EmptyHistoryText;
+            }
+            return;
+        }
         if(historyBattle!=selected.Text("battle_id")){historyBattle=selected.Text("battle_id");HistoryInspector.Reset();HistoryPanel.ClearSelection();}
         HistorySummary.Text="历史 · "+string.Join(" · ",selected.Get("labels").Items().Select(x=>x.Text()))+"\n所选副本独立于实时战斗；实时 HUD 继续跟随新局。";
         HistoryPanel.Update(selected.Get("view"));HistoryInspector.Update(selected.Get("view"));
