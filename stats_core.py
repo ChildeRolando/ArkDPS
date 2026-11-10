@@ -42,6 +42,11 @@ class Statistics:
         self.overkill_type_incomplete = set()
         self.unknown_overkill_sources = set()
         self.all_overkill_unknown = False
+        # A dropped damage/heal event makes the engagement numerator short.
+        # That gap is reported per owner instead of silently lowering the rate.
+        self.engagement_incomplete = set()
+        self.unknown_engagement_sources = set()
+        self.all_engagement_unknown = False
         # Shield-only uncertainty must not close damage/overkill coverage.
         self.shield_unknown = False
 
@@ -63,6 +68,8 @@ class Statistics:
         self.owners[source] = owner
         if source in self.unknown_overkill_sources:
             self.overkill_incomplete.add(owner)
+        if source in self.unknown_engagement_sources:
+            self.engagement_incomplete.add(owner)
 
     def mark_overkill_unknown(self, source):
         """Record a probe-level event gap for one source without closing coverage."""
@@ -77,6 +84,20 @@ class Statistics:
     def mark_all_overkill_unknown(self):
         """A damage event could not be attributed; keep other metrics but hide overkill."""
         self.all_overkill_unknown = True
+
+    def mark_engagement_unknown(self, source):
+        """A dropped damage/heal event leaves this source's engagement short."""
+        if not source:
+            return
+        owner = self.owners.get(source)
+        if owner is None:
+            self.unknown_engagement_sources.add(source)
+        else:
+            self.engagement_incomplete.add(owner)
+
+    def mark_all_engagement_unknown(self):
+        """An unattributable damage event could belong to any owner's numerator."""
+        self.all_engagement_unknown = True
 
     def mark_shields_unknown(self):
         """Shield events were incomplete; keep damage, overkill and engagement."""
@@ -199,13 +220,16 @@ class Statistics:
                 and isfinite(value))
 
     def _overkill(self, amount, *, target, real_delta, hp_before, hp_after,
-                  killed, target_type, damage_type, cancel_reason):
+                  killed, target_type, damage_type, cancel_reason, shield_absorbed):
         """Derive one hit's overkill from native settlement evidence.
 
-        ``amount`` is the modifier value applied to HP after shield/block
-        settlement, so absorbed damage is already excluded. ``real_delta`` is
-        the native signed HP delta (negative for damage). Only a target whose
-        HP actually reached zero can have overkill. Returns ``(known, value)``;
+        ``amount`` is the native modifier value before shield/block settlement:
+        captured frame 697 recorded ``m_value`` 14, ``realDelta`` 0 and unchanged
+        HP while ``BlockDamage`` absorbed the same 14. Absorbed damage therefore
+        has to be subtracted here instead of being assumed out of ``amount``.
+        ``real_delta`` is the native signed HP delta (negative for damage).
+        Only a target whose HP actually reached zero can have overkill, and only
+        a lethal hit needs the absorption context. Returns ``(known, value)``;
         any missing or contradictory field keeps the whole per-owner metric
         unknown instead of publishing a guess or zero.
         """
@@ -216,7 +240,10 @@ class Statistics:
                 or cancel_reason is not None and (type(cancel_reason) is not int)
                 or not all(self._optional_number(v) for v in
                            (real_delta, hp_before, hp_after))
-                or real_delta > 0 or hp_before < 0 or hp_after < 0):
+                or real_delta > 0 or hp_before < 0 or hp_after < 0
+                or (shield_absorbed is not None
+                    and (not self._optional_number(shield_absorbed)
+                         or shield_absorbed < 0))):
             return False, 0.0
         actual = -real_delta
         tolerance = max(0.01, amount * 1e-6)
@@ -228,7 +255,17 @@ class Statistics:
             return False, 0.0
         if not killed and hp_after <= tolerance:
             return False, 0.0
-        return True, (max(0.0, amount - actual) if killed else 0.0)
+        if not killed:
+            return True, 0.0
+        if shield_absorbed is None:
+            # Absorption happens before the HP delta, so a lethal hit without
+            # that context cannot separate absorbed damage from overkill.
+            return False, 0.0
+        if shield_absorbed > amount + tolerance:
+            return False, 0.0
+        if actual + shield_absorbed > amount + tolerance:
+            return False, 0.0
+        return True, max(0.0, amount - shield_absorbed - actual)
 
     def event(self, event_id, game_time, source, kind, amount, *,
               target=None, real_delta=None, hp_before=None, hp_after=None,
@@ -240,13 +277,14 @@ class Statistics:
         Inputs must arrive in game-time order. Shield expiration and replacement
         are not absorption and have no accepted event kind.
 
-        Damage events may carry overkill evidence: the applied settlement value
-        is ``amount``; ``real_delta`` is the native signed HP delta (negative
-        for damage), ``hp_before``/``hp_after`` the target HP, ``killed`` the
-        explicit endpoint, ``target_type``/``damage_type``/``cancel_reason``/
-        ``shield_absorbed`` the native context. Missing or inconsistent
-        evidence keeps overkill
-        unknown; it never becomes zero and never changes the native totals.
+        Damage events may carry overkill evidence: ``amount`` is the native
+        settlement value before shield/block absorption, ``shield_absorbed``
+        the absorption observed for that hit, ``real_delta`` the native signed
+        HP delta (negative for damage), ``hp_before``/``hp_after`` the target
+        HP, ``killed`` the explicit endpoint and ``target_type``/
+        ``damage_type``/``cancel_reason`` the native context. A lethal hit with
+        missing or inconsistent absorption/HP evidence keeps overkill unknown;
+        it never becomes zero and never changes the native totals.
         """
         self._time(game_time)
         self._amount(amount)
@@ -272,7 +310,8 @@ class Statistics:
             known, overkill = self._overkill(
                 amount, target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
-                damage_type=damage_type, cancel_reason=cancel_reason)
+                damage_type=damage_type, cancel_reason=cancel_reason,
+                shield_absorbed=shield_absorbed)
             if known:
                 self.overkill[owner] = self.overkill.get(owner, 0.0) + overkill
                 if overkill > 0:
@@ -339,6 +378,11 @@ class Statistics:
                               and not self.all_overkill_unknown
                               and owner not in self.overkill_incomplete)
             overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
+            # Engagement keeps its observed interval after coverage closes;
+            # only an explicitly reported dropped event makes it unknown.
+            engagement_known = (bool(self.event_coverage)
+                                and not self.all_engagement_unknown
+                                and owner not in self.engagement_incomplete)
             row = {'coverage_start': self.start_time,
                    'counter_snapshot_complete': complete,
                    'shield_coverage_start': self.start_time if self.event_coverage else None,
@@ -380,6 +424,12 @@ class Statistics:
                     row['engagement_' + kind] = None
                     row['active_' + kind] = 0 if self.event_coverage else None
                     row['observed_' + kind] = 0 if self.event_coverage else None
+                if not engagement_known:
+                    # A dropped event leaves the numerator and its interval
+                    # short; publish unknown instead of a low observed rate.
+                    row['engagement_' + kind] = None
+                    row['active_' + kind] = None
+                    row['observed_' + kind] = None
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())

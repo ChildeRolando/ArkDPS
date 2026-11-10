@@ -71,6 +71,7 @@ def detail_text(row):
     lines = [f'干员详情 · {row.get("name", "未知干员")} · {status}',
              f'伤害（含过量） {exact(row.get("damage"))}    治疗（含过量） {exact(row.get("healing"))}',
              f'有效护盾（观测区间） {exact(row.get("shield_absorbed"))}',
+             f'过量伤害（事件派生） {exact(row.get("overkill_damage"))}',
              f'接敌 DPS {exact(row.get("engagement_damage"))}    HPS {exact(row.get("engagement_healing"))}',
              f'伤害活跃秒 {exact(row.get("active_damage"))}    治疗活跃秒 {exact(row.get("active_healing"))}']
     lines.append(' · '.join(label + ' ' + exact((row.get('damage_by_type') or {}).get(key))

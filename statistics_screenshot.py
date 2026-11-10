@@ -12,6 +12,13 @@ from panel_model import Category
 from ui_theme import PALETTES, theme_key
 
 
+def display_number(value):
+    """User-visible numbers keep at most one decimal in the panel's 0.# form."""
+    if value is None:
+        return '—'
+    return f'{value:.1f}'.rstrip('0').rstrip('.')
+
+
 class _Bitmap:
     """Own native resources for one image; drawing never touches desktop windows."""
     def __init__(self):
@@ -162,11 +169,10 @@ def statistics_png(parent, record, config, *, theme=None):
             name = entry.name + (' · 已离场' if entry.portrait_muted else '')
             name_height = image.text(name, 20, y, 430, measure=True)
             row = data['statistics']['rows'][entry.owner_id]
-            overkill = '—' if row.get('overkill_damage') is None else repr(row['overkill_damage'])
-            coverage = (f'快照起点 {row["coverage_start"]!r} 秒 · 事件 '
-                        f'{row["shield_coverage_start"]!r} → {row["event_coverage_end"]!r} 秒 · '
-                        f'过量 {overkill}'
-                        .replace('None', '—', 2))
+            coverage = (f'快照起点 {display_number(row.get("coverage_start"))} 秒 · 事件 '
+                        f'{display_number(row.get("shield_coverage_start"))} → '
+                        f'{display_number(row.get("event_coverage_end"))} 秒 · '
+                        f'过量 {display_number(row.get("overkill_damage"))}')
             rows.append((entry, name, y, name_height, coverage))
             y += max(68, name_height + 40) + 26
         text('JSON 导出保留原值、来源与逐指标覆盖起止；此图采用当前面板的类别、排行与速率。')

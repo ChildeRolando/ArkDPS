@@ -128,14 +128,18 @@ class LiveEventCapture:
             raise
 
     def _apply_quality(self, payload):
-        """Keep recoverable per-event gaps scoped to overkill/shield."""
+        """Keep recoverable per-event gaps scoped to overkill/engagement/shield."""
         statistics = self.adapter.statistics
         if statistics is None:
             return
         for source in payload.get('unknown_sources') or ():
             statistics.mark_overkill_unknown(source)
+        for source in payload.get('engagement_unknown_sources') or ():
+            statistics.mark_engagement_unknown(source)
         if payload.get('damage_unknown'):
             statistics.mark_all_overkill_unknown()
+        if payload.get('engagement_unknown'):
+            statistics.mark_all_engagement_unknown()
         if payload.get('shield_unknown'):
             statistics.mark_shields_unknown()
 

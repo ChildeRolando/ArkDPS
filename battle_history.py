@@ -17,7 +17,7 @@ POLICIES = {
     'damage': 'native_cumulative_including_overkill',
     'healing': 'native_cumulative_including_overheal',
     'shield_absorbed': 'observed_actual_absorption_only',
-    'overkill': 'observed_settlement_value_minus_actual_hp_at_kill_after_shield',
+    'overkill': 'observed_incoming_value_minus_verified_shield_absorption_minus_actual_hp_at_kill',
     'overkill_by_type': 'observed_overkill_grouped_by_native_damage_type',
     'recent': 'cumulative_delta_game_time_window_up_to_5s',
     'engagement': 'observed_events_separate_damage_healing_union_1.5s_tail',
@@ -30,6 +30,14 @@ PRE_BY_TYPE_POLICIES = {key: value for key, value in POLICIES.items()
                         if key != 'overkill_by_type'}
 LEGACY_POLICIES = {key: value for key, value in POLICIES.items()
                    if key not in ('overkill', 'overkill_by_type')}
+# The first ARK-25 candidate recorded a policy name that treated the native
+# settlement value as post-shield. Keep those files readable instead of
+# rejecting them; their stored values are still validated as before.
+_PREVIOUS_OVERKILL_POLICY = 'observed_settlement_value_minus_actual_hp_at_kill_after_shield'
+ACCEPTED_POLICIES = (
+    POLICIES, PRE_BY_TYPE_POLICIES, LEGACY_POLICIES,
+    {**POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY},
+    {**PRE_BY_TYPE_POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY})
 _LOCK = RLock()
 
 
@@ -114,7 +122,7 @@ class BattleRecord:
             _date(data['recorded_at'])
             if data['observed_at'] is not None:
                 _date(data['observed_at'])
-            _require(data['policies'] in (POLICIES, PRE_BY_TYPE_POLICIES, LEGACY_POLICIES),
+            _require(data['policies'] in ACCEPTED_POLICIES,
                      'unsupported statistics policies')
             data['policies'] = deepcopy(POLICIES)
             _number(data['duration'], 'duration')

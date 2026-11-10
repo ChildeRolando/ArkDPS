@@ -68,8 +68,8 @@ ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期�
 
 ## ARK-25：伤害事件的过量证据
 
-`event_probe_android2791.js` 在 `Entity.ApplyModifier` 返回时，对 `targetType=0` 的伤害事件追加目标 ID、签名 `realDelta`、目标 HP 前后、`killed`、`type`/`targetType`/`cancelReason` 以及同帧已验证护盾吸收量。`amount` 仍取结算后的 `m_value`，因此护盾/抵挡已从过量的基数中排除；`shield_absorbed` 只作审计，不再次扣减。
+`event_probe_android2791.js` 在 `Entity.ApplyModifier` 返回时，对 `targetType=0` 的伤害事件追加目标 ID、签名 `realDelta`、目标 HP 前后、`killed`、`type`/`targetType`/`cancelReason` 以及同帧已验证护盾吸收量。`amount` 取原生 `m_value`；捕获样本（frame 697）证明它是吸收前的来伤值，因此 `shield_absorbed` 必须由统计层显式扣除，不能假定 `m_value` 已含吸收后的结果。探针只在同帧该目标的吸收可验证时给出吸收量；该目标在该帧出现无法解析的护盾/抵挡回调或非玩家护盾时传空，击杀对应过量即为未知。
 
-证据只在 HP 差值与 `realDelta` 一致、目标 ID 可读且符号正确时序列化。任一读取失败不关闭伤害/治疗/护盾事件流，只让该次伤害缺少证据，统计层随即将对应干员的过量标为未知。`Statistics` 只在目标实际 HP 归零时计算 `amount - (-realDelta)`，并在 `overkill_coverage_complete` 中记录事件覆盖与证据完整性；旧探针或旧历史没有这些字段时过量未知，不补零。
+证据只在 HP 差值与 `realDelta` 一致、目标 ID 可读且符号正确时序列化。任一读取失败不关闭伤害/治疗/护盾事件流，只让该次伤害缺少证据，统计层随即将对应干员的过量标为未知。来源 ID 读取失败时探针上报 `damage_unknown`（全队过量未知）与 `engagement_unknown`；无法识别伤害类型而被丢弃的事件按来源上报 `unknown_sources` 与 `engagement_unknown_sources`，使接敌分子显示未知而不是少算。`Statistics` 只在目标实际 HP 归零时计算 `amount - shield_absorbed - (-realDelta)`，并在 `overkill_coverage_complete` 中记录事件覆盖与证据完整性；旧探针或旧历史没有这些字段时过量未知，不补零。
 
 本节的 JS 偏移与实机行为尚未在设备上验证（依赖 ARK-21）；当前验收使用合成事件覆盖普通命中、击杀、护盾完全吸收、召唤归属与覆盖缺失。设备恢复后须至少补一局击杀样本的逐干员总伤害/过量对账。

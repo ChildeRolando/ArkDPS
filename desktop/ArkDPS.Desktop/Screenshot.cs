@@ -22,9 +22,9 @@ internal static class Screenshot
     public static void Window(Window window,string path)=>File.WriteAllBytes(path,Capture((FrameworkElement)window.Content));
     private static string OverkillText(JsonElement entry)
     {
-        var value=entry.Get("detail").Get("overkill_damage");
+        var detail=entry.Get("detail");var value=detail.Get("overkill_damage");
         if(value.ValueKind==JsonValueKind.Number) return "过量 "+Json.UiText(value.GetRawText())+" · 总伤害含过量";
-        return entry.Get("detail").Bool("overkill_coverage_complete") ? "过量 0 · 总伤害含过量" : "过量 — · 事件未完整覆盖";
+        return detail.Bool("event_coverage_complete") ? "过量 — · 证据不足" : "过量 — · 事件未完整覆盖";
     }
     public static byte[] Statistics(JsonElement selected,string theme)
     {

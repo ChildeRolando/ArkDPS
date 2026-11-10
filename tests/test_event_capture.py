@@ -35,7 +35,10 @@ class Observer:
         self.events = []
         self.error = None
         self.shield_unknown = False
+        self.damage_unknown = False
+        self.engagement_unknown = False
         self.unknown_sources = []
+        self.engagement_unknown_sources = []
         self.marks = []
 
     def mark(self):
@@ -45,13 +48,19 @@ class Observer:
                 'frame': self.collector.frame, 'game_time': self.collector.game_time,
                 'error': self.error, 'stopped': False,
                 'shield_unknown': self.shield_unknown,
-                'unknown_sources': list(self.unknown_sources)}
+                'damage_unknown': self.damage_unknown,
+                'engagement_unknown': self.engagement_unknown,
+                'unknown_sources': list(self.unknown_sources),
+                'engagement_unknown_sources': list(self.engagement_unknown_sources)}
 
     def drain(self):
         events, self.events = self.events, []
         return {'events': events, 'error': self.error, 'stopped': False,
                 'shield_unknown': self.shield_unknown,
-                'unknown_sources': list(self.unknown_sources)}
+                'damage_unknown': self.damage_unknown,
+                'engagement_unknown': self.engagement_unknown,
+                'unknown_sources': list(self.unknown_sources),
+                'engagement_unknown_sources': list(self.engagement_unknown_sources)}
 
 
 def event(sequence, frame=1, game_time=0, amount=20):
@@ -239,6 +248,24 @@ def test_probe_overkill_evidence_reaches_the_published_result():
     assert row['overkill_coverage_complete'] is True
 
 
+def test_lethal_hit_without_verified_absorption_context_stays_unknown():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    observer.sequence = observer.epoch = 1
+    observer.events = [{**event(1, amount=200),
+                        'target': 'enemy_1046_agent', 'real_delta': -44,
+                        'hp_before': 44., 'hp_after': 0., 'killed': True,
+                        'target_type': 0, 'damage_type': 1,
+                        'cancel_reason': 0, 'shield_absorbed': None}]
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    row = capture.sample()['rows']['char_a']
+    assert row['event_coverage_complete'] is True
+    assert row['damage'] == 120 and row['observed_damage'] == 200
+    assert row['overkill_damage'] is None
+
+
 def test_shield_gap_keeps_damage_and_overkill_without_closing_events():
     collector = Collector()
     observer = Observer(collector)
@@ -258,6 +285,38 @@ def test_shield_gap_keeps_damage_and_overkill_without_closing_events():
     assert row['event_coverage_complete'] is True
     assert row['observed_damage'] == 200
     assert row['overkill_damage'] == 156
+
+
+def test_dropped_event_hides_engagement_without_closing_coverage():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    observer.sequence = observer.epoch = 1
+    observer.engagement_unknown_sources = ['char_a']
+    observer.events = [event(1, amount=20)]
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    row = capture.sample()['rows']['char_a']
+    assert row['event_coverage_complete'] is True
+    assert row['observed_damage'] is None
+    assert row['engagement_damage'] is None
+    assert row['active_damage'] is None
+    assert row['observed_healing'] is None
+
+
+def test_unattributed_event_hides_team_engagement_and_overkill():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    observer.sequence = observer.epoch = 1
+    observer.damage_unknown = True
+    observer.engagement_unknown = True
+    observer.events = [event(1, amount=20)]
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    row = capture.sample()['rows']['char_a']
+    assert row['observed_damage'] is None
+    assert row['overkill_damage'] is None
 
 
 def test_unknown_source_keeps_coverage_and_only_hides_its_overkill():

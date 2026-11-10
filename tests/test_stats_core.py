@@ -181,6 +181,9 @@ def overkill(s, event_id, amount, actual, before, after, *, source='a', killed=N
              target='enemy', time=0, damage_type=1, **extra):
     if killed is None:
         killed = after == 0
+    # A synthetic hit without shields carries an explicit verified zero; a
+    # missing absorption context is a different (unknown) case.
+    extra.setdefault('shield_absorbed', 0.0)
     s.event(event_id, time, source, 'damage', amount, target=target,
             real_delta=-actual, hp_before=before, hp_after=after, killed=killed,
             target_type=0, damage_type=damage_type, **extra)
@@ -210,19 +213,43 @@ def test_overkill_excludes_shield_absorption_healing_and_never_double_counts():
     s = Statistics('battle', 0, event_coverage=True)
     s.register_source('a', 'a')
     s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
-    # The native modifier value is already post-shield: a fully absorbed hit
-    # settles at 0 even though the shield consumed 200 of the incoming damage.
-    overkill(s, 'absorbed', 0, 0, 800, 800, shield_absorbed=200)
-    # A partial shield still leaves the HP-applied settlement as the basis.
-    overkill(s, 'partial-kill', 100, 40, 40, 0, shield_absorbed=200)
+    # Captured frame 697: the native value is the incoming damage, the shield
+    # absorbed all 200 of it and the target's HP never moved.
+    overkill(s, 'absorbed', 200, 0, 800, 800, shield_absorbed=200)
+    # 200 incoming, 100 absorbed by the shield, 44 HP actually lost, target dies:
+    # overkill is 200 - 100 - 44, not 200 - 44.
+    overkill(s, 'partial-kill', 200, 44, 44, 0, shield_absorbed=100)
     s.event('heal', 0, 'a', 'healing', 500)
     row = s.result()['rows']['a']
-    assert row['overkill_damage'] == pytest.approx(60)
+    assert row['overkill_damage'] == pytest.approx(56)
     assert row['shield_absorbed'] == 0
     assert row['observed_healing'] == 500
     with pytest.raises(ValueError):
         s.event('bad-heal', 0, 'a', 'healing', 10, target='enemy',
                 real_delta=0, hp_before=1, hp_after=1, killed=False)
+
+
+def test_lethal_hit_requires_a_verified_absorption_context():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    # Non-lethal hits need no absorption context: their overkill is zero.
+    overkill(s, 'normal', 280, 280, 1000, 720, shield_absorbed=None)
+    overkill(s, 'kill-without-context', 200, 44, 44, 0, shield_absorbed=None)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_complete'] is False
+    assert s.result()['overkill_damage'] is None
+
+
+@pytest.mark.parametrize('absorbed', [250, 160, -1])
+def test_contradictory_absorption_evidence_is_unknown(absorbed):
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    # 250 > amount; 44 + 160 > amount; a negative absorption is invalid.
+    overkill(s, 'kill', 200, 44, 44, 0, shield_absorbed=absorbed)
+    assert s.result()['rows']['a']['overkill_damage'] is None
 
 
 @pytest.mark.parametrize('evidence', [
