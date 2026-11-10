@@ -181,6 +181,14 @@ class BattleRecord:
     def metadata(self):
         return deepcopy(self._data['metadata'])
 
+    @property
+    def event_status(self):
+        return self._data['event_status']
+
+    @property
+    def event_error(self):
+        return self._data['event_error']
+
     def to_dict(self):
         return deepcopy(self._data)
 

@@ -26,13 +26,14 @@ public sealed class Inspector : Border
         body.Children.Add(Text("点击排行中的干员，固定查看累计、独立接敌区间与数据来源。",12,false,"Muted",new Thickness(0,14,0,8)));
         body.Children.Add(Text("近期输出归零后保留固定条目；新战局清除选择。",11,false,"Muted"));
     }
-    internal void Pin(string id,JsonElement rows) {owner=id;Update(rows);}
+    internal void Pin(string id,JsonElement view) {owner=id;Update(view);}
     internal void Reset() {owner=null;Empty();}
-    internal void Update(JsonElement rows)
+    internal void Update(JsonElement view)
     {
+        var rows=view.Get("source");
         source=rows;
         if(owner==null) return;
-        var row=source.Get(owner);
+        var row=rows.Get(owner);
         if(row.ValueKind!=JsonValueKind.Object) return;
         body.Children.Clear();
         var profile=new DockPanel{Margin=new Thickness(0,0,0,20)};
@@ -44,8 +45,18 @@ public sealed class Inspector : Border
         Section("累计贡献");
         Pair("伤害 · 含过量",row.Exact("damage")); Pair("治疗 · 含过量",row.Exact("healing")); Pair("有效护盾 · 已观察",row.Exact("shield_absorbed"));
         Section("独立接敌速率");
-        Pair("DPS",row.Exact("engagement_damage"));Pair("HPS",row.Exact("engagement_healing"));
+        var rates=view.Get("rates").Get(owner);
+        var damageRate=rates.Get("damage");var healingRate=rates.Get("healing");
+        Pair("DPS",RateText(row,damageRate,"engagement_damage"));Pair("HPS",RateText(row,healingRate,"engagement_healing"));
         Pair("伤害活跃秒",row.Exact("active_damage"));Pair("治疗活跃秒",row.Exact("active_healing"));
+        // 事件不可用、未就绪或中断时，接敌列必须说明原因，而不是只留空值。
+        var rateNote=damageRate.Text("note");
+        if(rateNote.Length==0) rateNote=healingRate.Text("note");
+        if(rateNote.Length>0) body.Children.Add(Text(rateNote,11,false,"Muted",new Thickness(0,6,0,0)));
+        var rateReason=view.Text("rate_reason");
+        if(rateReason.Length>0) body.Children.Add(Text(rateReason,11,false,"Muted",new Thickness(0,4,0,0)));
+        var rateHint=view.Text("rate_hint");
+        if(rateHint.Length>0) body.Children.Add(Text(rateHint,11,false,"Muted",new Thickness(0,4,0,0)));
         Section("伤害构成 · 精确原值");
         var types=row.Get("damage_by_type");
         foreach(var (key,label,color) in new[]{("physical","物理","#E5484D"),("arts","法术","#3D8BFD"),("elemental","元素","#9B5CF6"),("true","真实","#FFFFFF")})
@@ -54,10 +65,22 @@ public sealed class Inspector : Border
         Pair("快照起点",row.Exact("coverage_start"));
         Pair("事件起点",row.Exact("shield_coverage_start"));Pair("事件终点",row.Exact("event_coverage_end"));
         body.Children.Add(Text(row.Bool("counter_snapshot_complete") ? "累计快照完整" : "累计快照不完整",11,false,"Muted",new Thickness(0,10,0,0)));
-        body.Children.Add(Text(row.Bool("event_coverage_complete") ? "事件完整覆盖" : "事件部分覆盖 · 未知不记零",11,false,"Muted"));
+        // 未建立事件覆盖与“覆盖到某点后中断”必须可区分；未覆盖区间不补零。
+        bool events=row.Get("shield_coverage_start").ValueKind==JsonValueKind.Number;
+        string coverage=!events ? "未建立事件覆盖 · 接敌与护盾保持未知，不补零"
+            : row.Bool("event_coverage_complete") ? "事件覆盖完整"
+            : "事件仅覆盖到 "+row.Exact("event_coverage_end")+" 游戏秒 · 之后未知，不补零";
+        body.Children.Add(Text(coverage,11,false,"Muted"));
         Section("归属来源");
         string sources=string.Join("\n",row.Get("sources").Items().Select(x=>x.Text()));
         body.Children.Add(Text(sources.Length>0 ? sources : "—",10,false,"Muted"));
+    }
+    private static string RateText(JsonElement row,JsonElement rate,string exact)
+    {
+        // 可靠零、未知与事件不可用由模型分类；这里只展示，不重新计算统计。
+        if(rate.Text("state")=="value") return row.Exact(exact);
+        var text=rate.Text("text");
+        return text.Length>0 ? text : row.Exact(exact);
     }
     private void Section(string title)
     {

@@ -28,6 +28,8 @@
 | 任意失败 / `error` | `ok: false`、可读 error；状态不伪造为成功，UI 保留最后有效值并提示。 |
 | `quit` / `bye` | bye 只在采集清理完成后发送；清理失败返回 error，UI 等待退出并显示失败。 |
 
+`snapshot` 的面板视图还包含事件可用性字段（`rate_available`/`rate_reason`/`rate_hint`/`rate_action`/`rate_action_label`）和逐行速率分类（`rate_state`/`rate_text`/`rate_note`）。WPF 只在接敌口径下显示原因与入口；`retry` 调用既有 `rescan`（不重启应用），`settings` 导航到连接设置。字段语义由 [panel-model](panel-model.md#事件不可用时的接敌展示ark-22) 拥有。
+
 stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。历史页是拉取式缓存：每次进入页面发送 `history_refresh`；采集会话每成功提交一条新战绩就推送一次 `history` 事件（仅 `result.written` 为真时），`serve` 在下一条 `snapshot` 前重新 `list_recent()`，所以打开的历史页也会自动出现新局。自动刷新保留当前选中副本、详情与筛选条件，不按轮询扫描目录；「刷新」按钮只作手动兜底。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
 
 ## 同包分发

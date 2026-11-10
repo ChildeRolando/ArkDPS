@@ -48,6 +48,22 @@ public partial class MainWindow
         File.WriteAllText(HistoryPath(stateDirectory,battleId),
             ArchiveJson(stateDirectory,battleId,stage),new System.Text.UTF8Encoding(false));
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
+    private async Task RunRateNoticeChecks(string id)
+    {
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
+        var panel=Panels[id];var view=panel.View;
+        Require(view.Text("rate_reason").Length>0,"engagement without events has no reason");
+        Require(view.Text("rate_action").Length>0,"engagement without events has no recovery action");
+        Require(view.Text("rate_action_label").Length>0,"engagement recovery action has no label");
+        Require(panel.RateNotice.Visibility==Visibility.Visible,"engagement notice is hidden");
+        Require(panel.Rate.IsEnabled,"engagement notice disabled switching back to five seconds");
+        foreach(var entry in view.Get("entries").Items())
+        {
+            if(entry.Text("rate_state")=="value") continue;
+            Require(entry.Text("rate").Length==0,"unavailable engagement exposed a numeric rate");
+            Require(!entry.Text("rate_text").StartsWith("0"),"unavailable engagement rendered as zero");
+        }
+    }
     private static void Click(int x,int y)
     {
         Require(SetCursorPos(x,y),"SetCursorPos failed");
@@ -312,15 +328,30 @@ public partial class MainWindow
         }
         var archive=State.Get("history").Items().FirstOrDefault(x=>x.Text("search").Contains("level_main_01-07"));
         if(archive.ValueKind==JsonValueKind.Object)await Command("history_select",new(){["battle_id"]=archive.Text("battle_id")});
+        if(archive.ValueKind==JsonValueKind.Object)
+        {
+            // 历史记录不得事后补零；必须注明该局事件未覆盖及恢复入口。
+            await Command("history_config",new(){["config"]=new{category="damage",ranking="total",rate_basis="engagement"}});
+            Require(HistoryPanel.View.Text("rate_reason").Contains("该局"),"history record without events has no reason");
+            Require(HistoryPanel.View.Text("rate_action").Length>0,"history record has no recovery entry");
+            Require(HistoryPanel.View.Get("entries").Items().All(e=>!e.Text("rate_text").StartsWith("0") || e.Text("rate_state")=="value"),"history backfilled engagement zero");
+            checks.Add("history record explains missing event coverage and is not zero-filled");
+            await Command("history_config",new(){["config"]=new{category="damage",ranking="total",rate_basis="recent_5s"}});
+        }
         var source=Panels[id].View.Get("source");string owner=source.EnumerateObject().First().Name;
-        activePanel=id;LiveInspector.Pin(owner,source);
+        activePanel=id;LiveInspector.Pin(owner,Panels[id].View);
         OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         await Settle();
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
         Require(ranks==string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share"))),"rate changed ranking / bars / shares");
         checks.Add("rate basis does not change ranks, bars or shares");
+        // 事件不可用时，接敌列必须给出原因与恢复入口，不能显示为空白或 0。
+        await RunRateNoticeChecks(id);
+        checks.Add("engagement without events shows reason + retry/settings entry, no zero substitute");
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="recent_5s"}});
+        Require(Panels[id].RateNotice.Visibility==Visibility.Collapsed,"five-second switch did not clear engagement notice");
+        checks.Add("switching back to five-second rate clears the unavailable notice");
         string placementBeforeTheme=JsonSerializer.Serialize(originalHud.Placement());
         IntPtr handleBeforeTheme=Native.Handle(originalHud);
         foreach(string theme in new[]{"lone-trail","original"})
@@ -354,7 +385,7 @@ public partial class MainWindow
         Require(originalHud.Panel.View.Get("entries").Items().First().Number("value")==98765,"HUD did not follow next live snapshot");
         Require(State.Get("history_selected").Text("battle_id")==selectedHistory,"live battle change replaced history selection");
         checks.Add("explicit synthetic next-battle snapshot updates native HUD, preserves viewed history");
-        await Command("snapshot");activePanel=id;LiveInspector.Pin(owner,Panels[id].View.Get("source"));
+        await Command("snapshot");activePanel=id;LiveInspector.Pin(owner,Panels[id].View);
         await Command("panel_duplicate",new(){["panel_id"]=id});string temporaryId=Panels.Keys.Last();
         OpenHud(temporaryId);Huds[temporaryId].Close();Require(!Huds.ContainsKey(temporaryId) && Panels.ContainsKey(temporaryId),"HUD close deleted its source");
         OpenHud(temporaryId);await Command("panel_delete",new(){["panel_id"]=temporaryId});

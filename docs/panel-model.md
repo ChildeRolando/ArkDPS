@@ -27,14 +27,23 @@
 - 未知指标不生成占位行，也不写零；输入行不被删除或修改。
 - 点击详情包含四类伤害、总量、治疗、有效护盾、活跃时间与归并来源键。
 
+## 事件不可用时的接敌展示（ARK-22）
+
+- 速率口径为「接敌」时，视图携带事件能力：`rate_available`、`rate_reason`、`rate_hint`、`rate_action`、`rate_action_label`。只有 `event_status` 为 `recording`/`finished` 才视为可用；`failed`、`unavailable`、`stopped`、`gap`、`attaching`/`ready` 都给出可读原因与恢复入口。
+- 实时面板的恢复入口是「重试事件观测」（重新连接采集，不重启应用）或「打开连接设置」；历史记录只提供连接设置入口，并明确该局无法补采。
+- 逐行 `rate_state` 区分：`value`（有值）、`no_engagement`（事件覆盖完整且该干员零事件，显示「无接敌」）、`unknown`（覆盖不完整）、`unavailable`（事件观测不可用）。`rate_text` 是对应的完整显示文本（`123/s`、`无接敌` 或 `—`），`rate_note` 说明可靠零/未知原因。
+- 事件不可用时不得以 0、墙钟时间或近 5 秒速率冒充接敌速率；速率选择器仍允许切回「近 5 秒」，并给出原因提示。
+- 实时视图的事件能力来自当前样本 `event_status`/`event_error`；历史视图来自 `BattleRecord.event_status`/`event_error` 与逐行 `shield_coverage_start`/`event_coverage_end`。覆盖不完整时注明可靠区间，未覆盖区间保持未知、不补零。
+- 事件观测恢复后，同一面板在下一次快照自动更新，无需重建面板或重开窗口。
+
 ## 验证
 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
-python -m pytest tests/test_panel_model.py -q --assert=plain
+python -m pytest tests/test_panel_model.py tests/test_desktop_bridge.py tests/test_wpf_contract.py -q --assert=plain
 ```
 
-覆盖：类别切换、总量/实时并列、速率列不影响排行/柱长/占比、线性柱长、原始值排序、颜色与分型、离场灰像、实时零输出移除与回归、未知指标与不完整队伍占比、配置持久化与集合校验。
+覆盖：类别切换、总量/实时并列、速率列不影响排行/柱长/占比、线性柱长、原始值排序、颜色与分型、离场灰像、实时零输出移除与回归、未知指标与不完整队伍占比、配置持久化与集合校验；以及事件不可用、事件覆盖中途关闭、某干员零事件、历史记录事件不完整四种接敌展示回归，断言不出现 0 值冒充未知，并在同一面板验证事件恢复。
 
 ## 边界
 
