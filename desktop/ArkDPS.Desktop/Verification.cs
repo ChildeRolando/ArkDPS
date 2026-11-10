@@ -147,6 +147,42 @@ public partial class MainWindow
                     "floating JSON "+numericField+" was accepted or quit was sent after rejection");
         }
         checks.Add("floating response version and id values are rejected fail-closed");
+        // A worker that stops answering quit and never exits must not hold the UI
+        // open: disposal has to give up in bounded time, end its own child handle
+        // and keep the diagnostic.
+        string stubbornRoot=Path.Combine(output,"stubborn-worker");Directory.CreateDirectory(stubbornRoot);
+        File.WriteAllLines(Path.Combine(stubbornRoot,"desktop_bridge.py"),new[]{
+            "import json,sys,time",
+            "hello=json.loads(sys.stdin.readline())",
+            "print(json.dumps(dict(version=1,id=hello['id'],ok=True,kind='hello',result=dict(transport='stdio-jsonl'))),flush=True)",
+            "time.sleep(120)"});
+        var stubborn=new BridgeClient(stubbornRoot,App.Python,Array.Empty<string>());
+        bool stubbornReported=false;long stubbornStart=Environment.TickCount64;
+        try{await stubborn.ConnectAsync();await stubborn.DisposeAsync();}
+        catch(IOException){stubbornReported=true;}
+        long stubbornElapsed=Environment.TickCount64-stubbornStart;
+        Require(stubbornReported,"a worker that ignored quit was not reported as a cleanup failure");
+        Require(stubbornElapsed<=(BridgeClient.QuitSeconds+BridgeClient.ExitSeconds+5)*1000L,
+                "worker that ignored quit blocked exit for "+stubbornElapsed+"ms");
+        Require(File.ReadAllText(stubborn.LogPath).Contains("[exit]"),"bounded worker exit left no diagnostic");
+        checks.Add("worker that ignores quit is ended by handle inside the bounded exit window and logged");
+        // The worker can be gone while a grandchild still holds the inherited stderr
+        // pipe; waiting for that pipe EOF used to keep the window alive forever.
+        string inheritedRoot=Path.Combine(output,"inherited-stderr-worker");Directory.CreateDirectory(inheritedRoot);
+        File.WriteAllLines(Path.Combine(inheritedRoot,"desktop_bridge.py"),new[]{
+            "import json,subprocess,sys",
+            "hello=json.loads(sys.stdin.readline())",
+            "print(json.dumps(dict(version=1,id=hello['id'],ok=True,kind='hello',result=dict(transport='stdio-jsonl'))),flush=True)",
+            "quit=json.loads(sys.stdin.readline())",
+            "print(json.dumps(dict(version=1,id=quit['id'],ok=True,kind='bye')),flush=True)",
+            "subprocess.Popen([sys.executable,'-c','import time; time.sleep(6)'],close_fds=False)",
+            "raise SystemExit(0)"});
+        var inherited=new BridgeClient(inheritedRoot,App.Python,Array.Empty<string>());
+        long inheritedStart=Environment.TickCount64;
+        try{await inherited.ConnectAsync();await inherited.DisposeAsync();}catch(IOException){}// pipe EOF is irrelevant to exit
+        long inheritedElapsed=Environment.TickCount64-inheritedStart;
+        Require(inheritedElapsed<3000,"inherited stderr pipe delayed exit by "+inheritedElapsed+"ms");
+        checks.Add("exit follows the worker process, not EOF on a pipe held by a surviving grandchild");
         commands++;lastResponse=System.Diagnostics.Stopwatch.GetTimestamp()-3*System.Diagnostics.Stopwatch.Frequency;
         await Poll();Require(Status.Text.Contains("worker 响应"),"stalled worker left a live status");commands--;
         checks.Add("UI freshness deadline marks stalled worker responses stale without zeroing data");

@@ -95,8 +95,9 @@ public partial class MainWindow : Window
             var reply=await bridge.RequestAsync(op,fields);ApplyState(reply.Get("state"));
             if(reply.Get("result").ValueKind==JsonValueKind.String) Footer.Text=reply.Text("result");
         }
-        catch(BridgeCommandException ex){if(App.Verification!=null)throw;MessageBox.Show(this,ex.Message,"操作未完成");}
-        catch(Exception ex){Lost(ex.Message);if(App.Verification==null) MessageBox.Show(this,ex.Message,"采集进程连接中断");}
+        // Never raise a modal dialog once shutdown has begun: it would block the close.
+        catch(BridgeCommandException ex){if(App.Verification!=null)throw;if(!closingRequested)MessageBox.Show(this,ex.Message,"操作未完成");else WriteQuitLog("命令失败："+ex.Message);}
+        catch(Exception ex){Lost(ex.Message);if(App.Verification==null&&!closingRequested) MessageBox.Show(this,ex.Message,"采集进程连接中断");}
         finally{commands--;}
     }
     private void Lost(string message)
@@ -327,11 +328,46 @@ public partial class MainWindow : Window
     {
         if(quitting || closingRequested)return;closingRequested=true;
         poll.Stop();save.Stop();
-        if(code==0)await SavePlacement();quitting=true;
+        // Exit must never depend on a healthy worker or on a dialog. Every step is
+        // bounded and failures are logged; the window closes even if cleanup stalls.
+        try
+        {
+            var cleanup=Release(code);
+            if(await Task.WhenAny(cleanup,Task.Delay(TimeSpan.FromSeconds(20)))!=cleanup)
+            {
+                code=1;WriteQuitLog("退出清理超过 20 秒，强制结束界面");
+            }
+            else code=await cleanup;
+        }
+        catch(Exception ex){code=1;WriteQuitLog("退出流程异常："+ex);}
+        System.Windows.Application.Current.Shutdown(code);
+    }
+    private async Task<int> Release(int code)
+    {
+        if(code==0)
+        {
+            try{await SavePlacement();}catch(Exception ex){code=1;WriteQuitLog("保存布局失败："+ex.Message);}
+        }
+        quitting=true;
         foreach(var hud in Huds.Values.ToArray()){hud.SuppressClose=true;hud.Close();}Huds.Clear();
         tray?.Dispose();tray=null;Footer.Text="正在释放 Python 采集会话…";
         try{if(bridge!=null)await bridge.DisposeAsync();}
-        catch(Exception ex){code=1;if(App.Verification==null)MessageBox.Show(this,ex.Message,"退出清理未确认");else File.WriteAllText(Path.Combine(App.Verification,"cleanup-error.txt"),ex.ToString());}
-        System.Windows.Application.Current.Shutdown(code);
+        catch(Exception ex)
+        {
+            code=1;WriteQuitLog("退出清理未确认："+ex.Message);
+            if(App.Verification!=null)
+                try{Directory.CreateDirectory(App.Verification);File.WriteAllText(Path.Combine(App.Verification,"cleanup-error.txt"),ex.ToString());}catch(IOException){}
+        }
+        return code;
+    }
+    private static void WriteQuitLog(string message)
+    {
+        try
+        {
+            string directory=Path.Combine(App.Root,"runtime");Directory.CreateDirectory(directory);
+            File.AppendAllText(Path.Combine(directory,"wpf-quit.log"),DateTime.Now.ToString("O")+" "+message+Environment.NewLine);
+        }
+        catch(IOException){}
+        catch(UnauthorizedAccessException){}
     }
 }

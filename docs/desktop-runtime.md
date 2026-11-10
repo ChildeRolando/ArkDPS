@@ -66,7 +66,7 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 
 每次脚本新建独立 state 目录，不覆盖产品配置；真实运行 WPF、真实 stdio 握手、切换双皮肤、保存主窗/HUD/历史/设置/完整排行 PNG，并在新进程恢复配置。对私有下层测试窗口发送 Win32 鼠标输入，核对 HUD → 下层 → HUD。包验收还断言 worker 实际使用包内 Python 3.12.10 / Frida 17.26.1；构建 smoke 将系统 Python 环境变量设为无效值，验证不依赖宿主 Python。
 
-**这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确 `NOT VERIFIED`，不将原生回调或 `Show()` 冒充物理双击。WPF 的实际游戏点击穿透、物理托盘恢复、实际 Windows 混合 DPI、游戏实机换局仍须当前候选的人工验证，不能沿用 Tk 的旧证据。独立评审及这些人工项收口前，不宣称整票/首版发布验收完成。
+**这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确 `NOT VERIFIED`，不将原生回调或 `Show()` 冒充物理双击。实际游戏点击穿透、物理托盘恢复与真实换局已在候选 `f7d59d9` 上完成实机验证（见下节），但混合 DPI 与退出/重启仍未收口；不得把本轮离线回执或旧候选证据当作这些实机项的通过证据。独立评审及这些人工项收口前，不宣称整票/首版发布验收完成。
 
 
 ## 本轮离线验收结果（2026-11-10）
@@ -75,11 +75,26 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 - 使用本地 SDK 10.0.403 实际构建 `net10.0-windows`，0 warning / 0 error；源版原生 WPF 验收通过，包含真实错误版本 worker 拒绝、握手后模拟 worker 崩溃与非零退出可观测、卡住响应的 UI 过期提示、双皮肤 HWND/位置/尺寸/透明度/锁定不变、私有窗口点击路由、合成换局及新进程配置恢复。
 - 自包含发布及带 Python 3.12.10 / Frida 17.26.1 的单包已实际构建和离线清洁解压运行，完成 v1 配置升级、显式 legacy 回退再进入 WPF；未删除 Tk 回退入口。精确候选、包摘要和截图摘要随构建回执交付。
 - 继承的 V1 红/蓝/紫/白语义色未通过通用分类色校验（蓝/紫的 CVD/正常视觉距离及白色 lightness/chroma）；不擅自改写固定语义色，也不声称色盲安全，提供文字图例和精确明细。
-- ARK-14 尚未交接设备，当前严格没有启动第二个实机采集器，也未操作 MuMu。WPF 的实际游戏点击、物理托盘双击和真实 DPI/游戏换局仍待设备释放后串行验收；这不是整票/首版发布完成声明。
+- 实机项已不再等待设备交接：候选 `f7d59d9` 已在 MuMu（真实 collector、96 DPI、主屏 1920×1080 + 负坐标副屏）完成穿透点击、物理托盘双击、真实换局/历史隔离、双皮肤切换与导出，结果见下节。混合 DPI（125/150/200%）仍无硬件可测，退出/重启项仍未通过。
 
 ## PR #21 当前候选离线复验（2026-11-10）
 
 - 通过 `ARKDPS_DOTNET` 指向任务本地 .NET SDK 10.0.403，`net10.0-windows` 构建成功，0 warning / 0 error。
 - `python acceptance/verify_wpf.py --output <新建隔离目录>` 生成 `PASS_OFFLINE_WPF` 回执；源版 WPF 首次启动与重启恢复均通过。回执包含 stdio JSONL 错误边界、两个主题、合成历史/HUD、私有 HWND 点击路由及截图 SHA-256。
 - 首次运行暴露的是验收夹具错误：fake worker 对第二个 `snapshot` 请求返回了默认 `kind=state`；将夹具响应改为 `kind=snapshot` 后完整离线验收通过。该次失败不是产品 WPF/worker 故障。
-- 此验收只使用合成数据和模拟 worker；没有访问 MuMu、启动 collector 或证明游戏点击穿透。物理托盘双击仍为 `NOT VERIFIED`，实机与正式 Multica Review Loop 仍未闭环。
+- 此验收只使用合成数据和模拟 worker；没有访问 MuMu、启动 collector 或证明游戏点击穿透。物理托盘双击在离线回执中仍为 `NOT VERIFIED`，因为离线验收无法定位真实 Shell 通知图标。
+
+## 实机验收状态（候选 f7d59d9，2026-11-10）
+
+同一 MuMu 实例串行执行，单实例（WPF PID 3252、HUD HWND 460528），证据为 `ARK-19-f7d59d9-live-evidence.zip`。以下“通过”均指实机回执，不是离线合成数据。
+
+| 实机项 | 结果 | 依据 |
+|---|---|---|
+| 游戏实际接收锁定 HUD 穿透点击 | **PASS** | `real-click-receipt.json`：`WindowFromPoint` 命中游戏渲染子窗；点击后帧 1384→1430，第二次点击使游戏进入 PAUSE |
+| Windows 通知区物理托盘双击恢复 | **PASS** | `real-tray-receipt.json`：主窗隐藏时采集继续（帧 1479→1537），原生双击真实 Shell 图标后恢复，解锁后 HUD 恢复命中 |
+| 真实换局 + 历史/HUD 隔离 | **PASS** | `live-history-isolation-receipt.json`：第二局开始后 HUD 跟随新局，正在查看的第一局战绩与归档未被替换 |
+| 实机双皮肤切换、历史 JSON 与完整排行 PNG 导出 | **PASS** | `08-lone-trail-live-*.png`、`11-original-history-live-*.png`、`real-export-receipt.json` |
+| 正常退出 / 主题重启恢复 | **未通过** | 点击「退出」后 18 秒主进程仍未结束，重启恢复无法执行 |
+| 混合 DPI（125/150/200%） | **未覆盖** | 仅有 96 DPI 硬件 |
+
+退出失败的实际记录：20:46:12.81 点击「退出」，`layout.json` 已写盘；worker 审计在同一秒内写入 `{"kind":"stopped","data":{}}` 且无 `cleanup_errors`，说明采集清理已完成，问题在 WPF 退出路径。该路径有两处可复现的有界性缺陷：`BridgeClient.DisposeAsync` 用 `Process.WaitForExitAsync()` 等待 worker，它同时等待被重定向的 stderr 管道 EOF，实测中存活孙进程持有该继承句柄时该等待永不返回（已用模拟 worker 在离线验收中稳定复现）；清理失败提示又是模态 `MessageBox`，会直接阻塞 `Application.Shutdown`。修复后退出改为有界等待（quit 5 秒、进程退出 10 秒），超时写诊断并仅结束本进程持有的子进程句柄（不按进程名清理），退出期间不再弹模态框。正常退出与主题重启恢复须在修复后的精确新 head 上重跑实机项，本次不宣称其通过。

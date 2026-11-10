@@ -71,3 +71,15 @@ def test_legacy_ui_acceptance_aborts_before_tk_on_dpi_failure(tmp_path, monkeypa
     monkeypatch.setattr(verify.tk, 'Tk', lambda: pytest.fail('created Tk without DPI awareness'))
     with pytest.raises(RuntimeError, match='DPI awareness'):
         verify.run(tmp_path/'evidence', False)
+
+
+def test_wpf_quit_is_bounded_and_never_modal():
+    bridge = (ROOT/'desktop/ArkDPS.Desktop/BridgeClient.cs').read_text('utf-8')
+    # WaitForExitAsync() also waits for EOF on the redirected stderr pipe, so a
+    # surviving grandchild that inherited the handle can block it indefinitely.
+    assert 'await process.WaitForExitAsync()' not in bridge
+    assert 'WaitForExitBoundedAsync' in bridge and 'ExitSeconds' in bridge and 'QuitSeconds' in bridge
+    window = (ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml.cs').read_text('utf-8')
+    quit_body = window[window.index('internal async Task Quit'):]
+    assert 'MessageBox' not in quit_body
+    assert 'Task.WhenAny' in quit_body and 'WriteQuitLog' in quit_body

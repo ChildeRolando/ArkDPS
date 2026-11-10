@@ -33,6 +33,10 @@ internal sealed class BridgeClient : IAsyncDisposable
 {
     public const int Version = 1;
     private const int MaxMessage = 32 * 1024 * 1024;
+    // Bounded so a worker that stops answering cannot keep the UI alive:
+    // quit must be answered in QuitSeconds, and the process must exit in ExitSeconds.
+    internal const int QuitSeconds = 5;
+    internal const int ExitSeconds = 10;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Process process;
     private readonly StreamWriter log;
@@ -57,7 +61,7 @@ internal sealed class BridgeClient : IAsyncDisposable
         start.ArgumentList.Add(Path.Combine(root, "desktop_bridge.py"));
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
         process = new() { StartInfo = start, EnableRaisingEvents = true };
-        process.ErrorDataReceived += (_, e) => { if(e.Data!=null) lock(log) log.WriteLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if(e.Data!=null){ try{ lock(log) log.WriteLine(e.Data); }catch(ObjectDisposedException){} } };
         try
         {
             if (!process.Start()) throw new IOException("无法启动 Python 采集进程");
@@ -146,7 +150,7 @@ internal sealed class BridgeClient : IAsyncDisposable
             {
                 if(!transportUnusable)
                 {
-                    var bye=await RequestAsync("quit");
+                    var bye=await RequestAsync("quit",timeoutOverride:TimeSpan.FromSeconds(QuitSeconds));
                     if(bye.Text("kind")!="bye") error=new IOException("worker 退出确认缺失");
                 }
                 // On an uncertain stream, quit could consume stale/partial output.
@@ -156,14 +160,57 @@ internal sealed class BridgeClient : IAsyncDisposable
         catch(Exception ex){error=ex;}
         finally
         {
-            // EOF is also a shutdown signal on UI crashes. Python joins its
-            // collector thread; never kill by name or abandon device cleanup.
-            process.StandardInput.Close();
-            await process.WaitForExitAsync();process.WaitForExit();
-            int exit=process.ExitCode;process.Dispose();log.Dispose();
-            if(exit!=0)error=new IOException("采集进程退出码 "+exit+"；清理日志："+LogPath,error);
+            bool exited=false;
+            int exit=-1;
+            Exception? closeError=null;
+            try
+            {
+                // EOF is also a shutdown signal on UI crashes. Python joins its
+                // collector thread; never kill by name or abandon device cleanup.
+                try{process.StandardInput.Close();}catch(IOException ex){closeError=ex;}
+                // Wait for the process exit itself, not for EOF on the redirected
+                // stderr pipe: a grandchild that inherited that handle can keep the
+                // pipe open after the worker is already gone, and awaiting the pipe
+                // would then block the UI forever. Never use WaitForExitAsync here.
+                exited=await WaitForExitBoundedAsync(TimeSpan.FromSeconds(ExitSeconds));
+                if(!exited)
+                {
+                    string diagnostic="worker 未在 "+ExitSeconds+" 秒内退出；仅结束本进程持有的子进程 PID "+process.Id;
+                    try{process.Kill();}catch(Exception ex){diagnostic+="；结束子进程失败："+ex.Message;}
+                    bool killed=await WaitForExitBoundedAsync(TimeSpan.FromSeconds(2));
+                    if(!killed) diagnostic+="；结束命令后仍未退出";
+                    WriteDiagnostic(diagnostic);
+                    error=new IOException(diagnostic+"；诊断日志："+LogPath,error);
+                }
+            }
+            finally
+            {
+                if(exited)
+                {
+                    try{exit=process.ExitCode;}catch(InvalidOperationException){}
+                    if(exit!=0)error=new IOException("采集进程退出码 "+exit+"；清理日志："+LogPath,error);
+                }
+                else error??=new IOException("采集进程退出未确认；诊断日志："+LogPath,closeError);
+                try{process.Dispose();}catch(InvalidOperationException){}
+                log.Dispose();
+            }
         }
         if(error!=null)throw error;
+    }
+    private async Task<bool> WaitForExitBoundedAsync(TimeSpan timeout)
+    {
+        long deadline=Environment.TickCount64+(long)timeout.TotalMilliseconds;
+        while(!process.HasExited)
+        {
+            long remaining=deadline-Environment.TickCount64;
+            if(remaining<=0)return false;
+            await Task.Delay((int)Math.Min(100,remaining));
+        }
+        return true;
+    }
+    private void WriteDiagnostic(string message)
+    {
+        try{lock(log) log.WriteLine("[exit] "+DateTime.Now.ToString("O")+" "+message);}catch(ObjectDisposedException){}
     }
 }
 internal sealed class BridgeCommandException(string message) : Exception(message);
