@@ -6,7 +6,7 @@
 
 ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期模式，`BattleRuntime` 分配 ID，快照和 `LiveEventCapture.ingest()` 共用一个适配器。跨帧重试保留队列；新局重建基线并隔离旧事件；同进程不因换局重挂载。首个终局先处理可靠水位再冻结，累计修订与一次归档沿用同局 ID。新日志的 `lifecycle_observation.events` 保留屏障/drain，`published.native_rows` 保留原生来源，`rows` 为窗口投影；独立对账器兼容两种日志。新候选的跨局实机尚未验收，范围和当前 MAA 错误证据见 [生命周期交接](snapshot-adapter.md)。
 
-`app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 命令行模式共用 `CollectionSession`。通过进程身份和游戏版本校验后，默认向本机已验证端点 `127.0.0.1:27043` 尝试临时事件观测；`--frida-remote host:port` 可覆盖端点，`--no-events` 显式关闭。API 的默认值同样为该端点，传入 `frida_remote=None` 关闭，可供 ARK-11 设置入口使用。Frida 17.26.1 客户端、同版服务及端口转发须由调用方准备；采集器结束时卸载自己的脚本，不安装或启动服务、不使用 eternalize。
+`app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 命令行模式共用 `CollectionSession`。通过进程身份和游戏版本校验后，默认向本机已验证端点 `127.0.0.1:27043` 尝试临时事件观测；`--frida-remote host:port` 可覆盖端点，`--no-events` 显式关闭。API 的默认值同样为该端点，传入 `frida_remote=None` 关闭，可供 ARK-11 设置入口使用。Frida 17.26.1 客户端、同版服务及端口转发须由调用方准备；采集器结束时卸载自己的脚本，不安装或启动服务、不使用 eternalize。V2 计划在用户显式 root 授权后随包分发并管理同版设备端 server；V1 的上述边界不变，见 [ADR 0004](adr/0004-v2-root-opt-in-frida-server.md)。
 
 连接先校验进程与游戏版本，再准备观察器，最后定位战局。因此观察器可以在进入关卡前就绪。`Collector.connect()` 的默认行为保持同时定位；`connect(locate=False)` 允许提前挂载，之后调用 `locate_battle()`。
 
