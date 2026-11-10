@@ -42,24 +42,24 @@ public sealed class Inspector : Border
         name.Children.Add(Text(row.Get("present").ValueKind switch{JsonValueKind.True=>"在场",JsonValueKind.False=>"已离场 · 累计保留",_=>"在场状态未知"},11,false,"Muted"));
         profile.Children.Add(name);body.Children.Add(profile);
         Section("累计贡献");
-        Pair("伤害 · 含过量",row.Exact("damage")); Pair("治疗 · 含过量",row.Exact("healing")); Pair("有效护盾 · 已观察",row.Exact("shield_absorbed"));
-        Pair("过量伤害 · 事件派生",row.Exact("overkill_damage"));
+        Pair("伤害 · 含过量",row.Ui("damage")); Pair("治疗 · 含过量",row.Ui("healing")); Pair("有效护盾 · 已观察",row.Ui("shield_absorbed"));
+        Pair("过量伤害 · 事件派生",row.Ui("overkill_damage"));
         if(row.Bool("overkill_type_complete"))
         {
             var overkillTypes=row.Get("overkill_damage_by_type");
-            body.Children.Add(Text("物理 "+overkillTypes.Exact("physical")+" · 法术 "+overkillTypes.Exact("arts")+" · 元素 "+overkillTypes.Exact("elemental")+" · 真实 "+overkillTypes.Exact("true"),10,false,"Muted",new Thickness(0,2,0,0)));
+            body.Children.Add(Text("物理 "+overkillTypes.Ui("physical")+" · 法术 "+overkillTypes.Ui("arts")+" · 元素 "+overkillTypes.Ui("elemental")+" · 真实 "+overkillTypes.Ui("true"),10,false,"Muted",new Thickness(0,2,0,0)));
         }
         body.Children.Add(Text(OverkillNote(row),11,false,"Muted",new Thickness(0,6,0,0)));
         Section("独立接敌速率");
-        Pair("DPS",row.Exact("engagement_damage"));Pair("HPS",row.Exact("engagement_healing"));
-        Pair("伤害活跃秒",row.Exact("active_damage"));Pair("治疗活跃秒",row.Exact("active_healing"));
+        Pair("DPS",row.Ui("engagement_damage"));Pair("HPS",row.Ui("engagement_healing"));
+        Pair("伤害活跃秒",row.Ui("active_damage"));Pair("治疗活跃秒",row.Ui("active_healing"));
         Section("伤害构成 · 精确原值");
         var types=row.Get("damage_by_type");
         foreach(var (key,label,color) in new[]{("physical","物理","#E5484D"),("arts","法术","#3D8BFD"),("elemental","元素","#9B5CF6"),("true","真实","#FFFFFF")})
-            Pair(label,types.Exact(key),color);
+            Pair(label,types.Ui(key),color);
         Section("观测覆盖");
-        Pair("快照起点",row.Exact("coverage_start"));
-        Pair("事件起点",row.Exact("shield_coverage_start"));Pair("事件终点",row.Exact("event_coverage_end"));
+        Pair("快照起点",row.Ui("coverage_start"));
+        Pair("事件起点",row.Ui("shield_coverage_start"));Pair("事件终点",row.Ui("event_coverage_end"));
         body.Children.Add(Text(row.Bool("counter_snapshot_complete") ? "累计快照完整" : "累计快照不完整",11,false,"Muted",new Thickness(0,10,0,0)));
         body.Children.Add(Text(row.Bool("event_coverage_complete") ? "事件完整覆盖" : "事件部分覆盖 · 未知不记零",11,false,"Muted"));
         if(row.Bool("shield_unknown"))

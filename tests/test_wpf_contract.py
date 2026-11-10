@@ -91,3 +91,16 @@ def test_wpf_surfaces_event_derived_overkill_without_redefining_damage():
     assert '"伤害 · 含过量"' in inspector
     assert '过量伤害 · 事件派生' in inspector and 'overkill_damage' in inspector
     assert '总伤害含过量' in screenshot and 'overkill_damage' in screenshot
+
+
+def test_wpf_user_facing_numbers_use_at_most_one_decimal():
+    bridge = (ROOT/'desktop/ArkDPS.Desktop/BridgeClient.cs').read_text('utf-8')
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')
+    panel = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml.cs').read_text('utf-8')
+    assert 'public static string Ui(' in bridge and 'ToString("0.#"' in bridge
+    assert '.Exact(' not in inspector
+    assert 'Json.UiText(entry.Text("exact_value"))' in screenshot
+    assert '0.###' not in screenshot
+    assert 'Entry.Exact("rate")' not in panel and 'Entry.Exact("share")' not in panel
+    assert 'Json.UiText(Entry.Text("exact_value"))' in panel

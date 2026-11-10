@@ -23,7 +23,7 @@ internal static class Screenshot
     private static string OverkillText(JsonElement entry)
     {
         var value=entry.Get("detail").Get("overkill_damage");
-        if(value.ValueKind==JsonValueKind.Number) return "过量 "+value.GetDouble().ToString("0.###")+" · 总伤害含过量";
+        if(value.ValueKind==JsonValueKind.Number) return "过量 "+Json.UiText(value.GetRawText())+" · 总伤害含过量";
         return entry.Get("detail").Bool("overkill_coverage_complete") ? "过量 0 · 总伤害含过量" : "过量 — · 事件未完整覆盖";
     }
     public static byte[] Statistics(JsonElement selected,string theme)
@@ -41,7 +41,7 @@ internal static class Screenshot
             var portrait=new Image{Source=item.Portrait,Width=40,Height=40,Margin=new Thickness(10,8,10,16)};row.Children.Add(portrait);
             var text=new StackPanel{Margin=new Thickness(0,9,12,16)};text.Children.Add(Inspector.Text(item.Name,16,true,"ConsoleInk"));text.Children.Add(Inspector.Text(item.Presence,11,false,"ConsoleMuted"));Grid.SetColumn(text,1);row.Children.Add(text);
             var values=new StackPanel{Margin=new Thickness(0,8,12,16),HorizontalAlignment=HorizontalAlignment.Right};
-            var exact=Inspector.Text(entry.Text("exact_value"),18,true,"ConsoleInk");exact.FontFamily=new FontFamily("Bahnschrift");exact.TextWrapping=TextWrapping.NoWrap;exact.TextAlignment=TextAlignment.Right;
+            var exact=Inspector.Text(Json.UiText(entry.Text("exact_value")),18,true,"ConsoleInk");exact.FontFamily=new FontFamily("Bahnschrift");exact.TextWrapping=TextWrapping.NoWrap;exact.TextAlignment=TextAlignment.Right;
             var secondary=Inspector.Text(item.Secondary,12,false,"ConsoleMuted");secondary.TextAlignment=TextAlignment.Right;
             var overkill=Inspector.Text(OverkillText(entry),11,false,"ConsoleMuted");overkill.TextAlignment=TextAlignment.Right;
             values.Children.Add(exact);values.Children.Add(secondary);values.Children.Add(overkill);Grid.SetColumn(values,2);row.Children.Add(values);

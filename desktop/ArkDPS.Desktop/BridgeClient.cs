@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -26,6 +27,22 @@ internal static class Json
         value.ValueKind == JsonValueKind.Array ? value.EnumerateArray() : Array.Empty<JsonElement>();
     public static string Exact(this JsonElement value, string name) =>
         value.Get(name).ValueKind is JsonValueKind.Null or JsonValueKind.Undefined ? "—" : value.Get(name).ToString();
+    // Every user-visible number keeps at most one decimal place. Internal
+    // ranking, share and export values remain unrounded.
+    public static string Ui(this JsonElement value, string name)
+    {
+        var item = value.Get(name);
+        if (item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return "—";
+        if (item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out var number) && double.IsFinite(number))
+            return number.ToString("0.#", CultureInfo.InvariantCulture);
+        return item.ToString();
+    }
+    public static string UiText(string text)
+    {
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number))
+            return number.ToString("0.#", CultureInfo.InvariantCulture);
+        return text;
+    }
 }
 
 /// <summary>One WPF parent, one Python child. Versioned UTF-8 JSON Lines only.</summary>
