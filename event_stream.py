@@ -77,10 +77,15 @@ class EventStream:
         self.stop()
         raise StreamGap(message)
 
-    def accept(self, *, session, sequence, frame, game_time, source, kind, amount):
+    def accept(self, *, session, sequence, frame, game_time, source, kind, amount,
+               target=None, real_delta=None, hp_before=None, hp_after=None,
+               killed=None, target_type=None, damage_type=None,
+               cancel_reason=None, shield_absorbed=None):
         if self.closed:
             raise StreamGap('event stream is closed')
-        payload = (session, frame, game_time, source, kind, amount)
+        payload = (session, frame, game_time, source, kind, amount,
+                   target, real_delta, hp_before, hp_after, killed,
+                   target_type, damage_type, cancel_reason, shield_absorbed)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -95,7 +100,12 @@ class EventStream:
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
         try:
-            self.statistics.event(f'{self.session}:{sequence}', game_time, source, kind, amount)
+            self.statistics.event(
+                f'{self.session}:{sequence}', game_time, source, kind, amount,
+                target=target, real_delta=real_delta, hp_before=hp_before,
+                hp_after=hp_after, killed=killed, target_type=target_type,
+                damage_type=damage_type, cancel_reason=cancel_reason,
+                shield_absorbed=shield_absorbed)
         except (ValueError, TypeError):
             self._fail('event is invalid or cannot be attributed')
         self.sequence = sequence

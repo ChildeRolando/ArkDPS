@@ -30,7 +30,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Value => Entry.Text("display_value");
     public string Presence => (Entry.Bool("portrait_muted") ? "已离场" : "统计条目") + (Entry.Bool("incomplete") ? " · 部分覆盖" : "");
     public string Secondary => Entry.Text("share_display") + (Entry.Text("rate_label").Length > 0 ? "   " + Entry.Text("rate_display") + "/s" : "");
-    public string Tooltip => Name + "\n排行原值 " + Entry.Text("exact_value") + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Exact("rate") + "\n占比 " + Entry.Exact("share");
+    public string Tooltip => Name + "\n排行原值 " + Json.UiText(Entry.Text("exact_value")) + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + "\n占比 " + Entry.Text("share_display") + "\n过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + "（总伤害含过量）";
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
@@ -72,6 +72,17 @@ internal static class Portraits
 
 public sealed class ContributionBar : FrameworkElement
 {
+    private static readonly DrawingBrush OverkillHatch=CreateOverkillHatch();
+    private static DrawingBrush CreateOverkillHatch()
+    {
+        var group=new DrawingGroup();
+        var dark=new Pen(new SolidColorBrush(Color.FromArgb(150,0,0,0)),1);
+        var light=new Pen(new SolidColorBrush(Color.FromArgb(150,255,255,255)),1);
+        group.Children.Add(new GeometryDrawing(null,dark,new LineGeometry(new Point(0,6),new Point(6,0))));
+        group.Children.Add(new GeometryDrawing(null,light,new LineGeometry(new Point(1,7),new Point(7,1))));
+        var brush=new DrawingBrush(group){TileMode=TileMode.Tile,Viewport=new Rect(0,0,6,6),ViewportUnits=BrushMappingMode.Absolute,Stretch=Stretch.None};
+        brush.Freeze(); return brush;
+    }
     public static readonly DependencyProperty DataProperty=DependencyProperty.Register(nameof(Data),typeof(JsonElement),typeof(ContributionBar),new FrameworkPropertyMetadata(default(JsonElement),FrameworkPropertyMetadataOptions.AffectsRender));
     public JsonElement Data { get => (JsonElement)GetValue(DataProperty); set => SetValue(DataProperty,value); }
     protected override void OnRender(DrawingContext dc)
@@ -87,7 +98,23 @@ public sealed class ContributionBar : FrameworkElement
         foreach(var segment in segments)
         {
             double size=Math.Min(width-x,width*Math.Clamp(segment.Number("ratio"),0,1));
-            if(size>0) dc.DrawRectangle(Theme.Brush(segment.Text("color")),null,new Rect(x,0,Math.Max(0,size-2),ActualHeight));
+            if(size>0)
+            {
+                double body=Math.Max(0,size-2);
+                dc.DrawRectangle(Theme.Brush(segment.Text("color")),null,new Rect(x,0,body,ActualHeight));
+                if(segment.TryGetProperty("overkill_ratio",out var mark) && mark.ValueKind==JsonValueKind.Number)
+                {
+                    double ratio=Math.Clamp(mark.GetDouble(),0,1), overkill=body*ratio;
+                    if(overkill>0)
+                    {
+                        double start=x+body-overkill;
+                        dc.DrawRectangle(OverkillHatch,null,new Rect(start,0,overkill,ActualHeight));
+                        var pen=new Pen(Theme.Resource("Signal"),1){DashStyle=DashStyles.Dash};
+                        pen.Freeze();
+                        dc.DrawLine(pen,new Point(start,0),new Point(start,ActualHeight));
+                    }
+                }
+            }
             x+=size;
         }
         if (x<width) dc.DrawRectangle(Theme.Resource("ConsoleMuted"),null,new Rect(x,0,width-x,ActualHeight));
@@ -135,6 +162,9 @@ public partial class StatisticPanel : UserControl
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         DeleteButton.IsEnabled=canDelete;
         Legend.Visibility=config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
+        OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
+            segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
+            ? Visibility.Visible : Visibility.Collapsed;
         var note=value.Text("share_note");
         Coverage.Text=(value.Bool("share_known")
             ? "全队同口径占比 · 点击干员固定明细"

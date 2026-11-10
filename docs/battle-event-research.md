@@ -15,7 +15,7 @@
 
 - 原生快照提供干员伤害/治疗累计及伤害分类槽，和编队、召唤宿主等归属信息；累计快照是总量的权威来源。
 - 正式事件流当前有三类：`damage`、`healing`、`shield_absorbed`。伤害/治疗来自 `Entity.ApplyModifier`；已验证数值盾吸收来自 `Buff.OnTakeDamage` 与 `BlockDamage._AssignDynamicVar`。护盾只对已验证来源和机制提供可靠事件，不代表一般盾/减伤都覆盖。
-- 产品伤害/治疗事件尚未序列化完整 Modifier：没有通用目标实体、技能、攻击/命中关联 ID 和原始伤害子类；事件金额读取 `m_value`，不是 HP `realDelta`。原生累计依旧不能与逐事件再相加。
+- 产品伤害事件现在额外序列化目标 ID、签名 `realDelta`、目标 HP 前后、`killed`、`targetType`、`damageType`、`cancelReason`，以及同帧已验证护盾的 `shield_absorbed` 上下文；金额读取原生 `m_value`，捕获样本（frame 697：`m_value=14`、`realDelta=0`、HP 未变、`BlockDamage` 吸收 14）显示它是吸收前的来伤值，吸收量须由统计层单独扣除，不是 HP `realDelta`。仍未覆盖技能、攻击/命中关联 ID 和原始伤害子类；这些新字段的设备端偏移与逐干员对账要等 ARK-21 的事件观测恢复后验证，读取失败时只让过量保持未知。原生累计依旧不能与逐事件再相加。
 - 产品近期 DPS/HPS 来自原生累计快照差分；接敌 DPS/HPS 来自已观察的伤害/治疗事件。事件序号、水位、帧、游戏时间和缺口状态用于覆盖完整性。
 - 研究 Frida probe 曾将 `AttackInfo.GetFinalAtk`、`BattleFormula.CalculateDamage*` 与 `Entity.ApplyModifier` 对账；祥子样本确认 `atk` 与 `atkScale` 分离，并观察到击杀超出目标剩余 HP 的数值差。但这批公式字段尚不属于正式产品事件 schema，原始探针记录不是仓库内的可重放验收工件。
 

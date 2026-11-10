@@ -177,6 +177,183 @@ def test_new_owner_starts_short_window_at_first_baseline():
     assert s.result()['rows']['b']['recent_damage'] == 100
 
 
+def overkill(s, event_id, amount, actual, before, after, *, source='a', killed=None,
+             target='enemy', time=0, damage_type=1, **extra):
+    if killed is None:
+        killed = after == 0
+    # A synthetic hit without shields carries an explicit verified zero; a
+    # missing absorption context is a different (unknown) case.
+    extra.setdefault('shield_absorbed', 0.0)
+    s.event(event_id, time, source, 'damage', amount, target=target,
+            real_delta=-actual, hp_before=before, hp_after=after, killed=killed,
+            target_type=0, damage_type=damage_type, **extra)
+
+
+def test_overkill_is_derived_only_at_a_lethal_endpoint_without_changing_totals():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 2000, 'healing': 0}})
+    overkill(s, 'normal', 280, 280, 1000, 720)
+    overkill(s, 'kill', 200, 44, 44, 0)
+    overkill(s, 'research', 771.5, 185.5, 185.5, 0)
+    # Captured OF-8 ApplyModifier sample: value 195, realDelta -160, HP 160 -> 0.
+    overkill(s, 'captured', 195, 160, 160, 0)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] == pytest.approx(777)
+    assert row['overkill_coverage_complete'] is True
+    assert row['damage'] == 2000          # native total stays inclusive
+    assert row['observed_damage'] == pytest.approx(1446.5)
+    top = s.result()
+    assert top['overkill_damage'] == pytest.approx(777)
+    assert top['overkill_coverage_complete'] is True
+    assert top['overkill_coverage_start'] == 0
+
+
+def test_overkill_excludes_shield_absorption_healing_and_never_double_counts():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    # Captured frame 697: the native value is the incoming damage, the shield
+    # absorbed all 200 of it and the target's HP never moved.
+    overkill(s, 'absorbed', 200, 0, 800, 800, shield_absorbed=200)
+    # 200 incoming, 100 absorbed by the shield, 44 HP actually lost, target dies:
+    # overkill is 200 - 100 - 44, not 200 - 44.
+    overkill(s, 'partial-kill', 200, 44, 44, 0, shield_absorbed=100)
+    s.event('heal', 0, 'a', 'healing', 500)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] == pytest.approx(56)
+    assert row['shield_absorbed'] == 0
+    assert row['observed_healing'] == 500
+    with pytest.raises(ValueError):
+        s.event('bad-heal', 0, 'a', 'healing', 10, target='enemy',
+                real_delta=0, hp_before=1, hp_after=1, killed=False)
+
+
+def test_lethal_hit_requires_a_verified_absorption_context():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    # Non-lethal hits need no absorption context: their overkill is zero.
+    overkill(s, 'normal', 280, 280, 1000, 720, shield_absorbed=None)
+    overkill(s, 'kill-without-context', 200, 44, 44, 0, shield_absorbed=None)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_complete'] is False
+    assert s.result()['overkill_damage'] is None
+
+
+@pytest.mark.parametrize('absorbed', [250, 160, -1])
+def test_contradictory_absorption_evidence_is_unknown(absorbed):
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    # 250 > amount; 44 + 160 > amount; a negative absorption is invalid.
+    overkill(s, 'kill', 200, 44, 44, 0, shield_absorbed=absorbed)
+    assert s.result()['rows']['a']['overkill_damage'] is None
+
+
+@pytest.mark.parametrize('evidence', [
+    {},
+    {'target': None, 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': True},
+    {'target': '', 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': True},
+    {'target': 'enemy', 'real_delta': None, 'hp_before': 10, 'hp_after': 0, 'killed': True},
+    {'target': 'enemy', 'real_delta': -10, 'hp_before': 10, 'hp_after': 0},
+    {'target': 'enemy', 'real_delta': 10, 'hp_before': 10, 'hp_after': 0, 'killed': True},
+    {'target': 'enemy', 'real_delta': -10, 'hp_before': 10, 'hp_after': 5, 'killed': True},
+    {'target': 'enemy', 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': False},
+    {'target': 'enemy', 'real_delta': -2, 'hp_before': 10, 'hp_after': 0, 'killed': True},
+])
+def test_overkill_incomplete_or_conflicting_evidence_is_unknown_not_zero(evidence):
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    s.event('hit', 0, 'a', 'damage', 10, **evidence)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_complete'] is False
+    assert s.result()['overkill_damage'] is None
+
+
+def test_overkill_accumulates_summon_sources_to_the_host():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('host-key', 'host')
+    s.register_source('summon-key', 'host')
+    s.snapshot(0, {'host-key': {'damage': 100, 'healing': 0},
+                   'summon-key': {'damage': 100, 'healing': 0}})
+    overkill(s, 'host-hit', 300, 50, 50, 0, source='host-key')
+    overkill(s, 'summon-hit', 120, 100, 200, 100, source='summon-key', killed=False)
+    overkill(s, 'summon-kill', 300, 100, 100, 0, source='summon-key')
+    assert s.result()['rows']['host']['overkill_damage'] == pytest.approx(450)
+
+
+def test_overkill_closes_with_event_coverage_and_keeps_zero_for_healers():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.register_source('healer', 'healer')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0},
+                   'healer': {'damage': 0, 'healing': 50}})
+    overkill(s, 'kill', 200, 44, 44, 0)
+    s.event('heal', 0, 'healer', 'healing', 100)
+    assert s.result()['rows']['healer']['overkill_damage'] == 0
+    assert s.result()['rows']['healer']['overkill_coverage_complete'] is True
+    s.advance(1)
+    s.invalidate_events()
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_end'] == 1
+    assert s.result()['overkill_coverage_complete'] is False
+
+
+def test_sparse_sampling_still_publishes_five_second_rate():
+    s = Statistics('battle', 0)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    # 2x play with the observed ~1.7s success cadence: no sample at the 5s
+    # boundary, but the bracket around it is still inside the window.
+    s.snapshot(2, {'a': {'damage': 200, 'healing': 0}})
+    s.snapshot(4, {'a': {'damage': 300, 'healing': 0}})
+    s.snapshot(6, {'a': {'damage': 400, 'healing': 0}})
+    row = s.result()['rows']['a']
+    # start=1, interpolated baseline 150, observed 250 over 5s.
+    assert row['recent_damage'] == pytest.approx(50)
+    assert row['recent_damage_window'] == pytest.approx((1, 6))
+
+
+def test_rate_still_unknown_when_bracket_is_a_real_gap():
+    s = Statistics('battle', 0)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 100, 'healing': 0}})
+    s.snapshot(10, {'a': {'damage': 200, 'healing': 0}})
+    assert s.result()['rows']['a']['recent_damage'] is None
+
+
+def test_overkill_is_grouped_by_native_damage_type():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 2000, 'healing': 0}})
+    overkill(s, 'physical-kill', 200, 44, 44, 0, damage_type=1)
+    overkill(s, 'arts-kill', 771.5, 185.5, 185.5, 0, damage_type=2)
+    overkill(s, 'normal-hit', 280, 280, 1000, 720, damage_type=3)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] == pytest.approx(742)
+    assert row['overkill_type_complete'] is True
+    assert row['overkill_damage_by_type'] == {
+        'physical': pytest.approx(156), 'arts': pytest.approx(586),
+        'elemental': 0.0, 'true': 0.0}
+
+
+def test_overkill_with_unrecognised_damage_type_keeps_total_but_hides_types():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    overkill(s, 'unknown-type-kill', 200, 44, 44, 0, damage_type=None)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] == pytest.approx(156)
+    assert row['overkill_coverage_complete'] is True
+    assert row['overkill_type_complete'] is False
+    assert row['overkill_damage_by_type'] is None
+
+
 def test_settlement_keeps_totals_complete_and_retires_rate_windows():
     s = Statistics('battle', 0)
     s.register_source('a', 'A')

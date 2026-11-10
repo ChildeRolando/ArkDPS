@@ -260,6 +260,7 @@ def test_rows_from_statistics_maps_adapter_fields():
         'active_damage': 2.5, 'active_healing': 1.5,
         'damage_by_type': {'physical': 10}, 'present': True,
         'counter_snapshot_complete': True, 'event_coverage_complete': False,
+        'overkill_damage': 6, 'overkill_coverage_complete': True,
         'sources': ['A', 'token'],
     }}}
     row = rows_from_statistics(result)[0]
@@ -267,7 +268,13 @@ def test_rows_from_statistics_maps_adapter_fields():
         'A', '灰烬', 10, 2, 3)
     assert row.recent_shield is None
     assert row.event_complete is False
+    assert row.overkill == 6 and row.overkill_complete is True
     assert row.sources == ('A', 'token')
+    detail = render_panel(total(), [row]).entries[0].detail
+    assert detail['overkill_damage'] == 6
+    assert detail['overkill_coverage_complete'] is True
+    # Overkill never changes the ranking basis or the damage denominator.
+    assert detail['damage'] == 10
 
 
 def test_share_denominator_includes_retired_and_zero_rows():
@@ -276,6 +283,24 @@ def test_share_denominator_includes_retired_and_zero_rows():
     view = render_panel(total(), rows)
     assert view.denominator == 400
     assert view.entries[0].share == pytest.approx(0.75)
+
+
+def test_overkill_segments_are_typed_and_only_on_the_totals_basis():
+    row = src('A', damage=1000, recent_damage=100)
+    row.damage_by_type = {'physical': 600, 'arts': 400}
+    row.overkill = 156
+    row.overkill_by_type = {'physical': 100, 'arts': 56, 'elemental': 0, 'true': 0}
+    row.overkill_type_complete = True
+    view = render_panel(PanelConfig(ranking=Ranking.TOTAL), [row])
+    segments = {segment['kind']: segment for segment in view.entries[0].segments}
+    assert segments['physical']['overkill_ratio'] == pytest.approx(100 / 600)
+    assert segments['arts']['overkill_ratio'] == pytest.approx(56 / 400)
+    recent = render_panel(PanelConfig(ranking=Ranking.RECENT), [row])
+    assert all('overkill_ratio' not in segment for segment in recent.entries[0].segments)
+    row.overkill_type_complete = False
+    incomplete = render_panel(PanelConfig(ranking=Ranking.TOTAL), [row])
+    assert all('overkill_ratio' not in segment for segment in incomplete.entries[0].segments)
+    assert incomplete.entries[0].detail['overkill_damage'] == 156
 
 
 def test_team_status_names_blocking_and_classified_sources():

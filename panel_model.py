@@ -161,6 +161,12 @@ class PanelSourceRow:
     active_damage: float | None = None
     active_healing: float | None = None
     damage_by_type: Mapping[str, float] = field(default_factory=dict)
+    # Event-derived overkill is a subset of damage, never part of the ranking
+    # denominator. It stays None unless the whole event stream proved it.
+    overkill: float | None = None
+    overkill_by_type: Mapping[str, float] | None = None
+    overkill_complete: bool = False
+    overkill_type_complete: bool = False
     counter_complete: bool = True
     event_complete: bool = True
     sources: tuple[str, ...] = ()
@@ -213,6 +219,10 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             active_healing=row.get('active_healing'),
             damage_by_type=row.get('damage_by_type') or {},
             recent_damage_by_type=row.get('recent_damage_by_type') or {},
+            overkill=row.get('overkill_damage'),
+            overkill_by_type=row.get('overkill_damage_by_type'),
+            overkill_complete=bool(row.get('overkill_coverage_complete', False)),
+            overkill_type_complete=bool(row.get('overkill_type_complete', False)),
             recent_damage_window=row.get('recent_damage_window'),
             recent_healing_window=row.get('recent_healing_window'),
             recent_shield_window=row.get('recent_shield_window'),
@@ -369,9 +379,17 @@ def _segments(row: PanelSourceRow, ranking: Ranking) -> tuple[tuple[dict, ...], 
         if not _finite(value) or value <= 0:
             continue
         known += value
-        segments.append({'kind': kind, 'value': value,
-                         'ratio': min(1.0, value / total),
-                         'color': DAMAGE_COLORS[kind]})
+        segment = {'kind': kind, 'value': value,
+                   'ratio': min(1.0, value / total),
+                   'color': DAMAGE_COLORS[kind]}
+        # Overkill is marked only on the totals basis: the five-second window
+        # does not derive a separate event-window overkill value.
+        if ranking is Ranking.TOTAL and row.overkill_type_complete and row.overkill_by_type:
+            overkill = row.overkill_by_type.get(kind)
+            if _finite(overkill) and overkill > 0:
+                segment['overkill'] = overkill
+                segment['overkill_ratio'] = min(1.0, overkill / value)
+        segments.append(segment)
     return tuple(segments), abs(known - total) <= max(0.01, total * 1e-6)
 
 
@@ -455,6 +473,11 @@ def render_panel(config: PanelConfig,
             detail={'damage_by_type': dict(row.damage_by_type),
                     'damage': row.damage, 'healing': row.healing,
                     'shield_absorbed': row.shield,
+                    'overkill_damage': row.overkill,
+                    'overkill_damage_by_type': (dict(row.overkill_by_type)
+                                                if row.overkill_type_complete else None),
+                    'overkill_type_complete': row.overkill_type_complete,
+                    'overkill_coverage_complete': row.overkill_complete,
                     'active_damage': row.active_damage,
                     'active_healing': row.active_healing,
                     'sources': list(row.sources)}))

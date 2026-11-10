@@ -504,6 +504,28 @@ def test_changed_owner_evidence_does_not_increase_cached_source():
     assert 'token_a' in r['mapping_conflicts']
 
 
+def test_event_evidence_publishes_overkill_and_a_missing_observer_keeps_it_unknown():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 1000)], 30, 10), paired(BASE, 10))
+    a.start_events(session='battle-1', frame=10, sequence=4)
+    a.accept_event(session='battle-1', sequence=5, frame=10, game_time=30,
+                   source='char_a', kind='damage', amount=200, target='enemy',
+                   real_delta=-44, hp_before=44, hp_after=0, killed=True,
+                   target_type=0, damage_type=1, shield_absorbed=0)
+    a.update(sample([row('char_a', 1200)], 31, 11), paired(BASE, 11))
+    result = a.result()
+    assert result['rows']['char_a']['overkill_damage'] == 156
+    assert result['rows']['char_a']['overkill_coverage_complete'] is True
+    assert result['overkill_damage'] == 156
+    assert result['rows']['char_a']['damage'] == 1200
+
+    plain = BattleStatisticsAdapter()
+    plain.update(sample([row('char_a', 1000)], 30, 10), paired(BASE, 10))
+    assert plain.result()['rows']['char_a']['overkill_damage'] is None
+    assert plain.result()['rows']['char_a']['overkill_coverage_complete'] is False
+    assert plain.result()['overkill_damage'] is None
+
+
 def test_known_map_trap_is_excluded_from_the_team_instead_of_blocking():
     adapter = BattleStatisticsAdapter()
     adapter.update(sample([row('char_a', 100), row('trap_321_shnbox', 0)], 0, 1),
