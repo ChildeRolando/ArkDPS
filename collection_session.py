@@ -14,7 +14,7 @@ DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
 
 class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
-                 collector=None, observer_factory=None, history=None):
+                 collector=None, observer_factory=None, history=None, on_history=None):
         self.collector = collector if collector is not None else Collector(adb, serial, log=log)
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
@@ -31,6 +31,9 @@ class CollectionSession:
         # and battle retries. Shutdown must retry releases and report failures.
         self.cleanup_errors = {}
         self.history = history
+        # Display owners get one notification per newly committed record; the
+        # callback must not read history itself (the session owns the write).
+        self.on_history = on_history
         self.history_error = None
         self._pending_history = None
         self._observer_generation = None
@@ -217,6 +220,10 @@ class CollectionSession:
                     self.history_error = str(exc)
                 self.audit('history_error', dict(battle_id=archive['battle_id'], error=str(exc)))
             else:
+                # Announce before diagnostic I/O so a journal failure cannot hide
+                # a record that is already durable on disk.
+                if result.written and self.on_history is not None:
+                    self.on_history()
                 self.audit('history_saved', dict(battle_id=archive['battle_id'], written=result.written,
                            diagnostics=[asdict(d) for d in result.diagnostics]))
 

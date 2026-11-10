@@ -26,6 +26,27 @@ public partial class MainWindow
     [DllImport("user32.dll",SetLastError=true)] private static extern uint SendInput(uint count,Input[] input,int size);
     [DllImport("shell32.dll")] private static extern int Shell_NotifyIconGetRect(ref IconId id,out RectNative rect);
     private static void Require(bool value,string message){if(!value)throw new InvalidOperationException(message);}
+    // The collection owner writes validated BattleRecord JSON atomically. The
+    // harness writes the same shape so the real reader validates real records.
+    private static string ArchiveJson(string stateDirectory,string battleId,string stage)
+    {
+        string source=Directory.GetFiles(Path.Combine(stateDirectory,"history"),"*.json")
+            .OrderBy(x=>x,StringComparer.Ordinal).First();
+        var root=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(source))!;
+        root["battle_id"]=battleId;root["statistics"]!["session"]=battleId;
+        root["statistics"]!["adapter_session"]=battleId;root["last_sample"]!["session"]=battleId;
+        root["metadata"]!["stage_id"]=stage;
+        string observed=DateTime.UtcNow.AddSeconds(5).ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff")+"+00:00";
+        root["observed_at"]=observed;root["recorded_at"]=observed;
+        return root.ToJsonString();
+    }
+    private static string HistoryPath(string stateDirectory,string battleId)=>
+        Path.Combine(stateDirectory,"history",Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(battleId)))
+            .ToLowerInvariant()+".json");
+    private static void WriteArchive(string stateDirectory,string battleId,string stage)=>
+        File.WriteAllText(HistoryPath(stateDirectory,battleId),
+            ArchiveJson(stateDirectory,battleId,stage),new System.Text.UTF8Encoding(false));
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
     private static void Click(int x,int y)
     {
@@ -188,6 +209,81 @@ public partial class MainWindow
         checks.Add("UI freshness deadline marks stalled worker responses stale without zeroing data");
         await Command("snapshot");
         string id=Panels.Keys.First();
+        // History is a pull cache owned by Python. Entering the page must re-read it,
+        // and an archive committed while the page stays open must arrive through the
+        // normal snapshot stream. Both use a real BattleRecord on disk, not a stub.
+        string stateDirectory=App.BridgeArguments[App.BridgeArguments.IndexOf("--state-dir")+1];
+        string fixturePath=App.BridgeArguments[App.BridgeArguments.IndexOf("--fixture")+1];
+        string phase=Path.GetFileName(output.TrimEnd(Path.DirectorySeparatorChar));
+        string entryBattle="ark-23-entry-"+phase;
+        WriteArchive(stateDirectory,entryBattle,"ARK23-ENTRY · 合成验收");
+        await Navigate("history");
+        Require(State.Get("history").Items().Any(x=>x.Text("battle_id")==entryBattle),
+                "entering history did not re-read an archive written while running");
+        Require(HistoryList.Items.Cast<HistoryItem>().Any(x=>x.Id==entryBattle),
+                "new archive missing from the rendered history list after page entry");
+        Require(HistoryPage.Visibility==Visibility.Visible,"history page entry did not show the page");
+        checks.Add("history page entry re-reads archives without pressing 刷新");
+        string archiveBattle="ark-23-archive-"+phase;
+        string recordPath=Path.Combine(output,"archive-record.json");
+        File.WriteAllText(recordPath,ArchiveJson(stateDirectory,archiveBattle,"ARK23-ARCHIVE · 合成验收"),new System.Text.UTF8Encoding(false));
+        string triggerPath=Path.Combine(output,"archive-trigger");
+        if(File.Exists(triggerPath))File.Delete(triggerPath);
+        string workerRoot=Path.Combine(output,"archive-worker");Directory.CreateDirectory(workerRoot);
+        File.WriteAllLines(Path.Combine(workerRoot,"desktop_bridge.py"),new[]{
+            "import json,queue,sys,threading,time",
+            "from pathlib import Path",
+            "args=sys.argv[1:]",
+            "def opt(name):return args[args.index(name)+1]",
+            "sys.path.insert(0,opt('--repo'))",
+            "from desktop_bridge import DesktopState,serve",
+            "from battle_history import BattleHistory,BattleRecord",
+            "state=DesktopState(Path(opt('--state-dir')))",
+            "state.accept('sample',json.loads(Path(opt('--fixture')).read_text('utf-8')))",
+            "class Worker:",
+            "    def __init__(self):self.events=queue.Queue()",
+            "    def close(self):pass",
+            "    def request(self,*a):pass",
+            "worker=Worker()",
+            "def watch():",
+            "    trigger=Path(opt('--trigger'))",
+            "    while not trigger.exists():time.sleep(.05)",
+            "    history=BattleHistory(Path(opt('--state-dir'))/'history')",
+            "    history.save(BattleRecord.from_dict(json.loads(Path(opt('--record')).read_text('utf-8'))))",
+            "    worker.events.put(('history',None))",
+            "threading.Thread(target=watch,daemon=True).start()",
+            "serve(sys.stdin,sys.stdout,state,worker)"},new System.Text.UTF8Encoding(false));
+        var archiveWorker=new BridgeClient(workerRoot,App.Python,new[]{"--state-dir",stateDirectory,"--fixture",fixturePath,"--repo",App.Root,"--record",recordPath,"--trigger",triggerPath});
+        var liveBridge=bridge;
+        try
+        {
+            await archiveWorker.ConnectAsync();
+            bridge=archiveWorker;await Poll();
+            Require(State.Get("history").Items().All(x=>x.Text("battle_id")!=archiveBattle),"archive visible before the worker committed it");
+            Search.Text="合成验收";await Settle();
+            string heldSelection=State.Get("history_selected").Text("battle_id");
+            Require(heldSelection.Length>0,"history list had no selected record to preserve");
+            string heldSummary=HistorySummary.Text;
+            File.WriteAllText(triggerPath,"archive",new System.Text.UTF8Encoding(false));
+            long deadline=Environment.TickCount64+8000;
+            while(State.Get("history").Items().All(x=>x.Text("battle_id")!=archiveBattle) && Environment.TickCount64<deadline)
+            {await Poll();await Task.Delay(100);}
+            Require(State.Get("history").Items().Any(x=>x.Text("battle_id")==archiveBattle),
+                    "archived battle never reached the open history page");
+            Require(HistoryList.Items.Cast<HistoryItem>().Any(x=>x.Id==archiveBattle),"archived battle missing from the rendered list");
+            Require(HistoryList.SelectedItem is HistoryItem held && held.Id==heldSelection,"automatic refresh dropped the list selection");
+            Require(State.Get("history_selected").Text("battle_id")==heldSelection,"automatic refresh replaced the selected detail");
+            Require(HistorySummary.Text==heldSummary,"automatic refresh replaced the detail summary");
+            Require(Search.Text=="合成验收","automatic refresh discarded the search filter");
+            checks.Add("archived battle reaches an open history page without 刷新, keeping selection and filter");
+        }
+        finally
+        {
+            bridge=liveBridge;
+            try{await archiveWorker.DisposeAsync();}catch(IOException){}
+            await Poll();
+            Search.Text="";await Settle();
+        }
         // The wrapper runs this candidate again against the saved directory.
         var restoredLayout=State.Get("layout").Clone();
         if(Huds.Count>0)
@@ -227,14 +323,14 @@ public partial class MainWindow
             var selected=State.Get("history_selected");
             if(selected.ValueKind==JsonValueKind.Object)
             {
-                Navigate("history");HistoryInspector.Pin(selected.Get("view").Get("source").EnumerateObject().First().Name,selected.Get("view").Get("source"));await Settle();
+                await Navigate("history");HistoryInspector.Pin(selected.Get("view").Get("source").EnumerateObject().First().Name,selected.Get("view").Get("source"));await Settle();
                 Screenshot.Window(this,Path.Combine(output,theme+"-history.png"));
                 File.WriteAllBytes(Path.Combine(output,theme+"-ranking.png"),Screenshot.Statistics(selected,theme));
                 string selectedId=selected.Text("battle_id");Search.Text="no-such-record";await Command("history_refresh");
                 Require(State.Get("history_selected").Text("battle_id")==selectedId,"filter/refresh replaced selected history");Search.Text="";
                 checks.Add(theme+" frozen selected history survives search and refresh");
             }
-            Navigate("settings");await Settle();Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));Navigate("live");
+            await Navigate("settings");await Settle();Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));await Navigate("live");
             checks.Add(theme+" theme switch keeps HUD HWND, values and source");
         }
         await SavePlacement();string normal=State.Get("layout").Get("gui").GetRawText();
