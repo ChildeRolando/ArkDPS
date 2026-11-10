@@ -6,8 +6,8 @@
 
 - `desktop/ArkDPS.Desktop` 是 .NET 10 / C# / WPF 原生 UI：主窗、统计面板、历史页、连接表单、固定干员报告、HUD、托盘与 PNG 均由 WPF 绘制；不是 Tk 换皮，也没有 WebView。
 - WPF 启动一个 `desktop_bridge.py` 子进程。只有 Python 可以调用 `ConnectionConfig` / `CollectionSession` / `BattleRuntime` / `BattleHistory`；C# 不读游戏内存，不执行 ADB，不重新计算统计或占比。`DesktopState.view` 只调用既有 `render_panel`。
-- GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
-- 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。
+- GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次；最终 `stopped` 审计写入失败纳入 `cleanup_errors`，即使资源已释放也必须报告。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
+- 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建唯一审计 JSONL 文件，不追加到先前运行的记录。
 - Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。旧 Tk 模块仅供 `python app.py --legacy-tk` 和既有回归诊断使用，正常启动不创建 Tk 窗口。命令行 `--capture-seconds` 路径不变。
 
 合入 ARK-14 发布工具后，`app.py --self-test <新目录>` 先进入旧 Tk 离线自检；`--acceptance-output` 先验证有限正时长，再进入旧 Tk 测量。PyInstaller 冻结的旧 `ArkDPS.exe` 仍用 Tk，不尝试构建或启动源码 WPF；普通源码入口和 WPF 同包入口保持不变。旧构建/自检契约见 [Windows 旧候选](windows-release.md)，不继承其真实设备验收结论。
@@ -16,7 +16,7 @@
 
 依照 ARK-19 最新修正，当前始终是一对父子进程，因此使用重定向的 stdin/stdout；**不使用 Named Pipes、TCP 或第三方 IPC 依赖**。只有未来有独立 worker 生命周期或多客户端需求时才重新评估 Named Pipes。
 
-每行一个 UTF-8 JSON 对象（无 BOM），命令含整数 `version: 1`、递增 `id` 和 `op`。UI 串行化请求/响应；响应携带相同 version/id。不兼容版本（包括字符串/布尔版本）、越界消息或序号不符都拒绝，不维护兼容协议分支。单条上限 32 MiB；命令等待有超时，错误会标记“最后有效记录”，不冒充仍然实时。
+每行一个 UTF-8 JSON 对象（无 BOM），命令含整数 `version: 1`、递增 `id` 和 `op`。UI 串行化请求/响应；响应携带相同 version/id。不兼容版本（包括字符串/布尔版本）、越界消息或序号不符都拒绝，不维护兼容协议分支。单条上限 32 MiB；命令等待有超时，错误会标记“最后有效记录”，不冒充仍然实时。请求可能已发送后若遇超时、I/O、JSON 解码或序号/版本错误，UI 将通道标记为不可用并拒绝后续命令，不自动重放；不在失步流上发送 `quit`，而关闭 stdin 触发 worker 的 EOF 清理。收到完整、序号匹配的 worker `error` 响应不视为通道失步。
 
 | op / 响应 kind | 语义 |
 | --- | --- |
@@ -26,7 +26,7 @@
 | 任意失败 / `error` | `ok: false`、可读 error；状态不伪造为成功，UI 保留最后有效值并提示。 |
 | `quit` / `bye` | bye 只在采集清理完成后发送；清理失败返回 error，UI 等待退出并显示失败。 |
 
-stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。
+stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
 
 ## 同包分发
 

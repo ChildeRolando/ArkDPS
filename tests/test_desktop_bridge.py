@@ -168,6 +168,57 @@ def test_failed_layout_write_does_not_publish_candidate(tmp_path):
     assert state.layout.theme == 'lone-trail'
 
 
+def test_connection_apply_layout_failure_keeps_connection_unchanged(tmp_path):
+    state = DesktopState(tmp_path)
+    before_connection, before_layout = state.connection, state.layout
+    with patch.object(state.store, 'save', side_effect=OSError('layout disk full')):
+        with pytest.raises(OSError, match='layout disk full'):
+            cmd(state, 'connection_apply',
+                config={'auto_detect': False, 'serial': '127.0.0.1:16384', 'adb_path': 'new-adb'},
+                events=False)
+    assert state.connection == before_connection
+    assert state.layout == before_layout
+    assert not state.connection_store.path.exists()
+
+
+def test_connection_apply_rolls_layout_back_when_connection_write_fails(tmp_path):
+    state = DesktopState(tmp_path)
+    before_connection, before_layout = state.connection, state.layout
+    with patch.object(state.connection_store, 'save', side_effect=OSError('connection disk full')):
+        with pytest.raises(OSError, match='connection disk full'):
+            cmd(state, 'connection_apply',
+                config={'auto_detect': False, 'serial': '127.0.0.1:16384', 'adb_path': 'new-adb'},
+                events=False)
+    assert state.connection == before_connection
+    assert state.layout == before_layout
+    assert json.loads(state.store.path.read_text('utf-8')) == before_layout.to_dict()
+    assert not state.connection_store.path.exists()
+
+
+def test_connection_apply_reports_layout_rollback_failure(tmp_path):
+    state = DesktopState(tmp_path)
+    before_layout = state.layout
+    real_save = state.store.save
+    calls = 0
+
+    def fail_rollback(layout):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError('rollback disk full')
+        real_save(layout)
+
+    with patch.object(state.store, 'save', side_effect=fail_rollback), \
+         patch.object(state.connection_store, 'save', side_effect=OSError('connection disk full')):
+        with pytest.raises(RuntimeError, match='connection disk full.*rollback disk full'):
+            cmd(state, 'connection_apply',
+                config={'auto_detect': False, 'serial': '127.0.0.1:16384', 'adb_path': 'new-adb'},
+                events=False)
+    assert calls == 2
+    assert state.layout == before_layout  # in-memory values publish only after both writes
+    assert json.loads(state.store.path.read_text('utf-8')) != before_layout.to_dict()
+
+
 def test_layout_v1_migrates_into_same_v3_owner(tmp_path):
     raw = dict(version=1, panels=[dict(panel_id='old', category='damage', ranking='total', rate_basis='recent_5s')])
     (tmp_path / 'layout.json').write_text(json.dumps(raw), encoding='utf-8')
@@ -194,7 +245,49 @@ def test_cleanup_failure_keeps_session_owned_and_prevents_successful_release(tmp
     assert worker.retired_errors  # successful retry cannot erase prior failure
 
 
-def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatch):
+def test_worker_preserves_final_audit_failure_after_collection_close_retry(tmp_path):
+    from collection_session import CollectionSession
+    from types import SimpleNamespace
+
+    calls, stopped = [], []
+    fail_once = True
+
+    def audit(kind, data):
+        nonlocal fail_once
+        if kind == 'stopped':
+            stopped.append(data)
+            if fail_once:
+                fail_once = False
+                raise OSError('final audit write failed')
+
+    worker = CollectionWorker(DesktopState(tmp_path))
+    session = CollectionSession('adb', 'serial', collector=SimpleNamespace(
+        close=lambda: calls.append('collector_close')), audit=audit)
+    worker.session = session
+    assert not worker.release()
+    assert worker.session is session
+    assert worker.release()
+    assert worker.session is None
+    assert calls == ['collector_close']
+    assert len(stopped) == 2
+    assert any('audit' in error and 'final audit write failed' in error
+               for error in worker.retired_errors)
+
+
+def test_worker_startup_setup_error_is_reported(tmp_path, monkeypatch):
+    import desktop_bridge
+
+    blocked_root = tmp_path / 'not-a-directory'
+    blocked_root.write_text('file blocks runtime directory', encoding='utf-8')
+    monkeypatch.setattr(desktop_bridge, 'ROOT', blocked_root)
+    worker = CollectionWorker(DesktopState(tmp_path/'state'))
+    worker.run()
+    kind, error = worker.events.get_nowait()
+    assert kind == 'error' and error
+    assert worker.session is None
+
+
+def test_worker_retries_final_cleanup_before_closing_audit_stream(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import desktop_bridge
 
@@ -217,6 +310,7 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
             self.audit = audit
             self.collector = SimpleNamespace(diagnostics=diagnostics)
             self.runtime = None
+            self.attempts = 0
 
         def enable_lifecycle(self, runtime):
             self.runtime = runtime
@@ -228,18 +322,137 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
             return None
 
         def close(self):
-            self.audit('session_closed', {})
+            self.attempts += 1
+            self.audit('cleanup_attempt', {'attempt': self.attempts})
+            if self.attempts == 1:
+                raise OSError('transient cleanup failure')
 
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
     worker.request(state.connection, False)
     worker.run()
 
-    assert worker.cleanup_error == ''
-    assert worker.session is None
+    assert worker.session is None and worker.cleanup_error == ''
     audit_path = next((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
-    assert json.loads(audit_path.read_text('utf-8').splitlines()[-1]) == {
-        'kind': 'session_closed', 'data': {},
-    }
+    events = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
+    assert events == [
+        {'kind': 'cleanup_attempt', 'data': {'attempt': 1}},
+        {'kind': 'cleanup_attempt', 'data': {'attempt': 2}},
+    ]
+
+
+def test_worker_retains_and_reports_session_after_final_cleanup_retries_fail(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    diagnostics = SimpleNamespace(
+        as_dict=lambda: {'status': 'ready'},
+        selected_serial='127.0.0.1:16384',
+        version_actual='test',
+    )
+    target = SimpleNamespace(adb_path='adb', serial='127.0.0.1:16384', diagnostics=diagnostics)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+    state = DesktopState(tmp_path/'state')
+    worker = CollectionWorker(state)
+    sessions = []
+
+    class Session:
+        cleanup_errors = {}
+
+        def __init__(self, *_args, audit, **_kwargs):
+            self.audit = audit
+            self.collector = SimpleNamespace(diagnostics=diagnostics)
+            self.runtime = None
+            self.attempts = 0
+            sessions.append(self)
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+
+        def connect(self):
+            worker.stop.set()
+
+        def read(self):
+            return None
+
+        def close(self):
+            self.attempts += 1
+            self.audit('cleanup_attempt', {'attempt': self.attempts})
+            raise OSError('persistent cleanup failure')
+
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(state.connection, False)
+    worker.thread.start()
+    worker.thread.join()
+
+    assert len(sessions) == 1 and sessions[0].attempts == 2
+    assert worker.session is sessions[0]
+    assert 'persistent cleanup failure' in worker.cleanup_error
+    with pytest.raises(RuntimeError, match='persistent cleanup failure'):
+        worker.close()
+    audit_path = next((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    assert len(audit_path.read_text('utf-8').splitlines()) == 2
+
+
+def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatch):
+    from datetime import datetime as RealDateTime
+    from types import SimpleNamespace
+    import desktop_bridge
+
+    class FixedDateTime:
+        @staticmethod
+        def now(tz):
+            return RealDateTime(2026, 11, 10, 9, 30, 0, tzinfo=tz)
+
+    monkeypatch.setattr(desktop_bridge, 'datetime', FixedDateTime)
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    diagnostics = SimpleNamespace(
+        as_dict=lambda: {'status': 'ready'},
+        selected_serial='127.0.0.1:16384',
+        version_actual='test',
+    )
+    target = SimpleNamespace(adb_path='adb', serial='127.0.0.1:16384', diagnostics=diagnostics)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+
+    state = DesktopState(tmp_path/'state')
+    workers = []
+
+    class Session:
+        cleanup_errors = {}
+
+        def __init__(self, *_args, audit, **_kwargs):
+            self.audit = audit
+            self.collector = SimpleNamespace(diagnostics=diagnostics)
+            self.runtime = None
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+
+        def connect(self):
+            workers[-1].stop.set()
+
+        def read(self):
+            return None
+
+        def close(self):
+            self.audit('session_closed', {})
+
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    for _ in range(2):
+        worker = CollectionWorker(state)
+        workers.append(worker)
+        worker.request(state.connection, False)
+        worker.run()
+        assert worker.cleanup_error == ''
+        assert worker.session is None
+
+    paths = list((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    assert len(paths) == 2
+    assert len({path.name for path in paths}) == 2
+    for audit_path in paths:
+        assert json.loads(audit_path.read_text('utf-8').splitlines()[-1]) == {
+            'kind': 'session_closed', 'data': {},
+        }
 
 
 def test_quit_ack_is_after_collector_cleanup(tmp_path):

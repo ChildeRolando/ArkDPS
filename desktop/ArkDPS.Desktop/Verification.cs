@@ -49,6 +49,104 @@ public partial class MainWindow
         finally{try{await crashing.DisposeAsync();}catch(IOException){exitObserved=true;}}
         Require(crashObserved && exitObserved,"worker crash / nonzero exit not observable");
         checks.Add("simulated worker crash after valid hello rejects snapshots and reports nonzero exit");
+        string partialRoot=Path.Combine(output,"partial-worker");Directory.CreateDirectory(partialRoot);
+        File.WriteAllLines(Path.Combine(partialRoot,"desktop_bridge.py"),new[]{
+            "import json,sys",
+            "hello=json.loads(sys.stdin.readline())",
+            "print(json.dumps(dict(version=1,id=hello['id'],ok=True,kind='hello',result=dict(transport='stdio-jsonl'))),flush=True)",
+            "request=json.loads(sys.stdin.readline())",
+            "sys.stdout.write('{\\\"version\\\":1,')",
+            "sys.stdout.flush()",
+            "sys.stdin.readline()"});
+        var partial=new BridgeClient(partialRoot,App.Python,Array.Empty<string>());
+        bool timedOut=false,followupRejected=false;
+        try
+        {
+            await partial.ConnectAsync();
+            try{await partial.RequestAsync("snapshot",timeoutOverride:TimeSpan.FromSeconds(1));}catch(OperationCanceledException){timedOut=true;}
+            try{await partial.RequestAsync("snapshot");}
+            catch(IOException ex){followupRejected=ex.Message.Contains("通道已失效");}
+        }
+        finally{await partial.DisposeAsync();}
+        Require(timedOut&&followupRejected,"partial response timeout allowed a later command or failed to reject it");
+        checks.Add("partial JSONL timeout marks transport unusable, rejects follow-up, and closes via stdin EOF");
+        string errorRoot=Path.Combine(output,"error-reply-worker");Directory.CreateDirectory(errorRoot);
+        File.WriteAllLines(Path.Combine(errorRoot,"desktop_bridge.py"),new[]{
+            "import json,sys",
+            "def send(c,ok=True,kind='state',result=None): print(json.dumps(dict(version=1,id=c['id'],ok=ok,kind=kind,result=result,error='expected' if not ok else None)),flush=True)",
+            "hello=json.loads(sys.stdin.readline()); send(hello,kind='hello',result=dict(transport='stdio-jsonl'))",
+            "first=json.loads(sys.stdin.readline()); send(first,ok=False,kind='error')",
+            "second=json.loads(sys.stdin.readline()); send(second)",
+            "quit=json.loads(sys.stdin.readline()); send(quit,kind='bye')"});
+        var errorReply=new BridgeClient(errorRoot,App.Python,Array.Empty<string>());
+        bool validErrorPreserved=false,recoveredAfterError=false;
+        try
+        {
+            await errorReply.ConnectAsync();
+            try{await errorReply.RequestAsync("snapshot");}catch(BridgeCommandException){validErrorPreserved=true;}
+            await errorReply.RequestAsync("snapshot");recoveredAfterError=true;
+        }
+        finally{await errorReply.DisposeAsync();}
+        Require(validErrorPreserved&&recoveredAfterError,"valid worker error reply poisoned the JSONL transport");
+        checks.Add("valid worker error response remains non-fatal to the synchronized transport");
+        string malformedRoot=Path.Combine(output,"malformed-worker");Directory.CreateDirectory(malformedRoot);
+        File.WriteAllLines(Path.Combine(malformedRoot,"desktop_bridge.py"),new[]{
+            "import json,sys",
+            "hello=json.loads(sys.stdin.readline())",
+            "print(json.dumps(dict(version=1,id=hello['id'],ok=True,kind='hello',result=dict(transport='stdio-jsonl'))),flush=True)",
+            "request=json.loads(sys.stdin.readline())",
+            "print(json.dumps(dict(version=1,id=request['id'],ok='false',kind='error',error='malformed')),flush=True)",
+            "line=sys.stdin.readline()",
+            "open('after-request.txt','w').write(line if line else 'EOF')"});
+        var malformed=new BridgeClient(malformedRoot,App.Python,Array.Empty<string>());
+        bool malformedRejected=false,malformedFollowupRejected=false;
+        try
+        {
+            await malformed.ConnectAsync();
+            try{await malformed.RequestAsync("snapshot");}catch(IOException){malformedRejected=true;}
+            try{await malformed.RequestAsync("snapshot");}
+            catch(IOException ex){malformedFollowupRejected=ex.Message.Contains("通道已失效");}
+        }
+        finally{await malformed.DisposeAsync();}
+        Require(malformedRejected&&malformedFollowupRejected&&
+                File.ReadAllText(Path.Combine(malformedRoot,"after-request.txt"))=="EOF",
+                "malformed ok response was not rejected / stdin EOF was not used");
+        checks.Add("malformed ok envelope poisons transport and shutdown closes stdin without quit");
+        string badHelloRoot=Path.Combine(output,"bad-transport-worker");Directory.CreateDirectory(badHelloRoot);
+        File.WriteAllLines(Path.Combine(badHelloRoot,"desktop_bridge.py"),new[]{
+            "import json,sys",
+            "hello=json.loads(sys.stdin.readline())",
+            "print(json.dumps(dict(version=1,id=hello['id'],ok=True,kind='hello',result=dict(transport='unexpected'))),flush=True)",
+            "line=sys.stdin.readline()",
+            "open('after-hello.txt','w').write(line if line else 'EOF')",
+            "if line: sys.stdout.write(json.dumps(dict(version=1,id=json.loads(line)['id'],ok=True,kind='bye'))+'\\n'); sys.stdout.flush()"});
+        var badHello=new BridgeClient(badHelloRoot,App.Python,Array.Empty<string>());
+        bool badTransportRejected=false;
+        try{await badHello.ConnectAsync();}catch(IOException){badTransportRejected=true;}
+        finally{await badHello.DisposeAsync();}
+        Require(badTransportRejected&&File.ReadAllText(Path.Combine(badHelloRoot,"after-hello.txt"))=="EOF",
+                "invalid hello transport did not fail closed before disposal");
+        checks.Add("invalid hello transport poisons channel before disposal");
+        foreach(string numericField in new[]{"version","id"})
+        {
+            string numericRoot=Path.Combine(output,"numeric-"+numericField);Directory.CreateDirectory(numericRoot);
+            File.WriteAllLines(Path.Combine(numericRoot,"desktop_bridge.py"),new[]{
+                "import json,sys",
+                "hello=json.loads(sys.stdin.readline())",
+                "reply=dict(version=1,id=hello['id'],ok=True,kind='hello',result=dict(transport='stdio-jsonl'))",
+                $"reply['{numericField}']=1.0",
+                "print(json.dumps(reply),flush=True)",
+                "line=sys.stdin.readline()",
+                "open('after-hello.txt','w').write(line if line else 'EOF')",
+                "if line: sys.stdout.write(json.dumps(dict(version=1,id=json.loads(line)['id'],ok=True,kind='bye'))+'\\n'); sys.stdout.flush()"});
+            var numeric=new BridgeClient(numericRoot,App.Python,Array.Empty<string>());
+            bool numericRejected=false;
+            try{await numeric.ConnectAsync();}catch(IOException){numericRejected=true;}
+            finally{await numeric.DisposeAsync();}
+            Require(numericRejected&&File.ReadAllText(Path.Combine(numericRoot,"after-hello.txt"))=="EOF",
+                    "floating JSON "+numericField+" was accepted or quit was sent after rejection");
+        }
+        checks.Add("floating response version and id values are rejected fail-closed");
         commands++;lastResponse=System.Diagnostics.Stopwatch.GetTimestamp()-3*System.Diagnostics.Stopwatch.Frequency;
         await Poll();Require(Status.Text.Contains("worker 响应"),"stalled worker left a live status");commands--;
         checks.Add("UI freshness deadline marks stalled worker responses stale without zeroing data");

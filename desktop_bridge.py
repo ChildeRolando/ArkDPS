@@ -233,8 +233,19 @@ class DesktopState:
             enabled = cmd['events']
             if not isinstance(enabled, bool):
                 raise ValueError('事件开关必须为布尔值')
-            self.connection_store.save(config)
-            self.persist(replace(self.layout, event_observation=enabled))
+            old_layout = self.layout
+            candidate_layout = replace(old_layout, event_observation=enabled)
+            self.store.save(candidate_layout)
+            try:
+                self.connection_store.save(config)
+            except Exception as exc:
+                try:
+                    self.store.save(old_layout)
+                except Exception as rollback:
+                    raise RuntimeError(
+                        f'连接配置保存失败：{exc}；旧布局回滚失败：{rollback}') from exc
+                raise
+            self.layout = candidate_layout
             self.connection = config
         else:
             raise ValueError('未知命令：' + str(op))
@@ -275,12 +286,13 @@ class CollectionWorker:
         return True
 
     def run(self):
-        runtime = BattleRuntime()
-        capture_dir = ROOT / 'runtime' / 'captures'
-        capture_dir.mkdir(parents=True, exist_ok=True)
-        path = capture_dir / f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.jsonl'
         try:
-            with path.open('a', encoding='utf-8') as stream:
+            runtime = BattleRuntime()
+            capture_dir = ROOT / 'runtime' / 'captures'
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            path = capture_dir / (
+                f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{uuid4().hex}.jsonl')
+            with path.open('x', encoding='utf-8') as stream:
                 from capture_cli import json_value
                 def audit(kind, data):
                     stream.write(json.dumps(dict(kind=kind, data=data), ensure_ascii=False,
@@ -336,7 +348,9 @@ class CollectionWorker:
                         self.stop.wait(.2)
                 finally:
                     # Session shutdown writes final audit records; keep its sink open.
-                    self.release()
+                    # A transient cleanup failure gets one retry before the sink closes.
+                    if not self.release():
+                        self.release()
         except Exception as exc:
             self.events.put(('error', str(exc)))
             traceback.print_exc(file=sys.stderr)

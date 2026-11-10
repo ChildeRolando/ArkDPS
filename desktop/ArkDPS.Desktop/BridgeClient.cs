@@ -36,6 +36,7 @@ internal sealed class BridgeClient : IAsyncDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Process process;
     private readonly StreamWriter log;
+    private bool transportUnusable;
     private int sequence;
     public string LogPath { get; }
     public JsonElement Hello { get; private set; }
@@ -67,8 +68,6 @@ internal sealed class BridgeClient : IAsyncDisposable
     public async Task ConnectAsync()
     {
         var hello=await RequestAsync("hello");Hello=hello.Get("result");
-        if(hello.Text("kind")!="hello" || hello.Get("result").Text("transport")!="stdio-jsonl")
-            throw new IOException("Python worker 握手失败；请检查 UI 与采集器版本。");
     }
     private async Task<string> ReadLineAsync(CancellationToken token)
     {
@@ -89,24 +88,52 @@ internal sealed class BridgeClient : IAsyncDisposable
         }
     }
 
-    public async Task<JsonElement> RequestAsync(string op, Dictionary<string, object?>? fields = null)
+    public async Task<JsonElement> RequestAsync(string op, Dictionary<string, object?>? fields = null,
+                                                TimeSpan? timeoutOverride = null)
     {
         await gate.WaitAsync();
         try
         {
+            if(transportUnusable)throw new IOException("worker 协议通道已失效；已拒绝后续命令");
             var command = fields == null ? new Dictionary<string, object?>() : new(fields);
             int id = ++sequence; command["version"] = Version; command["id"] = id; command["op"] = op;
             string payload=JsonSerializer.Serialize(command);
             if (Encoding.UTF8.GetByteCount(payload)>MaxMessage) throw new IOException("消息过大；导出内容超过 32 MiB");
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-            await process.StandardInput.WriteLineAsync(payload.AsMemory(),timeout.Token);
-            await process.StandardInput.FlushAsync(timeout.Token);
-            using var document = JsonDocument.Parse(await ReadLineAsync(timeout.Token));
-            var reply = document.RootElement;
-            if (reply.Number("version") != Version || reply.Number("id") != id)
-                throw new IOException("worker 协议版本或消息序号不匹配");
-            if (!reply.Bool("ok")) throw new BridgeCommandException(reply.Text("error"));
-            return reply.Clone();
+            using var timeout = new CancellationTokenSource(timeoutOverride ?? TimeSpan.FromSeconds(90));
+            bool requestMayHaveBeenSent = false;
+            try
+            {
+                requestMayHaveBeenSent = true;
+                await process.StandardInput.WriteLineAsync(payload.AsMemory(),timeout.Token);
+                await process.StandardInput.FlushAsync(timeout.Token);
+                using var document = JsonDocument.Parse(await ReadLineAsync(timeout.Token));
+                var reply = document.RootElement;
+                var responseVersion=reply.Get("version");var responseId=reply.Get("id");
+                if(responseVersion.ValueKind!=JsonValueKind.Number || !responseVersion.TryGetInt32(out int version) || version!=Version ||
+                   responseId.ValueKind!=JsonValueKind.Number || !responseId.TryGetInt32(out int responseSequence) || responseSequence!=id)
+                    throw new IOException("worker 协议版本或消息序号不匹配");
+                string kind=reply.Text("kind");var ok=reply.Get("ok");
+                if(ok.ValueKind==JsonValueKind.False)
+                {
+                    if(kind!="error" || reply.Get("error").ValueKind!=JsonValueKind.String)
+                        throw new IOException("worker 错误响应格式无效");
+                    throw new BridgeCommandException(reply.Text("error"));
+                }
+                if(ok.ValueKind!=JsonValueKind.True)throw new IOException("worker 成功响应缺少布尔 ok");
+                string expectedKind=op switch{"hello"=>"hello","snapshot"=>"snapshot","quit"=>"bye",_=>"state"};
+                if(kind!=expectedKind)throw new IOException("worker 响应类型不匹配");
+                if(op=="hello" && reply.Get("result").Text("transport")!="stdio-jsonl")
+                    throw new IOException("Python worker 握手失败；请检查 UI 与采集器版本。");
+                return reply.Clone();
+            }
+            catch(BridgeCommandException){throw;}
+            catch when(requestMayHaveBeenSent)
+            {
+                // A partial write, timeout, malformed reply or sequence mismatch
+                // makes it impossible to know which response belongs to which request.
+                transportUnusable = true;
+                throw;
+            }
         }
         finally { gate.Release(); }
     }
@@ -117,8 +144,13 @@ internal sealed class BridgeClient : IAsyncDisposable
         {
             if(!process.HasExited)
             {
-                var bye=await RequestAsync("quit");
-                if(bye.Text("kind")!="bye") error=new IOException("worker 退出确认缺失");
+                if(!transportUnusable)
+                {
+                    var bye=await RequestAsync("quit");
+                    if(bye.Text("kind")!="bye") error=new IOException("worker 退出确认缺失");
+                }
+                // On an uncertain stream, quit could consume stale/partial output.
+                // Closing stdin is the worker's documented EOF cleanup signal.
             }
         }
         catch(Exception ex){error=ex;}

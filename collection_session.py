@@ -26,6 +26,7 @@ class CollectionSession:
         self.event_error = None
         self.runtime = None
         self.closed = False
+        self._resources_closed = False
         # Retain cleanup failures and retired observers across snapshot fallback
         # and battle retries. Shutdown must retry releases and report failures.
         self.cleanup_errors = {}
@@ -223,33 +224,41 @@ class CollectionSession:
         if self.closed:
             return
         errors = []
-        try:
-            if self.runtime is not None:
-                self._drain_archives()
-                self.runtime.disconnected('capture_stopped')
-                self.audit('lifecycle_summary', self.runtime.sessions.live())
-            if self.capture is not None:
-                self.capture.close()
-                self.audit('coverage_closed', self.capture.adapter.result())
-        except BaseException as exc:
-            errors.append(('capture', exc))
-        for observer in tuple(self._pending_observers) + ((self.observer,)
-                                                        if self.observer is not None else ()):
+        if not self._resources_closed:
             try:
-                observer.stop()
+                if self.runtime is not None:
+                    self._drain_archives()
+                    self.runtime.disconnected('capture_stopped')
+                    self.audit('lifecycle_summary', self.runtime.sessions.live())
+                if self.capture is not None:
+                    self.capture.close()
+                    self.audit('coverage_closed', self.capture.adapter.result())
             except BaseException as exc:
-                errors.append(('observer', exc))
-            else:
-                if observer in self._pending_observers:
-                    self._pending_observers.remove(observer)
-        try:
-            self.collector.close()
-        except BaseException as exc:
-            errors.append(('collector', exc))
-        for resource, exc in errors:
-            self.cleanup_errors.setdefault(resource, []).append(str(exc))
-        self.closed = not self.cleanup_errors
+                errors.append(('capture', exc))
+            for observer in tuple(self._pending_observers) + ((self.observer,)
+                                                            if self.observer is not None else ()):
+                try:
+                    observer.stop()
+                except BaseException as exc:
+                    errors.append(('observer', exc))
+                else:
+                    if observer in self._pending_observers:
+                        self._pending_observers.remove(observer)
+            try:
+                self.collector.close()
+            except BaseException as exc:
+                errors.append(('collector', exc))
+            for resource, exc in errors:
+                self.cleanup_errors.setdefault(resource, []).append(str(exc))
+            self._resources_closed = not errors
+
         self.event_status = 'stopped'
-        self.audit('stopped', {'cleanup_errors': self.cleanup_errors} if self.cleanup_errors else {})
+        try:
+            self.audit('stopped', {'cleanup_errors': self.cleanup_errors} if self.cleanup_errors else {})
+        except BaseException as exc:
+            self.cleanup_errors.setdefault('audit', []).append(str(exc))
+            self.closed = False
+            raise
+        self.closed = self._resources_closed and not self.cleanup_errors
         if errors:
             raise errors[0][1]
