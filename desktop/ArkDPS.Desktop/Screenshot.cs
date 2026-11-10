@@ -42,7 +42,8 @@ internal static class Screenshot
         }
         if(!view.Get("entries").Items().Any())document.Children.Add(Inspector.Text(view.Text("empty_text"),16,false,"Muted",new Thickness(24,20,24,20)));
         document.Children.Add(Inspector.Text("分型：物理红 / 法术蓝 / 元素紫 / 真实白；精确构成见原始 JSON。",11,false,"Muted",new Thickness(24,16,24,4)));
-        document.Children.Add(Inspector.Text(view.Bool("share_known") ? "全队同口径占比" : view.Text("share_reason"),12,false,"Muted",new Thickness(24,0,24,5)));
+        var shareNote=view.Text("share_note");
+        document.Children.Add(Inspector.Text((view.Bool("share_known") ? "全队同口径占比" : view.Text("share_reason"))+(shareNote.Length>0 ? " · "+shareNote : ""),12,false,"Muted",new Thickness(24,0,24,5)));
         var record=selected.Get("record");document.Children.Add(Inspector.Text("事件："+record.Text("event_status")+" · "+record.Text("event_error"),11,false,"Muted",new Thickness(24,0,24,4)));
         document.Children.Add(Inspector.Text("冻结战绩 "+selected.Text("battle_id")+" · "+theme+" · 完整排行（非可见区域截图）",10,false,"Muted",new Thickness(24,0,24,22)));
         document.Measure(new Size(900,double.PositiveInfinity));document.Arrange(new Rect(document.DesiredSize));document.UpdateLayout();return Capture(document);
