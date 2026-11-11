@@ -112,3 +112,14 @@ def test_overkill_evidence_crosses_the_ordered_receiver_and_is_compared_on_repla
     with pytest.raises(StreamGap):
         receiver.accept(**{**event, 'hp_before': 45})
     assert stats.result()['rows']['host']['overkill_coverage_complete'] is False
+
+
+def test_invalid_supplemental_hp_evidence_never_closes_the_damage_stream():
+    stats, receiver = stream()
+    receiver.accept(session='battle', sequence=11, frame=900, game_time=30,
+                    source='a', kind='hp_damage', amount=float('nan'))
+    receiver.accept(session='battle', sequence=12, frame=900, game_time=30,
+                    source='a', kind='damage', amount=20)
+    row = stats.result()['rows']['host']
+    assert row['observed_damage'] == 20
+    assert row['event_coverage_complete'] is True

@@ -307,6 +307,16 @@ def test_hp_damage_missing_hp_or_shield_stays_unknown():
     assert row['overkill_coverage_complete'] is False
 
 
+def test_hp_damage_from_unknown_source_is_ignored_not_fatal():
+    s = Statistics('hp-unknown-source', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('hp-evil', .5, 'not-registered', 'hp_damage', 10,
+            target='enemy_1', hp_before=5, shield_absorbed=0)
+    assert s.result()['rows']['A']['damage'] == 0
+
+
 @pytest.mark.parametrize('evidence', [
     {},
     {'target': None, 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': True},

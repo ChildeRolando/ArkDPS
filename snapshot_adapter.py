@@ -176,6 +176,16 @@ class BattleStatisticsAdapter:
             self.last_result = self.statistics.result()
             self.types_current.clear()
 
+    def on_event_gap(self) -> None:
+        """Close event coverage only; snapshot totals and presence stay valid."""
+        if self.statistics is None or self.statistics.end_time is not None:
+            return
+        if self.event_stream is not None:
+            self.event_stream.stop()
+        self.statistics.invalidate_events()
+        self.types_current.clear()
+        self.last_result = self.statistics.result()
+
     def on_end(self) -> None:
         """Freeze a battle boundary that is not a collection gap.
 
@@ -268,19 +278,35 @@ class BattleStatisticsAdapter:
             raise StreamGap('event stream is unavailable')
         source = event.get('source')
         kind = event.get('kind')
-        if kind != 'elemental_burst' and (not isinstance(source, str) or not source):
+        if kind == 'hp_damage' and self.event_stream.closed:
+            # Supplemental target-side evidence may still be in flight after
+            # authoritative coverage ended. Drop it without raising again.
+            self.last_result = self.statistics.result()
+            return
+        # Target-side HP evidence is supplemental. An unattributable HP record
+        # must not tear down the authoritative damage/engagement stream; the
+        # ordered receiver drops it while advancing the shared sequence.
+        supplemental = kind == 'hp_damage'
+        if not supplemental and kind != 'elemental_burst' and (
+                not isinstance(source, str) or not source):
             self.event_stream.stop()
             self.last_result = self.statistics.result()
             raise StreamGap('event source is invalid')
         blocked = (self.owner_map.unknown_token_cids | self.owner_map.ambiguous_cids
                    | self.mapping_conflicts)
-        if source is not None and (source in blocked or self.owner_map.owners.get(source) in blocked):
+        if (not supplemental and source is not None
+                and (source in blocked or self.owner_map.owners.get(source) in blocked)):
             self.event_stream.stop()
             self.last_result = self.statistics.result()
             raise StreamGap('event source is ambiguous')
         owner = self.owner_map.owners.get(source) if source is not None else None
         if owner is not None and source not in self.statistics.owners:
-            if not self._register(source, owner):
+            can_register = not (source in blocked or owner in blocked)
+            if not can_register and not supplemental:
+                self.event_stream.stop()
+                self.last_result = self.statistics.result()
+                raise StreamGap('event source cannot be registered')
+            if can_register and not self._register(source, owner):
                 self.event_stream.stop()
                 self.last_result = self.statistics.result()
                 raise StreamGap('event source cannot be registered')

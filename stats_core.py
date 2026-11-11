@@ -347,6 +347,10 @@ class Statistics:
         kinds = ('damage', 'healing', 'shield_absorbed', 'elemental_bar', 'elemental_burst', 'hp_damage')
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
+        if kind == 'hp_damage' and source not in self.owners:
+            # Target-side HP evidence is supplemental. An unmapped source must
+            # not tear down the authoritative damage/engagement stream.
+            return
         if kind != 'elemental_burst' and source not in self.owners:
             raise ValueError('invalid event source')
         if kind == 'elemental_burst' and source is not None and source not in self.owners:

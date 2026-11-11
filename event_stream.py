@@ -107,8 +107,12 @@ class EventStream:
                 hp_after=hp_after, killed=killed, target_type=target_type,
                 damage_type=damage_type, cancel_reason=cancel_reason,
                 shield_absorbed=shield_absorbed, target_instance=target_instance)
-        except (ValueError, TypeError):
-            self._fail('event is invalid or cannot be attributed')
+        except (ValueError, TypeError) as exc:
+            # Target-side HP evidence is supplemental and must never tear down
+            # the authoritative damage/engagement stream. Keep the ordered
+            # sequence advancing; overkill still has the ApplyModifier path.
+            if kind != 'hp_damage':
+                self._fail(f'event is invalid or cannot be attributed: {exc}')
         self.sequence = sequence
         self.frame = frame
         self.game_time = game_time

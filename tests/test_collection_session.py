@@ -205,6 +205,26 @@ def test_live_gap_keeps_native_totals_and_freezes_event_coverage():
     current.close()
 
 
+def test_event_gap_keeps_presence_so_full_cycle_dps_survives():
+    current, collector, _ = session()
+    current.connect()
+    current.locate()
+    current.read()
+    current.observer.error = 'probe stopped'
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    sample = current.read()
+    assert sample['event_status'] == 'gap'
+    row = sample['statistics']['rows']['char_a']
+    assert row['presence_complete'] is True and row['presence_seconds'] == 1
+    collector.frame, collector.game_time, collector.damage = 4, 3, 150
+    sample = current.read()
+    row = sample['statistics']['rows']['char_a']
+    assert sample['event_status'] == 'gap'
+    assert row['damage'] == 150
+    assert row['presence_complete'] is True and row['presence_seconds'] == 3
+    current.close()
+
+
 def test_observer_drain_exception_degrades_instead_of_stopping_snapshots(monkeypatch):
     current, collector, _ = session()
     try:

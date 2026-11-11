@@ -29,7 +29,8 @@ class LiveEventCapture:
 
     def close(self):
         if not self.closed:
-            self.adapter.on_gap()
+            # Event coverage is separate from native snapshots/presence.
+            self.adapter.on_event_gap()
             self.closed = True
 
     def _mark(self):
