@@ -341,6 +341,11 @@ public partial class MainWindow
             await Command("history_config",new(){["config"]=new{category="damage",ranking="total",rate_basis="recent_5s"}});
         }
         var source=Panels[id].View.Get("source");string owner=source.EnumerateObject().First().Name;
+        var ownerRow=source.Get(owner);
+        Require(ownerRow.Get("skill_damage").ValueKind==JsonValueKind.Number &&
+                ownerRow.Get("non_skill_damage").ValueKind==JsonValueKind.Number,
+                "skill / non-skill split missing from rendered source rows");
+        checks.Add("skill / non-skill split reaches the operator detail source");
         activePanel=id;LiveInspector.Pin(owner,Panels[id].View);
         OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         await Settle();
@@ -372,6 +377,13 @@ public partial class MainWindow
             await Navigate("live");await Settle();
             Require(ReferenceEquals(originalHud,Huds[id]) && Native.Handle(originalHud)==handleBeforeTheme,"theme recreated HUD");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
+            await Navigate("enemies");await Settle();
+            Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
+            Require(EnemyTotalHp.Text.Contains("26000"),"enemy total HP did not render");
+            Require(EnemyOurDamage.Text.Contains("19800"),"cumulative damage line value did not render");
+            Require(!EnemyEmpty.IsVisible,"enemy empty state shown with entered enemies");
+            Screenshot.Window(this,Path.Combine(output,theme+"-enemies.png"));
+            await Navigate("live");await Settle();
             Screenshot.Window(this,Path.Combine(output,theme+"-main.png"));Screenshot.Window(originalHud,Path.Combine(output,theme+"-hud.png"));
             var selected=State.Get("history_selected");
             if(selected.ValueKind==JsonValueKind.Object)

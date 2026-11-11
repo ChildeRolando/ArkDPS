@@ -21,6 +21,7 @@ from tools.enemy_health.memcore import TcpChannel
 from tools.stage_global_state.memory import ReadFailure
 from tools.deploy_tracker.ak_deploy_reader import DeployTrackerReader, LOGGER_CONTROLLER
 from character_catalog import load_character_names
+from enemy_telemetry import EnemyTelemetry
 from connection import (ConnectionDiagnostics, DetectionStatus, VersionStatus,
                         EXPECTED_GAME_VERSION, ForwardRegistry)
 from roster import RosterReader, RosterSnapshot, RosterUnavailable
@@ -103,6 +104,7 @@ class Collector:
             cache_file=str(ROOT / 'runtime' / 'unused.pkl'), log=log)
         self.forward_registry = ForwardRegistry()
         self.core.mc.forward_registry = self.forward_registry
+        self.enemy_telemetry = EnemyTelemetry(self.core, log=log)
         # Dedicated port: do not share the upstream app's stream.
         self.names = load_character_names()
         self.last_pid_check = 0.0
@@ -148,6 +150,9 @@ class Collector:
         self.log('正在连接 MuMu…')
         self._lifecycle_reader = None
         self.core.bc_addr = 0
+        if not hasattr(self, 'enemy_telemetry'):
+            self.enemy_telemetry = EnemyTelemetry(self.core, log=self.log)
+        self.enemy_telemetry.reset()
         # MemCore owns its channel; its creation uses the class port default.
         TcpChannel.PORT = PORT
         self.core.connect()
@@ -219,6 +224,8 @@ class Collector:
         if not self.core._resolve_battle_clock():
             raise SampleUnavailable('未找到游戏逻辑时钟')
         self._roster_reader = None
+        if hasattr(self, 'enemy_telemetry'):
+            self.enemy_telemetry.reset()
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.cache_path.write_text(json.dumps(dict(pid=self.core.mc.pid,
             birth=self.core.mc.process_instance, bc=self.core.bc_addr)), encoding='utf-8')
@@ -312,6 +319,11 @@ class Collector:
             read_ms=round((time.perf_counter() - started) * 1000, 2),
             observed_at=time.time(), captured_monotonic=captured_monotonic, guard=guard)
 
+    def read_enemies(self, *, game_time, our_damage):
+        """Read supplemental enemy live telemetry without affecting counters."""
+        return self.enemy_telemetry.sample(game_time=game_time,
+                                           our_damage=our_damage)
+
     def read_lifecycle(self):
         if self._lifecycle_reader is None:
             raise SampleUnavailable('生命周期尚未连接')
@@ -347,6 +359,8 @@ class Collector:
             return
         self.core.bc_addr = address
         self._roster_reader = None
+        if hasattr(self, 'enemy_telemetry'):
+            self.enemy_telemetry.reset()
         if not self.core._resolve_battle_clock():
             raise SampleUnavailable('未能验证当前单例的逻辑时钟')
 

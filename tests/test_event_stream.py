@@ -123,3 +123,21 @@ def test_invalid_supplemental_hp_evidence_never_closes_the_damage_stream():
     row = stats.result()['rows']['host']
     assert row['observed_damage'] == 20
     assert row['event_coverage_complete'] is True
+
+
+def test_skill_window_events_cross_the_ordered_receiver():
+    stats, receiver = stream()
+    receiver.accept(session='battle', sequence=11, frame=900, game_time=30,
+                    source='a', kind='skill_start', amount=1,
+                    target_instance='Character.OnSkillStart', skill_key='k',
+                    skill_name='技能A')
+    receiver.accept(session='battle', sequence=12, frame=900, game_time=30,
+                    source='a', kind='damage', amount=20, target='enemy_1')
+    receiver.accept(session='battle', sequence=13, frame=900, game_time=30,
+                    source='a', kind='skill_end', amount=1,
+                    target_instance='Character.OnSkillFinish', skill_key='k')
+    row = stats.result()['rows']['host']
+    assert row['skill_damage'] == 20
+    assert row['non_skill_damage'] == 0
+    assert row['skill_split_complete'] is True
+    assert row['event_coverage_complete'] is True

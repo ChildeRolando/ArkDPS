@@ -4,6 +4,13 @@ if(Process.arch!=='arm64')throw new Error('ARM64 emulated realm required');
 const il=Process.getModuleByName('libil2cpp.so');
 function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
 function className(k){return k.add(0x10).readPointer().readCString();}
+function fieldOffsets(k,names){
+ const a=k.add(0x80).readPointer(),n=k.add(0x124).readU16(),seen={};
+ if(n>1000)throw new Error('invalid field metadata');
+ for(let i=0;i<n;i++){const f=a.add(i*32);if(!f.add(16).readPointer().equals(k))throw new Error('field owner mismatch');seen[f.readPointer().readCString()]=f.add(24).readS32();}
+ const out={};for(const name of names){if(!(name in seen))throw new Error('missing field '+className(k)+'.'+name);out[name]=seen[name];}
+ return out;
+}
 function expectFields(k,expected){
  const a=k.add(0x80).readPointer(),n=k.add(0x124).readU16(),seen={};
  if(n>1000)throw new Error('invalid field metadata');
@@ -12,7 +19,7 @@ function expectFields(k,expected){
 }
 const domain=api('il2cpp_domain_get','pointer',[])();
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
-const cfg={methods:[]};let clock;
+const cfg={methods:[]};let clock;let skillF=null;
 try{
  const size=Memory.alloc(8), assemblies=api('il2cpp_domain_get_assemblies','pointer',['pointer','pointer'])(domain,size);
  const imageOf=api('il2cpp_assembly_get_image','pointer',['pointer']), imageName=api('il2cpp_image_get_name','pointer',['pointer']);
@@ -20,10 +27,14 @@ try{
  let im;
  for(let i=0;i<size.readU64().toNumber();i++){const x=imageOf(assemblies.add(i*8).readPointer());if(imageName(x).readCString()==='Assembly-CSharp.dll'){im=x;break;}}
  if(!im)throw new Error('Assembly-CSharp not found');
- const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController']);const found={};
+ const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController',
+  'Character','BasicSkill','SkillData']);const found={};
  for(let i=0,n=classCount(im);i<n;i++){
   const k=classAt(im,i),name=className(k);if(!wanted.has(name))continue;
-  const ns=k.add(0x18).readPointer().readCString();if(ns!==(['BuffContainer','BlockDamage'].includes(name)?'':'Torappu.Battle'))continue;
+  const ns=k.add(0x18).readPointer().readCString();
+  const expectedNs=(['BuffContainer','BlockDamage'].includes(name)?'':
+    (name==='SkillData'?'Torappu':'Torappu.Battle'));
+  if(ns!==expectedNs)continue;
   if(found[name])throw new Error('ambiguous class '+name);found[name]=k;
  }
  for(const name of wanted)if(!found[name])throw new Error('class not found '+name);
@@ -32,6 +43,11 @@ try{
  expectFields(found.Modifier,{'m_source':0x10,'m_target':0x20,'m_originalSource':0x30,'m_value':0x40,'realDelta':0x58,'<targetType>k__BackingField':0x70,'<damageType>k__BackingField':0x78,'<cancelReason>k__BackingField':0x80});
  // FIXED_FRAME_COUNT is verified from the current class metadata, not an old battle object.
  expectFields(found.BattleController,{'s_fixedFrameCnt':0x14,'s_fixedPlayTime':0x18});
+ const CF=fieldOffsets(found.Character,['m_skill']);
+ const BF=fieldOffsets(found.BasicSkill,['m_owner','m_data']);
+ const SF=fieldOffsets(found.SkillData,['prefabKey','skillId','name']);
+ skillF={charSkill:CF.m_skill,owner:BF.m_owner,data:BF.m_data,
+  prefab:SF.prefabKey,id:SF.skillId,name:SF.name};
  clock=found.BattleController.add(0xb8).readPointer().add(0x14);
  for(const [owner,k] of Object.entries(found)){
   if(['Modifier','BattleController'].includes(owner))continue;
@@ -39,10 +55,15 @@ try{
   for(let i=0;i<mn;i++){
    const m=ma.add(i*8).readPointer();if(!m.add(0x20).readPointer().equals(k))continue;
    const name=m.add(0x18).readPointer().readCString();
-   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || (owner==='Entity'||owner==='Unit')&&['ApplyModifier','OnAppliedModifier','OnTakeHeal','OnTakeDamage','OnAfterOutputDamage'].includes(name)) cfg.methods.push({owner,name,address:m.readPointer().toString()});
+   const skillStart=['OnSkillStart','SwitchToSkillState','OnSkillCastSucceed','OnToggleSkillStart','OnSkillRetriggered'];
+   const skillEnd=['OnSkillFinish','SwitchOutFromSkillState','OnAfterSkill'];
+   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || (owner==='Entity'||owner==='Unit')&&['ApplyModifier','OnAppliedModifier','OnTakeHeal','OnTakeDamage','OnAfterOutputDamage'].includes(name) || owner==='Character'&&(skillStart.includes(name)||skillEnd.includes(name))) cfg.methods.push({owner,name,address:m.readPointer().toString()});
   }
  }
  for(const key of ['Entity.ApplyModifier','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar'])if(!cfg.methods.some(m=>m.owner+'.'+m.name===key))throw new Error('required method missing '+key);
+ const skillStarts=cfg.methods.filter(m=>m.owner==='Character'&&['OnSkillStart','SwitchToSkillState','OnSkillCastSucceed','OnToggleSkillStart','OnSkillRetriggered'].includes(m.name));
+ const skillEnds=cfg.methods.filter(m=>m.owner==='Character'&&['OnSkillFinish','SwitchOutFromSkillState','OnAfterSkill'].includes(m.name));
+ cfg.skillReady=skillStarts.length>0&&skillEnds.length>0;
 } finally {api('il2cpp_thread_detach','void',['pointer'])(thread);}
 // A callback increments epoch on entry and remains active until its native
 // invocation returns. RPC marks are serialized with these JS callbacks.
@@ -53,6 +74,7 @@ const engagementUnknownSources=new Set();
 let shieldUnknown=false;
 let damageUnknown=false;
 let engagementUnknown=false;
+let skillUnknown=false;
 // Recoverable unattributable callbacks are counted, not escalated globally.
 let skippedUnattributed=0;
 let queue=[];let hpContext=[];
@@ -134,11 +156,37 @@ function record(source,kind,amount,when,proof,evidence){
  if(evidence)Object.assign(event,evidence);
  queue.push(event);
 }
-for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&x.name==='ApplyModifier'||(x.owner==='Entity'||x.owner==='Unit')&&(x.name==='OnTakeDamage'||x.name==='OnAfterOutputDamage'))){
+const SKILL_START_METHODS=new Set(['OnSkillStart','SwitchToSkillState','OnSkillCastSucceed','OnToggleSkillStart','OnSkillRetriggered']);
+const SKILL_END_METHODS=new Set(['OnSkillFinish','SwitchOutFromSkillState','OnAfterSkill']);
+function skillIdentity(charPtr,skillPtr){
+ try{
+  const sk=(skillPtr&&!skillPtr.isNull())?skillPtr:charPtr.add(skillF.charSkill).readPointer();
+  if(!sk||sk.isNull())return {};
+  const data=sk.add(skillF.data).readPointer();
+  if(!data||data.isNull())return {};
+  const key=str(data.add(skillF.prefab).readPointer());
+  const id=str(data.add(skillF.id).readPointer());
+  const name=str(data.add(skillF.name).readPointer());
+  return {skill_key:key||id||null,skill_id:id||null,skill_name:name||null};
+ }catch(e){return {};}
+}
+for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&x.name==='ApplyModifier'||(x.owner==='Entity'||x.owner==='Unit')&&(x.name==='OnTakeDamage'||x.name==='OnAfterOutputDamage')||x.owner==='Character')){
  hooks.push(Interceptor.attach(ptr(m.address),{
   onEnter(args){
    active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    try{
+    if(this.name.startsWith('Character.')){
+     const method=this.name.slice('Character.'.length);
+     if(SKILL_START_METHODS.has(method)||SKILL_END_METHODS.has(method)){
+      this.skillStart=SKILL_START_METHODS.has(method);this.skillEnd=!this.skillStart;
+      try{
+       this.source=entityId(args[0]);
+       this.skill=skillIdentity(args[0],method==='OnAfterSkill'?args[1]:null);
+       this.skillReason=(method==='OnAfterSkill'&&args[2])?args[2].toInt32():null;
+      }catch(e){skillUnknown=true;this.ignore=true;}
+      return;
+     }
+    }
     this.when=time();
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
     if(this.name.endsWith('.OnAfterOutputDamage')){
@@ -183,7 +231,8 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(args[2].add(0x30));
     if(!Number.isFinite(this.before)||this.before<0||!Number.isFinite(this.incoming)||this.incoming<0){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=true;return;}
    }catch(e){
-    if(this.name==='Entity.ApplyModifier'){if(this.source&&own(this.source))unknownSources.add(this.source);else{skippedUnattributed++;}}
+    if(this.skillStart||this.skillEnd){skillUnknown=true;}
+    else if(this.name==='Entity.ApplyModifier'){if(this.source&&own(this.source))unknownSources.add(this.source);else{skippedUnattributed++;}}
     else{shieldUnknown=true;markShieldUnknown(this.when?this.when.frame:null,this.damageTarget);}
     this.ignore=true;
    }
@@ -192,7 +241,17 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
    try{
     if(this.pushed){const s=stacks.get(this.tid);s.pop();if(!s.length)stacks.delete(this.tid);return;}
     if(this.ignore&&this.name!=='Entity.ApplyModifier')return;
-    const end=time();if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
+    const end=time();
+    if(this.skillStart||this.skillEnd){
+     if(this.ignore)return;
+     if(!this.source){skillUnknown=true;return;}
+     const info=this.skill||{};
+     const evidence={skill_key:info.skill_key||null,skill_id:info.skill_id||null,skill_name:info.skill_name||null};
+     if(this.skillEnd)evidence.skill_reason=this.skillReason;
+     try{record(this.source,this.skillStart?'skill_start':'skill_end',1,end,{method:this.name},evidence);}catch(e){skillUnknown=true;}
+     return;
+    }
+    if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
      if(this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
@@ -272,7 +331,8 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      noteShield(this.when.frame,this.damageTarget,this.amount);
     }
    }catch(e){
-    if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}}
+    if(this.skillStart||this.skillEnd){skillUnknown=true;}
+    else if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}}
     else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);}
    }finally{if(this.started)active--;}
   }
@@ -281,11 +341,11 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
 rpc.exports={
  mark() {
   const current = time(true);
-  const quality={unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown};
+  const quality={unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady};
   if (current === null) return {retry:true,error:fatal,stopped,...quality};
   return {...current,sequence,epoch,active,error:fatal,stopped,...quality};
  },
- drain(){const result=queue,context=hpContextQueue();return {events:result,hp_context:context,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown};},
+ drain(){const result=queue,context=hpContextQueue();return {events:result,hp_context:context,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady};},
  stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
 };
-send({ready:true,arch:Process.arch});
+send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady});

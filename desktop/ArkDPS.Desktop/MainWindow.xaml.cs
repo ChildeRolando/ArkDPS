@@ -163,6 +163,7 @@ public partial class MainWindow : Window
         ConnectionDiagnostics.Text=state.Text("connection_text")+"\n"+state.Text("event_text")+"\n"+
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected")+"\n"+diag.Text("message")+"\n"+diag.Text("error");
         applying=false;ArrangePanels();
+        UpdateEnemies(state.Get("enemy"));
         if(changed){InvalidateVisualTree(this);foreach(var hud in Huds.Values)InvalidateVisualTree(hud);}
     }
     private static void InvalidateVisualTree(DependencyObject obj)
@@ -232,13 +233,14 @@ public partial class MainWindow : Window
     {
         route=page;LivePage.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
+        EnemyPage.Visibility=page=="enemies" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         bool live=page=="live";
         BattleStrip.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         MetricCards.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
-        PageEyebrow.Text=page switch{"history"=>"ARCHIVE / BATTLE LOG","settings"=>"SYSTEM / CONNECTION",_=>"FLIGHT RECORDER / ACTIVE SORTIE"};
-        PageTitle.Text=page switch{"history"=>"历史战绩","settings"=>"连接设置",_=>Theme.Key=="lone-trail" ? "飞行记录" : "本局统计"};
-        PageSubtitle.Text=page switch{"history"=>"本地归档 · 搜索、导出与分享","settings"=>"连接、事件观测与诊断",_=>"实时贡献、有效伤害与过量拆分"};
+        PageEyebrow.Text=page switch{"history"=>"ARCHIVE / BATTLE LOG","enemies"=>"ENEMY TELEMETRY / ENTERED SCOPE","settings"=>"SYSTEM / CONNECTION",_=>"FLIGHT RECORDER / ACTIVE SORTIE"};
+        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","settings"=>"连接设置",_=>Theme.Key=="lone-trail" ? "飞行记录" : "本局统计"};
+        PageSubtitle.Text=page switch{"history"=>"本地归档 · 搜索、导出与分享","enemies"=>"已入场敌人属性、总血量与累计伤害时间线","settings"=>"连接、事件观测与诊断",_=>"实时贡献、有效伤害与过量拆分"};
         SetNavState(page);
         AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         if(live){PanelScroll.ScrollToTop();InspectorScroll.ScrollToTop();}
@@ -249,7 +251,7 @@ public partial class MainWindow : Window
     }
     private void SetNavState(string page)
     {
-        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(SettingsNav,"settings")})
+        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(EnemyNav,"enemies"),(SettingsNav,"settings")})
         {
             bool active=tag==page;
             button.Background=active?Theme.Resource("SidebarActive"):Brushes.Transparent;

@@ -215,6 +215,8 @@ class DesktopState:
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
+                    enemy=sample.get('enemy') or dict(status='starting', error=None,
+                        ready=False, rows=[], totals={}, series=[]),
                     history=history, history_selected=selected, history_notice=self.history_notice)
 
     def persist(self, layout):

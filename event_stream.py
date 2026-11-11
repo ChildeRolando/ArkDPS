@@ -80,13 +80,14 @@ class EventStream:
     def accept(self, *, session, sequence, frame, game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
-               cancel_reason=None, shield_absorbed=None, target_instance=None):
+               cancel_reason=None, shield_absorbed=None, target_instance=None,
+               skill_key=None, skill_id=None, skill_name=None, skill_reason=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
                    target, real_delta, hp_before, hp_after, killed,
                    target_type, damage_type, cancel_reason, shield_absorbed,
-                   target_instance)
+                   target_instance, skill_key, skill_id, skill_name, skill_reason)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -106,7 +107,9 @@ class EventStream:
                 target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
                 damage_type=damage_type, cancel_reason=cancel_reason,
-                shield_absorbed=shield_absorbed, target_instance=target_instance)
+                shield_absorbed=shield_absorbed, target_instance=target_instance,
+                skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
+                skill_reason=skill_reason)
         except (ValueError, TypeError) as exc:
             # Target-side HP evidence is supplemental and must never tear down
             # the authoritative damage/engagement stream. Keep the ordered

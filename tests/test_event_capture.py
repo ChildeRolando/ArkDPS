@@ -380,3 +380,15 @@ def test_elemental_bar_and_sourceless_burst_reach_attribution():
     assert row['burst_overkill'] == 5216
     assert row['damage'] == pytest.approx(120 + 6000)
     assert row['effective_damage'] == pytest.approx(120 + 784)
+
+
+def test_probe_hooks_character_skill_windows_and_keeps_them_out_of_onenter():
+    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    assert "wanted=new Set([" in js and "'Character'" in js and "'BasicSkill'" in js
+    assert "'skill_start'" in js and "'skill_end'" in js
+    assert 'OnSkillStart' in js and 'OnSkillFinish' in js and 'OnAfterSkill' in js
+    enter = js[js.index('onEnter(args){'):js.index('onLeave(){')]
+    leave = js[js.index('onLeave(){'):]
+    assert "record(this.source,this.skillStart?'skill_start':'skill_end'" not in enter
+    assert "record(this.source,this.skillStart?'skill_start':'skill_end'" in leave
+    assert 'skill_unknown' in leave and 'skillUnknown' in js

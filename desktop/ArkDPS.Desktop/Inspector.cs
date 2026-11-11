@@ -94,6 +94,47 @@ public sealed class Inspector : Border
         if(row.Get("burst_unknown_reason").ValueKind==JsonValueKind.String)
             body.Children.Add(Text("元素爆条归属未知："+row.Text("burst_unknown_reason"),10,false,"Muted",new Thickness(0,2,0,0)));
 
+        Section("技能 / 非技能");
+        double skillDamage = row.Get("skill_damage").TryNumber();
+        double nonSkillDamage = row.Get("non_skill_damage").TryNumber();
+        bool skillKnown = row.Get("skill_damage").ValueKind == JsonValueKind.Number &&
+                          row.Get("non_skill_damage").ValueKind == JsonValueKind.Number;
+        if (skillKnown)
+        {
+            var splitStats = new WrapPanel();
+            AddStat(splitStats, "技能伤害", row.UiInt("skill_damage"));
+            AddStat(splitStats, "非技能伤害", row.UiInt("non_skill_damage"));
+            AddStat(splitStats, "技能窗口", row.UiInt("skill_window_count"));
+            body.Children.Add(splitStats);
+            double splitTotal = skillDamage + nonSkillDamage;
+            var splitBar = new Grid { Height = 8, Margin = new Thickness(0, 3, 0, 5) };
+            splitBar.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(splitTotal > 0 ? skillDamage : 1, GridUnitType.Star) });
+            splitBar.ColumnDefinitions.Add(new ColumnDefinition {
+                Width = new GridLength(splitTotal > 0 ? nonSkillDamage : 1, GridUnitType.Star) });
+            var skillPart = new Border { Background = Theme.Resource("Accent"),
+                CornerRadius = new CornerRadius(2, 0, 0, 2) };
+            var normalPart = new Border { Background = Theme.Resource("Muted"),
+                CornerRadius = new CornerRadius(0, 2, 2, 0) };
+            Grid.SetColumn(normalPart, 1);
+            splitBar.Children.Add(skillPart);
+            splitBar.Children.Add(normalPart);
+            body.Children.Add(splitBar);
+            string splitReason = row.Text("skill_split_reason");
+            body.Children.Add(Text(splitReason.Length > 0
+                ? "技能拆分未知：" + splitReason
+                : "按施放者技能窗口拆分伤害事件；被动技能计入非技能。",
+                10, false, "Muted", new Thickness(0, 1, 0, 2)));
+        }
+        else
+        {
+            string splitReason = row.Text("skill_split_reason");
+            body.Children.Add(Text(splitReason.Length > 0
+                ? "技能拆分未知：" + splitReason
+                : "技能拆分未知：事件观测或技能窗口未覆盖。",
+                10, false, "Muted", new Thickness(0, 1, 0, 2)));
+        }
+
         Section("被减伤率");
         Pair("被减伤率",Mitigation(row));
         var mitigationNote=MitigationNote(row,view);

@@ -660,3 +660,17 @@ def test_supplemental_hp_evidence_after_coverage_closed_is_dropped_quietly():
     result = a.result()['rows']['char_a']
     assert result['event_coverage_complete'] is False
     assert result['damage'] == 100
+
+
+def test_skill_window_from_unmapped_source_marks_split_unknown_without_closing_events():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a')], 0, 1), roster([CHAR_A], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
+                   source='enemy_1', kind='skill_start', amount=1, skill_key='k')
+    a.accept_event(session='battle-1', sequence=2, frame=1, game_time=0,
+                   source='char_a', kind='damage', amount=5)
+    result = a.result()['rows']['char_a']
+    assert result['event_coverage_complete'] is True
+    assert result['skill_damage'] is None
+    assert result['skill_split_complete'] is False

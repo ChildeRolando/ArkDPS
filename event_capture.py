@@ -143,6 +143,8 @@ class LiveEventCapture:
             statistics.mark_all_engagement_unknown()
         if payload.get('shield_unknown'):
             statistics.mark_shields_unknown()
+        if payload.get('skill_unknown'):
+            statistics.mark_skill_unknown()
 
     def ingest(self, sample, roster, sequence, drained):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.

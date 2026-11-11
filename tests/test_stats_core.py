@@ -528,3 +528,66 @@ def test_unattributed_elemental_burst_is_unknown_not_guessed():
     assert row['burst_complete'] is False
     assert '元素爆条' in row['burst_unknown_reason']
     assert row['damage'] == pytest.approx(1000)
+
+
+def test_skill_windows_split_observed_damage_and_close_at_finish():
+    s = Statistics('skill-split', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('start', .5, 'a', 'skill_start', 1,
+            target_instance='Character.OnSkillStart', skill_key='skill_a', skill_name='技能A')
+    s.event('skill-hit', .6, 'a', 'damage', 100, target='enemy_1')
+    s.event('end', .7, 'a', 'skill_end', 1,
+            target_instance='Character.OnSkillFinish', skill_key='skill_a', skill_reason=0)
+    s.event('normal-hit', .8, 'a', 'damage', 50, target='enemy_1')
+    s.finish(2)
+    row = s.result()['rows']['A']
+    assert row['skill_damage'] == 100
+    assert row['non_skill_damage'] == 50
+    assert row['skill_split_complete'] is True
+    assert row['skill_window_count'] == 1
+    assert row['skill_seen'] is True
+    assert row['observed_damage'] == 150
+
+
+def test_duplicate_skill_start_and_end_markers_stay_one_window():
+    s = Statistics('skill-dedupe', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('s1', .1, 'a', 'skill_start', 1, skill_key='k')
+    s.event('s2', .2, 'a', 'skill_start', 1, skill_key='k')
+    s.event('d', .3, 'a', 'damage', 10, target='enemy_1')
+    s.event('e1', .4, 'a', 'skill_end', 1, skill_key='k')
+    s.event('e2', .5, 'a', 'skill_end', 1, skill_key='k')
+    row = s.result()['rows']['A']
+    assert row['skill_damage'] == 10
+    assert row['non_skill_damage'] == 0
+    assert row['skill_window_count'] == 1
+
+
+def test_skill_split_is_unknown_after_event_coverage_ends():
+    s = Statistics('skill-gap', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('s', .1, 'a', 'skill_start', 1, skill_key='k')
+    s.event('d', .2, 'a', 'damage', 10, target='enemy_1')
+    s.invalidate_events(1)
+    row = s.result()['rows']['A']
+    assert row['skill_damage'] is None and row['non_skill_damage'] is None
+    assert row['skill_split_complete'] is False
+    assert row['skill_split_reason'] == '事件覆盖已结束'
+
+
+def test_skill_event_from_unknown_source_marks_split_unknown_not_fatal():
+    s = Statistics('skill-unknown', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('s', .1, 'mystery', 'skill_start', 1, skill_key='k')
+    s.event('d', .2, 'a', 'damage', 10, target='enemy_1')
+    row = s.result()['rows']['A']
+    assert row['skill_damage'] is None
+    assert row['skill_split_complete'] is False

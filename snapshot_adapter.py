@@ -278,15 +278,15 @@ class BattleStatisticsAdapter:
             raise StreamGap('event stream is unavailable')
         source = event.get('source')
         kind = event.get('kind')
-        if kind == 'hp_damage' and self.event_stream.closed:
-            # Supplemental target-side evidence may still be in flight after
-            # authoritative coverage ended. Drop it without raising again.
+        if kind in ('hp_damage', 'skill_start', 'skill_end') and self.event_stream.closed:
+            # Supplemental evidence may still be in flight after authoritative
+            # coverage ended. Drop it without raising again.
             self.last_result = self.statistics.result()
             return
         # Target-side HP evidence is supplemental. An unattributable HP record
         # must not tear down the authoritative damage/engagement stream; the
         # ordered receiver drops it while advancing the shared sequence.
-        supplemental = kind == 'hp_damage'
+        supplemental = kind in ('hp_damage', 'skill_start', 'skill_end')
         if not supplemental and kind != 'elemental_burst' and (
                 not isinstance(source, str) or not source):
             self.event_stream.stop()
