@@ -182,15 +182,25 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      if(![1,2,3,4].includes(type)){unknownSources.add(this.source);engagementUnknownSources.add(this.source);return;}
      const kind=type===4?'healing':'damage';
      let damageTarget=this.target, damageHpBefore=this.hpBefore, damageInstance=instance;
+     let fallbackUsed=false, fallbackInfo=null;
      if(kind==='damage'&&(!damageTarget||damageTarget.isNull())){
       const fallback=lastBarTarget.get(this.source);
+      fallbackInfo=fallback||null;
       if(fallback&&fallback.frame===end.frame){
-       damageTarget=fallback.target;damageHpBefore=fallback.hp_before;damageInstance=fallback.instance;
+       damageTarget=fallback.target;damageHpBefore=fallback.hp_before;damageInstance=fallback.instance;fallbackUsed=true;
       }
      }
      const evidence=kind==='damage'?overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame):null;
      if(evidence&&damageInstance) evidence.target_instance=damageInstance;
-     try{record(this.source,kind,amount,end,{method:this.name,type,target:targetType},evidence);}catch(e){fatal=String(e);}
+     const proof={method:this.name,type,target:targetType};
+     if(!this.target||this.target.isNull()||fallbackUsed){
+      proof.target_recovered=fallbackUsed;
+      proof.fallback_frame=fallbackInfo?fallbackInfo.frame:null;
+      proof.raw_target_null=!this.target||this.target.isNull();
+      proof.fallback_hp_before=fallbackInfo?fallbackInfo.hp_before:null;
+      proof.evidence_recovered=!!evidence;
+     }
+     try{record(this.source,kind,amount,end,proof,evidence);}catch(e){fatal=String(e);}
     }else{
      const after=dynamic(this.bb);
      if(!Number.isFinite(after)||after<0||Math.abs(this.before-after-this.amount)>0.01){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);return;}
