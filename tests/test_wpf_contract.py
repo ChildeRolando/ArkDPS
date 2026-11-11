@@ -83,14 +83,27 @@ def contrast(a, b):
 
 def test_actual_wpf_theme_text_pairs_have_aa_contrast():
     source = (ROOT/'desktop/ArkDPS.Desktop/App.xaml.cs').read_text('utf-8')
-    palettes = re.findall(r'\["Bg"\].*?\["Signal"\]="#[0-9A-F]+"', source, re.S)
-    assert len(palettes) == 2
+    palettes = re.findall(r'\["Bg"\].*?\["Radius"\]="[0-9]+"', source, re.S)
+    assert len(palettes) == 6
     for raw in palettes:
         colors = dict(re.findall(r'\["([A-Za-z]+)"\]="(#[0-9A-F]+)"', raw))
         for foreground, background in [('Ink','Bg'), ('Ink','Card'), ('Muted','Card'),
                 ('Muted','Inset'), ('ConsoleInk','Console'), ('ConsoleMuted','Console'),
-                ('ConsoleInk','ConsoleCard'), ('ConsoleMuted','ConsoleCard'), ('AccentText','Card'), ('AccentInk','Accent')]:
+                ('ConsoleInk','ConsoleCard'), ('ConsoleMuted','ConsoleCard'), ('AccentText','Card'), ('AccentInk','Accent'),
+                ('HeroInk','Hero'), ('HeroMuted','Hero'), ('HeroStatusInk','HeroCard')]:
             assert contrast(colors[foreground], colors[background]) >= 4.5, (foreground, background, colors)
+
+
+def test_wpf_ships_all_six_demo_skins():
+    source = (ROOT/'desktop/ArkDPS.Desktop/App.xaml.cs').read_text('utf-8')
+    for key in ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original'):
+        assert f'["{key}"]=new()' in source, key
+
+
+def test_inspector_uses_mitigation_rate_not_penetration_efficiency():
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    assert '"被减伤率"' in inspector and 'mitigation_rate' in inspector
+    assert '穿透效能' not in inspector and '穿透保留率' not in inspector
 
 
 def test_ui_has_no_game_memory_or_adb_process_api():

@@ -48,6 +48,18 @@ def event_label(status, error=None):
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
 
+def team_totals(statistics):
+    """Whole-team metric strip. Unknown rows stay None; no partial sum is shown as a total."""
+    rows = (statistics or {}).get('rows') or {}
+    result = {}
+    for key in ('damage', 'healing', 'shield_absorbed'):
+        values = [row.get(key) for row in rows.values()]
+        result[key] = (sum(values) if values and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in values) else None)
+    return result
+
+
 def empty_text(config, source, complete):
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
@@ -193,6 +205,7 @@ class DesktopState:
                                        error=sample.get('event_error', self.event_error), live=True)
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
+                    totals=team_totals(stats),
                     status=status, status_text=label, error=self.error,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
                     event_text=event_label(self.event_status, self.event_error),

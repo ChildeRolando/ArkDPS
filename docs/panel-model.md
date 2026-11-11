@@ -1,5 +1,7 @@
 # GUI/HUD 共用面板模型与排序口径
 
+当前 WPF 展示采用 demo 的导航栏/飞行记录头图/三张总览卡/表格面板/HUD 与干员详情右栏，并内置孤星、危机合约、巴别塔、长夜临光、叙拉古人、原始界面六套皮肤；所有皮肤共用同一数据模型，只替换颜色、圆角与强调色。干员详情中的「被减伤率」使用 `mitigation_rate`（百分比）；没有公式前伤害证据时保持未知并显示“—”，不以过量或护盾替代。
+
 当前 WPF 展示通过 `desktop_bridge.py` 只读消费 `panel_model.py`，C# 不重算排行/柱长/占比；运行与验收见 [桌面运行时](desktop-runtime.md)。产品 UI 只有 WPF：Tk 实现（`gui_panel.py`、`hud.py`、`gui_history.py`、`ui_theme.py`）已归档封存到 `archive/legacy-tk`，见 [ADR 0005](adr/0005-seal-legacy-tk.md)。下文 ARK-9/10/12/19 章节是 Tk 时代的实现与验收记录，只作追溯，不代表 WPF 的实机验收已完成。
 
 共享模型实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI、`hud.py` 的 HUD 和 `gui_history.py` 的历史窗口使用该模型，共享同一口径。

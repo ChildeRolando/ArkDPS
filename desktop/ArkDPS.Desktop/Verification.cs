@@ -356,9 +356,10 @@ public partial class MainWindow
         checks.Add("switching back to five-second rate clears the unavailable notice");
         string placementBeforeTheme=JsonSerializer.Serialize(originalHud.Placement());
         IntPtr handleBeforeTheme=Native.Handle(originalHud);
-        foreach(string theme in new[]{"lone-trail","original"})
+        foreach(string theme in new[]{"lone-trail","contingency-contract","babel","near-light","il-siracusano","original"})
         {
             await Command("theme",new(){["theme"]=theme});await Settle();
+            await Navigate("live");await Settle();
             Require(ReferenceEquals(originalHud,Huds[id]) && Native.Handle(originalHud)==handleBeforeTheme,"theme recreated HUD");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
             Screenshot.Window(this,Path.Combine(output,theme+"-main.png"));Screenshot.Window(originalHud,Path.Combine(output,theme+"-hud.png"));

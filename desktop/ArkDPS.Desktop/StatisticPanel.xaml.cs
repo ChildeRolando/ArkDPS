@@ -30,10 +30,11 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Id => Entry.Text("owner_id");
     public string Name => Entry.Text("name");
     public string Initial => Name.Length > 0 ? Name[..1] : "?";
-    public string Value => Entry.Text("display_value");
-    public string Presence => (Entry.Bool("portrait_muted") ? "已离场" : "统计条目") + (Entry.Bool("incomplete") ? " · 部分覆盖" : "");
-    public string Secondary => Entry.Text("share_display") + (Entry.Text("rate_text").Length > 0 ? "   " + Entry.Text("rate_text") : "");
-    public string Tooltip => Name + "\n排行原值 " + Json.UiText(Entry.Text("exact_value")) + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "") + "\n占比 " + Entry.Text("share_display") + "\n过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + "（总伤害含过量）";
+    public string Total => Entry.Text("display_value");
+    public string Rate => Entry.Text("rate_text");
+    public string Share => Entry.Text("share_display");
+    public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
+    public string Tooltip => Name + Environment.NewLine + "排行原值 " + Json.UiText(Entry.Text("exact_value")) + Environment.NewLine + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "") + Environment.NewLine + "占比 " + Entry.Text("share_display") + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage");
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
@@ -91,12 +92,13 @@ public sealed class ContributionBar : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
-        dc.DrawRoundedRectangle(Theme.Resource("ConsoleCard"),null,new Rect(0,0,ActualWidth,ActualHeight),2,2);
+        dc.DrawRoundedRectangle(Theme.Resource("Track"),null,new Rect(0,0,ActualWidth,ActualHeight),1,1);
         double width=ActualWidth*Math.Clamp(Data.Number("bar_ratio"),0,1), x=0;
         var segments=Data.Get("segments").Items().ToArray();
         if (segments.Length==0)
         {
-            dc.DrawRoundedRectangle(Data.Text("bar_color").Length>0 ? Theme.Brush(Data.Text("bar_color")) : Theme.Resource("Signal"),null,new Rect(0,0,width,ActualHeight),2,2); return;
+            var color=Data.Text("bar_color");
+            dc.DrawRoundedRectangle(color.Length>0 ? Theme.Brush(color) : Theme.Resource("Accent"),null,new Rect(0,0,width,ActualHeight),1,1); return;
         }
         foreach(var segment in segments)
         {
@@ -104,7 +106,7 @@ public sealed class ContributionBar : FrameworkElement
             if(size>0)
             {
                 double body=Math.Max(0,size-3);
-                dc.DrawRoundedRectangle(Theme.Brush(segment.Text("color")),null,new Rect(x,0,body,ActualHeight),3,3);
+                dc.DrawRoundedRectangle(SegmentBrush(segment),null,new Rect(x,0,body,ActualHeight),1,1);
                 if(segment.TryGetProperty("overkill_ratio",out var mark) && mark.ValueKind==JsonValueKind.Number)
                 {
                     double ratio=Math.Clamp(mark.GetDouble(),0,1), overkill=body*ratio;
@@ -120,8 +122,14 @@ public sealed class ContributionBar : FrameworkElement
             }
             x+=size;
         }
-        if (x<width) dc.DrawRectangle(Theme.Resource("ConsoleMuted"),null,new Rect(x,0,width-x,ActualHeight));
+        if (x<width) dc.DrawRectangle(Theme.Resource("Track"),null,new Rect(x,0,width-x,ActualHeight));
     }
+    private static Brush SegmentBrush(JsonElement segment) => segment.Text("kind") switch
+    {
+        "physical"=>Theme.Resource("Physical"),"arts"=>Theme.Resource("Arts"),
+        "elemental"=>Theme.Resource("Elemental"),"true"=>Theme.Resource("True"),
+        _=>Theme.Resource("Accent")
+    };
 }
 
 /// <summary>Decorative orbital geometry from the reference, never a data chart.</summary>
@@ -158,6 +166,8 @@ public partial class StatisticPanel : UserControl
         view=value; updating=true;
         Heading.Text=value.Text("title");
         PanelKind.Text=IsHud ? "HUD PANEL" : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
+        Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : "FullRow");
+        TableHeader.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         var config=value.Get("config");
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         Rate.IsEnabled=config.Text("category")!="shield";
@@ -176,11 +186,12 @@ public partial class StatisticPanel : UserControl
         RateAction.Content=value.Text("rate_action_label");
         RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
         Rate.ToolTip=isEngagement && reason.Length>0 ? reason : null;
-        RateHeading.Text=(value.Text("rate_label").Length>0 ? value.Text("rate_label")+" /s · " : "")+"占比";
+        RateHeading.Text=config.Text("category") switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
         Actions.Visibility=IsHistory||IsHud ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         DeleteButton.IsEnabled=canDelete;
-        Legend.Visibility=config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
+        Legend.Visibility=!IsHud && config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
+        LegendRow.MinHeight=IsHud ? 0 : 28;
         OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
             ? Visibility.Visible : Visibility.Collapsed;
@@ -188,7 +199,7 @@ public partial class StatisticPanel : UserControl
         Coverage.Text=(value.Bool("share_known")
             ? "全队同口径占比 · 点击干员固定明细"
             : value.Text("share_reason"))+(note.Length>0 ? " · "+note : "");
-        if(IsHud){Plot.MinHeight=80;Rows.MinHeight=35;Rows.MaxHeight=double.PositiveInfinity;}
+        if(IsHud){Plot.MinHeight=56;Rows.MinHeight=30;Rows.MaxHeight=double.PositiveInfinity;}
         if(IsHud) Coverage.Text="跟随源面板 · "+value.Text("metric_label");
         var incoming=value.Get("entries").Items().ToArray();
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
