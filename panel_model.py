@@ -245,6 +245,13 @@ class PanelSourceRow:
     overkill_complete: bool = False
     overkill_type_complete: bool = False
     overkill_unknown_reason: str | None = None
+    burst_damage: float | None = None
+    burst_overkill: float | None = None
+    burst_settlement: float | None = None
+    burst_complete: bool = False
+    burst_count: int = 0
+    burst_unknown_reason: str | None = None
+    effective_damage: float | None = None
     counter_complete: bool = True
     event_complete: bool = True
     event_coverage_end: float | None = None
@@ -323,6 +330,13 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             overkill_complete=bool(row.get('overkill_coverage_complete', False)),
             overkill_type_complete=bool(row.get('overkill_type_complete', False)),
             overkill_unknown_reason=row.get('overkill_unknown_reason'),
+            burst_damage=row.get('burst_damage'),
+            burst_overkill=row.get('burst_overkill'),
+            burst_settlement=row.get('burst_settlement'),
+            burst_complete=bool(row.get('burst_complete', False)),
+            burst_count=row.get('burst_count') or 0,
+            burst_unknown_reason=row.get('burst_unknown_reason'),
+            effective_damage=row.get('effective_damage'),
             recent_damage_window=row.get('recent_damage_window'),
             recent_healing_window=row.get('recent_healing_window'),
             recent_shield_window=row.get('recent_shield_window'),
@@ -653,6 +667,13 @@ def render_panel(config: PanelConfig,
                     'overkill_type_complete': row.overkill_type_complete,
                     'overkill_coverage_complete': row.overkill_complete,
                     'overkill_unknown_reason': row.overkill_unknown_reason,
+                    'burst_damage': row.burst_damage,
+                    'burst_overkill': row.burst_overkill,
+                    'burst_settlement': row.burst_settlement,
+                    'burst_complete': row.burst_complete,
+                    'burst_count': row.burst_count,
+                    'burst_unknown_reason': row.burst_unknown_reason,
+                    'effective_damage': row.effective_damage,
                     'event_coverage_complete': row.event_complete,
                     'event_reason': event_reason,
                     'active_damage': row.active_damage,

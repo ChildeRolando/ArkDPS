@@ -80,12 +80,13 @@ class EventStream:
     def accept(self, *, session, sequence, frame, game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
-               cancel_reason=None, shield_absorbed=None):
+               cancel_reason=None, shield_absorbed=None, target_instance=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
                    target, real_delta, hp_before, hp_after, killed,
-                   target_type, damage_type, cancel_reason, shield_absorbed)
+                   target_type, damage_type, cancel_reason, shield_absorbed,
+                   target_instance)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -105,7 +106,7 @@ class EventStream:
                 target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
                 damage_type=damage_type, cancel_reason=cancel_reason,
-                shield_absorbed=shield_absorbed)
+                shield_absorbed=shield_absorbed, target_instance=target_instance)
         except (ValueError, TypeError):
             self._fail('event is invalid or cannot be attributed')
         self.sequence = sequence

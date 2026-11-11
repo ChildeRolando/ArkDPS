@@ -262,17 +262,18 @@ class BattleStatisticsAdapter:
         if self.event_stream is None:
             raise StreamGap('event stream is unavailable')
         source = event.get('source')
-        if not isinstance(source, str) or not source:
+        kind = event.get('kind')
+        if kind != 'elemental_burst' and (not isinstance(source, str) or not source):
             self.event_stream.stop()
             self.last_result = self.statistics.result()
             raise StreamGap('event source is invalid')
         blocked = (self.owner_map.unknown_token_cids | self.owner_map.ambiguous_cids
                    | self.mapping_conflicts)
-        if source in blocked or self.owner_map.owners.get(source) in blocked:
+        if source is not None and (source in blocked or self.owner_map.owners.get(source) in blocked):
             self.event_stream.stop()
             self.last_result = self.statistics.result()
             raise StreamGap('event source is ambiguous')
-        owner = self.owner_map.owners.get(source)
+        owner = self.owner_map.owners.get(source) if source is not None else None
         if owner is not None and source not in self.statistics.owners:
             if not self._register(source, owner):
                 self.event_stream.stop()
@@ -469,9 +470,15 @@ class BattleStatisticsAdapter:
             enriched['damage_by_type'] = (
                 {kind: sum(values[kind] for values in known_types)
                  for kind in DAMAGE_TYPES} if known_types else {})
-            enriched['types_available'] = bool(known_types)
-            enriched['types_stale'] = not sources or any(
-                cid not in self.types_current for cid in sources)
+            burst = enriched.get('burst_settlement')
+            if burst is not None:
+                types = dict(enriched['damage_by_type'])
+                types['elemental'] = types.get('elemental', 0.0) + burst
+                enriched['damage_by_type'] = types
+            enriched['types_available'] = bool(known_types) or burst is not None
+            enriched['types_stale'] = ((not sources or any(
+                cid not in self.types_current for cid in sources))
+                and burst is None)
             enriched['present'] = owners_present.get(owner) if present_known else None
             enriched['sources'] = sorted(
                 cid for cid, mapped in self.owner_map.owners.items() if mapped == owner)
