@@ -264,7 +264,9 @@ def test_effective_only_changes_dps_numerator():
     row = PanelSourceRow(owner_id='A', name='A', damage=1000,
                          effective_damage=800, overkill=200, overkill_complete=True,
                          presence_seconds=10, presence_complete=True,
-                         recent_damage=200, recent_overkill=40)
+                         recent_damage=200, recent_overkill=40,
+                         recent_damage_window=(0, 5),
+                         observed_damage=500, active_damage=10)
     total = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE,
                                      effective_only=False), [row])
     effective = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE,
@@ -273,7 +275,11 @@ def test_effective_only_changes_dps_numerator():
     assert effective.entries[0].rate == pytest.approx(80)
     recent = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.RECENT_5S,
                                       effective_only=True), [row])
-    assert recent.entries[0].rate == pytest.approx(160)
+    assert recent.entries[0].rate == pytest.approx(192)
+    engagement = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                          rate_basis=RateBasis.ENGAGEMENT,
+                                          effective_only=True), [row])
+    assert engagement.entries[0].rate == pytest.approx(30)
 
 
 def test_shield_rejects_engagement_rate():

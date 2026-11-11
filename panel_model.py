@@ -315,16 +315,21 @@ class PanelSourceRow:
         return None
 
     def effective_recent(self) -> float | None:
+        """近期有效 DPS：近期速率减去窗口内过量量摊到每秒。"""
+        window = self.recent_damage_window
         if (not _finite(self.recent_damage) or not _finite(self.recent_overkill)
-                or not self.overkill_complete):
+                or not self.overkill_complete or not _valid_window(window)):
             return None
-        return max(0.0, self.recent_damage - self.recent_overkill)
+        duration = window[1] - window[0]
+        return max(0.0, self.recent_damage - self.recent_overkill / duration)
 
     def effective_observed(self) -> float | None:
+        """接敌有效 DPS：有效事件量除以活跃秒数，不是把量直接当成每秒。"""
         if (not _finite(self.observed_damage) or not _finite(self.overkill)
+                or not _finite(self.active_damage) or self.active_damage <= 0
                 or not self.overkill_complete):
             return None
-        return max(0.0, self.observed_damage - self.overkill)
+        return max(0.0, self.observed_damage - self.overkill) / self.active_damage
 
     def full_cycle(self, category: Category, *, effective: bool = False) -> float | None:
         """总量 / 在场时间, only when numerator and presence are certified."""
@@ -550,6 +555,11 @@ def _metric_complete(row: PanelSourceRow, category: Category,
     if ranking is Ranking.RECENT:
         return row.counter_complete
     return row.counter_complete
+
+
+def _valid_window(window) -> bool:
+    return (isinstance(window, (tuple, list)) and len(window) == 2
+            and all(_finite(t) for t in window) and 0 < window[1] - window[0] <= 5)
 
 
 def _effective_damage(row: PanelSourceRow) -> float | None:
