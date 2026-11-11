@@ -335,6 +335,16 @@ def test_unknown_source_keeps_coverage_and_only_hides_its_overkill():
     assert row['overkill_damage'] is None
 
 
+def test_probe_records_hp_evidence_only_after_onleave():
+    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    enter = js[js.index('onEnter(args){'):js.index('onLeave(){')]
+    leave = js[js.index('onLeave(){'):]
+    assert 'hp_damage' not in enter
+    assert 'hpContext.push' not in enter
+    assert 'hp_damage' in leave and 'hpContext.push' in leave
+    assert leave.index('const end=time()') < leave.index('hp_damage')
+
+
 def test_probe_recovers_targetless_damage_from_same_frame_elemental_bar():
     js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
     assert 'lastBarTarget' in js
