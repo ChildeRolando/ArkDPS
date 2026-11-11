@@ -100,16 +100,6 @@ def test_ui_has_no_game_memory_or_adb_process_api():
     assert 'desktop_bridge.py' in source
 
 
-def test_legacy_ui_acceptance_aborts_before_tk_on_dpi_failure(tmp_path, monkeypatch):
-    import sys
-    sys.path.insert(0, str(ROOT/'acceptance'))
-    import verify_ui_themes as verify
-    monkeypatch.setattr(verify, 'enable_dpi_awareness', lambda: False)
-    monkeypatch.setattr(verify.tk, 'Tk', lambda: pytest.fail('created Tk without DPI awareness'))
-    with pytest.raises(RuntimeError, match='DPI awareness'):
-        verify.run(tmp_path/'evidence', False)
-
-
 def test_wpf_quit_is_bounded_and_never_modal():
     bridge = (ROOT/'desktop/ArkDPS.Desktop/BridgeClient.cs').read_text('utf-8')
     # WaitForExitAsync() also waits for EOF on the redirected stderr pipe, so a

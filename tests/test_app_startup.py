@@ -17,7 +17,10 @@ def test_capture_leaves_bad_layout_for_next_gui_diagnostic(tmp_path, monkeypatch
     path.write_text(contents, encoding='utf-8')
     store = LayoutStore(path)
     monkeypatch.setattr(app, 'ROOT', tmp_path)
-    monkeypatch.setattr(app, 'LayoutStore', lambda: store)
+    # Headless capture must never touch GUI-only layout state; inject a guard
+    # even though the WPF-only entry no longer defines it.
+    monkeypatch.setattr(app, 'LayoutStore',
+                        lambda: pytest.fail('capture loaded GUI layout'), raising=False)
     monkeypatch.setattr(app.sys, 'argv', ['app.py', '--capture-seconds', '1', *event_args])
     monkeypatch.setattr(app.socket, 'socket', lambda: SimpleNamespace(
         bind=lambda address: None, listen=lambda count: None))

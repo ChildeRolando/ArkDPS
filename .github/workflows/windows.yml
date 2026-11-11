@@ -1,4 +1,4 @@
-name: Windows regression and portable candidate
+name: Windows regression and WPF portable candidate
 on:
   pull_request:
   push:
@@ -9,7 +9,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,28 +30,23 @@ jobs:
         run: python -m pytest tests -q --assert=plain
       - name: Build WPF desktop (net10.0-windows)
         run: dotnet build desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj --configuration Release --nologo
-      - name: Build exact clean checkout
-        shell: pwsh
-        run: python tools/build_windows.py --output runtime/ci-build --expect-head (git rev-parse HEAD)
-      - name: Verify extracted artifact without source imports
+      - name: Build WPF portable package (the only distribution entry)
+        run: python tools/package_windows.py --output runtime/ci-build
+      - name: Verify WPF source acceptance
+        run: python acceptance/verify_wpf.py --output runtime/wpf-source
+      - name: Verify WPF portable package
         shell: pwsh
         run: |
-          $zip = Get-ChildItem runtime/ci-build/*.zip | Select-Object -First 1
-          Expand-Archive $zip.FullName -DestinationPath runtime/extracted
-          $exe = (Resolve-Path runtime/extracted/ArkDPS/ArkDPS.exe).Path
-          $out = Join-Path $env:RUNNER_TEMP artifact-smoke
-          $p = Start-Process -FilePath $exe -ArgumentList @('--self-test', $out) -Wait -PassThru -WorkingDirectory $env:RUNNER_TEMP
-          if ($p.ExitCode -ne 0) { throw "Artifact verification failed: $($p.ExitCode)" }
-          $receipt = Get-Content (Join-Path $out receipt.json) -Raw | ConvertFrom-Json
-          if ($receipt.status -ne 'PASS' -or -not $receipt.frozen) { throw 'Missing artifact PASS' }
-          Copy-Item $out runtime/artifact-smoke -Recurse
+          $zip = (Get-ChildItem runtime/ci-build/*.zip | Select-Object -First 1).FullName
+          python acceptance/verify_wpf_package.py $zip --output runtime/package-validation
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-candidate-${{ github.sha }}
+          name: windows-wpf-candidate-${{ github.sha }}
           path: |
             runtime/ci-build/*.zip
-            runtime/ci-build/artifact.json
-            runtime/ci-build/build.log
-            runtime/artifact-smoke/
+            runtime/ci-build/*.sha256
+            runtime/ci-build/ArkDPS-win-x64-*/release.json
+            runtime/wpf-source/
+            runtime/package-validation/
           if-no-files-found: warn

@@ -1,6 +1,6 @@
 # GUI/HUD 共用面板模型与排序口径
 
-当前 WPF 展示通过 `desktop_bridge.py` 只读消费 `panel_model.py`，C# 不重算排行/柱长/占比；运行与验收见 [桌面运行时](desktop-runtime.md)。以下 Tk 文件和 ARK-9/10/12 章节保留原实现/验收背景，除共享统计规则外，不代表 WPF 的实机验收已完成。
+当前 WPF 展示通过 `desktop_bridge.py` 只读消费 `panel_model.py`，C# 不重算排行/柱长/占比；运行与验收见 [桌面运行时](desktop-runtime.md)。产品 UI 只有 WPF：Tk 实现（`gui_panel.py`、`hud.py`、`gui_history.py`、`ui_theme.py`）已归档封存到 `archive/legacy-tk`，见 [ADR 0005](adr/0005-seal-legacy-tk.md)。下文 ARK-9/10/12/19 章节是 Tk 时代的实现与验收记录，只作追溯，不代表 WPF 的实机验收已完成。
 
 共享模型实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI、`hud.py` 的 HUD 和 `gui_history.py` 的历史窗口使用该模型，共享同一口径。
 
@@ -53,14 +53,14 @@ python -m pytest tests/test_panel_model.py tests/test_desktop_bridge.py tests/te
 - 护盾最近 5 秒与接敌速率依赖 ARK-5 的事件数据；模型已支持 `recent_shield`，但当前适配器尚未提供。
 - 托盘、连接/事件设置与布局持久化见[设置、托盘与窗口配置恢复](settings-and-layout.md)；历史浏览与分享见下节 ARK-12。
 
-## 实时 GUI（ARK-9）
+## 实时 GUI（ARK-9，Tk 实现已封存）
 
 `App.render` 只将 `sample.statistics` 交给 `rows_from_statistics` / `render_board`，
 不使用兼容投影的旧 `sample.rows` 或全局平均 DPS。多面板共享同一份结果，
 各自持有不可变 `PanelConfig`，更改配置不修改统计、来源行或其他面板。
 新建使用默认配置，复制分配新 ID，删除不影响战局记录；最后一个面板保留。
 
-`StatisticPanel` 只负责原生显示：伤害分段柱、治疗/护盾柱、离场灰像、姓名与最多 1 位小数的数值悬停、
+`StatisticPanel`（WPF 由 `StatisticPanel.xaml.cs` 承担；Tk 版本已封存）只负责原生显示：伤害分段柱、治疗/护盾柱、离场灰像、姓名与最多 1 位小数的数值悬停、
 按 owner ID 固定的分类/累计/活跃时间/覆盖/来源详情。近期行隐藏时固定详情继续更新，换局清除固定选择。
 复用 Canvas 项；鼠标停在列表时保留顺序并持续更新数值，离开后恢复精确排序。
 方向键选择，回车固定；外层面板与各列表分别有滚动条。
@@ -70,9 +70,9 @@ python -m pytest tests/test_panel_model.py tests/test_desktop_bridge.py tests/te
 提示框按指针所在显示器的工作区限制全部四边，避开任务栏；底部不足时向上展开，
 不把高低不同显示器组成的虚拟桌面空白区域当成可见屏幕。
 
-“打开到 HUD”经 `App.hud_request(panel)` 创建或唤起该源面板唯一的紧凑窗口；首次启动不创建 HUD。
+“打开到 HUD”经 WPF 主窗创建或唤起该源面板唯一的紧凑窗口；首次启动不创建 HUD。
 HUD 读取源面板的 `config`，不建立第二套采集。
-删除源面板前发出 `<<PanelDeleting>>` Tcl 事件，附面板 ID。
+删除源面板前先关闭其 HUD，附面板 ID。
 
 本票没有引入新统计规则或数据源。采集、归属、覆盖仍由现有核心拥有；新增窗口组件
 只隔离绘制、鼠标/键盘状态和独立配置，防止把 UI 选择写回共享统计。
@@ -82,25 +82,14 @@ HUD 读取源面板的 `config`，不建立第二套采集。
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 python -m pytest tests -q --assert=plain
-python acceptance/verify_gui.py --scale 100
-python acceptance/verify_gui.py --scale 125
-python acceptance/verify_gui.py --scale 150
-python acceptance/verify_gui.py --scale 200
-# 宿主机先在 Windows 显示设置中将至少一块屏幕设为 125%（或用 150）：
-python acceptance/verify_gui.py --native-scale 125
+python acceptance/verify_wpf.py --output runtime/wpf-source
 ```
 
-GUI 测试要求可创建 Tk 窗口。截图脚本另外需要 Pillow，仅用于验收，不是产品依赖。
-脚本使用明确标注的离线样本，不操作游戏；遍历真实显示器并覆盖宽窄布局，检查
-完整数值、详情、负坐标副屏与高低不同双屏的 tooltip 四边和实际下方面板悬停，
-输出截图与 JSON（含 HEAD、代码摘要、工作区、窗口 DPI 和提示框完整边界）。
-`--scale` 调整 Tk 字体缩放，**不更改 Windows 显示设置**；它不能证明实际 Windows 缩放验收通过。
-`--native-scale` 不覆盖 Tk 缩放，要求至少一块显示器具有所选百分比的真实 DPI，并检查
-窗口移动后的 DPI 与该显示器一致。两屏均为 96 DPI 时，`--native-scale 125` 必须以退出码 2
-拒绝验收，须在宿主机实际设置后重跑；混合 DPI 热切换仍需单独验证。
-全黑截图导致验收脚本失败，不能作为视觉通过证据。
+WPF 验收使用明确标注的离线样本，不操作游戏；截图与回执由 `acceptance/verify_wpf.py` 生成。
+旧 Tk 的命令行测量脚本（`verify_gui.py` 等）已随归档封存，不再可用；混合 DPI 热切换仍需宿主机人工覆盖。
+全黑截图曾导致验收脚本失败，不能作为视觉通过证据。
 
-## 历史与分享（ARK-12）
+## 历史与分享（ARK-12，Tk 窗口已封存）
 
 “历史与分享”打开独立非模态 `HistoryWindow`；无需连接游戏即可读取 `BattleHistory.list_recent()`。
 列表显示最近 100 局的关卡、演习/正式/未知、胜负/退出/未知、最后可靠游戏时刻和观察日期；
@@ -137,22 +126,19 @@ PNG 从同一记录和 `render_panel` 生成，包含关卡/模式/结果/日期
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest tests -q --assert=plain --basetemp=runtime/ark12-full
-python acceptance/verify_history.py --scale 100 --output runtime/ark12-ui-100
-python acceptance/verify_history.py --scale 125 --output runtime/ark12-ui-125
-python acceptance/verify_history.py --scale 150 --output runtime/ark12-ui-150
-python acceptance/verify_history.py --scale 200 --output runtime/ark12-ui-200
+python acceptance/verify_wpf.py --output runtime/wpf-history
 ```
 
-`tests/test_battle_share.py` / `tests/test_gui_history.py` 覆盖各结果/模式、归档占比、精度/未知/覆盖、
+原 `acceptance/verify_history.py` 的 Tk 窗口测量已封存；历史页的当前验收由 WPF 回执覆盖。
+
+`tests/test_battle_share.py` 覆盖各结果/模式、归档占比、精度/未知/覆盖、
 取消/拒绝/确认替换、磁盘失败、归档保护、保存期间切换、实时换局及 HUD 源面板继续更新、
-关闭历史不停止采集、原生 PNG 身份与像素。`verify_history.py` 使用明确标注的离线 101 局样本，
-验证最多 100 局、宽窄布局、全部行分享图、JSON 对账、实时换局隔离和归档字节不变，
-输出截图及含提交和代码摘要的收据。`--scale` 只调整 Tk 字体，不能替代真实 Windows DPI 或
-新的 MuMu 实机验收。HUD 检查针对 ARK-9 的实时源回调契约；实际 HUD 窗口集成由 ARK-10/14 验收。
+关闭历史不停止采集。`verify_history.py`（已封存）曾用离线 101 局样本验证最多 100 局、宽窄布局、
+全部行分享图、JSON 对账、实时换局隔离和归档字节不变；当前对应证据来自 WPF 回执。
 
 本次只增加只读展示与分享边界；统计、战局身份和历史写入仍由原有模块拥有。
 
-## 紧凑 HUD（ARK-10）
+## 紧凑 HUD（ARK-10，Tk HUD 已封存）
 
 `HudWindow` 只拥有原生窗口和交互状态；复用 `StatisticPanel(compact=True)` 的同一绘制组件，
 隐藏配置及长详情，保留排序、分段柱、未知占比、部分覆盖提示、悬停数值及独立滚动。
@@ -196,8 +182,11 @@ python acceptance/verify_hud.py --hit-test-only --output runtime/hud-validation-
 ARK-10 交付评审时，宿主会话已补齐同候选默认原生点击 `PASS` 回执（路由 HUD → 下层窗口 → HUD）
 与 30.7 秒单屏录像；录像捕获工具和来源未登记，不外推到其他直播捕获模式。
 
-## 全局皮肤与原生交互（ARK-19）
+## 全局皮肤与原生交互（ARK-19；Tk 皮肤代码已封存，WPF 见桌面运行时）
 
 `ui_theme.py` 只拥有展示；`panel_model.py`、BattleRecord、统计与采集链路未改动。速率切换不改变排行/贡献条/占比分母；主题切换不重新调用排序、不清除 pin/hover、不重建 canvas 行或 native HUD。主题选择在现有布局中持久化，契约见[设置与布局](settings-and-layout.md)。
 
-`tests/test_ui_theme.py` 检查双主题状态区别、布局迁移、主题切换前后对象/值/行身份及 HUD 几何锁定不变、筛选/换局历史隔离、冻结 PNG 主题和文字对比度。`acceptance/verify_ui_themes.py` 以明确标注的合成数据驱动真实 Windows 窗口，保存双皮肤主窗/HUD/历史/设置/完整 PNG；Win32 SendInput 验证解锁 → 锁定 → 解锁时点击落到 HUD → 私有测试下层窗口 → HUD。托盘原生回调恢复后可从源面板解锁，独立进程检查主题及锁定 HUD 恢复。**这些不是实际游戏收到点击的证据，也不等于物理托盘图标双击验收。**
+WPF 侧由 `desktop/ArkDPS.Desktop/App.xaml.cs` 与 `Verification.cs` 覆盖双主题、HUD 几何锁定不变、
+筛选/换局历史隔离与文字对比度；`tests/test_wpf_contract.py` 固定对比度下限。原 `tests/test_ui_theme.py`
+与 `acceptance/verify_ui_themes.py` 已随 Tk 归档封存，其窗口/托盘测量不再可运行。**离线回执不是实际游戏
+收到点击的证据，也不等于物理托盘图标双击验收。**

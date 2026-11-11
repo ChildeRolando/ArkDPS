@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import PurePosixPath
 import re
+import subprocess
 
 
 def load_manifest(root, *, verify=False):
@@ -22,3 +23,19 @@ def load_manifest(root, *, verify=False):
         if verify and hashlib.sha256((root / name).read_bytes()).hexdigest() != digest:
             raise ValueError(f'bundle checksum mismatch: {name}')
     return data
+
+
+def candidate_head(root, expected=None):
+    """Resolve the candidate commit and refuse dirty or mismatched checkouts.
+
+    Portability matters here: a frozen bundle reads build-manifest.json instead,
+    but every build path must still prove it packages exactly one committed HEAD.
+    """
+    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    if expected and head != expected:
+        raise RuntimeError(f'candidate mismatch: expected {expected}, got {head}')
+    dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=normal'],
+                                    cwd=root, text=True).strip()
+    if dirty:
+        raise RuntimeError('release builds require a clean committed worktree')
+    return head

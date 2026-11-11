@@ -1,5 +1,6 @@
 """Versioned layout persistence, migration, corruption and reachability."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -168,3 +169,19 @@ def test_clamp_chooses_nearest_monitor_for_negative_and_far_coordinates():
 def test_clamp_without_monitor_information_returns_saved_geometry():
     geometry = ls.GuiGeometry(-500, 100, 700, 500)
     assert ls.clamp_geometry(geometry, []) == geometry
+
+
+@pytest.mark.parametrize('payload', ['{broken', '{"version": 99, "panels": []}'])
+def test_backup_failure_protects_original_even_after_lock_clears(tmp_path, monkeypatch, payload):
+    path = tmp_path / 'layout.json'
+    path.write_text(payload, encoding='utf-8')
+    store = ls.LayoutStore(path)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'replace', lambda *_: (_ for _ in ()).throw(OSError('locked')))
+        loaded = store.load()
+    assert not loaded.ok
+    assert '备份失败' in loaded.warning
+    with pytest.raises(OSError, match='备份失败'):
+        store.save(loaded.layout)
+    assert path.read_text(encoding='utf-8') == payload
+    assert not list(tmp_path.glob('.layout-*'))

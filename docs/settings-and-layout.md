@@ -32,9 +32,9 @@
 - 首次启动只创建“伤害 / 本局总量 / 近 5 秒 DPS”面板，且不打开 HUD。
 - 透明度限制在 0.7–1.0；坐标绝对值上限 100000，尺寸上限 20000；`bool` 不作为坐标。
 
-## Tk 历史实现与验收（不作为 WPF 候选证据）
+## Tk 历史实现与验收（已封存，不作为 WPF 候选证据）
 
-以下保留 ARK-10/11/12/19 原实现的追溯记录。涉及 Tk、`App`、`TrayIcon` 的实现细节只适用于显式 legacy 入口；其物理显示器/托盘/游戏人工验收不能继承给新的 WPF。当前 WPF 行为以本页上面的 v3 配置契约和桌面运行时文档为准。
+以下保留 ARK-10/11/12/19 原实现的追溯记录。Tk 面板、`App`、`TrayIcon` 及对应验收脚本已于 ARK-27 封存到 `archive/legacy-tk`，不再支持、不得运行，其物理显示器/托盘/游戏人工验收不能继承给 WPF（[ADR 0005](adr/0005-seal-legacy-tk.md)）。当前 WPF 行为以本页上面的 v3 配置契约和[桌面运行时](desktop-runtime.md)为准。
 
 ### 可达位置恢复
 
@@ -92,18 +92,18 @@ Frida 端点是本次运行的连接参数，不进入布局或连接配置。`A
 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
-python -m pytest tests/test_layout_store.py tests/test_settings.py tests/test_tray.py tests/test_window_restore.py -q --assert=plain
+python -m pytest tests/test_layout_store.py tests/test_desktop_bridge.py tests/test_wpf_contract.py -q --assert=plain
 python -m pytest tests -q --assert=plain
-python acceptance/verify_settings.py --output runtime/settings-validation
+python acceptance/verify_wpf.py --output runtime/wpf-settings-layout
 ```
 
-验收脚本用合成统计和合成多实例载荷驱动真实 Tk 窗口与系统托盘，再做一次**子进程重启**核对面板、HUD 位置/尺寸/透明度/锁定和 GUI 几何；移除显示器与 DPI 变化以注入工作区模拟，另外真实创建并释放一个本工具自己的 adb 转发。主阶段与重启阶段均在创建任何 Tk 窗口前设置并检查 DPI awareness；设置失败不继续几何验收。
+封存的 `acceptance/verify_settings.py` 曾用合成统计和合成多实例载荷驱动真实 Tk 窗口与系统托盘，再做一次**子进程重启**核对面板、HUD 位置/尺寸/透明度/锁定和 GUI 几何（该脚本已不可运行）；移除显示器与 DPI 变化以注入工作区模拟，另外真实创建并释放一个本工具自己的 adb 转发。主阶段与重启阶段均在创建任何 Tk 窗口前设置并检查 DPI awareness；设置失败不继续几何验收。
 
 重启前先删除旧的 `restore-receipt.json`，要求子进程退出码为 0，并验证新回执的 `phase=restore`、`status=PASS`、当前候选 `head` 与本次父进程生成的 `run_id`。丢失/损坏回执、超时、非零退出或候选/运行身份不符均明确失败，复用输出目录也不能借用旧 PASS。回执的 `code_sha256` 同时记录采集会话、事件观察器和验收脚本本身。
 
-`tests/test_settings_lifecycle_regressions.py` 以故障注入固定生产 DPI 门禁、默认几何夹取、HUD 单次渲染、Explorer 重新注册失败、托盘启动/停止超时后的所有权，以及设置重连和连接失败后的清理重试。11 个用例在原候选 `6abe80c6db69a2126e3363cc15ca952c4863a12b` 上实际失败，修复后通过。真实 Tk 用例同时覆盖有/无 HUD 时的托盘丢失恢复与任务栏回退。恢复验收将事件偏好相等性纳入必需断言；注入相反偏好的两个用例在旧验收脚本上错误得到 PASS、断言失败，新脚本明确拒绝。
+已归档的 `archive/legacy-tk/tests/test_settings_lifecycle_regressions.py` 曾以故障注入固定生产 DPI 门禁、默认几何夹取、HUD 单次渲染、Explorer 重新注册失败、托盘启动/停止超时后的所有权，以及设置重连和连接失败后的清理重试。11 个用例在原候选 `6abe80c6db69a2126e3363cc15ca952c4863a12b` 上实际失败，修复后通过。真实 Tk 用例同时覆盖有/无 HUD 时的托盘丢失恢复与任务栏回退。恢复验收将事件偏好相等性纳入必需断言；注入相反偏好的两个用例在旧验收脚本上错误得到 PASS、断言失败，新脚本明确拒绝。
 
-`tests/test_settings_review_regressions.py` 以故障注入固定启动/换局清理失败后的句柄重试、多个退休实例释放失败时的隔离、备份失败后原文件保护，以及重启回执新鲜度和 DPI 初始化顺序。前六个用例在候选 `4b30e9e0e47c987c45673755145aa0e54ebbb2e1` 上实际失败（两条句柄丢失、两条备份诊断缺失、两条旧 PASS 被接纳），修复后通过；`tests/test_collection_session.py` 和 `tests/test_shutdown_failures.py` 同时要求退出再次尝试并传播持续的清理失败。
+原 `tests/test_settings_review_regressions.py`（其余用例随 Tk 封存；句柄重试与备份失败两条已迁入 `tests/test_shutdown_failures.py`、`tests/test_layout_store.py`）曾以故障注入固定启动/换局清理失败后的句柄重试、多个退休实例释放失败时的隔离、备份失败后原文件保护，以及重启回执新鲜度和 DPI 初始化顺序。前六个用例在候选 `4b30e9e0e47c987c45673755145aa0e54ebbb2e1` 上实际失败（两条句柄丢失、两条备份诊断缺失、两条旧 PASS 被接纳），修复后通过；`tests/test_collection_session.py` 和 `tests/test_shutdown_failures.py` 同时要求退出再次尝试并传播持续的清理失败。
 
 ### 验收记录与未覆盖边界
 

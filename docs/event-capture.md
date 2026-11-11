@@ -1,6 +1,6 @@
 # 实时事件采集入口与验收
 
-当前 WPF 桌面由 `desktop_bridge.py` 子进程消费同一 `CollectionSession`，不修改本页采集语义；UI/worker 协议与分发见 [桌面运行时](desktop-runtime.md)。以下 Tk 入口和旧候选实机记录为历史证据，不自动认证新的 WPF。
+当前 WPF 桌面由 `desktop_bridge.py` 子进程消费同一 `CollectionSession`，不修改本页采集语义；UI/worker 协议与分发见 [桌面运行时](desktop-runtime.md)。旧 Tk 入口已随 `archive/legacy-tk` 封存（[ADR 0005](adr/0005-seal-legacy-tk.md)），不再可运行；旧候选实机记录为历史证据，不自动认证新的 WPF。
 
 当前主线 ARK-5 已在 `af18904ab89b417c87665f9dbfa731e2348cfa7a` 获独立 PASS，并合入 `b999a4c9a236331b95a07cfa0e90e8dd97e9d6be`。234 项回归及默认入口、启动失败降级、显式关闭的新实机证据通过。宿主机已在 2026-11-07 22:37:54Z 结束设备操作；下文早期“待返修/独占”是历史过程，当前串行占用以最新讨论为准。
 

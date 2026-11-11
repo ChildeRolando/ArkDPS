@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import App
+from collection_session import shutdown_report
 from collection_session import CollectionSession
 from connection import VersionStatus
 from event_observer import FridaEventObserver
@@ -41,7 +41,7 @@ def test_failed_observer_release_is_reported_and_native_cleanup_still_runs(failu
     current.observer = observer
     with pytest.raises(RuntimeError):
         current.close()
-    report = App.verify_shutdown(SimpleNamespace(session=current))
+    report = shutdown_report(current)
     assert calls == ['unload', 'detach', 'collector_close']
     assert not current.closed
     assert not report['ok'] and not report['session_closed']
@@ -55,7 +55,7 @@ def test_failed_observer_release_is_reported_and_native_cleanup_still_runs(failu
     current.close()
     assert observer.script is observer.session is None
     # Even a retry cannot erase the fact that this shutdown had cleanup errors.
-    assert not App.verify_shutdown(SimpleNamespace(session=current))['ok']
+    assert not shutdown_report(current)['ok']
 
 
 def test_collector_close_exception_is_in_shutdown_report_even_without_owned_forwards():
@@ -66,7 +66,7 @@ def test_collector_close_exception_is_in_shutdown_report_even_without_owned_forw
         close=fail, forward_registry=SimpleNamespace(owned={})))
     with pytest.raises(OSError, match='transport close refused'):
         current.close()
-    report = App.verify_shutdown(SimpleNamespace(session=current))
+    report = shutdown_report(current)
     assert not report['ok'] and not report['session_closed']
     assert report['observer_released'] and report['forwards_released']
     assert 'transport close refused' in ' '.join(report['issues'])
@@ -89,7 +89,7 @@ def test_failed_start_observer_cleanup_is_not_forgotten_after_snapshot_fallback(
     assert current.observer is None
     with pytest.raises(RuntimeError, match='startup detach refused'):
         current.close()
-    report = App.verify_shutdown(SimpleNamespace(session=current))
+    report = shutdown_report(current)
     assert not report['ok'] and not report['observer_released']
     assert 'startup detach refused' in ' '.join(report['issues'])
 
@@ -115,7 +115,7 @@ def test_all_close_errors_are_retained_without_skipping_other_resources(error_ty
     # Even a stale/foreign pre-set closed flag and cleared observer handles
     # cannot override the recorded outcome of actual cleanup operations.
     current.closed = True
-    report = App.verify_shutdown(SimpleNamespace(session=current))
+    report = shutdown_report(current)
     assert not report['ok'] and not report['session_closed']
     assert not report['observer_released']
     for resource in calls:
@@ -137,3 +137,47 @@ def test_interrupted_unload_still_attempts_detach_and_retains_failed_handle():
     assert calls == ['unload', 'detach']
     assert observer.session is None and observer.script is not None
     assert observer.cleanup_errors == {'script': 'unload interrupted'}
+
+
+@pytest.mark.parametrize('stage', ['startup', 'new_battle'])
+def test_retired_observer_handles_are_retried_on_close(stage):
+    failures = {'unload', 'detach'}
+    calls = []
+
+    def release(name):
+        calls.append(name)
+        if name in failures:
+            raise RuntimeError(name + ' refused')
+
+    collector = SimpleNamespace(close=lambda: calls.append('collector'))
+    old = FridaEventObserver(collector, 'unused')
+    script = SimpleNamespace(is_destroyed=False, unload=lambda: release('unload'))
+    native = SimpleNamespace(is_detached=False, detach=lambda: release('detach'))
+    old.script, old.session = script, native
+
+    def start():
+        # Frida start itself already attempts release before reporting failure.
+        old._release()
+        raise RuntimeError('attach failed')
+
+    old.start = start
+    replacement = SimpleNamespace(start=lambda: None, stop=lambda: calls.append('replacement'))
+    factory = lambda *_: old if stage == 'startup' else replacement
+    current = CollectionSession('adb', 'serial', collector=collector, observer_factory=factory)
+    if stage == 'startup':
+        current._attach_observer()
+        assert current.event_status == 'failed'
+        assert current.observer is None  # snapshot-only consumers see no failed observer
+    else:
+        current.observer = old
+        current.event_status = 'gap'
+        current._observer_generation = 1
+        retried, active = current._prepare_battle_observer(SimpleNamespace(generation=2, events={}))
+        assert retried and active is replacement
+    failures.clear()
+    current.close()
+    assert old.script is old.session is None
+    assert calls.count('unload') >= 2 and calls.count('detach') >= 2
+    assert calls[-1] == 'collector'
+    # Successful retries do not erase the historical cleanup failure.
+    assert current.cleanup_errors.get('observer')
