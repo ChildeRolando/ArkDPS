@@ -266,6 +266,21 @@ def test_living_target_proves_zero_overkill_without_full_hp_reconstruction():
 
 
 
+def test_friendly_self_damage_does_not_enter_engagement_dps():
+    s = Statistics('friendly', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(10)
+    s.event('self', 1, 'a', 'damage', 25, target='char_a', hp_after=10, killed=False)
+    s.event('enemy', 2, 'a', 'damage', 100, target='enemy_1',
+            hp_after=10, killed=False)
+    row = s.result()['rows']['A']
+    assert row['observed_damage'] == 100
+    assert row['active_damage'] == pytest.approx(1.5)
+    assert row['engagement_damage'] == pytest.approx(100 / 1.5)
+
+
+
 @pytest.mark.parametrize('evidence', [
     {},
     {'target': None, 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': True},

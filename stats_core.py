@@ -414,13 +414,20 @@ class Statistics:
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
         elif kind in ('damage', 'healing') and amount > 0:
-            state = self.engagement.setdefault((owner, kind), {'total': 0, 'intervals': []})
-            state['total'] += amount
-            intervals = state['intervals']
-            if intervals and game_time <= intervals[-1][1]:
-                intervals[-1] = (intervals[-1][0], max(intervals[-1][1], game_time + 1.5))
-            else:
-                intervals.append((game_time, game_time + 1.5))
+            # Damage dealt to a friendly/self target (e.g. a skill's HP cost)
+            # is not outgoing DPS. Only enemy-directed damage defines the
+            # damage engagement numerator and active interval. Healing keeps
+            # its own friendly-target interval as before.
+            friendly_damage = (kind == 'damage' and isinstance(target, str)
+                               and (target.startswith('char_') or target.startswith('token_')))
+            if not friendly_damage:
+                state = self.engagement.setdefault((owner, kind), {'total': 0, 'intervals': []})
+                state['total'] += amount
+                intervals = state['intervals']
+                if intervals and game_time <= intervals[-1][1]:
+                    intervals[-1] = (intervals[-1][0], max(intervals[-1][1], game_time + 1.5))
+                else:
+                    intervals.append((game_time, game_time + 1.5))
 
     def _recent(self, state, kind, start):
         if not state['continuous'] or not state['history']:
