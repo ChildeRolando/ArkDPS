@@ -252,6 +252,20 @@ def test_contradictory_absorption_evidence_is_unknown(absorbed):
     assert s.result()['rows']['a']['overkill_damage'] is None
 
 
+def test_living_target_proves_zero_overkill_without_full_hp_reconstruction():
+    s = Statistics('nonlethal', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('hit', .5, 'a', 'damage', 100, target='enemy',
+            hp_after=5, killed=False)
+    row = s.result()['rows']['A']
+    assert row['overkill_damage'] == 0
+    assert row['overkill_coverage_complete'] is True
+    assert row['effective_damage'] == 0  # snapshot damage is still 0 in this fixture
+
+
+
 @pytest.mark.parametrize('evidence', [
     {},
     {'target': None, 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': True},

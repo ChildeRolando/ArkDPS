@@ -282,6 +282,14 @@ class Statistics:
             return False, 0.0, '伤害类型无效'
         if cancel_reason is not None and type(cancel_reason) is not int:
             return False, 0.0, '取消原因无效'
+        # A non-lethal hit cannot overkill: if the probe observed that the
+        # target was still alive after this hit, no HP-before/real-delta
+        # reconstruction is required. This matters for same-frame multi-hit
+        # effects where another hit changes HP between the two reads.
+        tolerance = max(0.01, amount * 1e-6)
+        if (killed is False and self._optional_number(hp_after)
+                and hp_after > tolerance):
+            return True, 0.0, ''
         if not all(self._optional_number(v) for v in (real_delta, hp_before, hp_after)):
             return False, 0.0, '伤害事件缺少目标 HP 或实际扣血'
         if real_delta > 0 or hp_before < 0 or hp_after < 0:
@@ -290,7 +298,6 @@ class Statistics:
                 and (not self._optional_number(shield_absorbed) or shield_absorbed < 0)):
             return False, 0.0, '护盾/抵挡吸收数值无效'
         actual = -real_delta
-        tolerance = max(0.01, amount * 1e-6)
         if actual > amount + tolerance:
             return False, 0.0, '实际扣血超过结算伤害'
         if abs((hp_before - hp_after) - actual) > tolerance:

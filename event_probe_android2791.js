@@ -113,6 +113,16 @@ function overkillEvidence(mod,targetPtr,hpBefore,frame){
           cancel_reason:mod.add(0x70).readS32(),shield_absorbed:absorbed};
  }catch(e){return null;}
 }
+function nonlethalEvidence(targetPtr){
+ // A target that is still alive after this hit proves overkill=0, even if a
+ // same-frame concurrent hit made HP-before/real-delta reconstruction fail.
+ try{
+  const hp=targetHp(targetPtr);
+  if(hp===null||hp<=0)return null;
+  const key=targetKey(targetPtr)||targetPtr.toString();
+  return {target:key,hp_after:hp,killed:false};
+ }catch(e){return null;}
+}
 function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
@@ -197,6 +207,9 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
         damageTarget=fallback.target;damageHpBefore=fallback.hp_before;damageInstance=fallback.instance;
         evidence=alternative;fallbackUsed=true;
        }
+      }
+      if(!evidence&&damageTarget&&!damageTarget.isNull()){
+       evidence=nonlethalEvidence(damageTarget);
       }
      }
      if(evidence&&damageInstance) evidence.target_instance=damageInstance;
