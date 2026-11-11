@@ -125,3 +125,16 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 - **正常退出**：点击主窗「退出」后进程 250 ms 结束（重启后的第二次为 281 ms），退出码 0；worker 审计最后一条为 `{"kind":"stopped","data":{}}`，无 `cleanup_errors`；退出后无 `desktop_bridge.py` 进程、27380 端口无监听；`runtime/wpf-quit.log` 未生成（无清理失败）。
 - **主题重启恢复**：先在 `孤星 · LONE TRAIL` 会话切到「原始界面」并退出；新进程从同一 `layout.json` 启动后皮肤为「原始界面」、HUD 物理几何 `[1220,200,455,485]`、透明度 `0.83`、扩展样式 `0x8080128`（`WS_EX_TRANSPARENT|WS_EX_NOACTIVATE`，锁定）全部一致。
 - **边界**：本轮退出/重启复验时的 collector 处于“已连接、等待战斗数据”状态，没有进行中的战斗；`f7d59d9` 失败那次的 worker 审计显示清理已完成，退出等待与战斗内采集数据无关。战斗中的退出未在本轮复测。
+
+## ARK-27 Tk 封存离线复验（2026-11-11）
+
+- `python -m pytest tests -q` → **625 passed**。封存前基线为 683 项；移除的 60 项全部是 Tk 窗口/托盘/设置对话框用例，
+  新增 `tests/test_no_legacy_tk.py`（导入守卫、`archive/` 不被收集、打包白名单、移除参数退出码）。
+- `python app.py --legacy-tk` / `--self-test` / `--acceptance-output` → 退出码 2，错误文案指向
+  `acceptance/verify_wpf.py`；`python -c "import app"` 后 `tkinter` 不在 `sys.modules`。
+- `python acceptance/verify_wpf.py --output runtime/wpf-source` → `PASS_OFFLINE_WPF`。
+- `python tools/package_windows.py --output runtime/packages` → 构建成功；ZIP 内 627 个文件，无
+  `tkinter` / Tcl / Tk 文件、无 `ArkDPS.exe`，内嵌 Python 冒烟断言 `"tkinter" not in sys.modules` 通过。
+- `python acceptance/verify_wpf_package.py <zip>` → `PASS_OFFLINE_PACKAGE`。首次运行在本机窗口层叠下
+  HUD 输入路由检查失败一次（`unlocked HUD input route`，与本节前述已知波动同源），重跑完整通过；
+  该检查与 Tk 封存无关，未跳过或放宽断言。
