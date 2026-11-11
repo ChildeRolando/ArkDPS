@@ -74,16 +74,16 @@ internal static class Theme
         Key = key;
         var colors = key == "original" ? new Dictionary<string, string>
         {
-            ["Bg"]="#182127", ["Card"]="#26343D", ["Inset"]="#1D2A32", ["Ink"]="#EDF2F4",
-            ["Muted"]="#B9D2DE", ["Line"]="#526B78", ["Accent"]="#26607A", ["AccentInk"]="#FFFFFF", ["AccentText"]="#8DD3F0", ["Focus"]="#8DD3F0",
-            ["Console"]="#132029", ["ConsoleCard"]="#263B48", ["ConsoleInk"]="#EDF2F4",
-            ["ConsoleMuted"]="#B9D2DE", ["ConsoleLine"]="#526B78", ["Signal"]="#8DD3F0"
+            ["Bg"]="#0B1120", ["Card"]="#111827", ["Inset"]="#1E293B", ["Ink"]="#F8FAFC",
+            ["Muted"]="#CBD5E1", ["Line"]="#334155", ["Accent"]="#1D4ED8", ["AccentInk"]="#FFFFFF", ["AccentText"]="#93C5FD", ["Focus"]="#F59E0B",
+            ["Console"]="#0F172A", ["ConsoleCard"]="#162033", ["ConsoleInk"]="#F8FAFC",
+            ["ConsoleMuted"]="#CBD5E1", ["ConsoleLine"]="#334155", ["Signal"]="#F59E0B"
         } : new Dictionary<string, string>
         {
-            ["Bg"]="#E9E6DC", ["Card"]="#FFFCF3", ["Inset"]="#EFEBE0", ["Ink"]="#202E34",
-            ["Muted"]="#4D5C60", ["Line"]="#C8C3B4", ["Accent"]="#A33A18", ["AccentInk"]="#FFF9ED", ["AccentText"]="#A33A18", ["Focus"]="#A33A18",
-            ["Console"]="#17272E", ["ConsoleCard"]="#223740", ["ConsoleInk"]="#F5EDDA",
-            ["ConsoleMuted"]="#BED0D3", ["ConsoleLine"]="#526D77", ["Signal"]="#F2AC7A"
+            ["Bg"]="#F4F1EA", ["Card"]="#FFFFFF", ["Inset"]="#ECE7DC", ["Ink"]="#1B252B",
+            ["Muted"]="#5C6A72", ["Line"]="#D9D2C4", ["Accent"]="#C2410C", ["AccentInk"]="#FFFFFF", ["AccentText"]="#B23A0B", ["Focus"]="#C2410C",
+            ["Console"]="#101C24", ["ConsoleCard"]="#1B2B35", ["ConsoleInk"]="#F6F1E7",
+            ["ConsoleMuted"]="#AFC4CB", ["ConsoleLine"]="#38525E", ["Signal"]="#F2A65A"
         };
         foreach (var pair in colors) System.Windows.Application.Current.Resources[pair.Key] = Brush(pair.Value);
     }

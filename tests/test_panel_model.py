@@ -470,3 +470,19 @@ def test_event_unknown_reason_is_specific_for_failed_and_partial_coverage():
     row.event_coverage_end = 12.34
     partial = render_panel(PanelConfig(), [row], event=EventAvailability(status='recording'))
     assert partial.entries[0].detail['event_reason'] == '事件仅覆盖到 12.3 游戏秒，之后未知'
+
+
+def test_effective_only_panel_uses_effective_damage_and_type_segments():
+    row = src('A', damage=1000, recent_damage=100)
+    row.effective_damage = 800
+    row.overkill = 200
+    row.damage_by_type = {'physical': 600, 'arts': 400}
+    row.overkill_by_type = {'physical': 100, 'arts': 100, 'elemental': 0, 'true': 0}
+    row.overkill_type_complete = True
+    view = render_panel(PanelConfig(effective_only=True), [row])
+    entry = view.entries[0]
+    assert entry.value == 800
+    assert entry.detail['effective_damage'] == 800
+    assert all('overkill_ratio' not in segment for segment in entry.segments)
+    assert {segment['kind']: segment['value'] for segment in entry.segments} == {
+        'physical': 500, 'arts': 300}

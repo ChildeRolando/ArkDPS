@@ -158,12 +158,12 @@ def test_model_view_carries_explicit_event_rate_contract_fields():
     assert '不以 0 或墙钟替代' in source
 
 
-def test_wpf_surfaces_event_derived_overkill_without_redefining_damage():
+def test_wpf_surfaces_effective_and_overkill_without_inclusive_total_language():
     inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
     screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')
-    assert '"伤害 · 含过量"' in inspector
-    assert '过量伤害 · 事件派生' in inspector and 'overkill_damage' in inspector
-    assert '总伤害含过量' in screenshot and 'overkill_damage' in screenshot
+    assert '"有效伤害"' in inspector and '"过量伤害"' in inspector
+    assert 'effective_damage' in inspector and 'overkill_damage' in inspector
+    assert '总伤害含过量' not in inspector and '总伤害含过量' not in screenshot
 
 
 def test_wpf_user_facing_numbers_use_at_most_one_decimal():
@@ -186,7 +186,16 @@ def test_probe_declares_all_quality_counters_before_use():
                    (f'let {name}=', f'let {name} =', f'const {name}=', f'const {name} =')), name
 
 
-def test_wpf_surfaces_attributed_elemental_burst():
+def test_wpf_does_not_list_burst_as_a_separate_metric():
     inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
-    assert '爆条伤害 · 归属' in inspector
-    assert 'burst_damage' in inspector and 'burst_overkill' in inspector
+    assert '爆条伤害 · 归属' not in inspector
+    assert '爆条过量' not in inspector
+    assert 'burst_damage' not in inspector and 'burst_overkill' not in inspector
+
+
+def test_effective_only_toggle_and_overkill_legend_are_wired():
+    xaml = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml').read_text('utf-8')
+    panel = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml.cs').read_text('utf-8')
+    assert 'x:Name="EffectiveOnly"' in xaml and '仅显示有效伤害' in xaml
+    assert '▨ 过量伤害' in xaml
+    assert 'effective_only' in panel and 'EffectiveChanged' in panel

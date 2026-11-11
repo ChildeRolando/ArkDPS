@@ -157,6 +157,7 @@ class PanelConfig:
     ranking: Ranking = Ranking.TOTAL
     rate_basis: RateBasis = RateBasis.RECENT_5S
     title: str | None = None
+    effective_only: bool = False
 
     def __post_init__(self):
         if not self.panel_id:
@@ -168,12 +169,14 @@ class PanelConfig:
     def display_title(self) -> str:
         if self.title:
             return self.title
+        if self.effective_only and self.category is Category.DAMAGE:
+            return '有效伤害 · 本局总量'
         return f'{CATEGORY_LABELS[self.category]} · {RANKING_LABELS[self.ranking]}'
 
     def to_dict(self) -> dict:
         return {'panel_id': self.panel_id, 'category': self.category.value,
                 'ranking': self.ranking.value, 'rate_basis': self.rate_basis.value,
-                'title': self.title}
+                'title': self.title, 'effective_only': self.effective_only}
 
     @classmethod
     def from_dict(cls, raw: object) -> 'PanelConfig':
@@ -188,9 +191,13 @@ class PanelConfig:
         title = raw.get('title')
         if title is not None and not isinstance(title, str):
             raise ValueError('title 必须是字符串或 null')
+        effective_only = raw.get('effective_only', False)
+        if type(effective_only) is not bool:
+            raise ValueError('effective_only 必须是布尔值')
         return cls(panel_id=str(raw.get('panel_id') or 'default'),
                    category=category, ranking=ranking,
-                   rate_basis=rate_basis, title=title)
+                   rate_basis=rate_basis, title=title,
+                   effective_only=effective_only)
 
 
 @dataclass(frozen=True)
@@ -492,9 +499,24 @@ def _metric_complete(row: PanelSourceRow, category: Category,
     return row.counter_complete
 
 
-def _segments(row: PanelSourceRow, ranking: Ranking) -> tuple[tuple[dict, ...], bool]:
-    total = row.damage if ranking is Ranking.TOTAL else row.recent_damage
-    by_type = row.damage_by_type if ranking is Ranking.TOTAL else row.recent_damage_by_type
+def _effective_damage(row: PanelSourceRow) -> float | None:
+    if _finite(row.effective_damage):
+        return float(row.effective_damage)
+    if _finite(row.damage) and _finite(row.overkill):
+        return max(0.0, float(row.damage) - float(row.overkill))
+    return None
+
+
+def _segments(row: PanelSourceRow, ranking: Ranking,
+              effective: bool = False) -> tuple[tuple[dict, ...], bool]:
+    if effective:
+        total = _effective_damage(row)
+        by_type = {kind: max(0.0, float(value) -
+                             float((row.overkill_by_type or {}).get(kind, 0.0)))
+                   for kind, value in row.damage_by_type.items() if _finite(value)}
+    else:
+        total = row.damage if ranking is Ranking.TOTAL else row.recent_damage
+        by_type = row.damage_by_type if ranking is Ranking.TOTAL else row.recent_damage_by_type
     if total is None or not _finite(total) or total <= 0:
         return (), False
     segments = []
@@ -509,7 +531,8 @@ def _segments(row: PanelSourceRow, ranking: Ranking) -> tuple[tuple[dict, ...], 
                    'color': DAMAGE_COLORS[kind]}
         # Overkill is marked only on the totals basis: the five-second window
         # does not derive a separate event-window overkill value.
-        if ranking is Ranking.TOTAL and row.overkill_type_complete and row.overkill_by_type:
+        if (not effective and ranking is Ranking.TOTAL
+                and row.overkill_type_complete and row.overkill_by_type):
             overkill = row.overkill_by_type.get(kind)
             if _finite(overkill) and overkill > 0:
                 segment['overkill'] = overkill
@@ -575,8 +598,10 @@ def render_panel(config: PanelConfig,
     """
     rows = list(rows)
     category, ranking = config.category, config.ranking
-    metric_label = (CATEGORY_LABELS[category] + ' · ' +
-                    RANKING_LABELS[ranking])
+    effective = (config.effective_only and category is Category.DAMAGE
+                 and ranking is Ranking.TOTAL)
+    metric_label = ('有效伤害 · 本局总量' if effective else
+                    CATEGORY_LABELS[category] + ' · ' + RANKING_LABELS[ranking])
     rate_supported = category is not Category.SHIELD
     rate_label = RATE_LABELS[config.rate_basis] if rate_supported else ''
     if rate_supported:
@@ -591,7 +616,8 @@ def render_panel(config: PanelConfig,
     complete: dict[str, bool] = {}
     row_by_owner: dict[str, PanelSourceRow] = {}
     for row in rows:
-        value = row.total(category) if ranking is Ranking.TOTAL else row.recent(category)
+        value = (_effective_damage(row) if effective else
+                 row.total(category) if ranking is Ranking.TOTAL else row.recent(category))
         row_by_owner[row.owner_id] = row
         if _finite(value):
             values[row.owner_id] = float(value)
@@ -604,7 +630,8 @@ def render_panel(config: PanelConfig,
     # Any row whose selected metric is unknown, plus any caller-reported
     # missing team member, makes the whole-team denominator unreliable.
     any_unknown_row = any(
-        not _finite(r.total(category) if ranking is Ranking.TOTAL else r.recent(category))
+        not _finite(_effective_damage(r) if effective else
+                     r.total(category) if ranking is Ranking.TOTAL else r.recent(category))
         for r in rows)
     windows = [r.recent_window(category) for r in rows] if ranking is Ranking.RECENT else []
     def valid_window(window):
@@ -625,8 +652,8 @@ def render_panel(config: PanelConfig,
     entries: list[PanelEntry] = []
     for owner, value in displayed.items():
         row = row_by_owner[owner]
-        segments, segments_complete = (_segments(row, ranking) if category is Category.DAMAGE
-                                       else ((), False))
+        segments, segments_complete = (_segments(row, ranking, effective)
+                                       if category is Category.DAMAGE else ((), False))
         share = (value / team_denominator
                  if share_known and team_denominator > 0 else None)
         if row.event_complete:
@@ -673,7 +700,8 @@ def render_panel(config: PanelConfig,
                     'burst_complete': row.burst_complete,
                     'burst_count': row.burst_count,
                     'burst_unknown_reason': row.burst_unknown_reason,
-                    'effective_damage': row.effective_damage,
+                    'effective_damage': (_effective_damage(row) if effective
+                                         else row.effective_damage),
                     'event_coverage_complete': row.event_complete,
                     'event_reason': event_reason,
                     'active_damage': row.active_damage,

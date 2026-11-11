@@ -1,77 +1,82 @@
 <UserControl x:Class="ArkDPS.Desktop.StatisticPanel"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  xmlns:local="clr-namespace:ArkDPS.Desktop" MinWidth="350">
- <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="3" Margin="0,0,12,16">
+ <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Margin="0,0,12,16">
+  <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="2" Direction="270" Opacity="0.10" Color="#000000"/></Border.Effect>
   <Grid>
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-   <DockPanel Margin="16,14,12,10">
-    <WrapPanel x:Name="Actions" DockPanel.Dock="Right">
-     <Button Content="HUD" Click="OpenHud" ToolTip="从本面板打开单屏 HUD" Padding="9,4"/>
-     <Button Content="复制" Click="Duplicate" Padding="8,4"/><Button x:Name="DeleteButton" Content="删除" Click="Delete" Padding="8,4"/>
+   <DockPanel Margin="20,18,14,10">
+    <WrapPanel x:Name="Actions" DockPanel.Dock="Right" VerticalAlignment="Center">
+     <Button Content="HUD" Click="OpenHud" ToolTip="从本面板打开单屏 HUD" Padding="11,5" FontSize="11"/>
+     <Button Content="复制" Click="Duplicate" Padding="10,5" FontSize="11"/><Button x:Name="DeleteButton" Content="删除" Click="Delete" Padding="10,5" FontSize="11"/>
     </WrapPanel>
-    <TextBlock x:Name="Heading" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource Ink}" VerticalAlignment="Center"/>
+    <StackPanel>
+     <TextBlock x:Name="Heading" FontFamily="Segoe UI Variable Display, Microsoft YaHei UI" FontSize="19" FontWeight="Bold" Foreground="{DynamicResource Ink}" VerticalAlignment="Center"/>
+     <TextBlock Text="LIVE PANEL" FontFamily="Cascadia Mono, Consolas" FontSize="9" Foreground="{DynamicResource Muted}" Margin="0,3,0,0"/>
+    </StackPanel>
    </DockPanel>
-   <WrapPanel x:Name="Selectors" Grid.Row="1" Margin="16,0,10,12">
-    <ComboBox x:Name="Category" Width="110" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="统计类别">
+   <WrapPanel x:Name="Selectors" Grid.Row="1" Margin="20,0,14,14">
+    <ComboBox x:Name="Category" Width="104" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="统计类别">
      <ComboBoxItem Content="伤害" Tag="damage"/><ComboBoxItem Content="治疗" Tag="healing"/><ComboBoxItem Content="有效护盾" Tag="shield"/>
     </ComboBox>
-    <ComboBox x:Name="Ranking" Width="112" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="排行口径">
+    <ComboBox x:Name="Ranking" Width="106" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="排行口径">
      <ComboBoxItem Content="本局总量" Tag="total"/><ComboBoxItem Content="最近 5 秒" Tag="recent"/>
     </ComboBox>
-    <ComboBox x:Name="Rate" Width="100" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="速率口径">
+    <ComboBox x:Name="Rate" Width="96" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="速率口径">
      <ComboBoxItem Content="近 5 秒" Tag="recent_5s"/><ComboBoxItem Content="接敌" Tag="engagement"/>
     </ComboBox>
+    <ToggleButton x:Name="EffectiveOnly" Content="仅显示有效伤害" Click="EffectiveChanged" Margin="0,0,6,0" AutomationProperties.Name="仅显示有效伤害"/>
    </WrapPanel>
-   <Border x:Name="RateNoticePanel" Grid.Row="2" Visibility="Collapsed" Margin="16,0,16,12" Background="{DynamicResource Inset}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="3" Padding="10,8">
+   <Border x:Name="RateNoticePanel" Grid.Row="2" Visibility="Collapsed" Margin="20,0,20,14" Background="{DynamicResource Inset}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="8" Padding="12,9">
     <DockPanel>
-     <Button x:Name="RateAction" DockPanel.Dock="Right" Click="RateActionClicked" Padding="8,3" VerticalAlignment="Center" Margin="10,0,0,0"/>
+     <Button x:Name="RateAction" DockPanel.Dock="Right" Click="RateActionClicked" Padding="10,4" VerticalAlignment="Center" Margin="10,0,0,0"/>
      <TextBlock x:Name="RateNotice" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Muted}"/>
     </DockPanel>
    </Border>
-   <Grid x:Name="Plot" Grid.Row="3" Background="{DynamicResource Console}" MinHeight="235">
-    <local:OrbitalSurface IsHitTestVisible="False" Opacity="0.65"/>
-    <Grid Margin="16,12,16,8">
+   <Border x:Name="Plot" Grid.Row="3" Background="{DynamicResource Console}" CornerRadius="10" Margin="14,0,14,0" MinHeight="235">
+    <Grid Margin="16,13,14,10">
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-     <DockPanel Margin="0,0,0,9">
-      <TextBlock x:Name="RateHeading" DockPanel.Dock="Right" Foreground="{DynamicResource ConsoleMuted}" FontSize="11"/>
-      <TextBlock Text="干员贡献 / 按排行值线性缩放" Foreground="{DynamicResource ConsoleMuted}" FontSize="11"/>
+     <DockPanel Margin="0,0,0,10">
+      <TextBlock x:Name="RateHeading" DockPanel.Dock="Right" Foreground="{DynamicResource ConsoleMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="10"/>
+      <TextBlock Text="干员贡献 / 按排行值线性缩放" Foreground="{DynamicResource ConsoleMuted}" FontSize="10"/>
      </DockPanel>
-     <ListBox x:Name="Rows" ItemContainerStyle="{StaticResource RankedRow}" Grid.Row="1" SelectionChanged="RowSelected" MouseEnter="HoldOrder" MouseLeave="ReleaseOrder" MaxHeight="510" MinHeight="165" KeyboardNavigation.DirectionalNavigation="Contained">
+     <ListBox x:Name="Rows" ItemContainerStyle="{StaticResource RankedRow}" Grid.Row="1" SelectionChanged="RowSelected" MouseEnter="HoldOrder" MouseLeave="ReleaseOrder" MaxHeight="520" MinHeight="165" KeyboardNavigation.DirectionalNavigation="Contained">
       <ListBox.ItemTemplate><DataTemplate DataType="{x:Type local:RowItem}">
        <Grid Margin="{Binding RowMargin}" ToolTip="{Binding Tooltip}" MinHeight="{Binding RowHeight}">
-        <Grid.ColumnDefinitions><ColumnDefinition Width="43"/><ColumnDefinition Width="*"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
-        <Border Width="{Binding PortraitSize}" Height="{Binding PortraitSize}" VerticalAlignment="Top" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1" Background="{DynamicResource ConsoleCard}" ToolTip="{Binding Name}">
-         <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource ConsoleInk}" FontSize="16" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="100"/></Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding Rank}" Foreground="{DynamicResource ConsoleMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="12" VerticalAlignment="Top" Margin="0,5,0,0" TextAlignment="Center"/>
+        <Border Grid.Column="1" Width="{Binding PortraitSize}" Height="{Binding PortraitSize}" VerticalAlignment="Top" CornerRadius="9" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1" Background="{DynamicResource ConsoleCard}" ToolTip="{Binding Name}" ClipToBounds="True">
+         <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" VerticalAlignment="Center" HorizontalAlignment="Center"/>
           <Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
         </Border>
-        <StackPanel Grid.Column="1" Margin="0,0,5,0">
+        <StackPanel Grid.Column="2" Margin="8,0,8,0">
          <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ConsoleInk}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-         <TextBlock Text="{Binding Presence}" Foreground="{DynamicResource ConsoleMuted}" FontSize="11" Margin="0,3,0,0"/>
+         <TextBlock Text="{Binding Presence}" Foreground="{DynamicResource ConsoleMuted}" FontSize="10" Margin="0,3,0,0"/>
         </StackPanel>
-        <StackPanel Grid.Column="2" HorizontalAlignment="Right">
-         <TextBlock Text="{Binding Value}" FontFamily="Bahnschrift" FontSize="{Binding ValueSize}" Foreground="{DynamicResource ConsoleInk}" TextAlignment="Right"/>
-         <TextBlock Text="{Binding Secondary}" FontFamily="Bahnschrift" FontSize="11" Foreground="{DynamicResource ConsoleMuted}" TextAlignment="Right"/>
+        <StackPanel Grid.Column="3" HorizontalAlignment="Right">
+         <TextBlock Text="{Binding Value}" FontFamily="Cascadia Mono, Consolas" FontSize="{Binding ValueSize}" Foreground="{DynamicResource ConsoleInk}" TextAlignment="Right"/>
+         <TextBlock Text="{Binding Secondary}" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="{DynamicResource ConsoleMuted}" TextAlignment="Right" Margin="0,2,0,0"/>
         </StackPanel>
-        <local:ContributionBar Grid.Column="1" Grid.ColumnSpan="2" Data="{Binding Entry}" Height="7" VerticalAlignment="Bottom" Margin="0,0,0,0"/>
+        <local:ContributionBar Grid.Column="1" Grid.ColumnSpan="3" Data="{Binding Entry}" Height="8" VerticalAlignment="Bottom" Margin="0,0,0,1"/>
        </Grid>
       </DataTemplate></ListBox.ItemTemplate>
      </ListBox>
-     <TextBlock x:Name="Empty" Grid.Row="1" Foreground="{DynamicResource ConsoleMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="270" TextAlignment="Center" FontSize="14"/>
+     <TextBlock x:Name="Empty" Grid.Row="1" Foreground="{DynamicResource ConsoleMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="270" TextAlignment="Center" FontSize="13"/>
     </Grid>
-   </Grid>
-   <StackPanel Grid.Row="4" Margin="16,10,16,12">
+   </Border>
+   <StackPanel Grid.Row="4" Margin="20,12,20,14">
     <WrapPanel x:Name="Legend">
-     <Rectangle Fill="#E5484D" Width="7" Height="7" Margin="0,0,4,0"/><TextBlock Text="物理" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,14,0"/>
-     <Rectangle Fill="#3D8BFD" Width="7" Height="7" Margin="0,0,4,0"/><TextBlock Text="法术" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,14,0"/>
-     <Rectangle Fill="#9B5CF6" Width="7" Height="7" Margin="0,0,4,0"/><TextBlock Text="元素" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,14,0"/>
-     <Rectangle Fill="#FFFFFF" Stroke="#687D83" Width="7" Height="7" Margin="0,0,4,0"/><TextBlock Text="真实" Foreground="{DynamicResource Muted}" FontSize="11"/>
-     <TextBlock x:Name="OverkillLegend" Text="▨ 斜纹 = 按属性过量（事件）" Foreground="{DynamicResource Muted}" FontSize="11" Margin="14,0,0,0" Visibility="Collapsed"/>
+     <Border Background="#E5484D" CornerRadius="2" Width="8" Height="8" Margin="0,0,5,0"/><TextBlock Text="物理" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,14,0"/>
+     <Border Background="#3D8BFD" CornerRadius="2" Width="8" Height="8" Margin="0,0,5,0"/><TextBlock Text="法术" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,14,0"/>
+     <Border Background="#9B5CF6" CornerRadius="2" Width="8" Height="8" Margin="0,0,5,0"/><TextBlock Text="元素" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,14,0"/>
+     <Border Background="#FFFFFF" BorderBrush="#687D83" BorderThickness="1" CornerRadius="2" Width="8" Height="8" Margin="0,0,5,0"/><TextBlock Text="真实" Foreground="{DynamicResource Muted}" FontSize="10"/>
+     <TextBlock x:Name="OverkillLegend" Text="▨ 过量伤害" Foreground="{DynamicResource Muted}" FontSize="10" Margin="14,0,0,0" Visibility="Collapsed"/>
     </WrapPanel>
-    <TextBlock x:Name="Coverage" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,7,0,0" TextWrapping="Wrap"/>
+    <TextBlock x:Name="Coverage" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,8,0,0" TextWrapping="Wrap"/>
    </StackPanel>
-   <WrapPanel x:Name="HudControls" Grid.Row="5" Margin="16,0,16,12" Visibility="Collapsed">
-    <Button x:Name="LockButton" Content="锁定 HUD" Click="ToggleLock" Padding="10,5"/>
-    <TextBlock Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="4,0,8,0"/>
+   <WrapPanel x:Name="HudControls" Grid.Row="5" Margin="20,0,20,14" Visibility="Collapsed">
+    <Button x:Name="LockButton" Content="锁定 HUD" Click="ToggleLock" Padding="11,5"/>
+    <TextBlock Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0,10,0" FontSize="11"/>
     <Slider x:Name="Alpha" Minimum="0.7" Maximum="1" Value="0.9" Width="95" TickFrequency="0.01" ValueChanged="OpacityChanged" VerticalAlignment="Center" AutomationProperties.Name="HUD 透明度"/>
    </WrapPanel>
   </Grid>

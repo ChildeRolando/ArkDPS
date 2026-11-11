@@ -1,47 +1,68 @@
 <Window x:Class="ArkDPS.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:ArkDPS.Desktop"
- Style="{StaticResource {x:Type Window}}" Title="ArkDPS · 局内统计" Width="1380" Height="900" MinWidth="560" MinHeight="540" Closing="OnClosing" SizeChanged="OnResize">
+ Style="{StaticResource {x:Type Window}}" Title="ArkDPS · 局内统计" Width="1380" Height="900" MinWidth="560" MinHeight="540" Closing="OnClosing" SizeChanged="OnResize"
+ UseLayoutRounding="True" SnapsToDevicePixels="True">
  <DockPanel Background="{DynamicResource Bg}">
   <Border DockPanel.Dock="Top" Background="{DynamicResource Console}" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="0,0,0,1">
-   <WrapPanel Margin="24,14,18,14" VerticalAlignment="Center">
-    <StackPanel Orientation="Horizontal" Margin="0,0,24,0" VerticalAlignment="Center">
-     <Border Background="#A33A18" Width="32" Height="32" CornerRadius="3" Margin="0,0,10,0"><Path Data="M 5 21 L 10 21 L 14 9 L 18 25 L 22 16 L 27 16" Stroke="#FFF9ED" StrokeThickness="1.8"/></Border>
-     <TextBlock Text="ArkDPS" FontFamily="Bahnschrift" FontSize="25" Foreground="{DynamicResource ConsoleInk}" VerticalAlignment="Center"/>
+   <Grid Margin="26,13,22,13">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+     <Border Width="38" Height="38" CornerRadius="11" Background="{DynamicResource Accent}" Margin="0,0,12,0">
+      <Path Data="M 7 26 L 13 26 L 18 11 L 23 30 L 28 19 L 34 19" Stroke="{DynamicResource AccentInk}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+     </Border>
+     <StackPanel VerticalAlignment="Center">
+      <TextBlock Text="ArkDPS" FontFamily="Segoe UI Variable Display, Microsoft YaHei UI" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource ConsoleInk}" LineHeight="26"/>
+      <TextBlock Text="LIVE COMBAT ANALYTICS" FontFamily="Cascadia Mono, Consolas" FontSize="9" Foreground="{DynamicResource ConsoleMuted}" Margin="1,2,0,0"/>
+     </StackPanel>
     </StackPanel>
-    <Button Content="实时战况" Tag="live" Click="Navigate" Style="{StaticResource HeaderButton}"/>
-    <Button Content="历史战绩" Tag="history" Click="Navigate" Style="{StaticResource HeaderButton}"/>
-    <Button Content="连接设置" Tag="settings" Click="Navigate" Style="{StaticResource HeaderButton}" Margin="0,0,24,0"/>
-    <TextBlock Text="皮肤" Foreground="{DynamicResource ConsoleMuted}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-    <ComboBox x:Name="Skin" Width="155" SelectionChanged="SkinChanged" AutomationProperties.Name="全局皮肤">
-     <ComboBoxItem Content="孤星 · LONE TRAIL" Tag="lone-trail"/><ComboBoxItem Content="原始界面" Tag="original"/>
-    </ComboBox>
-    <Button Content="解锁全部 HUD" Click="UnlockAll" Style="{StaticResource HeaderButton}"/>
-    <Button Content="退出" Click="QuitClick" Style="{StaticResource HeaderButton}"/>
-   </WrapPanel>
+    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="34,0,0,0">
+     <Button Content="实时战况" Tag="live" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,6,0"/>
+     <Button Content="历史战绩" Tag="history" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,6,0"/>
+     <Button Content="连接设置" Tag="settings" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,22,0"/>
+    </StackPanel>
+    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+     <TextBlock Text="皮肤" Foreground="{DynamicResource ConsoleMuted}" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="11"/>
+     <ComboBox x:Name="Skin" Width="158" SelectionChanged="SkinChanged" AutomationProperties.Name="全局皮肤" Margin="0,0,10,0">
+      <ComboBoxItem Content="孤星 · LONE TRAIL" Tag="lone-trail"/><ComboBoxItem Content="原始界面" Tag="original"/>
+     </ComboBox>
+     <Button Content="解锁全部 HUD" Click="UnlockAll" Style="{StaticResource HeaderButton}" Padding="12,8" Margin="0,0,6,0"/>
+     <Button Content="退出" Click="QuitClick" Style="{StaticResource HeaderButton}" Padding="14,8"/>
+    </StackPanel>
+   </Grid>
   </Border>
-  <Border DockPanel.Dock="Bottom" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="24,8">
-   <DockPanel><TextBlock x:Name="ModeLabel" Text="Windows / WPF · 只读采集" Foreground="{DynamicResource Muted}" DockPanel.Dock="Right" FontSize="11" Margin="12,0,0,0"/>
+  <Border DockPanel.Dock="Bottom" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="26,9">
+   <DockPanel><TextBlock x:Name="ModeLabel" Text="Windows / WPF · 只读采集" Foreground="{DynamicResource Muted}" DockPanel.Dock="Right" FontFamily="Cascadia Mono, Consolas" FontSize="10" Margin="12,0,0,0"/>
     <TextBlock x:Name="Footer" Text="正在启动 Python 采集进程…" Foreground="{DynamicResource Muted}" FontSize="11"/>
    </DockPanel>
   </Border>
-  <Grid Margin="24,20,12,16">
+  <Grid Margin="28,22,24,18">
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-   <DockPanel Margin="0,0,12,14">
-    <WrapPanel DockPanel.Dock="Right"><Button x:Name="AddPanelButton" Content="新建面板" Click="AddPanel" Style="{StaticResource Primary}"/><Button Content="重新定位" Click="Rescan"/></WrapPanel>
-    <TextBlock x:Name="PageTitle" Text="本局统计" FontSize="22" FontWeight="Bold" VerticalAlignment="Center"/>
-   </DockPanel>
-   <Border Grid.Row="1" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="3" Margin="0,0,12,18" Padding="16,12">
+   <DockPanel Margin="0,0,12,16">
+    <WrapPanel DockPanel.Dock="Right" VerticalAlignment="Center"><Button x:Name="AddPanelButton" Content="新建面板" Click="AddPanel" Style="{StaticResource Primary}"/><Button Content="重新定位" Click="Rescan" Padding="16,8"/></WrapPanel>
     <StackPanel>
-     <WrapPanel>
-      <TextBlock x:Name="Stage" Text="关卡未知" FontWeight="Bold" Margin="0,0,24,0"/>
-      <TextBlock x:Name="Clock" Text="游戏时间 —" FontFamily="Bahnschrift" FontSize="16" Margin="0,0,24,0"/>
-      <TextBlock x:Name="Status" Text="等待战斗数据" Foreground="{DynamicResource AccentText}" FontWeight="SemiBold"/>
-     </WrapPanel>
-     <TextBlock x:Name="EventStatus" Text="等待事件能力诊断" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0"/>
-     <TextBlock x:Name="ErrorText" Foreground="{DynamicResource AccentText}" Margin="0,5,0,0"/>
+     <TextBlock x:Name="PageTitle" Text="本局统计" FontFamily="Segoe UI Variable Display, Microsoft YaHei UI" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource Ink}" LineHeight="34"/>
+     <TextBlock Text="实时贡献、有效伤害与过量拆分" Foreground="{DynamicResource Muted}" FontSize="11" Margin="1,4,0,0"/>
     </StackPanel>
+   </DockPanel>
+   <Border Grid.Row="1" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Margin="0,0,12,18" Padding="0">
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="4"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+     <Border Background="{DynamicResource Accent}" CornerRadius="12,0,0,12"/>
+     <StackPanel Grid.Column="1" Margin="20,16,20,16">
+      <Grid>
+       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+        <TextBlock x:Name="Stage" Text="关卡未知" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource Ink}" Margin="0,0,22,0"/>
+        <Border Background="{DynamicResource Inset}" CornerRadius="6" Padding="9,4"><TextBlock x:Name="Clock" Text="游戏时间 —" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="{DynamicResource Ink}"/></Border>
+       </StackPanel>
+       <Border Grid.Column="1" Background="{DynamicResource Inset}" CornerRadius="12" Padding="11,5"><TextBlock x:Name="Status" Text="等待战斗数据" Foreground="{DynamicResource AccentText}" FontWeight="SemiBold" FontSize="12"/></Border>
+      </Grid>
+      <TextBlock x:Name="EventStatus" Text="等待事件能力诊断" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,9,0,0"/>
+      <TextBlock x:Name="ErrorText" Foreground="{DynamicResource AccentText}" Margin="0,5,0,0"/>
+     </StackPanel>
+    </Grid>
    </Border>
    <DockPanel x:Name="LivePage" Grid.Row="2" LastChildFill="True">
-    <ScrollViewer x:Name="InspectorScroll" DockPanel.Dock="Right" Width="300" Margin="4,0,12,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <ScrollViewer x:Name="InspectorScroll" DockPanel.Dock="Right" Width="330" Margin="6,0,12,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
      <local:Inspector x:Name="LiveInspector"/>
     </ScrollViewer>
     <ScrollViewer x:Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -49,51 +70,51 @@
     </ScrollViewer>
    </DockPanel>
    <Grid x:Name="HistoryPage" Grid.Row="2" Visibility="Collapsed">
-    <Grid.ColumnDefinitions><ColumnDefinition x:Name="HistoryListColumn" Width="285"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-    <Border x:Name="HistoryListBorder" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" Margin="0,0,16,0" Padding="12">
+    <Grid.ColumnDefinitions><ColumnDefinition x:Name="HistoryListColumn" Width="300"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <Border x:Name="HistoryListBorder" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Margin="0,0,16,0" Padding="16">
      <DockPanel>
       <StackPanel DockPanel.Dock="Top">
-       <DockPanel Margin="0,0,0,10"><Button Content="刷新" Click="RefreshHistory" DockPanel.Dock="Right" Padding="8,4"/><TextBlock Text="最近 100 局" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/></DockPanel>
-       <TextBox x:Name="Search" TextChanged="FilterHistory" AutomationProperties.Name="搜索关卡、干员或日期" ToolTip="搜索关卡、干员或日期" Margin="0,0,0,8"/>
+       <DockPanel Margin="0,0,0,12"><Button Content="刷新" Click="RefreshHistory" DockPanel.Dock="Right" Padding="12,6"/><TextBlock Text="最近 100 局" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/></DockPanel>
+       <TextBox x:Name="Search" TextChanged="FilterHistory" AutomationProperties.Name="搜索关卡、干员或日期" ToolTip="搜索关卡、干员或日期" Margin="0,0,0,10"/>
        <WrapPanel Margin="0,0,0,10">
-        <ComboBox x:Name="Outcome" Width="104" SelectionChanged="FilterHistory"><ComboBoxItem Content="全部结果"/><ComboBoxItem Content="胜利"/><ComboBoxItem Content="失败"/><ComboBoxItem Content="退出"/><ComboBoxItem Content="结果未知"/></ComboBox>
+        <ComboBox x:Name="Outcome" Width="108" SelectionChanged="FilterHistory"><ComboBoxItem Content="全部结果"/><ComboBoxItem Content="胜利"/><ComboBoxItem Content="失败"/><ComboBoxItem Content="退出"/><ComboBoxItem Content="结果未知"/></ComboBox>
         <ComboBox x:Name="Practice" Width="112" SelectionChanged="FilterHistory"><ComboBoxItem Content="全部模式"/><ComboBoxItem Content="演习"/><ComboBoxItem Content="正式"/><ComboBoxItem Content="演习状态未知"/></ComboBox>
        </WrapPanel>
       </StackPanel>
       <ListBox x:Name="HistoryList" SelectionChanged="SelectHistory">
-       <ListBox.ItemTemplate><DataTemplate><Border Padding="10,12" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" ToolTip="{Binding StageDetail}"><StackPanel><TextBlock Text="{Binding Stage}" FontSize="16" FontWeight="Bold"/><TextBlock Text="{Binding Summary}" FontSize="11" Margin="0,5,0,0"/><TextBlock Text="{Binding Date}" FontSize="10" Margin="0,4,0,0"/></StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
+       <ListBox.ItemTemplate><DataTemplate><Border Padding="10,11" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" ToolTip="{Binding StageDetail}"><StackPanel><TextBlock Text="{Binding Stage}" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="{Binding Summary}" FontSize="11" Foreground="{DynamicResource Muted}" Margin="0,5,0,0"/><TextBlock Text="{Binding Date}" FontSize="10" Foreground="{DynamicResource Muted}" Margin="0,4,0,0"/></StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
       </ListBox>
      </DockPanel>
     </Border>
     <DockPanel Grid.Column="1">
-     <StackPanel DockPanel.Dock="Top" Margin="0,0,12,12">
-      <WrapPanel><Button Content="收起 / 展开列表" Click="ToggleHistoryList"/><Button x:Name="ExportJson" Content="导出 JSON" Click="SaveJson" IsEnabled="False"/><Button x:Name="ExportPng" Content="完整排行 PNG" Click="SavePng" IsEnabled="False" Style="{StaticResource Primary}"/></WrapPanel>
-      <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；完成对局归档后自动出现。" Foreground="{DynamicResource Muted}" Margin="0,10,0,0"/>
+     <StackPanel DockPanel.Dock="Top" Margin="0,0,12,14">
+      <WrapPanel><Button Content="收起 / 展开列表" Click="ToggleHistoryList" Padding="12,6"/><Button x:Name="ExportJson" Content="导出 JSON" Click="SaveJson" IsEnabled="False" Padding="12,6"/><Button x:Name="ExportPng" Content="完整排行 PNG" Click="SavePng" IsEnabled="False" Style="{StaticResource Primary}" Padding="14,6"/></WrapPanel>
+      <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；完成对局归档后自动出现。" Foreground="{DynamicResource Muted}" Margin="0,12,0,0"/>
       <TextBlock x:Name="HistoryNotice" Foreground="{DynamicResource AccentText}" FontSize="11" Margin="0,4,0,0"/>
      </StackPanel>
      <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel><local:StatisticPanel x:Name="HistoryPanel"/><local:Inspector x:Name="HistoryInspector" Margin="0,0,12,0"/></StackPanel></ScrollViewer>
     </DockPanel>
    </Grid>
    <ScrollViewer x:Name="SettingsPage" Grid.Row="2" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel MaxWidth="850" HorizontalAlignment="Left" Margin="0,0,12,0">
-     <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" Padding="24" Margin="0,0,0,18">
+    <StackPanel MaxWidth="880" HorizontalAlignment="Left" Margin="0,0,12,0">
+     <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Padding="26" Margin="0,0,0,18">
       <StackPanel>
-       <TextBlock Text="连接到 MuMu" FontSize="20" FontWeight="Bold"/>
-       <TextBlock Text="UI 不访问游戏进程和 ADB；连接与只读采集由独立 Python 进程负责。" Foreground="{DynamicResource Muted}" Margin="0,8,0,16"/>
+       <TextBlock Text="连接到 MuMu" FontSize="21" FontWeight="Bold"/>
+       <TextBlock Text="UI 不访问游戏进程和 ADB；连接与只读采集由独立 Python 进程负责。" Foreground="{DynamicResource Muted}" Margin="0,8,0,18"/>
        <CheckBox x:Name="AutoDetect" Content="自动检测认证的 MuMu 实例（多实例时需明确选择）"/>
-       <TextBlock Text="ADB 路径 · 留空自动查找" Margin="0,12,0,6"/><TextBox x:Name="AdbPath" MinWidth="340" AutomationProperties.Name="ADB 路径"/>
-       <TextBlock Text="实例地址" Margin="0,12,0,6"/><TextBox x:Name="Serial" ToolTip="多实例时选择检测结果或输入地址；明确地址不会被自动替换" AutomationProperties.Name="实例地址"/>
-       <Button x:Name="DetectButton" Content="检测实例" Click="Detect" HorizontalAlignment="Left" Margin="0,14,0,8"/>
+       <TextBlock Text="ADB 路径 · 留空自动查找" Margin="0,14,0,6"/><TextBox x:Name="AdbPath" MinWidth="340" AutomationProperties.Name="ADB 路径"/>
+       <TextBlock Text="实例地址" Margin="0,14,0,6"/><TextBox x:Name="Serial" ToolTip="多实例时选择检测结果或输入地址；明确地址不会被自动替换" AutomationProperties.Name="实例地址"/>
+       <Button x:Name="DetectButton" Content="检测实例" Click="Detect" HorizontalAlignment="Left" Margin="0,16,0,10"/>
        <ListBox x:Name="Instances" MinHeight="50" MaxHeight="150" SelectionChanged="ChooseInstance"/>
        <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" Margin="0,8,0,0"/>
       </StackPanel>
      </Border>
-     <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" Padding="24">
-      <StackPanel><TextBlock Text="事件观测与连接诊断" FontSize="20" FontWeight="Bold"/>
+     <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Padding="26">
+      <StackPanel><TextBlock Text="事件观测与连接诊断" FontSize="21" FontWeight="Bold"/>
        <CheckBox x:Name="EventsEnabled" Content="启用事件观测 · 护盾实际吸收 / 独立接敌区间"/>
        <TextBlock Text="事件不可用时沿用伤害 / 治疗累计快照。覆盖前的护盾未知，不显示为零。" Foreground="{DynamicResource Muted}" Margin="0,0,0,12"/>
        <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}"/>
-       <Button Content="应用设置并重新定位" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,20,0,0"/>
+       <Button Content="应用设置并重新定位" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,22,0,0"/>
       </StackPanel>
      </Border>
     </StackPanel>

@@ -24,6 +24,9 @@ public sealed class RowItem : INotifyPropertyChanged
     public double ValueSize=>Compact ? 18 : 21;
     private JsonElement entry;
     public JsonElement Entry { get => entry; set { entry=value; PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(null)); } }
+    private int rank;
+    public int Rank => rank;
+    internal void SetRank(int value) { if(rank!=value){rank=value;PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(Rank)));} }
     public string Id => Entry.Text("owner_id");
     public string Name => Entry.Text("name");
     public string Initial => Name.Length > 0 ? Name[..1] : "?";
@@ -100,8 +103,8 @@ public sealed class ContributionBar : FrameworkElement
             double size=Math.Min(width-x,width*Math.Clamp(segment.Number("ratio"),0,1));
             if(size>0)
             {
-                double body=Math.Max(0,size-2);
-                dc.DrawRectangle(Theme.Brush(segment.Text("color")),null,new Rect(x,0,body,ActualHeight));
+                double body=Math.Max(0,size-3);
+                dc.DrawRoundedRectangle(Theme.Brush(segment.Text("color")),null,new Rect(x,0,body,ActualHeight),3,3);
                 if(segment.TryGetProperty("overkill_ratio",out var mark) && mark.ValueKind==JsonValueKind.Number)
                 {
                     double ratio=Math.Clamp(mark.GetDouble(),0,1), overkill=body*ratio;
@@ -157,6 +160,9 @@ public partial class StatisticPanel : UserControl
         var config=value.Get("config");
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         Rate.IsEnabled=config.Text("category")!="shield";
+        EffectiveOnly.IsChecked=config.Bool("effective_only");
+        EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"&&config.Text("ranking")=="total"
+            ? Visibility.Visible : Visibility.Collapsed;
         // The engagement column depends on event observation. Never leave it as a
         // silently blank column: show the reason and a retry/settings entry while
         // still allowing a switch back to the five-second window.
@@ -198,6 +204,7 @@ public partial class StatisticPanel : UserControl
                 int index=items.ToList().FindIndex(x=>x.Id==incoming[i].Text("owner_id"));
                 if(index!=i) items.Move(index,i);
             }
+        for(int i=0;i<items.Count;i++) items[i].SetRank(i+1);
         Empty.Text=value.Text("empty_text"); Empty.Visibility=items.Count==0 ? Visibility.Visible : Visibility.Collapsed;
         updating=false;
     }
@@ -210,11 +217,17 @@ public partial class StatisticPanel : UserControl
         ["panel_id"]=PanelId,
         ["category"]=((ComboBoxItem)Category.SelectedItem).Tag,
         ["ranking"]=((ComboBoxItem)Ranking.SelectedItem).Tag,
-        ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag
+        ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag,
+        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0&&Ranking.SelectedIndex==0
     };
     private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e)
     {
         if(updating || Command==null || Category.SelectedItem==null || Ranking.SelectedItem==null || Rate.SelectedItem==null) return;
+        await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
+    }
+    private async void EffectiveChanged(object sender,RoutedEventArgs e)
+    {
+        if(updating||Command==null||Category.SelectedItem==null||Ranking.SelectedItem==null||Rate.SelectedItem==null) return;
         await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
     }
     private async void Duplicate(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_duplicate",new(){["panel_id"]=PanelId});}
