@@ -49,6 +49,54 @@ def test_totals_only_sum_entered_enemies_and_alive_remaining():
     assert totals['hp_complete'] is True
 
 
+def test_pending_hp_is_inferred_only_from_an_observed_same_type():
+    snapshot = {'enemies': [
+        enemy(roster_id=1, eid='enemy_a', max_hp=200.0, hp=150.0),
+        enemy(roster_id=2, spawn_order=2, eid='enemy_a', max_hp=0.0,
+              hp=0.0, lifecycle='pending', alive=False),
+        enemy(roster_id=3, spawn_order=3, eid='enemy_b', max_hp=0.0,
+              hp=0.0, lifecycle='pending', alive=False),
+    ]}
+    planned = enemy_rows(snapshot, include_pending=True)
+    by_id = {row['roster_id']: row for row in planned}
+    assert by_id[2]['max_hp'] == 200.0 and by_id[2]['hp_inferred'] is True
+    assert by_id[3]['hp_known'] is False and by_id[3]['hp_inferred'] is False
+
+
+def test_planned_pool_counts_enemies_that_die_between_polls():
+    snapshot = {'enemies': [
+        enemy(roster_id=1, max_hp=100.0, hp=0.0, alive=False, lifecycle='departed'),
+        enemy(roster_id=2, spawn_order=2, max_hp=500.0, hp=0.0, alive=False,
+              lifecycle='pending'),
+    ]}
+    rows = enemy_rows(snapshot)
+    planned = enemy_rows(snapshot, include_pending=True)
+    totals = enemy_totals(rows, planned)
+    assert totals['entered_count'] == 1
+    assert totals['planned_count'] == 2
+    assert totals['observed_total_hp'] == 100
+    assert totals['entered_total_hp'] == 600
+    assert totals['hp_complete'] is True
+
+
+def test_planned_pool_skips_unobserved_conditional_branches():
+    snapshot = {'ok': True, 'enemies': [
+        enemy(roster_id=1, eid='enemy_a', max_hp=100.0, hp=90.0,
+              spawn_kind='scheduled'),
+        enemy(roster_id=2, spawn_order=2, eid='enemy_a', max_hp=100.0,
+              hp=100.0, lifecycle='pending', alive=False, spawn_kind='scheduled'),
+        enemy(roster_id=3, spawn_order=3, eid='enemy_b', max_hp=999.0,
+              hp=999.0, lifecycle='pending', alive=False, spawn_kind='conditional'),
+    ]}
+    telemetry = EnemyTelemetry(
+        type('R', (), {'poll_fast': lambda self: snapshot})(),
+        clock=lambda: 1.0, bootstrap=lambda reader: True, poll_interval=0)
+    state = telemetry.sample(game_time=1.0, our_damage=0)
+    assert state['totals']['planned_count'] == 2
+    assert state['totals']['entered_total_hp'] == 200
+    assert state['totals']['planned_complete'] is True
+
+
 def test_timeline_is_ordered_deduplicated_and_downsampled():
     timeline = EnemyTimeline()
     rows = enemy_rows({'enemies': [enemy(max_hp=100.0, hp=100.0)]})

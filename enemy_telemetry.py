@@ -37,12 +37,13 @@ def _text(value):
     return value if isinstance(value, str) else ''
 
 
-def enemy_rows(snapshot):
-    """Serializable entered-enemy rows, excluding not-yet-spawned plan entries."""
+def enemy_rows(snapshot, *, include_pending=False):
+    """Serializable enemy rows; pending plan entries are opt-in."""
+    allowed = ENTERED_LIFECYCLES + (('pending',) if include_pending else ())
     rows = []
     for enemy in snapshot.get('enemies') or ():
         lifecycle = _text(getattr(enemy, 'lifecycle', 'active')) or 'active'
-        if lifecycle not in ENTERED_LIFECYCLES:
+        if lifecycle not in allowed:
             continue
         max_hp = _finite(getattr(enemy, 'max_hp', 0.0))
         hp = _finite(getattr(enemy, 'hp', 0.0))
@@ -72,25 +73,62 @@ def enemy_rows(snapshot):
             'end_frame': getattr(enemy, 'end_frame', None),
             'end_reason': getattr(enemy, 'end_reason', None),
             'is_summon': bool(getattr(enemy, 'is_summon', False)),
+            'planned': bool(getattr(enemy, 'planned', False)),
+            'spawn_kind': _text(getattr(enemy, 'spawn_kind', '')) or 'scheduled',
+            'hp_inferred': False,
             'position': {
                 'x': _finite(getattr(enemy, 'pos_x', 0.0)),
                 'y': _finite(getattr(enemy, 'pos_y', 0.0)),
             },
         })
+    if include_pending:
+        # A planned enemy that died between polls has no live attributes. The
+        # same enemy type's observed MaxHP is still a valid denominator; never
+        # invent a value for a type that was never observed.
+        observed_hp = {}
+        for row in rows:
+            if row['lifecycle'] in ENTERED_LIFECYCLES and row['hp_known']:
+                observed_hp[row['eid']] = max(observed_hp.get(row['eid'], 0.0),
+                                             row['max_hp'])
+        for row in rows:
+            if (not row['hp_known'] and row['lifecycle'] == 'pending'
+                    and row['eid'] in observed_hp):
+                row['max_hp'] = observed_hp[row['eid']]
+                row['hp_known'] = True
+                row['hp_inferred'] = True
     rows.sort(key=lambda row: (row['spawn_order'] is None,
                                row['spawn_order'] or 0, row['roster_id'] or 0))
     return rows
 
 
-def enemy_totals(rows):
+def enemy_totals(rows, planned=None):
+    """Observed entered enemies plus the stage's full planned HP pool.
+
+    A short-lived enemy can spawn and die between polls, so observed rows alone
+    can understate the HP that our damage actually consumed. The LevelData
+    plan is the authoritative denominator when every planned record has HP.
+    """
     entered = [row for row in rows if row['lifecycle'] in ENTERED_LIFECYCLES]
     known = [row for row in entered if row['hp_known']]
+    observed_total = sum(row['max_hp'] for row in known)
+    planned = list(planned or ())
+    planned_known = [row for row in planned if row['hp_known']]
+    plan_complete = bool(planned) and len(planned_known) == len(planned)
     return {
         'entered_count': len(entered),
         'alive_count': sum(1 for row in entered if row['alive']),
-        'entered_total_hp': sum(row['max_hp'] for row in known),
+        'planned_count': len(planned),
+        'planned_known_count': len(planned_known),
+        'planned_total_hp': sum(row['max_hp'] for row in planned_known),
+        'planned_complete': plan_complete,
+        'planned_unknown': [{'eid': row.get('eid'), 'name': row.get('name'),
+                             'spawn_order': row.get('spawn_order')}
+                            for row in planned if not row['hp_known']],
+        'entered_total_hp': (sum(row['max_hp'] for row in planned_known)
+                             if plan_complete else observed_total),
+        'observed_total_hp': observed_total,
         'remaining_hp': sum(max(0.0, row['hp']) for row in known if row['alive']),
-        'hp_complete': len(known) == len(entered) and bool(entered),
+        'hp_complete': plan_complete or (len(known) == len(entered) and bool(entered)),
     }
 
 
@@ -103,7 +141,7 @@ class EnemyTimeline:
     def reset(self):
         self.points = []
 
-    def add(self, game_time, rows, our_effective_damage):
+    def add(self, game_time, rows, our_effective_damage, planned=None):
         if not isinstance(game_time, (int, float)) or isinstance(game_time, bool):
             return None
         if not math.isfinite(game_time):
@@ -113,10 +151,14 @@ class EnemyTimeline:
                         and math.isfinite(our_effective_damage))
         if self.points and game_time <= self.points[-1]['game_time']:
             return None
-        totals = enemy_totals(rows)
+        totals = enemy_totals(rows, planned)
         point = {
             'game_time': float(game_time),
             'entered_total_hp': totals['entered_total_hp'],
+            'observed_total_hp': totals['observed_total_hp'],
+            'planned_count': totals['planned_count'],
+            'planned_total_hp': totals['planned_total_hp'],
+            'planned_complete': totals['planned_complete'],
             'remaining_hp': totals['remaining_hp'],
             'our_effective_damage': float(our_effective_damage) if damage_known else None,
             'our_damage_known': damage_known,
@@ -208,6 +250,13 @@ def bootstrap_at_battle(reader):
     reader._uf_ptrs = []
     reader._uf_items = 0
     reader._uf_cnt = 0
+    # The LevelData plan is the complete enemy-HP denominator; a short-lived
+    # enemy can otherwise spawn and die between polls without ever entering
+    # the live roster. Names/HP come from the local enemy DB, never a network.
+    try:
+        reader._load_spawn_plan()
+    except Exception:
+        pass
     try:
         reader._prefill()
     except Exception:
@@ -234,6 +283,7 @@ class EnemyTelemetry:
         self._last_poll = float('-inf')
         self._status = 'starting'
         self._rows = []
+        self._planned_rows = []
         self._damage_baseline = None
 
     def reset(self):
@@ -244,6 +294,7 @@ class EnemyTelemetry:
         self._last_poll = float('-inf')
         self._status = 'starting'
         self._rows = []
+        self._planned_rows = []
         self._damage_baseline = None
 
     def _state(self, status, *, rows=None, error=None):
@@ -257,7 +308,7 @@ class EnemyTelemetry:
             'error': error,
             'ready': self.ready,
             'rows': current,
-            'totals': enemy_totals(current),
+            'totals': enemy_totals(current, self._planned_rows),
             'damage_baseline': self._damage_baseline,
             'series': self.timeline.series(),
             'last_point': self.timeline.last,
@@ -302,6 +353,12 @@ class EnemyTelemetry:
             message = (snapshot or {}).get('msg') or '敌人快照不完整'
             return self._state('stale', error=message)
         rows = enemy_rows(snapshot)
+        planned = enemy_rows(snapshot, include_pending=True)
+        # Conditional branches only count once observed; scheduled waves form
+        # the deterministic stage HP pool even when a poll misses a short life.
+        self._planned_rows = [row for row in planned
+                              if row['lifecycle'] in ENTERED_LIFECYCLES
+                              or row['spawn_kind'] == 'scheduled']
         if self._damage_baseline is None and isinstance(our_damage, (int, float)):
             # Align the damage curve with the enemy-observation window. Native
             # counters can include damage dealt before ArkDPS attached; comparing
@@ -310,5 +367,5 @@ class EnemyTelemetry:
         adjusted = (max(0.0, float(our_damage) - self._damage_baseline)
                     if self._damage_baseline is not None
                     and isinstance(our_damage, (int, float)) else None)
-        self.timeline.add(game_time, rows, adjusted)
+        self.timeline.add(game_time, rows, adjusted, self._planned_rows)
         return self._state('ready', rows=rows)
