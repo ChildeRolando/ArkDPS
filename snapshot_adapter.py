@@ -229,12 +229,25 @@ class BattleStatisticsAdapter:
 
     def start_events(self, *, session, frame, sequence):
         """Start only after the producer proves its barrier follows this baseline."""
-        if (self.statistics is None or self.event_stream is not None
-                or session != self.session or frame != self.last_frame
-                or self.last_game_time != self.coverage_start
-                or self.owner_map.unknown_token_cids or self.owner_map.ambiguous_cids
-                or self.mapping_conflicts):
-            raise ValueError('event barrier does not match the initial baseline')
+        reasons = []
+        if self.statistics is None:
+            reasons.append('no statistics baseline')
+        if self.event_stream is not None:
+            reasons.append('event stream already open')
+        if session != self.session:
+            reasons.append(f'session {session!r} != {self.session!r}')
+        if frame != self.last_frame:
+            reasons.append(f'frame {frame} != {self.last_frame}')
+        if self.last_game_time != self.coverage_start:
+            reasons.append(f'time {self.last_game_time} != coverage start {self.coverage_start}')
+        if self.owner_map.unknown_token_cids:
+            reasons.append('unknown token sources: ' + ', '.join(sorted(self.owner_map.unknown_token_cids)))
+        if self.owner_map.ambiguous_cids:
+            reasons.append('ambiguous sources: ' + ', '.join(sorted(self.owner_map.ambiguous_cids)))
+        if self.mapping_conflicts:
+            reasons.append('mapping conflicts: ' + ', '.join(sorted(self.mapping_conflicts)))
+        if reasons:
+            raise ValueError('event barrier does not match the initial baseline: ' + '; '.join(reasons))
         self.statistics.event_coverage = True
         try:
             self.event_stream = EventStream(self.statistics, session=session,

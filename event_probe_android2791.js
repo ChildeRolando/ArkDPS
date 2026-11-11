@@ -53,6 +53,8 @@ const engagementUnknownSources=new Set();
 let shieldUnknown=false;
 let damageUnknown=false;
 let engagementUnknown=false;
+// Recoverable unattributable callbacks are counted, not escalated globally.
+let skippedUnattributed=0;
 let queue=[];
 const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}

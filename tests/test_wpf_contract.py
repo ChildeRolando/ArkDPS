@@ -177,3 +177,10 @@ def test_wpf_user_facing_numbers_use_at_most_one_decimal():
     assert '0.###' not in screenshot
     assert 'Entry.Exact("rate")' not in panel and 'Entry.Exact("share")' not in panel
     assert 'Json.UiText(Entry.Text("exact_value"))' in panel
+
+
+def test_probe_declares_all_quality_counters_before_use():
+    js = (ROOT/'event_probe_android2791.js').read_text('utf-8')
+    for name in ('unknownSources', 'engagementUnknownSources', 'skippedUnattributed'):
+        assert any(token in js for token in
+                   (f'let {name}=', f'let {name} =', f'const {name}=', f'const {name} =')), name
