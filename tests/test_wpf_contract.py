@@ -103,6 +103,8 @@ def test_hud_has_single_title_row_close_and_rich_rows():
     for binding in ('{Binding Rank}', '{Binding Portrait}', '{Binding Rate}', '{Binding Share}'):
         assert binding in xaml
     assert 'DPS算法' in xaml and '全周期DPS' in xaml and '溢出总伤' in xaml
+    assert 'Tag="dps"' in xaml and 'Tag="recent"' not in xaml
+    assert '溢出伤害率' in (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
 
 
 def test_wpf_ships_all_six_demo_skins():

@@ -37,6 +37,7 @@ class Category(str, Enum):
 
 class Ranking(str, Enum):
     TOTAL = 'total'
+    DPS = 'dps'
     RECENT = 'recent'
 
 
@@ -48,7 +49,14 @@ class RateBasis(str, Enum):
 
 CATEGORY_LABELS = {Category.DAMAGE: '伤害', Category.HEALING: '治疗',
                    Category.SHIELD: '有效护盾'}
-RANKING_LABELS = {Ranking.TOTAL: '本局总量', Ranking.RECENT: '最近 5 秒'}
+RANKING_LABELS = {Ranking.TOTAL: '总伤', Ranking.DPS: 'DPS', Ranking.RECENT: '最近 5 秒'}
+
+def ranking_label(category: Category, ranking: Ranking) -> str:
+    if ranking is Ranking.TOTAL:
+        return {Category.DAMAGE: '总伤', Category.HEALING: '总治疗',
+                Category.SHIELD: '总护盾'}[category]
+    return RANKING_LABELS[ranking]
+
 RATE_LABELS = {RateBasis.RECENT_5S: '近 5 秒', RateBasis.ENGAGEMENT: '接敌',
                RateBasis.FULL_CYCLE: '全周期DPS'}
 
@@ -166,14 +174,16 @@ class PanelConfig:
             raise ValueError('panel_id is required')
         if self.category is Category.SHIELD and self.rate_basis is not RateBasis.RECENT_5S:
             raise ValueError('护盾不使用接敌或全周期速率')
+        if self.category is Category.SHIELD and self.ranking is Ranking.DPS:
+            raise ValueError('护盾不使用 DPS 排行')
 
     @property
     def display_title(self) -> str:
         if self.title:
             return self.title
         if self.effective_only and self.category is Category.DAMAGE:
-            return '有效伤害 · 本局总量'
-        return f'{CATEGORY_LABELS[self.category]} · {RANKING_LABELS[self.ranking]}'
+            return '有效伤害 · ' + ranking_label(self.category, self.ranking)
+        return f'{CATEGORY_LABELS[self.category]} · {ranking_label(self.category, self.ranking)}'
 
     def to_dict(self) -> dict:
         return {'panel_id': self.panel_id, 'category': self.category.value,
@@ -246,6 +256,7 @@ class PanelSourceRow:
     engagement_healing: float | None = None
     active_damage: float | None = None
     active_healing: float | None = None
+    recent_overkill: float | None = None
     # Observed on-field duration since this session's coverage start. It is not
     # the engagement interval and is None when presence was never certified.
     presence_seconds: float | None = None
@@ -303,13 +314,38 @@ class PanelSourceRow:
             return self.active_healing
         return None
 
-    def full_cycle(self, category: Category) -> float | None:
-        """总伤 / 在场时间, only when both numerator and presence are certified."""
-        total = self.total(category)
+    def effective_recent(self) -> float | None:
+        if (not _finite(self.recent_damage) or not _finite(self.recent_overkill)
+                or not self.overkill_complete):
+            return None
+        return max(0.0, self.recent_damage - self.recent_overkill)
+
+    def effective_observed(self) -> float | None:
+        if (not _finite(self.observed_damage) or not _finite(self.overkill)
+                or not self.overkill_complete):
+            return None
+        return max(0.0, self.observed_damage - self.overkill)
+
+    def full_cycle(self, category: Category, *, effective: bool = False) -> float | None:
+        """总量 / 在场时间, only when numerator and presence are certified."""
+        total = (_effective_damage(self) if effective and category is Category.DAMAGE
+                 else self.total(category))
         if (not _finite(total) or not _finite(self.presence_seconds)
                 or self.presence_seconds <= 0 or not self.presence_complete):
             return None
         return total / self.presence_seconds
+
+    def rate(self, category: Category, basis: 'RateBasis', *,
+             effective: bool = False) -> float | None:
+        if basis is RateBasis.RECENT_5S:
+            return (self.effective_recent()
+                    if effective and category is Category.DAMAGE
+                    else self.recent(category))
+        if basis is RateBasis.ENGAGEMENT:
+            return (self.effective_observed()
+                    if effective and category is Category.DAMAGE
+                    else self.engagement(category))
+        return self.full_cycle(category, effective=effective)
 
     def observed(self, category: Category) -> float | None:
         if category is Category.DAMAGE:
@@ -342,6 +378,7 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             engagement_healing=row.get('engagement_healing'),
             active_damage=row.get('active_damage'),
             active_healing=row.get('active_healing'),
+            recent_overkill=row.get('recent_overkill_damage'),
             presence_seconds=row.get('presence_seconds'),
             presence_complete=bool(row.get('presence_complete', False)),
             observed_damage=row.get('observed_damage'),
@@ -606,25 +643,10 @@ def render_panel(config: PanelConfig,
                  team_reason: str = '',
                  team_note: str = '',
                  event: EventAvailability | None = None) -> PanelView:
-    """Build one panel view; unknown metrics are omitted, never zero-filled.
-
-    ``team_complete=False`` means the caller knows some team members or sources
-    are missing; shares are then reported as unknown instead of using a local
-    subset as if it were the whole team. ``team_reason`` names the blocking
-    sources, and ``team_note`` reports sources excluded from the team
-    denominator (shown even when shares are known).
-
-    ``event`` describes the event-observation capability. When it is absent or
-    degraded the engagement rate column reports a readable reason and recovery
-    entry instead of silently rendering empty values. Data that was never
-    observed stays unknown; it is never replaced by zero or a wall-clock rate.
-    """
+    """Build one panel view; unknown metrics are omitted, never zero-filled."""
     rows = list(rows)
     category, ranking = config.category, config.ranking
-    effective = (config.effective_only and category is Category.DAMAGE
-                 and ranking is Ranking.TOTAL)
-    metric_label = ('有效伤害 · 本局总量' if effective else
-                    CATEGORY_LABELS[category] + ' · ' + RANKING_LABELS[ranking])
+    effective = config.effective_only and category is Category.DAMAGE
     rate_supported = category is not Category.SHIELD
     rate_label = RATE_LABELS[config.rate_basis] if rate_supported else ''
     if rate_supported:
@@ -635,47 +657,97 @@ def render_panel(config: PanelConfig,
     if rate_available and event is not None and any(not row.event_complete for row in rows):
         rate_hint = '部分干员事件覆盖不完整；未覆盖区间保持未知，不补零。'
 
+    def metric_value(row: PanelSourceRow) -> float | None:
+        if ranking is Ranking.DPS:
+            return row.rate(category, config.rate_basis, effective=effective)
+        if ranking is Ranking.TOTAL:
+            return _effective_damage(row) if effective else row.total(category)
+        return row.recent(category)
+
+    def total_value(row: PanelSourceRow) -> float | None:
+        return _effective_damage(row) if effective else row.total(category)
+
+    def metric_complete(row: PanelSourceRow) -> bool:
+        if ranking is not Ranking.DPS:
+            return _metric_complete(row, category, ranking)
+        if not _finite(metric_value(row)):
+            return False
+        if effective and category is Category.DAMAGE:
+            if config.rate_basis is RateBasis.RECENT_5S:
+                return row.counter_complete and row.overkill_complete
+            if config.rate_basis is RateBasis.ENGAGEMENT:
+                return row.event_complete and row.overkill_complete
+            return row.presence_complete
+        return row.counter_complete
+
+    def rate_info(row: PanelSourceRow) -> tuple[float | None, str, str, str]:
+        if not rate_supported:
+            return None, 'unsupported', '', ''
+        rate = metric_value(row) if ranking is Ranking.DPS else row.rate(
+            category, config.rate_basis, effective=effective)
+        if not _finite(rate):
+            rate = None
+        state, text, note = (
+            ('unsupported', '', '') if not rate_supported else
+            _rate_display(row, category, rate, rate_available,
+                          engagement=config.rate_basis is RateBasis.ENGAGEMENT,
+                          full_cycle=config.rate_basis is RateBasis.FULL_CYCLE))
+        return rate, state, text, note
+
     values: dict[str, float] = {}
     complete: dict[str, bool] = {}
     row_by_owner: dict[str, PanelSourceRow] = {}
+    rates: dict[str, tuple[float | None, str, str, str]] = {}
     for row in rows:
-        value = (_effective_damage(row) if effective else
-                 row.total(category) if ranking is Ranking.TOTAL else row.recent(category))
+        value = metric_value(row)
         row_by_owner[row.owner_id] = row
+        rates[row.owner_id] = rate_info(row)
         if _finite(value):
             values[row.owner_id] = float(value)
-            complete[row.owner_id] = _metric_complete(row, category, ranking)
+            complete[row.owner_id] = metric_complete(row)
 
-    # Recent views drop zero-output rows; totals keep retired cumulative rows.
-    displayed = {owner: value for owner, value in values.items()
-                 if (value > 0 if ranking is Ranking.RECENT else value > 0)}
+    displayed = {owner: value for owner, value in values.items() if value > 0}
     team_denominator = sum(values.values()) if values else 0.0
-    # Any row whose selected metric is unknown, plus any caller-reported
-    # missing team member, makes the whole-team denominator unreliable.
-    any_unknown_row = any(
-        not _finite(_effective_damage(r) if effective else
-                     r.total(category) if ranking is Ranking.TOTAL else r.recent(category))
-        for r in rows)
-    windows = [r.recent_window(category) for r in rows] if ranking is Ranking.RECENT else []
+    any_unknown_row = any(not _finite(metric_value(r)) for r in rows)
+    windows = ([r.recent_window(category) for r in rows]
+               if ranking is Ranking.RECENT
+               or (ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S)
+               else [])
     def valid_window(window):
         return (isinstance(window, (tuple, list)) and len(window) == 2
                 and all(_finite(t) for t in window)
                 and 0 < window[1] - window[0] <= 5)
-    window_known = (ranking is Ranking.TOTAL or
-                    (bool(windows) and all(valid_window(w) for w in windows)
-                     and all(tuple(w) == tuple(windows[0]) for w in windows)))
+    if ranking is Ranking.TOTAL:
+        window_known = True
+    elif ranking is Ranking.DPS and config.rate_basis is RateBasis.ENGAGEMENT:
+        window_known = rate_available
+    elif ranking is Ranking.DPS and config.rate_basis is RateBasis.FULL_CYCLE:
+        window_known = True
+    else:
+        window_known = (bool(windows) and all(valid_window(w) for w in windows)
+                        and all(tuple(w) == tuple(windows[0]) for w in windows))
     share_known = (bool(values) and team_complete and not any_unknown_row and window_known
                    and all(complete.values()) and team_denominator > 0)
     share_reason = ('' if share_known else
-                    ('近期窗口不完整或不一致，无法计算全队同口径占比'
+                    ('DPS 算法或在场时间不完整，无法计算全队同口径占比'
+                     if ranking is Ranking.DPS and config.rate_basis is RateBasis.FULL_CYCLE else
+                     '事件观测不完整，无法计算全队同口径 DPS 占比'
+                     if ranking is Ranking.DPS and config.rate_basis is RateBasis.ENGAGEMENT else
+                     '近期窗口不完整或不一致，无法计算全队同口径占比'
                      if not window_known else
                      team_reason or '队伍数据不完整，无法计算全队同口径占比'))
     max_value = max(displayed.values(), default=0.0)
 
+    metric_label = (('有效伤害 · DPS' if effective else CATEGORY_LABELS[category] + ' · DPS')
+                    if ranking is Ranking.DPS else
+                    '有效伤害 · ' + ranking_label(category, ranking) if effective else
+                    CATEGORY_LABELS[category] + ' · ' + ranking_label(category, ranking))
+
     entries: list[PanelEntry] = []
     for owner, value in displayed.items():
         row = row_by_owner[owner]
-        segments, segments_complete = (_segments(row, ranking, effective)
+        segment_ranking = Ranking.TOTAL if ranking is Ranking.DPS else ranking
+        segments, segments_complete = (_segments(row, segment_ranking, effective)
                                        if category is Category.DAMAGE else ((), False))
         share = (value / team_denominator
                  if share_known and team_denominator > 0 else None)
@@ -688,27 +760,14 @@ def render_panel(config: PanelConfig,
                             + ' 游戏秒，之后未知')
         else:
             event_reason = '事件观测未建立覆盖'
-        rate = None
-        rate_state, rate_text, rate_note = (
-            ('unsupported', '', '') if not rate_supported else ('unknown', '—', ''))
-        if rate_supported:
-            if config.rate_basis is RateBasis.RECENT_5S:
-                rate = row.recent(category)
-            elif config.rate_basis is RateBasis.ENGAGEMENT:
-                rate = row.engagement(category)
-            else:
-                rate = row.full_cycle(category)
-            if not _finite(rate):
-                rate = None
-            rate_state, rate_text, rate_note = _rate_display(
-                row, category, rate, rate_available,
-                engagement=config.rate_basis is RateBasis.ENGAGEMENT,
-                full_cycle=config.rate_basis is RateBasis.FULL_CYCLE)
+        rate, rate_state, rate_text, rate_note = rates[owner]
+        shown = total_value(row) if ranking is Ranking.DPS else value
         entries.append(PanelEntry(
             owner_id=owner, name=row.name, value=value,
             bar_ratio=(value / max_value) if max_value > 0 else 0.0,
             share=share, share_display=format_percent(share),
-            display_value=format_compact(value), exact_value=f'{value!r}',
+            display_value=format_compact(shown) if _finite(shown) else '—',
+            exact_value=f'{value!r}',
             rate=rate, rate_display=format_compact(rate), rate_label=rate_label,
             present=row.present, portrait_muted=row.present is False,
             incomplete=not complete.get(owner, False),
@@ -722,21 +781,22 @@ def render_panel(config: PanelConfig,
                     'overkill_type_complete': row.overkill_type_complete,
                     'overkill_coverage_complete': row.overkill_complete,
                     'overkill_unknown_reason': row.overkill_unknown_reason,
+                    'effective_damage': _effective_damage(row) if effective else row.effective_damage,
+                    'recent_overkill_damage': row.recent_overkill,
+                    'presence_seconds': row.presence_seconds,
+                    'presence_complete': row.presence_complete,
                     'burst_damage': row.burst_damage,
                     'burst_overkill': row.burst_overkill,
                     'burst_settlement': row.burst_settlement,
                     'burst_complete': row.burst_complete,
                     'burst_count': row.burst_count,
                     'burst_unknown_reason': row.burst_unknown_reason,
-                    'effective_damage': (_effective_damage(row) if effective
-                                         else row.effective_damage),
                     'event_coverage_complete': row.event_complete,
                     'event_reason': event_reason,
                     'active_damage': row.active_damage,
                     'active_healing': row.active_healing,
                     'observed_damage': row.observed_damage,
                     'observed_healing': row.observed_healing,
-                    'event_coverage_complete': row.event_complete,
                     'sources': list(row.sources)},
             rate_state=rate_state, rate_text=rate_text, rate_note=rate_note))
     entries.sort(key=lambda e: (-e.value, e.name, e.owner_id))

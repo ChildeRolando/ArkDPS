@@ -181,7 +181,8 @@ class BattleRecord:
                                      ('overkill_coverage_start', None),
                                      ('overkill_coverage_end', None),
                                      ('presence_seconds', None),
-                                     ('presence_complete', False)):
+                                     ('presence_complete', False),
+                                     ('recent_overkill_damage', None)):
                     row.setdefault(key, default)
                 for metric in ('damage', 'healing', 'shield_absorbed', 'recent_damage',
                                'recent_healing', 'engagement_damage', 'engagement_healing',
@@ -190,7 +191,7 @@ class BattleRecord:
                                'overkill_damage', 'overkill_coverage_start',
                                'overkill_coverage_end', 'burst_damage',
                                'burst_overkill', 'burst_settlement', 'effective_damage',
-                               'presence_seconds'):
+                               'presence_seconds', 'recent_overkill_damage'):
                     _number(row[metric], metric, nullable=True)
                 _number(row['coverage_start'], 'row coverage_start')
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')

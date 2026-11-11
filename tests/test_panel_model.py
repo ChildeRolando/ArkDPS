@@ -239,6 +239,43 @@ def test_full_cycle_dps_uses_presence_time_and_stays_unknown_without_coverage():
     assert view.entries[0].rate_text == '—'
 
 
+def test_dps_ranking_follows_selected_algorithm():
+    rows = [
+        PanelSourceRow(owner_id='A', name='A', damage=1000, recent_damage=200,
+                       engagement_damage=10, presence_seconds=10, presence_complete=True),
+        PanelSourceRow(owner_id='B', name='B', damage=500, recent_damage=300,
+                       engagement_damage=50, presence_seconds=10, presence_complete=True),
+    ]
+    recent = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                      rate_basis=RateBasis.RECENT_5S), rows)
+    assert [e.owner_id for e in recent.entries] == ['B', 'A']
+    assert [e.value for e in recent.entries] == [300, 200]
+    engagement = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                           rate_basis=RateBasis.ENGAGEMENT), rows)
+    assert [e.owner_id for e in engagement.entries] == ['B', 'A']
+    assert [e.value for e in engagement.entries] == [50, 10]
+    full = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                    rate_basis=RateBasis.FULL_CYCLE), rows)
+    assert [e.owner_id for e in full.entries] == ['A', 'B']
+    assert [e.value for e in full.entries] == [100, 50]
+
+
+def test_effective_only_changes_dps_numerator():
+    row = PanelSourceRow(owner_id='A', name='A', damage=1000,
+                         effective_damage=800, overkill=200, overkill_complete=True,
+                         presence_seconds=10, presence_complete=True,
+                         recent_damage=200, recent_overkill=40)
+    total = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE,
+                                     effective_only=False), [row])
+    effective = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE,
+                                         effective_only=True), [row])
+    assert total.entries[0].rate == pytest.approx(100)
+    assert effective.entries[0].rate == pytest.approx(80)
+    recent = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.RECENT_5S,
+                                      effective_only=True), [row])
+    assert recent.entries[0].rate == pytest.approx(160)
+
+
 def test_shield_rejects_engagement_rate():
     with pytest.raises(ValueError):
         PanelConfig(category=Category.SHIELD, rate_basis=RateBasis.ENGAGEMENT)

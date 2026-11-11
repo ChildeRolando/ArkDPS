@@ -35,6 +35,7 @@ class Statistics:
         # stream in which every damage event carried verifiable target HP and
         # settlement evidence. Any unverifiable damage event makes it unknown.
         self.overkill = {}
+        self.overkill_events = deque()
         self.overkill_incomplete = set()
         self.overkill_reason = {}
         # Elemental bar damage is not HP damage; only its source matters.
@@ -393,6 +394,7 @@ class Statistics:
                     self.last_elemental.pop(target_instance, None)
                 self.overkill[owner] = self.overkill.get(owner, 0.0) + overkill
                 if overkill > 0:
+                    self.overkill_events.append((game_time, owner, overkill))
                     type_key = NATIVE_DAMAGE_TYPES.get(damage_type)
                     if type_key is None:
                         self.overkill_type_incomplete.add(owner)
@@ -513,6 +515,12 @@ class Statistics:
                 row['recent_' + kind + '_window'] = (
                     (start, self.now) if row['recent_' + kind] is not None
                     and start == expected_start else None)
+                if kind == 'damage':
+                    row['recent_overkill_damage'] = (
+                        sum(value for when, owner_key, value in self.overkill_events
+                            if owner_key == owner and start <= when <= self.now)
+                        if overkill_known and row['recent_damage_window'] is not None
+                        else None)
                 state = self.engagement.get((owner, kind))
                 if state:
                     covered_until = self.event_coverage_end if self.event_coverage_end is not None else self.now

@@ -34,6 +34,20 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Rate => Entry.Text("rate_text");
     public string Share => Entry.Text("share_display");
     public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
+    public string BarTooltip
+    {
+        get
+        {
+            var detail=Entry.Get("detail");var types=detail.Get("damage_by_type");
+            string Value(string key) => types.ValueKind==JsonValueKind.Object ? types.UiInt(key) : "—";
+            string over=detail.UiInt("overkill_damage");
+            return "物理 "+Value("physical")+Environment.NewLine
+                +"法术 "+Value("arts")+Environment.NewLine
+                +"元素 "+Value("elemental")+Environment.NewLine
+                +"真实 "+Value("true")+Environment.NewLine
+                +"过量 "+over;
+        }
+    }
     public string Tooltip => Name + Environment.NewLine + "排行原值 " + Json.UiText(Entry.Text("exact_value")) + Environment.NewLine + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "") + Environment.NewLine + "占比 " + Entry.Text("share_display") + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage");
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
@@ -165,11 +179,16 @@ public partial class StatisticPanel : UserControl
     internal void Update(JsonElement value, bool canDelete=true)
     {
         view=value; updating=true;
+        var config=value.Get("config");
         var title=value.Text("title");
         if(IsHud)
         {
-            title=title.Replace("有效伤害","").Replace("伤害","").Trim(' ','·');
-            if(title.Length==0) title=value.Text("metric_label");
+            title=config.Text("category") switch
+            {
+                "healing"=>"总治疗",
+                "shield"=>"总护盾",
+                _=>"总伤"
+            };
         }
         Heading.Text=title;
         PanelKind.Text=IsHud ? "HUD PANEL" : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
@@ -177,15 +196,16 @@ public partial class StatisticPanel : UserControl
         HudClose.Visibility=IsHud ? Visibility.Visible : Visibility.Collapsed;
         Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : "FullRow");
         TableHeader.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
-        var config=value.Get("config");
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         var category=config.Text("category");
+        if(category=="shield") Select(Ranking,"total");
+        Ranking.IsEnabled=category!="shield";
         ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
         ((ComboBoxItem)Ranking.Items[1]).Content=category=="shield" ? "近期" : "DPS";
         Rate.ToolTip=config.Text("rate_basis")=="full_cycle" ? "全周期 DPS = 总伤 / 在场时间（自本次观测起）" : null;
         Rate.IsEnabled=config.Text("category")!="shield";
         EffectiveOnly.IsChecked=config.Bool("effective_only");
-        EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"&&config.Text("ranking")=="total"
+        EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
             ? Visibility.Visible : Visibility.Collapsed;
         // The engagement column depends on event observation. Never leave it as a
         // silently blank column: show the reason and a retry/settings entry while
@@ -236,7 +256,10 @@ public partial class StatisticPanel : UserControl
     }
     private static void Select(ComboBox box,string tag)
     {
-        foreach(ComboBoxItem item in box.Items) if((string)item.Tag==tag) {box.SelectedItem=item;break;}
+        foreach(ComboBoxItem item in box.Items) if((string)item.Tag==tag) {box.SelectedItem=item;return;}
+        // Old v1 layouts used "recent"; the UI now exposes it as the DPS basis.
+        if(tag=="recent") foreach(ComboBoxItem item in box.Items)
+            if((string)item.Tag=="dps") {box.SelectedItem=item;return;}
     }
     internal Dictionary<string,object?> Configuration() => new()
     {
@@ -244,7 +267,7 @@ public partial class StatisticPanel : UserControl
         ["category"]=((ComboBoxItem)Category.SelectedItem).Tag,
         ["ranking"]=((ComboBoxItem)Ranking.SelectedItem).Tag,
         ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag,
-        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0&&Ranking.SelectedIndex==0
+        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0
     };
     private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e)
     {

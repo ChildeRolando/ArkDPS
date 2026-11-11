@@ -105,7 +105,7 @@
        <local:Inspector x:Name="LiveInspector"/>
       </StackPanel>
      </ScrollViewer>
-     <ScrollViewer x:Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+     <ScrollViewer x:Name="PanelScroll" Margin="28,0,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <WrapPanel x:Name="PanelHost"/>
      </ScrollViewer>
     </DockPanel>

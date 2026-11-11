@@ -86,6 +86,7 @@ public sealed class Inspector : Border
         var stats=new WrapPanel{Margin=new Thickness(0,0,0,4)};
         AddStat(stats,"有效伤害",Effective(row));
         AddStat(stats,"过量伤害",row.UiInt("overkill_damage"));
+        AddStat(stats,"溢出伤害率",OverkillRate(row));
         AddStat(stats,"治疗",row.UiInt("healing"));
         AddStat(stats,"有效护盾",row.UiInt("shield_absorbed"));
         if(stats.Children.Count>0) body.Children.Add(stats);
@@ -153,6 +154,14 @@ public sealed class Inspector : Border
         if(damage.ValueKind==JsonValueKind.Number&&overkill.ValueKind==JsonValueKind.Number)
             return Json.UiIntText((damage.GetDouble()-overkill.GetDouble()).ToString(System.Globalization.CultureInfo.InvariantCulture));
         return "—";
+    }
+    private static string OverkillRate(JsonElement row)
+    {
+        var damage=row.Get("damage");var overkill=row.Get("overkill_damage");
+        if(damage.ValueKind!=JsonValueKind.Number||overkill.ValueKind!=JsonValueKind.Number) return "—";
+        double total=damage.GetDouble();
+        if(!double.IsFinite(total)||total<=0) return "—";
+        return Math.Round(overkill.GetDouble()/total*100,0).ToString("0")+"%";
     }
     private static string Mitigation(JsonElement row)
     {
