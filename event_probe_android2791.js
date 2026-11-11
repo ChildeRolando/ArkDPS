@@ -76,6 +76,11 @@ function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).
 function targetHp(p){if(!p||p.isNull())return null;const value=fp(p.add(0x40));return Number.isFinite(value)&&value>=0&&value<1e9?value:null;}
 function targetKey(p){if(!p||p.isNull())return null;try{const id=str(p.add(0x148).readPointer());return id||null;}catch(e){return null;}}
 const shieldByFrame=new Map();
+// Some elemental-bar modifiers expose a null target on the following damage
+// callback. Keep the most recent bar target for the same source/frame so the
+// damage event can still offer verifiable target/HP evidence. The Python core
+// re-checks HP consistency; a stale or mismatched fallback remains unknown.
+const lastBarTarget=new Map();
 // Absorption observed in a frame but not verifiable for a target cannot prove
 // that a lethal hit's excess was not absorbed, so its overkill stays unknown.
 const shieldUnknownByFrame=new Map();
@@ -159,6 +164,8 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      const owned=this.source&&own(this.source);
      const amount=fp(this.mod.add(0x30));
      if(owned&&type===0&&targetType===5){
+      if(this.target&&!this.target.isNull())
+       lastBarTarget.set(this.source,{frame:end.frame,target:this.target,hp_before:this.hpBefore,instance});
       try{record(this.source,'elemental_bar',amount,end,{method:this.name,type,target:targetType},{target_instance:instance});}catch(e){fatal=String(e);}
       return;
      }
@@ -174,8 +181,15 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      if(targetType!==0)return;
      if(![1,2,3,4].includes(type)){unknownSources.add(this.source);engagementUnknownSources.add(this.source);return;}
      const kind=type===4?'healing':'damage';
-     const evidence=kind==='damage'?overkillEvidence(this.mod,this.target,this.hpBefore,end.frame):null;
-     if(evidence&&instance) evidence.target_instance=instance;
+     let damageTarget=this.target, damageHpBefore=this.hpBefore, damageInstance=instance;
+     if(kind==='damage'&&(!damageTarget||damageTarget.isNull())){
+      const fallback=lastBarTarget.get(this.source);
+      if(fallback&&fallback.frame===end.frame){
+       damageTarget=fallback.target;damageHpBefore=fallback.hp_before;damageInstance=fallback.instance;
+      }
+     }
+     const evidence=kind==='damage'?overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame):null;
+     if(evidence&&damageInstance) evidence.target_instance=damageInstance;
      try{record(this.source,kind,amount,end,{method:this.name,type,target:targetType},evidence);}catch(e){fatal=String(e);}
     }else{
      const after=dynamic(this.bb);

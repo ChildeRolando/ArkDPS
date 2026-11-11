@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from event_capture import CaptureRetry, LiveEventCapture
 from event_stream import StreamGap
@@ -332,6 +333,15 @@ def test_unknown_source_keeps_coverage_and_only_hides_its_overkill():
     assert row['event_coverage_complete'] is True
     assert row['observed_damage'] == 20
     assert row['overkill_damage'] is None
+
+
+def test_probe_recovers_targetless_damage_from_same_frame_elemental_bar():
+    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    assert 'lastBarTarget' in js
+    assert 'fallback.frame===end.frame' in js
+    assert 'overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame)' in js
+    # The fallback is evidence, not a bypass: the Python core still verifies HP.
+    assert 'target_instance' in js
 
 
 def test_elemental_bar_and_sourceless_burst_reach_attribution():
