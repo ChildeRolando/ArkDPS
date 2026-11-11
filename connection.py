@@ -668,6 +668,18 @@ class ForwardRegistry:
                     return
                 raise CommandError('本地端口已有本工具的其他转发')
             self.owned.pop(key)
+        # A previous ArkDPS process may have exited without removing its
+        # forward. Reuse exactly the same mapping; never grab a different
+        # remote or another serial's port.
+        listing = _run(self.run, [adb, 'forward', '--list'], 10.0)
+        if listing.returncode == 0:
+            for line in listing.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and parts[0] == serial and parts[1] == f'tcp:{local}':
+                    if parts[2] == f'tcp:{remote}':
+                        self.owned[key] = (adb, remote)
+                        return
+                    raise CommandError('本地端口已有本工具的其他转发')
         result = _run(self.run, [adb, '-s', serial, 'forward', '--no-rebind',
                                  f'tcp:{local}', f'tcp:{remote}'], 10.0)
         if result.returncode != 0:
