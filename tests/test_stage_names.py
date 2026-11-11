@@ -1,8 +1,6 @@
-"""Stage display resolution across live, history, PNG and export surfaces."""
+"""Stage display resolution across live, history and export surfaces."""
 import json
-import struct
 from pathlib import Path
-import zlib
 
 import pytest
 
@@ -10,10 +8,8 @@ import stage_names
 from battle_history import BattleHistory
 from battle_share import json_bytes, record_labels, record_stage
 from desktop_bridge import DesktopState
-from panel_model import PanelConfig
-from statistics_screenshot import statistics_png
 from test_battle_history import record
-from test_gui import sample
+from sample_data import sample
 
 MAIN = 'Obt/Main/level_main_01-07'
 ROGUE = 'Obt/Roguelike/RO6/level_rogue6_1-3'
@@ -112,7 +108,9 @@ def test_live_bridge_history_and_search_use_the_same_resolution(tmp_path):
     assert '急不可耐' in item['search'] and ROGUE.casefold() in item['search']
 
 
-def test_png_and_json_export_share_the_resolved_name_and_keep_raw_id(tmp_path):
+def test_json_export_keeps_the_resolved_name_and_the_raw_id():
+    # PNG rendering lives in the WPF client (Screenshot.cs) and paints the same
+    # resolved label; the Python worker only serialises the export payload.
     original = record(stage_id=ACTIVITY)
     label = record_labels(original)[0]
     payload = json_bytes(original)
@@ -121,17 +119,6 @@ def test_png_and_json_export_share_the_resolved_name_and_keep_raw_id(tmp_path):
     assert exported['display']['stage'] == dict(
         stage_id=ACTIVITY, stage_name=label, stage_code='OF-8', stage_zone='主舞台',
         stage_known=True, catalog_version=stage_names.catalog().data_version)
-
-    png = statistics_png(None, original, PanelConfig(), theme='lone-trail')
-    offset, text = 8, b''
-    while offset < len(png):
-        size = struct.unpack('!I', png[offset:offset+4])[0]
-        kind, data = png[offset+4:offset+8], png[offset+8:offset+8+size]
-        if kind == b'tEXt':
-            text = data
-        offset += size + 12
-    selection = json.loads(text.split(b'\0', 1)[1])
-    assert selection['stage'] == label and selection['stage_id'] == ACTIVITY
 
 
 def test_alternate_stage_ids_resolve_through_documented_aliases():

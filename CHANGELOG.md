@@ -6,7 +6,8 @@
 - MuMu 自动检测、版本门禁、事件不可用时的快照降级；不支持版本拒绝实时数值。
 - 自动换局和最近 100 局本地战绩、JSON 与统计 PNG 导出。
 - 连接设置、托盘生命周期和 GUI/HUD 布局恢复。
-- Windows x64 便携 ZIP、精确提交/逐文件摘要/产物 SHA-256、离线原生自检及 Windows CI。
+- Windows x64 WPF 便携 ZIP、精确提交/逐文件摘要/产物 SHA-256、WPF 离线验收及 Windows CI。
+- Tk 面板已封存（ARK-27）：产品 UI 只有 WPF，旧 Tk 入口、测试、验收脚本与构建工具归档到 `archive/legacy-tk`，不再产出 `ArkDPS.exe`。
 
 这是待独立验收的候选，不是已授权对外发布。认证与证据边界见
 [Windows 候选构建和验收](docs/windows-release.md)，统计机制范围仍由

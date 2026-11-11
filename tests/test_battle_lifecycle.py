@@ -460,24 +460,6 @@ def test_prototype_projection_does_not_present_partial_shares_as_full_team():
     assert sample['rows'][0]['share'] is None
 
 
-def test_gui_worker_failure_still_closes_its_owned_collector():
-    import queue
-    from app import App
-    window = App.__new__(App)
-    window.events = queue.Queue()
-    owned = SimpleNamespace(closed=False)
-    owned.close = lambda: setattr(owned, 'closed', True)
-    window.collector = owned
-
-    def disk_failure():
-        raise OSError('capture log unavailable')
-
-    window._collect = disk_failure
-    window.collect()
-    assert owned.closed and window.collector is None
-    assert window.events.get() == ('error', 'capture log unavailable')
-
-
 def test_terminal_same_frame_revisions_are_kept_until_confirmed_scene_exit():
     # OF-8 native samples: 2964 / 98.79990577697754, first state=3 then a
     # later accounting revision at exactly that frame/time (host aef6051).

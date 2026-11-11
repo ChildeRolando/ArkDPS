@@ -19,7 +19,7 @@ from panel_model import PanelConfig
 from stats_core import Statistics
 from test_battle_history import record
 from test_battle_share import exported_record
-from test_gui import sample
+from sample_data import sample
 
 
 def cmd(state, op, **fields):
@@ -482,9 +482,16 @@ def test_default_app_entry_routes_to_wpf_not_tk(monkeypatch):
     calls = []
     monkeypatch.setattr(sys, 'argv', ['app.py', '--no-events'])
     monkeypatch.setattr(desktop_launcher, 'launch', lambda args: calls.append(args))
-    monkeypatch.setattr(app.tk, 'Tk', lambda: pytest.fail('default launch created Tk'))
     app.main()
     assert len(calls) == 1 and calls[0].frida_remote == ''
+
+
+def test_app_entry_never_imports_tk():
+    # The sealed Tk panel must not come back through the product entry point.
+    result = subprocess.run([sys.executable, '-c',
+        "import app, sys; assert 'tkinter' not in sys.modules"],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_real_metadata_key_and_invalid_manual_connection(tmp_path):
@@ -517,44 +524,24 @@ def test_rescan_retains_effective_cli_target_until_explicit_settings_apply(tmp_p
     assert state.connection != override
 
 
-@pytest.mark.parametrize('frozen', [False, True])
-def test_main_merge_self_test_precedes_wpf_and_legacy_startup(tmp_path, monkeypatch, frozen):
+@pytest.mark.parametrize('flag,args,needle', [
+    ('--legacy-tk', [], '--legacy-tk'),
+    ('--self-test', ['out'], 'verify_wpf'),
+    ('--acceptance-output', ['out', '--acceptance-seconds', '1'], 'verify_wpf'),
+    ('--acceptance-seconds', ['1'], 'verify_wpf'),
+])
+def test_removed_tk_flags_are_rejected_before_any_startup(tmp_path, monkeypatch, capsys,
+                                                          flag, args, needle):
     import app
     import desktop_launcher
-    import release_smoke
-    calls = []
-    monkeypatch.setattr(sys, 'frozen', frozen, raising=False)
-    monkeypatch.setattr(sys, 'argv', ['app.py', '--self-test', str(tmp_path/'smoke')])
-    monkeypatch.setattr(release_smoke, 'run_smoke', lambda output: calls.append(output) or 7)
-    monkeypatch.setattr(desktop_launcher, 'launch', lambda _: pytest.fail('self-test launched WPF'))
-    monkeypatch.setattr(app, 'LayoutStore', lambda: pytest.fail('self-test loaded production settings'))
+    monkeypatch.setattr(sys, 'argv', ['app.py', flag, *args])
+    monkeypatch.setattr(desktop_launcher, 'launch', lambda _: pytest.fail('removed flag launched WPF'))
     with pytest.raises(SystemExit) as exc:
         app.main()
-    assert exc.value.code == 7
-    assert calls == [tmp_path/'smoke']
-    assert not (tmp_path/'smoke').exists()  # mocked self-test; no GUI/collector
-
-
-@pytest.mark.parametrize('mode', ['explicit-tk', 'measurement', 'frozen-tk'])
-def test_main_merge_legacy_release_modes_do_not_launch_source_wpf(tmp_path, monkeypatch, mode):
-    import app
-    import desktop_launcher
-    class ReachedLegacyLayout(Exception):
-        pass
-    arguments = ['app.py']
-    if mode == 'explicit-tk':
-        arguments.append('--legacy-tk')
-    elif mode == 'measurement':
-        arguments += ['--acceptance-output', str(tmp_path/'measure'), '--acceptance-seconds', '1']
-    monkeypatch.setattr(sys, 'argv', arguments)
-    monkeypatch.setattr(sys, 'frozen', mode == 'frozen-tk', raising=False)
-    monkeypatch.setattr(desktop_launcher, 'launch', lambda _: pytest.fail('legacy mode launched WPF'))
-    def stop_before_gui_or_collection():
-        raise ReachedLegacyLayout()
-    monkeypatch.setattr(app, 'LayoutStore', stop_before_gui_or_collection)
-    with pytest.raises(ReachedLegacyLayout):
-        app.main()
-    assert not (tmp_path/'measure').exists()
+    assert exc.value.code == 2
+    error = capsys.readouterr().err
+    assert '已封存' in error and needle in error
+    assert not (tmp_path / 'out').exists()
 
 
 def test_history_event_refreshes_records_before_the_next_snapshot(tmp_path):

@@ -18,10 +18,15 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from release_identity import candidate_head
 PYTHON_URL = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip'
 PYTHON_SHA256 = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
 FRIDA_VERSION = '17.26.1'
 FRIDA_SHA256 = 'f4f6875afed9f0c493af790b2b2d18fe9bfb379a35ecb708f14c2d4b15df6e1e'
+# Nothing Tk-shaped may reach the portable package: the panel is sealed and the
+# WPF client renders every surface itself.
+TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', 'tcl86t')
 BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py',
            'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py',
            'connection.py', 'event_capture.py', 'event_observer.py', 'event_stream.py',
@@ -54,9 +59,16 @@ def unpack(source, destination):
         archive.extractall(destination)
 
 
+def assert_no_tk_files(names):
+    """The manifest itself must prove no Tk/Tcl runtime or screenshot code shipped."""
+    bad = sorted(name for name in names
+                 if any(marker in name.lower() for marker in TK_MARKERS))
+    if bad:
+        raise RuntimeError('Sealed Tk artifacts in package: ' + ', '.join(bad))
+
+
 def build(output, *, python_zip=None, frida_wheel=None, with_events=True):
-    if subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True).strip():
-        raise RuntimeError('Release packages require a clean committed source tree')
+    head = candidate_head(ROOT)
     output.mkdir(parents=True, exist_ok=True)
     inputs = Path(tempfile.mkdtemp(prefix='inputs-', dir=output))
     if python_zip is None:
@@ -101,11 +113,12 @@ def build(output, *, python_zip=None, frida_wheel=None, with_events=True):
     # Python LICENSE.txt and Frida dist-info/licenses/COPYING stay in their archives.
     manifest = dict(format=1, protocol=1, target_framework='net10.0-windows',
         dotnet_sdk=subprocess.check_output([dotnet_executable,'--version'],cwd=ROOT,text=True).strip(),
-        dotnet_runtime=json.loads((bundle/'ArkDPS.Desktop.runtimeconfig.json').read_text('utf-8')), head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+        dotnet_runtime=json.loads((bundle/'ArkDPS.Desktop.runtimeconfig.json').read_text('utf-8')), head=head,
         collector_sha256=digest(collector/'desktop_bridge.py'), python='3.12.10',
         python_source=PYTHON_URL, python_archive_sha256=PYTHON_SHA256,
         frida=FRIDA_VERSION if with_events else None, frida_wheel_sha256=FRIDA_SHA256 if with_events else None,
         files={str(p.relative_to(bundle)).replace('\\','/'):digest(p) for p in sorted(bundle.rglob('*')) if p.is_file()})
+    assert_no_tk_files(manifest['files'])
     (bundle/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     (bundle/'使用说明.txt').write_text('双击 ArkDPS.Desktop.exe。两端和运行时随同一包发布，无需安装 Python 或 .NET。\n'
         '请解压到可写目录；配置和历史在 collector/runtime。整个目录一起替换，不混用旧 worker。\n'

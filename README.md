@@ -6,15 +6,11 @@
 
 实测依据见 [底层能力报告](docs/capability-validation.md)及[补充实验](docs/recovery-validation.md)，覆盖已测数值盾、召唤伤害/治疗/护盾归属及实时事件。最新产品决定不做独立重连恢复需求：中途启动读取已有伤害/治疗累计，DPS/HPS 从可靠采集时起算。此前护盾累计无法补读已记入 [开发备忘](docs/development-notes.md)，不阻塞开发。研究证据不等于所有机制均已通过产品验收；以下限制仍适用。
 
-旧 Tk 仅保留为 `python app.py --legacy-tk` 诊断入口；不能用其截图或验收结果替代 WPF 候选证据。
+产品 UI 只有 C#/WPF（`desktop/ArkDPS.Desktop`）。旧 Tk 面板已归档封存到 `archive/legacy-tk`，不再支持、不得运行，其截图/回执与 ARK-14 旧结论都不能作为当前验收证据；UI 验收统一走 `acceptance/verify_wpf.py`。
 
-## ARK-14 旧 Tk 便携候选
+## Windows 分发
 
-`1.0.0-rc.1` 可在 Windows x64 构建为无需系统 Python 的完整 ZIP。先比对产物 SHA-256，再解压到用户可写目录并运行 `ArkDPS.exe`。不只复制 EXE；配置和最近 100 局历史保存在程序旁 `runtime/`。升级请解压到新目录后仅迁移已备份的 `runtime/`。
-
-候选内置 Frida 17.26.1 **客户端**，不附带或自动启动设备端 server；无端点会降级到伤害/治疗快照，事件指标未知。初版仅以 MuMu 12 / Android 2.7.91 为兼容目标；未获得对外发布授权。安装、自检、构建、许可与验收矩阵详见 [发布说明](docs/windows-release.md) 和 [变更日志](CHANGELOG.md)。以下 `start.cmd` 是**源码运行**入口，不是便携版安装步骤。
-
-此节及 `tools/build_windows.py` 保留 ARK-14 的旧 Tk 构建/自检链路，不是当前 WPF 分发入口；WPF 同包构建与验收以 [桌面运行时](docs/desktop-runtime.md) 为准，旧候选实机结论不能继承给 WPF。
+`1.0.0-rc.1` 以 WPF 便携 ZIP 分发：解压到用户可写目录，运行 `ArkDPS.Desktop.exe`，包内自带 .NET 与 Python 3.12.10，不需要系统 Python。构建用 `python tools/package_windows.py`，验收用 `acceptance/verify_wpf.py` 与 `acceptance/verify_wpf_package.py`。初版仅以 MuMu 12 / Android 2.7.91 为兼容目标；未获得对外发布授权。构建、许可与验收矩阵详见[发布说明](docs/windows-release.md) 和 [变更日志](CHANGELOG.md)。`start.cmd` 是**源码运行**入口，不是便携版安装步骤。
 
 ## 文档导航
 
