@@ -66,6 +66,11 @@ def build_owner_map(roster: RosterSnapshot) -> OwnerMap:
     for token in roster.entries:
         if not token.is_token:
             continue
+        # A proven map-device namespace stays non-team even if the roster
+        # exposes it as a token with no resolvable host (e.g. stage summons
+        # such as trap_016_peon). It must not block event coverage.
+        if classify_unmapped_source(token.cid) is not None:
+            continue
         hosts = by_uid.get(token.host_uid, []) if token.host_uid is not None else []
         hosts = [h for h in hosts if h.cid == token.host_key]
         host_by_key = {(h.cid, h.unique_id): h for h in hosts}

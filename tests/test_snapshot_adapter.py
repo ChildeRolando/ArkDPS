@@ -585,3 +585,18 @@ def test_ambiguous_trap_key_is_not_reclassified_as_non_team():
     assert result['non_team_sources'] == []
     assert result['unknown_sources'] == ['trap_321_shnbox']
     assert result['totals_complete'] is False
+
+
+def test_stage_trap_roster_token_is_non_team_and_does_not_block_events():
+    trap = entry('trap_016_peon', 99, token=True)
+    mapping = build_owner_map(roster([CHAR_A, trap], frame=1))
+    assert 'trap_016_peon' not in mapping.unknown_token_cids
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('trap_016_peon', 0)], 0, 1),
+                   roster([CHAR_A, trap], frame=1))
+    result = adapter.result()
+    assert result['unknown_sources'] == []
+    assert result['non_team_sources'] == ['trap_016_peon']
+    assert result['non_team_output'] == {'trap_016_peon': {'damage': 0.0, 'healing': 0.0}}
+    assert result['totals_complete'] is True
+    adapter.start_events(session='battle-1', frame=1, sequence=0)

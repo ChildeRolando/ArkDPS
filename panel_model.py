@@ -143,6 +143,13 @@ def format_percent(value: float | None) -> str:
     return f'{value * 100:.1f}%'
 
 
+def format_one_decimal(value: float | None) -> str:
+    """User-visible number with at most one decimal place."""
+    if value is None or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return '—'
+    return f'{value:.1f}'.rstrip('0').rstrip('.')
+
+
 @dataclass(frozen=True)
 class PanelConfig:
     panel_id: str = 'default'
@@ -239,6 +246,7 @@ class PanelSourceRow:
     overkill_type_complete: bool = False
     counter_complete: bool = True
     event_complete: bool = True
+    event_coverage_end: float | None = None
     sources: tuple[str, ...] = ()
     # A window certifies that the full expected recent interval was observed.
     recent_damage_window: tuple[float, float] | None = None
@@ -318,6 +326,7 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             recent_shield_window=row.get('recent_shield_window'),
             counter_complete=bool(row.get('counter_snapshot_complete', True)),
             event_complete=bool(row.get('event_coverage_complete', True)),
+            event_coverage_end=row.get('event_coverage_end'),
             sources=tuple(row.get('sources') or ()),
         ))
     return rows
@@ -604,6 +613,15 @@ def render_panel(config: PanelConfig,
                                        else ((), False))
         share = (value / team_denominator
                  if share_known and team_denominator > 0 else None)
+        if row.event_complete:
+            event_reason = ''
+        elif rate_reason:
+            event_reason = rate_reason
+        elif _finite(row.event_coverage_end):
+            event_reason = ('事件仅覆盖到 ' + format_one_decimal(row.event_coverage_end)
+                            + ' 游戏秒，之后未知')
+        else:
+            event_reason = '事件观测未建立覆盖'
         rate = None
         rate_state, rate_text, rate_note = (
             ('unsupported', '', '') if not rate_supported else ('unknown', '—', ''))
@@ -632,6 +650,8 @@ def render_panel(config: PanelConfig,
                                                 if row.overkill_type_complete else None),
                     'overkill_type_complete': row.overkill_type_complete,
                     'overkill_coverage_complete': row.overkill_complete,
+                    'event_coverage_complete': row.event_complete,
+                    'event_reason': event_reason,
                     'active_damage': row.active_damage,
                     'active_healing': row.active_healing,
                     'observed_damage': row.observed_damage,

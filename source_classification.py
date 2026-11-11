@@ -8,9 +8,12 @@ non-team source instead of blocking the whole panel.
 
 Only verified client prefab namespaces are recognised. Squad operators use
 ``char_``, summons/deployables use ``token_`` and map devices/traps use
-``trap_`` (the same split the deployment reader relies on). Everything else --
-including any ``char_``/``token_`` key without a unique host -- stays unknown,
-because misclassifying it would silently drop real team output.
+``trap_`` (the same split the deployment reader relies on). A ``trap_`` prefix
+is proof of a stage/map prop even when the roster also exposes it as a token
+with no resolvable host, so it is classified before the roster check.
+Everything else -- including any ``char_``/``token_`` key without a unique
+host -- stays unknown, because misclassifying it would silently drop real team
+output.
 """
 
 NON_TEAM_CLASSES = (
@@ -23,12 +26,14 @@ def classify_unmapped_source(cid, roster_cids=()):
 
     ``roster_cids`` are the statistic keys the current roster already accounts
     for (squad operators, mapped summons or independently attributed map
-    units). A key present there is never classified: its ownership belongs to
-    the roster evidence, not to a naming convention.
+    units). A recognised non-team prefix is classified before this check; any
+    other key present there is never classified by naming convention alone.
     """
-    if not isinstance(cid, str) or not cid or cid in roster_cids:
+    if not isinstance(cid, str) or not cid:
         return None
     for prefix, kind, label in NON_TEAM_CLASSES:
         if cid.startswith(prefix):
             return kind, label
+    if cid in roster_cids:
+        return None
     return None

@@ -455,3 +455,18 @@ def test_render_panel_keeps_non_team_note_when_shares_are_known():
     view = render_panel(total(), rows, team_note='已排除非队伍来源：trap_x')
     assert view.share_known is True
     assert view.share_note == '已排除非队伍来源：trap_x'
+
+
+def test_event_unknown_reason_is_specific_for_failed_and_partial_coverage():
+    row = src('A', damage=100)
+    row.event_complete = False
+    failed = EventAvailability(status='failed',
+                               error='unable to connect to remote frida-server', live=True)
+    view = render_panel(PanelConfig(), [row], event=failed)
+    reason = view.entries[0].detail['event_reason']
+    assert '事件观测未连接' in reason
+    assert 'unable to connect to remote frida-server' in reason
+
+    row.event_coverage_end = 12.34
+    partial = render_panel(PanelConfig(), [row], event=EventAvailability(status='recording'))
+    assert partial.entries[0].detail['event_reason'] == '事件仅覆盖到 12.3 游戏秒，之后未知'

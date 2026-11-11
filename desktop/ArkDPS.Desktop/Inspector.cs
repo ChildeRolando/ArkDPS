@@ -50,7 +50,7 @@ public sealed class Inspector : Border
             var overkillTypes=row.Get("overkill_damage_by_type");
             body.Children.Add(Text("物理 "+overkillTypes.Ui("physical")+" · 法术 "+overkillTypes.Ui("arts")+" · 元素 "+overkillTypes.Ui("elemental")+" · 真实 "+overkillTypes.Ui("true"),10,false,"Muted",new Thickness(0,2,0,0)));
         }
-        body.Children.Add(Text(OverkillNote(row),11,false,"Muted",new Thickness(0,6,0,0)));
+        body.Children.Add(Text(OverkillNote(row,view),11,false,"Muted",new Thickness(0,6,0,0)));
         Section("独立接敌速率");
         var rates=view.Get("rates").Get(owner);
         var damageRate=rates.Get("damage");var healingRate=rates.Get("healing");
@@ -72,11 +72,13 @@ public sealed class Inspector : Border
         Pair("快照起点",row.Ui("coverage_start"));
         Pair("事件起点",row.Ui("shield_coverage_start"));Pair("事件终点",row.Ui("event_coverage_end"));
         body.Children.Add(Text(row.Bool("counter_snapshot_complete") ? "累计快照完整" : "累计快照不完整",11,false,"Muted",new Thickness(0,10,0,0)));
-        // 未建立事件覆盖与“覆盖到某点后中断”必须可区分；未覆盖区间不补零。
-        bool events=row.Get("shield_coverage_start").ValueKind==JsonValueKind.Number;
-        string coverage=!events ? "未建立事件覆盖 · 接敌与护盾保持未知，不补零"
-            : row.Bool("event_coverage_complete") ? "事件覆盖完整"
-            : "事件仅覆盖到 "+row.Ui("event_coverage_end")+" 游戏秒 · 之后未知，不补零";
+        // 未建立事件覆盖、覆盖到某点后中断或单事件缺口必须给出具体原因。
+        var eventReason=view.Text("rate_reason");
+        string coverage=row.Bool("event_coverage_complete") ? "事件完整覆盖"
+            : (eventReason.Length>0 ? eventReason : "事件覆盖不完整，原因未知")
+              +(row.Get("event_coverage_end").ValueKind==JsonValueKind.Number
+                ? "（已覆盖至 "+row.Ui("event_coverage_end")+" 游戏秒）" : "")
+              +" · 未覆盖区间保持未知，不补零";
         body.Children.Add(Text(coverage,11,false,"Muted"));
         if(row.Bool("shield_unknown"))
             body.Children.Add(Text("护盾事件不完整 · 伤害/接敌/过量继续",11,false,"Muted"));
@@ -91,11 +93,16 @@ public sealed class Inspector : Border
         var text=rate.Text("text");
         return text.Length>0 ? text : row.Ui(exact);
     }
-    private static string OverkillNote(JsonElement row)
+    private static string OverkillNote(JsonElement row,JsonElement view)
     {
         if(row.Bool("overkill_coverage_complete") && row.Get("overkill_damage").ValueKind==JsonValueKind.Number)
             return "总伤害仍含过量；过量只用于查看，不改变伤害排行、柱长或占比，并已排除护盾/抵挡吸收。";
-        if(!row.Bool("event_coverage_complete")) return "总伤害仍含过量；事件覆盖不完整，过量未知（不记零）。";
+        if(!row.Bool("event_coverage_complete"))
+        {
+            string reason=view.Text("rate_reason");
+            if(reason.Length==0) reason="事件观测未建立覆盖或已中断";
+            return "总伤害仍含过量；"+reason+"；过量未知（不记零）。";
+        }
         return "总伤害仍含过量；目标或实际扣血证据不足，过量未知（不记零）。";
     }
     private void Section(string title)
