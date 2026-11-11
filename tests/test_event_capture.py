@@ -342,6 +342,7 @@ def test_probe_recovers_targetless_damage_from_same_frame_elemental_bar():
     assert 'overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame)' in js
     # The fallback is evidence, not a bypass: the Python core still verifies HP.
     assert 'target_instance' in js
+    assert "record(this.source,'hp_damage'" in js
 
 
 def test_elemental_bar_and_sourceless_burst_reach_attribution():

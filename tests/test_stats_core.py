@@ -281,6 +281,32 @@ def test_friendly_self_damage_does_not_enter_engagement_dps():
 
 
 
+def test_hp_damage_events_provide_target_overkill():
+    s = Statistics('hp', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
+    s.advance(2)
+    s.event('hp1', 1, 'a', 'hp_damage', 150, target='enemy_1',
+            hp_before=100, shield_absorbed=0)
+    s.event('hp2', 1.5, 'a', 'hp_damage', 50, target='enemy_2',
+            hp_before=100, shield_absorbed=0)
+    row = s.result()['rows']['A']
+    assert row['overkill_damage'] == 50
+    assert row['overkill_coverage_complete'] is True
+    assert row['effective_damage'] == 950
+
+
+def test_hp_damage_missing_hp_or_shield_stays_unknown():
+    s = Statistics('hp-unknown', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
+    s.advance(2)
+    s.event('hp1', 1, 'a', 'hp_damage', 150, target='enemy_1', hp_before=None)
+    row = s.result()['rows']['A']
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_complete'] is False
+
+
 @pytest.mark.parametrize('evidence', [
     {},
     {'target': None, 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': True},

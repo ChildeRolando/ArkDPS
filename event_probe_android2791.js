@@ -142,7 +142,8 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     this.when=time();
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
     if(this.name.endsWith('.OnAfterOutputDamage')){
-     this.mod=args[0];
+     // args[0] is the hidden IL2CPP `this` receiver; modifier is args[1].
+     this.mod=args[1];
      try{
       this.target=this.mod.add(0x10).readPointer();
       this.hpBefore=targetHp(this.target);
@@ -154,10 +155,10 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     }
     if(this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      // Signature: OnTakeDamage(Modifier& modifier, bool force), invoked on the
-     // target entity. The modifier carries m_target/m_source and value.
-     this.mod=args[0];
+     // target entity. args[0] is hidden `this`; modifier is args[1].
+     this.receiver=args[0];this.mod=args[1];
      try{
-      this.target=this.mod.add(0x10).readPointer();
+      this.target=this.receiver&&!this.receiver.isNull()?this.receiver:this.mod.add(0x10).readPointer();
       this.hpBefore=targetHp(this.target);
       this.source=entityId(this.mod.readPointer());
       this.amount=fp(this.mod.add(0x30));
@@ -167,6 +168,11 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     }
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
+     if(this.name==='Unit.OnTakeDamage'&&this.source&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
+      const targetKeyValue=targetKey(this.target)||this.target.toString();
+      const shield=shieldContextUnknown(end.frame,this.target)?null:shieldTotal(end.frame,this.target);
+      try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()});}catch(e){fatal=String(e);}
+     }
      const hpAfter=targetHp(this.target);
      hpContext.push({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
       source:this.source||null,target:targetKey(this.target)||this.target.toString(),

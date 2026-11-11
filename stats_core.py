@@ -37,6 +37,11 @@ class Statistics:
         self.overkill = {}
         self.overkill_events = deque()
         self.overkill_incomplete = set()
+        # Target-side HP events are an independent, authoritative overkill
+        # source: amount minus observed shield absorption minus HP before.
+        self.hp_overkill = {}
+        self.hp_overkill_incomplete = set()
+        self.hp_seen = set()
         self.overkill_reason = {}
         # Elemental bar damage is not HP damage; only its source matters.
         self.last_elemental = {}
@@ -339,7 +344,7 @@ class Statistics:
         self._amount(amount)
         if not self.event_coverage or self.event_coverage_end is not None or not self.baseline_ready:
             raise ValueError('event coverage or baseline is unavailable')
-        kinds = ('damage', 'healing', 'shield_absorbed', 'elemental_bar', 'elemental_burst')
+        kinds = ('damage', 'healing', 'shield_absorbed', 'elemental_bar', 'elemental_burst', 'hp_damage')
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
         if kind != 'elemental_burst' and source not in self.owners:
@@ -348,8 +353,8 @@ class Statistics:
             raise ValueError('invalid burst source')
         evidence = (target, real_delta, hp_before, hp_after, killed,
                     target_type, damage_type, cancel_reason, shield_absorbed)
-        if kind not in ('damage', 'elemental_burst') and any(value is not None for value in evidence):
-            raise ValueError('damage evidence is only valid for damage or burst')
+        if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
+            raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
         payload = (game_time, source, kind, amount, evidence, target_instance)
         if event_id in self.events:
             if self.events[event_id] != payload:
@@ -411,6 +416,28 @@ class Statistics:
             else:
                 self.overkill_incomplete.add(owner)
                 self.overkill_reason[owner] = reason
+        if kind == 'hp_damage':
+            if not isinstance(target, str) or not target:
+                self.hp_seen.add(owner)
+                self.hp_overkill_incomplete.add(owner)
+                return
+            # Friendly/self damage is not outgoing HP damage for DPS/overkill.
+            if target.startswith('char_') or target.startswith('token_'):
+                return
+            self.hp_seen.add(owner)
+            tolerance = max(0.01, amount * 1e-6)
+            if not self._optional_number(hp_before) or hp_before < 0:
+                self.hp_overkill_incomplete.add(owner)
+                return
+            if amount <= hp_before + tolerance:
+                overkill = 0.0
+            else:
+                if not self._optional_number(shield_absorbed) or shield_absorbed < 0:
+                    self.hp_overkill_incomplete.add(owner)
+                    return
+                overkill = max(0.0, amount - shield_absorbed - hp_before)
+            self.hp_overkill[owner] = self.hp_overkill.get(owner, 0.0) + overkill
+            return
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
         elif kind in ('damage', 'healing') and amount > 0:
@@ -560,6 +587,18 @@ class Statistics:
                     types = row['overkill_damage_by_type']
                     if types is not None:
                         types['elemental'] = types.get('elemental', 0.0) + burst['overkill']
+            if owner in self.hp_seen:
+                hp_known = bool(self.event_coverage) and owner not in self.hp_overkill_incomplete
+                if hp_known:
+                    row['overkill_damage'] = self.hp_overkill.get(owner, 0.0)
+                    row['overkill_coverage_complete'] = True
+                    row['overkill_unknown_reason'] = None
+                    row['overkill_damage_by_type'] = None
+                    row['overkill_type_complete'] = False
+                else:
+                    row['overkill_damage'] = None
+                    row['overkill_coverage_complete'] = False
+                    row['overkill_unknown_reason'] = '目标掉血证据不完整'
             if row['damage'] is not None and row['overkill_damage'] is not None:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
