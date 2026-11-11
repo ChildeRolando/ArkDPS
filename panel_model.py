@@ -244,6 +244,7 @@ class PanelSourceRow:
     overkill_by_type: Mapping[str, float] | None = None
     overkill_complete: bool = False
     overkill_type_complete: bool = False
+    overkill_unknown_reason: str | None = None
     counter_complete: bool = True
     event_complete: bool = True
     event_coverage_end: float | None = None
@@ -321,6 +322,7 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             overkill_by_type=row.get('overkill_damage_by_type'),
             overkill_complete=bool(row.get('overkill_coverage_complete', False)),
             overkill_type_complete=bool(row.get('overkill_type_complete', False)),
+            overkill_unknown_reason=row.get('overkill_unknown_reason'),
             recent_damage_window=row.get('recent_damage_window'),
             recent_healing_window=row.get('recent_healing_window'),
             recent_shield_window=row.get('recent_shield_window'),
@@ -650,6 +652,7 @@ def render_panel(config: PanelConfig,
                                                 if row.overkill_type_complete else None),
                     'overkill_type_complete': row.overkill_type_complete,
                     'overkill_coverage_complete': row.overkill_complete,
+                    'overkill_unknown_reason': row.overkill_unknown_reason,
                     'event_coverage_complete': row.event_complete,
                     'event_reason': event_reason,
                     'active_damage': row.active_damage,

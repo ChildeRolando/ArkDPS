@@ -25,6 +25,7 @@ FRIDA_SHA256 = 'f4f6875afed9f0c493af790b2b2d18fe9bfb379a35ecb708f14c2d4b15df6e1e
 BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py',
            'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py',
            'connection.py', 'event_capture.py', 'event_observer.py', 'event_stream.py',
+           'frida_provision.py',
            'character_catalog.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
            'stage_names.py', 'stats_core.py',

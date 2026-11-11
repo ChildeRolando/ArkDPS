@@ -25,9 +25,12 @@ internal static class Screenshot
         var detail=entry.Get("detail");var value=detail.Get("overkill_damage");
         if(value.ValueKind==JsonValueKind.Number) return "过量 "+Json.UiText(value.GetRawText())+" · 总伤害含过量";
         var reason=detail.Text("event_reason");
-        return detail.Bool("event_coverage_complete")
-            ? "过量 — · 证据不足"
-            : "过量 — · "+(reason.Length>0 ? reason : "事件未完整覆盖");
+        if(detail.Bool("event_coverage_complete"))
+        {
+            var overkillReason=detail.Text("overkill_unknown_reason");
+            return "过量 — · "+(overkillReason.Length>0 ? overkillReason : "证据不足");
+        }
+        return "过量 — · "+(reason.Length>0 ? reason : "事件未完整覆盖");
     }
     public static byte[] Statistics(JsonElement selected,string theme)
     {

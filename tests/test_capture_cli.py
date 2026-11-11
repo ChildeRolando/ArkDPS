@@ -114,12 +114,12 @@ def test_cli_start_failure_reports_readiness_and_optionally_continues_snapshots(
             capture_cli.run_capture(args, session_factory=factory)
     else:
         capture_cli.run_capture(args, session_factory=factory)
-    summary = json.loads((args.output_dir / 'summary.json').read_text())
+    summary = json.loads((args.output_dir / 'summary.json').read_text(encoding='utf-8'))
     if require_events:
         assert not (args.output_dir / 'READY.json').exists()
         assert summary['samples'] == 0 and 'optional frida missing' in summary['error']
     else:
-        ready = json.loads((args.output_dir / 'READY.json').read_text())
+        ready = json.loads((args.output_dir / 'READY.json').read_text(encoding='utf-8'))
         assert ready['event_status'] == 'failed' and ready['event_error'] == 'optional frida missing'
         assert summary['error'] is None and summary['samples'] == 1
         assert summary['last_sample']['event_status'] == 'failed'

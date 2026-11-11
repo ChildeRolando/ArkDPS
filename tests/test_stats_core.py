@@ -417,3 +417,13 @@ def test_unrecovered_gap_is_not_sealed_by_the_battle_end():
     result = s.result()
     assert result['totals_complete'] is False
     assert result['rows']['A']['counter_snapshot_complete'] is False
+
+
+def test_overkill_unknown_reason_names_missing_absorption_context():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    overkill(s, 'kill-without-context', 200, 44, 44, 0, shield_absorbed=None)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] is None
+    assert '护盾/抵挡吸收上下文' in row['overkill_unknown_reason']

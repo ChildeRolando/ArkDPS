@@ -103,7 +103,8 @@ public sealed class Inspector : Border
             if(reason.Length==0) reason="事件观测未建立覆盖或已中断";
             return "总伤害仍含过量；"+reason+"；过量未知（不记零）。";
         }
-        return "总伤害仍含过量；目标或实际扣血证据不足，过量未知（不记零）。";
+        var overkillReason=row.Text("overkill_unknown_reason");
+        return "总伤害仍含过量；"+(overkillReason.Length>0 ? overkillReason : "目标或实际扣血证据不足")+"；过量未知（不记零）。";
     }
     private void Section(string title)
     {

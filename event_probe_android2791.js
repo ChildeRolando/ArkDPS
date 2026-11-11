@@ -125,7 +125,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
-     try{this.source=entityId(this.mod.readPointer());}catch(e){damageUnknown=true;engagementUnknown=true;this.ignore=true;return;}
+     try{this.source=entityId(this.mod.readPointer());}catch(e){skippedUnattributed++;this.ignore=true;return;}
      if(!own(this.source)){this.ignore=true;return;}
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
      return;
@@ -141,7 +141,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(args[2].add(0x30));
     if(!Number.isFinite(this.before)||this.before<0||!Number.isFinite(this.incoming)||this.incoming<0){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=true;return;}
    }catch(e){
-    if(this.name==='Entity.ApplyModifier'){if(this.source&&own(this.source))unknownSources.add(this.source);else{damageUnknown=true;engagementUnknown=true;}}
+    if(this.name==='Entity.ApplyModifier'){if(this.source&&own(this.source))unknownSources.add(this.source);else{skippedUnattributed++;}}
     else{shieldUnknown=true;markShieldUnknown(this.when?this.when.frame:null,this.damageTarget);}
     this.ignore=true;
    }
@@ -165,7 +165,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      noteShield(this.when.frame,this.damageTarget,this.amount);
     }
    }catch(e){
-    if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{damageUnknown=true;engagementUnknown=true;}}
+    if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}}
     else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);}
    }finally{if(this.started)active--;}
   }

@@ -36,6 +36,7 @@ class Statistics:
         # settlement evidence. Any unverifiable damage event makes it unknown.
         self.overkill = {}
         self.overkill_incomplete = set()
+        self.overkill_reason = {}
         # Per-type overkill is a separate subset. It stays unknown if a lethal
         # event has overkill but no recognised native damage type.
         self.overkill_by_type = {}
@@ -262,49 +263,45 @@ class Statistics:
                   killed, target_type, damage_type, cancel_reason, shield_absorbed):
         """Derive one hit's overkill from native settlement evidence.
 
-        ``amount`` is the native modifier value before shield/block settlement:
-        captured frame 697 recorded ``m_value`` 14, ``realDelta`` 0 and unchanged
-        HP while ``BlockDamage`` absorbed the same 14. Absorbed damage therefore
-        has to be subtracted here instead of being assumed out of ``amount``.
-        ``real_delta`` is the native signed HP delta (negative for damage).
-        Only a target whose HP actually reached zero can have overkill, and only
-        a lethal hit needs the absorption context. Returns ``(known, value)``;
-        any missing or contradictory field keeps the whole per-owner metric
-        unknown instead of publishing a guess or zero.
+        Returns ``(known, value, reason)``. On failure ``reason`` names the
+        missing or contradictory evidence so the UI can explain the unknown.
         """
-        if (not isinstance(target, str) or not target
-                or type(killed) is not bool
-                or target_type is not None and (type(target_type) is not int)
-                or damage_type is not None and (type(damage_type) is not int)
-                or cancel_reason is not None and (type(cancel_reason) is not int)
-                or not all(self._optional_number(v) for v in
-                           (real_delta, hp_before, hp_after))
-                or real_delta > 0 or hp_before < 0 or hp_after < 0
-                or (shield_absorbed is not None
-                    and (not self._optional_number(shield_absorbed)
-                         or shield_absorbed < 0))):
-            return False, 0.0
+        if not isinstance(target, str) or not target:
+            return False, 0.0, '伤害事件缺少目标身份'
+        if type(killed) is not bool:
+            return False, 0.0, '伤害事件缺少击杀标记'
+        if target_type is not None and type(target_type) is not int:
+            return False, 0.0, '目标类型无效'
+        if damage_type is not None and type(damage_type) is not int:
+            return False, 0.0, '伤害类型无效'
+        if cancel_reason is not None and type(cancel_reason) is not int:
+            return False, 0.0, '取消原因无效'
+        if not all(self._optional_number(v) for v in (real_delta, hp_before, hp_after)):
+            return False, 0.0, '伤害事件缺少目标 HP 或实际扣血'
+        if real_delta > 0 or hp_before < 0 or hp_after < 0:
+            return False, 0.0, '目标 HP 或扣血数值无效'
+        if (shield_absorbed is not None
+                and (not self._optional_number(shield_absorbed) or shield_absorbed < 0)):
+            return False, 0.0, '护盾/抵挡吸收数值无效'
         actual = -real_delta
         tolerance = max(0.01, amount * 1e-6)
         if actual > amount + tolerance:
-            return False, 0.0
+            return False, 0.0, '实际扣血超过结算伤害'
         if abs((hp_before - hp_after) - actual) > tolerance:
-            return False, 0.0
+            return False, 0.0, '目标 HP 变化与实际扣血不一致'
         if killed and hp_after > tolerance:
-            return False, 0.0
+            return False, 0.0, '击杀标记与目标 HP 不一致'
         if not killed and hp_after <= tolerance:
-            return False, 0.0
+            return False, 0.0, '击杀标记与目标 HP 不一致'
         if not killed:
-            return True, 0.0
+            return True, 0.0, ''
         if shield_absorbed is None:
-            # Absorption happens before the HP delta, so a lethal hit without
-            # that context cannot separate absorbed damage from overkill.
-            return False, 0.0
+            return False, 0.0, '击杀缺少护盾/抵挡吸收上下文'
         if shield_absorbed > amount + tolerance:
-            return False, 0.0
+            return False, 0.0, '护盾吸收超过结算伤害'
         if actual + shield_absorbed > amount + tolerance:
-            return False, 0.0
-        return True, max(0.0, amount - shield_absorbed - actual)
+            return False, 0.0, '护盾吸收与实际扣血之和不一致'
+        return True, max(0.0, amount - shield_absorbed - actual), ''
 
     def event(self, event_id, game_time, source, kind, amount, *,
               target=None, real_delta=None, hp_before=None, hp_after=None,
@@ -346,7 +343,7 @@ class Statistics:
         self.last_event_time = game_time
         owner = self.owners[source]
         if kind == 'damage':
-            known, overkill = self._overkill(
+            known, overkill, reason = self._overkill(
                 amount, target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
                 damage_type=damage_type, cancel_reason=cancel_reason,
@@ -362,6 +359,7 @@ class Statistics:
                         per_type[type_key] = per_type.get(type_key, 0.0) + overkill
             else:
                 self.overkill_incomplete.add(owner)
+                self.overkill_reason[owner] = reason
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
         elif amount > 0:
@@ -419,6 +417,16 @@ class Statistics:
                               and not self.all_overkill_unknown
                               and owner not in self.overkill_incomplete)
             overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
+            if overkill_known:
+                overkill_unknown_reason = None
+            elif not self.event_coverage:
+                overkill_unknown_reason = '事件观测未建立'
+            elif self.event_coverage_end is not None:
+                overkill_unknown_reason = '事件覆盖已结束'
+            elif self.all_overkill_unknown:
+                overkill_unknown_reason = '存在未归属的伤害事件'
+            else:
+                overkill_unknown_reason = self.overkill_reason.get(owner, '伤害证据不足')
             # Engagement keeps its observed interval after coverage closes;
             # only an explicitly reported dropped event makes it unknown.
             engagement_known = (bool(self.event_coverage)
@@ -438,6 +446,7 @@ class Statistics:
                                                 for key in DAMAGE_TYPE_KEYS}
                                                if overkill_type_known else None),
                    'overkill_type_complete': overkill_type_known,
+                   'overkill_unknown_reason': overkill_unknown_reason,
                    'overkill_coverage_complete': overkill_known,
                    'overkill_coverage_start': self.start_time if self.event_coverage else None,
                    'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
