@@ -537,6 +537,9 @@ class EnemyReader:
         self._merge_lock = threading.Lock()  # 并行扫描合并锁
         # 准实时轮询 (常驻 TCP 通道)
         self._chan = None             # TcpChannel, 惰性打开
+        # Product collection shares this channel with authoritative counter
+        # reads; an enemy polling failure must not close the shared transport.
+        self.shared_channel = False
         self._detail_chan = None      # 详情独立通道，避免重读取阻塞主轮询
         self._detail_context = threading.local()
         self._fast_tick = 0
@@ -4613,7 +4616,8 @@ class EnemyReader:
             self._poll_state_log.emit(self.log,
                 (type(e).__name__, getattr(e, 'errno', None)),
                 f'[轮询] memsrv v5 异常 ({type(e).__name__}: {e})', scope=scope)
-            self.close()
+            if not self.shared_channel:
+                self.close()
             raise RuntimeError(f'memsrv v5 读取失败: {e}') from e
 
     @staticmethod

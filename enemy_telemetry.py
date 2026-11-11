@@ -142,6 +142,14 @@ class EnemyTimeline:
         return dict(self.points[-1]) if self.points else None
 
 
+def _load_enemy_db():
+    try:
+        from tools.enemy_health.enemy_db import load_enemy_db
+        return load_enemy_db()
+    except Exception:
+        return None
+
+
 def bootstrap_at_battle(reader):
     """Locate the enemy chain from the battle controller already certified.
 
@@ -171,7 +179,9 @@ def bootstrap_at_battle(reader):
     reader.enemy_addrs = reader._union_enemy_ptrs(unit_enemies, enemies)
     # Live enemy names/attributes and lifecycle do not need the static spawn
     # plan. The reader's names catalog is optional and tolerant of a missing
-    # generated handbook table.
+    # generated handbook table; it is still required by runtime action records.
+    if getattr(reader, '_db', None) is None:
+        reader._db = _load_enemy_db() or {}
     for name in ('_names', '_identity_sources', '_attr_cache', '_attr_snapshot',
                  '_runtime_snapshot', '_runtime_ptrs', '_skill_cd', '_skill_enriched',
                  '_skill_lp', '_skill_ap'):
@@ -276,6 +286,14 @@ class EnemyTelemetry:
         try:
             snapshot = self.reader.poll_fast()
         except Exception as exc:
+            # poll_fast normally closes its channel on failure. On the product
+            # path that channel is shared with authoritative counter reads, so
+            # an enemy-only failure must not tear down the collection session.
+            if getattr(self.reader, 'shared_channel', False) and getattr(self.reader, '_chan', None) is None:
+                try:
+                    self.reader._chan = self.reader.mc.channel()
+                except Exception:
+                    pass
             return self._state('unavailable', error=f'敌人读取失败：{exc}')
         if not snapshot or not snapshot.get('ok'):
             message = (snapshot or {}).get('msg') or '敌人快照不完整'

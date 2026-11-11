@@ -207,7 +207,7 @@ def test_bootstrap_does_not_require_the_static_handbook_bundle(monkeypatch):
     reader = Reader()
     assert enemy_telemetry.bootstrap_at_battle(reader) is True
     assert reader._spawn_plan == [] and reader._roster_initialized is False
-    assert getattr(reader, '_db', None) is None
+    assert isinstance(reader._db, dict)
 
 
 def test_timeline_keeps_enemy_hp_when_effective_damage_is_unknown():
@@ -220,15 +220,21 @@ def test_timeline_keeps_enemy_hp_when_effective_damage_is_unknown():
 
 
 def test_bundled_enemy_catalog_provides_names_and_handbook_codes():
-    import sys
+    import json
     from pathlib import Path
-    vendor = Path(__file__).resolve().parents[1] / 'vendor' / 'ark-source'
-    sys.path.insert(0, str(vendor))
-    try:
-        from tools.enemy_health.enemy_db import load_enemy_db
-        db = load_enemy_db()
-    finally:
-        sys.path.remove(str(vendor))
-    assert db['enemy_1007_slime']['name']
-    assert db['enemy_1007_slime']['code'] == 'B1'
-    assert 'enemy_1027_mob' in db
+    path = (Path(__file__).resolve().parents[1] / 'vendor' / 'ark-source' /
+            'game_data' / 'catalogs' / 'enemy_names.json')
+    catalog = json.loads(path.read_text(encoding='utf-8'))
+    assert catalog['enemy_1007_slime']['name']
+    assert catalog['enemy_1007_slime']['code'] == 'B1'
+    assert 'enemy_1027_mob' in catalog
+
+
+def test_enemy_poll_failure_does_not_close_the_shared_product_channel():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / 'vendor' / 'ark-source' /
+              'tools' / 'enemy_health' / 'enemy_reader.py').read_text(encoding='utf-8')
+    assert 'self.shared_channel = False' in source
+    assert 'if not self.shared_channel:' in source
+    guarded = source.split('if not self.shared_channel:', 1)[1]
+    assert guarded.lstrip().startswith('self.close()')

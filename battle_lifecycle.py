@@ -311,6 +311,13 @@ class BattleSessions:
         if self.adapter is not None and not self._archived:
             self.adapter.on_gap()
             self.state = 'frozen'
+        # A lifecycle read gap closes event coverage too. Keep the UI honest:
+        # without this, the status can still say recording while every derived
+        # metric is unknown.
+        if self.capture is not None and not self.capture.closed:
+            self.capture.close()
+        if self.event_status in ('ready', 'recording'):
+            self.event_status, self.event_error = 'gap', reason
 
     def _archive(self, reason):
         if self.adapter is None or self._archived:

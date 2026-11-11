@@ -104,6 +104,7 @@ class Collector:
             cache_file=str(ROOT / 'runtime' / 'unused.pkl'), log=log)
         self.forward_registry = ForwardRegistry()
         self.core.mc.forward_registry = self.forward_registry
+        self.core.shared_channel = True
         self.enemy_telemetry = EnemyTelemetry(self.core, log=log)
         # Dedicated port: do not share the upstream app's stream.
         self.names = load_character_names()
