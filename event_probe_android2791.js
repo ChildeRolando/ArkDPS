@@ -39,14 +39,14 @@ try{
   for(let i=0;i<mn;i++){
    const m=ma.add(i*8).readPointer();if(!m.add(0x20).readPointer().equals(k))continue;
    const name=m.add(0x18).readPointer().readCString();
-   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || owner==='Entity'&&['ApplyModifier','OnAppliedModifier','OnTakeHeal'].includes(name)) cfg.methods.push({owner,name,address:m.readPointer().toString()});
+   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || owner==='Entity'&&['ApplyModifier','OnAppliedModifier','OnTakeHeal','OnTakeDamage'].includes(name)) cfg.methods.push({owner,name,address:m.readPointer().toString()});
   }
  }
  for(const key of ['Entity.ApplyModifier','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar'])if(!cfg.methods.some(m=>m.owner+'.'+m.name===key))throw new Error('required method missing '+key);
 } finally {api('il2cpp_thread_detach','void',['pointer'])(thread);}
 // A callback increments epoch on entry and remains active until its native
 // invocation returns. RPC marks are serialized with these JS callbacks.
-let sequence=0, epoch=0, active=0, fatal=null, stopped=false;
+let sequence=0, hpSequence=0, epoch=0, active=0, fatal=null, stopped=false;
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
 const engagementUnknownSources=new Set();
@@ -55,7 +55,7 @@ let damageUnknown=false;
 let engagementUnknown=false;
 // Recoverable unattributable callbacks are counted, not escalated globally.
 let skippedUnattributed=0;
-let queue=[];
+let queue=[];let hpContext=[];
 const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
@@ -123,6 +123,7 @@ function nonlethalEvidence(targetPtr){
   return {target:key,hp_after:hp,killed:false};
  }catch(e){return null;}
 }
+function hpContextQueue(){const result=hpContext;hpContext=[];return result;}
 function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
@@ -140,6 +141,31 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
    try{
     this.when=time();
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
+    if(this.name==='Entity.OnTakeDamage'){
+     // Signature: OnTakeDamage(Modifier& modifier, bool force), invoked on the
+     // target entity. The modifier carries m_target/m_source and value.
+     this.mod=args[0];
+     try{
+      this.target=this.mod.add(0x10).readPointer();
+      this.hpBefore=targetHp(this.target);
+      this.source=entityId(this.mod.readPointer());
+      this.amount=fp(this.mod.add(0x30));
+      this.real=fp(this.mod.add(0x48));
+     }catch(e){this.ignore=true;}
+     return;
+    }
+    if(this.name==='Entity.OnTakeDamage'){
+     if(this.ignore)return;
+     const hpAfter=targetHp(this.target);
+     hpContext.push({sequence:++hpSequence,frame:end.frame,game_time:end.game_time,
+      source:this.source||null,target:targetKey(this.target)||this.target.toString(),
+      target_instance:this.target.toString(),amount:this.amount,
+      real_delta:this.real,hp_before:this.hpBefore,hp_after:hpAfter,
+      killed:hpAfter!==null&&hpAfter<=1e-6,
+      target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32(),
+      cancel_reason:this.mod.add(0x70).readS32()});
+     return;
+    }
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
@@ -243,7 +269,7 @@ rpc.exports={
   if (current === null) return {retry:true,error:fatal,stopped,...quality};
   return {...current,sequence,epoch,active,error:fatal,stopped,...quality};
  },
- drain(){const result=queue;queue=[];return {events:result,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown};},
+ drain(){const result=queue,context=hpContextQueue();return {events:result,hp_context:context,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown};},
  stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
 };
 send({ready:true,arch:Process.arch});
