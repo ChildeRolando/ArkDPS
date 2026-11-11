@@ -144,26 +144,25 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.name.endsWith('.OnAfterOutputDamage')){
      // args[0] is the hidden IL2CPP `this` receiver; modifier is args[1].
      this.mod=args[1];
-     try{
-      this.target=this.mod.add(0x10).readPointer();
-      this.hpBefore=targetHp(this.target);
-      this.source=entityId(this.mod.readPointer());
-      this.amount=fp(this.mod.add(0x30));
-      this.real=fp(this.mod.add(0x48));
-     }catch(e){this.ignore=true;}
+     try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.ignore=true;return;}
+     try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
+     try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
+     try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      return;
     }
     if(this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      // Signature: OnTakeDamage(Modifier& modifier, bool force), invoked on the
      // target entity. args[0] is hidden `this`; modifier is args[1].
+     // Keep target/HP even if the source identity read fails; never discard
+     // the whole target-side evidence for that reason.
      this.receiver=args[0];this.mod=args[1];
      try{
       this.target=this.receiver&&!this.receiver.isNull()?this.receiver:this.mod.add(0x10).readPointer();
       this.hpBefore=targetHp(this.target);
-      this.source=entityId(this.mod.readPointer());
-      this.amount=fp(this.mod.add(0x30));
-      this.real=fp(this.mod.add(0x48));
-     }catch(e){this.ignore=true;}
+     }catch(e){this.ignore=true;return;}
+     try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
+     try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
+     try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      return;
     }
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
