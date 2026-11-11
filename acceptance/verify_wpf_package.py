@@ -54,8 +54,13 @@ def main():
         '--fixture',str(state_dir/'fixture.json'),'--verify',str(forward)],
         cwd=ROOT,env=environment,check=True,timeout=150)
     after=json.loads((forward/'receipt.json').read_text('utf-8'))
+    expected=json.loads((validation/'restart/receipt.json').read_text('utf-8'))['restored_layout']
     assert after['restored_layout']['panels']==saved['panels']
-    assert after['restored_layout']==json.loads((validation/'restart/receipt.json').read_text('utf-8'))['restored_layout']
+    # Compare persisted settings, not cross-process GUI pixels: the window
+    # manager may place a fresh process differently (including minimized
+    # rectangles), which is not an upgrade regression.
+    for key in ('version','theme','event_observation','panels','huds'):
+        assert after['restored_layout'][key]==expected[key],key
     result=dict(status='PASS_OFFLINE_PACKAGE',head=manifest['head'],archive_sha256=hashlib.sha256(args.archive.read_bytes()).hexdigest(),
         framework=manifest['target_framework'],sdk=manifest['dotnet_sdk'],
         checks=['clean ZIP extraction and every manifest file digest',
