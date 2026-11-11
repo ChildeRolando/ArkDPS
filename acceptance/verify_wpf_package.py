@@ -1,7 +1,8 @@
-"""Offline portable install/upgrade/legacy-rollback checks for ONE built ZIP.
+"""Offline portable install/upgrade checks for ONE built ZIP.
 
-No MuMu/ADB, no registry or machine-wide installer changes. The explicit Tk
-fallback is kept until current-candidate game integration is independently done.
+No MuMu/ADB, no registry or machine-wide installer changes. The Tk panel is
+sealed, so the only migration chain proved here is v1 layout -> WPF v3 ->
+WPF restart restore.
 """
 import argparse
 import hashlib
@@ -44,47 +45,23 @@ def main():
     subprocess.run([sys.executable,'-I',str(ROOT/'acceptance/verify_wpf.py'),
         '--bundle',str(bundle),'--migrate-v1','--output',str(validation)],
         cwd=ROOT,env=environment,check=True,timeout=300)
-    receipt=json.loads((validation/'receipt.json').read_text('utf-8'))
     state_dir,=validation.glob('state-*')
     saved=json.loads((state_dir/'layout.json').read_text('utf-8'))
     assert saved['version']==3
-    # Exercise the retained front end against exactly the WPF-written settings.
-    import tkinter as tk
-    from app import App,enable_dpi_awareness
-    from connection import ConnectionConfigStore
-    from layout_store import LayoutStore
-    from types import SimpleNamespace
-    assert enable_dpi_awareness()
-    root=tk.Tk()
-    original=App.collect
-    App.collect=lambda self:None
-    try:
-        app=App(root,SimpleNamespace(adb='',serial='',frida_remote=None),
-            layout_store=LayoutStore(state_dir/'layout.json'),
-            connection_store=ConnectionConfigStore(state_dir/'connection.json'))
-        root.update()
-        assert app.theme==saved['theme']
-        assert [p.config.to_dict() for p in app.panels]==saved['panels']
-        app.save_layout_now()
-        legacy=json.loads((state_dir/'layout.json').read_text('utf-8'))
-        assert legacy['theme']==saved['theme'] and legacy['panels']==saved['panels']
-        assert [(h['panel_id'],h['opacity'],h['locked']) for h in legacy['huds']]==[(h['panel_id'],h['opacity'],h['locked']) for h in saved['huds']]
-        app.quit();root.mainloop()
-    finally:
-        App.collect=original
-    # Then switch forward again, still device-free and using the bundled runtime.
-    forward=output/'forward-after-legacy'
+    # Restart the bundled WPF client on exactly the layout it wrote itself.
+    forward=output/'forward-restart'
     subprocess.run([str(bundle/'ArkDPS.Desktop.exe'),'--offline','--state-dir',str(state_dir),
         '--fixture',str(state_dir/'fixture.json'),'--verify',str(forward)],
         cwd=ROOT,env=environment,check=True,timeout=150)
     after=json.loads((forward/'receipt.json').read_text('utf-8'))
-    assert after['restored_layout']['panels']==legacy['panels']
+    assert after['restored_layout']['panels']==saved['panels']
+    assert after['restored_layout']==json.loads((validation/'restart/receipt.json').read_text('utf-8'))['restored_layout']
     result=dict(status='PASS_OFFLINE_PACKAGE',head=manifest['head'],archive_sha256=hashlib.sha256(args.archive.read_bytes()).hexdigest(),
         framework=manifest['target_framework'],sdk=manifest['dotnet_sdk'],
         checks=['clean ZIP extraction and every manifest file digest',
             'self-contained UI with invalid system DOTNET_ROOT, no dotnet/Python on PATH',
             'isolated bundled Python 3.12.10 + Frida 17.26.1',
-            'old v1 layout -> native WPF v3 -> retained explicit Tk fallback -> native WPF',
+            'old v1 layout -> native WPF v3 -> WPF restart restores the same layout',
             'panel settings, theme, locked HUD and 83% opacity retained'],
         limitations=['portable ZIP only, not MSI or registry installation',
             'synthetic data only; device remains reserved to ARK-14',

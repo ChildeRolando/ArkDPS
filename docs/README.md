@@ -24,7 +24,8 @@
 
 ## 发布
 
-- [ARK-14 旧 Tk Windows 候选构建和发布验收](windows-release.md) — 保留便携安装/升级、精确产物、离线自检、CI 与独立实机矩阵；当前 WPF 入口见桌面运行时。
+- [Windows WPF 便携包构建与发布验收](windows-release.md) — 当前唯一分发入口：构建、验收、CI 与许可边界。
+- [旧 ARK-14 Tk 候选归档](archive/legacy-tk/windows-release-ark14.md) — 已封存的 PyInstaller/Tk 候选记录，只作历史追溯。
 - [变更日志](../CHANGELOG.md) — 候选版本的变化与交付状态。
 
 ## 实现契约
@@ -35,8 +36,8 @@
 - [统计核心输入契约](statistics-core.md) — 离线统计核心的输入与口径。
 - [累计、生命周期与本地战绩](snapshot-adapter.md#本地战绩ark-8) — 冻结交接、版本化 BattleRecord、最近 100 局读取及故障诊断。
 - [实时事件采集入口与验收](event-capture.md) — 可选观察器、共享采集入口、覆盖语义和宿主机验收命令。
-- [GUI/HUD 共用面板模型](panel-model.md) — 面板配置、排序、柱长与占比口径。
-- [设置、托盘与窗口配置恢复](settings-and-layout.md) — 布局版本与迁移、可达位置、托盘生命周期、事件观测开关与退出清理。
+- [GUI/HUD 共用面板模型](panel-model.md) — 面板配置、排序、柱长与占比口径（Tk 实现已封存）。
+- [设置、托盘与窗口配置恢复](settings-and-layout.md) — 布局版本与迁移、可达位置、托盘生命周期、事件观测开关与退出清理（Tk 历史章节已封存）。
 - [ADR 0001：总伤害包含过量部分](adr/0001-damage-totals-include-overkill.md)
 - [ADR 0004：过量伤害作为独立事件派生指标](adr/0004-overkill-as-separate-event-derived-metric.md)
 - [ADR 0003：WPF 展示与 Python 子进程](adr/0003-wpf-python-worker.md)

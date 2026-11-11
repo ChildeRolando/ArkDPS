@@ -6,15 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from release_identity import load_manifest
+import release_identity
+from release_identity import candidate_head, load_manifest
 import capture_cli
 from test_capture_cli import Session, options, stub_git_and_clock
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('windows_builder', ROOT / 'tools/build_windows.py')
-builder = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(builder)
 HEAD = 'a' * 40
+spec = importlib.util.spec_from_file_location('package_windows', ROOT / 'tools/package_windows.py')
+package = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(package)
 
 
 def manifest(tmp_path):
@@ -46,22 +47,34 @@ def test_invalid_manifests_rejected(tmp_path, field, value):
         load_manifest(tmp_path, verify=True)
 
 
-def test_builder_refuses_dirty_tree_and_wrong_head(monkeypatch):
-    monkeypatch.setattr(builder, 'git', lambda *args: HEAD if args[0] == 'rev-parse' else ' M app.py')
+def test_candidate_head_refuses_dirty_tree_and_wrong_head(monkeypatch):
+    def git(command, **kwargs):
+        assert command[0] == 'git' and kwargs['cwd'] == ROOT
+        return HEAD + '\n' if command[1] == 'rev-parse' else ' M app.py\n'
+    monkeypatch.setattr(release_identity.subprocess, 'check_output', git)
     with pytest.raises(RuntimeError, match='clean committed'):
-        builder.candidate_head(HEAD)
+        candidate_head(ROOT)
+    monkeypatch.setattr(release_identity.subprocess, 'check_output',
+                        lambda command, **kwargs: HEAD + '\n' if command[1] == 'rev-parse' else '')
     with pytest.raises(RuntimeError, match='candidate mismatch'):
-        builder.candidate_head('b'*40)
+        candidate_head(ROOT, 'b' * 40)
+    assert candidate_head(ROOT, HEAD) == HEAD
 
 
-def test_only_tracked_resources_are_bundled(monkeypatch):
-    monkeypatch.setattr(builder, 'git', lambda *args: 'vendor/ark-source/LICENSE\nassets/arkdps.ico')
-    resources = builder.tracked_data()
-    assert all(str(p).startswith(str(ROOT)) for p, _ in resources)
-    assert (ROOT / 'vendor/ark-source/LICENSE', 'vendor/ark-source') in resources
-    assert not any('runtime' in p.parts or 'tests' in p.parts for p, _ in resources)
-    assert (ROOT / 'event_probe_android2791.js', '.') in resources
-    assert (ROOT / 'LICENSE', '.') in resources
+def test_package_rejects_any_tk_runtime_file():
+    package.assert_no_tk_files(['ArkDPS.Desktop.exe', 'collector/desktop_bridge.py',
+                                'python/python312.zip'])
+    for name in ('python/tcl/tcl8.6/init.tcl', 'python/Lib/tkinter/__init__.py',
+                 'python/DLLs/_tkinter.pyd', 'licenses/Tcl.txt'):
+        with pytest.raises(RuntimeError, match='Sealed Tk'):
+            package.assert_no_tk_files(['ArkDPS.Desktop.exe', name])
+
+
+def test_package_backend_is_worker_import_closure_without_tk():
+    assert 'gui_panel.py' not in package.BACKEND and 'ui_theme.py' not in package.BACKEND
+    assert not any('tk' in name.lower() for name in package.BACKEND)
+    for name in package.BACKEND:
+        assert (ROOT / name).is_file(), name
 
 
 def test_frozen_capture_uses_manifest_not_git(tmp_path, monkeypatch):
@@ -89,51 +102,6 @@ def test_frozen_capture_refuses_wrong_candidate_before_connect(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match='candidate mismatch'):
         capture_cli.run_capture(args, session_factory=Session)
     assert not args.output_dir.exists()
-
-
-def test_live_measurements_do_not_treat_paused_frames_or_new_battle_as_active():
-    from release_probe import summarize
-    def point(frame, seconds, *, session='a', panels=1):
-        return dict(session=session, frame=frame, game_time=seconds,
-                    captured_monotonic=seconds, speed_level=1, panels=panels,
-                    huds=1, read_ms=5, render_complete_age_ms=15)
-    points = [point(1, 1), point(1, 1), point(2, 2),
-              point(1, 1, session='b'), point(2, 2, session='b', panels=3)]
-    result = summarize(points)
-    assert result['speed_level=1,panels=1,huds=1']['samples'] == 1
-    assert result['speed_level=1,panels=3,huds=1']['samples'] == 1
-    assert result['speed_level=1,panels=1,huds=1']['interval_ms']['p95'] == 1000
-    assert summarize([point(1, 1), point(1, 1)]) == {}
-
-
-def test_real_windows_process_resources_are_positive():
-    from release_probe import process_resources
-    result = process_resources()
-    assert result['private_bytes'] > 0 and result['working_set_bytes'] > 0
-    assert result['cpu_seconds'] >= 0
-
-
-def test_frozen_module_relative_resources_are_mirrored(monkeypatch):
-    paths = ['vendor/ark-source/tools/enemy_health/bin/memsrv',
-             'vendor/ark-source/tools/enemy_health/generated_offsets.json',
-             'vendor/ark-source/game_data/manifest.json',
-             'vendor/ark-source/tools/enemy_health/memcore.py']
-    monkeypatch.setattr(builder, 'git', lambda *args: '\n'.join(paths))
-    resources = builder.tracked_data()
-    assert (ROOT / paths[0], 'tools/enemy_health/bin') in resources
-    assert (ROOT / paths[1], 'tools/enemy_health') in resources
-    assert (ROOT / paths[2], 'game_data') in resources
-    assert (ROOT / paths[3], 'tools/enemy_health') not in resources
-
-
-def test_builder_rejects_unpinned_toolchain(monkeypatch):
-    expected = dict(line.split('==') for line in (ROOT / 'requirements-windows.txt').read_text().splitlines()
-                    if line and not line.startswith('#'))
-    monkeypatch.setattr(builder.importlib.metadata, 'version', expected.__getitem__)
-    assert builder.toolchain_versions() == expected
-    monkeypatch.setattr(builder.importlib.metadata, 'version', lambda _: 'wrong')
-    with pytest.raises(RuntimeError, match='toolchain mismatch'):
-        builder.toolchain_versions()
 
 
 def test_ci_desktop_preparation_never_changes_user_desktop(monkeypatch):
@@ -174,54 +142,6 @@ def test_ci_desktop_preparation_requires_verified_resolution(monkeypatch):
 
 
 @pytest.mark.parametrize('expected', [None, HEAD])
-@pytest.mark.parametrize('dirty', [' M app.py\n', '?? local_probe.py\n'])
-def test_source_live_probe_rejects_dirty_candidate_before_measurement(
-        tmp_path, monkeypatch, expected, dirty):
-    import collector
-    import release_probe
-    from unittest.mock import Mock
-
-    monkeypatch.setattr(collector, 'ROOT', tmp_path)
-    monkeypatch.setattr(release_probe.sys, 'frozen', False, raising=False)
-    commands = []
-    def git(command, **kwargs):
-        commands.append(command)
-        assert kwargs['cwd'] == tmp_path
-        return HEAD if command[1] == 'rev-parse' else dirty
-    monkeypatch.setattr(release_probe.subprocess, 'check_output', git)
-    monkeypatch.setattr(release_probe.LiveProbe, 'sample_resources', lambda self: None)
-    app = Mock()
-    app.history.list_recent.return_value.records = []
-    app.panels = [object()]
-    output = tmp_path / 'measurement'
-    with pytest.raises(RuntimeError, match='uncommitted changes'):
-        release_probe.LiveProbe(app, output, 1, 1, expected)
-    assert commands[-1] == ['git', 'status', '--porcelain', '--untracked-files=normal']
-    assert not output.exists()
-    app.create_hud.assert_not_called()
-    app.root.after.assert_not_called()
-
-
-def test_source_live_probe_clean_candidate_still_measures(tmp_path, monkeypatch):
-    import collector
-    import release_probe
-    from unittest.mock import Mock
-
-    monkeypatch.setattr(collector, 'ROOT', tmp_path)
-    monkeypatch.setattr(release_probe.sys, 'frozen', False, raising=False)
-    monkeypatch.setattr(release_probe.subprocess, 'check_output',
-                        lambda command, **kwargs: HEAD if command[1] == 'rev-parse' else '')
-    monkeypatch.setattr(release_probe.LiveProbe, 'sample_resources', lambda self: None)
-    app = Mock()
-    app.history.list_recent.return_value.records = []
-    app.panels = [object()]
-    probe = release_probe.LiveProbe(app, tmp_path / 'measurement', 1, 1, HEAD)
-    assert probe.head == HEAD and probe.output.is_dir()
-    app.create_hud.assert_called_once_with(app.panels[0])
-    app.root.after.assert_called_once_with(1000, app.quit)
-
-
-@pytest.mark.parametrize('expected', [None, HEAD])
 @pytest.mark.parametrize('damage', ['modified', 'missing'])
 def test_frozen_capture_rejects_damaged_bundle_before_evidence_or_connect(
         tmp_path, monkeypatch, expected, damage):
@@ -243,24 +163,6 @@ def test_frozen_capture_rejects_damaged_bundle_before_evidence_or_connect(
         capture_cli.run_capture(args, session_factory=Session)
     assert len(Session.instances) == before
     assert not args.output_dir.exists()
-
-
-@pytest.mark.parametrize('seconds', ['nan', 'inf', '-inf', '0', '-1'])
-def test_gui_acceptance_rejects_nonfinite_or_nonpositive_duration_before_startup(
-        tmp_path, monkeypatch, seconds, capsys):
-    import app
-    from unittest.mock import Mock
-
-    monkeypatch.setattr(app.sys, 'argv', ['app.py', '--acceptance-output', str(tmp_path / 'out'),
-                                        '--acceptance-seconds=' + seconds])
-    layout = Mock(side_effect=AssertionError('must reject before layout or GUI startup'))
-    monkeypatch.setattr(app, 'LayoutStore', layout)
-    with pytest.raises(SystemExit) as exc:
-        app.main()
-    assert exc.value.code == 2
-    assert 'positive' in capsys.readouterr().err
-    layout.assert_not_called()
-    assert not (tmp_path / 'out').exists()
 
 
 def test_clean_ci_installs_declared_png_test_decoder():

@@ -8,11 +8,11 @@
 - WPF 启动一个 `desktop_bridge.py` 子进程。只有 Python 可以调用 `ConnectionConfig` / `CollectionSession` / `BattleRuntime` / `BattleHistory`；C# 不读游戏内存，不执行 ADB，不重新计算统计或占比。`DesktopState.view` 只调用既有 `render_panel`。
 - GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次；最终 `stopped` 审计写入失败纳入 `cleanup_errors`，即使资源已释放也必须报告。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
 - 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建唯一审计 JSONL 文件，不追加到先前运行的记录。
-- Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。旧 Tk 模块仅供 `python app.py --legacy-tk` 和既有回归诊断使用，正常启动不创建 Tk 窗口。命令行 `--capture-seconds` 路径不变。
+- Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。Tk 面板已封存（[ADR 0005](adr/0005-seal-legacy-tk.md)），`app.py` 只路由到 WPF 或无界面 `--capture-seconds`；`--legacy-tk`、`--acceptance-output`、`--self-test` 等旧参数由 argparse 明确报错退出，不会回退到其他界面。
 
 关卡名称由 Python 统一解析：`stage_names.py` 读取随包的 `vendor/ark-source/game_data/catalogs/stage_names.json`，把原生 `stage_id`（如 `Obt/Main/level_main_01-07`）翻译成玩家可读名称（`1-7`）。实时 `stage`、历史 `labels[0]`、PNG 与导出的 `display.stage` 共用同一解析；原始 `stage_id` 原样保留在历史、`stage_raw`、`stage_detail` 与导出中，UI 不改写它。目录缺失、无法解析或与 manifest `data_version` 不一致时，`warnings`/`history_notice` 明确提示版本问题并退回可读短码（如 `rogue6_1-3`），不显示内部路径，也不影响战绩读取。
 
-合入 ARK-14 发布工具后，`app.py --self-test <新目录>` 先进入旧 Tk 离线自检；`--acceptance-output` 先验证有限正时长，再进入旧 Tk 测量。PyInstaller 冻结的旧 `ArkDPS.exe` 仍用 Tk，不尝试构建或启动源码 WPF；普通源码入口和 WPF 同包入口保持不变。旧构建/自检契约见 [Windows 旧候选](windows-release.md)，不继承其真实设备验收结论。
+`app.py` 是唯一入口：默认调用 `desktop_launcher.launch` 启动 WPF，`--capture-seconds` 走无界面采集；旧 Tk 自检/测量参数已移除。归档前的旧构建与自检契约见 `archive/legacy-tk/`，不继承其真实设备验收结论。
 
 ## 唯一协议：stdio JSON Lines v1
 
@@ -55,7 +55,7 @@ Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新
 
 ## 可复核验收
 
-测试依赖由根目录 `requirements-test.txt` 固定，包含用于独立解码验证 PNG 的 Pillow；它不进入 Python worker 运行时。WPF 统计 PNG 由 .NET `PngBitmapEncoder` 生成，旧 Tk 导出由 Win32 GDI 与标准库生成；不能因测试导入 `PIL` 就把 Pillow 当作产品运行时依赖，也不能漏装测试依赖或跳过 PNG 断言。
+测试依赖由根目录 `requirements-test.txt` 固定，包含用于独立解码验证 PNG 的 Pillow；它不进入 Python worker 运行时。WPF 统计 PNG 由 .NET `PngBitmapEncoder` 生成；不能因测试导入 `PIL` 就把 Pillow 当作产品运行时依赖，也不能漏装测试依赖或跳过 PNG 断言。
 
 ```powershell
 python -m pip install -r requirements-test.txt
@@ -66,7 +66,7 @@ python acceptance/verify_wpf.py --bundle runtime/packages/<解压目录> --outpu
 python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --output runtime/wpf-install-upgrade-rollback
 ```
 
-单包脚本还在新目录验证清洁解压、全部文件摘要、缺少全局 Python/.NET 的运行、v1→v3 设置迁移及显式 Tk 回退后再进 WPF；这只是便携 ZIP 的离线升级/回退，不冒充 MSI/注册表安装或游戏验收。
+单包脚本还在新目录验证清洁解压、全部文件摘要、缺少全局 Python/.NET 的运行、v1→v3 设置迁移以及 WPF 重启恢复；这只是便携 ZIP 的离线升级验收，不冒充 MSI/注册表安装或游戏验收。
 
 每次脚本新建独立 state 目录，不覆盖产品配置；真实运行 WPF、真实 stdio 握手、切换双皮肤、保存主窗/HUD/历史/设置/完整排行 PNG，并在新进程恢复配置。对私有下层测试窗口发送 Win32 鼠标输入，核对 HUD → 下层 → HUD。包验收还断言 worker 实际使用包内 Python 3.12.10 / Frida 17.26.1；构建 smoke 将系统 Python 环境变量设为无效值，验证不依赖宿主 Python。
 
@@ -77,7 +77,7 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 
 - 完整 Python 回归实际运行 630 项通过；WPF 专项覆盖 worker 无 Tk 导入、统一统计输入、未知值、排行/速率正交、历史淘汰/换局隔离、版本拒绝、退出清理、旧配置迁移、包解压安全和实际双主题文字对比度。严格整数协议版本的回归曾实际失败（布尔 `true` 被 Python 当作 1），修正后通过。
 - 使用本地 SDK 10.0.403 实际构建 `net10.0-windows`，0 warning / 0 error；源版原生 WPF 验收通过，包含真实错误版本 worker 拒绝、握手后模拟 worker 崩溃与非零退出可观测、卡住响应的 UI 过期提示、双皮肤 HWND/位置/尺寸/透明度/锁定不变、私有窗口点击路由、合成换局及新进程配置恢复。
-- 自包含发布及带 Python 3.12.10 / Frida 17.26.1 的单包已实际构建和离线清洁解压运行，完成 v1 配置升级、显式 legacy 回退再进入 WPF；未删除 Tk 回退入口。精确候选、包摘要和截图摘要随构建回执交付。
+- 自包含发布及带 Python 3.12.10 / Frida 17.26.1 的单包已实际构建和离线清洁解压运行，完成 v1 配置升级（当时仍含 Tk 回退步骤，该入口已于 ARK-27 封存）。精确候选、包摘要和截图摘要随构建回执交付。
 - 继承的 V1 红/蓝/紫/白语义色未通过通用分类色校验（蓝/紫的 CVD/正常视觉距离及白色 lightness/chroma）；不擅自改写固定语义色，也不声称色盲安全，提供文字图例和精确明细。
 - 实机项已不再等待设备交接：候选 `f7d59d9` 已在 MuMu（真实 collector、96 DPI、主屏 1920×1080 + 负坐标副屏）完成穿透点击、物理托盘双击、真实换局/历史隔离、双皮肤切换与导出；`f7d59d9` 上失败的退出/重启在修复候选 `0ca9f18` 上通过。混合 DPI（125/150/200%）仍无硬件可测。
 

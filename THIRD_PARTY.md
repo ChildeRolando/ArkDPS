@@ -34,7 +34,7 @@ Arknights / 上海鹰角网络科技有限公司，仅用于学习与交流；�
 
 构建脚本 `tools/build_portraits.py` 只下载基础头像，缩为 48×48，分别打包原色与灰度图集；
 `assets/portraits/manifest.json` 记录每张原始 PNG 的 SHA-256、源提交、图集坐标及图集摘要。
-重建需要 Pillow，当前 WPF 产品离线读取同一头像图集（旧 Tk 诊断入口保留）；未知干员使用姓名占位。
+重建需要 Pillow，当前 WPF 产品离线读取同一头像图集；未知干员使用姓名占位。
 
 ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff758505380322c0cf519fe` 的 `tools/stage_global_state/memory.py`，保留其有界精确只读实现；包入口精简为该子集的说明，不导入未随附的 Timeline 应用。`tools/enemy_health/battle_lifecycle.py` 的读取结果增加已读取的原生 `state` 字段，供产品区分初始化、运行和结束，并增加经过对象类型及字符串槽稳定性校验的可选 `LevelData.levelId` 元信息；其余单例与场景读守卫保留。未验证的胜负、演习和退出原因不推断。新增产品观察代次、队列交接及视图契约位于仓库根目录 `battle_lifecycle.py`，没有复制上游完整应用。
 
@@ -47,20 +47,13 @@ ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff75850538032
 
 `tools/package_windows.py` 从官方 Python.org HTTPS 地址取得 CPython 3.12.10 embeddable x64，并使用固定 SHA-256 核验；原始 `python/LICENSE.txt` 保留在分发目录。自包含 .NET 10 / WPF 产物随包分发，保留 .NET `LICENSE.txt` 与 `ThirdPartyNotices.txt` 于 `licenses/`。默认完整包还保留 PyPI `frida==17.26.1` wheel 的 `dist-info/licenses/COPYING`（wxWindows Library Licence 3.1）及元数据，不将该许可改写为本仓库许可。Python 3.12 不需要其仅针对 Python <3.11 的 typing_extensions 依赖。安装包不包含 Frida server 或 ADB，也不安装/启动设备服务；明确 `--without-events` 仅生成无 Frida 的累计快照变体。
 
-## ARK-14 旧 Tk 便携候选的运行时
+## 已封存的 ARK-14 旧 Tk 候选运行时
 
-`requirements-windows.txt` 固定 Windows x64 构建工具链；`release.json` 固定产品候选版本。
-`build-manifest.json` 保存实际 Python/工具版本及逐文件摘要，`artifact.json` 保存最终 ZIP 摘要。
-分发仍遵循本文开头的 Tim23333 非商业许可，不因打包工具而改变本地代码授权。
+旧 PyInstaller + Tk 候选（CPython 3.10.10、Tcl/Tk 8.6、frida 客户端、typing_extensions、PyInstaller bootloader）
+已于 ARK-27 封存，构建工具、`release.json` 与 Tcl 许可原文归档在 `archive/legacy-tk/`，不再随任何产物分发。
+来源与历史许可说明保留在归档目录与 git 历史中；当前分发只包含 WPF 自包含运行时、CPython 3.12.10、
+可选 Frida 17.26.1 客户端及 .NET 许可，见上节。
 
-| 组件 | 来源/许可 | 打包方式 |
-| --- | --- | --- |
-| CPython 3.10.10 | https://www.python.org/downloads/release/python-31010/ · PSF 与随附依赖许可 | `licenses/Python.txt` 复制构建解释器完整 LICENSE.txt（含 OpenSSL/libffi 等声明） |
-| Tcl/Tk 8.6 | https://www.tcl.tk/ · Tcl/Tk BSD 风格许可 | Tcl 原文 `assets/licenses/Tcl.txt`，Tk 复制构建解释器 `tcl/tk8.6/license.terms` 到 `licenses/Tk.txt` |
-| Frida 17.26.1 客户端 | https://pypi.org/project/frida/17.26.1/ · wxWindows Library Licence 3.1 | 原 wheel 的 COPYING 复制到 `licenses/frida-0.txt`；只含客户端，无设备 server |
-| typing_extensions 4.15.0 | https://pypi.org/project/typing-extensions/4.15.0/ · Python Software Foundation License | 原 wheel 的 LICENSE 复制到 `licenses/typing_extensions-0.txt` |
-| PyInstaller 6.9.0 | https://pyinstaller.org/ · GPLv2+，含 bootloader 分发例外 | 构建工具，不带整个工具；COPYING 复制到 `licenses/pyinstaller-0.txt`，例外不覆盖应用或素材自己的许可 |
-
-Tcl 8.6.12 原文取自 https://github.com/tcltk/tcl/blob/core-8-6-12/license.terms ，
+Tcl 8.6.12 原文（归档）取自 https://github.com/tcltk/tcl/blob/core-8-6-12/license.terms ，
 本地原始文本 SHA-256 `c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16`。
 Windows ZIP 不包含 MuMu、ADB、游戏客户端、MAA、Pillow 或 pytest。上述链接仅为来源说明，不表示厂商背书。

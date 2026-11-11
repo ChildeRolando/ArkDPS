@@ -269,3 +269,42 @@ class CollectionSession:
         self.closed = self._resources_closed and not self.cleanup_errors
         if errors:
             raise errors[0][1]
+
+
+def shutdown_report(session):
+    """Report what a finished session actually released, from operation outcomes.
+
+    A stale or foreign ``closed`` flag never substitutes for the recorded
+    cleanup results: the receipt is built from ``cleanup_errors`` and the
+    remaining observer/forward handles.
+    """
+    cleanup_errors = getattr(session, 'cleanup_errors', {}) if session is not None else {}
+    issues = []
+    session_closed = ((session is None or bool(getattr(session, 'closed', False)))
+                      and not cleanup_errors)
+    if not session_closed:
+        issues.append('采集会话未关闭')
+    observer_released = not cleanup_errors.get('observer')
+    if session is not None:
+        if getattr(session, '_pending_observers', []):
+            observer_released = False
+        observer = getattr(session, 'observer', None)
+        if observer is not None:
+            observer_released = (observer_released and
+                                 not getattr(observer, 'cleanup_errors', {}) and
+                                 getattr(observer, 'script', None) is None and
+                                 getattr(observer, 'session', None) is None)
+    if not observer_released:
+        issues.append('事件观察器释放未确认')
+    for resource, errors in cleanup_errors.items():
+        issues.extend(f'{resource} 清理失败：{error}' for error in errors)
+    forwards_released = True
+    collector = getattr(session, 'collector', None) if session is not None else None
+    registry = getattr(collector, 'forward_registry', None)
+    owned = getattr(registry, 'owned', {}) if registry is not None else {}
+    if owned:
+        forwards_released = False
+        issues.append(f'仍有 {len(owned)} 个 ADB 转发未释放')
+    return dict(ok=not issues, session_closed=session_closed,
+                observer_released=observer_released,
+                forwards_released=forwards_released, issues=issues)
