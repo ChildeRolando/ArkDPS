@@ -35,7 +35,19 @@ class Statistics:
         # stream in which every damage event carried verifiable target HP and
         # settlement evidence. Any unverifiable damage event makes it unknown.
         self.overkill = {}
+        self.overkill_events = deque()
         self.overkill_incomplete = set()
+        # Target-side HP events are an independent, authoritative overkill
+        # source: amount minus observed shield absorption minus HP before.
+        self.hp_overkill = {}
+        self.hp_overkill_incomplete = set()
+        self.hp_seen = set()
+        self.overkill_reason = {}
+        # Elemental bar damage is not HP damage; only its source matters.
+        self.last_elemental = {}
+        self.burst = {}
+        self.burst_unknown = False
+        self.burst_unknown_reason = None
         # Per-type overkill is a separate subset. It stays unknown if a lethal
         # event has overkill but no recognised native damage type.
         self.overkill_by_type = {}
@@ -262,54 +274,57 @@ class Statistics:
                   killed, target_type, damage_type, cancel_reason, shield_absorbed):
         """Derive one hit's overkill from native settlement evidence.
 
-        ``amount`` is the native modifier value before shield/block settlement:
-        captured frame 697 recorded ``m_value`` 14, ``realDelta`` 0 and unchanged
-        HP while ``BlockDamage`` absorbed the same 14. Absorbed damage therefore
-        has to be subtracted here instead of being assumed out of ``amount``.
-        ``real_delta`` is the native signed HP delta (negative for damage).
-        Only a target whose HP actually reached zero can have overkill, and only
-        a lethal hit needs the absorption context. Returns ``(known, value)``;
-        any missing or contradictory field keeps the whole per-owner metric
-        unknown instead of publishing a guess or zero.
+        Returns ``(known, value, reason)``. On failure ``reason`` names the
+        missing or contradictory evidence so the UI can explain the unknown.
         """
-        if (not isinstance(target, str) or not target
-                or type(killed) is not bool
-                or target_type is not None and (type(target_type) is not int)
-                or damage_type is not None and (type(damage_type) is not int)
-                or cancel_reason is not None and (type(cancel_reason) is not int)
-                or not all(self._optional_number(v) for v in
-                           (real_delta, hp_before, hp_after))
-                or real_delta > 0 or hp_before < 0 or hp_after < 0
-                or (shield_absorbed is not None
-                    and (not self._optional_number(shield_absorbed)
-                         or shield_absorbed < 0))):
-            return False, 0.0
-        actual = -real_delta
+        if not isinstance(target, str) or not target:
+            return False, 0.0, '伤害事件缺少目标身份'
+        if type(killed) is not bool:
+            return False, 0.0, '伤害事件缺少击杀标记'
+        if target_type is not None and type(target_type) is not int:
+            return False, 0.0, '目标类型无效'
+        if damage_type is not None and type(damage_type) is not int:
+            return False, 0.0, '伤害类型无效'
+        if cancel_reason is not None and type(cancel_reason) is not int:
+            return False, 0.0, '取消原因无效'
+        # A non-lethal hit cannot overkill: if the probe observed that the
+        # target was still alive after this hit, no HP-before/real-delta
+        # reconstruction is required. This matters for same-frame multi-hit
+        # effects where another hit changes HP between the two reads.
         tolerance = max(0.01, amount * 1e-6)
+        if (killed is False and self._optional_number(hp_after)
+                and hp_after > tolerance):
+            return True, 0.0, ''
+        if not all(self._optional_number(v) for v in (real_delta, hp_before, hp_after)):
+            return False, 0.0, '伤害事件缺少目标 HP 或实际扣血'
+        if real_delta > 0 or hp_before < 0 or hp_after < 0:
+            return False, 0.0, '目标 HP 或扣血数值无效'
+        if (shield_absorbed is not None
+                and (not self._optional_number(shield_absorbed) or shield_absorbed < 0)):
+            return False, 0.0, '护盾/抵挡吸收数值无效'
+        actual = -real_delta
         if actual > amount + tolerance:
-            return False, 0.0
+            return False, 0.0, '实际扣血超过结算伤害'
         if abs((hp_before - hp_after) - actual) > tolerance:
-            return False, 0.0
+            return False, 0.0, '目标 HP 变化与实际扣血不一致'
         if killed and hp_after > tolerance:
-            return False, 0.0
+            return False, 0.0, '击杀标记与目标 HP 不一致'
         if not killed and hp_after <= tolerance:
-            return False, 0.0
+            return False, 0.0, '击杀标记与目标 HP 不一致'
         if not killed:
-            return True, 0.0
+            return True, 0.0, ''
         if shield_absorbed is None:
-            # Absorption happens before the HP delta, so a lethal hit without
-            # that context cannot separate absorbed damage from overkill.
-            return False, 0.0
+            return False, 0.0, '击杀缺少护盾/抵挡吸收上下文'
         if shield_absorbed > amount + tolerance:
-            return False, 0.0
+            return False, 0.0, '护盾吸收超过结算伤害'
         if actual + shield_absorbed > amount + tolerance:
-            return False, 0.0
-        return True, max(0.0, amount - shield_absorbed - actual)
+            return False, 0.0, '护盾吸收与实际扣血之和不一致'
+        return True, max(0.0, amount - shield_absorbed - actual), ''
 
     def event(self, event_id, game_time, source, kind, amount, *,
               target=None, real_delta=None, hp_before=None, hp_after=None,
               killed=None, target_type=None, damage_type=None,
-              cancel_reason=None, shield_absorbed=None):
+              cancel_reason=None, shield_absorbed=None, target_instance=None):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
         Duplicate IDs with identical payload are ignored; conflicts are rejected.
@@ -329,13 +344,18 @@ class Statistics:
         self._amount(amount)
         if not self.event_coverage or self.event_coverage_end is not None or not self.baseline_ready:
             raise ValueError('event coverage or baseline is unavailable')
-        if not event_id or source not in self.owners or kind not in ('damage', 'healing', 'shield_absorbed'):
-            raise ValueError('invalid event identity, source or kind')
+        kinds = ('damage', 'healing', 'shield_absorbed', 'elemental_bar', 'elemental_burst', 'hp_damage')
+        if not event_id or kind not in kinds:
+            raise ValueError('invalid event identity or kind')
+        if kind != 'elemental_burst' and source not in self.owners:
+            raise ValueError('invalid event source')
+        if kind == 'elemental_burst' and source is not None and source not in self.owners:
+            raise ValueError('invalid burst source')
         evidence = (target, real_delta, hp_before, hp_after, killed,
                     target_type, damage_type, cancel_reason, shield_absorbed)
-        if kind != 'damage' and any(value is not None for value in evidence):
-            raise ValueError('overkill evidence is only valid for damage')
-        payload = (game_time, source, kind, amount, evidence)
+        if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
+            raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
+        payload = (game_time, source, kind, amount, evidence, target_instance)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
@@ -344,16 +364,49 @@ class Statistics:
             raise ValueError('event outside ordered observation')
         self.events[event_id] = payload
         self.last_event_time = game_time
-        owner = self.owners[source]
+        owner = self.owners.get(source)
+        if kind == 'elemental_bar':
+            if not target_instance or owner is None:
+                raise ValueError('elemental bar needs a source and target instance')
+            self.last_elemental[target_instance] = owner
+            return
+        if kind == 'elemental_burst':
+            if not target_instance:
+                raise ValueError('elemental burst needs a target instance')
+            if (not self._optional_number(real_delta) or real_delta > 0
+                    or not self._optional_number(hp_before)
+                    or not self._optional_number(hp_after)
+                    or hp_before < 0 or hp_after < 0):
+                raise ValueError('invalid elemental burst evidence')
+            actual = -real_delta
+            tolerance = max(0.01, amount * 1e-6)
+            if actual > amount + tolerance:
+                raise ValueError('elemental burst actual exceeds settlement')
+            attributed = owner if owner is not None else self.last_elemental.get(target_instance)
+            if attributed is None:
+                self.burst_unknown = True
+                self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
+                return
+            entry = self.burst.setdefault(attributed, {'actual': 0.0, 'overkill': 0.0,
+                                                        'settlement': 0.0, 'count': 0})
+            entry['actual'] += actual
+            entry['overkill'] += max(0.0, amount - actual)
+            entry['settlement'] += amount
+            entry['count'] += 1
+            self.last_elemental.pop(target_instance, None)
+            return
         if kind == 'damage':
-            known, overkill = self._overkill(
+            known, overkill, reason = self._overkill(
                 amount, target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
                 damage_type=damage_type, cancel_reason=cancel_reason,
                 shield_absorbed=shield_absorbed)
             if known:
+                if killed and target_instance:
+                    self.last_elemental.pop(target_instance, None)
                 self.overkill[owner] = self.overkill.get(owner, 0.0) + overkill
                 if overkill > 0:
+                    self.overkill_events.append((game_time, owner, overkill))
                     type_key = NATIVE_DAMAGE_TYPES.get(damage_type)
                     if type_key is None:
                         self.overkill_type_incomplete.add(owner)
@@ -362,16 +415,46 @@ class Statistics:
                         per_type[type_key] = per_type.get(type_key, 0.0) + overkill
             else:
                 self.overkill_incomplete.add(owner)
+                self.overkill_reason[owner] = reason
+        if kind == 'hp_damage':
+            if not isinstance(target, str) or not target:
+                self.hp_seen.add(owner)
+                self.hp_overkill_incomplete.add(owner)
+                return
+            # Friendly/self damage is not outgoing HP damage for DPS/overkill.
+            if target.startswith('char_') or target.startswith('token_'):
+                return
+            self.hp_seen.add(owner)
+            tolerance = max(0.01, amount * 1e-6)
+            if not self._optional_number(hp_before) or hp_before < 0:
+                self.hp_overkill_incomplete.add(owner)
+                return
+            if amount <= hp_before + tolerance:
+                overkill = 0.0
+            else:
+                if not self._optional_number(shield_absorbed) or shield_absorbed < 0:
+                    self.hp_overkill_incomplete.add(owner)
+                    return
+                overkill = max(0.0, amount - shield_absorbed - hp_before)
+            self.hp_overkill[owner] = self.hp_overkill.get(owner, 0.0) + overkill
+            return
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
-        elif amount > 0:
-            state = self.engagement.setdefault((owner, kind), {'total': 0, 'intervals': []})
-            state['total'] += amount
-            intervals = state['intervals']
-            if intervals and game_time <= intervals[-1][1]:
-                intervals[-1] = (intervals[-1][0], max(intervals[-1][1], game_time + 1.5))
-            else:
-                intervals.append((game_time, game_time + 1.5))
+        elif kind in ('damage', 'healing') and amount > 0:
+            # Damage dealt to a friendly/self target (e.g. a skill's HP cost)
+            # is not outgoing DPS. Only enemy-directed damage defines the
+            # damage engagement numerator and active interval. Healing keeps
+            # its own friendly-target interval as before.
+            friendly_damage = (kind == 'damage' and isinstance(target, str)
+                               and (target.startswith('char_') or target.startswith('token_')))
+            if not friendly_damage:
+                state = self.engagement.setdefault((owner, kind), {'total': 0, 'intervals': []})
+                state['total'] += amount
+                intervals = state['intervals']
+                if intervals and game_time <= intervals[-1][1]:
+                    intervals[-1] = (intervals[-1][0], max(intervals[-1][1], game_time + 1.5))
+                else:
+                    intervals.append((game_time, game_time + 1.5))
 
     def _recent(self, state, kind, start):
         if not state['continuous'] or not state['history']:
@@ -419,6 +502,16 @@ class Statistics:
                               and not self.all_overkill_unknown
                               and owner not in self.overkill_incomplete)
             overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
+            if overkill_known:
+                overkill_unknown_reason = None
+            elif not self.event_coverage:
+                overkill_unknown_reason = '事件观测未建立'
+            elif self.event_coverage_end is not None:
+                overkill_unknown_reason = '事件覆盖已结束'
+            elif self.all_overkill_unknown:
+                overkill_unknown_reason = '存在未归属的伤害事件'
+            else:
+                overkill_unknown_reason = self.overkill_reason.get(owner, '伤害证据不足')
             # Engagement keeps its observed interval after coverage closes;
             # only an explicitly reported dropped event makes it unknown.
             engagement_known = (bool(self.event_coverage)
@@ -438,10 +531,19 @@ class Statistics:
                                                 for key in DAMAGE_TYPE_KEYS}
                                                if overkill_type_known else None),
                    'overkill_type_complete': overkill_type_known,
+                   'overkill_unknown_reason': overkill_unknown_reason,
                    'overkill_coverage_complete': overkill_known,
                    'overkill_coverage_start': self.start_time if self.event_coverage else None,
                    'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                              else self.end_time if self.event_coverage else None)}
+            burst = self.burst.get(owner)
+            burst_complete = not self.burst_unknown
+            row['burst_damage'] = (burst['actual'] if burst and burst_complete else None)
+            row['burst_overkill'] = (burst['overkill'] if burst and burst_complete else None)
+            row['burst_settlement'] = (burst['settlement'] if burst and burst_complete else None)
+            row['burst_count'] = (burst['count'] if burst and burst_complete else 0)
+            row['burst_complete'] = burst_complete
+            row['burst_unknown_reason'] = self.burst_unknown_reason if not burst_complete else None
             for kind in ('damage', 'healing'):
                 row[kind] = sum(self.sources[s]['values'][kind] for s in sources) if sources else None
                 start = max([self.start_time, self.now - 5] +
@@ -454,6 +556,12 @@ class Statistics:
                 row['recent_' + kind + '_window'] = (
                     (start, self.now) if row['recent_' + kind] is not None
                     and start == expected_start else None)
+                if kind == 'damage':
+                    row['recent_overkill_damage'] = (
+                        sum(value for when, owner_key, value in self.overkill_events
+                            if owner_key == owner and start <= when <= self.now)
+                        if overkill_known and row['recent_damage_window'] is not None
+                        else None)
                 state = self.engagement.get((owner, kind))
                 if state:
                     covered_until = self.event_coverage_end if self.event_coverage_end is not None else self.now
@@ -471,6 +579,30 @@ class Statistics:
                     row['engagement_' + kind] = None
                     row['active_' + kind] = None
                     row['observed_' + kind] = None
+            if burst_complete and burst:
+                if row['damage'] is not None:
+                    row['damage'] += burst['settlement']
+                if row['overkill_damage'] is not None:
+                    row['overkill_damage'] += burst['overkill']
+                    types = row['overkill_damage_by_type']
+                    if types is not None:
+                        types['elemental'] = types.get('elemental', 0.0) + burst['overkill']
+            if owner in self.hp_seen:
+                hp_known = bool(self.event_coverage) and owner not in self.hp_overkill_incomplete
+                if hp_known:
+                    row['overkill_damage'] = self.hp_overkill.get(owner, 0.0)
+                    row['overkill_coverage_complete'] = True
+                    row['overkill_unknown_reason'] = None
+                    row['overkill_damage_by_type'] = None
+                    row['overkill_type_complete'] = False
+                else:
+                    row['overkill_damage'] = None
+                    row['overkill_coverage_complete'] = False
+                    row['overkill_unknown_reason'] = '目标掉血证据不完整'
+            if row['damage'] is not None and row['overkill_damage'] is not None:
+                row['effective_damage'] = row['damage'] - row['overkill_damage']
+            else:
+                row['effective_damage'] = None
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())

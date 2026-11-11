@@ -551,3 +551,28 @@ def test_invalid_overkill_coverage_is_rejected():
                                            overkill_coverage_end=5.)
     with pytest.raises(HistoryError, match='overkill coverage'):
         BattleRecord.from_dict(data)
+
+
+def test_burst_fields_round_trip_and_old_records_stay_readable(tmp_path):
+    data = record().to_dict()
+    row = data['statistics']['rows']['a']
+    row.update(burst_damage=784., burst_overkill=5216., burst_settlement=6000.,
+               burst_count=1, burst_complete=True, effective_damage=1784.)
+    value = BattleRecord.from_dict(data)
+    history = BattleHistory(tmp_path)
+    history.save(value)
+    restored = history.get(value.battle_id).records[0]
+    stored = restored.statistics['rows']['a']
+    assert stored['burst_damage'] == 784.
+    assert stored['burst_settlement'] == 6000.
+    assert stored['burst_complete'] is True
+    assert stored['burst_count'] == 1
+    legacy = record(1).to_dict()
+    for key in ('burst_damage', 'burst_overkill', 'burst_settlement',
+                'burst_count', 'burst_complete', 'burst_unknown_reason',
+                'effective_damage'):
+        legacy['statistics']['rows']['a'].pop(key, None)
+    restored = BattleRecord.from_dict(legacy)
+    stored = restored.statistics['rows']['a']
+    assert stored['burst_damage'] is None and stored['burst_complete'] is False
+    assert stored['burst_count'] == 0

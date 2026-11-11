@@ -252,6 +252,61 @@ def test_contradictory_absorption_evidence_is_unknown(absorbed):
     assert s.result()['rows']['a']['overkill_damage'] is None
 
 
+def test_living_target_proves_zero_overkill_without_full_hp_reconstruction():
+    s = Statistics('nonlethal', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('hit', .5, 'a', 'damage', 100, target='enemy',
+            hp_after=5, killed=False)
+    row = s.result()['rows']['A']
+    assert row['overkill_damage'] == 0
+    assert row['overkill_coverage_complete'] is True
+    assert row['effective_damage'] == 0  # snapshot damage is still 0 in this fixture
+
+
+
+def test_friendly_self_damage_does_not_enter_engagement_dps():
+    s = Statistics('friendly', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(10)
+    s.event('self', 1, 'a', 'damage', 25, target='char_a', hp_after=10, killed=False)
+    s.event('enemy', 2, 'a', 'damage', 100, target='enemy_1',
+            hp_after=10, killed=False)
+    row = s.result()['rows']['A']
+    assert row['observed_damage'] == 100
+    assert row['active_damage'] == pytest.approx(1.5)
+    assert row['engagement_damage'] == pytest.approx(100 / 1.5)
+
+
+
+def test_hp_damage_events_provide_target_overkill():
+    s = Statistics('hp', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
+    s.advance(2)
+    s.event('hp1', 1, 'a', 'hp_damage', 150, target='enemy_1',
+            hp_before=100, shield_absorbed=0)
+    s.event('hp2', 1.5, 'a', 'hp_damage', 50, target='enemy_2',
+            hp_before=100, shield_absorbed=0)
+    row = s.result()['rows']['A']
+    assert row['overkill_damage'] == 50
+    assert row['overkill_coverage_complete'] is True
+    assert row['effective_damage'] == 950
+
+
+def test_hp_damage_missing_hp_or_shield_stays_unknown():
+    s = Statistics('hp-unknown', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
+    s.advance(2)
+    s.event('hp1', 1, 'a', 'hp_damage', 150, target='enemy_1', hp_before=None)
+    row = s.result()['rows']['A']
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_complete'] is False
+
+
 @pytest.mark.parametrize('evidence', [
     {},
     {'target': None, 'real_delta': -10, 'hp_before': 10, 'hp_after': 0, 'killed': True},
@@ -417,3 +472,49 @@ def test_unrecovered_gap_is_not_sealed_by_the_battle_end():
     result = s.result()
     assert result['totals_complete'] is False
     assert result['rows']['A']['counter_snapshot_complete'] is False
+
+
+def test_overkill_unknown_reason_names_missing_absorption_context():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 500, 'healing': 0}})
+    overkill(s, 'kill-without-context', 200, 44, 44, 0, shield_absorbed=None)
+    row = s.result()['rows']['a']
+    assert row['overkill_damage'] is None
+    assert '护盾/抵挡吸收上下文' in row['overkill_unknown_reason']
+
+
+def test_elemental_burst_is_attributed_to_the_last_elemental_bar_source():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
+    s.advance(1)
+    s.event('bar', 0.5, 'a', 'elemental_bar', 308.88, target_instance='target-1')
+    s.event('burst', 0.9, None, 'elemental_burst', 6000,
+            target='enemy_1046_agent', real_delta=-784, hp_before=784,
+            hp_after=0, killed=True, target_instance='target-1')
+    s.advance(2)
+    row = s.result()['rows']['a']
+    assert row['burst_damage'] == pytest.approx(784)
+    assert row['burst_overkill'] == pytest.approx(5216)
+    assert row['burst_settlement'] == pytest.approx(6000)
+    assert row['burst_complete'] is True
+    assert row['damage'] == pytest.approx(7000)
+    assert row['overkill_damage'] == pytest.approx(5216)
+    assert row['effective_damage'] == pytest.approx(1784)
+
+
+def test_unattributed_elemental_burst_is_unknown_not_guessed():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
+    s.advance(1)
+    s.event('burst', 0.9, None, 'elemental_burst', 6000,
+            target='enemy_1046_agent', real_delta=-784, hp_before=784,
+            hp_after=0, killed=True, target_instance='target-unknown')
+    s.advance(2)
+    row = s.result()['rows']['a']
+    assert row['burst_damage'] is None
+    assert row['burst_complete'] is False
+    assert '元素爆条' in row['burst_unknown_reason']
+    assert row['damage'] == pytest.approx(1000)

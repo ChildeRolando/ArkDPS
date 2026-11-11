@@ -27,6 +27,7 @@ from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
                         resolve_configured)
 from event_capture import CaptureRetry
+from frida_provision import ensure_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
 from panel_model import (EventAvailability, PanelConfig, detail_rates, render_panel,
@@ -45,6 +46,18 @@ def event_label(status, error=None):
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
               'finished': '事件观测结束 · 保留已覆盖区间'}
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
+
+
+def team_totals(statistics):
+    """Whole-team metric strip. Unknown rows stay None; no partial sum is shown as a total."""
+    rows = (statistics or {}).get('rows') or {}
+    result = {}
+    for key in ('damage', 'healing', 'shield_absorbed'):
+        values = [row.get(key) for row in rows.values()]
+        result[key] = (sum(values) if values and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in values) else None)
+    return result
 
 
 def empty_text(config, source, complete):
@@ -192,6 +205,7 @@ class DesktopState:
                                        error=sample.get('event_error', self.event_error), live=True)
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
+                    totals=team_totals(stats),
                     status=status, status_text=label, error=self.error,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
                     event_text=event_label(self.event_status, self.event_error),
@@ -294,6 +308,8 @@ class CollectionWorker:
         self.session = None
         self.cleanup_error = ''
         self.retired_errors = []
+        self.last_connect_attempt = 0.0
+        self.last_endpoint_check = 0.0
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
 
     def request(self, config, enabled):
@@ -332,7 +348,7 @@ class CollectionWorker:
                     stream.flush()
                 try:
                     usable = False
-                    current_config, current_enabled = None, False
+                    current_config, current_enabled, current_target = None, False, None
                     while not self.stop.is_set():
                         try:
                             config, enabled = self.requests.get_nowait()
@@ -341,11 +357,19 @@ class CollectionWorker:
                         if config is not None:
                             current_config, current_enabled = config, enabled
                             usable = False
+                            self.last_connect_attempt = time.monotonic()
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
                                     target = resolve_configured(config)
+                                    current_target = target
                                     self.events.put(('diagnostic', target.diagnostics.as_dict()))
+                                    if enabled:
+                                        ok, detail = ensure_frida_endpoint(target.adb_path, target.serial,
+                                                                           remote=self.endpoint)
+                                        audit('frida_endpoint', {'ok': ok, 'detail': detail})
+                                        if not ok:
+                                            self.events.put(('warning', '事件端点：' + detail))
                                     self.session = CollectionSession(target.adb_path, target.serial,
                                         frida_remote=self.endpoint if enabled else None,
                                         history=self.history, audit=audit,
@@ -378,6 +402,20 @@ class CollectionWorker:
                                 self.request(current_config, current_enabled)
                             except Exception as exc:
                                 self.events.put(('error', str(exc)))
+                                usable = False
+                        if (usable and current_enabled and current_target is not None
+                                and time.monotonic() - self.last_endpoint_check >= 5):
+                            self.last_endpoint_check = time.monotonic()
+                            ok, detail = ensure_frida_endpoint(current_target.adb_path,
+                                                               current_target.serial,
+                                                               remote=self.endpoint)
+                            audit('frida_keepalive', {'ok': ok, 'detail': detail})
+                            if not ok:
+                                self.events.put(('warning', '事件端点保活：' + detail))
+                        if (not usable and current_config is not None
+                                and time.monotonic() - self.last_connect_attempt >= 5):
+                            self.last_connect_attempt = time.monotonic()
+                            self.request(current_config, current_enabled)
                         self.stop.wait(.2)
                 finally:
                     # Session shutdown writes final audit records; keep its sink open.

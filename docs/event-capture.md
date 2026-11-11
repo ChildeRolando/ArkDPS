@@ -6,6 +6,8 @@
 
 ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期模式，`BattleRuntime` 分配 ID，快照和 `LiveEventCapture.ingest()` 共用一个适配器。跨帧重试保留队列；新局重建基线并隔离旧事件；同进程不因换局重挂载。首个终局先处理可靠水位再冻结，累计修订与一次归档沿用同局 ID。新日志的 `lifecycle_observation.events` 保留屏障/drain，`published.native_rows` 保留原生来源，`rows` 为窗口投影；独立对账器兼容两种日志。新候选的跨局实机尚未验收，范围和当前 MAA 错误证据见 [生命周期交接](snapshot-adapter.md)。
 
+开启事件观测后，采集 worker 每 5 秒检查本机事件端点：若转发丢失会重建 `27043 → 27864`；若设备上已有的 `frida-server-17.26.1` 未运行，会尝试启动它。模拟器重启导致采集连接丢失时，worker 每 5 秒自动重新解析实例并重连，不需要手动「重新定位」。这套保活只复用设备上已存在的二进制，不下载、不替换；启动失败会作为明确警告显示。
+
 `app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 命令行模式共用 `CollectionSession`。通过进程身份和游戏版本校验后，默认向本机已验证端点 `127.0.0.1:27043` 尝试临时事件观测；`--frida-remote host:port` 可覆盖端点，`--no-events` 显式关闭。API 的默认值同样为该端点，传入 `frida_remote=None` 关闭，可供 ARK-11 设置入口使用。Frida 17.26.1 客户端、同版服务及端口转发须由调用方准备；采集器结束时卸载自己的脚本，不安装或启动服务、不使用 eternalize。
 
 连接先校验进程与游戏版本，再准备观察器，最后定位战局。因此观察器可以在进入关卡前就绪。`Collector.connect()` 的默认行为保持同时定位；`connect(locate=False)` 允许提前挂载，之后调用 `locate_battle()`。
@@ -70,6 +72,6 @@ ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期�
 
 `event_probe_android2791.js` 在 `Entity.ApplyModifier` 返回时，对 `targetType=0` 的伤害事件追加目标 ID、签名 `realDelta`、目标 HP 前后、`killed`、`type`/`targetType`/`cancelReason` 以及同帧已验证护盾吸收量。`amount` 取原生 `m_value`；捕获样本（frame 697）证明它是吸收前的来伤值，因此 `shield_absorbed` 必须由统计层显式扣除，不能假定 `m_value` 已含吸收后的结果。探针只在同帧该目标的吸收可验证时给出吸收量；该目标在该帧出现无法解析的护盾/抵挡回调或非玩家护盾时传空，击杀对应过量即为未知。
 
-证据只在 HP 差值与 `realDelta` 一致、目标 ID 可读且符号正确时序列化。任一读取失败不关闭伤害/治疗/护盾事件流，只让该次伤害缺少证据，统计层随即将对应干员的过量标为未知。来源 ID 读取失败时探针上报 `damage_unknown`（全队过量未知）与 `engagement_unknown`；无法识别伤害类型而被丢弃的事件按来源上报 `unknown_sources` 与 `engagement_unknown_sources`，使接敌分子显示未知而不是少算。`Statistics` 只在目标实际 HP 归零时计算 `amount - shield_absorbed - (-realDelta)`，并在 `overkill_coverage_complete` 中记录事件覆盖与证据完整性；旧探针或旧历史没有这些字段时过量未知，不补零。
+证据只在 HP 差值与 `realDelta` 一致、目标 ID 可读且符号正确时序列化。若元素损伤条后的伤害回调目标指针为空，探针会用同帧同来源最近一次 `elemental_bar` 的目标指针/HP 作为候选，再走同一 HP 一致性校验；候选不匹配、过期或 HP 不可读时仍不序列化证据。任一读取失败不关闭伤害/治疗/护盾事件流，只让该次伤害缺少证据，统计层随即将对应干员的过量标为未知。来源 ID 读取失败时探针上报 `damage_unknown`（全队过量未知）与 `engagement_unknown`；无法识别伤害类型而被丢弃的事件按来源上报 `unknown_sources` 与 `engagement_unknown_sources`，使接敌分子显示未知而不是少算。`Statistics` 只在目标实际 HP 归零时计算 `amount - shield_absorbed - (-realDelta)`，并在 `overkill_coverage_complete` 中记录事件覆盖与证据完整性；旧探针或旧历史没有这些字段时过量未知，不补零。
 
 本节的 JS 偏移与实机行为尚未在设备上验证（依赖 ARK-21）；当前验收使用合成事件覆盖普通命中、击杀、护盾完全吸收、召唤归属与覆盖缺失。设备恢复后须至少补一局击杀样本的逐干员总伤害/过量对账。

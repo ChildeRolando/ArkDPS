@@ -107,6 +107,24 @@ def test_mid_battle_baseline_starts_short_window_immediately():
     assert update.game_time == 32.3
 
 
+def test_full_cycle_presence_accumulates_only_while_present_and_gap_invalidates():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 0), row('char_b', 0)], 0, 1),
+                   roster([CHAR_A, CHAR_B], present=(1,), frame=1))
+    adapter.update(sample([row('char_a', 100), row('char_b', 0)], 3, 3),
+                   roster([CHAR_A, CHAR_B], present=(1, 2), frame=3))
+    adapter.update(sample([row('char_a', 100), row('char_b', 50)], 5, 5),
+                   roster([CHAR_A, CHAR_B], present=(2,), frame=5))
+    result = adapter.result(BASE)
+    assert result['rows']['char_a']['presence_seconds'] == pytest.approx(5)
+    assert result['rows']['char_b']['presence_seconds'] == pytest.approx(2)
+    assert result['rows']['char_a']['presence_complete'] is True
+    adapter.on_gap()
+    result = adapter.result(BASE)
+    assert result['rows']['char_a']['presence_seconds'] is None
+    assert result['rows']['char_a']['presence_complete'] is False
+
+
 def test_four_damage_types_and_overkill_totals_are_kept():
     a = BattleStatisticsAdapter()
     a.update(sample([row('char_a', 100, 0, physical=10, arts=20, true=30,
@@ -585,3 +603,18 @@ def test_ambiguous_trap_key_is_not_reclassified_as_non_team():
     assert result['non_team_sources'] == []
     assert result['unknown_sources'] == ['trap_321_shnbox']
     assert result['totals_complete'] is False
+
+
+def test_stage_trap_roster_token_is_non_team_and_does_not_block_events():
+    trap = entry('trap_016_peon', 99, token=True)
+    mapping = build_owner_map(roster([CHAR_A, trap], frame=1))
+    assert 'trap_016_peon' not in mapping.unknown_token_cids
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('trap_016_peon', 0)], 0, 1),
+                   roster([CHAR_A, trap], frame=1))
+    result = adapter.result()
+    assert result['unknown_sources'] == []
+    assert result['non_team_sources'] == ['trap_016_peon']
+    assert result['non_team_output'] == {'trap_016_peon': {'damage': 0.0, 'healing': 0.0}}
+    assert result['totals_complete'] is True
+    adapter.start_events(session='battle-1', frame=1, sequence=0)

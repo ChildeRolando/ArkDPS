@@ -66,6 +66,11 @@ def build_owner_map(roster: RosterSnapshot) -> OwnerMap:
     for token in roster.entries:
         if not token.is_token:
             continue
+        # A proven map-device namespace stays non-team even if the roster
+        # exposes it as a token with no resolvable host (e.g. stage summons
+        # such as trap_016_peon). It must not block event coverage.
+        if classify_unmapped_source(token.cid) is not None:
+            continue
         hosts = by_uid.get(token.host_uid, []) if token.host_uid is not None else []
         hosts = [h for h in hosts if h.cid == token.host_key]
         host_by_key = {(h.cid, h.unique_id): h for h in hosts}
@@ -148,6 +153,9 @@ class BattleStatisticsAdapter:
         self.last_roster_frame: int | None = None
         self.last_roster: RosterSnapshot | None = None
         self.presented_names: dict[str, str] = {}
+        self.presence_seconds: dict[str, float] = {}
+        self.presence_complete = True
+        self.presence_gap = False
         self.finished_session: str | None = None
 
     @property
@@ -163,6 +171,8 @@ class BattleStatisticsAdapter:
                 self.event_stream.stop()
             self.statistics.invalidate_snapshots()
             self.statistics.invalidate_events()
+            self.presence_complete = False
+            self.presence_gap = True
             self.last_result = self.statistics.result()
             self.types_current.clear()
 
@@ -224,12 +234,25 @@ class BattleStatisticsAdapter:
 
     def start_events(self, *, session, frame, sequence):
         """Start only after the producer proves its barrier follows this baseline."""
-        if (self.statistics is None or self.event_stream is not None
-                or session != self.session or frame != self.last_frame
-                or self.last_game_time != self.coverage_start
-                or self.owner_map.unknown_token_cids or self.owner_map.ambiguous_cids
-                or self.mapping_conflicts):
-            raise ValueError('event barrier does not match the initial baseline')
+        reasons = []
+        if self.statistics is None:
+            reasons.append('no statistics baseline')
+        if self.event_stream is not None:
+            reasons.append('event stream already open')
+        if session != self.session:
+            reasons.append(f'session {session!r} != {self.session!r}')
+        if frame != self.last_frame:
+            reasons.append(f'frame {frame} != {self.last_frame}')
+        if self.last_game_time != self.coverage_start:
+            reasons.append(f'time {self.last_game_time} != coverage start {self.coverage_start}')
+        if self.owner_map.unknown_token_cids:
+            reasons.append('unknown token sources: ' + ', '.join(sorted(self.owner_map.unknown_token_cids)))
+        if self.owner_map.ambiguous_cids:
+            reasons.append('ambiguous sources: ' + ', '.join(sorted(self.owner_map.ambiguous_cids)))
+        if self.mapping_conflicts:
+            reasons.append('mapping conflicts: ' + ', '.join(sorted(self.mapping_conflicts)))
+        if reasons:
+            raise ValueError('event barrier does not match the initial baseline: ' + '; '.join(reasons))
         self.statistics.event_coverage = True
         try:
             self.event_stream = EventStream(self.statistics, session=session,
@@ -244,17 +267,18 @@ class BattleStatisticsAdapter:
         if self.event_stream is None:
             raise StreamGap('event stream is unavailable')
         source = event.get('source')
-        if not isinstance(source, str) or not source:
+        kind = event.get('kind')
+        if kind != 'elemental_burst' and (not isinstance(source, str) or not source):
             self.event_stream.stop()
             self.last_result = self.statistics.result()
             raise StreamGap('event source is invalid')
         blocked = (self.owner_map.unknown_token_cids | self.owner_map.ambiguous_cids
                    | self.mapping_conflicts)
-        if source in blocked or self.owner_map.owners.get(source) in blocked:
+        if source is not None and (source in blocked or self.owner_map.owners.get(source) in blocked):
             self.event_stream.stop()
             self.last_result = self.statistics.result()
             raise StreamGap('event source is ambiguous')
-        owner = self.owner_map.owners.get(source)
+        owner = self.owner_map.owners.get(source) if source is not None else None
         if owner is not None and source not in self.statistics.owners:
             if not self._register(source, owner):
                 self.event_stream.stop()
@@ -384,6 +408,19 @@ class BattleStatisticsAdapter:
         else:
             self.statistics.snapshot(game_time, counters)
             changed = True
+        if (self.last_roster is not None and self.last_game_time is not None
+                and game_time > self.last_game_time and not settling):
+            if self.presence_gap:
+                self.presence_gap = False
+                self.presence_complete = False
+            elif self.last_roster.present_known and roster.present_known:
+                delta = game_time - self.last_game_time
+                for owner in self._present_owners(self.last_roster):
+                    self.presence_seconds[owner] = self.presence_seconds.get(owner, 0.0) + delta
+            else:
+                self.presence_complete = False
+        if not roster.present_known:
+            self.presence_complete = False
         if (changed or roster != self.last_roster
                 or any(self.last_types.get(cid) != values for cid, values in types_update.items())):
             self.snapshot_revision += 1
@@ -423,6 +460,14 @@ class BattleStatisticsAdapter:
         self.finished_session = self.session
         return self.last_result
 
+    @staticmethod
+    def _present_owners(roster: RosterSnapshot) -> set[str]:
+        if not roster.present_known:
+            return set()
+        present = roster.present_unique_ids
+        return {entry.cid for entry in roster.entries
+                if not entry.is_token and entry.unique_id in present}
+
     def result(self, roster: RosterSnapshot | None = None) -> dict:
         """Return statistics rows enriched with type totals and presence."""
         if self.last_result is None:
@@ -451,10 +496,19 @@ class BattleStatisticsAdapter:
             enriched['damage_by_type'] = (
                 {kind: sum(values[kind] for values in known_types)
                  for kind in DAMAGE_TYPES} if known_types else {})
-            enriched['types_available'] = bool(known_types)
-            enriched['types_stale'] = not sources or any(
-                cid not in self.types_current for cid in sources)
+            burst = enriched.get('burst_settlement')
+            if burst is not None:
+                types = dict(enriched['damage_by_type'])
+                types['elemental'] = types.get('elemental', 0.0) + burst
+                enriched['damage_by_type'] = types
+            enriched['types_available'] = bool(known_types) or burst is not None
+            enriched['types_stale'] = ((not sources or any(
+                cid not in self.types_current for cid in sources))
+                and burst is None)
             enriched['present'] = owners_present.get(owner) if present_known else None
+            enriched['presence_seconds'] = (self.presence_seconds.get(owner, 0.0)
+                                            if self.presence_complete and present_known else None)
+            enriched['presence_complete'] = self.presence_complete
             enriched['sources'] = sorted(
                 cid for cid, mapped in self.owner_map.owners.items() if mapped == owner)
             enriched['name'] = (self.presented_names.get(owner)

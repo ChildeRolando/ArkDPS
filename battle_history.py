@@ -19,6 +19,7 @@ POLICIES = {
     'shield_absorbed': 'observed_actual_absorption_only',
     'overkill': 'observed_incoming_value_minus_verified_shield_absorption_minus_actual_hp_at_kill',
     'overkill_by_type': 'observed_overkill_grouped_by_native_damage_type',
+    'burst': 'elemental_burst_attributed_to_last_elemental_bar_source',
     'recent': 'cumulative_delta_game_time_window_up_to_5s',
     'engagement': 'observed_events_separate_damage_healing_union_1.5s_tail',
     'ownership': 'verified_statistics_source_to_owner_no_guessing',
@@ -122,7 +123,10 @@ class BattleRecord:
             _date(data['recorded_at'])
             if data['observed_at'] is not None:
                 _date(data['observed_at'])
-            _require(data['policies'] in ACCEPTED_POLICIES,
+            policies = data['policies']
+            _require(isinstance(policies, dict)
+                     and set(policies) <= set(POLICIES)
+                     and all(POLICIES.get(key) == value for key, value in policies.items()),
                      'unsupported statistics policies')
             data['policies'] = deepcopy(POLICIES)
             _number(data['duration'], 'duration')
@@ -166,22 +170,35 @@ class BattleRecord:
                                      ('overkill_damage_by_type', None),
                                      ('overkill_type_complete', False),
                                      ('shield_unknown', False),
+                                     ('burst_damage', None),
+                                     ('burst_overkill', None),
+                                     ('burst_settlement', None),
+                                     ('burst_count', 0),
+                                     ('burst_complete', False),
+                                     ('burst_unknown_reason', None),
+                                     ('effective_damage', None),
                                      ('overkill_coverage_complete', False),
                                      ('overkill_coverage_start', None),
-                                     ('overkill_coverage_end', None)):
+                                     ('overkill_coverage_end', None),
+                                     ('presence_seconds', None),
+                                     ('presence_complete', False),
+                                     ('recent_overkill_damage', None)):
                     row.setdefault(key, default)
                 for metric in ('damage', 'healing', 'shield_absorbed', 'recent_damage',
                                'recent_healing', 'engagement_damage', 'engagement_healing',
                                'active_damage', 'active_healing', 'observed_damage', 'observed_healing',
                                'shield_coverage_start', 'event_coverage_end',
                                'overkill_damage', 'overkill_coverage_start',
-                               'overkill_coverage_end'):
+                               'overkill_coverage_end', 'burst_damage',
+                               'burst_overkill', 'burst_settlement', 'effective_damage',
+                               'presence_seconds', 'recent_overkill_damage'):
                     _number(row[metric], metric, nullable=True)
                 _number(row['coverage_start'], 'row coverage_start')
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')
                 for flag in ('counter_snapshot_complete', 'event_coverage_complete',
                              'overkill_coverage_complete', 'overkill_type_complete',
-                             'shield_unknown', 'types_available', 'types_stale'):
+                             'shield_unknown', 'burst_complete', 'types_available', 'types_stale',
+                             'presence_complete'):
                     _require(type(row[flag]) is bool, f'invalid {flag}')
                 by_type = row['overkill_damage_by_type']
                 _require(by_type is None or
@@ -194,6 +211,11 @@ class BattleRecord:
                 if row['overkill_type_complete']:
                     _require(by_type is not None,
                              'overkill type completeness without typed values')
+                _require(type(row['burst_count']) is int and row['burst_count'] >= 0,
+                         'invalid burst_count')
+                _require(row['burst_unknown_reason'] is None
+                         or isinstance(row['burst_unknown_reason'], str),
+                         'invalid burst_unknown_reason')
                 _require(row['present'] is None or type(row['present']) is bool, 'invalid presence')
                 _require(isinstance(row['sources'], list) and
                          all(isinstance(s, str) and s for s in row['sources']), 'invalid sources')

@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from event_capture import CaptureRetry, LiveEventCapture
 from event_stream import StreamGap
@@ -332,3 +333,35 @@ def test_unknown_source_keeps_coverage_and_only_hides_its_overkill():
     assert row['event_coverage_complete'] is True
     assert row['observed_damage'] == 20
     assert row['overkill_damage'] is None
+
+
+def test_probe_recovers_targetless_damage_from_same_frame_elemental_bar():
+    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    assert 'lastBarTarget' in js
+    assert 'fallback.frame===end.frame' in js
+    assert 'overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame)' in js
+    # The fallback is evidence, not a bypass: the Python core still verifies HP.
+    assert 'target_instance' in js
+    assert "record(this.source,'hp_damage'" in js
+
+
+def test_elemental_bar_and_sourceless_burst_reach_attribution():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    observer.sequence = observer.epoch = 2
+    observer.events = [
+        {'sequence': 1, 'frame': 2, 'game_time': 1, 'source': 'char_a',
+         'kind': 'elemental_bar', 'amount': 308.88, 'target_instance': 'target-1'},
+        {'sequence': 2, 'frame': 2, 'game_time': 1, 'source': None,
+         'kind': 'elemental_burst', 'amount': 6000, 'target': 'enemy_1046_agent',
+         'target_instance': 'target-1', 'real_delta': -784, 'hp_before': 784,
+         'hp_after': 0, 'killed': True},
+    ]
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    row = capture.sample()['rows']['char_a']
+    assert row['burst_damage'] == 784
+    assert row['burst_overkill'] == 5216
+    assert row['damage'] == pytest.approx(120 + 6000)
+    assert row['effective_damage'] == pytest.approx(120 + 784)

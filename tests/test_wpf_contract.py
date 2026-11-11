@@ -83,14 +83,40 @@ def contrast(a, b):
 
 def test_actual_wpf_theme_text_pairs_have_aa_contrast():
     source = (ROOT/'desktop/ArkDPS.Desktop/App.xaml.cs').read_text('utf-8')
-    palettes = re.findall(r'\["Bg"\].*?\["Signal"\]="#[0-9A-F]+"', source, re.S)
-    assert len(palettes) == 2
+    palettes = re.findall(r'\["Bg"\].*?\["Radius"\]="[0-9]+"', source, re.S)
+    assert len(palettes) == 6
     for raw in palettes:
         colors = dict(re.findall(r'\["([A-Za-z]+)"\]="(#[0-9A-F]+)"', raw))
         for foreground, background in [('Ink','Bg'), ('Ink','Card'), ('Muted','Card'),
                 ('Muted','Inset'), ('ConsoleInk','Console'), ('ConsoleMuted','Console'),
-                ('ConsoleInk','ConsoleCard'), ('ConsoleMuted','ConsoleCard'), ('AccentText','Card'), ('AccentInk','Accent')]:
+                ('ConsoleInk','ConsoleCard'), ('ConsoleMuted','ConsoleCard'), ('AccentText','Card'), ('AccentInk','Accent'),
+                ('HeroInk','Hero'), ('HeroMuted','Hero'), ('HeroStatusInk','HeroCard')]:
             assert contrast(colors[foreground], colors[background]) >= 4.5, (foreground, background, colors)
+
+
+def test_hud_has_single_title_row_close_and_rich_rows():
+    xaml = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml').read_text('utf-8')
+    hud = (ROOT/'desktop/ArkDPS.Desktop/HudWindow.cs').read_text('utf-8')
+    assert 'x:Name="HudClose"' in xaml and 'Click="CloseHud"' in xaml
+    assert 'ArkDPS / HUD' not in hud and '解锁 · 可拖动' not in hud
+    assert 'x:Name="HudRow"' not in xaml  # DataTemplate key, not a control name
+    for binding in ('{Binding Rank}', '{Binding Portrait}', '{Binding Rate}', '{Binding Share}'):
+        assert binding in xaml
+    assert 'DPS算法' in xaml and '全周期DPS' in xaml and '溢出总伤' in xaml
+    assert 'Tag="dps"' in xaml and 'Tag="recent"' not in xaml
+    assert '溢出伤害率' in (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+
+
+def test_wpf_ships_all_six_demo_skins():
+    source = (ROOT/'desktop/ArkDPS.Desktop/App.xaml.cs').read_text('utf-8')
+    for key in ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original'):
+        assert f'["{key}"]=new()' in source, key
+
+
+def test_inspector_uses_mitigation_rate_not_penetration_efficiency():
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    assert '"被减伤率"' in inspector and 'mitigation_rate' in inspector
+    assert '穿透效能' not in inspector and '穿透保留率' not in inspector
 
 
 def test_ui_has_no_game_memory_or_adb_process_api():
@@ -148,12 +174,12 @@ def test_model_view_carries_explicit_event_rate_contract_fields():
     assert '不以 0 或墙钟替代' in source
 
 
-def test_wpf_surfaces_event_derived_overkill_without_redefining_damage():
+def test_wpf_surfaces_effective_and_overkill_without_inclusive_total_language():
     inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
     screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')
-    assert '"伤害 · 含过量"' in inspector
-    assert '过量伤害 · 事件派生' in inspector and 'overkill_damage' in inspector
-    assert '总伤害含过量' in screenshot and 'overkill_damage' in screenshot
+    assert '"有效伤害"' in inspector and '"过量伤害"' in inspector
+    assert 'effective_damage' in inspector and 'overkill_damage' in inspector
+    assert '总伤害含过量' not in inspector and '总伤害含过量' not in screenshot
 
 
 def test_wpf_user_facing_numbers_use_at_most_one_decimal():
@@ -167,3 +193,27 @@ def test_wpf_user_facing_numbers_use_at_most_one_decimal():
     assert '0.###' not in screenshot
     assert 'Entry.Exact("rate")' not in panel and 'Entry.Exact("share")' not in panel
     assert 'Json.UiText(Entry.Text("exact_value"))' in panel
+
+
+def test_probe_declares_all_quality_counters_before_use():
+    js = (ROOT/'event_probe_android2791.js').read_text('utf-8')
+    for name in ('unknownSources', 'engagementUnknownSources', 'skippedUnattributed'):
+        assert any(token in js for token in
+                   (f'let {name}=', f'let {name} =', f'const {name}=', f'const {name} =')), name
+
+
+def test_wpf_does_not_list_burst_as_a_separate_metric():
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    assert '爆条伤害 · 归属' not in inspector
+    assert '爆条过量' not in inspector
+    assert 'burst_damage' not in inspector and 'burst_overkill' not in inspector
+
+
+def test_effective_only_toggle_and_overkill_legend_are_wired():
+    xaml = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml').read_text('utf-8')
+    panel = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml.cs').read_text('utf-8')
+    assert 'x:Name="EffectiveOnly"' in xaml
+    assert '有效伤害' in xaml and '溢出总伤' in xaml
+    assert '仅显示有效伤害' not in xaml
+    assert '▨ 过量伤害' in xaml
+    assert 'effective_only' in panel and 'EffectiveChanged' in panel

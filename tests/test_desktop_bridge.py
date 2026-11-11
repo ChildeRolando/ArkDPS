@@ -46,6 +46,16 @@ def test_first_launch_and_default_model_ignores_legacy_projection(tmp_path):
     assert view['source']['a']['shield_absorbed'] is None
 
 
+def test_snapshot_team_totals_keep_unknown_unknown():
+    from desktop_bridge import team_totals
+    known = {'rows': {'a': {'damage': 10, 'healing': 2, 'shield_absorbed': 1},
+                      'b': {'damage': 5, 'healing': None, 'shield_absorbed': 3}}}
+    totals = team_totals(known)
+    assert totals['damage'] == 15 and totals['shield_absorbed'] == 4
+    assert totals['healing'] is None
+    assert team_totals({})['damage'] is None
+
+
 def test_rate_does_not_change_ranks_bars_shares_and_shield_rejects_engagement(tmp_path):
     state = DesktopState(tmp_path)
     state.accept('sample', sample())

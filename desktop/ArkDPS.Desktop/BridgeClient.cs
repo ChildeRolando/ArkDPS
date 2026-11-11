@@ -37,6 +37,21 @@ internal static class Json
             return number.ToString("0.#", CultureInfo.InvariantCulture);
         return item.ToString();
     }
+    // Detail panels use whole numbers; compact list values keep their own form.
+    public static string UiInt(this JsonElement value, string name)
+    {
+        var item = value.Get(name);
+        if (item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return "—";
+        if (item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out var number) && double.IsFinite(number))
+            return Math.Round(number, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture);
+        return item.ToString();
+    }
+    public static string UiIntText(string text)
+    {
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number))
+            return Math.Round(number, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture);
+        return text;
+    }
     public static string UiText(string text)
     {
         if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number))

@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SetNavState("live");
         HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;HistoryPanel.RateActionRequested=HandleRateAction;
         HistoryPanel.PinRequested=id=>HistoryInspector.Pin(id,HistoryPanel.View);
         Outcome.SelectedIndex=0;Practice.SelectedIndex=0;
@@ -114,12 +115,16 @@ public partial class MainWindow : Window
         lastResponse=System.Diagnostics.Stopwatch.GetTimestamp();responseStale=false;
         applying=true;State=state;
         var layout=state.Get("layout");string theme=layout.Text("theme");
-        bool changed=Theme.Key!=theme;if(changed)Theme.Apply(theme);
-        Skin.SelectedIndex=theme=="original" ? 1 : 0;
+        bool changed=Theme.Key!=theme;if(changed){Theme.Apply(theme);SetNavState(route);if(route=="live")PageTitle.Text=Theme.Key=="lone-trail" ? "飞行记录" : "本局统计";}
+        Skin.SelectedIndex=Theme.IndexOf(theme);
         Status.Text=state.Text("status_text");EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         Stage.Text=state.Text("stage").Length>0 ? state.Text("stage") : "关卡未知";
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
+        var totals=state.Get("totals");
+        TotalDamage.Text=TotalText(totals.Get("damage"));
+        TotalHealing.Text=TotalText(totals.Get("healing"));
+        TotalShield.Text=TotalText(totals.Get("shield_absorbed"));
         var seconds=state.Get("game_time");double t=seconds.TryNumber();Clock.Text=seconds.ValueKind==JsonValueKind.Number ? $"游戏时间 {(int)t/60:00}:{t%60:00.0}" : "游戏时间 —";
         Footer.Text=state.Text("connection_text");
         if(App.BridgeArguments.Contains("--offline")) ModeLabel.Text="离线验收 · 合成数据 · 不访问游戏";
@@ -151,6 +156,7 @@ public partial class MainWindow : Window
             Native.Restore(this,layout.Get("gui"));
             foreach(var placement in layout.Get("huds").Items()) OpenHud(placement.Text("panel_id"),placement);
             InitializeSettings();initialized=true;normalGeometry=Native.Geometry(this);
+            PanelScroll.ScrollToTop();InspectorScroll.ScrollToTop();
         }
         UpdateHistory();
         var diag=state.Get("diagnostic");
@@ -176,11 +182,11 @@ public partial class MainWindow : Window
         if(PanelHost==null || PanelScroll==null) return;
         bool narrow=ActualWidth<1000;
         DockPanel.SetDock(InspectorScroll,narrow ? Dock.Bottom : Dock.Right);
-        InspectorScroll.Width=narrow ? double.NaN : 300;InspectorScroll.MaxHeight=narrow ? 240 : double.PositiveInfinity;
+        InspectorScroll.Width=narrow ? double.NaN : 340;InspectorScroll.MaxHeight=narrow ? 300 : double.PositiveInfinity;
         double width=PanelScroll.ViewportWidth;
-        if(width<100) width=Math.Max(350,ActualWidth-(narrow ? 72 : 390));
-        int columns=Math.Max(1,(int)(width/385));
-        foreach(var panel in Panels.Values)panel.Width=Math.Max(350,Math.Floor(width/columns));
+        if(width<100) width=Math.Max(420,ActualWidth-(narrow ? 132 : 500));
+        int columns=Math.Max(1,(int)Math.Round(width/410));
+        foreach(var panel in Panels.Values)panel.Width=Math.Max(400,Math.Floor(width/columns));
         if(ActualWidth<850 && !historyHidden){HistoryListColumn.Width=new GridLength(210);}else if(!historyHidden) HistoryListColumn.Width=new GridLength(285);
     }
     private void ScheduleSave(){if(initialized && !applying && !quitting){if(IsVisible && WindowState==WindowState.Normal)normalGeometry=Native.Geometry(this);save.Stop();save.Start();}}
@@ -227,11 +233,41 @@ public partial class MainWindow : Window
         route=page;LivePage.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
-        PageTitle.Text=page switch{"history"=>"历史战绩","settings"=>"连接设置",_=>"本局统计"};
-        AddPanelButton.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;ArrangePanels();
+        bool live=page=="live";
+        BattleStrip.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
+        MetricCards.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
+        PageEyebrow.Text=page switch{"history"=>"ARCHIVE / BATTLE LOG","settings"=>"SYSTEM / CONNECTION",_=>"FLIGHT RECORDER / ACTIVE SORTIE"};
+        PageTitle.Text=page switch{"history"=>"历史战绩","settings"=>"连接设置",_=>Theme.Key=="lone-trail" ? "飞行记录" : "本局统计"};
+        PageSubtitle.Text=page switch{"history"=>"本地归档 · 搜索、导出与分享","settings"=>"连接、事件观测与诊断",_=>"实时贡献、有效伤害与过量拆分"};
+        SetNavState(page);
+        AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
+        if(live){PanelScroll.ScrollToTop();InspectorScroll.ScrollToTop();}
+        ArrangePanels();
         // The list is a pull cache owned by Python: re-read it on every entry so a
         // battle finished a moment ago is visible without pressing 刷新.
         if(page=="history") await Command("history_refresh");
+    }
+    private void SetNavState(string page)
+    {
+        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(SettingsNav,"settings")})
+        {
+            bool active=tag==page;
+            button.Background=active?Theme.Resource("SidebarActive"):Brushes.Transparent;
+            button.Foreground=active?Theme.Resource("SidebarInk"):Theme.Resource("SidebarMuted");
+            button.BorderBrush=active?Theme.Resource("Accent"):Brushes.Transparent;
+            button.BorderThickness=active?new Thickness(3,0,0,0):new Thickness(0);
+        }
+        PageTitle.Foreground=Theme.Resource("Ink");
+        PageSubtitle.Foreground=Theme.Resource("Muted");
+        PageEyebrow.Foreground=Theme.Resource("Accent");
+    }
+    private static string TotalText(JsonElement value)
+    {
+        if(value.ValueKind!=JsonValueKind.Number) return "—";
+        double number=value.GetDouble();
+        if(!double.IsFinite(number)) return "—";
+        if(number>=1_000_000) return (number/1_000_000).ToString("0.00",System.Globalization.CultureInfo.InvariantCulture)+"M";
+        return number.ToString("N0",System.Globalization.CultureInfo.InvariantCulture);
     }
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
     // 事件不可用时的恢复入口：重试会重新连接采集（不重启应用）；否则打开连接设置。

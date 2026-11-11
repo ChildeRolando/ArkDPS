@@ -225,6 +225,78 @@ def test_shield_recent_can_be_rendered_when_supplied():
     assert view.rate_supported is False
 
 
+def test_full_cycle_dps_uses_presence_time_and_stays_unknown_without_coverage():
+    row = PanelSourceRow(owner_id='A', name='A', damage=1000,
+                         presence_seconds=10, presence_complete=True)
+    view = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE), [row])
+    entry = view.entries[0]
+    assert entry.rate == pytest.approx(100)
+    assert entry.rate_text == '100/s'
+    unknown = PanelSourceRow(owner_id='B', name='B', damage=1000,
+                             presence_seconds=None, presence_complete=False)
+    view = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE), [unknown])
+    assert view.entries[0].rate is None
+    assert view.entries[0].rate_text == '—'
+
+
+def test_dps_ranking_follows_selected_algorithm():
+    rows = [
+        PanelSourceRow(owner_id='A', name='A', damage=1000, recent_damage=200,
+                       engagement_damage=10, presence_seconds=10, presence_complete=True),
+        PanelSourceRow(owner_id='B', name='B', damage=500, recent_damage=300,
+                       engagement_damage=50, presence_seconds=10, presence_complete=True),
+    ]
+    recent = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                      rate_basis=RateBasis.RECENT_5S), rows)
+    assert [e.owner_id for e in recent.entries] == ['B', 'A']
+    assert [e.value for e in recent.entries] == [300, 200]
+    engagement = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                           rate_basis=RateBasis.ENGAGEMENT), rows)
+    assert [e.owner_id for e in engagement.entries] == ['B', 'A']
+    assert [e.value for e in engagement.entries] == [50, 10]
+    full = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                    rate_basis=RateBasis.FULL_CYCLE), rows)
+    assert [e.owner_id for e in full.entries] == ['A', 'B']
+    assert [e.value for e in full.entries] == [100, 50]
+
+
+def test_full_cycle_denominator_cannot_be_shorter_than_active_engagement():
+    # Mirrors 冬时 in a real archive: roster presence started ~3s after the
+    # first event, so the raw sampled presence was shorter than active time.
+    row = PanelSourceRow(owner_id='A', name='A', damage=12630,
+                         effective_damage=12282.5, overkill=347.5,
+                         overkill_complete=True, presence_seconds=24.6333,
+                         presence_complete=True, active_damage=27.1333)
+    view = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE,
+                                    ranking=Ranking.TOTAL), [row])
+    assert view.entries[0].rate == pytest.approx(12630 / 27.1333, rel=1e-6)
+    effective = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE,
+                                         ranking=Ranking.TOTAL, effective_only=True), [row])
+    assert effective.entries[0].rate == pytest.approx(12282.5 / 27.1333, rel=1e-6)
+
+
+def test_effective_only_changes_dps_numerator():
+    row = PanelSourceRow(owner_id='A', name='A', damage=1000,
+                         effective_damage=800, overkill=200, overkill_complete=True,
+                         presence_seconds=10, presence_complete=True,
+                         recent_damage=200, recent_overkill=40,
+                         recent_damage_window=(0, 5),
+                         observed_damage=500, active_damage=10)
+    total = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE,
+                                     effective_only=False), [row])
+    effective = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE,
+                                         effective_only=True), [row])
+    assert total.entries[0].rate == pytest.approx(100)
+    assert effective.entries[0].rate == pytest.approx(80)
+    recent = render_panel(PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.RECENT_5S,
+                                      effective_only=True), [row])
+    assert recent.entries[0].rate == pytest.approx(192)
+    engagement = render_panel(PanelConfig(ranking=Ranking.DPS,
+                                          rate_basis=RateBasis.ENGAGEMENT,
+                                          effective_only=True), [row])
+    assert engagement.entries[0].rate == pytest.approx(30)
+
+
 def test_shield_rejects_engagement_rate():
     with pytest.raises(ValueError):
         PanelConfig(category=Category.SHIELD, rate_basis=RateBasis.ENGAGEMENT)
@@ -455,3 +527,34 @@ def test_render_panel_keeps_non_team_note_when_shares_are_known():
     view = render_panel(total(), rows, team_note='已排除非队伍来源：trap_x')
     assert view.share_known is True
     assert view.share_note == '已排除非队伍来源：trap_x'
+
+
+def test_event_unknown_reason_is_specific_for_failed_and_partial_coverage():
+    row = src('A', damage=100)
+    row.event_complete = False
+    failed = EventAvailability(status='failed',
+                               error='unable to connect to remote frida-server', live=True)
+    view = render_panel(PanelConfig(), [row], event=failed)
+    reason = view.entries[0].detail['event_reason']
+    assert '事件观测未连接' in reason
+    assert 'unable to connect to remote frida-server' in reason
+
+    row.event_coverage_end = 12.34
+    partial = render_panel(PanelConfig(), [row], event=EventAvailability(status='recording'))
+    assert partial.entries[0].detail['event_reason'] == '事件仅覆盖到 12.3 游戏秒，之后未知'
+
+
+def test_effective_only_panel_uses_effective_damage_and_type_segments():
+    row = src('A', damage=1000, recent_damage=100)
+    row.effective_damage = 800
+    row.overkill = 200
+    row.damage_by_type = {'physical': 600, 'arts': 400}
+    row.overkill_by_type = {'physical': 100, 'arts': 100, 'elemental': 0, 'true': 0}
+    row.overkill_type_complete = True
+    view = render_panel(PanelConfig(effective_only=True), [row])
+    entry = view.entries[0]
+    assert entry.value == 800
+    assert entry.detail['effective_damage'] == 800
+    assert all('overkill_ratio' not in segment for segment in entry.segments)
+    assert {segment['kind']: segment['value'] for segment in entry.segments} == {
+        'physical': 500, 'arts': 300}

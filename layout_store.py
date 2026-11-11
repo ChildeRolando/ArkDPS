@@ -29,6 +29,7 @@ from panel_model import PanelConfig
 
 ROOT = Path(__file__).resolve().parent
 LAYOUT_VERSION = 3
+THEMES = ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original')
 DEFAULT_GUI = (960, 700)
 DEFAULT_GUI_MINIMUM = (440, 500)
 DEFAULT_HUD_MINIMUM = (350, 230)
@@ -121,7 +122,7 @@ class Layout:
     theme: str = 'lone-trail'
 
     def __post_init__(self):
-        if self.theme not in ('lone-trail', 'original'):
+        if self.theme not in THEMES:
             raise ValueError('未知皮肤')
         if not self.panels:
             raise ValueError('至少需要一个面板')
@@ -242,7 +243,7 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
             warnings.append(f'GUI 窗口几何无效，已使用默认位置：{exc}')
     huds = _parse_huds(raw.get('huds'), panels, warnings)
     theme = raw.get('theme', 'lone-trail')
-    if theme not in ('lone-trail', 'original'):
+    if theme not in THEMES:
         warnings.append('皮肤设置无效，已使用孤星')
         theme = 'lone-trail'
     return Layout(panels=panels, huds=huds, gui=gui,

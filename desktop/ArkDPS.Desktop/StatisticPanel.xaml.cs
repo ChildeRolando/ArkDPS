@@ -24,13 +24,31 @@ public sealed class RowItem : INotifyPropertyChanged
     public double ValueSize=>Compact ? 18 : 21;
     private JsonElement entry;
     public JsonElement Entry { get => entry; set { entry=value; PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(null)); } }
+    private int rank;
+    public int Rank => rank;
+    internal void SetRank(int value) { if(rank!=value){rank=value;PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(Rank)));} }
     public string Id => Entry.Text("owner_id");
     public string Name => Entry.Text("name");
     public string Initial => Name.Length > 0 ? Name[..1] : "?";
-    public string Value => Entry.Text("display_value");
-    public string Presence => (Entry.Bool("portrait_muted") ? "已离场" : "统计条目") + (Entry.Bool("incomplete") ? " · 部分覆盖" : "");
-    public string Secondary => Entry.Text("share_display") + (Entry.Text("rate_text").Length > 0 ? "   " + Entry.Text("rate_text") : "");
-    public string Tooltip => Name + "\n排行原值 " + Json.UiText(Entry.Text("exact_value")) + "\n" + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "") + "\n占比 " + Entry.Text("share_display") + "\n过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + "（总伤害含过量）";
+    public string Total => Entry.Text("display_value");
+    public string Rate => Entry.Text("rate_text");
+    public string Share => Entry.Text("share_display");
+    public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
+    public string BarTooltip
+    {
+        get
+        {
+            var detail=Entry.Get("detail");var types=detail.Get("damage_by_type");
+            string Value(string key) => types.ValueKind==JsonValueKind.Object ? types.UiInt(key) : "—";
+            string over=detail.UiInt("overkill_damage");
+            return "物理 "+Value("physical")+Environment.NewLine
+                +"法术 "+Value("arts")+Environment.NewLine
+                +"元素 "+Value("elemental")+Environment.NewLine
+                +"真实 "+Value("true")+Environment.NewLine
+                +"过量 "+over;
+        }
+    }
+    public string Tooltip => Name + Environment.NewLine + "排行原值 " + Json.UiText(Entry.Text("exact_value")) + Environment.NewLine + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "") + Environment.NewLine + "占比 " + Entry.Text("share_display") + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage");
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
@@ -88,20 +106,21 @@ public sealed class ContributionBar : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
-        dc.DrawRoundedRectangle(Theme.Resource("ConsoleCard"),null,new Rect(0,0,ActualWidth,ActualHeight),2,2);
+        dc.DrawRoundedRectangle(Theme.Resource("Track"),null,new Rect(0,0,ActualWidth,ActualHeight),1,1);
         double width=ActualWidth*Math.Clamp(Data.Number("bar_ratio"),0,1), x=0;
         var segments=Data.Get("segments").Items().ToArray();
         if (segments.Length==0)
         {
-            dc.DrawRoundedRectangle(Data.Text("bar_color").Length>0 ? Theme.Brush(Data.Text("bar_color")) : Theme.Resource("Signal"),null,new Rect(0,0,width,ActualHeight),2,2); return;
+            var color=Data.Text("bar_color");
+            dc.DrawRoundedRectangle(color.Length>0 ? Theme.Brush(color) : Theme.Resource("Accent"),null,new Rect(0,0,width,ActualHeight),1,1); return;
         }
         foreach(var segment in segments)
         {
             double size=Math.Min(width-x,width*Math.Clamp(segment.Number("ratio"),0,1));
             if(size>0)
             {
-                double body=Math.Max(0,size-2);
-                dc.DrawRectangle(Theme.Brush(segment.Text("color")),null,new Rect(x,0,body,ActualHeight));
+                double body=size;
+                dc.DrawRectangle(SegmentBrush(segment),null,new Rect(x,0,body,ActualHeight));
                 if(segment.TryGetProperty("overkill_ratio",out var mark) && mark.ValueKind==JsonValueKind.Number)
                 {
                     double ratio=Math.Clamp(mark.GetDouble(),0,1), overkill=body*ratio;
@@ -117,8 +136,14 @@ public sealed class ContributionBar : FrameworkElement
             }
             x+=size;
         }
-        if (x<width) dc.DrawRectangle(Theme.Resource("ConsoleMuted"),null,new Rect(x,0,width-x,ActualHeight));
+        if (x<width) dc.DrawRectangle(Theme.Resource("Track"),null,new Rect(x,0,width-x,ActualHeight));
     }
+    private static Brush SegmentBrush(JsonElement segment) => segment.Text("kind") switch
+    {
+        "physical"=>Theme.Resource("Physical"),"arts"=>Theme.Resource("Arts"),
+        "elemental"=>Theme.Resource("Elemental"),"true"=>Theme.Resource("True"),
+        _=>Theme.Resource("Accent")
+    };
 }
 
 /// <summary>Decorative orbital geometry from the reference, never a data chart.</summary>
@@ -142,6 +167,7 @@ public partial class StatisticPanel : UserControl
 {
     internal Func<string,Dictionary<string,object?>?,Task>? Command;
     internal Action<string>? HudRequested, PinRequested, LockRequested, RateActionRequested;
+    internal Action? CloseRequested;
     internal Action<string,double>? AlphaRequested;
     private readonly ObservableCollection<RowItem> items=new();
     private JsonElement view;
@@ -153,10 +179,34 @@ public partial class StatisticPanel : UserControl
     internal void Update(JsonElement value, bool canDelete=true)
     {
         view=value; updating=true;
-        Heading.Text=value.Text("title");
         var config=value.Get("config");
+        var title=value.Text("title");
+        if(IsHud)
+        {
+            title=config.Text("category") switch
+            {
+                "healing"=>"总治疗",
+                "shield"=>"总护盾",
+                _=>"总伤"
+            };
+        }
+        Heading.Text=title;
+        PanelKind.Text=IsHud ? "HUD PANEL" : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
+        PanelKind.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
+        HudClose.Visibility=IsHud ? Visibility.Visible : Visibility.Collapsed;
+        Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : "FullRow");
+        TableHeader.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
+        var category=config.Text("category");
+        if(category=="shield") Select(Ranking,"total");
+        Ranking.IsEnabled=category!="shield";
+        ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
+        ((ComboBoxItem)Ranking.Items[1]).Content=category=="shield" ? "近期" : "DPS";
+        Rate.ToolTip=config.Text("rate_basis")=="full_cycle" ? "全周期 DPS = 总伤 / 在场时间（自本次观测起）" : null;
         Rate.IsEnabled=config.Text("category")!="shield";
+        EffectiveOnly.IsChecked=config.Bool("effective_only");
+        EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
+            ? Visibility.Visible : Visibility.Collapsed;
         // The engagement column depends on event observation. Never leave it as a
         // silently blank column: show the reason and a retry/settings entry while
         // still allowing a switch back to the five-second window.
@@ -169,11 +219,12 @@ public partial class StatisticPanel : UserControl
         RateAction.Content=value.Text("rate_action_label");
         RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
         Rate.ToolTip=isEngagement && reason.Length>0 ? reason : null;
-        RateHeading.Text=(value.Text("rate_label").Length>0 ? value.Text("rate_label")+" /s · " : "")+"占比";
+        RateHeading.Text=config.Text("category") switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
         Actions.Visibility=IsHistory||IsHud ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         DeleteButton.IsEnabled=canDelete;
-        Legend.Visibility=config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
+        Legend.Visibility=!IsHud && config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
+        LegendRow.MinHeight=IsHud ? 0 : 28;
         OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
             ? Visibility.Visible : Visibility.Collapsed;
@@ -181,7 +232,8 @@ public partial class StatisticPanel : UserControl
         Coverage.Text=(value.Bool("share_known")
             ? "全队同口径占比 · 点击干员固定明细"
             : value.Text("share_reason"))+(note.Length>0 ? " · "+note : "");
-        if(IsHud){Plot.MinHeight=80;Rows.MinHeight=35;Rows.MaxHeight=double.PositiveInfinity;}
+        if(IsHud){Plot.MinHeight=56;Rows.MinHeight=30;Rows.MaxHeight=double.PositiveInfinity;}
+        Coverage.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         if(IsHud) Coverage.Text="跟随源面板 · "+value.Text("metric_label");
         var incoming=value.Get("entries").Items().ToArray();
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
@@ -198,28 +250,39 @@ public partial class StatisticPanel : UserControl
                 int index=items.ToList().FindIndex(x=>x.Id==incoming[i].Text("owner_id"));
                 if(index!=i) items.Move(index,i);
             }
+        for(int i=0;i<items.Count;i++) items[i].SetRank(i+1);
         Empty.Text=value.Text("empty_text"); Empty.Visibility=items.Count==0 ? Visibility.Visible : Visibility.Collapsed;
         updating=false;
     }
     private static void Select(ComboBox box,string tag)
     {
-        foreach(ComboBoxItem item in box.Items) if((string)item.Tag==tag) {box.SelectedItem=item;break;}
+        foreach(ComboBoxItem item in box.Items) if((string)item.Tag==tag) {box.SelectedItem=item;return;}
+        // Old v1 layouts used "recent"; the UI now exposes it as the DPS basis.
+        if(tag=="recent") foreach(ComboBoxItem item in box.Items)
+            if((string)item.Tag=="dps") {box.SelectedItem=item;return;}
     }
     internal Dictionary<string,object?> Configuration() => new()
     {
         ["panel_id"]=PanelId,
         ["category"]=((ComboBoxItem)Category.SelectedItem).Tag,
         ["ranking"]=((ComboBoxItem)Ranking.SelectedItem).Tag,
-        ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag
+        ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag,
+        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0
     };
     private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e)
     {
         if(updating || Command==null || Category.SelectedItem==null || Ranking.SelectedItem==null || Rate.SelectedItem==null) return;
         await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
     }
+    private async void EffectiveChanged(object sender,RoutedEventArgs e)
+    {
+        if(updating||Command==null||Category.SelectedItem==null||Ranking.SelectedItem==null||Rate.SelectedItem==null) return;
+        await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
+    }
     private async void Duplicate(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_duplicate",new(){["panel_id"]=PanelId});}
     private async void Delete(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_delete",new(){["panel_id"]=PanelId});}
     private void OpenHud(object sender,RoutedEventArgs e) => HudRequested?.Invoke(PanelId);
+    private void CloseHud(object sender,RoutedEventArgs e) => CloseRequested?.Invoke();
     private void RateActionClicked(object sender,RoutedEventArgs e) => RateActionRequested?.Invoke(view.Text("rate_action"));
     private void RowSelected(object sender,SelectionChangedEventArgs e) {if(!updating && Rows.SelectedItem is RowItem item) PinRequested?.Invoke(item.Id);}
     private void HoldOrder(object sender,MouseEventArgs e) => hold=true;
