@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace ArkDPS.Desktop;
 
@@ -14,6 +16,7 @@ public sealed class EnemyPoint
     public double TotalHp { get; init; }
     public double RemainingHp { get; init; }
     public double Damage { get; init; }
+    public bool DamageKnown { get; init; }
 }
 
 public sealed class EnemyItem
@@ -29,6 +32,7 @@ public sealed class EnemyItem
     public string Tooltip { get; init; } = "";
     public double HpPercent { get; init; }
     public double Opacity { get; init; } = 1;
+    public ImageSource? Portrait { get; init; }
 
     private static string Int(JsonElement value)
     {
@@ -71,7 +75,62 @@ public sealed class EnemyItem
             HpText = hpText, AttrsText = attrs, Tooltip = detail,
             HpPercent = hpKnown ? Math.Clamp(row.Get("hp_ratio").TryNumber() * 100, 0, 100) : 0,
             Opacity = alive ? 1 : .56,
+            Portrait = EnemyPortraits.Get(eid, !alive),
         };
+    }
+}
+
+internal static class EnemyPortraits
+{
+    private static JsonElement manifest;
+    private static BitmapImage? normal, muted;
+    private static readonly Dictionary<string, ImageSource> cache = new();
+    private static bool loaded;
+
+    public static ImageSource? Get(string id, bool gray)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        if (!loaded)
+        {
+            loaded = true;
+            try
+            {
+                var path = Path.Combine(App.Root, "assets", "enemy_portraits");
+                using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(path, "manifest.json")));
+                manifest = doc.RootElement.Clone();
+                normal = Load(Path.Combine(path, "normal.png"));
+                muted = Load(Path.Combine(path, "muted.png"));
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or NotSupportedException)
+            {
+                return null;
+            }
+        }
+        var metadata = manifest.Get("portraits").Get(id);
+        if (metadata.ValueKind != JsonValueKind.Object || normal == null || muted == null) return null;
+        string key = id + gray;
+        if (!cache.TryGetValue(key, out var image))
+        {
+            int index = (int)metadata.Number("index");
+            int cell = (int)manifest.Number("cell_size");
+            int cols = (int)manifest.Number("columns");
+            image = new CroppedBitmap(gray ? muted : normal,
+                new Int32Rect(index % cols * cell, index / cols * cell, cell, cell));
+            image.Freeze();
+            cache[key] = image;
+        }
+        return image;
+    }
+
+    private static BitmapImage Load(string path)
+    {
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.UriSource = new Uri(path);
+        image.EndInit();
+        image.Freeze();
+        return image;
     }
 }
 
@@ -169,7 +228,24 @@ public sealed class EnemyChart : FrameworkElement
         }
 
         Series(p => p.TotalHp, accent, 2.2);
-        Series(p => p.Damage, good, 2.2);
+        var damagePen = new Pen(good, 2.2)
+        {
+            LineJoin = PenLineJoin.Round,
+            StartLineCap = PenLineCap.Round,
+            EndLineCap = PenLineCap.Round,
+        };
+        for (int i = 1; i < points.Count; i++)
+        {
+            if (!points[i - 1].DamageKnown || !points[i].DamageKnown) continue;
+            dc.DrawLine(damagePen, Map(points[i - 1].GameTime, points[i - 1].Damage),
+                        Map(points[i].GameTime, points[i].Damage));
+        }
+        var known = points.Where(p => p.DamageKnown).ToArray();
+        if (known.Length > 0)
+        {
+            var last = Map(known[^1].GameTime, known[^1].Damage);
+            dc.DrawEllipse(good, null, last, 3.7, 3.7);
+        }
         Series(p => p.RemainingHp, muted, 1.4, true);
         var frameBrush = line.Clone();
         frameBrush.Opacity = .7;
@@ -205,13 +281,15 @@ public partial class MainWindow
         EnemyRemaining.Text = complete ? remaining : "≥ " + remaining;
         var last = enemy.Get("last_point");
         EnemyOurDamage.Text = last.ValueKind == JsonValueKind.Object
-            ? Json.UiInt(last, "our_damage") : "—";
+            && last.Get("our_damage_known").ValueKind == JsonValueKind.True
+            ? Json.UiInt(last, "our_effective_damage") : "—";
         EnemyChart.SetData(enemy.Get("series").Items().Select(p => new EnemyPoint
         {
             GameTime = p.Get("game_time").TryNumber(),
             TotalHp = p.Get("entered_total_hp").TryNumber(),
             RemainingHp = p.Get("remaining_hp").TryNumber(),
-            Damage = p.Get("our_damage").TryNumber(),
+            Damage = p.Get("our_effective_damage").TryNumber(),
+            DamageKnown = p.Get("our_damage_known").ValueKind == JsonValueKind.True,
         }).ToArray());
         var error = enemy.Text("error");
         EnemyStatusHint.Text = error.Length > 0 ? error
@@ -226,7 +304,7 @@ public partial class MainWindow
             _ => "场上暂无已入场敌人。",
         };
         EnemyChartLegendTotal.Text = "敌方总血量  " + (complete ? totalHp : "≥ " + totalHp);
-        EnemyChartLegendDamage.Text = "我方累计伤害  " + EnemyOurDamage.Text;
+        EnemyChartLegendDamage.Text = "我方有效伤害  " + EnemyOurDamage.Text;
         EnemyChartLegendRemaining.Text = "敌方剩余  " + (complete ? remaining : "≥ " + remaining);
     }
 }

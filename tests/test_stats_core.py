@@ -591,3 +591,44 @@ def test_skill_event_from_unknown_source_marks_split_unknown_not_fatal():
     row = s.result()['rows']['A']
     assert row['skill_damage'] is None
     assert row['skill_split_complete'] is False
+
+
+def test_skill_coverage_and_effective_split_use_per_event_overkill():
+    s = Statistics('skill-effective', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('start', .5, 'a', 'skill_start', 1, skill_key='k')
+    s.event('skill-kill', .6, 'a', 'damage', 50, target='enemy_1',
+            real_delta=-10, hp_before=10, hp_after=0, killed=True,
+            target_type=0, damage_type=1, shield_absorbed=0)
+    s.event('end', .7, 'a', 'skill_end', 1, skill_key='k')
+    s.event('normal-hit', .8, 'a', 'damage', 30, target='enemy_1',
+            real_delta=-30, hp_before=40, hp_after=10, killed=False,
+            target_type=0, damage_type=1)
+    s.advance(2)
+    row = s.result()['rows']['A']
+    assert row['skill_damage'] == 50
+    assert row['non_skill_damage'] == 30
+    assert row['skill_damage_effective'] == 10
+    assert row['non_skill_damage_effective'] == 30
+    assert row['skill_split_effective_complete'] is True
+    assert row['skill_active_seconds'] == pytest.approx(.2)
+    assert row['skill_coverage_complete'] is True
+
+
+def test_hp_overkill_evidence_splits_effective_skill_damage():
+    s = Statistics('skill-hp-effective', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('start', .1, 'a', 'skill_start', 1, skill_key='k')
+    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1')
+    s.event('hp', .2, 'a', 'hp_damage', 50, target='enemy_1',
+            hp_before=10, shield_absorbed=0)
+    s.event('end', .3, 'a', 'skill_end', 1, skill_key='k')
+    s.advance(1)
+    row = s.result()['rows']['A']
+    assert row['skill_damage'] == 50
+    assert row['skill_damage_effective'] == 10
+    assert row['skill_split_effective_complete'] is True

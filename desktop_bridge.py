@@ -168,7 +168,8 @@ class DesktopState:
                                    team_complete=complete, team_reason=reason,
                                    team_note=note, event=event))
         view['empty_text'] = empty_text(config, source, complete)
-        view['rates'] = detail_rates(rows, event)
+        view['rates'] = detail_rates(
+            rows, event, effective=config.effective_only and config.category.value == 'damage')
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source

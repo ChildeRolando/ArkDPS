@@ -558,3 +558,25 @@ def test_effective_only_panel_uses_effective_damage_and_type_segments():
     assert all('overkill_ratio' not in segment for segment in entry.segments)
     assert {segment['kind']: segment['value'] for segment in entry.segments} == {
         'physical': 500, 'arts': 300}
+
+
+def test_skill_coverage_and_effective_skill_split_reach_entry_detail():
+    row = PanelSourceRow(
+        owner_id='A', name='A', damage=1000, effective_damage=600,
+        overkill=400, overkill_complete=True,
+        skill_damage=500, non_skill_damage=500,
+        skill_damage_effective=300, non_skill_damage_effective=300,
+        skill_split_complete=True, skill_split_effective_complete=True,
+        skill_active_seconds=5, presence_seconds=10, presence_complete=True,
+        skill_coverage_complete=True,
+        damage_by_type={'physical': 1000},
+        overkill_by_type={'physical': 400}, overkill_type_complete=True)
+    assert row.skill_coverage() == .5
+    view = render_panel(PanelConfig(panel_id='p', effective_only=True), [row],
+                        event=EventAvailability('recording'))
+    detail = view.entries[0].detail
+    assert detail['skill_damage_effective'] == 300
+    assert detail['non_skill_damage_effective'] == 300
+    assert detail['skill_coverage'] == .5
+    assert detail['skill_split_effective_complete'] is True
+    assert detail['effective_damage_by_type'] == {'physical': 600}

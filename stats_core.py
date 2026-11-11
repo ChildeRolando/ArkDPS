@@ -70,6 +70,13 @@ class Statistics:
         self.non_skill_observed = {}
         self.skill_seen = set()
         self.skill_unknown = False
+        # Per-event overkill is split by the same skill window as its damage.
+        # HP evidence is kept separately because it overrides the ApplyModifier
+        # overkill total for owners that produced target-side evidence.
+        self.skill_overkill = {}
+        self.non_skill_overkill = {}
+        self.hp_skill_overkill = {}
+        self.hp_non_skill_overkill = {}
 
     @staticmethod
     def _time(value):
@@ -181,6 +188,20 @@ class Statistics:
                 raise ValueError('invalid event coverage end')
             self.event_coverage_end = end_time
             self._close_skill_windows(end_time)
+
+    def _skill_active_seconds(self, owner):
+        end = (self.event_coverage_end if self.event_coverage_end is not None
+               else self.now)
+        total = 0.0
+        for window in self.skill_windows.get(owner, ()):
+            start = window.get('start')
+            stop = window.get('end')
+            if self._optional_number(start) and self._optional_number(stop):
+                total += max(0.0, min(stop, end) - start)
+        active = self.skill_active.get(owner)
+        if active is not None and self._optional_number(active.get('start')):
+            total += max(0.0, end - active['start'])
+        return total
 
     def _close_skill_windows(self, game_time):
         for owner, window in list(self.skill_active.items()):
@@ -428,6 +449,13 @@ class Statistics:
             bucket = (self.skill_observed if attributed in self.skill_active
                       else self.non_skill_observed)
             bucket[attributed] = bucket.get(attributed, 0.0) + amount
+            burst_overkill = max(0.0, amount - actual)
+            if burst_overkill > 0:
+                overkill_bucket = (self.skill_overkill
+                                   if attributed in self.skill_active
+                                   else self.non_skill_overkill)
+                overkill_bucket[attributed] = (
+                    overkill_bucket.get(attributed, 0.0) + burst_overkill)
             self.last_elemental.pop(target_instance, None)
             return
         if kind in ('skill_start', 'skill_end'):
@@ -462,6 +490,9 @@ class Statistics:
                     else:
                         per_type = self.overkill_by_type.setdefault(owner, {})
                         per_type[type_key] = per_type.get(type_key, 0.0) + overkill
+                    bucket = (self.skill_overkill if owner in self.skill_active
+                              else self.non_skill_overkill)
+                    bucket[owner] = bucket.get(owner, 0.0) + overkill
             else:
                 self.overkill_incomplete.add(owner)
                 self.overkill_reason[owner] = reason
@@ -493,6 +524,10 @@ class Statistics:
                     return
                 overkill = max(0.0, amount - shield_absorbed - hp_before)
             self.hp_overkill[owner] = self.hp_overkill.get(owner, 0.0) + overkill
+            if overkill > 0:
+                bucket = (self.hp_skill_overkill if owner in self.skill_active
+                          else self.hp_non_skill_overkill)
+                bucket[owner] = bucket.get(owner, 0.0) + overkill
             return
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
@@ -678,11 +713,39 @@ class Statistics:
                 reason = '技能窗口未覆盖全部伤害事件'
             else:
                 reason = None
+            hp_overkill_known = owner in self.hp_seen and owner not in self.hp_overkill_incomplete
+            apply_overkill_known = overkill_known
+            if hp_overkill_known:
+                split_skill_overkill = self.hp_skill_overkill.get(owner, 0.0)
+                split_non_skill_overkill = self.hp_non_skill_overkill.get(owner, 0.0)
+                split_overkill_known = True
+            elif apply_overkill_known:
+                split_skill_overkill = self.skill_overkill.get(owner, 0.0)
+                split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
+                split_overkill_known = True
+            else:
+                split_skill_overkill = split_non_skill_overkill = None
+                split_overkill_known = False
+            effective_split_known = skill_known and covers_total and split_overkill_known
             row['skill_damage'] = skill_value if skill_known else None
             row['non_skill_damage'] = non_skill_value if skill_known else None
+            row['skill_damage_effective'] = (
+                max(0.0, skill_value - split_skill_overkill)
+                if effective_split_known else None)
+            row['non_skill_damage_effective'] = (
+                max(0.0, non_skill_value - split_non_skill_overkill)
+                if effective_split_known else None)
             row['skill_seen'] = owner in self.skill_seen
-            row['skill_window_count'] = len(self.skill_windows.get(owner, ()))
+            row['skill_window_count'] = (len(self.skill_windows.get(owner, ()))
+                                         + (1 if owner in self.skill_active else 0))
+            row['skill_active_seconds'] = (
+                self._skill_active_seconds(owner)
+                if self.event_coverage else None)
+            row['skill_coverage_complete'] = (
+                bool(self.event_coverage) and self.event_coverage_end is None
+                and not self.skill_unknown)
             row['skill_split_complete'] = skill_known and covers_total
+            row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason
             rows[owner] = row
         overkill_complete = bool(rows) and all(

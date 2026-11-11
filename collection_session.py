@@ -214,9 +214,17 @@ class CollectionSession:
                 telemetry.reset()
         stats = sample.get('statistics') or {}
         rows = stats.get('rows') or {}
-        our_damage = sum(value.get('damage', 0.0) for value in rows.values()
-                         if isinstance(value, dict)
-                         and isinstance(value.get('damage'), (int, float)))
+        known_rows = [value for value in rows.values()
+                      if isinstance(value, dict)
+                      and isinstance(value.get('damage'), (int, float))]
+        effective = [value.get('effective_damage') for value in known_rows]
+        if not known_rows:
+            our_damage = 0.0
+        elif all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                 for value in effective):
+            our_damage = sum(effective)
+        else:
+            our_damage = None
         read = getattr(self.collector, 'read_enemies', None)
         if read is None:
             sample['enemy'] = self._enemy_payload or {

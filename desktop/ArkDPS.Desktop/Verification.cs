@@ -48,6 +48,13 @@ public partial class MainWindow
         File.WriteAllText(HistoryPath(stateDirectory,battleId),
             ArchiveJson(stateDirectory,battleId,stage),new System.Text.UTF8Encoding(false));
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
+    private static bool HasText(DependencyObject root,string text)
+    {
+        if(root is TextBlock block && block.Text.Contains(text,StringComparison.Ordinal)) return true;
+        for(int i=0;i<System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);i++)
+            if(HasText(System.Windows.Media.VisualTreeHelper.GetChild(root,i),text)) return true;
+        return false;
+    }
     private async Task RunRateNoticeChecks(string id)
     {
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
@@ -347,6 +354,23 @@ public partial class MainWindow
                 "skill / non-skill split missing from rendered source rows");
         checks.Add("skill / non-skill split reaches the operator detail source");
         activePanel=id;LiveInspector.Pin(owner,Panels[id].View);
+        await Navigate("live");await Settle();
+        // The right-hand inspector must consume the same effective/overkill
+        // switch as the panel, including composition, engagement DPS and the
+        // skill split. The synthetic rows carry both datasets.
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",
+            ranking="total",rate_basis="recent_5s",effective_only=true}});
+        await Settle();
+        Require(Panels[id].View.Get("config").Bool("effective_only"),"effective switch did not reach the panel view");
+        Require(HasText(LiveInspector,"技能覆盖率"),"inspector did not render skill coverage");
+        Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
+        Screenshot.Window(this,Path.Combine(output,"effective-inspector.png"));
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",
+            ranking="total",rate_basis="recent_5s",effective_only=false}});
+        await Settle();
+        Require(HasText(LiveInspector,"技能伤害") &&
+                !HasText(LiveInspector,"技能有效伤害"),"inspector did not restore total skill split");
+        checks.Add("effective switch drives inspector composition, engagement rates and skill split");
         OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         await Settle();
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));

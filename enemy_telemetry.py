@@ -103,13 +103,14 @@ class EnemyTimeline:
     def reset(self):
         self.points = []
 
-    def add(self, game_time, rows, our_damage):
+    def add(self, game_time, rows, our_effective_damage):
         if not isinstance(game_time, (int, float)) or isinstance(game_time, bool):
             return None
-        if not isinstance(our_damage, (int, float)) or isinstance(our_damage, bool):
+        if not math.isfinite(game_time):
             return None
-        if not math.isfinite(game_time) or not math.isfinite(our_damage):
-            return None
+        damage_known = (isinstance(our_effective_damage, (int, float))
+                        and not isinstance(our_effective_damage, bool)
+                        and math.isfinite(our_effective_damage))
         if self.points and game_time <= self.points[-1]['game_time']:
             return None
         totals = enemy_totals(rows)
@@ -117,7 +118,8 @@ class EnemyTimeline:
             'game_time': float(game_time),
             'entered_total_hp': totals['entered_total_hp'],
             'remaining_hp': totals['remaining_hp'],
-            'our_damage': float(our_damage),
+            'our_effective_damage': float(our_effective_damage) if damage_known else None,
+            'our_damage_known': damage_known,
             'entered_count': totals['entered_count'],
             'alive_count': totals['alive_count'],
             'hp_complete': totals['hp_complete'],
@@ -167,11 +169,9 @@ def bootstrap_at_battle(reader):
     if reader._resolve_unit_manager(bc):
         unit_enemies = list(reader._uf_ptrs)
     reader.enemy_addrs = reader._union_enemy_ptrs(unit_enemies, enemies)
-    # The optional static game-data bundle may be absent from a source checkout.
-    # Live enemy names/attributes and lifecycle do not need the handbook table;
-    # keep the reader on its runtime path instead of failing the whole feature.
-    if getattr(reader, '_db', None) is None:
-        reader._db = {}
+    # Live enemy names/attributes and lifecycle do not need the static spawn
+    # plan. The reader's names catalog is optional and tolerant of a missing
+    # generated handbook table.
     for name in ('_names', '_identity_sources', '_attr_cache', '_attr_snapshot',
                  '_runtime_snapshot', '_runtime_ptrs', '_skill_cd', '_skill_enriched',
                  '_skill_lp', '_skill_ap'):

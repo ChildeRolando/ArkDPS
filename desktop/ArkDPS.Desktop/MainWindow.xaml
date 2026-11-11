@@ -146,7 +146,7 @@
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
       <Border Style="{StaticResource MetricCard}" Grid.Column="0" Margin="0,0,8,0"><StackPanel><TextBlock Text="◇ 已入场敌人" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyEntered" Text="—" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="含已离场实例" Style="{StaticResource Caption}"/></StackPanel></Border>
       <Border Style="{StaticResource MetricCard}" Grid.Column="1" Margin="0,0,8,0"><StackPanel><TextBlock Text="◆ 敌方总血量" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyTotalHp" Text="—" Foreground="{DynamicResource Accent}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="已入场实例 MaxHP 之和" Style="{StaticResource Caption}"/></StackPanel></Border>
-      <Border Style="{StaticResource MetricCard}" Grid.Column="2" Margin="0,0,8,0"><StackPanel><TextBlock Text="⚡ 我方累计伤害" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyOurDamage" Text="—" Foreground="{DynamicResource Good}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="与干员总伤同口径" Style="{StaticResource Caption}"/></StackPanel></Border>
+      <Border Style="{StaticResource MetricCard}" Grid.Column="2" Margin="0,0,8,0"><StackPanel><TextBlock Text="⚡ 我方有效伤害" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyOurDamage" Text="—" Foreground="{DynamicResource Good}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="与干员有效伤害同口径" Style="{StaticResource Caption}"/></StackPanel></Border>
       <Border Style="{StaticResource MetricCard}" Grid.Column="3" Margin="0"><StackPanel><TextBlock Text="◈ 敌方剩余" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyRemaining" Text="—" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="仅场上存活实例" Style="{StaticResource Caption}"/></StackPanel></Border>
      </Grid>
      <Grid Grid.Row="1">
@@ -159,7 +159,7 @@
          <ListBox x:Name="EnemyList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="已入场敌人">
           <ListBox.ItemTemplate><DataTemplate><Border Padding="8,9" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Opacity="{Binding Opacity}" ToolTip="{Binding Tooltip}"><StackPanel>
            <DockPanel>
-            <Border Width="34" Height="34" CornerRadius="3" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True"><Grid><TextBlock Text="{Binding Badge}" Foreground="{DynamicResource Accent}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid></Border>
+            <Border Width="34" Height="34" CornerRadius="3" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True"><Grid><TextBlock Text="{Binding Badge}" Foreground="{DynamicResource Accent}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Stretch="UniformToFill"/></Grid></Border>
             <StackPanel Margin="9,0,0,0" VerticalAlignment="Center"><TextBlock Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Eid}" Foreground="{DynamicResource Muted}" FontFamily="Cascadia Mono, Consolas" FontSize="10" TextTrimming="CharacterEllipsis"/></StackPanel>
             <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="{Binding Status}" Foreground="{DynamicResource Muted}" FontSize="10" TextAlignment="Right"/><TextBlock Text="{Binding HpText}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="12" TextAlignment="Right" Margin="0,2,0,0"/></StackPanel>
            </DockPanel>
@@ -173,10 +173,10 @@
       </Border>
       <Border Style="{StaticResource SurfaceCard}" Grid.Column="1" Padding="14">
        <DockPanel>
-        <DockPanel DockPanel.Dock="Top" LastChildFill="False" Margin="0,0,0,8"><TextBlock Text="血量 / 累计伤害" DockPanel.Dock="Left" Style="{StaticResource CardTitle}" FontSize="18"/><TextBlock Text="按游戏时间" Foreground="{DynamicResource Muted}" FontSize="11" DockPanel.Dock="Right" VerticalAlignment="Bottom"/></DockPanel>
+        <DockPanel DockPanel.Dock="Top" LastChildFill="False" Margin="0,0,0,8"><TextBlock Text="血量 / 有效伤害" DockPanel.Dock="Left" Style="{StaticResource CardTitle}" FontSize="18"/><TextBlock Text="按游戏时间" Foreground="{DynamicResource Muted}" FontSize="11" DockPanel.Dock="Right" VerticalAlignment="Bottom"/></DockPanel>
         <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
          <Border Width="8" Height="8" CornerRadius="1" Background="{DynamicResource Accent}" Margin="0,0,5,0"/><TextBlock x:Name="EnemyChartLegendTotal" Text="敌方总血量" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,12,0"/>
-         <Border Width="8" Height="8" CornerRadius="1" Background="{DynamicResource Good}" Margin="0,0,5,0"/><TextBlock x:Name="EnemyChartLegendDamage" Text="我方累计伤害" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,12,0"/>
+         <Border Width="8" Height="8" CornerRadius="1" Background="{DynamicResource Good}" Margin="0,0,5,0"/><TextBlock x:Name="EnemyChartLegendDamage" Text="我方有效伤害" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,12,0"/>
          <Border Width="8" Height="8" CornerRadius="1" Background="{DynamicResource Muted}" Margin="0,0,5,0"/><TextBlock x:Name="EnemyChartLegendRemaining" Text="敌方剩余" Foreground="{DynamicResource Muted}" FontSize="10"/>
         </WrapPanel>
         <local:EnemyChart x:Name="EnemyChart"/>

@@ -207,4 +207,28 @@ def test_bootstrap_does_not_require_the_static_handbook_bundle(monkeypatch):
     reader = Reader()
     assert enemy_telemetry.bootstrap_at_battle(reader) is True
     assert reader._spawn_plan == [] and reader._roster_initialized is False
-    assert reader._db == {}
+    assert getattr(reader, '_db', None) is None
+
+
+def test_timeline_keeps_enemy_hp_when_effective_damage_is_unknown():
+    timeline = EnemyTimeline()
+    rows = enemy_rows({'enemies': [enemy(max_hp=100.0, hp=100.0)]})
+    point = timeline.add(1.0, rows, None)
+    assert point['entered_total_hp'] == 100
+    assert point['our_effective_damage'] is None
+    assert point['our_damage_known'] is False
+
+
+def test_bundled_enemy_catalog_provides_names_and_handbook_codes():
+    import sys
+    from pathlib import Path
+    vendor = Path(__file__).resolve().parents[1] / 'vendor' / 'ark-source'
+    sys.path.insert(0, str(vendor))
+    try:
+        from tools.enemy_health.enemy_db import load_enemy_db
+        db = load_enemy_db()
+    finally:
+        sys.path.remove(str(vendor))
+    assert db['enemy_1007_slime']['name']
+    assert db['enemy_1007_slime']['code'] == 'B1'
+    assert 'enemy_1027_mob' in db

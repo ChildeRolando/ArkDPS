@@ -29,10 +29,15 @@ def seed(directory):
     for i, (owner, name) in enumerate(names):
         value = copy.deepcopy(row)
         damage = (12 - i) * 9123.4567
+        overkill = damage * .08
         value.update(name=name, damage=damage, healing=(i % 3) * 4567.89,
+            overkill_damage=overkill, effective_damage=damage - overkill,
             skill_damage=damage * .42, non_skill_damage=damage * .58,
-            skill_split_complete=True, skill_seen=True,
-            skill_window_count=1 + i % 3, skill_split_reason=None,
+            skill_damage_effective=(damage - overkill) * .42,
+            non_skill_damage_effective=(damage - overkill) * .58,
+            skill_split_complete=True, skill_split_effective_complete=True,
+            skill_seen=True, skill_active_seconds=4.2,
+            skill_coverage_complete=True, skill_split_reason=None,
             recent_damage=(12-i)*97.23, recent_healing=(i % 3)*103.12,
             present=i not in (3, 8), shield_absorbed=2334.56 if i == 2 else None,
             engagement_damage=(12-i)*123.45, engagement_healing=(i % 3)*215.43,
@@ -51,11 +56,11 @@ def seed(directory):
                         practice=None, outcome='unknown'))
     series = [
         dict(game_time=0., entered_total_hp=18000., remaining_hp=18000.,
-             our_damage=0., entered_count=2, alive_count=2, hp_complete=True),
+             our_effective_damage=0., our_damage_known=True, entered_count=2, alive_count=2, hp_complete=True),
         dict(game_time=6., entered_total_hp=26000., remaining_hp=14100.,
-             our_damage=11900., entered_count=3, alive_count=2, hp_complete=True),
+             our_effective_damage=11900., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
         dict(game_time=12., entered_total_hp=26000., remaining_hp=6200.,
-             our_damage=19800., entered_count=3, alive_count=1, hp_complete=True),
+             our_effective_damage=19800., our_damage_known=True, entered_count=3, alive_count=1, hp_complete=True),
     ]
     enemies = [
         dict(roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',

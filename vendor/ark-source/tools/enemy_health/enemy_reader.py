@@ -1168,7 +1168,8 @@ class EnemyReader:
             self._db[eid] = merged
             old = merged
         resolved_name = old.get('name') or eid
-        resolved_code = self._handbook_codes.get(eid, '') if self._collect('code') else ''
+        resolved_code = (self._handbook_codes.get(eid, '')
+                         or old.get('code', '') if self._collect('code') else '')
         for record in self._all_plan_records():
             if record.get('key') != eid:
                 continue
