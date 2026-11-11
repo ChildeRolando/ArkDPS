@@ -338,7 +338,16 @@ class PanelSourceRow:
         if (not _finite(total) or not _finite(self.presence_seconds)
                 or self.presence_seconds <= 0 or not self.presence_complete):
             return None
-        return total / self.presence_seconds
+        # Roster presence sampling can start after the first event. The active
+        # engagement interval is evidence that the owner was present, so it is
+        # a lower bound for the full-cycle denominator. Without this guard a
+        # slowly detected deployment makes full-cycle DPS exceed engagement DPS.
+        active = self.active(category)
+        denominator = max(self.presence_seconds,
+                          active if _finite(active) else self.presence_seconds)
+        if denominator <= 0:
+            return None
+        return total / denominator
 
     def rate(self, category: Category, basis: 'RateBasis', *,
              effective: bool = False) -> float | None:

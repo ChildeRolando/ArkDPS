@@ -260,6 +260,21 @@ def test_dps_ranking_follows_selected_algorithm():
     assert [e.value for e in full.entries] == [100, 50]
 
 
+def test_full_cycle_denominator_cannot_be_shorter_than_active_engagement():
+    # Mirrors 冬时 in a real archive: roster presence started ~3s after the
+    # first event, so the raw sampled presence was shorter than active time.
+    row = PanelSourceRow(owner_id='A', name='A', damage=12630,
+                         effective_damage=12282.5, overkill=347.5,
+                         overkill_complete=True, presence_seconds=24.6333,
+                         presence_complete=True, active_damage=27.1333)
+    view = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE,
+                                    ranking=Ranking.TOTAL), [row])
+    assert view.entries[0].rate == pytest.approx(12630 / 27.1333, rel=1e-6)
+    effective = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE,
+                                         ranking=Ranking.TOTAL, effective_only=True), [row])
+    assert effective.entries[0].rate == pytest.approx(12282.5 / 27.1333, rel=1e-6)
+
+
 def test_effective_only_changes_dps_numerator():
     row = PanelSourceRow(owner_id='A', name='A', damage=1000,
                          effective_damage=800, overkill=200, overkill_complete=True,
