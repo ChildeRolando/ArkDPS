@@ -353,6 +353,11 @@ def test_probe_recovers_targetless_damage_from_same_frame_elemental_bar():
     # The fallback is evidence, not a bypass: the Python core still verifies HP.
     assert 'target_instance' in js
     assert "record(this.source,'hp_damage'" in js
+    # Target-side HP evidence only describes our own outgoing damage. Enemy
+    # attacks on operators are not stream events; emitting them closed the
+    # whole authoritative stream before this guard existed.
+    hp_guard = js[js.index("Unit.OnTakeDamage'&&this.source"):]
+    assert 'own(this.source)' in hp_guard[:80]
 
 
 def test_elemental_bar_and_sourceless_burst_reach_attribution():
