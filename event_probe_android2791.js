@@ -39,7 +39,7 @@ try{
   for(let i=0;i<mn;i++){
    const m=ma.add(i*8).readPointer();if(!m.add(0x20).readPointer().equals(k))continue;
    const name=m.add(0x18).readPointer().readCString();
-   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || owner==='Entity'&&['ApplyModifier','OnAppliedModifier','OnTakeHeal','OnTakeDamage'].includes(name)) cfg.methods.push({owner,name,address:m.readPointer().toString()});
+   if(['OnTakeDamage','OnBlockDamage'].includes(name) || owner==='BlockDamage'&&['Execute','_AssignDynamicVar'].includes(name) || (owner==='Entity'||owner==='Unit')&&['ApplyModifier','OnAppliedModifier','OnTakeHeal','OnTakeDamage'].includes(name)) cfg.methods.push({owner,name,address:m.readPointer().toString()});
   }
  }
  for(const key of ['Entity.ApplyModifier','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar'])if(!cfg.methods.some(m=>m.owner+'.'+m.name===key))throw new Error('required method missing '+key);
@@ -134,14 +134,14 @@ function record(source,kind,amount,when,proof,evidence){
  if(evidence)Object.assign(event,evidence);
  queue.push(event);
 }
-for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&(x.name==='ApplyModifier'||x.name==='OnTakeDamage'))){
+for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&x.name==='ApplyModifier'||(x.owner==='Entity'||x.owner==='Unit')&&x.name==='OnTakeDamage')){
  hooks.push(Interceptor.attach(ptr(m.address),{
   onEnter(args){
    active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    try{
     this.when=time();
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
-    if(this.name==='Entity.OnTakeDamage'){
+    if(this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      // Signature: OnTakeDamage(Modifier& modifier, bool force), invoked on the
      // target entity. The modifier carries m_target/m_source and value.
      this.mod=args[0];
@@ -154,7 +154,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      }catch(e){this.ignore=true;}
      return;
     }
-    if(this.name==='Entity.OnTakeDamage'){
+    if(this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
      const hpAfter=targetHp(this.target);
      hpContext.push({sequence:++hpSequence,frame:end.frame,game_time:end.game_time,
