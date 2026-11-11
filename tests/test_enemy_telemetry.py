@@ -160,9 +160,6 @@ def test_bootstrap_uses_the_certified_battle_controller_without_a_second_scan(mo
         def _union_enemy_ptrs(self, primary, fallback):
             return list(primary) + list(fallback)
 
-        def _load_spawn_plan(self):
-            self.loaded = True
-
         def _prefill(self):
             self.prefilled = True
 
@@ -170,10 +167,11 @@ def test_bootstrap_uses_the_certified_battle_controller_without_a_second_scan(mo
     assert enemy_telemetry.bootstrap_at_battle(reader) is True
     assert reader.sched_addr == 2000 and reader.list_addr == 3000
     assert reader.enemy_addrs == [11, 12]
-    assert reader.loaded and reader.prefilled
+    assert reader._spawn_plan == [] and reader._roster_initialized is False
+    assert reader.prefilled
 
 
-def test_bootstrap_falls_back_to_an_empty_plan_and_keeps_the_clock(monkeypatch):
+def test_bootstrap_does_not_require_the_static_handbook_bundle(monkeypatch):
     import enemy_telemetry
 
     monkeypatch.setattr(enemy_telemetry, '_gs', SimpleNamespace(
@@ -203,18 +201,10 @@ def test_bootstrap_falls_back_to_an_empty_plan_and_keeps_the_clock(monkeypatch):
         def _union_enemy_ptrs(self, primary, fallback):
             return []
 
-        def _load_spawn_plan(self):
-            raise RuntimeError('missing game data')
-
-        def _set_spawn_plan(self, records):
-            self.plan = records
-
-        def _resolve_battle_clock(self):
-            self.clock = True
-
         def _prefill(self):
-            pass
+            raise RuntimeError('static data missing')
 
     reader = Reader()
     assert enemy_telemetry.bootstrap_at_battle(reader) is True
-    assert reader.plan == [] and reader.clock is True
+    assert reader._spawn_plan == [] and reader._roster_initialized is False
+    assert reader._db == {}

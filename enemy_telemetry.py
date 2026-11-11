@@ -167,17 +167,37 @@ def bootstrap_at_battle(reader):
     if reader._resolve_unit_manager(bc):
         unit_enemies = list(reader._uf_ptrs)
     reader.enemy_addrs = reader._union_enemy_ptrs(unit_enemies, enemies)
-    saved_clock = getattr(reader, '_bc_static_fields', 0)
-    try:
-        reader._load_spawn_plan()
-    except Exception:
-        reader._set_spawn_plan([])
-        if saved_clock:
-            reader._bc_static_fields = saved_clock
-        else:
-            reader._resolve_battle_clock()
-    if saved_clock and not getattr(reader, '_bc_static_fields', 0):
-        reader._bc_static_fields = saved_clock
+    # The optional static game-data bundle may be absent from a source checkout.
+    # Live enemy names/attributes and lifecycle do not need the handbook table;
+    # keep the reader on its runtime path instead of failing the whole feature.
+    if getattr(reader, '_db', None) is None:
+        reader._db = {}
+    for name in ('_names', '_identity_sources', '_attr_cache', '_attr_snapshot',
+                 '_runtime_snapshot', '_runtime_ptrs', '_skill_cd', '_skill_enriched',
+                 '_skill_lp', '_skill_ap'):
+        cache = getattr(reader, name, None)
+        if cache is not None and hasattr(cache, 'clear'):
+            cache.clear()
+    reader._spawn_plan = []
+    reader._runtime_spawn_plan = []
+    reader._runtime_action_records = {}
+    reader._plan_by_id = {}
+    reader._roster_last = {}
+    reader._addr_to_roster = {}
+    reader._dynamic_roster_seq = 0
+    reader._roster_initialized = False
+    reader._action_meta = {}
+    reader._action_queue_ptr = 0
+    reader._action_queue_items = 0
+    reader._action_queue_version = -1
+    reader._action_queue_entries = []
+    reader._f_ptrs = []
+    reader._f_items = 0
+    reader._f_cnt = 0
+    reader._f_version = -1
+    reader._uf_ptrs = []
+    reader._uf_items = 0
+    reader._uf_cnt = 0
     try:
         reader._prefill()
     except Exception:
