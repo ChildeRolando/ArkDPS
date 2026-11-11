@@ -41,7 +41,16 @@ class RemovedFlag(argparse.Action):
         self.message = message
 
     def __call__(self, parser, namespace, values, option_string=None):
-        parser.error(self.message)
+        # Keep the diagnostic readable on UTF-8 and non-UTF-8 consoles; capsys
+        # replaces sys.stderr with a text stream that has no usable buffer.
+        text = ((option_string + ': ') if option_string else '') + self.message + chr(10)
+        try:
+            sys.stderr.write(text)
+            sys.stderr.flush()
+        except UnicodeEncodeError:
+            sys.stderr.buffer.write(text.encode('utf-8'))
+            sys.stderr.buffer.flush()
+        raise SystemExit(2)
 
 
 def timestamp():
@@ -80,7 +89,17 @@ def parser_for():
     return parser
 
 
+def _utf8_streams():
+    """Keep CLI diagnostics readable on non-Chinese Windows consoles and CI."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8')
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    _utf8_streams()
     parser = parser_for()
     args = parser.parse_args()
     if args.require_events and args.frida_remote == '':

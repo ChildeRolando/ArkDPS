@@ -105,6 +105,6 @@ def test_app_import_never_loads_tkinter():
 @pytest.mark.parametrize('flag', ['--legacy-tk', '--acceptance-output', '--self-test'])
 def test_removed_flags_exit_nonzero_with_wpf_pointer(flag):
     result = subprocess.run([sys.executable, 'app.py', flag, 'out'], cwd=ROOT,
-                            capture_output=True, text=True, timeout=120)
+                            capture_output=True, text=True, encoding='utf-8', timeout=120)
     assert result.returncode == 2
     assert '已封存' in result.stderr and 'verify_wpf' in result.stderr
