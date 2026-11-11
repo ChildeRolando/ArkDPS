@@ -153,6 +153,9 @@ class BattleStatisticsAdapter:
         self.last_roster_frame: int | None = None
         self.last_roster: RosterSnapshot | None = None
         self.presented_names: dict[str, str] = {}
+        self.presence_seconds: dict[str, float] = {}
+        self.presence_complete = True
+        self.presence_gap = False
         self.finished_session: str | None = None
 
     @property
@@ -168,6 +171,8 @@ class BattleStatisticsAdapter:
                 self.event_stream.stop()
             self.statistics.invalidate_snapshots()
             self.statistics.invalidate_events()
+            self.presence_complete = False
+            self.presence_gap = True
             self.last_result = self.statistics.result()
             self.types_current.clear()
 
@@ -403,6 +408,19 @@ class BattleStatisticsAdapter:
         else:
             self.statistics.snapshot(game_time, counters)
             changed = True
+        if (self.last_roster is not None and self.last_game_time is not None
+                and game_time > self.last_game_time and not settling):
+            if self.presence_gap:
+                self.presence_gap = False
+                self.presence_complete = False
+            elif self.last_roster.present_known and roster.present_known:
+                delta = game_time - self.last_game_time
+                for owner in self._present_owners(self.last_roster):
+                    self.presence_seconds[owner] = self.presence_seconds.get(owner, 0.0) + delta
+            else:
+                self.presence_complete = False
+        if not roster.present_known:
+            self.presence_complete = False
         if (changed or roster != self.last_roster
                 or any(self.last_types.get(cid) != values for cid, values in types_update.items())):
             self.snapshot_revision += 1
@@ -442,6 +460,14 @@ class BattleStatisticsAdapter:
         self.finished_session = self.session
         return self.last_result
 
+    @staticmethod
+    def _present_owners(roster: RosterSnapshot) -> set[str]:
+        if not roster.present_known:
+            return set()
+        present = roster.present_unique_ids
+        return {entry.cid for entry in roster.entries
+                if not entry.is_token and entry.unique_id in present}
+
     def result(self, roster: RosterSnapshot | None = None) -> dict:
         """Return statistics rows enriched with type totals and presence."""
         if self.last_result is None:
@@ -480,6 +506,9 @@ class BattleStatisticsAdapter:
                 cid not in self.types_current for cid in sources))
                 and burst is None)
             enriched['present'] = owners_present.get(owner) if present_known else None
+            enriched['presence_seconds'] = (self.presence_seconds.get(owner, 0.0)
+                                            if self.presence_complete and present_known else None)
+            enriched['presence_complete'] = self.presence_complete
             enriched['sources'] = sorted(
                 cid for cid, mapped in self.owner_map.owners.items() if mapped == owner)
             enriched['name'] = (self.presented_names.get(owner)

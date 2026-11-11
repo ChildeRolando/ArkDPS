@@ -225,6 +225,20 @@ def test_shield_recent_can_be_rendered_when_supplied():
     assert view.rate_supported is False
 
 
+def test_full_cycle_dps_uses_presence_time_and_stays_unknown_without_coverage():
+    row = PanelSourceRow(owner_id='A', name='A', damage=1000,
+                         presence_seconds=10, presence_complete=True)
+    view = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE), [row])
+    entry = view.entries[0]
+    assert entry.rate == pytest.approx(100)
+    assert entry.rate_text == '100/s'
+    unknown = PanelSourceRow(owner_id='B', name='B', damage=1000,
+                             presence_seconds=None, presence_complete=False)
+    view = render_panel(PanelConfig(rate_basis=RateBasis.FULL_CYCLE), [unknown])
+    assert view.entries[0].rate is None
+    assert view.entries[0].rate_text == '—'
+
+
 def test_shield_rejects_engagement_rate():
     with pytest.raises(ValueError):
         PanelConfig(category=Category.SHIELD, rate_basis=RateBasis.ENGAGEMENT)

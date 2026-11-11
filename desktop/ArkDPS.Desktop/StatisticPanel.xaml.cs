@@ -105,8 +105,8 @@ public sealed class ContributionBar : FrameworkElement
             double size=Math.Min(width-x,width*Math.Clamp(segment.Number("ratio"),0,1));
             if(size>0)
             {
-                double body=Math.Max(0,size-3);
-                dc.DrawRoundedRectangle(SegmentBrush(segment),null,new Rect(x,0,body,ActualHeight),1,1);
+                double body=size;
+                dc.DrawRectangle(SegmentBrush(segment),null,new Rect(x,0,body,ActualHeight));
                 if(segment.TryGetProperty("overkill_ratio",out var mark) && mark.ValueKind==JsonValueKind.Number)
                 {
                     double ratio=Math.Clamp(mark.GetDouble(),0,1), overkill=body*ratio;
@@ -153,6 +153,7 @@ public partial class StatisticPanel : UserControl
 {
     internal Func<string,Dictionary<string,object?>?,Task>? Command;
     internal Action<string>? HudRequested, PinRequested, LockRequested, RateActionRequested;
+    internal Action? CloseRequested;
     internal Action<string,double>? AlphaRequested;
     private readonly ObservableCollection<RowItem> items=new();
     private JsonElement view;
@@ -164,12 +165,24 @@ public partial class StatisticPanel : UserControl
     internal void Update(JsonElement value, bool canDelete=true)
     {
         view=value; updating=true;
-        Heading.Text=value.Text("title");
+        var title=value.Text("title");
+        if(IsHud)
+        {
+            title=title.Replace("有效伤害","").Replace("伤害","").Trim(' ','·');
+            if(title.Length==0) title=value.Text("metric_label");
+        }
+        Heading.Text=title;
         PanelKind.Text=IsHud ? "HUD PANEL" : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
+        PanelKind.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
+        HudClose.Visibility=IsHud ? Visibility.Visible : Visibility.Collapsed;
         Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : "FullRow");
         TableHeader.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         var config=value.Get("config");
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
+        var category=config.Text("category");
+        ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
+        ((ComboBoxItem)Ranking.Items[1]).Content=category=="shield" ? "近期" : "DPS";
+        Rate.ToolTip=config.Text("rate_basis")=="full_cycle" ? "全周期 DPS = 总伤 / 在场时间（自本次观测起）" : null;
         Rate.IsEnabled=config.Text("category")!="shield";
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"&&config.Text("ranking")=="total"
@@ -200,6 +213,7 @@ public partial class StatisticPanel : UserControl
             ? "全队同口径占比 · 点击干员固定明细"
             : value.Text("share_reason"))+(note.Length>0 ? " · "+note : "");
         if(IsHud){Plot.MinHeight=56;Rows.MinHeight=30;Rows.MaxHeight=double.PositiveInfinity;}
+        Coverage.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         if(IsHud) Coverage.Text="跟随源面板 · "+value.Text("metric_label");
         var incoming=value.Get("entries").Items().ToArray();
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
@@ -245,6 +259,7 @@ public partial class StatisticPanel : UserControl
     private async void Duplicate(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_duplicate",new(){["panel_id"]=PanelId});}
     private async void Delete(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_delete",new(){["panel_id"]=PanelId});}
     private void OpenHud(object sender,RoutedEventArgs e) => HudRequested?.Invoke(PanelId);
+    private void CloseHud(object sender,RoutedEventArgs e) => CloseRequested?.Invoke();
     private void RateActionClicked(object sender,RoutedEventArgs e) => RateActionRequested?.Invoke(view.Text("rate_action"));
     private void RowSelected(object sender,SelectionChangedEventArgs e) {if(!updating && Rows.SelectedItem is RowItem item) PinRequested?.Invoke(item.Id);}
     private void HoldOrder(object sender,MouseEventArgs e) => hold=true;

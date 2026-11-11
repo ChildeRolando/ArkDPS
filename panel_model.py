@@ -43,12 +43,14 @@ class Ranking(str, Enum):
 class RateBasis(str, Enum):
     RECENT_5S = 'recent_5s'
     ENGAGEMENT = 'engagement'
+    FULL_CYCLE = 'full_cycle'
 
 
 CATEGORY_LABELS = {Category.DAMAGE: '伤害', Category.HEALING: '治疗',
                    Category.SHIELD: '有效护盾'}
 RANKING_LABELS = {Ranking.TOTAL: '本局总量', Ranking.RECENT: '最近 5 秒'}
-RATE_LABELS = {RateBasis.RECENT_5S: '近 5 秒', RateBasis.ENGAGEMENT: '接敌'}
+RATE_LABELS = {RateBasis.RECENT_5S: '近 5 秒', RateBasis.ENGAGEMENT: '接敌',
+               RateBasis.FULL_CYCLE: '全周期DPS'}
 
 @dataclass(frozen=True)
 class EventAvailability:
@@ -162,8 +164,8 @@ class PanelConfig:
     def __post_init__(self):
         if not self.panel_id:
             raise ValueError('panel_id is required')
-        if self.category is Category.SHIELD and self.rate_basis is RateBasis.ENGAGEMENT:
-            raise ValueError('护盾不使用接敌速率')
+        if self.category is Category.SHIELD and self.rate_basis is not RateBasis.RECENT_5S:
+            raise ValueError('护盾不使用接敌或全周期速率')
 
     @property
     def display_title(self) -> str:
@@ -244,6 +246,10 @@ class PanelSourceRow:
     engagement_healing: float | None = None
     active_damage: float | None = None
     active_healing: float | None = None
+    # Observed on-field duration since this session's coverage start. It is not
+    # the engagement interval and is None when presence was never certified.
+    presence_seconds: float | None = None
+    presence_complete: bool = False
     damage_by_type: Mapping[str, float] = field(default_factory=dict)
     # Event-derived overkill is a subset of damage, never part of the ranking
     # denominator. It stays None unless the whole event stream proved it.
@@ -297,6 +303,14 @@ class PanelSourceRow:
             return self.active_healing
         return None
 
+    def full_cycle(self, category: Category) -> float | None:
+        """总伤 / 在场时间, only when both numerator and presence are certified."""
+        total = self.total(category)
+        if (not _finite(total) or not _finite(self.presence_seconds)
+                or self.presence_seconds <= 0 or not self.presence_complete):
+            return None
+        return total / self.presence_seconds
+
     def observed(self, category: Category) -> float | None:
         if category is Category.DAMAGE:
             return self.observed_damage
@@ -328,6 +342,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             engagement_healing=row.get('engagement_healing'),
             active_damage=row.get('active_damage'),
             active_healing=row.get('active_healing'),
+            presence_seconds=row.get('presence_seconds'),
+            presence_complete=bool(row.get('presence_complete', False)),
             observed_damage=row.get('observed_damage'),
             observed_healing=row.get('observed_healing'),
             damage_by_type=row.get('damage_by_type') or {},
@@ -542,10 +558,17 @@ def _segments(row: PanelSourceRow, ranking: Ranking,
 
 
 def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
-                  available: bool, *, engagement: bool = True) -> tuple[str, str, str]:
+                  available: bool, *, engagement: bool = True,
+                  full_cycle: bool = False) -> tuple[str, str, str]:
     """Classify one row's rate column without inventing a value."""
     if _finite(rate):
         return 'value', f'{format_compact(rate)}/s', ''
+    if full_cycle:
+        if not row.presence_complete or row.presence_seconds is None:
+            return 'unknown', '—', '在场时间未建立可靠覆盖；全周期 DPS 未知'
+        if row.presence_seconds <= 0:
+            return 'unknown', '—', '未观测到在场时间；全周期 DPS 未知'
+        return 'unknown', '—', '总量或在场时间不完整；全周期 DPS 未知'
     if not engagement:
         return 'unknown', '—', ''
     observed, active = row.observed(category), row.active(category)
@@ -669,13 +692,18 @@ def render_panel(config: PanelConfig,
         rate_state, rate_text, rate_note = (
             ('unsupported', '', '') if not rate_supported else ('unknown', '—', ''))
         if rate_supported:
-            rate = (row.recent(category) if config.rate_basis is RateBasis.RECENT_5S
-                    else row.engagement(category))
+            if config.rate_basis is RateBasis.RECENT_5S:
+                rate = row.recent(category)
+            elif config.rate_basis is RateBasis.ENGAGEMENT:
+                rate = row.engagement(category)
+            else:
+                rate = row.full_cycle(category)
             if not _finite(rate):
                 rate = None
             rate_state, rate_text, rate_note = _rate_display(
                 row, category, rate, rate_available,
-                engagement=config.rate_basis is RateBasis.ENGAGEMENT)
+                engagement=config.rate_basis is RateBasis.ENGAGEMENT,
+                full_cycle=config.rate_basis is RateBasis.FULL_CYCLE)
         entries.append(PanelEntry(
             owner_id=owner, name=row.name, value=value,
             bar_ratio=(value / max_value) if max_value > 0 else 0.0,

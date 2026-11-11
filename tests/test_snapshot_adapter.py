@@ -107,6 +107,24 @@ def test_mid_battle_baseline_starts_short_window_immediately():
     assert update.game_time == 32.3
 
 
+def test_full_cycle_presence_accumulates_only_while_present_and_gap_invalidates():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 0), row('char_b', 0)], 0, 1),
+                   roster([CHAR_A, CHAR_B], present=(1,), frame=1))
+    adapter.update(sample([row('char_a', 100), row('char_b', 0)], 3, 3),
+                   roster([CHAR_A, CHAR_B], present=(1, 2), frame=3))
+    adapter.update(sample([row('char_a', 100), row('char_b', 50)], 5, 5),
+                   roster([CHAR_A, CHAR_B], present=(2,), frame=5))
+    result = adapter.result(BASE)
+    assert result['rows']['char_a']['presence_seconds'] == pytest.approx(5)
+    assert result['rows']['char_b']['presence_seconds'] == pytest.approx(2)
+    assert result['rows']['char_a']['presence_complete'] is True
+    adapter.on_gap()
+    result = adapter.result(BASE)
+    assert result['rows']['char_a']['presence_seconds'] is None
+    assert result['rows']['char_a']['presence_complete'] is False
+
+
 def test_four_damage_types_and_overkill_totals_are_kept():
     a = BattleStatisticsAdapter()
     a.update(sample([row('char_a', 100, 0, physical=10, arts=20, true=30,

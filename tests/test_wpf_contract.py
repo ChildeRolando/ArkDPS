@@ -94,6 +94,17 @@ def test_actual_wpf_theme_text_pairs_have_aa_contrast():
             assert contrast(colors[foreground], colors[background]) >= 4.5, (foreground, background, colors)
 
 
+def test_hud_has_single_title_row_close_and_rich_rows():
+    xaml = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml').read_text('utf-8')
+    hud = (ROOT/'desktop/ArkDPS.Desktop/HudWindow.cs').read_text('utf-8')
+    assert 'x:Name="HudClose"' in xaml and 'Click="CloseHud"' in xaml
+    assert 'ArkDPS / HUD' not in hud and '解锁 · 可拖动' not in hud
+    assert 'x:Name="HudRow"' not in xaml  # DataTemplate key, not a control name
+    for binding in ('{Binding Rank}', '{Binding Portrait}', '{Binding Rate}', '{Binding Share}'):
+        assert binding in xaml
+    assert 'DPS算法' in xaml and '全周期DPS' in xaml and '溢出总伤' in xaml
+
+
 def test_wpf_ships_all_six_demo_skins():
     source = (ROOT/'desktop/ArkDPS.Desktop/App.xaml.cs').read_text('utf-8')
     for key in ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original'):
@@ -199,6 +210,8 @@ def test_wpf_does_not_list_burst_as_a_separate_metric():
 def test_effective_only_toggle_and_overkill_legend_are_wired():
     xaml = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml').read_text('utf-8')
     panel = (ROOT/'desktop/ArkDPS.Desktop/StatisticPanel.xaml.cs').read_text('utf-8')
-    assert 'x:Name="EffectiveOnly"' in xaml and '仅显示有效伤害' in xaml
+    assert 'x:Name="EffectiveOnly"' in xaml
+    assert '有效伤害' in xaml and '溢出总伤' in xaml
+    assert '仅显示有效伤害' not in xaml
     assert '▨ 过量伤害' in xaml
     assert 'effective_only' in panel and 'EffectiveChanged' in panel

@@ -13,8 +13,8 @@
       <Border Width="34" Height="34" CornerRadius="{DynamicResource ControlRadius}" Background="{DynamicResource Accent}">
        <Path Data="M 5 22 L 10 22 L 14 9 L 18 26 L 22 16 L 27 16" Stroke="{DynamicResource AccentInk}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
       </Border>
-      <TextBlock Text="ArkDPS" Foreground="{DynamicResource SidebarInk}" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBlock Text="LIVE ANALYTICS" Foreground="{DynamicResource SidebarMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="6" HorizontalAlignment="Center" Margin="0,1,0,0"/>
+      <TextBlock Text="ArkDPS" Foreground="{DynamicResource SidebarInk}" FontSize="17" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBlock Text="LIVE ANALYTICS" Foreground="{DynamicResource SidebarMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="7" HorizontalAlignment="Center" Margin="0,1,0,0"/>
      </StackPanel>
      <Button x:Name="LiveNav" Tag="live" Click="Navigate" Style="{StaticResource NavButton}">
       <StackPanel Orientation="Horizontal"><Path Width="18" Height="18" Data="M 3 18 L 21 18 M 5 15 L 9 10 L 12 12 L 18 4 L 21 6" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/><TextBlock Text="实时战况" Margin="9,0,0,0"/></StackPanel>
@@ -28,7 +28,7 @@
     </StackPanel>
 
     <StackPanel DockPanel.Dock="Bottom" Margin="10,0,10,12">
-     <TextBlock Text="皮肤" Foreground="{DynamicResource SidebarMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="9" Margin="2,0,0,5"/>
+     <TextBlock Text="皮肤" Foreground="{DynamicResource SidebarMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="10" Margin="2,0,0,5"/>
      <ComboBox x:Name="Skin" SelectionChanged="SkinChanged" AutomationProperties.Name="全局皮肤" Background="{DynamicResource SidebarCard}" Foreground="{DynamicResource SidebarInk}" BorderBrush="{DynamicResource SidebarLine}" Margin="0,0,0,8">
       <ComboBoxItem Content="孤星" Tag="lone-trail"/>
       <ComboBoxItem Content="危机合约" Tag="contingency-contract"/>
@@ -37,12 +37,12 @@
       <ComboBoxItem Content="叙拉古人" Tag="il-siracusano"/>
       <ComboBoxItem Content="原始界面" Tag="original"/>
      </ComboBox>
-     <Button Content="解锁 HUD" Click="UnlockAll" Background="{DynamicResource SidebarCard}" Foreground="{DynamicResource SidebarInk}" BorderBrush="{DynamicResource SidebarLine}" Padding="6,7" FontSize="10" Margin="0,0,0,6"/>
-     <Button Content="退出" Click="QuitClick" Background="Transparent" Foreground="{DynamicResource SidebarMuted}" BorderBrush="{DynamicResource SidebarLine}" Padding="6,7" FontSize="10" Margin="0"/>
+     <Button Content="解锁 HUD" Click="UnlockAll" Background="{DynamicResource SidebarCard}" Foreground="{DynamicResource SidebarInk}" BorderBrush="{DynamicResource SidebarLine}" Padding="6,7" FontSize="11" Margin="0,0,0,6"/>
+     <Button Content="退出" Click="QuitClick" Background="Transparent" Foreground="{DynamicResource SidebarMuted}" BorderBrush="{DynamicResource SidebarLine}" Padding="6,7" FontSize="11" Margin="0"/>
     </StackPanel>
 
     <StackPanel VerticalAlignment="Center" Margin="12,0">
-     <TextBlock Text="ARKDPS" Foreground="{DynamicResource SidebarMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="8" TextAlignment="Center" Margin="0,0,0,4"/>
+     <TextBlock Text="ARKDPS" Foreground="{DynamicResource SidebarMuted}" FontFamily="Cascadia Mono, Consolas" FontSize="9" TextAlignment="Center" Margin="0,0,0,4"/>
      <Border Height="1" Background="{DynamicResource SidebarLine}" Margin="8,0"/>
     </StackPanel>
    </DockPanel>
@@ -59,7 +59,7 @@
     <StackPanel>
      <TextBlock x:Name="PageEyebrow" Style="{StaticResource Eyebrow}" Text="FLIGHT RECORDER / ACTIVE SORTIE"/>
      <TextBlock x:Name="PageTitle" Style="{StaticResource PageTitle}" Text="本局统计" Margin="0,3,0,3"/>
-     <TextBlock x:Name="PageSubtitle" Foreground="{DynamicResource Muted}" FontSize="12" Text="实时贡献、有效伤害与过量拆分"/>
+     <TextBlock x:Name="PageSubtitle" Foreground="{DynamicResource Muted}" FontSize="13" Text="实时贡献、有效伤害与过量拆分"/>
     </StackPanel>
    </DockPanel>
 
@@ -69,18 +69,18 @@
      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
       <Border Width="4" Height="48" Background="{DynamicResource Accent}" CornerRadius="{DynamicResource ControlRadius}" Margin="0,0,14,0"/>
       <StackPanel VerticalAlignment="Center">
-       <TextBlock x:Name="Stage" Text="关卡未知" Foreground="{DynamicResource HeroInk}" FontSize="24" FontWeight="Bold"/>
-       <TextBlock x:Name="EventStatus" Text="等待事件能力诊断" Foreground="{DynamicResource HeroMuted}" FontSize="10" Margin="0,4,0,0"/>
+       <TextBlock x:Name="Stage" Text="关卡未知" Foreground="{DynamicResource HeroInk}" FontSize="25" FontWeight="Bold"/>
+       <TextBlock x:Name="EventStatus" Text="等待事件能力诊断" Foreground="{DynamicResource HeroMuted}" FontSize="11" Margin="0,4,0,0"/>
       </StackPanel>
       <Border Background="{DynamicResource HeroCard}" CornerRadius="{DynamicResource ControlRadius}" Padding="10,6" Margin="22,0,0,0" VerticalAlignment="Center">
-       <TextBlock x:Name="Clock" Text="游戏时间 —" Foreground="{DynamicResource HeroCardInk}" FontFamily="Cascadia Mono, Consolas" FontSize="18" FontWeight="Bold"/>
+       <TextBlock x:Name="Clock" Text="游戏时间 —" Foreground="{DynamicResource HeroCardInk}" FontFamily="Cascadia Mono, Consolas" FontSize="19" FontWeight="Bold"/>
       </Border>
      </StackPanel>
      <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
       <Border Background="{DynamicResource HeroCard}" CornerRadius="{DynamicResource ControlRadius}" Padding="10,5" HorizontalAlignment="Right">
-       <TextBlock x:Name="Status" Text="等待战斗数据" Foreground="{DynamicResource HeroStatusInk}" FontWeight="SemiBold" FontSize="12"/>
+       <TextBlock x:Name="Status" Text="等待战斗数据" Foreground="{DynamicResource HeroStatusInk}" FontWeight="SemiBold" FontSize="13"/>
       </Border>
-      <TextBlock x:Name="ErrorText" Foreground="{DynamicResource Danger}" FontSize="10" TextAlignment="Right" Margin="0,5,0,0" MaxWidth="470"/>
+      <TextBlock x:Name="ErrorText" Foreground="{DynamicResource Danger}" FontSize="11" TextAlignment="Right" Margin="0,5,0,0" MaxWidth="470"/>
      </StackPanel>
     </Grid>
    </Border>
@@ -88,13 +88,13 @@
    <Grid x:Name="MetricCards" Grid.Row="2" Margin="28,0,24,14">
     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <Border Style="{StaticResource MetricCard}" Grid.Column="0" Margin="0,0,8,0">
-     <StackPanel><TextBlock Text="⚡ 总伤害" Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock x:Name="TotalDamage" Text="—" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="26" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="含过量伤害" Style="{StaticResource Caption}"/></StackPanel>
+     <StackPanel><TextBlock Text="⚡ 总伤害" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="TotalDamage" Text="—" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="含过量伤害" Style="{StaticResource Caption}"/></StackPanel>
     </Border>
     <Border Style="{StaticResource MetricCard}" Grid.Column="1" Margin="0,0,8,0">
-     <StackPanel><TextBlock Text="♡ 总治疗" Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock x:Name="TotalHealing" Text="—" Foreground="{DynamicResource Heal}" FontFamily="Cascadia Mono, Consolas" FontSize="26" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="客户端治疗累计" Style="{StaticResource Caption}"/></StackPanel>
+     <StackPanel><TextBlock Text="♡ 总治疗" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="TotalHealing" Text="—" Foreground="{DynamicResource Heal}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="客户端治疗累计" Style="{StaticResource Caption}"/></StackPanel>
     </Border>
     <Border Style="{StaticResource MetricCard}" Grid.Column="2" Margin="0">
-     <StackPanel><TextBlock Text="◇ 有效护盾" Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock x:Name="TotalShield" Text="—" Foreground="{DynamicResource Shield}" FontFamily="Cascadia Mono, Consolas" FontSize="26" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="已观测的实际吸收" Style="{StaticResource Caption}"/></StackPanel>
+     <StackPanel><TextBlock Text="◇ 有效护盾" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="TotalShield" Text="—" Foreground="{DynamicResource Shield}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="已观测的实际吸收" Style="{StaticResource Caption}"/></StackPanel>
     </Border>
    </Grid>
 
@@ -102,26 +102,6 @@
     <DockPanel x:Name="LivePage" LastChildFill="True">
      <ScrollViewer x:Name="InspectorScroll" DockPanel.Dock="Right" Width="340" Margin="4,0,24,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <StackPanel>
-       <Border Style="{StaticResource SurfaceCard}" Margin="0,0,0,12" Padding="14">
-        <StackPanel>
-         <DockPanel Margin="0,0,0,8"><TextBlock Text="HUD 预览" Style="{StaticResource CardTitle}" FontSize="15"/><TextBlock Text="跟随当前面板" Style="{StaticResource Caption}" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="12,0,0,0"/></DockPanel>
-         <Border Background="{DynamicResource Console}" CornerRadius="{DynamicResource ControlRadius}" Padding="10" Height="168">
-          <Grid>
-           <Canvas Opacity="0.55">
-            <Ellipse Width="240" Height="110" Stroke="{DynamicResource ConsoleLine}" StrokeThickness="0.8" Canvas.Left="24" Canvas.Top="22"/>
-            <Ellipse Width="190" Height="150" Stroke="{DynamicResource ConsoleLine}" StrokeThickness="0.6" Canvas.Left="50" Canvas.Top="2"/>
-            <Line X1="8" Y1="132" X2="280" Y2="36" Stroke="{DynamicResource ConsoleLine}" StrokeThickness="0.5"/>
-            <Line X1="26" Y1="18" X2="26" Y2="150" Stroke="{DynamicResource ConsoleLine}" StrokeThickness="0.5"/>
-           </Canvas>
-           <Border Background="{DynamicResource ConsoleCard}" BorderBrush="{DynamicResource Signal}" BorderThickness="1" CornerRadius="2" Padding="9,8" Margin="26,30,26,42">
-            <StackPanel><TextBlock Text="HUD 放置区域" Foreground="{DynamicResource ConsoleInk}" FontSize="11" FontWeight="SemiBold"/><Border Height="4" Background="{DynamicResource Signal}" Margin="0,7,30,0"/><Border Height="4" Background="{DynamicResource ConsoleMuted}" Margin="0,5,60,0"/><Border Height="4" Background="{DynamicResource ConsoleMuted}" Margin="0,5,18,0"/></StackPanel>
-           </Border>
-           <TextBlock Text="模拟游戏画面" Foreground="{DynamicResource ConsoleMuted}" FontSize="9" VerticalAlignment="Bottom" HorizontalAlignment="Left"/>
-          </Grid>
-         </Border>
-         <TextBlock Text="从统计面板打开 HUD，即可拖动预览。锁定时点击会穿透到游戏。" Style="{StaticResource Caption}" Margin="0,8,0,0"/>
-        </StackPanel>
-       </Border>
        <local:Inspector x:Name="LiveInspector"/>
       </StackPanel>
      </ScrollViewer>
@@ -143,15 +123,15 @@
         </WrapPanel>
        </StackPanel>
        <ListBox x:Name="HistoryList" SelectionChanged="SelectHistory">
-        <ListBox.ItemTemplate><DataTemplate><Border Padding="9,9" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" ToolTip="{Binding StageDetail}"><StackPanel><DockPanel><TextBlock Text="{Binding Stage}" FontSize="14" FontWeight="SemiBold"/><TextBlock Text="{Binding Date}" Style="{StaticResource Caption}" DockPanel.Dock="Right" VerticalAlignment="Center"/></DockPanel><TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
+        <ListBox.ItemTemplate><DataTemplate><Border Padding="9,9" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" ToolTip="{Binding StageDetail}"><StackPanel><DockPanel><TextBlock Text="{Binding Stage}" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="{Binding Date}" Style="{StaticResource Caption}" DockPanel.Dock="Right" VerticalAlignment="Center"/></DockPanel><TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
        </ListBox>
       </DockPanel>
      </Border>
      <DockPanel Grid.Column="1" Margin="0,0,24,18">
       <StackPanel DockPanel.Dock="Top" Margin="0,0,4,10">
        <WrapPanel><Button Content="收起 / 展开列表" Click="ToggleHistoryList" Padding="10,6"/><Button x:Name="ExportJson" Content="导出 JSON" Click="SaveJson" IsEnabled="False" Padding="10,6"/><Button x:Name="ExportPng" Content="完整排行 PNG" Click="SavePng" IsEnabled="False" Style="{StaticResource Primary}" Padding="12,6"/></WrapPanel>
-       <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；完成对局归档后自动出现。" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,10,0,0"/>
-       <TextBlock x:Name="HistoryNotice" Foreground="{DynamicResource Danger}" FontSize="10" Margin="0,3,0,0"/>
+       <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；完成对局归档后自动出现。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,10,0,0"/>
+       <TextBlock x:Name="HistoryNotice" Foreground="{DynamicResource Danger}" FontSize="11" Margin="0,3,0,0"/>
       </StackPanel>
       <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel><local:StatisticPanel x:Name="HistoryPanel" Margin="0,0,0,12"/><local:Inspector x:Name="HistoryInspector"/></StackPanel></ScrollViewer>
      </DockPanel>
@@ -161,21 +141,21 @@
      <StackPanel MaxWidth="920" HorizontalAlignment="Left">
       <Border Style="{StaticResource SurfaceCard}" Padding="22" Margin="0,0,0,12">
        <StackPanel>
-        <TextBlock Text="连接到 MuMu" Style="{StaticResource CardTitle}" FontSize="19"/>
-        <TextBlock Text="UI 不访问游戏进程和 ADB；连接与只读采集由独立 Python 进程负责。" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,14"/>
+        <TextBlock Text="连接到 MuMu" Style="{StaticResource CardTitle}" FontSize="20"/>
+        <TextBlock Text="UI 不访问游戏进程和 ADB；连接与只读采集由独立 Python 进程负责。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,14"/>
         <CheckBox x:Name="AutoDetect" Content="自动检测认证的 MuMu 实例（多实例时需明确选择）"/>
         <TextBlock Text="ADB 路径 · 留空自动查找" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="AdbPath" MinWidth="340" AutomationProperties.Name="ADB 路径"/>
         <TextBlock Text="实例地址" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="Serial" ToolTip="多实例时选择检测结果或输入地址；明确地址不会被自动替换" AutomationProperties.Name="实例地址"/>
         <Button x:Name="DetectButton" Content="检测实例" Click="Detect" HorizontalAlignment="Left" Margin="0,12,0,8"/>
         <ListBox x:Name="Instances" MinHeight="46" MaxHeight="140" SelectionChanged="ChooseInstance"/>
-        <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0"/>
+        <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,0"/>
        </StackPanel>
       </Border>
       <Border Style="{StaticResource SurfaceCard}" Padding="22" Margin="0,0,0,18">
-       <StackPanel><TextBlock Text="事件观测与连接诊断" Style="{StaticResource CardTitle}" FontSize="19"/>
+       <StackPanel><TextBlock Text="事件观测与连接诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
         <CheckBox x:Name="EventsEnabled" Content="启用事件观测 · 护盾实际吸收 / 独立接敌区间"/>
-        <TextBlock Text="事件不可用时沿用伤害 / 治疗累计快照。覆盖前的护盾未知，不显示为零。" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,0,10"/>
-        <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}" FontSize="11"/>
+        <TextBlock Text="事件不可用时沿用伤害 / 治疗累计快照。覆盖前的护盾未知，不显示为零。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,0,0,10"/>
+        <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}" FontSize="12"/>
         <Button Content="应用设置并重新定位" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,16,0,0"/>
        </StackPanel>
       </Border>
@@ -184,8 +164,8 @@
    </Grid>
 
    <Border Grid.Row="4" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="28,8">
-    <DockPanel><TextBlock x:Name="ModeLabel" Text="Windows / WPF · 只读采集" Foreground="{DynamicResource Muted}" DockPanel.Dock="Right" FontFamily="Cascadia Mono, Consolas" FontSize="9" Margin="12,0,0,0"/>
-     <TextBlock x:Name="Footer" Text="正在启动 Python 采集进程…" Foreground="{DynamicResource Muted}" FontSize="10"/>
+    <DockPanel><TextBlock x:Name="ModeLabel" Text="Windows / WPF · 只读采集" Foreground="{DynamicResource Muted}" DockPanel.Dock="Right" FontFamily="Cascadia Mono, Consolas" FontSize="10" Margin="12,0,0,0"/>
+     <TextBlock x:Name="Footer" Text="正在启动 Python 采集进程…" Foreground="{DynamicResource Muted}" FontSize="11"/>
     </DockPanel>
    </Border>
   </Grid>

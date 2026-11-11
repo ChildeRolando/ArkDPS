@@ -8,9 +8,9 @@
 
 ## 配置与运行状态分离
 
-- 持久化只保存 `PanelConfig`：`panel_id`、类别、排行、速率口径、可选标题；`PanelCollection` 带 `version`，读取时校验版本与重复 id。
+- 持久化只保存 `PanelConfig`：`panel_id`、类别、排行、DPS算法、可选标题；`PanelCollection` 带 `version`，读取时校验版本与重复 id。
 - 运行状态只存在于 `PanelView` / `PanelEntry`：数值、柱长、占比、颜色、在场与详情，不回写配置。
-- 类别：伤害 / 治疗 / 有效护盾。排行：本局总量 / 最近 5 秒。速率列：近 5 秒 / 接敌；护盾不使用接敌速率（配置直接拒绝）。
+- 类别：伤害 / 治疗 / 有效护盾。排行：总伤（治疗为总治疗、护盾为总护盾）/ DPS（最近 5 秒）。DPS 算法列：近 5 秒 / 接敌 / 全周期DPS；护盾不使用接敌或全周期（配置直接拒绝）。全周期分母是在场时间，从本次观测起点累计，采集缺口或未知在场状态保持未知。
 
 ## 口径规则
 
@@ -35,9 +35,9 @@
 
 ## 事件不可用时的接敌展示（ARK-22）
 
-- 速率口径为「接敌」时，视图携带事件能力：`rate_available`、`rate_reason`、`rate_hint`、`rate_action`、`rate_action_label`。只有 `event_status` 为 `recording`/`finished` 才视为可用；`failed`、`unavailable`、`stopped`、`gap`、`attaching`/`ready` 都给出可读原因与恢复入口。
+- DPS算法为「接敌」时，视图携带事件能力：`rate_available`、`rate_reason`、`rate_hint`、`rate_action`、`rate_action_label`。只有 `event_status` 为 `recording`/`finished` 才视为可用；`failed`、`unavailable`、`stopped`、`gap`、`attaching`/`ready` 都给出可读原因与恢复入口。
 - 实时面板的恢复入口是「重试事件观测」（重新连接采集，不重启应用）或「打开连接设置」；历史记录只提供连接设置入口，并明确该局无法补采。
-- 逐行 `rate_state` 区分：`value`（有值）、`no_engagement`（事件覆盖完整且该干员零事件，显示「无接敌」）、`unknown`（覆盖不完整）、`unavailable`（事件观测不可用）。`rate_text` 是对应的完整显示文本（`123/s`、`无接敌` 或 `—`），`rate_note` 说明可靠零/未知原因。
+- 逐行 `rate_state` 区分：`value`（有值）、`no_engagement`（事件覆盖完整且该干员零事件，显示「无接敌」）、`unknown`（覆盖或在场时间不完整）、`unavailable`（事件观测不可用）。`rate_text` 是对应的完整显示文本（`123/s`、`无接敌` 或 `—`），`rate_note` 说明可靠零/未知原因。全周期DPS使用 `presence_seconds`（观测在场秒数）和 `presence_complete`，不以接敌活跃时间冒充。
 - 事件不可用时不得以 0、墙钟时间或近 5 秒速率冒充接敌速率；速率选择器仍允许切回「近 5 秒」，并给出原因提示。
 - 实时视图的事件能力来自当前样本 `event_status`/`event_error`；历史视图来自 `BattleRecord.event_status`/`event_error` 与逐行 `shield_coverage_start`/`event_coverage_end`。覆盖不完整时注明可靠区间，未覆盖区间保持未知、不补零。
 - 事件观测恢复后，同一面板在下一次快照自动更新，无需重建面板或重开窗口。

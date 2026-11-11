@@ -354,6 +354,11 @@ public partial class MainWindow
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="recent_5s"}});
         Require(Panels[id].RateNotice.Visibility==Visibility.Collapsed,"five-second switch did not clear engagement notice");
         checks.Add("switching back to five-second rate clears the unavailable notice");
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="full_cycle"}});
+        Require(Panels[id].View.Text("rate_label")=="全周期DPS","full-cycle label missing");
+        Require(Panels[id].View.Get("entries").Items().Any(e=>e.Text("rate_state")=="value" && e.Text("rate_text").EndsWith("/s")),"full-cycle did not expose a numeric DPS");
+        checks.Add("full-cycle DPS uses observed presence time and renders /s");
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="recent_5s"}});
         string placementBeforeTheme=JsonSerializer.Serialize(originalHud.Placement());
         IntPtr handleBeforeTheme=Native.Handle(originalHud);
         foreach(string theme in new[]{"lone-trail","contingency-contract","babel","near-light","il-siracusano","original"})

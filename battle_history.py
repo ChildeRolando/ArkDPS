@@ -179,7 +179,9 @@ class BattleRecord:
                                      ('effective_damage', None),
                                      ('overkill_coverage_complete', False),
                                      ('overkill_coverage_start', None),
-                                     ('overkill_coverage_end', None)):
+                                     ('overkill_coverage_end', None),
+                                     ('presence_seconds', None),
+                                     ('presence_complete', False)):
                     row.setdefault(key, default)
                 for metric in ('damage', 'healing', 'shield_absorbed', 'recent_damage',
                                'recent_healing', 'engagement_damage', 'engagement_healing',
@@ -187,13 +189,15 @@ class BattleRecord:
                                'shield_coverage_start', 'event_coverage_end',
                                'overkill_damage', 'overkill_coverage_start',
                                'overkill_coverage_end', 'burst_damage',
-                               'burst_overkill', 'burst_settlement', 'effective_damage'):
+                               'burst_overkill', 'burst_settlement', 'effective_damage',
+                               'presence_seconds'):
                     _number(row[metric], metric, nullable=True)
                 _number(row['coverage_start'], 'row coverage_start')
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')
                 for flag in ('counter_snapshot_complete', 'event_coverage_complete',
                              'overkill_coverage_complete', 'overkill_type_complete',
-                             'shield_unknown', 'burst_complete', 'types_available', 'types_stale'):
+                             'shield_unknown', 'burst_complete', 'types_available', 'types_stale',
+                             'presence_complete'):
                     _require(type(row[flag]) is bool, f'invalid {flag}')
                 by_type = row['overkill_damage_by_type']
                 _require(by_type is None or

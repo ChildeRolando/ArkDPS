@@ -51,7 +51,7 @@
 
   <Style TargetType="Window">
    <Setter Property="FontFamily" Value="Segoe UI Variable Text, Microsoft YaHei UI"/>
-   <Setter Property="FontSize" Value="13"/>
+   <Setter Property="FontSize" Value="14"/>
    <Setter Property="Background" Value="{DynamicResource Bg}"/>
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
    <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
@@ -60,31 +60,31 @@
   <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
   <Style x:Key="Eyebrow" TargetType="TextBlock">
    <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
-   <Setter Property="FontSize" Value="10"/>
+   <Setter Property="FontSize" Value="11"/>
    <Setter Property="FontWeight" Value="Bold"/>
    <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
   </Style>
   <Style x:Key="PageTitle" TargetType="TextBlock">
    <Setter Property="FontFamily" Value="Segoe UI Variable Display, Microsoft YaHei UI"/>
-   <Setter Property="FontSize" Value="34"/>
+   <Setter Property="FontSize" Value="36"/>
    <Setter Property="FontWeight" Value="Bold"/>
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
    <Setter Property="LineHeight" Value="38"/>
   </Style>
   <Style x:Key="CardTitle" TargetType="TextBlock">
-   <Setter Property="FontSize" Value="17"/>
+   <Setter Property="FontSize" Value="18"/>
    <Setter Property="FontWeight" Value="Bold"/>
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
   </Style>
   <Style x:Key="FieldLabel" TargetType="TextBlock">
-   <Setter Property="FontSize" Value="10"/>
+   <Setter Property="FontSize" Value="11"/>
    <Setter Property="FontWeight" Value="SemiBold"/>
    <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
    <Setter Property="Margin" Value="0,0,0,4"/>
   </Style>
   <Style x:Key="Caption" TargetType="TextBlock">
-   <Setter Property="FontSize" Value="10"/>
+   <Setter Property="FontSize" Value="11"/>
    <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
   </Style>
   <Style x:Key="Mono" TargetType="TextBlock">
