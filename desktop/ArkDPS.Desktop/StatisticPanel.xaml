@@ -16,16 +16,16 @@
     </StackPanel>
    </DockPanel>
    <WrapPanel x:Name="Selectors" Grid.Row="1" Margin="20,0,14,14">
-    <ComboBox x:Name="Category" Width="104" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="统计类别">
+    <ComboBox x:Name="Category" Width="92" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="统计类别">
      <ComboBoxItem Content="伤害" Tag="damage"/><ComboBoxItem Content="治疗" Tag="healing"/><ComboBoxItem Content="有效护盾" Tag="shield"/>
     </ComboBox>
-    <ComboBox x:Name="Ranking" Width="106" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="排行口径">
+    <ComboBox x:Name="Ranking" Width="98" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="排行口径">
      <ComboBoxItem Content="本局总量" Tag="total"/><ComboBoxItem Content="最近 5 秒" Tag="recent"/>
     </ComboBox>
-    <ComboBox x:Name="Rate" Width="96" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="速率口径">
+    <ComboBox x:Name="Rate" Width="84" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="速率口径">
      <ComboBoxItem Content="近 5 秒" Tag="recent_5s"/><ComboBoxItem Content="接敌" Tag="engagement"/>
     </ComboBox>
-    <ToggleButton x:Name="EffectiveOnly" Content="仅显示有效伤害" Click="EffectiveChanged" Margin="0,0,6,0" AutomationProperties.Name="仅显示有效伤害"/>
+    <ToggleButton x:Name="EffectiveOnly" Content="仅显示有效伤害" Click="EffectiveChanged" Margin="0,0,0,0" Padding="10,6" FontSize="11" AutomationProperties.Name="仅显示有效伤害"/>
    </WrapPanel>
    <Border x:Name="RateNoticePanel" Grid.Row="2" Visibility="Collapsed" Margin="20,0,20,14" Background="{DynamicResource Inset}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="8" Padding="12,9">
     <DockPanel>
