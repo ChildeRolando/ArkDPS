@@ -182,21 +182,30 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      if(![1,2,3,4].includes(type)){unknownSources.add(this.source);engagementUnknownSources.add(this.source);return;}
      const kind=type===4?'healing':'damage';
      let damageTarget=this.target, damageHpBefore=this.hpBefore, damageInstance=instance;
-     let fallbackUsed=false, fallbackInfo=null;
-     if(kind==='damage'&&(!damageTarget||damageTarget.isNull())){
+     let fallbackUsed=false, fallbackInfo=null, evidence=null;
+     if(kind==='damage'){
+      evidence=overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame);
+      // Some periodic/area modifiers expose a non-null pointer that is not a
+      // readable HP target. If the original evidence fails, retry with the
+      // same-frame elemental-bar target as a candidate; the HP check still
+      // decides whether it is valid.
       const fallback=lastBarTarget.get(this.source);
       fallbackInfo=fallback||null;
-      if(fallback&&fallback.frame===end.frame){
-       damageTarget=fallback.target;damageHpBefore=fallback.hp_before;damageInstance=fallback.instance;fallbackUsed=true;
+      if(!evidence&&fallback&&fallback.frame===end.frame){
+       const alternative=overkillEvidence(this.mod,fallback.target,fallback.hp_before,end.frame);
+       if(alternative){
+        damageTarget=fallback.target;damageHpBefore=fallback.hp_before;damageInstance=fallback.instance;
+        evidence=alternative;fallbackUsed=true;
+       }
       }
      }
-     const evidence=kind==='damage'?overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame):null;
      if(evidence&&damageInstance) evidence.target_instance=damageInstance;
      const proof={method:this.name,type,target:targetType};
-     if(!this.target||this.target.isNull()||fallbackUsed){
+     if(kind==='damage'&&(!evidence||fallbackUsed||!damageInstance)){
       proof.target_recovered=fallbackUsed;
       proof.fallback_frame=fallbackInfo?fallbackInfo.frame:null;
       proof.raw_target_null=!this.target||this.target.isNull();
+      proof.raw_target_instance=instance;
       proof.fallback_hp_before=fallbackInfo?fallbackInfo.hp_before:null;
       proof.evidence_recovered=!!evidence;
      }
