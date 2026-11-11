@@ -15,9 +15,9 @@
      </StackPanel>
     </StackPanel>
     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="34,0,0,0">
-     <Button Content="实时战况" Tag="live" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,6,0"/>
-     <Button Content="历史战绩" Tag="history" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,6,0"/>
-     <Button Content="连接设置" Tag="settings" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,22,0"/>
+     <Button x:Name="LiveNav" Content="实时战况" Tag="live" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,6,0"/>
+     <Button x:Name="HistoryNav" Content="历史战绩" Tag="history" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,6,0"/>
+     <Button x:Name="SettingsNav" Content="连接设置" Tag="settings" Click="Navigate" Style="{StaticResource HeaderButton}" Padding="16,8" Margin="0,0,22,0"/>
     </StackPanel>
     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
      <TextBlock Text="皮肤" Foreground="{DynamicResource ConsoleMuted}" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="11"/>
@@ -40,7 +40,7 @@
     <WrapPanel DockPanel.Dock="Right" VerticalAlignment="Center"><Button x:Name="AddPanelButton" Content="新建面板" Click="AddPanel" Style="{StaticResource Primary}"/><Button Content="重新定位" Click="Rescan" Padding="16,8"/></WrapPanel>
     <StackPanel>
      <TextBlock x:Name="PageTitle" Text="本局统计" FontFamily="Segoe UI Variable Display, Microsoft YaHei UI" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource Ink}" LineHeight="34"/>
-     <TextBlock Text="实时贡献、有效伤害与过量拆分" Foreground="{DynamicResource Muted}" FontSize="11" Margin="1,4,0,0"/>
+     <TextBlock x:Name="PageSubtitle" Text="实时贡献、有效伤害与过量拆分" Foreground="{DynamicResource Muted}" FontSize="11" Margin="1,4,0,0"/>
     </StackPanel>
    </DockPanel>
    <Border Grid.Row="1" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Margin="0,0,12,18" Padding="0">

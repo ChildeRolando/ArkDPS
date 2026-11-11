@@ -157,6 +157,7 @@ public partial class StatisticPanel : UserControl
     {
         view=value; updating=true;
         Heading.Text=value.Text("title");
+        PanelKind.Text=IsHud ? "HUD PANEL" : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
         var config=value.Get("config");
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         Rate.IsEnabled=config.Text("category")!="shield";

@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SetNavState("live");
         HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;HistoryPanel.RateActionRequested=HandleRateAction;
         HistoryPanel.PinRequested=id=>HistoryInspector.Pin(id,HistoryPanel.View);
         Outcome.SelectedIndex=0;Practice.SelectedIndex=0;
@@ -114,7 +115,7 @@ public partial class MainWindow : Window
         lastResponse=System.Diagnostics.Stopwatch.GetTimestamp();responseStale=false;
         applying=true;State=state;
         var layout=state.Get("layout");string theme=layout.Text("theme");
-        bool changed=Theme.Key!=theme;if(changed)Theme.Apply(theme);
+        bool changed=Theme.Key!=theme;if(changed){Theme.Apply(theme);SetNavState(route);}
         Skin.SelectedIndex=theme=="original" ? 1 : 0;
         Status.Text=state.Text("status_text");EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
@@ -228,10 +229,22 @@ public partial class MainWindow : Window
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         PageTitle.Text=page switch{"history"=>"历史战绩","settings"=>"连接设置",_=>"本局统计"};
+        PageSubtitle.Text=page switch{"history"=>"本地归档 · 搜索、导出与分享","settings"=>"连接、事件观测与诊断",_=>"实时贡献、有效伤害与过量拆分"};
+        SetNavState(page);
         AddPanelButton.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;ArrangePanels();
         // The list is a pull cache owned by Python: re-read it on every entry so a
         // battle finished a moment ago is visible without pressing 刷新.
         if(page=="history") await Command("history_refresh");
+    }
+    private void SetNavState(string page)
+    {
+        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(SettingsNav,"settings")})
+        {
+            bool active=tag==page;
+            button.Background=active?Theme.Resource("Accent"):Theme.Resource("ConsoleCard");
+            button.Foreground=active?Theme.Resource("AccentInk"):Theme.Resource("ConsoleInk");
+            button.BorderBrush=active?Theme.Resource("Accent"):Theme.Resource("ConsoleLine");
+        }
     }
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
     // 事件不可用时的恢复入口：重试会重新连接采集（不重启应用）；否则打开连接设置。

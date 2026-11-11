@@ -12,7 +12,7 @@
     </WrapPanel>
     <StackPanel>
      <TextBlock x:Name="Heading" FontFamily="Segoe UI Variable Display, Microsoft YaHei UI" FontSize="19" FontWeight="Bold" Foreground="{DynamicResource Ink}" VerticalAlignment="Center"/>
-     <TextBlock Text="LIVE PANEL" FontFamily="Cascadia Mono, Consolas" FontSize="9" Foreground="{DynamicResource Muted}" Margin="0,3,0,0"/>
+     <TextBlock x:Name="PanelKind" Text="LIVE PANEL" FontFamily="Cascadia Mono, Consolas" FontSize="9" Foreground="{DynamicResource Muted}" Margin="0,3,0,0"/>
     </StackPanel>
    </DockPanel>
    <WrapPanel x:Name="Selectors" Grid.Row="1" Margin="20,0,14,14">
