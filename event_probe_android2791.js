@@ -127,9 +127,9 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
-     try{this.source=entityId(this.mod.readPointer());}catch(e){skippedUnattributed++;this.ignore=true;return;}
-     if(!own(this.source)){this.ignore=true;return;}
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
+     try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
+     if(!this.source||!own(this.source))this.foreign=true;
      return;
     }
     const s=stacks.get(this.tid)||[];if(!s.length){shieldUnknown=true;markShieldUnknown(this.when.frame,null);this.ignore=true;return;}
@@ -151,15 +151,32 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
   onLeave(){
    try{
     if(this.pushed){const s=stacks.get(this.tid);s.pop();if(!s.length)stacks.delete(this.tid);return;}
-    if(this.ignore||!this.source||!own(this.source))return;
+    if(this.ignore&&this.name!=='Entity.ApplyModifier')return;
     const end=time();if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
     if(this.name==='Entity.ApplyModifier'){
-     const target=this.mod.add(0x60).readS32(),type=this.mod.add(0x68).readS32();
-     if(target!==0)return;
-     if(![1,2,3,4,5].includes(type)){unknownSources.add(this.source);engagementUnknownSources.add(this.source);return;}
+     const targetType=this.mod.add(0x60).readS32(),type=this.mod.add(0x68).readS32();
+     const instance=this.target&&!this.target.isNull()?this.target.toString():null;
+     const owned=this.source&&own(this.source);
+     const amount=fp(this.mod.add(0x30));
+     if(owned&&type===0&&targetType===5){
+      try{record(this.source,'elemental_bar',amount,end,{method:this.name,type,target:targetType},{target_instance:instance});}catch(e){fatal=String(e);}
+      return;
+     }
+     if(type===5){
+      const evidence=overkillEvidence(this.mod,this.target,this.hpBefore,end.frame);
+      if(evidence&&instance){
+       evidence.target_instance=instance;
+       try{record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence);}catch(e){fatal=String(e);}
+      }
+      return;
+     }
+     if(!owned)return;
+     if(targetType!==0)return;
+     if(![1,2,3,4].includes(type)){unknownSources.add(this.source);engagementUnknownSources.add(this.source);return;}
      const kind=type===4?'healing':'damage';
      const evidence=kind==='damage'?overkillEvidence(this.mod,this.target,this.hpBefore,end.frame):null;
-     try{record(this.source,kind,fp(this.mod.add(0x30)),end,{method:this.name,type,target},evidence);}catch(e){fatal=String(e);}
+     if(evidence&&instance) evidence.target_instance=instance;
+     try{record(this.source,kind,amount,end,{method:this.name,type,target:targetType},evidence);}catch(e){fatal=String(e);}
     }else{
      const after=dynamic(this.bb);
      if(!Number.isFinite(after)||after<0||Math.abs(this.before-after-this.amount)>0.01){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);return;}

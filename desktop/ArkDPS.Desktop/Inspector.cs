@@ -45,12 +45,15 @@ public sealed class Inspector : Border
         Section("累计贡献");
         Pair("伤害 · 含过量",row.Ui("damage")); Pair("治疗 · 含过量",row.Ui("healing")); Pair("有效护盾 · 已观察",row.Ui("shield_absorbed"));
         Pair("过量伤害 · 事件派生",row.Ui("overkill_damage"));
+        Pair("爆条伤害 · 归属",row.Ui("burst_damage")); Pair("爆条过量",row.Ui("burst_overkill")); Pair("有效伤害",row.Ui("effective_damage"));
         if(row.Bool("overkill_type_complete"))
         {
             var overkillTypes=row.Get("overkill_damage_by_type");
             body.Children.Add(Text("物理 "+overkillTypes.Ui("physical")+" · 法术 "+overkillTypes.Ui("arts")+" · 元素 "+overkillTypes.Ui("elemental")+" · 真实 "+overkillTypes.Ui("true"),10,false,"Muted",new Thickness(0,2,0,0)));
         }
         body.Children.Add(Text(OverkillNote(row,view),11,false,"Muted",new Thickness(0,6,0,0)));
+        if(row.Get("burst_unknown_reason").ValueKind==JsonValueKind.String)
+            body.Children.Add(Text("爆条归属未知："+row.Text("burst_unknown_reason"),11,false,"Muted",new Thickness(0,4,0,0)));
         Section("独立接敌速率");
         var rates=view.Get("rates").Get(owner);
         var damageRate=rates.Get("damage");var healingRate=rates.Get("healing");

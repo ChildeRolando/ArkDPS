@@ -184,3 +184,9 @@ def test_probe_declares_all_quality_counters_before_use():
     for name in ('unknownSources', 'engagementUnknownSources', 'skippedUnattributed'):
         assert any(token in js for token in
                    (f'let {name}=', f'let {name} =', f'const {name}=', f'const {name} =')), name
+
+
+def test_wpf_surfaces_attributed_elemental_burst():
+    inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    assert '爆条伤害 · 归属' in inspector
+    assert 'burst_damage' in inspector and 'burst_overkill' in inspector

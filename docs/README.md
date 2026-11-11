@@ -41,6 +41,7 @@
 - [ADR 0004：过量伤害作为独立事件派生指标](adr/0004-overkill-as-separate-event-derived-metric.md)
 - [ADR 0003：WPF 展示与 Python 子进程](adr/0003-wpf-python-worker.md)
 - [ADR 0002：接敌伤害与治疗使用独立活跃区间](adr/0002-separate-engagement-windows.md)
+- [ADR 0006：元素爆条伤害按最后元素损伤来源归属](adr/0006-elemental-burst-attribution.md)
 
 ## 维护约定
 
