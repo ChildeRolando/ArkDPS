@@ -165,23 +165,6 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      return;
     }
-    if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
-     if(this.ignore)return;
-     if(this.name==='Unit.OnTakeDamage'&&this.source&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
-      const targetKeyValue=targetKey(this.target)||this.target.toString();
-      const shield=shieldContextUnknown(end.frame,this.target)?null:shieldTotal(end.frame,this.target);
-      try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()});}catch(e){fatal=String(e);}
-     }
-     const hpAfter=targetHp(this.target);
-     hpContext.push({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
-      source:this.source||null,target:targetKey(this.target)||this.target.toString(),
-      target_instance:this.target.toString(),amount:this.amount,
-      real_delta:this.real,hp_before:this.hpBefore,hp_after:hpAfter,
-      killed:hpAfter!==null&&hpAfter<=1e-6,
-      target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32(),
-      cancel_reason:this.mod.add(0x70).readS32()});
-     return;
-    }
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
@@ -210,6 +193,23 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.pushed){const s=stacks.get(this.tid);s.pop();if(!s.length)stacks.delete(this.tid);return;}
     if(this.ignore&&this.name!=='Entity.ApplyModifier')return;
     const end=time();if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
+    if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
+     if(this.ignore)return;
+     if(this.name==='Unit.OnTakeDamage'&&this.source&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
+      const targetKeyValue=targetKey(this.target)||this.target.toString();
+      const shield=shieldContextUnknown(end.frame,this.target)?null:shieldTotal(end.frame,this.target);
+      try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()});}catch(e){fatal=String(e);}
+     }
+     const hpAfter=targetHp(this.target);
+     hpContext.push({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
+      source:this.source||null,target:targetKey(this.target)||this.target.toString(),
+      target_instance:this.target.toString(),amount:this.amount,
+      real_delta:this.real,hp_before:this.hpBefore,hp_after:hpAfter,
+      killed:hpAfter!==null&&hpAfter<=1e-6,
+      target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32(),
+      cancel_reason:this.mod.add(0x70).readS32()});
+     return;
+    }
     if(this.name==='Entity.ApplyModifier'){
      const targetType=this.mod.add(0x60).readS32(),type=this.mod.add(0x68).readS32();
      const instance=this.target&&!this.target.isNull()?this.target.toString():null;
