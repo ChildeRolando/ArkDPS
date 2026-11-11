@@ -98,6 +98,22 @@ def test_missing_event_closes_coverage_at_last_watermark():
     assert not row['event_coverage_complete']
 
 
+def test_clean_battle_end_closes_coverage_as_complete():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    observer.sequence = observer.epoch = 1
+    observer.events = [event(1)]
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    capture.sample()
+    capture.adapter.on_end()
+    row = capture.adapter.result()['rows']['char_a']
+    assert row['event_coverage_end'] is not None
+    assert row['event_coverage_complete'] is True
+    assert row['skill_split_reason'] != '事件覆盖已结束'
+
+
 def test_post_barrier_event_is_buffered_until_its_snapshot():
     collector = Collector()
     observer = Observer(collector)

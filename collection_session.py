@@ -155,7 +155,7 @@ class CollectionSession:
             result = self.capture.adapter.result()
         stream = self.capture.adapter.event_stream
         if (stream is not None and stream.closed and self.capture.adapter.statistics.end_time is not None
-                and self.capture.adapter.statistics.event_coverage_end is None):
+                and not self.capture.adapter.statistics.event_coverage_broken):
             self.event_status = 'finished'
         elif stream is not None and stream.closed and self.event_status in ('ready', 'recording'):
             self.event_status = 'gap'

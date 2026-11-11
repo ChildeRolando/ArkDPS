@@ -37,7 +37,9 @@ def baseline_barrier(before, sample, after):
                     or not isfinite(mark['game_time']) or mark['game_time'] < 0):
                 raise StreamGap('invalid or non-quiescent producer mark')
             if mark['active'] != 0:
-                raise BarrierBusy('callback is in flight')
+                hooks = mark.get('active_hooks') or []
+                detail = ', '.join(str(name) for name in hooks[:4])
+                raise BarrierBusy('callback is in flight' + (': ' + detail if detail else ''))
         if (any(before[k] != after[k] for k in ('sequence', 'epoch', 'frame', 'game_time'))
                 or sample['frame'] != after['frame']
                 or sample['game_time'] != after['game_time']):
@@ -68,9 +70,9 @@ class EventStream:
     def _nonnegative_int(value):
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
-    def stop(self):
+    def stop(self, *, complete=False):
         if not self.closed:
-            self.statistics.invalidate_events(self.game_time)
+            self.statistics.invalidate_events(self.game_time, complete=complete)
             self.closed = True
 
     def _fail(self, message):

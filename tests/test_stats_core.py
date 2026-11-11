@@ -581,6 +581,30 @@ def test_skill_split_is_unknown_after_event_coverage_ends():
     assert row['skill_split_reason'] == '事件覆盖已结束'
 
 
+def test_clean_event_coverage_close_keeps_final_effective_and_skill_metrics():
+    s = Statistics('skill-clean-end', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(1)
+    s.event('start', .1, 'a', 'skill_start', 1, skill_key='k')
+    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1')
+    s.event('hp', .2, 'a', 'hp_damage', 50, target='enemy_1',
+            hp_before=10, shield_absorbed=0, damage_type=1)
+    s.event('end', .3, 'a', 'skill_end', 1, skill_key='k')
+    s.advance(1)
+    s.snapshot(1, {'a': {'damage': 50, 'healing': 0}})
+    s.invalidate_events(1, complete=True)
+    row = s.result()['rows']['A']
+    assert row['event_coverage_end'] == 1
+    assert row['event_coverage_complete'] is True
+    assert row['overkill_damage'] == 40
+    assert row['effective_damage'] == 10
+    assert row['skill_damage'] == 50
+    assert row['skill_damage_effective'] == 10
+    assert row['skill_split_effective_complete'] is True
+    assert row['skill_coverage_complete'] is True
+
+
 def test_skill_event_from_unknown_source_marks_split_unknown_not_fatal():
     s = Statistics('skill-unknown', 0, event_coverage=True)
     s.register_source('a', 'A')

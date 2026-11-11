@@ -24,6 +24,7 @@ class Statistics:
         self.end_time = None
         self.event_coverage = event_coverage
         self.event_coverage_end = None
+        self.event_coverage_broken = False
         self.baseline_ready = False
         self.owners = {}
         self.sources = {}
@@ -181,14 +182,21 @@ class Statistics:
             if state['totals_valid']:
                 state['totals_time'] = self.now
 
-    def invalidate_events(self, end_time=None):
-        """Close event coverage at the last reliable game time."""
+    def invalidate_events(self, end_time=None, *, complete=False):
+        """Close event coverage at the last reliable game time.
+
+        ``complete`` is reserved for a confirmed battle boundary: the stream
+        ended because the battle ended, not because evidence was lost. A clean
+        close still certifies the covered interval; a broken close does not.
+        """
         if self.event_coverage and self.event_coverage_end is None:
             end_time = self.now if end_time is None else end_time
             self._time(end_time)
             if not self.last_event_time <= end_time <= self.now:
                 raise ValueError('invalid event coverage end')
             self.event_coverage_end = end_time
+            if not complete:
+                self.event_coverage_broken = True
             self._close_skill_windows(end_time)
 
     def _skill_active_seconds(self, owner):
@@ -597,7 +605,8 @@ class Statistics:
             # settlement or battle boundary retires rates, not final counters.
             complete = all(s in self.sources and self.sources[s]['totals_valid'] and
                            self.sources[s]['totals_time'] == self.now for s in registered)
-            overkill_known = (bool(self.event_coverage) and self.event_coverage_end is None
+            coverage_complete = bool(self.event_coverage) and not self.event_coverage_broken
+            overkill_known = (coverage_complete
                               and not self.all_overkill_unknown
                               and owner not in self.overkill_incomplete)
             overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
@@ -605,7 +614,7 @@ class Statistics:
                 overkill_unknown_reason = None
             elif not self.event_coverage:
                 overkill_unknown_reason = '事件观测未建立'
-            elif self.event_coverage_end is not None:
+            elif not coverage_complete:
                 overkill_unknown_reason = '事件覆盖已结束'
             elif self.all_overkill_unknown:
                 overkill_unknown_reason = '存在未归属的伤害事件'
@@ -621,7 +630,7 @@ class Statistics:
                    'shield_coverage_start': self.start_time if self.event_coverage else None,
                    'event_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                           else self.end_time if self.event_coverage else None),
-                   'event_coverage_complete': self.event_coverage and self.event_coverage_end is None,
+                   'event_coverage_complete': coverage_complete,
                    'shield_absorbed': (self.shields.get(owner, 0)
                                        if self.event_coverage and not self.shield_unknown else None),
                    'shield_unknown': self.shield_unknown,
@@ -707,9 +716,7 @@ class Statistics:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
                 row['effective_damage'] = None
-            skill_known = (bool(self.event_coverage)
-                           and self.event_coverage_end is None
-                           and not self.skill_unknown)
+            skill_known = coverage_complete and not self.skill_unknown
             skill_value = self.skill_observed.get(owner, 0.0)
             non_skill_value = self.non_skill_observed.get(owner, 0.0)
             expected = row.get('observed_damage')
@@ -720,7 +727,7 @@ class Statistics:
                             <= max(0.01, abs(expected) * 1e-6))
             if not skill_known:
                 reason = ('事件观测未建立' if not self.event_coverage else
-                          '事件覆盖已结束' if self.event_coverage_end is not None else
+                          '事件覆盖已结束' if not coverage_complete else
                           '技能事件覆盖不完整')
             elif not covers_total:
                 reason = '技能窗口未覆盖全部伤害事件'
@@ -754,9 +761,7 @@ class Statistics:
             row['skill_active_seconds'] = (
                 self._skill_active_seconds(owner)
                 if self.event_coverage else None)
-            row['skill_coverage_complete'] = (
-                bool(self.event_coverage) and self.event_coverage_end is None
-                and not self.skill_unknown)
+            row['skill_coverage_complete'] = coverage_complete and not self.skill_unknown
             row['skill_split_complete'] = skill_known and covers_total
             row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason

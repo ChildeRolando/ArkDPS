@@ -198,7 +198,7 @@ class BattleStatisticsAdapter:
         if self.statistics is None:
             return
         if self.event_stream is not None:
-            self.event_stream.stop()
+            self.event_stream.stop(complete=True)
         self.statistics.seal_totals()
         self.statistics.invalidate_rates()
         self.types_current.clear()
@@ -472,12 +472,8 @@ class BattleStatisticsAdapter:
             self.last_result = self.statistics.result()
             return self.last_result
         end = game_time if game_time is not None else self.last_game_time
-        if self.event_stream is not None:
-            if (not self.event_stream.closed and self.event_stream.game_time == end
-                    and self.statistics.now == end):
-                self.event_stream.closed = True
-            else:
-                self.event_stream.stop()
+        if self.event_stream is not None and not self.event_stream.closed:
+            self.event_stream.stop(complete=True)
         self.statistics.finish(end)
         # A frozen battle has no future observation: last reliable cumulative
         # counters are final. A gap-invalidated source stays unknown.

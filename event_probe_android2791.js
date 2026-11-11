@@ -68,6 +68,7 @@ try{
 // A callback increments epoch on entry and remains active until its native
 // invocation returns. RPC marks are serialized with these JS callbacks.
 let sequence=0, hpSequence=0, epoch=0, active=0, fatal=null, stopped=false;
+const activeHooks=new Map();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
 const engagementUnknownSources=new Set();
@@ -174,6 +175,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
  hooks.push(Interceptor.attach(ptr(m.address),{
   onEnter(args){
    active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
+   activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);
    try{
     if(this.name.startsWith('Character.')){
      const method=this.name.slice('Character.'.length);
@@ -334,7 +336,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.skillStart||this.skillEnd){skillUnknown=true;}
     else if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}}
     else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);}
-   }finally{if(this.started)active--;}
+   }finally{if(this.started){active--;const left=(activeHooks.get(this.name)||1)-1;if(left>0)activeHooks.set(this.name,left);else activeHooks.delete(this.name);}}
   }
  }));
 }
@@ -343,7 +345,7 @@ rpc.exports={
   const current = time(true);
   const quality={unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady};
   if (current === null) return {retry:true,error:fatal,stopped,...quality};
-  return {...current,sequence,epoch,active,error:fatal,stopped,...quality};
+  return {...current,sequence,epoch,active,active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
  },
  drain(){const result=queue,context=hpContextQueue();return {events:result,hp_context:context,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady};},
  stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
