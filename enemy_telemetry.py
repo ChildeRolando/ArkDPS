@@ -234,6 +234,7 @@ class EnemyTelemetry:
         self._last_poll = float('-inf')
         self._status = 'starting'
         self._rows = []
+        self._damage_baseline = None
 
     def reset(self):
         self.timeline.reset()
@@ -243,6 +244,7 @@ class EnemyTelemetry:
         self._last_poll = float('-inf')
         self._status = 'starting'
         self._rows = []
+        self._damage_baseline = None
 
     def _state(self, status, *, rows=None, error=None):
         self._status = status
@@ -256,6 +258,7 @@ class EnemyTelemetry:
             'ready': self.ready,
             'rows': current,
             'totals': enemy_totals(current),
+            'damage_baseline': self._damage_baseline,
             'series': self.timeline.series(),
             'last_point': self.timeline.last,
         }
@@ -299,5 +302,13 @@ class EnemyTelemetry:
             message = (snapshot or {}).get('msg') or '敌人快照不完整'
             return self._state('stale', error=message)
         rows = enemy_rows(snapshot)
-        self.timeline.add(game_time, rows, our_damage)
+        if self._damage_baseline is None and isinstance(our_damage, (int, float)):
+            # Align the damage curve with the enemy-observation window. Native
+            # counters can include damage dealt before ArkDPS attached; comparing
+            # that cumulative value with entered-enemy MaxHP would overstate it.
+            self._damage_baseline = float(our_damage)
+        adjusted = (max(0.0, float(our_damage) - self._damage_baseline)
+                    if self._damage_baseline is not None
+                    and isinstance(our_damage, (int, float)) else None)
+        self.timeline.add(game_time, rows, adjusted)
         return self._state('ready', rows=rows)

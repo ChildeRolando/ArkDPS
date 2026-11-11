@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private int commands;
     private string activePanel="",lastBattle="",historyBattle="",historySignature="";
     private string route="live";
+    internal string LastUiError="";
     public MainWindow()
     {
         InitializeComponent();
@@ -86,7 +87,7 @@ public partial class MainWindow : Window
         if(polling || commands>0 || quitting || bridge==null) return;
         polling=true;
         try {var reply=await bridge.RequestAsync("snapshot");ApplyState(reply.Get("state"));}
-        catch(Exception ex){Lost(ex.Message);}
+        catch(Exception ex){RecordUiError(ex);Lost(ex.Message);}
         finally{polling=false;}
     }
     internal async Task Command(string op,Dictionary<string,object?>? fields=null)
@@ -100,8 +101,20 @@ public partial class MainWindow : Window
         }
         // Never raise a modal dialog once shutdown has begun: it would block the close.
         catch(BridgeCommandException ex){if(App.Verification!=null)throw;if(!closingRequested)MessageBox.Show(this,ex.Message,"操作未完成");else WriteQuitLog("命令失败："+ex.Message);}
-        catch(Exception ex){Lost(ex.Message);if(App.Verification==null&&!closingRequested) MessageBox.Show(this,ex.Message,"采集进程连接中断");}
+        catch(Exception ex){RecordUiError(ex);Lost(ex.Message);if(App.Verification==null&&!closingRequested) MessageBox.Show(this,ex.Message,"采集进程连接中断");}
         finally{commands--;}
+    }
+    internal void RecordUiError(Exception ex)
+    {
+        LastUiError=ex.ToString();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(App.Root,"runtime"));
+            File.AppendAllText(Path.Combine(App.Root,"runtime","ui-errors.log"),
+                DateTime.Now.ToString("O")+Environment.NewLine+LastUiError+Environment.NewLine);
+        }
+        catch(IOException){}
+        catch(UnauthorizedAccessException){}
     }
     private void Lost(string message)
     {

@@ -83,6 +83,7 @@ def test_telemetry_throttles_without_dropping_last_rows():
                                bootstrap=lambda reader: True, poll_interval=1.0)
     first = telemetry.sample(game_time=1.0, our_damage=10)
     assert first['status'] == 'ready' and first['rows'][0]['hp'] == 90
+    assert first['last_point']['our_effective_damage'] == 0
     now[0] = 0.5
     throttled = telemetry.sample(game_time=1.5, our_damage=20)
     assert throttled['rows'][0]['hp'] == 90
@@ -91,6 +92,7 @@ def test_telemetry_throttles_without_dropping_last_rows():
     fresh = telemetry.sample(game_time=2.0, our_damage=30)
     assert fresh['rows'][0]['hp'] == 80
     assert len(fresh['series']) == 2
+    assert fresh['last_point']['our_effective_damage'] == 20
 
 
 def test_poll_failure_is_reported_not_raised():

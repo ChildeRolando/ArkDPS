@@ -292,9 +292,14 @@ public partial class MainWindow
             DamageKnown = p.Get("our_damage_known").ValueKind == JsonValueKind.True,
         }).ToArray());
         var error = enemy.Text("error");
-        EnemyStatusHint.Text = error.Length > 0 ? error
+        string hint = error.Length > 0 ? error
             : complete ? "仅统计已入场敌人；总血量按每个已入场实例的 MaxHP 累加。"
             : "部分已入场敌人的 MaxHP 尚未读到，总血量以 ≥ 表示下限。";
+        double baseline = enemy.Get("damage_baseline").TryNumber(-1);
+        if (baseline > 0)
+            hint += " 我方有效伤害从敌情观测起点累计（起点 " +
+                    Json.UiIntText(baseline.ToString(CultureInfo.InvariantCulture)) + "）。";
+        EnemyStatusHint.Text = hint;
         EnemyEmpty.Visibility = rows.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         EnemyEmpty.Text = status switch
         {

@@ -625,10 +625,12 @@ def test_hp_overkill_evidence_splits_effective_skill_damage():
     s.event('start', .1, 'a', 'skill_start', 1, skill_key='k')
     s.event('hit', .2, 'a', 'damage', 50, target='enemy_1')
     s.event('hp', .2, 'a', 'hp_damage', 50, target='enemy_1',
-            hp_before=10, shield_absorbed=0)
+            hp_before=10, shield_absorbed=0, damage_type=1)
     s.event('end', .3, 'a', 'skill_end', 1, skill_key='k')
     s.advance(1)
     row = s.result()['rows']['A']
     assert row['skill_damage'] == 50
     assert row['skill_damage_effective'] == 10
     assert row['skill_split_effective_complete'] is True
+    assert row['overkill_damage_by_type'] == {'physical': 40}
+    assert row['overkill_type_complete'] is True

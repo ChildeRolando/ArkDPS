@@ -118,12 +118,14 @@ public sealed class Inspector : Border
         body.Children.Add(splitStats);
         if (skillKnown)
         {
-            double splitTotal = skillDamage + nonSkillDamage;
+            double splitSkillWeight = double.IsFinite(skillDamage) && skillDamage > 0 ? skillDamage : 0;
+            double splitNormalWeight = double.IsFinite(nonSkillDamage) && nonSkillDamage > 0 ? nonSkillDamage : 0;
+            double splitTotal = splitSkillWeight + splitNormalWeight;
             var splitBar = new Grid { Height = 8, Margin = new Thickness(0, 3, 0, 5) };
             splitBar.ColumnDefinitions.Add(new ColumnDefinition {
-                Width = new GridLength(splitTotal > 0 ? skillDamage : 1, GridUnitType.Star) });
+                Width = new GridLength(splitTotal > 0 ? splitSkillWeight : 1, GridUnitType.Star) });
             splitBar.ColumnDefinitions.Add(new ColumnDefinition {
-                Width = new GridLength(splitTotal > 0 ? nonSkillDamage : 1, GridUnitType.Star) });
+                Width = new GridLength(splitTotal > 0 ? splitNormalWeight : 1, GridUnitType.Star) });
             var skillPart = new Border { Background = Theme.Resource("Accent"),
                 CornerRadius = new CornerRadius(2, 0, 0, 2) };
             var normalPart = new Border { Background = Theme.Resource("Muted"),
@@ -164,21 +166,25 @@ public sealed class Inspector : Border
             var types=effective ? detail.Get("effective_damage_by_type") : row.Get("damage_by_type");
             if(types.ValueKind!=JsonValueKind.Object)
             {
-                body.Children.Add(Text("有效伤害构成未知：按类型的过量证据不足。",10,false,"Muted"));
-                types=default;
+                body.Children.Add(Text(effective
+                    ? "有效伤害构成未知：按类型的过量证据不足。"
+                    : "伤害构成未知：累计类型字段不完整。",10,false,"Muted"));
             }
-            double total=new[]{"physical","arts","elemental","true"}.Sum(k=>types.TryGetProperty(k,out var v)&&v.ValueKind==JsonValueKind.Number?v.GetDouble():0);
-            var mix=new WrapPanel();
-            foreach(var (key,label,token) in new[]{("physical","物理","Physical"),("arts","法术","Arts"),("elemental","元素","Elemental"),("true","真实","True")})
+            else
             {
-                double amount=types.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Number?v.GetDouble():0;
-                if(amount<=0) continue;
-                string fraction=total>0 ? Math.Round(amount/total*100).ToString("0")+"%" : "—";
-                var card=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource(token),BorderThickness=new Thickness(1,2,1,1),Padding=new Thickness(6,5,6,5),Margin=new Thickness(0,0,4,4),MinWidth=66};
-                var stack=new StackPanel();stack.Children.Add(Text(label,9,false,"Muted"));stack.Children.Add(Mono(fraction,13,true,"Ink"));stack.Children.Add(Text(Json.UiIntText(amount.ToString(System.Globalization.CultureInfo.InvariantCulture)),9,false,"Muted"));
-                card.Child=stack;mix.Children.Add(card);
+                double total=new[]{"physical","arts","elemental","true"}.Sum(k=>types.TryGetProperty(k,out var v)&&v.ValueKind==JsonValueKind.Number?v.GetDouble():0);
+                var mix=new WrapPanel();
+                foreach(var (key,label,token) in new[]{("physical","物理","Physical"),("arts","法术","Arts"),("elemental","元素","Elemental"),("true","真实","True")})
+                {
+                    double amount=types.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Number?v.GetDouble():0;
+                    if(amount<=0) continue;
+                    string fraction=total>0 ? Math.Round(amount/total*100).ToString("0")+"%" : "—";
+                    var card=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource(token),BorderThickness=new Thickness(1,2,1,1),Padding=new Thickness(6,5,6,5),Margin=new Thickness(0,0,4,4),MinWidth=66};
+                    var stack=new StackPanel();stack.Children.Add(Text(label,9,false,"Muted"));stack.Children.Add(Mono(fraction,13,true,"Ink"));stack.Children.Add(Text(Json.UiIntText(amount.ToString(System.Globalization.CultureInfo.InvariantCulture)),9,false,"Muted"));
+                    card.Child=stack;mix.Children.Add(card);
+                }
+                body.Children.Add(mix);
             }
-            body.Children.Add(mix);
         }
 
         Section("独立接敌速率");

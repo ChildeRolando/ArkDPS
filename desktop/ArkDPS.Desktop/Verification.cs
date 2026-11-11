@@ -365,6 +365,12 @@ public partial class MainWindow
         Require(HasText(LiveInspector,"技能覆盖率"),"inspector did not render skill coverage");
         Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
         Screenshot.Window(this,Path.Combine(output,"effective-inspector.png"));
+        LastUiError="";
+        Panels[id].EffectiveOnly.IsChecked=true;
+        Panels[id].EffectiveOnly.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        for(int wait=0;wait<40&&commands>0;wait++) await Task.Delay(50);
+        await Settle();
+        Require(LastUiError.Length==0,"effective click crashed the UI: "+LastUiError);
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",
             ranking="total",rate_basis="recent_5s",effective_only=false}});
         await Settle();

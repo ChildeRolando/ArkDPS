@@ -41,6 +41,8 @@ class Statistics:
         # source: amount minus observed shield absorption minus HP before.
         self.hp_overkill = {}
         self.hp_overkill_incomplete = set()
+        self.hp_overkill_by_type = {}
+        self.hp_overkill_type_incomplete = set()
         self.hp_seen = set()
         self.overkill_reason = {}
         # Elemental bar damage is not HP damage; only its source matters.
@@ -528,6 +530,12 @@ class Statistics:
                 bucket = (self.hp_skill_overkill if owner in self.skill_active
                           else self.hp_non_skill_overkill)
                 bucket[owner] = bucket.get(owner, 0.0) + overkill
+                type_key = NATIVE_DAMAGE_TYPES.get(damage_type)
+                if type_key is None:
+                    self.hp_overkill_type_incomplete.add(owner)
+                else:
+                    per_type = self.hp_overkill_by_type.setdefault(owner, {})
+                    per_type[type_key] = per_type.get(type_key, 0.0) + overkill
             return
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
@@ -684,8 +692,13 @@ class Statistics:
                     row['overkill_damage'] = self.hp_overkill.get(owner, 0.0)
                     row['overkill_coverage_complete'] = True
                     row['overkill_unknown_reason'] = None
-                    row['overkill_damage_by_type'] = None
-                    row['overkill_type_complete'] = False
+                    if owner in self.hp_overkill_type_incomplete:
+                        row['overkill_damage_by_type'] = None
+                        row['overkill_type_complete'] = False
+                    else:
+                        row['overkill_damage_by_type'] = dict(
+                            self.hp_overkill_by_type.get(owner, {}))
+                        row['overkill_type_complete'] = True
                 else:
                     row['overkill_damage'] = None
                     row['overkill_coverage_complete'] = False
