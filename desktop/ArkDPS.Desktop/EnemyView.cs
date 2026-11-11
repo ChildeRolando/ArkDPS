@@ -293,8 +293,8 @@ public partial class MainWindow
         }).ToArray());
         var error = enemy.Text("error");
         string hint = error.Length > 0 ? error
-            : complete ? "仅统计已入场敌人；总血量按每个已入场实例的 MaxHP 累加。"
-            : "部分已入场敌人的 MaxHP 尚未读到，总血量以 ≥ 表示下限。";
+            : complete ? "已入场列表只含观测到的实例；总血量按关卡出怪计划与同类型实例的 MaxHP 统计，漏采实例按同类型推断。"
+            : "关卡计划中仍有未观测到的敌种，总血量以 ≥ 表示下限。";
         double baseline = enemy.Get("damage_baseline").TryNumber(-1);
         if (baseline > 0)
             hint += " 我方有效伤害从敌情观测起点累计（起点 " +

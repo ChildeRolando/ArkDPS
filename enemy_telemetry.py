@@ -128,7 +128,8 @@ def enemy_totals(rows, planned=None):
                              if plan_complete else observed_total),
         'observed_total_hp': observed_total,
         'remaining_hp': sum(max(0.0, row['hp']) for row in known if row['alive']),
-        'hp_complete': plan_complete or (len(known) == len(entered) and bool(entered)),
+        'hp_complete': (plan_complete if planned else
+                        (len(known) == len(entered) and bool(entered))),
     }
 
 

@@ -613,18 +613,27 @@ def _effective_damage(row: PanelSourceRow) -> float | None:
 
 def _effective_by_type(row: PanelSourceRow) -> dict | None:
     if not row.overkill_type_complete or row.overkill_by_type is None:
+        # An untyped overkill event still has one possible damage type when the
+        # operator's entire observed output is that type. This is evidence from
+        # the type totals, not a proportional guess.
+        live_types = [kind for kind, value in row.damage_by_type.items()
+                      if _finite(value) and value > 0]
+        if len(live_types) == 1 and _finite(row.overkill):
+            kind = live_types[0]
+            return {kind: max(0.0, float(row.damage_by_type[kind]) - float(row.overkill))}
         return None
     return {kind: max(0.0, float(value) - float(row.overkill_by_type.get(kind, 0.0)))
             for kind, value in row.damage_by_type.items() if _finite(value)}
-
 
 def _segments(row: PanelSourceRow, ranking: Ranking,
               effective: bool = False) -> tuple[tuple[dict, ...], bool]:
     if effective:
         total = _effective_damage(row)
-        by_type = {kind: max(0.0, float(value) -
-                             float((row.overkill_by_type or {}).get(kind, 0.0)))
-                   for kind, value in row.damage_by_type.items() if _finite(value)}
+        by_type = _effective_by_type(row)
+        if by_type is None:
+            by_type = {kind: max(0.0, float(value) -
+                                 float((row.overkill_by_type or {}).get(kind, 0.0)))
+                       for kind, value in row.damage_by_type.items() if _finite(value)}
     else:
         total = row.damage if ranking is Ranking.TOTAL else row.recent_damage
         by_type = row.damage_by_type if ranking is Ranking.TOTAL else row.recent_damage_by_type
