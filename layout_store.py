@@ -30,7 +30,7 @@ from panel_model import DEFAULT_NUMBER_UNITS, NUMBER_UNITS, PanelConfig
 ROOT = Path(__file__).resolve().parent
 LAYOUT_VERSION = 3
 DEFAULT_THEME = 'lone-trail'
-THEMES = (DEFAULT_THEME, 'people')
+THEMES = (DEFAULT_THEME, 'people', 'babel')
 DEFAULT_GUI = (960, 700)
 DEFAULT_GUI_MINIMUM = (440, 500)
 DEFAULT_HUD_MINIMUM = (350, 230)

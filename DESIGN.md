@@ -4,7 +4,7 @@ Operate surface: Windows C# / .NET 10 / WPF. The Lone Trail v1.0 materials guide
 
 ## Composition and skins
 
-The common WPF templates and dynamic brush resources support two skins. Default 孤星 uses a dark slate workspace, metallic edges, orange selection and cyan team DPS. 人们，我们。 (People, A People) uses the same layout with red accents, warm paper, dark steel and the supplied branding, navigation and city artwork.
+The common WPF templates and dynamic brush resources support three skins. Default 孤星 uses a dark slate workspace, metallic edges, orange selection and cyan team DPS. 人们，我们。 (People, A People) uses red accents, warm paper, dark steel and city artwork. 巴别塔 (Babel) pairs an ivory fractured-tower masthead with charcoal records, fine battle-time ticks and restrained crimson selection.
 
 The sidebar opens the full enemy page. The live summary uses the shared dark panel surface. Battle and instance identity preserve selection across HP, transformation and rebirth updates. Current HP, current form MaxHP, recorded phase capacity and the separate stage estimate retain their own evidence. A known lower bound uses ≥ and leaves the HP ratio blank. Enemy chart points distinguish exact HP, lower bounds and gaps. Effective damage starts at the enemy observation baseline, with other native sources listed separately.
 

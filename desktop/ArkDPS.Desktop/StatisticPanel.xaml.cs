@@ -144,19 +144,23 @@ public sealed class ContributionBar : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
-        dc.DrawRoundedRectangle(Theme.Resource("Track"),null,new Rect(0,0,ActualWidth,ActualHeight),1,1);
+        double height=Theme.IsBabel ? Math.Min(5,ActualHeight) : ActualHeight;
+        double top=(ActualHeight-height)/2;
+        double radius=Theme.IsBabel ? 0 : 1;
+        var track=Theme.Resource("ContributionTrack");
+        dc.DrawRoundedRectangle(track,null,new Rect(0,top,ActualWidth,height),radius,radius);
         double width=ActualWidth*Math.Clamp(Data.Number("bar_ratio"),0,1), x=0;
         var segments=Data.Get("segments").Items().ToArray();
         if (segments.Length==0)
         {
             var color=Data.Text("bar_color");
-            var fill = Theme.IsPeople ? Theme.Resource(MetricCategory switch
+            var fill = Theme.IsPeople || Theme.IsBabel ? Theme.Resource(MetricCategory switch
             {
                 "healing" => "Heal",
                 "shield" => "Shield",
-                _ => "Accent",
+                _ => Theme.IsBabel ? "Physical" : "Accent",
             }) : color.Length > 0 ? Theme.Brush(color) : Theme.Resource("Accent");
-            dc.DrawRoundedRectangle(fill,null,new Rect(0,0,width,ActualHeight),1,1); return;
+            dc.DrawRoundedRectangle(fill,null,new Rect(0,top,width,height),radius,radius); return;
         }
         foreach(var segment in segments)
         {
@@ -164,23 +168,23 @@ public sealed class ContributionBar : FrameworkElement
             if(size>0)
             {
                 double body=size;
-                dc.DrawRectangle(SegmentBrush(segment),null,new Rect(x,0,body,ActualHeight));
+                dc.DrawRectangle(SegmentBrush(segment),null,new Rect(x,top,body,height));
                 if(segment.TryGetProperty("overkill_ratio",out var mark) && mark.ValueKind==JsonValueKind.Number)
                 {
                     double ratio=Math.Clamp(mark.GetDouble(),0,1), overkill=body*ratio;
                     if(overkill>0)
                     {
                         double start=x+body-overkill;
-                        dc.DrawRectangle(OverkillHatch,null,new Rect(start,0,overkill,ActualHeight));
+                        dc.DrawRectangle(OverkillHatch,null,new Rect(start,top,overkill,height));
                         var pen=new Pen(Theme.Resource("Signal"),1){DashStyle=DashStyles.Dash};
                         pen.Freeze();
-                        dc.DrawLine(pen,new Point(start,0),new Point(start,ActualHeight));
+                        dc.DrawLine(pen,new Point(start,top),new Point(start,top+height));
                     }
                 }
             }
             x+=size;
         }
-        if (x<width) dc.DrawRectangle(Theme.Resource("Track"),null,new Rect(x,0,width-x,ActualHeight));
+        if (x<width) dc.DrawRectangle(track,null,new Rect(x,top,width-x,height));
     }
     private static Brush SegmentBrush(JsonElement segment) => segment.Text("kind") switch
     {
@@ -217,7 +221,7 @@ public partial class StatisticPanel : UserControl
     private JsonElement view;
     private bool updating, hold;
     private bool referenceStyle, liveToolbar;
-    private bool? loneTrailHudSkin;
+    private string? appliedHudSkin;
     private HudLayout? hudLayout;
     private double hudViewportLimit=double.PositiveInfinity;
     private const double ReferenceRowsDefaultHeight=185;
@@ -314,16 +318,31 @@ public partial class StatisticPanel : UserControl
 
     private void ApplyHudSkin()
     {
-        bool loneTrail=Theme.Key=="lone-trail";
-        if(loneTrailHudSkin==loneTrail) return;
-        loneTrailHudSkin=loneTrail;
+        if (appliedHudSkin == Theme.Key) return;
+        appliedHudSkin = Theme.Key;
+        bool loneTrail = Theme.Key == Theme.LoneTrail;
+        bool babel = Theme.IsBabel;
 
-        PanelFrame.SetResourceReference(Border.BackgroundProperty,loneTrail ? "Console" : "Card");
-        TitleAccent.Visibility=loneTrail ? Visibility.Collapsed : Visibility.Visible;
-        LoneTrailHudMark.Visibility=loneTrail ? Visibility.Visible : Visibility.Collapsed;
-        LoneTrailHudBackdrop.Visibility=LoneTrailHudChevrons.Visibility=LoneTrailHudMark.Visibility;
-        PeopleHudArtwork.Visibility=Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
-        TitleRegion.BorderThickness=new Thickness(0,0,0,1);
+        PanelFrame.SetResourceReference(Border.BackgroundProperty, loneTrail ? "Console" : "Card");
+        TitleAccent.Visibility = loneTrail || babel ? Visibility.Collapsed : Visibility.Visible;
+        LoneTrailHudMark.Visibility = loneTrail ? Visibility.Visible : Visibility.Collapsed;
+        LoneTrailHudBackdrop.Visibility = LoneTrailHudChevrons.Visibility = LoneTrailHudMark.Visibility;
+        PeopleHudArtwork.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+        BabelHudMark.Visibility = BabelHudRule.Visibility = babel ? Visibility.Visible : Visibility.Collapsed;
+        TitleRegion.BorderThickness = new Thickness(0, 0, 0, 1);
+        HudClose.Background = Brushes.Transparent;
+        if (babel)
+        {
+            Heading.SetResourceReference(TextBlock.ForegroundProperty, "BabelPaperInk");
+            HudClose.SetResourceReference(Control.ForegroundProperty, "BabelPaperInk");
+            HudClose.Resources["Focus"] = Theme.Resource("BabelPaperAccent");
+        }
+        else
+        {
+            Heading.ClearValue(TextBlock.ForegroundProperty);
+            HudClose.ClearValue(Control.ForegroundProperty);
+            HudClose.Resources.Remove("Focus");
+        }
         if(loneTrail)
         {
             PanelFrame.CornerRadius=new CornerRadius(0);
@@ -335,10 +354,10 @@ public partial class StatisticPanel : UserControl
         else
         {
             PanelFrame.SetResourceReference(Border.CornerRadiusProperty,"CardRadius");
-            TitleRegion.SetResourceReference(Border.BackgroundProperty,"Inset");
-            TitleRegion.SetResourceReference(Border.BorderBrushProperty,"Line");
+            TitleRegion.SetResourceReference(Border.BackgroundProperty, babel ? "BabelPaper" : "Inset");
+            TitleRegion.SetResourceReference(Border.BorderBrushProperty, babel ? "BabelPaperRule" : "Line");
             HudClose.ClearValue(StyleProperty);
-            HudClose.SetResourceReference(Control.BorderBrushProperty,"Line");
+            HudClose.SetResourceReference(Control.BorderBrushProperty, babel ? "BabelPaperRule" : "Line");
         }
     }
 

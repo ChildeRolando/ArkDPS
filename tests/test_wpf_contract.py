@@ -114,13 +114,13 @@ def test_hud_has_single_title_row_close_and_rich_rows():
     assert '溢出伤害率' in (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
 
 
-def test_wpf_picker_and_worker_offer_lone_trail_and_people():
+def test_wpf_picker_and_worker_offer_lone_trail_people_and_babel():
     xaml = ElementTree.parse(ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml')
     wpf = '{http://schemas.microsoft.com/winfx/2006/xaml/presentation}'
     name = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
     picker = next(combo for combo in xaml.iter(wpf + 'ComboBox') if combo.get(name) == 'Skin')
     assert tuple(item.get('Tag') for item in picker.findall(wpf + 'ComboBoxItem')) == THEMES
-    assert THEMES == ('lone-trail', 'people')
+    assert THEMES == ('lone-trail', 'people', 'babel')
 
 
 def test_inspector_uses_mitigation_rate_not_penetration_efficiency():

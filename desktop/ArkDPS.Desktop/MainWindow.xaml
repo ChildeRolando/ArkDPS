@@ -73,6 +73,10 @@
    <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="5"/><Setter Property="Padding" Value="11,6"/>
    <Setter Property="Margin" Value="4,0"/>
   </Style>
+  <Style x:Key="ResearchCurrentMetric" TargetType="Border" BasedOn="{StaticResource ResearchMetric}">
+   <Setter Property="BorderBrush" Value="{DynamicResource MetricHighlight}"/>
+   <Setter Property="BorderThickness" Value="2"/><Setter Property="Padding" Value="15,6,10,6"/>
+  </Style>
   <Style x:Key="ResearchMetricLabel" TargetType="TextBlock">
    <Setter Property="Foreground" Value="{DynamicResource MetricInk}"/><Setter Property="FontWeight" Value="Bold"/><Setter Property="FontSize" Value="13"/>
   </Style>
@@ -90,6 +94,10 @@
    <Grid.OpacityMask><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#FFFFFFFF" Offset=".55"/><GradientStop Color="#00FFFFFF" Offset="1"/></LinearGradientBrush></Grid.OpacityMask>
   </Grid>
 
+  <Border x:Name="BabelTitlebarSurface" Grid.ColumnSpan="2" Background="{DynamicResource BabelTitlebarBackground}"
+          BorderBrush="{DynamicResource BabelTitlebarEdge}" BorderThickness="0,0,0,1"
+          Visibility="Collapsed" IsHitTestVisible="False"/>
+
   <Grid x:Name="TitleBar" Grid.ColumnSpan="2" Background="Transparent" MouseLeftButtonDown="DragTitleBar">
    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
    <Grid x:Name="BrandBadge" Width="202" Margin="5,3,0,3" Background="{DynamicResource ChromeBrandSurface}">
@@ -100,6 +108,10 @@
     <Image x:Name="CompactBrandMark" Source="Assets/LoneTrail/arkdps-icon.png" Width="34" HorizontalAlignment="Center" Stretch="Uniform" Visibility="Collapsed"/>
     <Image x:Name="PeopleBrandMark" Source="{DynamicResource PeopleMasthead}" Width="132" Height="30" Stretch="Uniform" Visibility="Collapsed"/>
     <Image x:Name="PeopleCompactBrandMark" Source="{DynamicResource PeopleEmblem}" Width="38" Height="27" Stretch="Uniform" Visibility="Collapsed"/>
+    <Image x:Name="BabelBrandMark" Source="{DynamicResource BabelMasthead}" Width="138" Height="30"
+           Stretch="Uniform" Visibility="Collapsed" IsHitTestVisible="False"/>
+    <Image x:Name="BabelCompactBrandMark" Source="{DynamicResource BabelEmblem}" Width="30" Height="28"
+           Stretch="Uniform" Visibility="Collapsed" IsHitTestVisible="False"/>
    </Grid>
    <StackPanel Grid.Column="1" x:Name="ChromeDescription" Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left" Background="{DynamicResource ChromeDescriptionSurface}" Margin="5,0,0,0">
     <TextBlock x:Name="SystemTitle" Text="COMBAT DPS ANALYSIS SYSTEM" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="{DynamicResource ChromeInk}" Margin="9,1,12,0"/>
@@ -154,10 +166,13 @@
       <TextBlock x:Name="SideLabName" Text="ORBITAL COMBAT&#x0a;RESEARCH UNIT" Foreground="#DCE5ED" FontSize="11" FontFamily="{DynamicResource DataFont}" Margin="8,0,0,10"/>
       <Image x:Name="PeoplePennant" Source="{DynamicResource PeoplePennantArtwork}" Width="34" Height="43"
              HorizontalAlignment="Left" Margin="8,0,0,7" IsHitTestVisible="False" Visibility="Collapsed"/>
+      <Image x:Name="BabelSidebarMark" Source="{DynamicResource BabelTowerBadge}" Width="48" Height="51"
+             HorizontalAlignment="Left" Margin="8,0,0,7" Stretch="Uniform" IsHitTestVisible="False" Visibility="Collapsed"/>
       <Grid>
        <ComboBox x:Name="Skin" SelectionChanged="SkinChanged" Style="{StaticResource SidebarSkin}" AutomationProperties.Name="皮肤" ToolTip="切换皮肤">
         <ComboBoxItem Content="孤星" Tag="lone-trail" ContentTemplate="{StaticResource SkinItemLabel}"/>
         <ComboBoxItem Content="人们，我们。" Tag="people" ContentTemplate="{StaticResource SkinItemLabel}"/>
+        <ComboBoxItem Content="巴别塔" Tag="babel" ContentTemplate="{StaticResource SkinItemLabel}"/>
        </ComboBox>
        <TextBlock x:Name="SkinLabel" Text="皮肤" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource SidebarMuted}"
                   VerticalAlignment="Top" Margin="8,6,17,0" IsHitTestVisible="False"/>
@@ -184,11 +199,11 @@
       HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Margin="5,4,3,4">
      <Grid Margin="0,0,4,0">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-      <HeaderedContentControl Style="{StaticResource ResearchFrame}" Padding="22,7,14,5" Margin="0,0,0,5" MinHeight="304">
+      <HeaderedContentControl x:Name="LiveOverviewFrame" Style="{StaticResource ResearchFrame}" Padding="22,7,14,5" Margin="0,0,0,5" MinHeight="304">
        <HeaderedContentControl.Header>
         <DockPanel>
          <TextBlock x:Name="Status" DockPanel.Dock="Right" Foreground="{DynamicResource FrameMuted}" FontSize="11" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="236" VerticalAlignment="Center"/>
-         <TextBlock Text="实时DPS / LIVE DPS" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FrameInk}" TextTrimming="CharacterEllipsis"/>
+         <TextBlock x:Name="LiveFrameTitle" Text="实时DPS / LIVE DPS" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FrameInk}" TextTrimming="CharacterEllipsis"/>
         </DockPanel>
        </HeaderedContentControl.Header>
        <Grid>
@@ -196,12 +211,33 @@
         <Grid x:Name="OverviewGrid">
          <Grid.ColumnDefinitions><ColumnDefinition x:Name="OverviewTrendColumn" Width="1.69*"/><ColumnDefinition x:Name="OverviewStatsColumn" Width="4*"/></Grid.ColumnDefinitions>
          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-         <Border x:Name="CurrentMetric" Style="{StaticResource ResearchMetric}" BorderBrush="{DynamicResource MetricHighlight}" BorderThickness="2" Padding="15,6,10,6">
+         <Grid x:Name="BabelMastheadSurface" Grid.ColumnSpan="2" Height="145" Visibility="Collapsed"
+               Background="{DynamicResource BabelPaper}" ClipToBounds="True" IsHitTestVisible="False">
+          <Image x:Name="BabelMastheadArtwork" Source="{DynamicResource BabelMastheadArt}"
+                 Stretch="UniformToFill" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+          <Border x:Name="BabelMastheadVeilLayer" Background="{DynamicResource BabelMastheadVeil}"/>
+          <Border VerticalAlignment="Bottom" HorizontalAlignment="Left" Width="32" Height="2"
+                  Background="{DynamicResource BabelPaperAccent}"/>
+         </Grid>
+         <StackPanel x:Name="BabelMastheadHeading" Visibility="Collapsed" VerticalAlignment="Center" Margin="22,0,8,0">
+          <TextBlock x:Name="BabelMastheadTitle" Text="BABEL" FontFamily="{DynamicResource HeadingFont}"
+                     FontSize="72" FontWeight="Bold" LineHeight="72" LineStackingStrategy="BlockLineHeight"
+                     Foreground="{DynamicResource BabelPaperInk}" TextWrapping="NoWrap"/>
+          <StackPanel Orientation="Horizontal" Margin="2,4,0,0">
+           <Path Data="M 0,4 L 4,0 L 8,4 L 4,8 Z" Width="8" Height="8" Stretch="Fill"
+                 Fill="{DynamicResource BabelPaperAccent}" Margin="0,0,7,0" VerticalAlignment="Center"
+                 IsHitTestVisible="False"/>
+           <TextBlock Text="巴别塔" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource BabelPaperMuted}"/>
+          </StackPanel>
+         </StackPanel>
+         <Border x:Name="BabelMetricStrip" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed"
+                 Background="{DynamicResource Inset}" IsHitTestVisible="False"/>
+         <Border x:Name="CurrentMetric" Style="{StaticResource ResearchCurrentMetric}">
           <StackPanel>
-           <TextBlock Text="当前团队DPS" Style="{StaticResource ResearchMetricLabel}"/>
+           <TextBlock x:Name="CurrentMetricLabel" Text="当前团队DPS" Style="{StaticResource ResearchMetricLabel}"/>
            <DockPanel>
-            <Path DockPanel.Dock="Left" Data="M 0 11 H 7 L 10 5 L 14 17 L 19 0 L 23 13 L 26 7 L 29 11 H 36" Stroke="{DynamicResource MetricSignal}" StrokeThickness="2" VerticalAlignment="Center" Margin="0,2,9,0"/>
-            <TextBlock Text="DPS" Foreground="{DynamicResource MetricMuted}" FontSize="15" DockPanel.Dock="Right" VerticalAlignment="Bottom" Margin="4,0,0,5"/>
+            <Path x:Name="CurrentMetricPulse" DockPanel.Dock="Left" Data="M 0 11 H 7 L 10 5 L 14 17 L 19 0 L 23 13 L 26 7 L 29 11 H 36" Stroke="{DynamicResource MetricSignal}" StrokeThickness="2" VerticalAlignment="Center" Margin="0,2,9,0"/>
+            <TextBlock x:Name="CurrentMetricUnit" Text="DPS" Foreground="{DynamicResource MetricMuted}" FontSize="15" DockPanel.Dock="Right" VerticalAlignment="Bottom" Margin="4,0,0,5"/>
             <TextBlock x:Name="CurrentDps" Text="—" Style="{StaticResource ResearchReadout}" FontSize="39"/>
            </DockPanel>
           </StackPanel>

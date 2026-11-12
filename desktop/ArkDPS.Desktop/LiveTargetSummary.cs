@@ -233,6 +233,7 @@ public sealed class LiveTargetSummary : Border
         private readonly TextBlock badge = Label(28, "ConsoleMuted", bold: true);
         private readonly Image portrait = new() { Stretch = Stretch.Uniform };
         private readonly Border portraitFrame;
+        private string? renderedSkin;
         private readonly Border headerMark = new()
         {
             Width = 3, Height = 25, Margin = new Thickness(0, 0, 7, 0),
@@ -339,10 +340,11 @@ public sealed class LiveTargetSummary : Border
             next.IsEnabled = canNext;
             targetLock.IsEnabled = Current is { Uid.Length: > 0 };
             if (Visibility == Visibility.Collapsed) return;
-            var markVisibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
-            if (headerMark.Visibility != markVisibility)
+            if (renderedSkin != Theme.Key)
             {
-                headerMark.Visibility = markVisibility;
+                renderedSkin = Theme.Key;
+                headerMark.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+                BorderThickness = Theme.IsBabel ? new Thickness(0, 0, 0, 1) : new Thickness(1);
                 portraitFrame.BorderThickness = new Thickness(Theme.IsPeople ? 2 : 1);
                 portraitFrame.SetResourceReference(BorderBrushProperty, Theme.IsPeople ? "MetricHighlight" : "ConsoleLine");
             }

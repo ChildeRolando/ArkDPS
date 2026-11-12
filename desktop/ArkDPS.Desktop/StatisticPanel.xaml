@@ -195,6 +195,9 @@
      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
       <Image x:Name="LoneTrailHudChevrons" Source="Assets/LoneTrail/chevrons-silver.png" Width="36" Height="20"
              Opacity=".88" Margin="0,0,3,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <Path x:Name="BabelHudRule" Data="M 0,7 H 90 M 0,0 V 7 M 15,4 V 7 M 30,2 V 7 M 45,4 V 7 M 60,2 V 7 M 75,4 V 7 M 90,0 V 7"
+            Width="90" Height="8" Stretch="Uniform" Stroke="{DynamicResource BabelPaperMuted}" StrokeThickness=".8"
+            Margin="0,0,14,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
       <Button x:Name="HudClose" Click="CloseHud" Padding="6,1" MinWidth="32" Visibility="Collapsed" ToolTip="关闭 HUD" AutomationProperties.Name="关闭 HUD" Background="Transparent" BorderBrush="{DynamicResource Line}">
        <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Width="10" Height="10" Stretch="Fill" StrokeThickness="1.5"
              Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" IsHitTestVisible="False"/>
@@ -204,6 +207,8 @@
       <Border x:Name="TitleAccent" Width="3" Height="18" Background="{DynamicResource Accent}" CornerRadius="1" Margin="0,0,8,0"/>
       <Path x:Name="LoneTrailHudMark" Data="M 5,0 L 12,0 L 7,18 L 0,18 Z" Width="11" Height="18" Stretch="Fill"
             Fill="{DynamicResource Accent}" Margin="0,0,7,0" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <Image x:Name="BabelHudMark" Source="Assets/Babel/Components/tower-emblem.png" Width="25" Height="25" Stretch="Uniform"
+             Margin="0,0,6,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
       <StackPanel x:Name="TitleText"><TextBlock x:Name="Heading" Style="{StaticResource CardTitle}" FontSize="18" VerticalAlignment="Center"/><TextBlock x:Name="PanelKind" Text="LIVE PANEL" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource Muted}" Margin="0,1,0,0"/></StackPanel>
      </StackPanel>
     </DockPanel>

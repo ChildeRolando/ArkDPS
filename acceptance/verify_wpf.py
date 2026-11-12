@@ -154,12 +154,12 @@ def main():
         receipts.append(receipt)
     import struct
     for phase in ('first-launch', 'restart'):
-        for theme in ('lone-trail', 'people'):
+        for theme in ('lone-trail', 'people', 'babel'):
             width, height = struct.unpack('>II', (output/phase/(theme+'-ranking.png')).read_bytes()[16:24])
             assert width == 900 and height > 900, 'full ranking export clipped to visible viewport'
     assert not list(directory.glob('layout.json.corrupt-*')), 'valid legacy layout was quarantined'
     assert receipts[0]['restored_layout']['theme'] == 'lone-trail', 'legacy theme did not fall back to Lone Trail'
-    assert receipts[1]['restored_layout']['theme'] == 'people', 'People did not survive a restart'
+    assert receipts[1]['restored_layout']['theme'] == 'babel', 'Babel did not survive a restart'
     assert receipts[1]['restored_layout'] == receipts[0]['layout'], 'fresh process did not read exact saved layout'
     files = {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in output.rglob('*.png')}

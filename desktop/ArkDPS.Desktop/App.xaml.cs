@@ -84,12 +84,16 @@ internal static class Theme
 {
     public const string LoneTrail = "lone-trail";
     public const string People = "people";
-    public static IReadOnlyList<string> Keys { get; } = Array.AsReadOnly(new[] { LoneTrail, People });
+    public const string Babel = "babel";
+
+    private static readonly string[] ThemeKeys = { LoneTrail, People, Babel };
+    public static IReadOnlyList<string> Keys { get; } = Array.AsReadOnly(ThemeKeys);
     public static string Key { get; private set; } = LoneTrail;
     public static bool IsPeople => Key == People;
+    public static bool IsBabel => Key == Babel;
 
     public static string Normalize(string key) => Skins.ContainsKey(key) ? key : LoneTrail;
-    public static int IndexOf(string key) => key == People ? 1 : 0;
+    public static int IndexOf(string key) => Array.IndexOf(ThemeKeys, Normalize(key));
 
     private static readonly Dictionary<string,Dictionary<string,string>> Skins=new()
     {
@@ -187,16 +191,64 @@ internal static class Theme
             ["HeroCardMuted"]="#58504A",
             ["Radius"]="2",
         },
+        [Babel]=new()
+        {
+            ["Bg"]="#131214",
+            ["Card"]="#1C1A1D",
+            ["Inset"]="#252226",
+            ["Ink"]="#F4EFEA",
+            ["Muted"]="#C3B8B5",
+            ["Line"]="#564C54",
+            ["Edge"]="#8D7E87",
+            ["Accent"]="#D7525E",
+            ["AccentInk"]="#170E11",
+            ["AccentText"]="#FFADB1",
+            ["Focus"]="#FFB3B7",
+            ["FocusOnDark"]="#FFB3B7",
+            ["Good"]="#B0D2B9",
+            ["Warn"]="#E7C189",
+            ["Danger"]="#FF9C9F",
+            ["Physical"]="#F07A82",
+            ["Arts"]="#98ABC8",
+            ["Elemental"]="#B9A5CB",
+            ["True"]="#E5DEDA",
+            ["Heal"]="#9CB7A7",
+            ["Shield"]="#8CB4C0",
+            ["Away"]="#2A252B",
+            ["Track"]="#39323A",
+            ["Console"]="#171518",
+            ["ConsoleCard"]="#242024",
+            ["ConsoleInk"]="#F4EFEA",
+            ["ConsoleMuted"]="#C3B8B5",
+            ["ConsoleLine"]="#6D626A",
+            ["Signal"]="#FF9C9F",
+            ["Sidebar"]="#151416",
+            ["SidebarCard"]="#211D22",
+            ["SidebarInk"]="#F4EFEA",
+            ["SidebarMuted"]="#C3B8B5",
+            ["SidebarLine"]="#6D626A",
+            ["SidebarActive"]="#38262D",
+            ["Hero"]="#131214",
+            ["HeroInk"]="#F4EFEA",
+            ["HeroMuted"]="#C3B8B5",
+            ["HeroLine"]="#564C54",
+            ["HeroCard"]="#1C1A1D",
+            ["HeroStatusInk"]="#FFADB1",
+            ["HeroCardInk"]="#F4EFEA",
+            ["HeroCardMuted"]="#C3B8B5",
+            ["Radius"]="0",
+        },
     };
     private static readonly Uri FontBase=new("pack://application:,,,/");
     private static readonly FontFamily LoneTrailInterface=new(FontBase,
         "./Assets/Fonts/#Barlow Semi Condensed, Microsoft YaHei UI, Segoe UI");
-    private static readonly FontFamily LoneTrailData=new(FontBase,
+    private static readonly FontFamily DataFamily=new(FontBase,
         "./Assets/Fonts/#IBM Plex Mono, Microsoft YaHei UI, Consolas");
-    private static readonly FontFamily PeopleInterface=new("Segoe UI Variable Text, Microsoft YaHei UI");
+    private static readonly FontFamily StandardInterface=new("Segoe UI Variable Text, Microsoft YaHei UI");
     private static readonly FontFamily PeopleDisplay=new("Georgia, Microsoft YaHei UI");
     private static readonly Brush LoneTrailRankSelection=RankGradient("#885020", "#473119", "#29251E");
     private static readonly Brush PeopleRankSelection=RankGradient("#78312B", "#592D29", "#3C2927");
+    private static readonly Brush BabelRankSelection=Brush("#39272D");
     private static readonly Brush PeopleRankLeader=Brush("#E8C486");
 
     public static void Apply(string key)
@@ -207,17 +259,33 @@ internal static class Theme
         foreach (var pair in colors)
             if (pair.Key != "Radius") resources[pair.Key] = Brush(pair.Value);
 
-        resources["InterfaceFont"] = IsPeople ? PeopleInterface : LoneTrailInterface;
+        resources["InterfaceFont"] = Key == LoneTrail ? LoneTrailInterface : StandardInterface;
         resources["HeadingFont"] = IsPeople ? PeopleDisplay : LoneTrailInterface;
-        resources["DisplayFont"] = IsPeople ? PeopleDisplay : LoneTrailInterface;
-        resources["DataFont"] = LoneTrailData;
-        resources["DataHighlight"] = Brush(IsPeople ? colors["Signal"] : "#61DFFF");
-        resources["ReferenceRankSelection"] = IsPeople ? PeopleRankSelection : LoneTrailRankSelection;
-        resources["ReferenceRankSelectionEdge"] = Brush(IsPeople ? "#ED8875" : colors["Accent"]);
+        resources["DisplayFont"] = Key switch
+        {
+            People => PeopleDisplay,
+            Babel => DataFamily,
+            _ => LoneTrailInterface,
+        };
+        resources["DataFont"] = DataFamily;
+        resources["DataHighlight"] = Brush(Key == LoneTrail ? "#61DFFF" : colors["Signal"]);
+        resources["ContributionTrack"] = resources["Track"];
+        resources["ReferenceRankSelection"] = Key switch
+        {
+            People => PeopleRankSelection,
+            Babel => BabelRankSelection,
+            _ => LoneTrailRankSelection,
+        };
+        resources["ReferenceRankSelectionEdge"] = Brush(Key switch
+        {
+            People => "#ED8875",
+            Babel => colors["Signal"],
+            _ => colors["Accent"],
+        });
         resources["ReferenceRankLeader"] = IsPeople ? PeopleRankLeader : Brushes.Transparent;
         int radius = int.Parse(colors["Radius"]);
         resources["CardRadius"] = new CornerRadius(radius);
-        resources["ControlRadius"] = new CornerRadius(Math.Max(2, radius - 1));
+        resources["ControlRadius"] = new CornerRadius(IsBabel ? 0 : Math.Max(2, radius - 1));
         resources["BgGrid"] = Grid(colors["Bg"], colors["Line"]);
     }
 

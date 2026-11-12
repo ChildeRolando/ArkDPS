@@ -279,9 +279,9 @@ public partial class MainWindow : Window
         bool wide = width >= 1320;
         bool scrollLive = narrow || ContentRoot.ActualHeight < (wide ? 640 : 960);
         bool narrowOverview = width < 920;
-        NavigationColumn.Width = new GridLength(narrow ? 92 : 208);
-        BrandBadge.Width = narrow ? 87 : 202;
-        if (narrow) Skin.Padding = new Thickness(8, 24, 27, 4);
+        NavigationColumn.Width = new GridLength(Theme.IsBabel ? (narrow ? 86 : 172) : (narrow ? 92 : 208));
+        BrandBadge.Width = NavigationColumn.Width.Value - (narrow ? 5 : 6);
+        if (narrow) Skin.Padding = new Thickness(8, 24, Theme.IsBabel ? 20 : 27, 4);
         else Skin.ClearValue(Control.PaddingProperty);
         ArrangeThemeArtwork(narrow);
         foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (SettingsNav, SettingsNavLabel) })
@@ -289,11 +289,7 @@ public partial class MainWindow : Window
             button.HorizontalContentAlignment = narrow ? HorizontalAlignment.Center : HorizontalAlignment.Left;
             label.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         }
-        OverviewStatsColumn.Width = narrowOverview ? new GridLength(0) : new GridLength(4.15, GridUnitType.Star);
-        Grid.SetColumn(MetricCards, narrowOverview ? 0 : 1);
-        Grid.SetRow(MetricCards, narrowOverview ? 1 : 0);
-        MetricCards.Columns = width < 710 ? 2 : 4;
-        CurrentMetric.Margin = new Thickness(4, 0, 4, narrowOverview ? 4 : 0);
+        ArrangeOverview(narrowOverview, width < 710);
 
         EnemySummaryColumn.Width = wide ? new GridLength(22, GridUnitType.Star) : new GridLength(0);
         RankingColumn.Width = new GridLength(41, GridUnitType.Star);
@@ -328,6 +324,36 @@ public partial class MainWindow : Window
         Grid.SetRow(ConnectionEventForm, stackedSettings ? 2 : 1);
         ConnectionForm.Margin = new Thickness(0, 0, stackedSettings ? 0 : 12, 12);
     }
+    private void ArrangeOverview(bool narrowOverview, bool twoMetricColumns)
+    {
+        MetricCards.Columns = twoMetricColumns ? 2 : 4;
+        if (Theme.IsBabel)
+        {
+            OverviewTrendColumn.Width = new GridLength(narrowOverview ? 151 : 236);
+            OverviewStatsColumn.Width = new GridLength(1, GridUnitType.Star);
+            Grid.SetColumn(CurrentMetric, 1);
+            Grid.SetColumn(MetricCards, 0);
+            Grid.SetColumnSpan(MetricCards, 2);
+            Grid.SetRow(MetricCards, 1);
+            BabelMastheadSurface.Height = narrowOverview ? 112 : 145;
+            BabelMastheadVeilLayer.SetResourceReference(Border.BackgroundProperty,
+                narrowOverview ? "BabelMastheadVeilCompact" : "BabelMastheadVeil");
+            BabelMastheadHeading.Margin = new Thickness(narrowOverview ? 14 : 22, 0, 8, 0);
+            BabelMastheadTitle.FontSize = narrowOverview ? 48 : 72;
+            BabelMastheadTitle.LineHeight = BabelMastheadTitle.FontSize;
+            CurrentMetric.Margin = new Thickness(8, 0, 12, 0);
+            CurrentDps.FontSize = narrowOverview ? 35 : 55;
+            return;
+        }
+        OverviewTrendColumn.Width = new GridLength(1.69, GridUnitType.Star);
+        OverviewStatsColumn.Width = narrowOverview ? new GridLength(0) : new GridLength(4.15, GridUnitType.Star);
+        Grid.SetColumn(CurrentMetric, 0);
+        Grid.SetColumn(MetricCards, narrowOverview ? 0 : 1);
+        Grid.SetColumnSpan(MetricCards, 1);
+        Grid.SetRow(MetricCards, narrowOverview ? 1 : 0);
+        CurrentMetric.Margin = new Thickness(4, 0, 4, narrowOverview ? 4 : 0);
+        CurrentDps.FontSize = 39;
+    }
     private void FitLivePanels()
     {
         bool fill = LivePage.VerticalScrollBarVisibility == ScrollBarVisibility.Disabled;
@@ -360,35 +386,78 @@ public partial class MainWindow : Window
     }
     private void ApplyThemeArtwork()
     {
-        bool people = Theme.IsPeople;
-        string palette = people ? "People" : "LoneTrail";
+        bool loneTrail = Theme.Key == Theme.LoneTrail;
+        string palette = Theme.Key switch
+        {
+            Theme.People => "People",
+            Theme.Babel => "Babel",
+            _ => "LoneTrail"
+        };
         var shell = new ResourceDictionary
         {
             Source = new Uri($"pack://application:,,,/Themes/MainWindow.{palette}.xaml")
         };
         Resources.MergedDictionaries.Clear();
         Resources.MergedDictionaries.Add(shell);
+        ApplyShellLayout();
         Skin.Resources["Focus"] = Theme.Resource("FocusOnDark");
-        HeaderArtwork.Visibility = people ? Visibility.Collapsed : Visibility.Visible;
-        PeoplePennant.Visibility = people ? Visibility.Visible : Visibility.Collapsed;
+        if (Theme.IsBabel) ChromeControls.Resources["Focus"] = Theme.Resource("FocusOnDark");
+        else ChromeControls.Resources.Remove("Focus");
+        HeaderArtwork.Visibility = loneTrail ? Visibility.Visible : Visibility.Collapsed;
+        PeoplePennant.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+        BabelTitlebarSurface.Visibility = BabelSidebarMark.Visibility =
+            Theme.IsBabel ? Visibility.Visible : Visibility.Collapsed;
         bool offline = App.BridgeArguments.Contains("--offline");
-        SystemTitle.Visibility = people ? Visibility.Collapsed : Visibility.Visible;
-        ModeLabel.Visibility = offline || !people ? Visibility.Visible : Visibility.Collapsed;
+        SystemTitle.Visibility = loneTrail ? Visibility.Visible : Visibility.Collapsed;
+        ModeLabel.Visibility = offline || loneTrail ? Visibility.Visible : Visibility.Collapsed;
         ModeLabel.Text = offline ? "离线验收 · 合成数据 · 不访问游戏" : "ARKDPS / ORBITAL CONSOLE";
         ArrangeThemeArtwork(ContentRoot.ActualWidth is > 0 and < 1100);
     }
 
+    private void ApplyShellLayout()
+    {
+        bool babel = Theme.IsBabel;
+        foreach (var frame in new[] { LiveOverviewFrame, EnemySummary, RankingFrame, LiveDetail })
+            frame.SetResourceReference(StyleProperty, babel ? "BabelResearchFrame" : "ResearchFrame");
+        foreach (var button in new[] { LiveNav, EnemyNav, HistoryNav, SettingsNav })
+            button.SetResourceReference(StyleProperty, babel ? "BabelResearchNav" : "ResearchNav");
+        foreach (Border metric in MetricCards.Children)
+            metric.SetResourceReference(StyleProperty, babel ? "BabelSecondaryMetric" : "ResearchMetric");
+        CurrentMetric.SetResourceReference(StyleProperty, babel ? "BabelCurrentMetric" : "ResearchCurrentMetric");
+
+        BabelMastheadSurface.Visibility = BabelMastheadHeading.Visibility = BabelMetricStrip.Visibility =
+            babel ? Visibility.Visible : Visibility.Collapsed;
+        CurrentMetricPulse.Visibility = CurrentMetricUnit.Visibility = babel ? Visibility.Collapsed : Visibility.Visible;
+        LiveOverviewFrame.Padding = babel ? new Thickness(8, 2, 8, 5) : new Thickness(22, 7, 14, 5);
+        LiveOverviewFrame.MinHeight = babel ? 0 : 304;
+        LiveFrameTitle.Text = babel ? "实时战况" : "实时DPS / LIVE DPS";
+        EnemySummary.Header = babel ? "敌方单位" : "敌方单位 / ENEMY UNIT";
+        RankingFrame.Header = babel ? "干员 DPS 排行" : "干员DPS排行 / OPERATOR DPS RANKING";
+        LiveDetail.Header = babel ? "干员详情" : "干员详情 / OPERATOR DETAIL";
+        if (babel)
+        {
+            CurrentMetricLabel.SetResourceReference(TextBlock.ForegroundProperty, "BabelPaperMuted");
+            CurrentDps.SetResourceReference(TextBlock.ForegroundProperty, "BabelPaperInk");
+        }
+        else
+        {
+            CurrentMetricLabel.ClearValue(TextBlock.ForegroundProperty);
+            CurrentDps.ClearValue(TextBlock.ForegroundProperty);
+        }
+    }
     private void ArrangeThemeArtwork(bool narrow)
     {
-        bool people = Theme.IsPeople;
-        ChromeDescription.Visibility = ContentRoot.ActualWidth >= 740 && (!people || ModeLabel.Visibility == Visibility.Visible)
+        bool loneTrail = Theme.Key == Theme.LoneTrail;
+        ChromeDescription.Visibility = ContentRoot.ActualWidth >= 740 && ModeLabel.Visibility == Visibility.Visible
             ? Visibility.Visible : Visibility.Collapsed;
-        BrandMark.Visibility = !people && !narrow ? Visibility.Visible : Visibility.Collapsed;
-        CompactBrandMark.Visibility = !people && narrow ? Visibility.Visible : Visibility.Collapsed;
-        PeopleBrandMark.Visibility = people && !narrow ? Visibility.Visible : Visibility.Collapsed;
-        PeopleCompactBrandMark.Visibility = people && narrow ? Visibility.Visible : Visibility.Collapsed;
-        ChromeLab.Visibility = !people && ContentRoot.ActualWidth >= 940 ? Visibility.Visible : Visibility.Collapsed;
-        SideLab.Visibility = SideLabName.Visibility = !people && !narrow ? Visibility.Visible : Visibility.Collapsed;
+        BrandMark.Visibility = loneTrail && !narrow ? Visibility.Visible : Visibility.Collapsed;
+        CompactBrandMark.Visibility = loneTrail && narrow ? Visibility.Visible : Visibility.Collapsed;
+        PeopleBrandMark.Visibility = Theme.IsPeople && !narrow ? Visibility.Visible : Visibility.Collapsed;
+        PeopleCompactBrandMark.Visibility = Theme.IsPeople && narrow ? Visibility.Visible : Visibility.Collapsed;
+        BabelBrandMark.Visibility = Theme.IsBabel && !narrow ? Visibility.Visible : Visibility.Collapsed;
+        BabelCompactBrandMark.Visibility = Theme.IsBabel && narrow ? Visibility.Visible : Visibility.Collapsed;
+        ChromeLab.Visibility = loneTrail && ContentRoot.ActualWidth >= 940 ? Visibility.Visible : Visibility.Collapsed;
+        SideLab.Visibility = SideLabName.Visibility = loneTrail && !narrow ? Visibility.Visible : Visibility.Collapsed;
     }
     private void ResetLiveInspector()
     {
@@ -507,8 +576,17 @@ public partial class MainWindow : Window
             bool active=tag==page;
             button.SetResourceReference(Control.BackgroundProperty, active ? "ShellNavActive" : "Sidebar");
             button.Foreground=active?Theme.Resource("SidebarInk"):Theme.Resource("SidebarMuted");
-            button.SetResourceReference(Control.BorderBrushProperty, active ? "ShellNavSelectedEdge" : "SidebarLine");
-            button.BorderThickness=active?new Thickness(2):new Thickness(1);
+            if (Theme.IsBabel)
+            {
+                if (active) button.SetResourceReference(Control.BorderBrushProperty, "ShellNavSelectedEdge");
+                else button.BorderBrush = Brushes.Transparent;
+                button.BorderThickness = new Thickness(2, 0, 0, 0);
+            }
+            else
+            {
+                button.SetResourceReference(Control.BorderBrushProperty, active ? "ShellNavSelectedEdge" : "SidebarLine");
+                button.BorderThickness = new Thickness(active ? 2 : 1);
+            }
         }
     }
     private static string OverviewNumber(JsonElement value) =>

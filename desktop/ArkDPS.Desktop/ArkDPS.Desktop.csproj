@@ -12,6 +12,7 @@
   <ItemGroup>
     <Resource Include="Assets/LoneTrail/*.png" />
     <Resource Include="Assets/People/**/*.png;Assets/People/**/*.jpg" />
+    <Resource Include="Assets/Babel/**/*.png;Assets/Babel/**/*.jpg" />
     <Resource Include="Assets/Fonts/*.ttf" />
     <None Update="Assets/Fonts/*-OFL.txt" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

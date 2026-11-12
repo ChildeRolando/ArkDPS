@@ -2,6 +2,11 @@
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" ShutdownMode="OnExplicitShutdown">
  <Application.Resources>
+  <SolidColorBrush x:Key="BabelPaper" Color="#EDE8E4"/>
+  <SolidColorBrush x:Key="BabelPaperInk" Color="#211B1F"/>
+  <SolidColorBrush x:Key="BabelPaperMuted" Color="#575056"/>
+  <SolidColorBrush x:Key="BabelPaperRule" Color="#ADA3A4"/>
+  <SolidColorBrush x:Key="BabelPaperAccent" Color="#8C2636"/>
   <!-- Default palette is LONE TRAIL; Theme.Apply replaces these at runtime. -->
   <SolidColorBrush x:Key="Bg" Color="#E9E6DC"/>
   <SolidColorBrush x:Key="Card" Color="#FFFCF3"/>

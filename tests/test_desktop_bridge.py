@@ -208,7 +208,8 @@ def test_rate_does_not_change_ranks_bars_shares_and_shield_rejects_engagement(tm
         cmd(state, 'panel_update', config=dict(config, category='shield'))
 
 
-def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp_path):
+@pytest.mark.parametrize('theme', ['people', 'babel'])
+def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp_path, theme):
     state = DesktopState(tmp_path)
     state.accept('sample', sample())
     state.history.save(record())
@@ -219,8 +220,8 @@ def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp
     assert second != 'default'
     hud = dict(panel_id=second, x=10, y=20, width=410, height=430, opacity=.83, locked=True)
     cmd(state, 'placement', gui=dict(x=50, y=60, width=1200, height=800), huds=[hud])
-    cmd(state, 'theme', theme='people')
-    assert state.snapshot()['layout']['theme'] == 'people'
+    cmd(state, 'theme', theme=theme)
+    assert state.snapshot()['layout']['theme'] == theme
     assert state.last is last and state.selected is selected
     assert state.layout.huds[0].to_dict() == hud
     restarted = DesktopState(tmp_path)

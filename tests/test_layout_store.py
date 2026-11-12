@@ -59,7 +59,7 @@ def test_version_one_panel_collection_is_migrated(tmp_path):
 
 
 @pytest.mark.parametrize('theme', [
-    'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original',
+    'contingency-contract', 'near-light', 'il-siracusano', 'original',
     'unknown', None, {'id': 'people'},
 ])
 def test_unavailable_theme_falls_back_without_discarding_layout(tmp_path, theme):
@@ -81,6 +81,18 @@ def test_unavailable_theme_falls_back_without_discarding_layout(tmp_path, theme)
     store.save(loaded.layout)
     reloaded = store.load()
     assert reloaded.ok and not reloaded.warning and reloaded.layout == expected
+
+
+def test_preexisting_babel_theme_loads_without_falling_back(tmp_path):
+    path = tmp_path / 'layout.json'
+    path.write_text(json.dumps({'version': 3, 'theme': 'babel', 'panels': [
+        panel('saved', category=Category.SHIELD).to_dict()]}), encoding='utf-8')
+
+    result = ls.LayoutStore(path).load()
+
+    assert result.ok and result.warning == ''
+    assert result.layout.theme == 'babel'
+    assert result.layout.panels == (panel('saved', category=Category.SHIELD),)
 
 
 def test_bare_panel_document_without_version_is_accepted_as_legacy(tmp_path):
