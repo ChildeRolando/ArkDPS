@@ -154,7 +154,9 @@ def test_statuses_keep_last_valid_values_and_do_not_convert_unknown_to_zero(tmp_
     state.last_progress -= 1
     assert state.status()[0] == 'paused'
     data['captured_monotonic'] -= 3
-    assert state.status()[0] == 'stale'
+    status, label = state.status()
+    assert status == 'stale'
+    assert '等待下一次可靠采样' in label and '保留最后有效记录' in label
     state.accept('error', 'lost')
     assert state.status()[0] == 'disconnected'
     assert state.snapshot()['panels'][0]['entries'][0]['value'] == 1230
@@ -300,6 +302,90 @@ def test_worker_startup_setup_error_is_reported(tmp_path, monkeypatch):
     kind, error = worker.events.get_nowait()
     assert kind == 'error' and error
     assert worker.session is None
+
+
+def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from collector import ProcessChanged
+    from event_capture import CaptureRetry
+
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path/'state')
+    worker = CollectionWorker(state)
+    clock = [0.0]
+    checks = []
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    first = replace(state.connection, serial='serial-a', auto_detect=False)
+    second = replace(state.connection, serial='serial-b', auto_detect=False)
+
+    def resolve(config):
+        diagnostics = SimpleNamespace(as_dict=lambda: {}, selected_serial=config.serial,
+                                      version_actual='test')
+        return SimpleNamespace(adb_path='adb', serial=config.serial, diagnostics=diagnostics)
+
+    def bind(_adb, serial, *, remote):
+        checks.append(('bind', serial))
+        return checks.count(('bind', serial)) > 1 or serial == first.serial, 'binding result'
+
+    def keep(_adb, serial, *, remote):
+        checks.append(('keep', serial))
+        return True, 'healthy endpoint'
+
+    class Session:
+        cleanup_errors = {}
+
+        def __init__(self, _adb, serial, **_kwargs):
+            self.serial = serial
+            self.reads = 0
+            self.collector = SimpleNamespace(diagnostics=resolve(SimpleNamespace(serial=serial)).diagnostics)
+            self.observer = SimpleNamespace(status='ready')
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+            runtime.sessions.state = 'playing'
+
+        def connect(self):
+            pass
+
+        def read(self):
+            self.reads += 1
+            if self.serial == first.serial and self.reads == 3:
+                worker.request(second, True)
+                return None
+            clock[0] += 6
+            if self.serial == first.serial:
+                if self.reads == 2:
+                    self.observer.status = 'failed'
+                    raise CaptureRetry('observer mark request failed: raw diagnostic detail')
+                raise CaptureRetry('baseline crossed an event or game frame')
+            if checks.count(('bind', second.serial)) > 2:
+                worker.stop.set()
+                return None
+            if self.reads == 2:
+                raise ProcessChanged('游戏进程出生标识已变化')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', resolve)
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', bind)
+    monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', keep)
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(first, True)
+    worker.run()
+
+    assert checks == [('bind', 'serial-a'), ('keep', 'serial-a'), ('bind', 'serial-a'),
+                      ('bind', 'serial-b'), ('bind', 'serial-b'), ('bind', 'serial-b'),
+                      ('keep', 'serial-b')]
+    assert worker.requests.empty()
+    path, = (tmp_path/'runtime'/'captures').glob('wpf-*.jsonl')
+    journal = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+    assert [item['data']['duration_ms'] for item in journal if item['kind'] == 'frida_keepalive'] == [0, 0, 0, 0]
+    retries = [item['data'] for item in journal if item['kind'] == 'capture_retry']
+    assert [retry['reason'] for retry in retries] == ['baseline crossed an event or game frame',
+                                                     'observer mark request failed']
+    assert all(retry['duration_ms'] == 6000 for retry in retries)
 
 
 def test_worker_retries_final_cleanup_before_closing_audit_stream(tmp_path, monkeypatch):
