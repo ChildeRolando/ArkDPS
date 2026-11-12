@@ -202,6 +202,7 @@ public partial class StatisticPanel : UserControl
     private JsonElement view;
     private bool updating, hold;
     private bool referenceStyle;
+    private const double ReferenceRowsDefaultHeight=185;
     internal bool IsHistory, IsHud;
     public string PanelId => view.Get("config").Text("panel_id");
     internal JsonElement View => view;
@@ -216,24 +217,25 @@ public partial class StatisticPanel : UserControl
         PanelFrame.SetResourceReference(Border.BackgroundProperty,enable ? "Console" : "Card");
         PanelFrame.Margin=enable ? new Thickness(0) : new Thickness(0,0,12,14);
         PanelTitle.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
-        TitleBar.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
+        TitleRegion.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
         TitleBar.Margin=enable ? new Thickness(5,3,5,2) : new Thickness(14,10,12,8);
         Selectors.Margin=enable ? new Thickness(5,0,5,4) : new Thickness(14,0,14,8);
         RateNoticePanel.Margin=enable ? new Thickness(5,0,5,3) : new Thickness(14,0,14,8);
         RateNoticePanel.Padding=enable ? new Thickness(5,2,5,2) : new Thickness(10,7,10,7);
         HudControls.Margin=enable ? new Thickness(5,2,5,4) : new Thickness(14,0,14,10);
         Coverage.Margin=enable ? new Thickness(5,2,5,3) : new Thickness(14,8,14,9);
+        Coverage.FontSize=enable ? 12 : 10;
         Coverage.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Empty.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Plot.MinHeight=enable ? 0 : 120;
-        Rows.MinHeight=enable ? 56 : 80;
-        Rows.MaxHeight=enable ? 168 : 520;
+        Rows.MinHeight=enable ? 74 : 80;
+        Rows.MaxHeight=enable ? ReferenceRowsDefaultHeight : 520;
         Rows.ItemContainerStyle=(Style)FindResource(enable ? "ReferenceRankedRow" : "RankedRow");
         LegendRow.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
         Grid.SetRow(Plot,enable ? 0 : 4);
         Grid.SetRow(Coverage,enable ? 1 : 5);
         Grid.SetRow(Selectors,enable ? 2 : 1);
-        Grid.SetRow(TitleBar,enable ? 3 : 0);
+        Grid.SetRow(TitleRegion,enable ? 3 : 0);
         Grid.SetRow(RateNoticePanel,enable ? 4 : 2);
         Grid.SetRow(LegendRow,enable ? 5 : 3);
         var panelGrid=(Grid)PanelFrame.Child;
@@ -297,7 +299,7 @@ public partial class StatisticPanel : UserControl
     {
         if (!referenceStyle) return;
         double chrome = Math.Max(0, ActualHeight - Rows.ActualHeight);
-        double rowLimit = Math.Clamp(availableHeight - chrome, 168, 520);
+        double rowLimit = Math.Clamp(availableHeight - chrome, ReferenceRowsDefaultHeight, 520);
         if (Math.Abs(Rows.MaxHeight - rowLimit) >= 1) Rows.MaxHeight = rowLimit;
     }
 

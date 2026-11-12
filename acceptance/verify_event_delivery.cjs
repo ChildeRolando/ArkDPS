@@ -111,7 +111,7 @@ const emitted=[];
 const targetKey=target=>target?.eid;
 const own=source=>source.startsWith('char_')||source.startsWith('token_');
 const record=(source,kind,amount,when,proof,evidence)=>emitted.push({source,kind,amount,evidence});
-${between('function recordEnemyDamage(', 'function includeEnemyHp(')}
+${between('function enemyDamageIdentity(', 'function includeEnemyHp(')}
 ${between('function nonlethalSettlement(', 'function dynamic(')}
 const mod=type=>({add:offset=>({readS32:()=>{
   assert.equal(offset,0x68);
@@ -132,6 +132,37 @@ assert.equal(emitted[0].kind,'enemy_damage');
 assert.equal(emitted[0].amount,17);
 assert.equal(emitted[0].evidence.target_uid,'123');
 assert.equal(enemyDamageUnknown,false);
+
+const when={frame:2};
+const burst={target:target.eid,real_delta:-7};
+const sourceNull={source:null,nativeSourceNull:true,real:-7,mod:mod(5),target,
+                  burstTarget:enemyDamageIdentity(target)};
+const sourceOwned={...sourceNull,source:'char_a',nativeSourceNull:false};
+const sourceEnemy={...sourceOwned,source:'enemy_a'};
+recordEnemyDamage(sourceNull,when);
+assert.equal(emitted.length,1);
+recordSourcelessEnemyBurst(sourceNull,burst,when);
+assert.equal(emitted.length,2);
+assert.equal(emitted[1].source,null);
+assert.equal(emitted[1].amount,7);
+assert.equal(emitted[1].evidence.target_uid,'123');
+assert.equal(emitted[1].evidence.damage_type,5);
+recordEnemyDamage(sourceOwned,when);
+recordSourcelessEnemyBurst(sourceOwned,burst,when);
+recordEnemyDamage(sourceEnemy,when);
+recordSourcelessEnemyBurst(sourceEnemy,burst,when);
+assert.equal(emitted.length,3);
+assert.equal(emitted[2].source,'char_a');
+assert.equal(enemyDamageUnknown,false);
+
+recordSourcelessEnemyBurst({...sourceNull,nativeSourceNull:false},burst,when);
+assert.equal(emitted.length,3);
+assert.equal(enemyDamageUnknown,true);
+enemyDamageUnknown=false;
+recordSourcelessEnemyBurst({...sourceNull,burstTarget:{...sourceNull.burstTarget,target_uid:'122'}},burst,when);
+assert.equal(emitted.length,3);
+assert.equal(enemyDamageUnknown,true);
+enemyDamageUnknown=false;
 recordEnemyDamage({source:'char_a',real:-17,mod:mod(2),target:null},{frame:1});
 assert.equal(enemyDamageUnknown,true);
 assert.equal(nonlethalSettlement(target,30,-17,17).hp_after,13);

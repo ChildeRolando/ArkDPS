@@ -328,26 +328,45 @@ function enemyIdentity(enemy,uid) {
  if(!uid)throw new Error('missing enemy instance UID');
  return {target:entityId(enemy),target_instance:String(uid)};
 }
+function enemyDamageIdentity(target) {
+ const key=targetKey(target);
+ if(!key)throw new Error('missing settled target');
+ // Some targetable stage objects enter the HP pool, others do not. Keep
+ // the UID for both and let the host match the exact admitted instance.
+ if(!key.startsWith('enemy_')&&!key.startsWith('trap_'))return null;
+ if(!enemyEntryConfig.assignable(enemyEntryConfig.bObject,target.readPointer()))
+  throw new Error('settled target is not a battle object');
+ const uid=target.add(0x18).readU32();
+ if(!uid)throw new Error('missing settled target UID');
+ return {target:key,target_uid:String(uid),target_instance:target.toString()};
+}
 function recordEnemyDamage(scope,when) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
  try{
   const type=scope.mod.add(0x68).readS32();
   if(![1,2,3,5].includes(type))return;
   if(scope.sourceReadFailed)throw new Error('missing settled source identity');
-  if(!scope.source&&type!==5)return;
+  // ApplyModifier is the only scoped producer for a source-null burst.
+  if(!scope.source)return;
   if(!Number.isFinite(scope.real)||scope.real>0)throw new Error('invalid settled HP delta');
   if(scope.real===0)return;
-  const target=scope.target,key=targetKey(target);
-  if(!key)throw new Error('missing settled target');
-  // Some targetable stage objects enter the HP pool, others do not. Keep
-  // the UID for both and let the host match the exact admitted instance.
-  if(!key.startsWith('enemy_')&&!key.startsWith('trap_'))return;
-  if(!enemyEntryConfig.assignable(enemyEntryConfig.bObject,target.readPointer()))
-   throw new Error('settled target is not a battle object');
-  const uid=target.add(0x18).readU32();
-  if(!uid)throw new Error('missing settled target UID');
-  record(scope.source,'enemy_damage',-scope.real,when,{method:scope.name},
-         {target:key,target_uid:String(uid),target_instance:target.toString(),damage_type:type});
+  const target=enemyDamageIdentity(scope.target);
+  if(target)record(scope.source,'enemy_damage',-scope.real,when,{method:scope.name},
+                   {...target,damage_type:type});
+ }catch(e){enemyDamageUnknown=true;}
+}
+function recordSourcelessEnemyBurst(scope,evidence,when) {
+ if(!enemyDamageReady||scope.source||scope.burstTarget===null)return;
+ try{
+  const real=evidence?.real_delta??fp(scope.mod.add(0x48));
+  if(real===0)return;
+  const target=scope.burstTarget;
+  if(!scope.nativeSourceNull||!evidence||!target||!Number.isFinite(real)||real>=0
+     ||target.target!==evidence.target||target.target_uid!==String(scope.target.add(0x18).readU32()))
+   throw new Error('unverified sourceless burst settlement');
+  // The host must attribute the HP deduction before the burst consumes its
+  // elemental bar owner. Both records stay within this callback's barrier.
+  record(null,'enemy_damage',-real,when,{method:scope.name},{...target,damage_type:5});
  }catch(e){enemyDamageUnknown=true;}
 }
 function includeEnemyHp(evidence,enemy) {
@@ -773,7 +792,16 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
-     try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
+     try{
+      const source=this.mod.readPointer();
+      this.nativeSourceNull=source.isNull();
+      this.source=this.nativeSourceNull?null:entityId(source);
+     }catch(e){this.source=null;}
+     if(enemyDamageReady&&this.nativeSourceNull){
+      try{
+       if(this.mod.add(0x68).readS32()===5)this.burstTarget=enemyDamageIdentity(this.target);
+      }catch(e){/* An unverified target only affects an actual settlement. */}
+     }
      if(this.source&&own(this.source))enterModifier(this);
      return;
     }
@@ -849,6 +877,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      }
      if(type===5){
       const evidence=overkillEvidence(this.mod,this.target,this.hpBefore,end.frame);
+      recordSourcelessEnemyBurst(this,evidence,end);
       if(evidence&&instance){
        evidence.target_instance=instance;
        try{record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence);}catch(e){fatal=String(e);}

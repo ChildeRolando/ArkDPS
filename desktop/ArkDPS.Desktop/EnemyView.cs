@@ -232,6 +232,12 @@ public sealed class EnemyChart : FrameworkElement
         InvalidateVisual();
     }
 
+    internal void RefreshNumberUnits()
+    {
+        UpdateReadout();
+        InvalidateVisual();
+    }
+
     private int CursorIndex() => cursorTime is not double time || points.Count==0
         ? -1 : Enumerable.Range(0,points.Count).MinBy(i=>Math.Abs(points[i].GameTime-time));
 
@@ -249,7 +255,7 @@ public sealed class EnemyChart : FrameworkElement
         + "\n" + DamageLabel + " " + Reading(point.Damage,point.DamageComplete);
 
     private static string Reading(double? value,bool complete) =>
-        value is double number ? (complete ? "" : "≥ ")+Compact(number) : "—";
+        value is double number ? (complete ? "" : "≥ ")+Json.CompactAmount(number) : "—";
 
     private void SelectPoint(int index)
     {
@@ -294,13 +300,6 @@ public sealed class EnemyChart : FrameworkElement
         InvalidateVisual();
     }
 
-    private static string Compact(double value)
-    {
-        if (!double.IsFinite(value)) return "—";
-        if (Math.Abs(value) >= 10000) return (value / 10000).ToString("0.#", CultureInfo.InvariantCulture) + "万";
-        return Math.Round(value, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture);
-    }
-
     private static string Time(double seconds)
     {
         int total = (int)Math.Max(0, seconds);
@@ -343,7 +342,7 @@ public sealed class EnemyChart : FrameworkElement
         {
             double y = top + height * i / 4;
             dc.DrawLine(gridPen, new Point(left, y), new Point(left + width, y));
-            var label = new FormattedText(Compact(maxY * (4 - i) / 4), CultureInfo.CurrentUICulture,
+            var label = new FormattedText(Json.CompactAmount(maxY * (4 - i) / 4), CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight, typeface, 10, muted, dpi);
             dc.DrawText(label, new Point(left - label.Width - 8, y - label.Height / 2));
         }

@@ -38,6 +38,21 @@ internal static class Json
         return item.ToString();
     }
     // Detail panels use whole numbers; compact list values keep their own form.
+    internal static string NumberUnits { get; set; } = "western";
+    internal static string CompactAmount(double? amount)
+    {
+        if (amount is not double value || !double.IsFinite(value)) return "—";
+        bool chinese = NumberUnits == "chinese";
+        double whole = Math.Round(Math.Abs(value));
+        double major = chinese ? 100_000_000 : 1_000_000;
+        double minor = chinese ? 10_000 : 1_000;
+        if (whole < minor) return Math.Round(value).ToString("0", CultureInfo.InvariantCulture);
+        double scaledMinor = Math.Round(value / minor, 1);
+        return whole >= major || Math.Abs(scaledMinor) >= major / minor
+            ? Math.Round(value / major, 1).ToString("0.#", CultureInfo.InvariantCulture) + (chinese ? "亿" : "M")
+            : scaledMinor.ToString("0.#", CultureInfo.InvariantCulture) + (chinese ? "万" : "K");
+    }
+
     public static string UiInt(this JsonElement value, string name)
     {
         var item = value.Get(name);

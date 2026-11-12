@@ -54,70 +54,68 @@ public partial class MainWindow
     }
     private void VerifyEnemyPaging(System.Text.Json.Nodes.JsonNode fixture)
     {
-        static Button? FindArrow(DependencyObject parent, string id)
-        {
-            if (parent is Button button && System.Windows.Automation.AutomationProperties.GetAutomationId(button)==id)
-                return button;
-            foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
-                if (FindArrow(child,id) is { } match) return match;
-            return null;
-        }
-
-        var previous=FindArrow(TargetSummary,"PreviousLiveEnemy")
-            ?? throw new InvalidOperationException("previous enemy arrow not exposed");
-        var next=FindArrow(TargetSummary,"NextLiveEnemy")
-            ?? throw new InvalidOperationException("next enemy arrow not exposed");
-        Require(System.Windows.Automation.AutomationProperties.GetName(previous)=="上一名敌人" &&
-                System.Windows.Automation.AutomationProperties.GetName(next)=="下一名敌人",
-                "enemy paging arrows lack accessible names");
+        FrameworkElement Find(string id) => FindAutomationElement(TargetSummary, id)
+            ?? throw new InvalidOperationException("missing enemy control: " + id);
 
         var state=fixture.DeepClone();
-        state["battle_id"]="synthetic-enemy-paging";
         var rows=System.Text.Json.Nodes.JsonNode.Parse("""
             [
-              {"instance_uid":"101","eid":"enemy_a","name":"首位敌人","lifecycle":"active","alive":true,"hp":900,"max_hp":1000},
-              {"instance_uid":"102","eid":"enemy_a","name":"次位敌人","lifecycle":"active","alive":true,"hp":400,"max_hp":5000},
-              {"instance_uid":"103","eid":"enemy_b","name":"血量未知敌人","lifecycle":"active","alive":true,"hp":null},
-              {"instance_uid":"104","eid":"enemy_c","name":"已离场敌人","lifecycle":"departed","alive":false,"hp":9000},
-              {"instance_uid":"105","eid":"enemy_d","name":"推断敌人","lifecycle":"active","alive":true,"hp":10000,"entry_inferred":true}
+              {"instance_uid":"101","eid":"enemy_a","name":"首位敌人","lifecycle":"active","alive":true,"hp":900,"max_hp":1000,"atk":173},
+              {"instance_uid":"102","eid":"enemy_a","name":"同型敌人","lifecycle":"active","alive":true,"hp":800,"max_hp":1200,"atk":214},
+              {"instance_uid":"103","eid":"enemy_b","name":"次型敌人","lifecycle":"active","alive":true,"hp":600},
+              {"instance_uid":"104","eid":"enemy_c","name":"第三型敌人","lifecycle":"active","alive":true,"hp":300},
+              {"instance_uid":"105","eid":"enemy_d","name":"已离场敌人","lifecycle":"departed","alive":false,"hp":0,"max_hp":9000},
+              {"instance_uid":"106","eid":"enemy_e","name":"推断敌人","lifecycle":"active","alive":true,"hp":10000,"entry_inferred":true}
             ]
             """)!.AsArray();
         state["enemy"]!["rows"]=rows;
 
-        void Publish() => TargetSummary.Update(JsonSerializer.SerializeToElement(state), "—", "—", "—", "");
-        static void ClickArrow(Button arrow) =>
-            arrow.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        void Publish(string battle = "synthetic-enemy-paging") =>
+            TargetSummary.Update(battle, JsonSerializer.SerializeToElement(state["enemy"]), "");
 
         try
         {
             Publish();
-            Require(HasText(TargetSummary,"首位敌人") && previous.Visibility==Visibility.Visible &&
-                    next.Visibility==Visibility.Visible && !previous.IsEnabled && next.IsEnabled,
-                    "first enemy is not the confirmed live instance with highest current HP");
-            ClickArrow(next);
-            Require(HasText(TargetSummary,"次位敌人") && previous.IsEnabled && next.IsEnabled,
-                    "right arrow did not select the next live UID");
-            ClickArrow(next);
-            Require(HasText(TargetSummary,"血量未知敌人") && previous.IsEnabled && !next.IsEnabled,
-                    "unknown HP did not sort last or next arrow remained enabled at the end");
-            ClickArrow(previous);
-            rows[1]!["hp"]=1100;
+            var first = Find("LiveEnemyCard1");
+            var second = Find("LiveEnemyCard2");
+            var third = Find("LiveEnemyCard3");
+            var previous = (Button)Find("PreviousLiveEnemy");
+            var next = (Button)Find("NextLiveEnemy");
+            var pin = (System.Windows.Controls.Primitives.ToggleButton)Find("LockLiveEnemy");
+            Require(System.Windows.Automation.AutomationProperties.GetName(previous)=="上一名敌人" &&
+                    System.Windows.Automation.AutomationProperties.GetName(next)=="下一名敌人",
+                    "enemy paging arrows lack accessible names");
+            Require(HasText(first,"首位敌人") && HasText(first,"173") &&
+                    HasText(second,"次型敌人") && HasText(third,"第三型敌人") &&
+                    !HasText(TargetSummary,"推断敌人") && !previous.IsEnabled && next.IsEnabled,
+                    "cards did not prefer distinct confirmed live types or render attack");
+            next.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Require(HasText(first,"同型敌人") && HasText(first,"214") && HasText(second,"次型敌人"),
+                    "right arrow did not skip instances already shown on other cards");
+            pin.IsChecked = true;
+            rows[1]!["hp"]=230;
             Publish();
-            Require(HasText(TargetSummary,"次位敌人") && !previous.IsEnabled && next.IsEnabled,
-                    "HP reorder changed the selected UID or left stale arrow bounds");
+            Require(HasText(first,"同型敌人") && HasText(first,"230") && !next.IsEnabled && !previous.IsEnabled,
+                    "locked card did not follow the exact instance after HP reorder");
             rows[1]!["alive"]=false;
             rows[1]!["lifecycle"]="departed";
+            rows[1]!["hp"]=0;
+            rows[1]!["atk"]=null;
             Publish();
-            Require(HasText(TargetSummary,"首位敌人"), "departed selection did not fall back to a live enemy");
-            rows[2]!["alive"]=false;
-            rows[2]!["lifecycle"]="departed";
+            Require(pin.IsChecked == true && HasText(first,"同型敌人") && HasText(first,"214"),
+                    "locked card lost the departed instance or last confirmed attributes");
+            foreach(int index in new[] { 0, 2, 3 })
+            {
+                rows[index]!["alive"]=false;
+                rows[index]!["lifecycle"]="departed";
+            }
             Publish();
-            Require(previous.Visibility==Visibility.Collapsed && next.Visibility==Visibility.Collapsed &&
-                    !previous.IsEnabled && !next.IsEnabled, "single live enemy still has paging controls");
-            rows[0]!["alive"]=false;
-            rows[0]!["lifecycle"]="departed";
-            Publish();
-            Require(HasText(TargetSummary,"等待敌方数据"), "enemy card retained a departed enemy with no live targets");
+            pin.IsChecked = false;
+            Require(HasText(TargetSummary,"已离场敌人") || next.IsEnabled || previous.IsEnabled,
+                    "departed types disappeared from the cards and queue");
+            pin.IsChecked = true;
+            Publish("synthetic-enemy-paging-next");
+            Require(pin.IsChecked == false, "enemy lock carried over to a new battle");
         }
         finally
         {
@@ -243,7 +241,7 @@ public partial class MainWindow
             Width = width; Height = height;
             await Settle();
             Require(Math.Abs(ActualWidth - width) < 2 && Math.Abs(ActualHeight - height) < 2,
-                "test window did not reach requested DIP size");
+                $"test window did not reach {width}x{height} DIP: {ActualWidth}x{ActualHeight}, {WindowState}, DPI {System.Windows.Media.VisualTreeHelper.GetDpi(this)}");
             Require(Grid.GetColumnSpan(EnemySummary) == (width >= 1320 ? 1 : 3) &&
                 Grid.GetColumn(LiveDetail) == (width < 1100 ? 1 : 2) &&
                 (LiveNavLabel.Visibility == Visibility.Collapsed) == (width < 1100),
@@ -259,6 +257,7 @@ public partial class MainWindow
                     Grid.GetColumn(panel.ReferenceFooterTotal)==3 && Grid.GetColumn(panel.ReferenceFooterRate)==4,
                     "team total or DPS did not render in its ranking column");
             }
+            Require(!HasVisibleScrollbar(this), $"visible scrollbar at {width}x{height} DIPs");
             if (width >= 1200) VerifyCompactPortraitLayout();
             Screenshot.Window(this, Path.Combine(output, $"lone-trail-live-{width}x{height}-dip.png"));
             if (width == 1380)
@@ -269,7 +268,8 @@ public partial class MainWindow
         }
         await Navigate("enemies");
         await Settle();
-        Require(EnemyPageScroll.ScrollableHeight > 0 && EnemyChartHost.ActualHeight >= 300,
+        Require(EnemyPageScroll.ScrollableHeight > 0 && EnemyChartHost.ActualHeight >= 300 &&
+                !HasVisibleScrollbar(this),
             "minimum window does not scroll to the full enemy chart");
         Screenshot.Window(this, Path.Combine(output, "lone-trail-enemies-minimum.png"));
         await Navigate("live");
@@ -277,7 +277,19 @@ public partial class MainWindow
         await Settle();
         WindowState = WindowState.Maximized;
         await Settle();
-        if (ActualWidth >= 1320 && ActualHeight >= 640)
+        var workArea = System.Windows.Forms.Screen.FromHandle(Native.Handle(this)).WorkingArea;
+        var topLeft = ContentRoot.PointToScreen(new Point());
+        var bottomRight = ContentRoot.PointToScreen(new Point(ContentRoot.ActualWidth, ContentRoot.ActualHeight));
+        var panelBottom = LiveBody.PointToScreen(new Point(0, LiveBody.ActualHeight));
+        Require(topLeft.X >= workArea.Left-1 && topLeft.Y >= workArea.Top-1 &&
+                bottomRight.X <= workArea.Right+1 && bottomRight.Y <= workArea.Bottom+1 &&
+                panelBottom.Y <= workArea.Bottom+1,
+                $"maximized frame runs outside monitor work area: {topLeft} to {bottomRight}, {workArea}");
+        Require(TitleBar.ActualHeight <= 38 &&
+                TitleBar.ActualHeight-ChromeControls.ActualHeight is >= 2 and <= 10,
+                "window controls do not have a compact title bar");
+        Screenshot.Window(this, Path.Combine(output, "lone-trail-live-maximized.png"));
+        if (ContentRoot.ActualWidth >= 1320 && ContentRoot.ActualHeight >= 640)
             Require(LivePage.ScrollableHeight < 1 &&
                 Math.Abs(LiveBody.TranslatePoint(new Point(0,LiveBody.ActualHeight),LivePage).Y - LivePage.ActualHeight) < 6,
                 "maximized dashboard left unused space below the panels");
@@ -285,6 +297,7 @@ public partial class MainWindow
         Width = 560; Height = 540;
         await Navigate("history");
         await Settle();
+        Require(ContentRoot.Margin == new Thickness(), "restored window kept maximized insets");
         Require(HistoryList.ActualHeight >= 58, $"minimum history viewport too short ({HistoryList.ActualHeight:F1} DIPs)");
         Screenshot.Window(this, Path.Combine(output, "lone-trail-history-minimum.png"));
         await Navigate("live");
@@ -292,7 +305,7 @@ public partial class MainWindow
         await Settle();
         ApplyState(initial);
         await Command("theme", new() { ["theme"] = "original" });
-        checks.Add("portrait beside three rounded metrics, HP-ordered enemy paging, aligned team footer, pause/recovery/known zero and five Lone Trail DIP layouts");
+        checks.Add("larger portrait and ranking, distinct enemy cards with paging and UID lock, pause/recovery/zero, five Lone Trail layouts and physical maximized bounds");
     }
     private void VerifyCompactPortraitLayout()
     {
@@ -303,7 +316,7 @@ public partial class MainWindow
             ?? throw new InvalidOperationException("compact detail metric missing")).ToArray();
         var avatarPosition=avatar.TranslatePoint(new Point(),LiveInspector);
         var positions=rows.Select(row=>row.TranslatePoint(new Point(),LiveInspector)).ToArray();
-        Require(avatar.ActualWidth==36 && avatar.ActualHeight==36 && HasText(LiveInspector,"1,167") &&
+        Require(avatar.ActualWidth==46 && avatar.ActualHeight==46 && HasText(LiveInspector,"1,167") &&
             positions.Take(3).All(point=>point.X>=avatarPosition.X+avatar.ActualWidth) &&
             avatarPosition.Y>=positions[0].Y-1 &&
             avatarPosition.Y+avatar.ActualHeight<=positions[2].Y+rows[2].ActualHeight+1 &&
@@ -319,6 +332,14 @@ public partial class MainWindow
         return null;
     }
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
+    private static bool HasVisibleScrollbar(DependencyObject root)
+    {
+        if (root is System.Windows.Controls.Primitives.ScrollBar { IsVisible: true } bar &&
+            bar.ActualWidth > 0 && bar.ActualHeight > 0) return true;
+        for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+            if (HasVisibleScrollbar(System.Windows.Media.VisualTreeHelper.GetChild(root, index))) return true;
+        return false;
+    }
     private static bool HasText(DependencyObject root,string text)
     {
         if(root is TextBlock block && block.Text.Contains(text,StringComparison.Ordinal)) return true;
@@ -785,6 +806,17 @@ public partial class MainWindow
             await Command("theme",new(){["theme"]=theme});await Settle();
             await Navigate("live");await Settle();
             Require(ReferenceEquals(originalHud,Huds[id]) && Native.Handle(originalHud)==handleBeforeTheme,"theme recreated HUD");
+            Require(!HasVisibleScrollbar(originalHud), "HUD displayed a scrollbar");
+            var hudPanel = originalHud.Panel;
+            var titleRegion = hudPanel.TitleRegion;
+            Require(hudPanel.PanelFrame.Margin == new Thickness() &&
+                    hudPanel.PanelFrame.BorderThickness == new Thickness() &&
+                    titleRegion.ActualWidth >= originalHud.ActualWidth - 2,
+                    "HUD does not fill its window or retains the extra frame");
+            Require(originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(2,2)) as DependencyObject) &&
+                    !originalHud.IsTitleDragSource(hudPanel.HudClose) &&
+                    (hudPanel.LoneTrailHudMark.Visibility == Visibility.Visible) == (theme == "lone-trail"),
+                    "HUD drag surface, close hit target, or skin marker did not render");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
             await Navigate("enemies");await Settle();
             Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
@@ -815,9 +847,25 @@ public partial class MainWindow
                 Require(State.Get("history_selected").Text("battle_id")==selectedId,"filter/refresh replaced selected history");Search.Text="";
                 checks.Add(theme+" frozen selected history survives search and refresh");
             }
-            await Navigate("settings");await Settle();Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));await Navigate("live");
+            await Navigate("settings");await Settle();
+            Require(!HasVisibleScrollbar(this), "settings displayed a scrollbar");
+            Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));await Navigate("live");
             checks.Add(theme+" theme switch keeps HUD HWND, values and source");
         }
+        await Navigate("settings");
+        await Command("number_units", new() { ["number_units"] = "chinese" });
+        Require(NumberUnits.SelectedIndex == 1 && Json.CompactAmount(1_000_000) == "100万" &&
+                Json.CompactAmount(120_000_000) == "1.2亿" &&
+                Panels[id].View.Get("entries").Items().Any(row => row.Text("display_value").Contains("万")) &&
+                originalHud.Panel.View.Get("entries").GetRawText() == Panels[id].View.Get("entries").GetRawText(),
+                "Chinese display units did not reach the settings, chart formatter, live panel and HUD");
+        Screenshot.Window(this, Path.Combine(output, "number-units-settings.png"));
+        await Command("number_units", new() { ["number_units"] = "western" });
+        Require(NumberUnits.SelectedIndex == 0 && Json.CompactAmount(1150) == "1.2K" &&
+                Json.CompactAmount(1_000_000) == "1M" &&
+                Panels[id].View.Get("entries").Items().Any(row => row.Text("display_value").Contains("K")),
+                "western display units did not restore without restarting");
+        checks.Add("global number units switch updates live ranking, chart labels and existing HUD");
         await VerifyLoneTrailLayout(output, checks);
         await SavePlacement();string normal=State.Get("layout").Get("gui").GetRawText();
         WindowState=WindowState.Minimized;await Settle();await SavePlacement();

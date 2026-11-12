@@ -457,8 +457,17 @@ def test_format_compact_units():
     assert format_compact(999) == '999'
     assert format_compact(1000) == '1K'
     assert format_compact(1500) == '1.5K'
+    assert format_compact(1150) == '1.2K'
+    assert format_compact(999_950) == '1M'
     assert format_compact(1_000_000) == '1M'
     assert format_compact(1_234_567) == '1.2M'
+    assert format_compact(None, 'chinese') == '—'
+    assert format_compact(9_999, 'chinese') == '9999'
+    assert format_compact(10_000, 'chinese') == '1万'
+    assert format_compact(-12_345, 'chinese') == '-1.2万'
+    assert format_compact(99_999_500, 'chinese') == '1亿'
+    assert format_compact(100_000_000, 'chinese') == '1亿'
+    assert format_compact(127_000_000, 'chinese') == '1.3亿'
 
 
 def test_config_roundtrip_and_collection_validation():

@@ -213,20 +213,21 @@ class DesktopState:
             return 'degraded', '正在统计 · 事件降级'
         return 'live', '正在统计'
 
-    @staticmethod
-    def view(config, statistics, complete=None, event=None):
+    def view(self, config, statistics, complete=None, event=None):
         source = statistics.get('rows') or {}
+        number_units = self.layout.number_units
         if complete is None:
-            complete, reason, note = team_status(statistics)
+            complete, reason, note = team_status(statistics, number_units)
         else:
             reason, note = '', ''
         rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
-                                   team_note=note, event=event))
+                                   team_note=note, event=event, number_units=number_units))
         view['empty_text'] = empty_text(config, source, complete)
         view['rates'] = detail_rates(
-            rows, event, effective=config.effective_only and config.category.value == 'damage')
+            rows, event, effective=config.effective_only and config.category.value == 'damage',
+            number_units=number_units)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source
@@ -308,6 +309,8 @@ class DesktopState:
                                  huds=tuple(h for h in self.layout.huds if h.panel_id != cmd['panel_id'])))
         elif op == 'theme':
             self.persist(replace(self.layout, theme=cmd['theme']))
+        elif op == 'number_units':
+            self.persist(replace(self.layout, number_units=cmd['number_units']))
         elif op == 'placement':
             known = {p.panel_id for p in self.layout.panels}
             huds = tuple(HudPlacement.from_dict(h) for h in cmd['huds'])

@@ -431,6 +431,43 @@ def test_elemental_bar_and_sourceless_burst_reach_attribution():
     assert row['effective_damage'] == pytest.approx(120 + 784)
 
 
+@pytest.mark.parametrize('burst_source, scoped_settlement', [
+    (None, True),       # Native source-null burst, scoped before team attribution.
+    ('char_a', True),   # Native source-owned burst, scoped by the output callback.
+    (None, False),      # Legacy wire cannot supply the missing native target UID.
+])
+def test_elemental_burst_counts_actual_enemy_hp_once(burst_source, scoped_settlement):
+    class EnemyDamageObserver(Observer):
+        def drain(self):
+            return {**super().drain(), 'enemy_damage_ready': True}
+
+    collector = Collector()
+    observer = EnemyDamageObserver(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time = 2, 1
+    collector.damage = 120 if burst_source is None else 140
+    records = [
+        dict(event(1, frame=2, game_time=1), kind='elemental_bar', target_instance='0x1'),
+    ]
+    if scoped_settlement:
+        records.append(dict(event(2, frame=2, game_time=1), kind='enemy_damage',
+                            source=burst_source, amount=9, target='enemy_a',
+                            target_instance='0x1', target_uid='10', damage_type=5))
+    records.append(dict(event(len(records) + 1, frame=2, game_time=1), kind='elemental_burst',
+                        source=burst_source, target='enemy_a', target_instance='0x1',
+                        real_delta=-9, hp_before=9, hp_after=0, killed=True, damage_type=5))
+    observer.sequence = observer.epoch = len(records)
+    for _ in range(2):
+        observer.events = records.copy()
+        result = capture.sample()
+        assert result['enemy_damage']['by_uid'] == (
+            {'10': {'eid': 'enemy_a', 'amount': 9}} if scoped_settlement else {})
+        row = result['rows']['char_a']
+        assert row['effective_damage'] == 129
+        assert row['burst_damage'] == 9
+
+
 def test_probe_hooks_character_skill_windows_and_keeps_them_out_of_onenter():
     js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
     assert "wanted=new Set([" in js and "'Character'" in js and "'BasicSkill'" in js

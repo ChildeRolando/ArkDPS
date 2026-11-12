@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from panel_model import PanelConfig
+from panel_model import DEFAULT_NUMBER_UNITS, NUMBER_UNITS, PanelConfig
 
 ROOT = Path(__file__).resolve().parent
 LAYOUT_VERSION = 3
@@ -120,10 +120,13 @@ class Layout:
     gui: GuiGeometry | None = None
     event_observation: bool = True
     theme: str = 'lone-trail'
+    number_units: str = DEFAULT_NUMBER_UNITS
 
     def __post_init__(self):
         if self.theme not in THEMES:
             raise ValueError('未知皮肤')
+        if not isinstance(self.number_units, str) or self.number_units not in NUMBER_UNITS:
+            raise ValueError('未知数值单位')
         if not self.panels:
             raise ValueError('至少需要一个面板')
         ids = [panel.panel_id for panel in self.panels]
@@ -136,6 +139,7 @@ class Layout:
     def to_dict(self) -> dict:
         return {'version': LAYOUT_VERSION, 'theme': self.theme,
                 'event_observation': bool(self.event_observation),
+                'number_units': self.number_units,
                 'gui': self.gui.to_dict() if self.gui else None,
                 'panels': [panel.to_dict() for panel in self.panels],
                 'huds': [hud.to_dict() for hud in self.huds]}
@@ -246,8 +250,13 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     if theme not in THEMES:
         warnings.append('皮肤设置无效，已使用孤星')
         theme = 'lone-trail'
+    number_units = raw.get('number_units', DEFAULT_NUMBER_UNITS)
+    if not isinstance(number_units, str) or number_units not in NUMBER_UNITS:
+        warnings.append('数值单位设置无效，已使用 K / M')
+        number_units = DEFAULT_NUMBER_UNITS
     return Layout(panels=panels, huds=huds, gui=gui,
-                  event_observation=event, theme=theme), warnings, migrated_from
+                  event_observation=event, theme=theme,
+                  number_units=number_units), warnings, migrated_from
 
 
 class LayoutStore:

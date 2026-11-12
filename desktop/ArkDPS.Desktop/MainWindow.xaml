@@ -64,29 +64,30 @@
    <Setter Property="Foreground" Value="#F6F8FA"/><Setter Property="FontFamily" Value="Bahnschrift, Segoe UI"/><Setter Property="FontSize" Value="27"/>
   </Style>
  </Window.Resources>
- <Grid Background="{DynamicResource Bg}">
-  <Grid.RowDefinitions><RowDefinition Height="57"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+ <Border x:Name="WindowSurface" Background="{DynamicResource Bg}">
+ <Grid x:Name="ContentRoot">
+  <Grid.RowDefinitions><RowDefinition Height="36"/><RowDefinition Height="*"/></Grid.RowDefinitions>
   <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavigationColumn" Width="208"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-  <Grid x:Name="HeaderArtwork" Grid.ColumnSpan="2" Grid.RowSpan="2" Height="130" VerticalAlignment="Top" IsHitTestVisible="False">
+  <Grid x:Name="HeaderArtwork" Grid.ColumnSpan="2" Grid.RowSpan="2" Height="108" VerticalAlignment="Top" IsHitTestVisible="False">
    <Image Source="Assets/LoneTrail/orbital-header-banner.png" Stretch="UniformToFill" VerticalAlignment="Center" ClipToBounds="True"/>
    <Grid.OpacityMask><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#FFFFFFFF" Offset=".55"/><GradientStop Color="#00FFFFFF" Offset="1"/></LinearGradientBrush></Grid.OpacityMask>
   </Grid>
 
-  <Grid Grid.ColumnSpan="2" Background="Transparent" MouseLeftButtonDown="DragTitleBar">
+  <Grid x:Name="TitleBar" Grid.ColumnSpan="2" Background="Transparent" MouseLeftButtonDown="DragTitleBar">
    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <Grid Width="202" Margin="5,4,0,4" Background="#EA1A242C">
+   <Grid x:Name="BrandBadge" Width="202" Margin="5,3,0,3" Background="#EA1A242C">
     <StackPanel x:Name="BrandMark" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-     <Image Source="Assets/LoneTrail/arkdps-icon.png" Width="46" Height="31" Margin="0,0,5,0"/>
-     <TextBlock Text="ArkDPS" Foreground="#F3F5F7" FontSize="30" FontWeight="Bold" VerticalAlignment="Center"/>
+     <Image Source="Assets/LoneTrail/arkdps-icon.png" Width="34" Height="24" Margin="0,0,5,0"/>
+     <TextBlock Text="ArkDPS" Foreground="#F3F5F7" FontSize="23" FontWeight="Bold" VerticalAlignment="Center"/>
     </StackPanel>
-    <Image x:Name="CompactBrandMark" Source="Assets/LoneTrail/arkdps-icon.png" Width="42" HorizontalAlignment="Center" Stretch="Uniform" Visibility="Collapsed"/>
-    <TextBlock x:Name="BrandText" Text="ArkDPS" Foreground="#F4F7FA" FontSize="25" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+    <Image x:Name="CompactBrandMark" Source="Assets/LoneTrail/arkdps-icon.png" Width="34" HorizontalAlignment="Center" Stretch="Uniform" Visibility="Collapsed"/>
+    <TextBlock x:Name="BrandText" Text="ArkDPS" Foreground="#F4F7FA" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
    </Grid>
-   <StackPanel Grid.Column="1" x:Name="ChromeDescription" Orientation="Vertical" VerticalAlignment="Stretch" HorizontalAlignment="Left" Background="#CF202930" Margin="2,3,0,4">
-    <TextBlock Text="COMBAT DPS ANALYSIS SYSTEM" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="#F6F8FA" Margin="10,7,16,0"/>
-    <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="#BFC9D1" Margin="10,3,16,0"/>
+   <StackPanel Grid.Column="1" x:Name="ChromeDescription" Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left" Background="#CF202930" Margin="5,0,0,0">
+    <TextBlock Text="COMBAT DPS ANALYSIS SYSTEM" FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="#F6F8FA" Margin="9,1,12,0"/>
+    <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="#BFC9D1" Margin="9,0,12,1"/>
    </StackPanel>
-   <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Background="#DF202930" Margin="4,0,8,0">
+   <StackPanel x:Name="ChromeControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Background="#DF202930" Margin="4,0,8,0">
     <StackPanel x:Name="ChromeLab" Margin="4,0,13,0" VerticalAlignment="Center">
      <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="#F2F5F7"/>
      <TextBlock Text="ORCU / DPS LAB" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="#CBD5DF" Margin="0,2,0,0"/>
@@ -102,7 +103,7 @@
     <Image x:Name="SidebarArtwork" Source="Assets/LoneTrail/sidebar-orbital-detail.png" Stretch="UniformToFill" Opacity=".94" IsHitTestVisible="False"/>
     <Border Background="#4516202B" IsHitTestVisible="False"/>
     <DockPanel>
-     <StackPanel DockPanel.Dock="Top" Margin="3,44,3,0">
+     <StackPanel DockPanel.Dock="Top" Margin="3,8,3,0">
      <Button x:Name="LiveNav" Tag="live" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="实时战况" AutomationProperties.Name="实时战况">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
        <Image x:Name="LiveNavAsset" Source="Assets/LoneTrail/realtime.png" Width="25" Height="24" Stretch="Uniform"/>
@@ -117,11 +118,11 @@
        <TextBlock x:Name="HistoryNavLabel" Text="历史战绩" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
-     <Button x:Name="SettingsNav" Tag="settings" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="连接设置" AutomationProperties.Name="连接设置">
+     <Button x:Name="SettingsNav" Tag="settings" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="设置" AutomationProperties.Name="设置">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
        <Image x:Name="SettingsNavAsset" Source="Assets/LoneTrail/connection.png" Width="25" Height="24" Stretch="Uniform"/>
        <Path x:Name="SettingsNavVector" Width="22" Height="22" Data="M 2 4 H 16 M 2 9 H 16 M 2 14 H 16 M 6 2 V 6 M 12 7 V 11 M 8 12 V 16" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
-       <TextBlock x:Name="SettingsNavLabel" Text="连接设置" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
+       <TextBlock x:Name="SettingsNavLabel" Text="设置" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
       <Border Background="#8AA0B0" Height="1" Margin="9,8,9,15"/>
@@ -160,7 +161,7 @@
    </DockPanel>
    <Grid Grid.Row="1">
     <ScrollViewer x:Name="LivePage" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"
-      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Margin="5,18,3,2">
+      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Margin="5,4,3,4">
      <Grid Margin="0,0,4,0">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <HeaderedContentControl Style="{StaticResource ResearchFrame}" Padding="22,7,14,5" Margin="0,0,0,5" MinHeight="304">
@@ -210,13 +211,13 @@
           <Button x:Name="AddPanelButton" Content="+ 新建面板" Click="AddPanel" Padding="6,1" MinHeight="22" FontSize="11"/>
           <Button Content="重新定位" Click="Rescan" Padding="6,1" MinHeight="22" FontSize="11"/>
          </StackPanel>
-         <ScrollViewer x:Name="RankingScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+         <ScrollViewer x:Name="RankingScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
           <StackPanel x:Name="PanelHost"/>
          </ScrollViewer>
         </DockPanel>
        </HeaderedContentControl>
        <HeaderedContentControl x:Name="LiveDetail" Grid.Column="2" Header="干员详情 / OPERATOR DETAIL" Style="{StaticResource ResearchFrame}" Padding="2">
-        <ScrollViewer x:Name="LiveDetailScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="LiveDetailScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
          <StackPanel><local:Inspector x:Name="LiveInspector" CompactReference="True"/>
           <local:LiveTrendView x:Name="OperatorTrend" Kind="Operator" Margin="0,3,0,0" Visibility="Collapsed"/>
          </StackPanel>
@@ -261,7 +262,7 @@
        <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；完成对局归档后自动出现。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,10,0,0"/>
        <TextBlock x:Name="HistoryNotice" Foreground="{DynamicResource Danger}" FontSize="11" Margin="0,3,0,0"/>
       </StackPanel>
-      <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel><local:StatisticPanel x:Name="HistoryPanel" Margin="0,0,0,12"/><local:Inspector x:Name="HistoryInspector"/></StackPanel></ScrollViewer>
+      <ScrollViewer VerticalScrollBarVisibility="Hidden"><StackPanel><local:StatisticPanel x:Name="HistoryPanel" Margin="0,0,0,12"/><local:Inspector x:Name="HistoryInspector"/></StackPanel></ScrollViewer>
      </DockPanel>
     </Grid>
 
@@ -330,11 +331,20 @@
     </Grid>
     </ScrollViewer>
 
-    <ScrollViewer x:Name="SettingsPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="20,0,20,0">
+    <ScrollViewer x:Name="SettingsPage" Visibility="Collapsed" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled" Margin="20,0,20,0">
      <Grid MaxWidth="1080">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="SettingsRightColumn" Width="*"/></Grid.ColumnDefinitions>
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-      <Border x:Name="ConnectionForm" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,12,12">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Border Grid.ColumnSpan="2" Style="{StaticResource SurfaceCard}" Padding="20,12" Margin="0,0,0,12">
+       <StackPanel Orientation="Horizontal">
+        <TextBlock Text="数值缩写单位" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+        <ComboBox x:Name="NumberUnits" AutomationProperties.Name="数值缩写单位" SelectionChanged="NumberUnitsChanged" MinWidth="150">
+         <ComboBoxItem Content="K / M" Tag="western"/>
+         <ComboBoxItem Content="万 / 亿" Tag="chinese"/>
+        </ComboBox>
+       </StackPanel>
+      </Border>
+      <Border x:Name="ConnectionForm" Grid.Row="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,12,12">
        <StackPanel>
         <TextBlock Text="连接到 MuMu" Style="{StaticResource CardTitle}" FontSize="20"/>
         <TextBlock Text="UI 不访问游戏进程和 ADB；连接与只读采集由独立 Python 进程负责。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,14"/>
@@ -346,7 +356,7 @@
         <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,0"/>
        </StackPanel>
       </Border>
-      <Border x:Name="ConnectionEventForm" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12">
+      <Border x:Name="ConnectionEventForm" Grid.Row="1" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12">
        <StackPanel><TextBlock Text="事件观测与连接诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
         <CheckBox x:Name="EventsEnabled" Content="启用事件观测 · 护盾实际吸收 / 独立接敌区间"/>
         <TextBlock Text="事件不可用时沿用伤害 / 治疗累计快照。覆盖前的护盾未知，不显示为零。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,0,0,10"/>
@@ -361,4 +371,5 @@
    <TextBlock x:Name="Footer" Grid.Row="2" Visibility="Collapsed"/>
   </Grid>
  </Grid>
+ </Border>
 </Window>

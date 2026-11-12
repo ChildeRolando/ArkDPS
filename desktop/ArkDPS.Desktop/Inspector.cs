@@ -311,29 +311,29 @@ public sealed class Inspector : Border
             "M 6,1 L 11,4 V 9 L 6,12 L 1,9 V 4 Z M 4,7 L 6,5 L 8,7",
             "M 6,1 A 5,5 0 1 1 5.9,1 M 6,3 V 6 L 8,7",
         };
-        private readonly TextBlock name=Label("",17,LightInk,true);
-        private readonly TextBlock role=Label("",11,DarkInk);
+        private readonly TextBlock name=Label("",20,LightInk,true);
+        private readonly TextBlock role=Label("",13,DarkInk);
         private readonly Image portrait=new(){Stretch=Stretch.UniformToFill};
-        private readonly TextBlock initial=Label("",17,DarkInk,true);
+        private readonly TextBlock initial=Label("",21,DarkInk,true);
         private readonly TextBlock[] metricLabels=new TextBlock[9];
         private readonly TextBlock[] metricValues=new TextBlock[9];
         private readonly TextBlock[] typeValues=new TextBlock[4];
-        private readonly TextBlock compositionTitle=Label("伤害属性构成",13,DarkInk,true);
-        private readonly TextBlock ringTitle=Label("总伤",13,DarkInk,true);
-        private readonly TextBlock ringValue=Label("—",14,DarkInk,true);
+        private readonly TextBlock compositionTitle=Label("伤害属性构成",15,DarkInk,true);
+        private readonly TextBlock ringTitle=Label("总伤",14,DarkInk,true);
+        private readonly TextBlock ringValue=Label("—",17,DarkInk,true);
         private readonly Ring ring=new();
         private readonly Button more=new()
         {
-            Content="详情",Padding=new Thickness(9,2,9,2),MinWidth=48,MinHeight=0,
-            Height=28,FontSize=12,Foreground=LightInk,Background=LightFace,BorderBrush=Divider,
+            Content="详情",Padding=new Thickness(9,2,9,2),MinWidth=54,MinHeight=0,
+            Height=32,FontSize=14,Foreground=LightInk,Background=LightFace,BorderBrush=Divider,
             VerticalAlignment=VerticalAlignment.Center,HorizontalAlignment=HorizontalAlignment.Right,
         };
-        private readonly TextBlock moreText=Text("",12);
-        private readonly ToolTip tooltip=new(){MaxWidth=350,Placement=PlacementMode.Bottom};
+        private readonly TextBlock moreText=Text("",14);
+        private readonly ToolTip tooltip=new(){MaxWidth=390,Placement=PlacementMode.Bottom};
 
         internal ReferenceReport()
         {
-            var identity=new Grid{MinHeight=32,Margin=new Thickness(0,0,0,6),Background=LightFace};
+            var identity=new Grid{MinHeight=36,Margin=new Thickness(0,0,0,6),Background=LightFace};
             identity.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
             identity.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
             identity.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
@@ -362,7 +362,7 @@ public sealed class Inspector : Border
             AutomationProperties.SetAutomationId(more,"CompactOperatorDetails");
 
             var modules=new Grid();
-            var primaryWidth=new GridLength(1.18,GridUnitType.Star);
+            var primaryWidth=new GridLength(1.28,GridUnitType.Star);
             var chartWidth=new GridLength(1,GridUnitType.Star);
             modules.ColumnDefinitions.Add(new ColumnDefinition{Width=primaryWidth});
             modules.ColumnDefinitions.Add(new ColumnDefinition{Width=chartWidth});
@@ -379,29 +379,29 @@ public sealed class Inspector : Border
             initial.VerticalAlignment=VerticalAlignment.Center;
             portraitCanvas.Children.Add(initial);
             portraitCanvas.Children.Add(portrait);
-            var avatar=new Border{Child=portraitCanvas,Width=36,Height=36,VerticalAlignment=VerticalAlignment.Center,
-                Margin=new Thickness(0,0,7,0),BorderBrush=Divider,BorderThickness=new Thickness(1)};
+            var avatar=new Border{Child=portraitCanvas,Width=46,Height=46,VerticalAlignment=VerticalAlignment.Center,
+                Margin=new Thickness(0,0,8,0),BorderBrush=Divider,BorderThickness=new Thickness(1)};
             AutomationProperties.SetAutomationId(avatar,"CompactOperatorPortrait");
             Grid.SetRowSpan(avatar,primaryMetricCount);
             readings.Children.Add(avatar);
 
             for(int index=0;index<metricLabels.Length;index++)
             {
-                readings.RowDefinitions.Add(new RowDefinition{MinHeight=19});
+                readings.RowDefinitions.Add(new RowDefinition{MinHeight=23});
                 var row=new DockPanel();
-                var key=metricLabels[index]=Label(DefaultLabels[index],12,MutedInk);
+                var key=metricLabels[index]=Label(DefaultLabels[index],14,MutedInk);
                 key.TextTrimming=TextTrimming.CharacterEllipsis;
-                var value=metricValues[index]=Label("—",12,DarkInk,true);
+                var value=metricValues[index]=Label("—",14,DarkInk,true);
                 value.Margin=new Thickness(6,0,0,0);
                 value.FontFamily=new FontFamily("Cascadia Mono, Consolas");
                 value.TextTrimming=TextTrimming.CharacterEllipsis;
-                value.MaxWidth=108;
+                value.MaxWidth=120;
                 DockPanel.SetDock(value,Dock.Right);
                 row.Children.Add(value);
                 var icon=new System.Windows.Shapes.Path
                 {
                     Data=Geometry.Parse(MetricIcons[index]),Stroke=DarkInk,StrokeThickness=1.2,
-                    Stretch=Stretch.Uniform,Width=11,Height=11,VerticalAlignment=VerticalAlignment.Center,
+                    Stretch=Stretch.Uniform,Width=12,Height=12,VerticalAlignment=VerticalAlignment.Center,
                     Margin=new Thickness(0,0,6,0),IsHitTestVisible=false,
                 };
                 DockPanel.SetDock(icon,Dock.Left);
@@ -415,13 +415,13 @@ public sealed class Inspector : Border
                 else Grid.SetColumnSpan(cell,2);
                 readings.Children.Add(cell);
             }
-            var statsPanel=PanelFrame(Module(Label("主要数据",13,DarkInk,true),readings),new Thickness(0,0,3,0));
+            var statsPanel=PanelFrame(Module(Label("主要数据",15,DarkInk,true),readings),new Thickness(0,0,3,0));
             AutomationProperties.SetAutomationId(statsPanel,"CompactOperatorStats");
             modules.Children.Add(statsPanel);
 
-            var chart=new Grid{MinHeight=132};
-            chart.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1.1,GridUnitType.Star)});
+            var chart=new Grid{MinHeight=146};
             chart.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
+            chart.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
             chart.Children.Add(ring);
             var center=new StackPanel{HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center};
             ringTitle.HorizontalAlignment=HorizontalAlignment.Center;
@@ -433,15 +433,18 @@ public sealed class Inspector : Border
             var legend=new StackPanel{VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(5,0,0,0)};
             for(int index=0;index<DamageTypes.Length;index++)
             {
-                var line=new DockPanel{Height=25};
+                var line=new DockPanel{MinHeight=27};
                 var item=DamageTypes[index];
-                var value=typeValues[index]=Label("—",11,DarkInk);
+                var value=typeValues[index]=Label("—",13,DarkInk);
                 value.FontFamily=new FontFamily("Cascadia Mono, Consolas");
+                value.Margin=new Thickness(9,0,0,0);
+                value.MinWidth=33;
+                value.TextAlignment=TextAlignment.Right;
                 DockPanel.SetDock(value,Dock.Right);line.Children.Add(value);
-                var swatch=new Border{Width=9,Height=9,Background=item.Color,CornerRadius=new CornerRadius(1),
+                var swatch=new Border{Width=10,Height=10,Background=item.Color,CornerRadius=new CornerRadius(1),
                     VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,5,0)};
                 DockPanel.SetDock(swatch,Dock.Left);line.Children.Add(swatch);
-                line.Children.Add(Label(item.Label,11,MutedInk));
+                line.Children.Add(Label(item.Label,13,MutedInk));
                 legend.Children.Add(line);
             }
             Grid.SetColumn(legend,1);chart.Children.Add(legend);
@@ -455,7 +458,7 @@ public sealed class Inspector : Border
             modules.SizeChanged+=(_,e)=>
             {
                 if(!e.WidthChanged) return;
-                bool narrow=e.NewSize.Width<390;
+                bool narrow=e.NewSize.Width<410;
                 if(stacked==narrow) return;
                 stacked=narrow;
                 modules.ColumnDefinitions[0].Width=stacked ? chartWidth : primaryWidth;
@@ -471,7 +474,7 @@ public sealed class Inspector : Border
         private static DockPanel Module(TextBlock title,UIElement content)
         {
             var module=new DockPanel{Margin=new Thickness(8,3,8,4)};
-            var heading=new Border{Child=title,Height=23,BorderBrush=Divider,BorderThickness=new Thickness(0,0,0,1)};
+            var heading=new Border{Child=title,Height=26,BorderBrush=Divider,BorderThickness=new Thickness(0,0,0,1)};
             DockPanel.SetDock(heading,Dock.Top);
             module.Children.Add(heading);
             module.Children.Add(content);

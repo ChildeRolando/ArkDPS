@@ -236,27 +236,15 @@
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ComboBoxItem"><Border x:Name="item" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="{DynamicResource ControlRadius}" Margin="3,1"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsHighlighted" Value="True"><Setter TargetName="item" Property="Background" Value="{DynamicResource Inset}"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
   </Style>
   <Style TargetType="CheckBox"><Setter Property="Margin" Value="0,6,0,6"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/></Style>
-  <Style TargetType="ScrollViewer"><Setter Property="PanningMode" Value="VerticalOnly"/></Style>
+  <Style TargetType="ScrollViewer">
+   <Setter Property="PanningMode" Value="VerticalOnly"/>
+   <Setter Property="VerticalScrollBarVisibility" Value="Hidden"/>
+   <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+  </Style>
   <Style TargetType="ListBox">
    <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/><Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
-   <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
-  </Style>
-  <Style TargetType="ScrollBar">
-   <Setter Property="Width" Value="9"/>
-   <Setter Property="Background" Value="Transparent"/>
-   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ScrollBar">
-    <Grid Background="Transparent">
-     <Track x:Name="PART_Track" IsDirectionReversed="True"
-            Maximum="{TemplateBinding Maximum}" Minimum="{TemplateBinding Minimum}"
-            Value="{TemplateBinding Value}" ViewportSize="{TemplateBinding ViewportSize}"
-            Orientation="{TemplateBinding Orientation}">
-      <Track.DecreaseRepeatButton><RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/></Track.DecreaseRepeatButton>
-      <Track.Thumb><Thumb><Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="{DynamicResource Edge}" CornerRadius="2" Margin="2,1" Opacity="0.65"/></ControlTemplate></Thumb.Template></Thumb></Track.Thumb>
-      <Track.IncreaseRepeatButton><RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/></Track.IncreaseRepeatButton>
-     </Track>
-    </Grid>
-   </ControlTemplate></Setter.Value></Setter>
+   <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Hidden"/>
   </Style>
   <Style x:Key="RankedRow" TargetType="ListBoxItem">
    <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/>

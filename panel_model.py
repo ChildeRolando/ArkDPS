@@ -131,20 +131,27 @@ def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, s
     return False, reason, hint, action, label
 
 
-def format_compact(value: float | None) -> str:
-    """Integer display with 1/K/M units; calculation and sorting stay raw."""
-    if value is None or not isinstance(value, (int, float)) or not math.isfinite(value):
+DEFAULT_NUMBER_UNITS = 'western'
+NUMBER_UNITS = {
+    'western': ((1_000_000, 'M'), (1_000, 'K')),
+    'chinese': ((100_000_000, '亿'), (10_000, '万')),
+}
+
+
+def format_compact(value: float | None, number_units: str = DEFAULT_NUMBER_UNITS) -> str:
+    """Shorten display amounts without changing the underlying measurements."""
+    if not _finite(value):
         return '—'
     sign = '-' if value < 0 else ''
     value = abs(value)
-    rounded = round(value)
-    if rounded < 1000:
-        return f'{sign}{int(rounded)}'
-    if value < 1_000_000:
-        text = f'{value / 1000:.1f}'.rstrip('0').rstrip('.')
-        return f'{sign}{text}K'
-    text = f'{value / 1_000_000:.1f}'.rstrip('0').rstrip('.')
-    return f'{sign}{text}M'
+    whole = round(value)
+    (major, major_suffix), (minor, minor_suffix) = NUMBER_UNITS[number_units]
+    if whole >= minor:
+        scaled_minor = round(value / minor * 10) / 10
+        if whole >= major or scaled_minor >= major / minor:
+            return f"{sign}{round(value / major * 10) / 10:.1f}".rstrip('0').rstrip('.') + major_suffix
+        return f"{sign}{scaled_minor:.1f}".rstrip('0').rstrip('.') + minor_suffix
+    return f'{sign}{whole}'
 
 
 def format_percent(value: float | None) -> str:
@@ -541,7 +548,7 @@ def non_team_label(cid: str) -> str:
     return classified[1] if classified else '非队伍来源'
 
 
-def non_team_note(statistics: Mapping) -> str:
+def non_team_note(statistics: Mapping, number_units: str = DEFAULT_NUMBER_UNITS) -> str:
     """Name sources proven not to be team members, with any excluded output."""
     names = _name_list(statistics.get('non_team_sources'))
     if not names:
@@ -556,8 +563,8 @@ def non_team_note(statistics: Mapping) -> str:
         known = _finite(damage) or _finite(healing)
         label = non_team_label(cid)
         if (_finite(damage) and damage > 0) or (_finite(healing) and healing > 0):
-            parts.append(f'{cid}（{label}，未归属输出：伤害 {format_compact(damage)}，'
-                         f'治疗 {format_compact(healing)}）')
+            parts.append(f'{cid}（{label}，未归属输出：伤害 {format_compact(damage, number_units)}，'
+                         f'治疗 {format_compact(healing, number_units)}）')
         elif not known:
             parts.append(f'{cid}（{label}，输出未知）')
         else:
@@ -565,7 +572,7 @@ def non_team_note(statistics: Mapping) -> str:
     return '已排除非队伍来源：' + '；'.join(parts)
 
 
-def team_status(statistics: Mapping) -> tuple[bool, str, str]:
+def team_status(statistics: Mapping, number_units: str = DEFAULT_NUMBER_UNITS) -> tuple[bool, str, str]:
     """Return ``(complete, blocking_reason, non_team_note)`` for a team panel.
 
     Completeness follows the adapter's cumulative-totals marker; per-row
@@ -600,7 +607,7 @@ def team_status(statistics: Mapping) -> tuple[bool, str, str]:
         elif not gaps:
             gaps.append('累计快照不完整')
     reason = '队伍数据不完整（' + '；'.join(gaps) + '）' if gaps else ''
-    return (not gaps), reason, non_team_note(result)
+    return (not gaps), reason, non_team_note(result, number_units)
 
 
 def _valid_window(window) -> bool:
@@ -689,10 +696,11 @@ def _segments(row: PanelSourceRow, ranking: Ranking,
 
 def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
                   available: bool, *, engagement: bool = True,
-                  full_cycle: bool = False) -> tuple[str, str, str]:
+                  full_cycle: bool = False,
+                  number_units: str = DEFAULT_NUMBER_UNITS) -> tuple[str, str, str]:
     """Classify one row's rate column without inventing a value."""
     if _finite(rate):
-        return 'value', f'{format_compact(rate)}/s', ''
+        return 'value', f'{format_compact(rate, number_units)}/s', ''
     if full_cycle:
         if not row.presence_complete or row.presence_seconds is None:
             return 'unknown', '—', '在场时间未建立可靠覆盖；全周期 DPS 未知'
@@ -711,7 +719,8 @@ def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
 
 def detail_rates(rows: Iterable[PanelSourceRow],
                  event: EventAvailability | None = None, *,
-                 effective: bool = False) -> dict:
+                 effective: bool = False,
+                 number_units: str = DEFAULT_NUMBER_UNITS) -> dict:
     """Per-owner engagement display state for both damage and healing.
 
     Detail views use the same classification as the panel rate column so a
@@ -727,7 +736,8 @@ def detail_rates(rows: Iterable[PanelSourceRow],
                    if effective and category is Category.DAMAGE
                    else row.engagement(category))
             state, text, note = _rate_display(
-                row, category, raw if _finite(raw) else None, available)
+                row, category, raw if _finite(raw) else None, available,
+                number_units=number_units)
             kinds[kind] = {'state': state, 'text': text, 'note': note}
         result[row.owner_id] = kinds
     return result
@@ -790,7 +800,8 @@ def render_panel(config: PanelConfig,
                  team_complete: bool = True,
                  team_reason: str = '',
                  team_note: str = '',
-                 event: EventAvailability | None = None) -> PanelView:
+                 event: EventAvailability | None = None,
+                 number_units: str = DEFAULT_NUMBER_UNITS) -> PanelView:
     """Build one panel view; unknown metrics are omitted, never zero-filled."""
     rows = list(rows)
     category, ranking = config.category, config.ranking
@@ -845,7 +856,8 @@ def render_panel(config: PanelConfig,
             ('unsupported', '', '') if not rate_supported else
             _rate_display(row, category, rate, rate_available,
                           engagement=config.rate_basis is RateBasis.ENGAGEMENT,
-                          full_cycle=config.rate_basis is RateBasis.FULL_CYCLE))
+                          full_cycle=config.rate_basis is RateBasis.FULL_CYCLE,
+                          number_units=number_units))
         return rate, state, text, note
 
     values: dict[str, float] = {}
@@ -935,9 +947,9 @@ def render_panel(config: PanelConfig,
             owner_id=owner, name=row.name, value=value,
             bar_ratio=(value / max_value) if max_value > 0 else 0.0,
             share=share, share_display=format_percent(share),
-            display_value=format_compact(shown) if _finite(shown) else '—',
+            display_value=format_compact(shown, number_units) if _finite(shown) else '—',
             exact_value=f'{value!r}',
-            rate=rate, rate_display=format_compact(rate), rate_label=rate_label,
+            rate=rate, rate_display=format_compact(rate, number_units), rate_label=rate_label,
             present=row.present, portrait_muted=row.present is False,
             incomplete=not complete.get(owner, False),
             segments=segments, segments_complete=segments_complete,
@@ -954,8 +966,8 @@ def render_panel(config: PanelConfig,
                      rate_action_label=rate_action_label, details_by_owner=details,
                      share_scope=share_scope,
                      footer_total=footer_total, footer_rate=footer_rate,
-                     footer_total_display=format_compact(footer_total),
-                     footer_rate_display=f'{format_compact(footer_rate)}/s' if footer_rate is not None else '—',
+                     footer_total_display=format_compact(footer_total, number_units),
+                     footer_rate_display=f'{format_compact(footer_rate, number_units)}/s' if footer_rate is not None else '—',
                      footer_total_complete=(footer_total is not None and team_complete
                                             and len(totals) == len(rows)),
                      footer_rate_complete=(footer_rate is not None and team_complete
@@ -966,8 +978,10 @@ def render_board(configs: Iterable[PanelConfig],
                  rows: Iterable[PanelSourceRow], *,
                  team_complete: bool = True,
                  team_reason: str = '',
-                 team_note: str = '') -> list[PanelView]:
+                 team_note: str = '',
+                 number_units: str = DEFAULT_NUMBER_UNITS) -> list[PanelView]:
     rows = list(rows)
     return [render_panel(config, rows, team_complete=team_complete,
-                         team_reason=team_reason, team_note=team_note)
+                         team_reason=team_reason, team_note=team_note,
+                         number_units=number_units)
             for config in configs]

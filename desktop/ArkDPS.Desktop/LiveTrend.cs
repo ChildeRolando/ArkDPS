@@ -358,7 +358,7 @@ public sealed class LiveTrendView : Border
             return;
         }
         var point = cursor is double time ? Nearest(points, time) : points[^1];
-        readout.Text = TimeLabel(point.Time) + " · " + Number(Value(point)) + " DPS" + stateNote;
+        readout.Text = TimeLabel(point.Time) + " · " + Json.CompactAmount(Value(point)) + " DPS" + stateNote;
         if (IsReferenceCompact && cursor.HasValue && point.Team is > 0)
         {
             var shares = Participation(point, SelectedOperators());
@@ -570,7 +570,7 @@ public sealed class LiveTrendView : Border
             double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
             FormattedText Label(string label) => new(label, CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight, NumberFont, 10, muted, dpi);
-            double left = bareCompact ? 3 : Math.Min(ActualWidth * .35, Math.Max(49, Label(Number(ceiling)).Width + 10));
+            double left = bareCompact ? 3 : Math.Min(ActualWidth * .35, Math.Max(49, Label(Json.CompactAmount(ceiling)).Width + 10));
             double top = reference ? 17 : 7;
             plot = new Rect(left, top, Math.Max(1, ActualWidth - left - 13 - donutWidth),
                 Math.Max(1, ActualHeight - top - (bareCompact ? 5 : 20)));
@@ -608,7 +608,7 @@ public sealed class LiveTrendView : Border
                 dc.DrawLine(gridPen, new Point(plot.Left, y), new Point(plot.Right, y));
                 if (bareCompact) continue;
                 double axisValue = ceiling * (ticks - i) / ticks;
-                var label = Label(Number(axisValue));
+                var label = Label(Json.CompactAmount(axisValue));
                 dc.DrawText(label, new Point(Math.Max(0, plot.Left - label.Width - 6), y - label.Height / 2));
             }
             if (!bareCompact)
@@ -724,7 +724,7 @@ public sealed class LiveTrendView : Border
             FormattedText Label(string value, Typeface font, double size) => new(value, CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight, font, size, AxisInk, dpi);
             double valueSize = Math.Clamp(radius * .45, 13, 20);
-            string rounded = Number(team);
+            string rounded = Json.CompactAmount(team);
             var valueLabel = Label(rounded, StrongText, valueSize);
             double valueWidth = radius * 2 - thickness - 6;
             if (valueLabel.Width > valueWidth) valueLabel = Label(rounded, StrongText, valueSize * valueWidth / valueLabel.Width);
