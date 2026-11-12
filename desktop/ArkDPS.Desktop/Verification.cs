@@ -235,6 +235,15 @@ public partial class MainWindow
             ranked.Rows.SelectedIndex = 0;
             ranked.PinRequested?.Invoke(ranked.View.Get("entries").Items().First().Text("owner_id"));
         }
+        var liveView=fixture["panels"]!.AsArray()[0]!;
+        string pinnedOwner=liveView["entries"]!.AsArray()[0]!["owner_id"]!.GetValue<string>();
+        var pinnedRow=liveView["source"]![pinnedOwner]!;
+        Require(HasText(FindOperatorRatio("Mitigation"),"—"),"unavailable mitigation rendered as zero");
+        pinnedRow["mitigation_rate"]=0;
+        ApplyFixture(fixture);
+        Require(HasText(FindOperatorRatio("Mitigation"),"0%"),"measured zero mitigation was treated as unknown");
+        pinnedRow["mitigation_rate"]=18.34;
+        ApplyFixture(fixture);
         double savedWidth = Width, savedHeight = Height;
         foreach (var (width, height) in new[] { (1920, 1080), (1672, 941), (1380, 900), (1200, 820), (560, 540) })
         {
@@ -258,7 +267,14 @@ public partial class MainWindow
                     "team total or DPS did not render in its ranking column");
             }
             Require(!HasVisibleScrollbar(this), $"visible scrollbar at {width}x{height} DIPs");
-            if (width >= 1200) VerifyCompactPortraitLayout();
+            if (width >= 1200)
+            {
+                VerifyCompactPortraitLayout();
+                VerifyCompactRatioLayout();
+            }
+            Require(ReferenceEquals(TargetSummary.Background,Theme.Resource("Card")) &&
+                    TargetSummary.Child is ScrollViewer && !HasText(TargetSummary,"敌情 ›"),
+                    "enemy summary retained a separate background or duplicate navigation");
             Screenshot.Window(this, Path.Combine(output, $"lone-trail-live-{width}x{height}-dip.png"));
             if (width == 1380)
             {
@@ -309,7 +325,7 @@ public partial class MainWindow
         await Settle();
         ApplyState(initial);
         await Command("theme", new() { ["theme"] = "original" });
-        checks.Add("larger portrait and ranking, distinct enemy cards with paging and UID lock, pause/recovery/zero, five Lone Trail layouts and physical maximized bounds");
+        checks.Add("compact portrait, three parallel ratio rings and field formula tooltips, themed enemy cards, five Lone Trail layouts and physical maximized bounds");
     }
     private void VerifyCompactPortraitLayout()
     {
@@ -327,6 +343,39 @@ public partial class MainWindow
             positions[3].X<positions[0].X,
             "portrait did not sit left of the three metrics or the next row failed to regain its width");
     }
+    private FrameworkElement FindOperatorRatio(string suffix) =>
+        FindAutomationElement(LiveInspector,"CompactOperatorRatio"+suffix)
+        ?? throw new InvalidOperationException("missing operator ratio "+suffix);
+
+    private void VerifyCompactRatioLayout()
+    {
+        var ratios=new[] { FindOperatorRatio("Overkill"), FindOperatorRatio("Mitigation"), FindOperatorRatio("SkillShare") };
+        var values=new[] { "8%", "18%", "42%" };
+        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 实际伤害 ÷ 公式前伤害", "技能期伤害 ÷ 已拆分的总伤害" };
+        var positions=ratios.Select(field=>field.TranslatePoint(new Point(),LiveInspector)).ToArray();
+        Require(positions.All(position=>Math.Abs(position.Y-positions[0].Y)<1) &&
+                positions[0].X<positions[1].X && positions[1].X<positions[2].X &&
+                ratios.All(field=>field.ActualWidth>75 && field.ActualHeight>=58),
+                "the three ratio rings did not fit side by side");
+        for(int index=0;index<ratios.Length;index++)
+        {
+            Require(HasText(ratios[index],values[index]) &&
+                    ratios[index].ToolTip is ToolTip {Content:TextBlock description} &&
+                    description.Text.Contains(formulas[index],StringComparison.Ordinal) &&
+                    ToolTipService.GetShowsToolTipOnKeyboardFocus(ratios[index])==true,
+                    "ratio did not display its value or expose its formula");
+        }
+        for(int index=0;index<5;index++)
+        {
+            var field=FindAutomationElement(LiveInspector,"CompactOperatorMetric"+index);
+            Require(field?.ToolTip is ToolTip {Content:TextBlock description} &&
+                    description.Text.Contains('\n'),"operator field does not explain its calculation");
+        }
+        Require(!HasText(LiveInspector,"阿米娅") && !HasText(LiveInspector,"非技能伤害占比") &&
+                FindAutomationElement(LiveInspector,"CompactOperatorDetails")==null,
+                "compact inspector still displays the removed title, row or details button");
+    }
+
     private static FrameworkElement? FindAutomationElement(DependencyObject root, string id)
     {
         if(root is FrameworkElement element && System.Windows.Automation.AutomationProperties.GetAutomationId(element)==id)
@@ -755,7 +804,15 @@ public partial class MainWindow
         await Settle();
         Require(Panels[id].View.Get("config").Bool("effective_only"),"effective switch did not reach the panel view");
         Require(HasText(LiveInspector,"技能覆盖率"),"inspector did not render skill coverage");
-        Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
+        if (LiveInspector.CompactReference)
+        {
+            var skillRing=FindOperatorRatio("SkillShare");
+            Require(HasText(skillRing,"技能期有效伤害占比") && HasText(skillRing,"37%") &&
+                    skillRing.ToolTip is ToolTip {Content:TextBlock skillTip} &&
+                    skillTip.Text.Contains("技能期有效伤害 ÷",StringComparison.Ordinal),
+                    "skill-period ring did not switch to effective data");
+        }
+        else Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
         Screenshot.Window(this,Path.Combine(output,"effective-inspector.png"));
         LastUiError="";
         Panels[id].EffectiveOnly.IsChecked=true;
@@ -766,8 +823,15 @@ public partial class MainWindow
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",
             ranking="total",rate_basis="recent_5s",effective_only=false}});
         await Settle();
-        Require(HasText(LiveInspector,"技能伤害") &&
-                !HasText(LiveInspector,"技能有效伤害"),"inspector did not restore total skill split");
+        if (LiveInspector.CompactReference)
+        {
+            var skillRing=FindOperatorRatio("SkillShare");
+            Require(HasText(skillRing,"技能期伤害占比") && HasText(skillRing,"42%") &&
+                    !HasText(skillRing,"技能期有效伤害占比"),
+                    "skill-period ring did not restore total damage");
+        }
+        else Require(HasText(LiveInspector,"技能伤害") && !HasText(LiveInspector,"技能有效伤害"),
+                "inspector did not restore total skill split");
         var priorView = Panels[id].View;
         var unranked = System.Text.Json.Nodes.JsonNode.Parse(priorView.GetRawText())!;
         var rankedRows = unranked["entries"]!.AsArray();

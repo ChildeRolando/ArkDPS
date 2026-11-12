@@ -56,7 +56,6 @@ public partial class MainWindow : Window
         PanelHost.SizeChanged += (_, _) => FitLivePanels();
         LiveDetailScroll.SizeChanged += (_, _) => FitLivePanels();
         LiveInspector.SizeChanged += (_, _) => FitLivePanels();
-        TargetSummary.OpenEnemies += async () => await Navigate("enemies");
         ApplyThemeArtwork();
         SetNavState("live");
         HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;HistoryPanel.RateActionRequested=HandleRateAction;

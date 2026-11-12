@@ -15,34 +15,18 @@ namespace ArkDPS.Desktop;
 public sealed class LiveTargetSummary : Border
 {
     private const int CardCount = 3;
-    private static readonly Brush Metal = Theme.Brush("#E2E6E9");
     private readonly TargetCard[] cards;
     private readonly ScrollViewer cardScroll;
     private readonly Dictionary<string, Target> departedByType = new(StringComparer.Ordinal);
     private Target[] queue = Array.Empty<Target>();
-    private string lastSkin = "";
     private string battle = "";
     private string status = "";
 
-    internal event Action? OpenEnemies;
-
     public LiveTargetSummary()
     {
-        SetResourceReference(BorderBrushProperty, "Edge");
-        BorderThickness = new Thickness(1);
+        SetResourceReference(BackgroundProperty, "Card");
         Padding = new Thickness(6);
         SnapsToDevicePixels = true;
-        var content = new DockPanel();
-        Child = content;
-
-        var open = new Button { Content = "敌情 ›", Padding = new Thickness(8, 1, 8, 1),
-            MinHeight = 27, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 0, 0, 5) };
-        AutomationProperties.SetName(open, "打开敌情");
-        open.Click += (_, _) => OpenEnemies?.Invoke();
-        DockPanel.SetDock(open, Dock.Top);
-        content.Children.Add(open);
-
         var stack = new StackPanel();
         cardScroll = new ScrollViewer
         {
@@ -56,7 +40,7 @@ public sealed class LiveTargetSummary : Border
             if (args.NewSize.Height < args.PreviousSize.Height || args.NewSize.Width < args.PreviousSize.Width)
                 cardScroll.ScrollToTop();
         };
-        content.Children.Add(cardScroll);
+        Child = cardScroll;
         cards = Enumerable.Range(1, CardCount).Select(slot => new TargetCard(slot, Page, LockChanged)).ToArray();
         foreach (var card in cards) stack.Children.Add(card);
         Update("", default, "");
@@ -64,12 +48,6 @@ public sealed class LiveTargetSummary : Border
 
     internal void Update(string battleId, JsonElement enemy, string enemyStatus)
     {
-        if (lastSkin != Theme.Key)
-        {
-            lastSkin = Theme.Key;
-            if (lastSkin == "lone-trail") Background = Metal;
-            else SetResourceReference(BackgroundProperty, "Card");
-        }
         status = enemyStatus;
         bool newBattle = battle != battleId;
         if (newBattle)

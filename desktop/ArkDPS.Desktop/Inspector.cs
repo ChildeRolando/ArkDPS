@@ -6,7 +6,6 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Input;
 using System.Windows.Media;
 
 namespace ArkDPS.Desktop;
@@ -20,7 +19,7 @@ public sealed class Inspector : Border
     private ReferenceReport? referenceReport;
     private (string Owner, string Theme, string Row, string Entry, string Detail,
         string Rates, int Rank, bool Effective, string Metric, string Ranking,
-        string RateReason, string RateHint, string ShareDescription)? displayed;
+        string RateBasis, string RateReason, string RateHint, string ShareDescription)? displayed;
     internal string? Owner => owner;
     public bool CompactReference
     {
@@ -81,13 +80,13 @@ public sealed class Inspector : Border
         string ranking=config.Text("ranking");
         string rateReason=view.Text("rate_reason"), rateHint=view.Text("rate_hint");
         var signature=(owner,Theme.Key,Raw(row),Raw(entry),Raw(detail),Raw(rates),
-            index,effective,metric,ranking,rateReason,rateHint,shareInfo.Description);
+            index,effective,metric,ranking,config.Text("rate_basis"),rateReason,rateHint,shareInfo.Description);
         if(displayed==signature) return;
         displayed=signature;
 
         if(compactReference && Theme.Key=="lone-trail")
         {
-            ShowReference().Update(owner,row,view,entry,detail,rates,effective,ranking,shareInfo);
+            ShowReference().Update(owner,row,view,entry,detail,effective,ranking,shareInfo);
             return;
         }
         UseFullReport();
@@ -281,86 +280,48 @@ public sealed class Inspector : Border
 
     private sealed class ReferenceReport : StackPanel
     {
-        private static readonly Brush LightInk=Theme.Brush("#0D1722");
         private static readonly Brush DarkInk=Theme.Brush("#F1F4F7");
         private static readonly Brush MutedInk=Theme.Brush("#D2D9E0");
         private static readonly Brush Divider=Theme.Brush("#3D4751");
         private static readonly Brush Accent=Theme.Brush("#FF8A26");
+        private static readonly Brush Cyan=Theme.Brush("#58C7E5");
         private static readonly Brush DarkFace=new LinearGradientBrush(
             Color.FromRgb(24,33,41),Color.FromRgb(38,46,54),90);
-        private static readonly Brush LightFace=new LinearGradientBrush(
-            Color.FromRgb(237,240,244),Color.FromRgb(211,218,225),90);
         private static readonly (string Key,string Label,Brush Color)[] DamageTypes=
         {
             ("physical","物理",Accent),
-            ("arts","法术",Theme.Brush("#58C7E5")),
+            ("arts","法术",Cyan),
             ("elemental","元素",Theme.Brush("#B68CF4")),
             ("true","真实",Theme.Brush("#B4C1D0")),
         };
-        private static readonly string[] DefaultLabels={"总伤","DPS（近 5 秒）","伤害占比",
-            "伤害溢出率","被减伤率","技能伤害占比","非技能伤害占比","技能覆盖率","站场总时间"};
+        private static readonly string[] DefaultLabels={"总伤","DPS（近 5 秒）","伤害占比","技能覆盖率","站场总时间"};
         private static readonly string[] MetricIcons=
         {
             "M 6,0 V 12 M 0,6 H 12 M 2,2 L 10,10 M 10,2 L 2,10",
             "M 1,9 A 5,5 0 1 1 11,9 M 6,7 L 9,4 M 3,11 H 9",
             "M 6,1 L 11,4 V 9 L 6,12 L 1,9 V 4 Z M 1,4 L 6,7 L 11,4 M 6,7 V 12",
             "M 6,1 L 11,4 V 9 L 6,12 L 1,9 V 4 Z M 4,7 L 6,5 L 8,7",
-            "M 2,2 L 6,0 L 10,2 V 7 C 10,9 8,11 6,12 C 4,11 2,9 2,7 Z M 4,6 L 6,8 L 9,4",
-            "M 6,1 L 11,6 L 6,11 L 1,6 Z M 4,7 L 6,4 L 8,7",
-            "M 6,1 L 11,6 L 6,11 L 1,6 Z M 4,6 H 8",
-            "M 6,1 L 11,4 V 9 L 6,12 L 1,9 V 4 Z M 4,7 L 6,5 L 8,7",
             "M 6,1 A 5,5 0 1 1 5.9,1 M 6,3 V 6 L 8,7",
         };
-        private readonly TextBlock name=Label("",20,LightInk,true);
-        private readonly TextBlock role=Label("",13,DarkInk);
         private readonly Image portrait=new(){Stretch=Stretch.UniformToFill};
         private readonly TextBlock initial=Label("",21,DarkInk,true);
-        private readonly TextBlock[] metricLabels=new TextBlock[9];
-        private readonly TextBlock[] metricValues=new TextBlock[9];
-        private readonly TextBlock[] typeValues=new TextBlock[4];
+        private readonly Border avatar;
+        private readonly TextBlock[] metricLabels=new TextBlock[DefaultLabels.Length];
+        private readonly TextBlock[] metricValues=new TextBlock[DefaultLabels.Length];
+        private readonly Border[] metricFields=new Border[DefaultLabels.Length];
+        private readonly RatioField overkill=new("伤害溢出率",Accent,"Overkill");
+        private readonly RatioField mitigation=new("被减伤率",Theme.Brush("#A7BBCF"),"Mitigation");
+        private readonly RatioField skillShare=new("技能期伤害占比",Cyan,"SkillShare");
+        private readonly DockPanel[] typeFields=new DockPanel[DamageTypes.Length];
+        private readonly TextBlock[] typeValues=new TextBlock[DamageTypes.Length];
         private readonly TextBlock compositionTitle=Label("伤害属性构成",15,DarkInk,true);
         private readonly TextBlock ringTitle=Label("总伤",14,DarkInk,true);
         private readonly TextBlock ringValue=Label("—",17,DarkInk,true);
-        private readonly Ring ring=new();
-        private readonly Button more=new()
-        {
-            Content="详情",Padding=new Thickness(9,2,9,2),MinWidth=54,MinHeight=0,
-            Height=32,FontSize=14,Foreground=LightInk,Background=LightFace,BorderBrush=Divider,
-            VerticalAlignment=VerticalAlignment.Center,HorizontalAlignment=HorizontalAlignment.Right,
-        };
-        private readonly TextBlock moreText=Text("",14);
-        private readonly ToolTip tooltip=new(){MaxWidth=390,Placement=PlacementMode.Bottom};
+        private readonly Ring ring=new(14,DamageTypes.Select(item=>item.Color).ToArray());
+        private readonly Border compositionField;
 
         internal ReferenceReport()
         {
-            var identity=new Grid{MinHeight=36,Margin=new Thickness(0,0,0,6),Background=LightFace};
-            identity.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
-            identity.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-            identity.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-            name.Margin=new Thickness(8,0,8,0);
-            name.TextTrimming=TextTrimming.CharacterEllipsis;
-            identity.Children.Add(name);
-            var badge=new Border{Child=role,Background=Theme.Brush("#586370"),CornerRadius=new CornerRadius(2),
-                VerticalAlignment=VerticalAlignment.Center,Padding=new Thickness(6,1,6,1),Margin=new Thickness(0,0,7,0)};
-            Grid.SetColumn(badge,1);
-            identity.Children.Add(badge);
-            more.Margin=new Thickness(0,2,6,2);
-            Grid.SetColumn(more,2);
-            identity.Children.Add(more);
-            Children.Add(identity);
-
-            tooltip.Content=moreText;
-            tooltip.PlacementTarget=more;
-            more.ToolTip=tooltip;
-            more.Click+=(_,_)=>tooltip.IsOpen=!tooltip.IsOpen;
-            more.PreviewKeyDown+=(_,e)=>
-            {
-                if(e.Key==Key.Escape && tooltip.IsOpen){tooltip.IsOpen=false;e.Handled=true;}
-            };
-            more.LostKeyboardFocus+=(_,_)=>tooltip.IsOpen=false;
-            AutomationProperties.SetName(more,"查看完整干员数据");
-            AutomationProperties.SetAutomationId(more,"CompactOperatorDetails");
-
             var modules=new Grid();
             var primaryWidth=new GridLength(1.28,GridUnitType.Star);
             var chartWidth=new GridLength(1,GridUnitType.Star);
@@ -379,7 +340,7 @@ public sealed class Inspector : Border
             initial.VerticalAlignment=VerticalAlignment.Center;
             portraitCanvas.Children.Add(initial);
             portraitCanvas.Children.Add(portrait);
-            var avatar=new Border{Child=portraitCanvas,Width=46,Height=46,VerticalAlignment=VerticalAlignment.Center,
+            avatar=new Border{Child=portraitCanvas,Width=46,Height=46,VerticalAlignment=VerticalAlignment.Center,
                 Margin=new Thickness(0,0,8,0),BorderBrush=Divider,BorderThickness=new Thickness(1)};
             AutomationProperties.SetAutomationId(avatar,"CompactOperatorPortrait");
             Grid.SetRowSpan(avatar,primaryMetricCount);
@@ -407,7 +368,7 @@ public sealed class Inspector : Border
                 DockPanel.SetDock(icon,Dock.Left);
                 row.Children.Add(icon);
                 row.Children.Add(key);
-                var cell=new Border{Child=row,BorderBrush=Divider,
+                var cell=metricFields[index]=new Border{Child=row,Background=Brushes.Transparent,BorderBrush=Divider,
                     BorderThickness=new Thickness(0,0,0,index==metricLabels.Length-1 ? 0 : 1)};
                 AutomationProperties.SetAutomationId(cell,$"CompactOperatorMetric{index}");
                 Grid.SetRow(cell,index);
@@ -419,7 +380,7 @@ public sealed class Inspector : Border
             AutomationProperties.SetAutomationId(statsPanel,"CompactOperatorStats");
             modules.Children.Add(statsPanel);
 
-            var chart=new Grid{MinHeight=146};
+            var chart=new Grid{MinHeight=115};
             chart.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
             chart.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
             chart.Children.Add(ring);
@@ -433,7 +394,7 @@ public sealed class Inspector : Border
             var legend=new StackPanel{VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(5,0,0,0)};
             for(int index=0;index<DamageTypes.Length;index++)
             {
-                var line=new DockPanel{MinHeight=27};
+                var line=typeFields[index]=new DockPanel{MinHeight=25,Background=Brushes.Transparent};
                 var item=DamageTypes[index];
                 var value=typeValues[index]=Label("—",13,DarkInk);
                 value.FontFamily=new FontFamily("Cascadia Mono, Consolas");
@@ -448,11 +409,18 @@ public sealed class Inspector : Border
                 legend.Children.Add(line);
             }
             Grid.SetColumn(legend,1);chart.Children.Add(legend);
-            var chartPanel=PanelFrame(Module(compositionTitle,chart),new Thickness(3,0,0,0));
+            var chartPanel=compositionField=PanelFrame(Module(compositionTitle,chart),new Thickness(3,0,0,0));
             AutomationProperties.SetAutomationId(chartPanel,"CompactOperatorComposition");
             Grid.SetColumn(chartPanel,1);
             modules.Children.Add(chartPanel);
             Children.Add(modules);
+
+            var ratios=new UniformGrid{Rows=1,Columns=3};
+            ratios.Children.Add(overkill);
+            ratios.Children.Add(mitigation);
+            ratios.Children.Add(skillShare);
+            AutomationProperties.SetAutomationId(ratios,"CompactOperatorRatios");
+            Children.Add(PanelFrame(ratios,new Thickness(0,6,0,0)));
 
             bool stacked=false;
             modules.SizeChanged+=(_,e)=>
@@ -495,34 +463,29 @@ public sealed class Inspector : Border
 
         internal void Reset()
         {
-            name.Text="选择干员";
-            name.ToolTip=null;
-            role.Text="等待选择";
             initial.Text="—";
             portrait.Source=null;
-            more.IsEnabled=false;
-            moreText.Text="";
-            tooltip.IsOpen=false;
-            for(int index=0;index<metricLabels.Length;index++)
-            {
-                metricLabels[index].Text=DefaultLabels[index];
-                metricValues[index].Text="—";
-            }
-            SetComposition(false,default,default);
+            avatar.ToolTip="从排行选择干员";
+            AutomationProperties.SetName(avatar,"干员头像");
+            SetMetrics(default,default,default,default,false,"",SharePresentation.From(default));
         }
 
         internal void Update(string owner,JsonElement row,JsonElement view,JsonElement entry,
-            JsonElement detail,JsonElement rates,bool effective,string ranking,SharePresentation shareInfo)
+            JsonElement detail,bool effective,string ranking,SharePresentation shareInfo)
         {
             string displayName=row.Text("name");
-            name.Text=displayName.Length>0 ? displayName : owner;
-            name.ToolTip=name.Text;
-            initial.Text=name.Text[..1];
+            if(displayName.Length==0) displayName=owner;
+            initial.Text=displayName[..1];
             portrait.Source=Portraits.Get(owner,row.Get("present").ValueKind==JsonValueKind.False);
-            string category=view.Get("config").Text("category");
-            role.Text=category switch{"healing"=>"HPS","shield"=>"护盾",_=>effective ? "有效 DPS" : "DPS"};
-            more.IsEnabled=true;
+            avatar.ToolTip=displayName;
+            AutomationProperties.SetName(avatar,displayName+"头像");
+            SetMetrics(row,view,entry,detail,effective,ranking,shareInfo);
+        }
 
+        private void SetMetrics(JsonElement row,JsonElement view,JsonElement entry,JsonElement detail,
+            bool effective,string ranking,SharePresentation shareInfo)
+        {
+            string category=view.Get("config").Text("category");
             double skill=detail.Number(effective ? "skill_damage_effective" : "skill_damage",double.NaN);
             double ordinary=detail.Number(effective ? "non_skill_damage_effective" : "non_skill_damage",double.NaN);
             double splitTotal=skill+ordinary;
@@ -538,7 +501,8 @@ public sealed class Inspector : Border
             string presence=row.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
                 ? FormatTime(seconds) : "—";
             metricLabels[0].Text=effective ? "有效伤害" : "总伤";
-            metricLabels[1].Text=category=="shield" ? "有效护盾"
+            metricLabels[1].Text=rateLabel.Length==0 && category!="shield" ? DefaultLabels[1]
+                : category=="shield" ? "有效护盾"
                 : rateLabel=="全周期DPS" && category=="damage" ? "全周期 DPS"
                 : $"{(category=="healing" ? "HPS" : "DPS")}（{rateLabel}）";
             metricLabels[2].Text=view.Text("share_scope")=="known" ? shareInfo.Label : (ranking,category) switch
@@ -550,57 +514,71 @@ public sealed class Inspector : Border
                 ("recent",_) => "近期伤害占比",
                 _ => "伤害占比",
             };
-            metricLabels[5].Text=effective ? "技能有效伤害占比" : "技能伤害占比";
-            metricLabels[6].Text=effective ? "非技能有效伤害占比" : "非技能伤害占比";
-            string[] values={
-                effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
-                category=="shield" ? Number(row.Get("shield_absorbed")) : rate,
-                share,OverkillRate(row),Mitigation(row),
-                splitKnown && splitTotal>0 ? Percentage(skill/splitTotal) : "—",
-                splitKnown && splitTotal>0 ? Percentage(ordinary/splitTotal) : "—",
-                coverageKnown ? Percentage(skillCoverage) : "—",presence,
-            };
-            for(int index=0;index<values.Length;index++)
-            {
-                metricValues[index].Text=values[index].Length>0 ? values[index] : "—";
-                metricLabels[index].ToolTip=metricLabels[index].Text;
-                metricValues[index].ToolTip=metricValues[index].Text;
-            }
-            metricLabels[2].ToolTip=shareInfo.Description;
-            metricValues[2].ToolTip=shareInfo.Description;
-            if(!splitKnown && reason.Length>0)
-            {
-                metricValues[5].ToolTip=reason;
-                metricValues[6].ToolTip=reason;
-            }
-            if(!coverageKnown && reason.Length>0) metricValues[7].ToolTip=reason;
-            string rateNote=entry.Text("rate_note");
-            if(category!="shield" && rateNote.Length>0) metricValues[1].ToolTip=rateNote;
-            SetComposition(effective,row,detail);
+            SetMetric(0,effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
+                effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
+                    ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。");
+            string rateHint=category=="shield" ? "累计归属于该干员的实际护盾吸收量。"
+                : DescribeRate(view.Get("config").Text("rate_basis"),category=="healing",effective);
+            SetMetric(1,category=="shield" ? Number(row.Get("shield_absorbed")) : rate,
+                WithNote(rateHint,entry.Text("rate_note")));
+            SetMetric(2,share,WithNote("该干员当前排行指标 ÷ 同口径指标合计。",shareInfo.Description));
+            SetMetric(3,coverageKnown ? Percentage(skillCoverage) : "—",
+                WithNote("技能开启时间 ÷ 干员在场时间。被动技能不计入开启时间。",
+                    coverageKnown ? "" : (reason.Length>0 ? reason : "在场时间或技能窗口证据不足。")));
+            SetMetric(4,presence,WithNote("累加干员确认在场的战斗时长。",
+                presence=="—" ? "在场时间覆盖不足。" : ""));
 
-            string damageRate=RateText(row,rates.Get("damage"),"engagement_damage",
-                effective ? detail : default,effective ? "effective_engagement_damage" : "");
-            string healRate=RateText(row,rates.Get("healing"),"engagement_healing");
-            string sources=string.Join("、",row.Get("sources").Items().Select(source=>source.Text()));
-            string skillLabel=effective ? "技能有效伤害" : "技能伤害";
-            moreText.Text=string.Join("\n",new[]
+            double overflow=OverkillFraction(row);
+            string overflowNote=double.IsFinite(overflow) ? ""
+                : row.Get("damage").TryNumber(double.NaN)==0 ? "累计总伤为零，无法计算占比。"
+                : OverkillNote(row,view);
+            overkill.Update(overflow,WithNote("过量伤害 ÷ 总伤害（含过量）。",overflowNote));
+            double reduction=row.Get("mitigation_rate").TryNumber(double.NaN)/100;
+            mitigation.Update(reduction,WithNote("1 − 实际伤害 ÷ 公式前伤害。",
+                double.IsFinite(reduction) ? "" : MitigationNote(row,view)));
+            string splitBasis=effective ? "技能期有效伤害 ÷ 已拆分的总有效伤害。" : "技能期伤害 ÷ 已拆分的总伤害。";
+            skillShare.Caption=effective ? "技能期有效伤害占比" : "技能期伤害占比";
+            skillShare.Update(splitKnown && splitTotal>0 ? skill/splitTotal : double.NaN,
+                WithNote(splitBasis+"被动技能的伤害归入非技能期。",
+                    !splitKnown ? (reason.Length>0 ? reason : "技能期伤害覆盖不足。")
+                        : splitTotal==0 ? "已拆分的伤害为零，无法计算占比。" : ""));
+            SetComposition(effective,row,detail);
+        }
+
+        private static string DescribeRate(string basis,bool healing,bool effective)
+        {
+            string output=healing ? "治疗量" : effective ? "有效伤害" : "伤害";
+            return basis switch
             {
-                name.Text+" · "+(row.Bool("present") ? "在场" : row.Get("present").ValueKind==JsonValueKind.False ? "已离场" : "在场状态未知"),
-                "总伤 "+Number(row.Get("damage"))+"   有效 "+Effective(row)+"   过量 "+Number(row.Get("overkill_damage")),
-                "治疗 "+Number(row.Get("healing"))+"   有效护盾 "+Number(row.Get("shield_absorbed")),
-                shareInfo.Description,
-                skillLabel+" "+(splitKnown ? Number(skill) : "—")
-                    +"   非"+skillLabel+" "+(splitKnown ? Number(ordinary) : "—"),
-                "技能覆盖率 "+metricValues[7].Text+"   技能开启秒 "
-                    +(detail.Bool("skill_coverage_complete") ? detail.UiInt("skill_active_seconds") : "—"),
-                "接敌 DPS "+damageRate+"   接敌 HPS "+healRate,
-                "伤害活跃秒 "+row.UiInt("active_damage")+"   治疗活跃秒 "+row.UiInt("active_healing"),
-                OverkillNote(row,view),
-                MitigationNote(row,view),
-                reason.Length>0 ? "技能拆分："+reason : "覆盖率按技能开启时间占在场时间计算；被动技能计入非技能。",
-                view.Text("rate_reason"),
-                "归属来源 "+(sources.Length>0 ? sources : "—"),
-            }.Where(line=>line.Length>0));
+                "engagement" => $"已观测的{output} ÷ 活跃时长。每次事件产生 1.5 秒活跃区间，重叠区间合并，超出观测末尾的部分截断。",
+                "full_cycle" => $"累计{output} ÷ 在场时长。已观测活跃时长更长时，以活跃时长为准。",
+                _ => $"最近最多 5 个游戏秒内的{output} ÷ 该观测窗口的时长。",
+            };
+        }
+
+        private static string WithNote(string formula,string note)=>note.Length==0 ? formula : formula+"\n"+note;
+
+        private void SetMetric(int index,string value,string explanation)
+        {
+            metricValues[index].Text=value.Length>0 ? value : "—";
+            DescribeField(metricFields[index],metricLabels[index].Text,metricValues[index].Text,explanation);
+        }
+
+        private static void DescribeField(FrameworkElement field,string label,string value,string explanation)
+        {
+            if(field.ToolTip is not ToolTip {Content:TextBlock text})
+            {
+                text=Text("",13,token:"ConsoleInk");
+                field.ToolTip=new ToolTip{Content=text,MaxWidth=360};
+                field.Focusable=true;
+                ToolTipService.SetShowsToolTipOnKeyboardFocus(field,true);
+            }
+            string heading=label+"  "+value;
+            string description=heading+"\n"+explanation;
+            if(text.Text==description) return;
+            text.Text=description;
+            AutomationProperties.SetName(field,heading);
+            AutomationProperties.SetHelpText(field,explanation);
         }
 
         private void SetComposition(bool effective,JsonElement row,JsonElement detail)
@@ -613,10 +591,16 @@ public sealed class Inspector : Border
                 && (effective || (row.Bool("types_available") && !row.Bool("types_stale")));
             double[] values=DamageTypes.Select(item=>known ? types.Number(item.Key) : 0).ToArray();
             double total=values.Sum();
+            string damageLabel=effective ? "有效伤害" : "伤害";
+            string coverageNote=known ? "" : effective ? "分属性的过量证据不足。" : "分属性的累计伤害不可用。";
+            DescribeField(compositionField,compositionTitle.Text,ringValue.Text,WithNote(
+                $"各属性的{damageLabel} ÷ 已记录的各属性{damageLabel}之和。",coverageNote));
             for(int index=0;index<values.Length;index++)
             {
                 typeValues[index].Text=known && total>0 ? Percentage(values[index]/total) : "—";
-                typeValues[index].ToolTip=known ? Number(values[index]) : "伤害构成未知";
+                string amountNote=known ? "该属性累计"+damageLabel+" "+Number(values[index])+"。" : coverageNote;
+                DescribeField(typeFields[index],DamageTypes[index].Label,typeValues[index].Text,
+                    WithNote($"该属性的{damageLabel} ÷ 已记录的各属性{damageLabel}之和。",amountNote));
             }
             ring.Set(values,total);
         }
@@ -627,10 +611,57 @@ public sealed class Inspector : Border
             return FormattableString.Invariant($"{Math.Floor(rounded/60):00}:{rounded%60:00}");
         }
 
-        private sealed class Ring : FrameworkElement
+        private sealed class RatioField : Border
         {
-            private double[] values=new double[4];
+            private readonly TextBlock title;
+            internal string Caption { get=>title.Text; set=>title.Text=value; }
+            private readonly TextBlock value=Label("—",15,DarkInk,true);
+            private readonly Ring ring;
+
+            internal RatioField(string label,Brush color,string automationSuffix)
+            {
+                ring=new Ring(4,color);
+                Background=Brushes.Transparent;
+                Padding=new Thickness(3,5,3,6);
+                var dial=new Grid{Width=50,Height=50,HorizontalAlignment=HorizontalAlignment.Center};
+                dial.Children.Add(ring);
+                value.FontFamily=new FontFamily("Cascadia Mono, Consolas");
+                value.HorizontalAlignment=HorizontalAlignment.Center;
+                dial.Children.Add(new Viewbox{Child=value,StretchDirection=StretchDirection.DownOnly,
+                    Margin=new Thickness(7)});
+                var content=new StackPanel();
+                content.Children.Add(dial);
+                title=Label(label,13,MutedInk,true);
+                title.Margin=new Thickness(0,2,0,0);
+                title.TextWrapping=TextWrapping.Wrap;
+                title.TextAlignment=TextAlignment.Center;
+                content.Children.Add(title);
+                Child=content;
+                AutomationProperties.SetAutomationId(this,"CompactOperatorRatio"+automationSuffix);
+            }
+
+            internal void Update(double fraction,string explanation)
+            {
+                value.Text=Percentage(fraction);
+                ring.SetFraction(fraction);
+                DescribeField(this,Caption,value.Text,explanation);
+            }
+        }
+
+        private sealed class Ring(double thickness,params Brush[] colors) : FrameworkElement
+        {
+            private double[] values=new double[colors.Length];
             private double total;
+
+            internal void SetFraction(double fraction)
+            {
+                double portion=double.IsFinite(fraction) ? Math.Clamp(fraction,0,1) : 0;
+                if(total==1 && values[0]==portion) return;
+                values[0]=portion;
+                total=1;
+                InvalidateVisual();
+            }
+
             internal void Set(double[] next,double sum)
             {
                 if(total==sum && values.SequenceEqual(next)) return;
@@ -639,7 +670,6 @@ public sealed class Inspector : Border
 
             protected override void OnRender(DrawingContext context)
             {
-                const double thickness=14;
                 double radius=Math.Min(ActualWidth,ActualHeight)/2-thickness/2-2;
                 if(radius<=0) return;
                 var center=new Point(ActualWidth/2,ActualHeight/2);
@@ -651,7 +681,7 @@ public sealed class Inspector : Border
                 {
                     if(values[index]<=0) continue;
                     double sweep=2*Math.PI*values[index]/total;
-                    var pen=new Pen(DamageTypes[index].Color,thickness);
+                    var pen=new Pen(colors[index],thickness);
                     if(sweep>=2*Math.PI-.0001)
                     {
                         context.DrawEllipse(null,pen,center,radius,radius);
@@ -709,14 +739,13 @@ public sealed class Inspector : Border
             return Json.UiIntText((damage.GetDouble()-overkill.GetDouble()).ToString(System.Globalization.CultureInfo.InvariantCulture));
         return "—";
     }
-    private static string OverkillRate(JsonElement row)
+    private static double OverkillFraction(JsonElement row)
     {
-        var damage=row.Get("damage");var overkill=row.Get("overkill_damage");
-        if(damage.ValueKind!=JsonValueKind.Number||overkill.ValueKind!=JsonValueKind.Number) return "—";
-        double total=damage.GetDouble();
-        if(!double.IsFinite(total)||total<=0) return "—";
-        return Percentage(overkill.GetDouble()/total);
+        double total=row.Get("damage").TryNumber(double.NaN);
+        return total>0 ? row.Get("overkill_damage").TryNumber(double.NaN)/total : double.NaN;
     }
+    private static string OverkillRate(JsonElement row)=>Percentage(OverkillFraction(row));
+
     private static string Mitigation(JsonElement row)
     {
         var value=row.Get("mitigation_rate");
