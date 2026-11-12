@@ -382,11 +382,14 @@ class Statistics:
         return total
 
     @staticmethod
-    def _unconfirmed_skill_reason(window):
+    def _unconfirmed_skill_reason(window, *, live=False):
         if window is None or ('cast_completed_at' not in window and 'movement_at' not in window):
             return None
         if 'skchr_angel2_3' in (window['key'], window['id']):
             return '未观测到弹药技能的实际结束'
+        if live and window['effect_started']:
+            # The observed portion of a confirmed activation is a usable window.
+            return None
         return '未观测到技能效果的实际结束'
 
     def _close_skill_window(self, owner, game_time, reason, *, confirmed):
@@ -406,6 +409,9 @@ class Statistics:
     def _record_skill_transition(self, owner, source, kind, game_time, *,
                                  key, skill_id, name, method, reason):
         window = self.skill_active.get(owner)
+        identity = {key, skill_id} - {None}
+        active_identity = {window['key'], window['id']} - {None} if window is not None else set()
+        same_skill = not active_identity or not identity or not active_identity.isdisjoint(identity)
         if kind == 'skill_start':
             self.skill_seen.add(owner)
             if (window is not None and source == window['source']
@@ -416,16 +422,16 @@ class Statistics:
                 # A later activation cannot certify the previous effect's endpoint.
                 self._close_skill_window(owner, game_time, 'next_activation', confirmed=False)
                 window = None
+            effect_started = method in ('Character.SwitchToSkillState', 'Character.OnSkillCastSucceed',
+                                        'Character.OnToggleSkillStart', 'Character.OnSkillRetriggered')
             if window is None:
                 self.skill_active[owner] = {
                     'start': game_time, 'source': source, 'key': key, 'id': skill_id,
-                    'name': name, 'method': method}
+                    'name': name, 'effect_started': effect_started}
+            elif source == window['source'] and same_skill and effect_started:
+                window['effect_started'] = True
             return
-        if window is None or source != window['source']:
-            return
-        start_identity = {window['key'], window['id']} - {None}
-        end_identity = {key, skill_id} - {None}
-        if start_identity and end_identity and start_identity.isdisjoint(end_identity):
+        if window is None or source != window['source'] or not same_skill:
             return
         if method == 'Character.OnAfterSkill' and type(reason) is int and reason == 1:
             # Ability.FinishReason.INTERRUPTED can end the cast action while
@@ -435,7 +441,7 @@ class Statistics:
         if method == 'BattleController.OnCharacterFinished' and reason == 11:
             # Entity.FinishReason.MOVE_LIKE_RESPAWN_SELF reports both Ulpian
             # S3's outward move on the cast-completion frame and his return.
-            if 'skchr_ulpia_3' in start_identity:
+            if 'skchr_ulpia_3' in active_identity:
                 moved_at = window.setdefault('movement_at', game_time)
                 if moved_at == window.get('cast_completed_at') and game_time > moved_at:
                     self._close_skill_window(owner, game_time, reason, confirmed=True)
@@ -991,8 +997,9 @@ class Statistics:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
                 row['effective_damage'] = None
-            skill_incomplete_reason = (self.skill_incomplete.get(owner)
-                                       or self._unconfirmed_skill_reason(self.skill_active.get(owner)))
+            skill_incomplete_reason = (
+                self.skill_incomplete.get(owner)
+                or self._unconfirmed_skill_reason(self.skill_active.get(owner), live=True))
             skill_known = (coverage_complete and not self.skill_unknown
                            and skill_incomplete_reason is None)
             skill_value = self.skill_observed.get(owner, 0.0)
