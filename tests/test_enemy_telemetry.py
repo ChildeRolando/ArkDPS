@@ -1,0 +1,400 @@
+from types import SimpleNamespace
+
+from collection_session import CollectionSession
+from enemy_telemetry import (EnemyTelemetry, EnemyTimeline, enemy_rows,
+                             enemy_totals)
+
+
+def enemy(**values):
+    base = dict(roster_id=1, spawn_order=1, eid='enemy_1', name='士兵', code='B1',
+                hp=100.0, max_hp=200.0, atk=10.0, def_=2.0, res=3.0,
+                mspd=0.5, aspd=100.0, alive=True, lifecycle='active',
+                state_id=1, spawn_frame=10, end_frame=None, end_reason=None,
+                is_summon=False, pos_x=1.5, pos_y=2.5)
+    base.update(values)
+    return SimpleNamespace(**base)
+
+
+def test_entered_scope_excludes_pending_and_keeps_departed():
+    rows = enemy_rows({'enemies': [
+        enemy(roster_id=2, spawn_order=2, lifecycle='pending', alive=False),
+        enemy(roster_id=1, spawn_order=1),
+        enemy(roster_id=3, spawn_order=3, lifecycle='departed', alive=False,
+              hp=0.0, end_reason='death'),
+    ]})
+    assert [row['roster_id'] for row in rows] == [1, 3]
+    assert rows[0]['hp_known'] is True and rows[0]['hp_ratio'] == 0.5
+    assert rows[1]['state'] == '移动' and rows[1]['lifecycle'] == 'departed'
+
+
+def test_missing_hp_is_never_rendered_as_zero_percent():
+    rows = enemy_rows({'enemies': [enemy(hp=0.0, max_hp=0.0)]})
+    assert rows[0]['hp_known'] is False
+    assert rows[0]['hp_ratio'] is None
+    totals = enemy_totals(rows)
+    assert totals['entered_total_hp'] == 0
+    assert totals['hp_complete'] is False
+
+
+def test_totals_only_sum_entered_enemies_and_alive_remaining():
+    rows = enemy_rows({'enemies': [
+        enemy(roster_id=1, max_hp=100.0, hp=40.0, alive=True),
+        enemy(roster_id=2, max_hp=50.0, hp=0.0, alive=False, lifecycle='departed'),
+        enemy(roster_id=3, spawn_order=3, max_hp=999.0, lifecycle='pending'),
+    ]})
+    totals = enemy_totals(rows)
+    assert totals['entered_count'] == 2
+    assert totals['alive_count'] == 1
+    assert totals['entered_total_hp'] == 150
+    assert totals['remaining_hp'] == 40
+    assert totals['hp_complete'] is True
+
+
+def test_pending_hp_is_inferred_only_from_an_observed_same_type():
+    snapshot = {'enemies': [
+        enemy(roster_id=1, eid='enemy_a', max_hp=200.0, hp=150.0),
+        enemy(roster_id=2, spawn_order=2, eid='enemy_a', max_hp=0.0,
+              hp=0.0, lifecycle='pending', alive=False),
+        enemy(roster_id=3, spawn_order=3, eid='enemy_b', max_hp=0.0,
+              hp=0.0, lifecycle='pending', alive=False),
+    ]}
+    planned = enemy_rows(snapshot, include_pending=True)
+    by_id = {row['roster_id']: row for row in planned}
+    assert by_id[2]['max_hp'] == 200.0 and by_id[2]['hp_inferred'] is True
+    assert by_id[3]['hp_known'] is False and by_id[3]['hp_inferred'] is False
+
+
+def test_stage_estimate_includes_pending_plan_without_growing_entered_hp():
+    snapshot = {'enemies': [
+        enemy(roster_id=1, max_hp=100.0, hp=0.0, alive=False, lifecycle='departed'),
+        enemy(roster_id=2, spawn_order=2, max_hp=500.0, hp=0.0, alive=False,
+              lifecycle='pending'),
+    ]}
+    rows = enemy_rows(snapshot)
+    planned = enemy_rows(snapshot, include_pending=True)
+    totals = enemy_totals(rows, planned)
+    assert totals['entered_count'] == 1
+    assert totals['planned_count'] == 2
+    assert totals['observed_total_hp'] == 100
+    assert totals['entered_total_hp'] == 100
+    assert totals['stage_total_hp_estimate'] == 600
+    assert totals['hp_complete'] is True
+
+
+def test_planned_pool_skips_unobserved_conditional_branches():
+    snapshot = {'ok': True, 'enemies': [
+        enemy(roster_id=1, eid='enemy_a', max_hp=100.0, hp=90.0,
+              spawn_kind='scheduled'),
+        enemy(roster_id=2, spawn_order=2, eid='enemy_a', max_hp=100.0,
+              hp=100.0, lifecycle='pending', alive=False, spawn_kind='scheduled'),
+        enemy(roster_id=3, spawn_order=3, eid='enemy_b', max_hp=999.0,
+              hp=999.0, lifecycle='pending', alive=False, spawn_kind='conditional'),
+    ]}
+    telemetry = EnemyTelemetry(
+        type('R', (), {'poll_fast': lambda self: snapshot})(),
+        clock=lambda: 1.0, bootstrap=lambda reader: True, poll_interval=0)
+    state = telemetry.sample(game_time=1.0, our_damage=0)
+    assert state['totals']['planned_count'] == 2
+    assert state['totals']['entered_total_hp'] == 100
+    assert state['totals']['stage_total_hp_estimate'] == 200
+    assert state['totals']['total_hp_complete'] is False
+    assert state['totals']['planned_complete'] is True
+
+
+def test_timeline_is_ordered_deduplicated_and_downsampled():
+    timeline = EnemyTimeline()
+    rows = enemy_rows({'enemies': [enemy(max_hp=100.0, hp=100.0)]})
+    assert timeline.add(1.0, rows, 0.0)['entered_total_hp'] == 100
+    assert timeline.add(1.0, rows, 0.0) is None
+    assert timeline.add(0.5, rows, 0.0) is None
+    for second in range(2, 12):
+        timeline.add(float(second), rows, float(second * 10))
+    series = timeline.series(limit=5)
+    assert len(series) == 5
+    assert series[0]['game_time'] == 1.0 and series[-1]['game_time'] == 11.0
+    assert [point['game_time'] for point in series] == sorted(point['game_time'] for point in series)
+
+
+def test_telemetry_throttles_without_dropping_last_rows():
+    now = [0.0]
+    snapshots = [
+        {'ok': True, 'enemies': [enemy(max_hp=100.0, hp=90.0)]},
+        {'ok': True, 'enemies': [enemy(max_hp=100.0, hp=80.0)]},
+    ]
+
+    class Reader:
+        def __init__(self):
+            self.calls = 0
+
+        def poll_fast(self):
+            value = snapshots[min(self.calls, len(snapshots) - 1)]
+            self.calls += 1
+            return value
+
+    telemetry = EnemyTelemetry(Reader(), clock=lambda: now[0],
+                               bootstrap=lambda reader: True, poll_interval=1.0)
+    first = telemetry.sample(game_time=1.0, our_damage=10)
+    assert first['status'] == 'ready' and first['rows'][0]['hp'] == 90
+    assert first['last_point']['our_effective_damage'] == 0
+    now[0] = 0.5
+    throttled = telemetry.sample(game_time=1.5, our_damage=20)
+    assert throttled['rows'][0]['hp'] == 90
+    assert len(throttled['series']) == 1
+    now[0] = 1.1
+    fresh = telemetry.sample(game_time=2.0, our_damage=30)
+    assert fresh['rows'][0]['hp'] == 80
+    assert len(fresh['series']) == 2
+    assert fresh['last_point']['our_effective_damage'] == 20
+
+
+def test_entries_publish_between_enemy_polls_and_merge_by_instance_uid(monkeypatch):
+    snapshots = iter([
+        {'ok': True, 'enemies': [enemy(instance_uid='5', spawn_frame=1)]},
+        {'ok': True, 'enemies': [
+            enemy(instance_uid='5', spawn_frame=1),
+            enemy(instance_uid='6', roster_id=2, spawn_frame=22, hp=70.0),
+        ]},
+    ])
+    now = [0.0]
+    telemetry = EnemyTelemetry(
+        SimpleNamespace(poll_fast=lambda: next(snapshots)),
+        clock=lambda: now[0], bootstrap=lambda reader: True)
+    session = CollectionSession(None, None, collector=SimpleNamespace(
+        enemy_telemetry=telemetry, read_enemies=telemetry.sample))
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: now[0])
+
+    def publish(events, *, complete=True):
+        sample = {'session': 'battle', 'game_time': 1.0 + now[0], 'statistics': {
+            'enemy_entry': {'complete': complete, 'start_frame': 10, 'events': events}}}
+        session._attach_enemy(sample)
+        return sample['enemy']
+
+    first = publish([])
+    assert first['totals']['entered_count'] == 1
+    assert first['rows'][0]['spawn_frame'] == 1
+    now[0] = 0.5
+    entries = [dict(instance_uid='6', eid='enemy_1', frame=12, game_time=1.2),
+               dict(instance_uid='7', eid='enemy_1', frame=13, game_time=1.3)]
+    during_throttle = publish(entries)
+    assert during_throttle['entry_events_complete'] is True
+    assert during_throttle['entry_events_start_frame'] == 10
+    assert during_throttle['totals']['entered_count'] == 3
+    assert during_throttle['totals']['alive_count'] == 1
+    assert during_throttle['totals']['unknown_lifecycle_count'] == 2
+    assert during_throttle['totals']['hp_complete'] is False
+    event_only = during_throttle['rows'][1]
+    assert event_only['lifecycle'] == 'entered'
+    assert event_only['alive'] is None
+    assert event_only['hp'] is None and event_only['max_hp'] is None
+    assert event_only['end_frame'] is None and event_only['end_reason'] is None
+
+    now[0] = 1.1
+    fresh = publish(entries, complete=False)
+    assert fresh['entry_events_complete'] is False
+    assert fresh['totals']['entered_count'] == 3
+    assert fresh['last_point']['entered_count'] == 3
+    observed = next(row for row in fresh['rows'] if row['instance_uid'] == '6')
+    assert observed['spawn_frame'] == 12 and observed['spawn_time'] == 1.2
+    assert observed['alive'] is True and observed['hp'] == 70.0
+    missed = next(row for row in fresh['rows'] if row['instance_uid'] == '7')
+    assert missed['alive'] is None
+
+
+def test_events_do_not_double_count_the_schedulers_inferred_prefix():
+    snapshot = {'ok': True, 'enemies': [
+        enemy(addr=0, lifecycle='departed', alive=False),
+    ]}
+    telemetry = EnemyTelemetry(SimpleNamespace(poll_fast=lambda: snapshot),
+                               bootstrap=lambda reader: True, poll_interval=0)
+    legacy = telemetry.sample(game_time=1.0, our_damage=0)
+    assert legacy['totals']['entered_count'] == 0
+    assert legacy['totals']['planned_count'] == 1
+    state = telemetry.sample(game_time=2.0, our_damage=0, enemy_entry={
+        'complete': True, 'start_frame': 10, 'events': [
+            dict(instance_uid='31', eid='enemy_1', frame=13, game_time=1.3),
+        ],
+    })
+    assert state['totals']['entered_count'] == 1
+    assert state['rows'][0]['instance_uid'] == '31'
+    assert state['totals']['planned_count'] == 1
+
+
+def test_enemy_snapshot_decodes_the_same_unsigned_instance_uid_as_the_probe():
+    import struct
+    from tools.enemy_health import game_structs as gs
+    from tools.enemy_health.enemy_reader import EnemyReader
+
+    block = bytearray(gs.EnemyFields.READ_SIZE)
+    struct.pack_into('<I', block, gs.BObjectFields.INSTANCE_UID, 0xffffffff)
+    observed = EnemyReader._parse_enemy_block(123, block, read_instance_uid=True)
+    legacy = EnemyReader._parse_enemy_block(123, block)
+    assert observed.instance_uid == '4294967295'
+    assert legacy.instance_uid is None
+
+
+def test_poll_failure_is_reported_not_raised():
+    class Reader:
+        def poll_fast(self):
+            raise RuntimeError('channel lost')
+
+    telemetry = EnemyTelemetry(Reader(), bootstrap=lambda reader: True,
+                               clock=lambda: 10.0)
+    state = telemetry.sample(game_time=1.0, our_damage=0)
+    assert state['status'] == 'unavailable'
+    assert 'channel lost' in state['error']
+    assert state['rows'] == []
+
+
+def test_bootstrap_failure_retries_then_locates():
+    attempts = []
+
+    def bootstrap(reader):
+        attempts.append(1)
+        return len(attempts) >= 2
+
+    class Reader:
+        def poll_fast(self):
+            return {'ok': True, 'enemies': [enemy()]}
+
+    now = [0.0]
+    telemetry = EnemyTelemetry(Reader(), bootstrap=bootstrap,
+                               clock=lambda: now[0], bootstrap_retry=3.0)
+    assert telemetry.sample(game_time=1.0, our_damage=0)['status'] == 'locating'
+    now[0] = 1.0
+    assert len(attempts) == 1
+    now[0] = 4.0
+    state = telemetry.sample(game_time=4.0, our_damage=40)
+    assert state['status'] == 'ready' and len(state['rows']) == 1
+
+
+def test_bootstrap_uses_the_certified_battle_controller_without_a_second_scan(monkeypatch):
+    import enemy_telemetry
+
+    monkeypatch.setattr(enemy_telemetry, '_gs', SimpleNamespace(
+        BattleControllerFields=SimpleNamespace(SCHEDULER=0x30),
+        SchedulerFields=SimpleNamespace(M_MANAGED_WAVE_ENEMIES=0xC0)))
+
+    class MC:
+        def is_ptr(self, value):
+            return bool(value)
+
+        def read_klass_name(self, value):
+            return 'Scheduler'
+
+    class Reader:
+        mc = MC()
+        bc_addr = 1000
+
+        def _read_ptr(self, address):
+            return {0x418: 2000, 0x890: 3000}.get(address, 0)
+
+        def _read_live_enemy_list(self, address):
+            assert address == 3000
+            return [11, 12]
+
+        def _resolve_unit_manager(self, bc):
+            assert bc == 1000
+            return False
+
+        def _union_enemy_ptrs(self, primary, fallback):
+            return list(primary) + list(fallback)
+
+        def _prefill(self):
+            self.prefilled = True
+
+    reader = Reader()
+    assert enemy_telemetry.bootstrap_at_battle(reader) is True
+    assert reader.sched_addr == 2000 and reader.list_addr == 3000
+    assert reader.enemy_addrs == [11, 12]
+    assert reader._spawn_plan == [] and reader._roster_initialized is False
+    assert reader.prefilled
+
+
+def test_bootstrap_does_not_require_the_static_handbook_bundle(monkeypatch):
+    import enemy_telemetry
+
+    monkeypatch.setattr(enemy_telemetry, '_gs', SimpleNamespace(
+        BattleControllerFields=SimpleNamespace(SCHEDULER=0x30),
+        SchedulerFields=SimpleNamespace(M_MANAGED_WAVE_ENEMIES=0xC0)))
+
+    class MC:
+        def is_ptr(self, value):
+            return bool(value)
+
+        def read_klass_name(self, value):
+            return 'Scheduler'
+
+    class Reader:
+        mc = MC()
+        bc_addr = 1000
+
+        def _read_ptr(self, address):
+            return {0x418: 2000, 0x890: 3000}.get(address, 0)
+
+        def _read_live_enemy_list(self, address):
+            return []
+
+        def _resolve_unit_manager(self, bc):
+            return False
+
+        def _union_enemy_ptrs(self, primary, fallback):
+            return []
+
+        def _prefill(self):
+            raise RuntimeError('static data missing')
+
+    reader = Reader()
+    assert enemy_telemetry.bootstrap_at_battle(reader) is True
+    assert reader._spawn_plan == [] and reader._roster_initialized is False
+    assert isinstance(reader._db, dict)
+
+
+def test_timeline_keeps_enemy_hp_when_effective_damage_is_unknown():
+    timeline = EnemyTimeline()
+    rows = enemy_rows({'enemies': [enemy(max_hp=100.0, hp=100.0)]})
+    point = timeline.add(1.0, rows, None)
+    assert point['entered_total_hp'] == 100
+    assert point['our_effective_damage'] is None
+    assert point['our_damage_known'] is False
+
+
+def test_reborn_hp_is_displayed_on_the_same_enemy_with_its_current_max_hp():
+    patriot = enemy(instance_uid='42', eid='enemy_1506_patrt',
+                    hp=60000, max_hp=60000)
+    snapshot = {'ok': True, 'enemies': [patriot]}
+    telemetry = EnemyTelemetry(
+        SimpleNamespace(poll_fast=lambda: snapshot),
+        clock=lambda: 1.0, bootstrap=lambda reader: True)
+    telemetry.sample(game_time=45, our_damage=60000)
+    phases = {'complete': True, 'instances': {'42': {
+        'eid': patriot.eid, 'phase_total_hp': 120000,
+        'phase_count': 2, 'phase_from_birth': True,
+    }}}
+    result = telemetry.sample(game_time=75, our_damage=60000, enemy_phases=phases)
+    row, = result['rows']
+    assert result['totals']['entered_count'] == 1
+    assert row['hp'] == row['max_hp'] == 60000
+    assert row['phase_total_hp'] == 120000
+    assert row['phase_count'] == 2
+    assert row['phase_from_birth'] and row['phase_coverage_complete']
+
+
+def test_bundled_enemy_catalog_provides_names_and_handbook_codes():
+    import json
+    from pathlib import Path
+    path = (Path(__file__).resolve().parents[1] / 'vendor' / 'ark-source' /
+            'game_data' / 'catalogs' / 'enemy_names.json')
+    catalog = json.loads(path.read_text(encoding='utf-8'))
+    assert catalog['enemy_1007_slime']['name']
+    assert catalog['enemy_1007_slime']['code'] == 'B1'
+    assert 'enemy_1027_mob' in catalog
+
+
+def test_enemy_poll_failure_does_not_close_the_shared_product_channel():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / 'vendor' / 'ark-source' /
+              'tools' / 'enemy_health' / 'enemy_reader.py').read_text(encoding='utf-8')
+    assert 'self.shared_channel = False' in source
+    assert 'if not self.shared_channel:' in source
+    guarded = source.split('if not self.shared_channel:', 1)[1]
+    assert guarded.lstrip().startswith('self.close()')

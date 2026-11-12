@@ -168,7 +168,8 @@ class DesktopState:
                                    team_complete=complete, team_reason=reason,
                                    team_note=note, event=event))
         view['empty_text'] = empty_text(config, source, complete)
-        view['rates'] = detail_rates(rows, event)
+        view['rates'] = detail_rates(
+            rows, event, effective=config.effective_only and config.category.value == 'damage')
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source
@@ -215,6 +216,8 @@ class DesktopState:
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
+                    enemy=sample.get('enemy') or dict(status='starting', error=None,
+                        ready=False, rows=[], totals={}, series=[]),
                     history=history, history_selected=selected, history_notice=self.history_notice)
 
     def persist(self, layout):

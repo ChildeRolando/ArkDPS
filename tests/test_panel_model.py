@@ -558,3 +558,50 @@ def test_effective_only_panel_uses_effective_damage_and_type_segments():
     assert all('overkill_ratio' not in segment for segment in entry.segments)
     assert {segment['kind']: segment['value'] for segment in entry.segments} == {
         'physical': 500, 'arts': 300}
+
+
+def test_effective_composition_infers_a_single_observed_damage_type():
+    row = src('A', damage=1000, recent_damage=100)
+    row.effective_damage = 800
+    row.overkill = 200
+    row.damage_by_type = {'physical': 1000, 'arts': 0, 'elemental': 0, 'true': 0}
+    row.overkill_by_type = None
+    row.overkill_type_complete = False
+    view = render_panel(PanelConfig(effective_only=True), [row])
+    entry = view.entries[0]
+    assert entry.detail['effective_damage_by_type'] == {'physical': 800}
+    assert {segment['kind']: segment['value'] for segment in entry.segments} == {
+        'physical': 800}
+
+    row.damage_by_type = {'physical': 600, 'arts': 400}
+    mixed = render_panel(PanelConfig(effective_only=True), [row]).entries[0]
+    assert mixed.detail['effective_damage_by_type'] is None
+
+
+def test_skill_coverage_and_effective_skill_split_reach_entry_detail():
+    row = PanelSourceRow(
+        owner_id='A', name='A', damage=1000, effective_damage=600,
+        overkill=400, overkill_complete=True,
+        skill_damage=500, non_skill_damage=500,
+        skill_damage_effective=300, non_skill_damage_effective=300,
+        skill_split_complete=True, skill_split_effective_complete=True,
+        skill_active_seconds=5, presence_seconds=10, presence_complete=True,
+        skill_coverage_complete=True,
+        damage_by_type={'physical': 1000},
+        overkill_by_type={'physical': 400}, overkill_type_complete=True)
+    assert row.skill_coverage() == .5
+    view = render_panel(PanelConfig(panel_id='p', effective_only=True), [row],
+                        event=EventAvailability('recording'))
+    detail = view.entries[0].detail
+    assert detail['skill_damage_effective'] == 300
+    assert detail['non_skill_damage_effective'] == 300
+    assert detail['skill_coverage'] == .5
+    assert detail['skill_split_effective_complete'] is True
+    assert detail['effective_damage_by_type'] == {'physical': 600}
+
+
+def test_skill_window_longer_than_observed_presence_has_unknown_coverage():
+    row = PanelSourceRow(owner_id='A', name='A',
+                         skill_active_seconds=260.2, presence_seconds=16.97,
+                         presence_complete=True, skill_coverage_complete=True)
+    assert row.skill_coverage() is None

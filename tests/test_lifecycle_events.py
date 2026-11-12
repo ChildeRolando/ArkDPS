@@ -2,11 +2,14 @@
 from copy import deepcopy
 from dataclasses import asdict, replace
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from collection_session import CollectionSession
+from enemy_telemetry import EnemyTelemetry
 from event_capture import CaptureRetry
+from event_observer import ObserverReadRetry
 from test_collection_session import Collector, LiveObserver
 from test_event_capture import event
 
@@ -27,6 +30,112 @@ def advance(session, collector, *, terminal=False):
     collector.state = 3 if terminal else 2
     session.observer.sequence = session.observer.epoch = 1
     session.observer.events = [event(1)]
+
+
+def test_event_read_timeout_preserves_terminal_batch_until_host_commit():
+    session, collector, _, records = connected()
+    acknowledgements = []
+    try:
+        observer = session.observer
+        fail = True
+
+        def read_through(sequence):
+            nonlocal fail
+            if sequence == 1 and fail:
+                fail = False
+                raise ObserverReadRetry('observer read response timed out')
+            return observer.drain()
+
+        def commit_events(sequence):
+            result = session.runtime.sessions.adapter.result()
+            acknowledgements.append((sequence, result['rows']['char_a']['observed_damage']))
+
+        observer.read_through = read_through
+        observer.commit_events = commit_events
+        baseline = session.read()
+        assert baseline['event_status'] == 'recording'
+        advance(session, collector, terminal=True)
+        with pytest.raises(CaptureRetry, match='response timed out'):
+            session.read()
+        assert acknowledgements == [(0, 0)]
+        assert len([kind for kind, _ in records if kind == 'published']) == 1
+        finished = session.read()
+        assert finished['event_status'] == 'finished'
+        assert finished['statistics']['rows']['char_a']['observed_damage'] == 20
+        assert acknowledgements == [(0, 0), (1, 20)]
+        session.read()
+        assert acknowledgements == [(0, 0), (1, 20)]
+    finally:
+        session.close()
+
+
+def test_enemy_state_batch_updates_the_panel_without_waiting_for_another_snapshot():
+    session, collector, _, _ = connected()
+    polls = []
+
+    def seed():
+        polls.append(collector.frame)
+        return {'ok': True, 'fixed_frame': collector.frame, 'enemies': []}
+
+    collector.enemy_telemetry = EnemyTelemetry(SimpleNamespace(poll_fast=seed),
+                                              bootstrap=lambda _: True, clock=lambda: 50.0)
+    collector.read_enemies = collector.enemy_telemetry.sample
+    observer = session.observer
+    drain = observer.drain
+    observer.drain = lambda: dict(drain(), enemy_state_ready=True,
+                                  enemy_entry_ready=True, enemy_phase_ready=True)
+    sequence = 0
+
+    def advance_enemy(frame, records, *, terminal=False):
+        nonlocal sequence
+        collector.frame, collector.game_time = frame, float(frame - 1)
+        collector.state = 3 if terminal else 2
+        observer.events = []
+        for uid, eid, kind, evidence in records:
+            sequence += 1
+            observer.events.append(dict(sequence=sequence, frame=frame, game_time=collector.game_time,
+                                        kind=kind, source=None, target=eid, target_instance=uid,
+                                        **({'amount': 0} | evidence)))
+        observer.sequence = observer.epoch = sequence
+        return session.read()
+
+    def enemy_rows(sample):
+        return {row['instance_uid']: row for row in sample['enemy']['rows']}
+
+    try:
+        assert session.read()['statistics']['enemy_state']['complete']
+        boss, soldier = ('12', 'enemy_patrt'), ('13', 'enemy_soldier')
+        first = advance_enemy(2, [
+            (*boss, 'enemy_enter', dict(hp_after=60000, enemy_entry_attributes={'max_hp': 60000})),
+            (*soldier, 'enemy_enter', dict(hp_after=4500, enemy_entry_attributes={'max_hp': 4500})),
+            (*soldier, 'enemy_hp', dict(hp_before=4500, hp_after=0)),
+            (*soldier, 'enemy_finish', dict(hp_after=0, finish_reason=2)),
+            (*boss, 'enemy_hp', dict(hp_before=60000, hp_after=0)),
+            (*boss, 'enemy_fake_death', dict(hp_after=0)),
+        ])
+        assert enemy_rows(first)['13']['lifecycle'] == 'departed'
+        assert enemy_rows(first)['13']['end_frame'] == 2
+        assert enemy_rows(first)['12']['lifecycle'] == 'rebirthing'
+        assert enemy_rows(first)['12']['end_frame'] is None
+        assert first['enemy']['last_point']['game_time'] == 1
+        second = advance_enemy(3, [(*boss, 'enemy_reborn', dict(
+            amount=60000, hp_before=0, hp_after=60000, phase_total_hp=120000,
+            phase_count=2, phase_from_birth=True))])
+        assert enemy_rows(second)['12']['hp'] == 60000
+        assert enemy_rows(second)['12']['lifecycle'] == 'active'
+        assert second['enemy']['totals']['entered_total_hp'] == 124500
+        assert second['enemy']['last_point']['remaining_hp'] == 60000
+        final = advance_enemy(4, [(*boss, 'enemy_finish', dict(hp_after=0, finish_reason=2))],
+                              terminal=True)
+        assert final['event_status'] == 'finished'
+        assert final['event_watermark']['sequence'] == sequence
+        assert enemy_rows(final)['12']['lifecycle'] == 'departed'
+        assert enemy_rows(final)['12']['end_frame'] == 4
+        assert final['enemy']['totals']['remaining_hp'] == 0
+        assert final['statistics']['rows']['char_a']['observed_damage'] == 0
+        assert polls == [1]
+    finally:
+        session.close()
 
 
 @pytest.mark.parametrize('before_baseline', [True, False])

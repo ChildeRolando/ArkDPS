@@ -276,6 +276,17 @@ class PanelSourceRow:
     burst_count: int = 0
     burst_unknown_reason: str | None = None
     effective_damage: float | None = None
+    skill_damage: float | None = None
+    non_skill_damage: float | None = None
+    skill_damage_effective: float | None = None
+    non_skill_damage_effective: float | None = None
+    skill_split_complete: bool = False
+    skill_split_effective_complete: bool = False
+    skill_split_reason: str | None = None
+    skill_active_seconds: float | None = None
+    skill_coverage_complete: bool = False
+    skill_window_count: int = 0
+    skill_seen: bool = False
     counter_complete: bool = True
     event_complete: bool = True
     event_coverage_end: float | None = None
@@ -330,6 +341,16 @@ class PanelSourceRow:
                 or not self.overkill_complete):
             return None
         return max(0.0, self.observed_damage - self.overkill) / self.active_damage
+
+    def skill_coverage(self) -> float | None:
+        """Observed skill-on time divided by certified on-field time."""
+        if (not self.skill_coverage_complete or not self.presence_complete
+                or not _finite(self.skill_active_seconds)
+                or not _finite(self.presence_seconds)
+                or self.presence_seconds <= 0
+                or not 0 <= self.skill_active_seconds <= self.presence_seconds):
+            return None
+        return self.skill_active_seconds / self.presence_seconds
 
     def full_cycle(self, category: Category, *, effective: bool = False) -> float | None:
         """总量 / 在场时间, only when numerator and presence are certified."""
@@ -411,6 +432,18 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             burst_count=row.get('burst_count') or 0,
             burst_unknown_reason=row.get('burst_unknown_reason'),
             effective_damage=row.get('effective_damage'),
+            skill_damage=row.get('skill_damage'),
+            non_skill_damage=row.get('non_skill_damage'),
+            skill_damage_effective=row.get('skill_damage_effective'),
+            non_skill_damage_effective=row.get('non_skill_damage_effective'),
+            skill_split_complete=bool(row.get('skill_split_complete', False)),
+            skill_split_effective_complete=bool(
+                row.get('skill_split_effective_complete', False)),
+            skill_split_reason=row.get('skill_split_reason'),
+            skill_active_seconds=row.get('skill_active_seconds'),
+            skill_coverage_complete=bool(row.get('skill_coverage_complete', False)),
+            skill_window_count=row.get('skill_window_count') or 0,
+            skill_seen=bool(row.get('skill_seen', False)),
             recent_damage_window=row.get('recent_damage_window'),
             recent_healing_window=row.get('recent_healing_window'),
             recent_shield_window=row.get('recent_shield_window'),
@@ -579,13 +612,29 @@ def _effective_damage(row: PanelSourceRow) -> float | None:
     return None
 
 
+def _effective_by_type(row: PanelSourceRow) -> dict | None:
+    if not row.overkill_type_complete or row.overkill_by_type is None:
+        # An untyped overkill event still has one possible damage type when the
+        # operator's entire observed output is that type. This is evidence from
+        # the type totals, not a proportional guess.
+        live_types = [kind for kind, value in row.damage_by_type.items()
+                      if _finite(value) and value > 0]
+        if len(live_types) == 1 and _finite(row.overkill):
+            kind = live_types[0]
+            return {kind: max(0.0, float(row.damage_by_type[kind]) - float(row.overkill))}
+        return None
+    return {kind: max(0.0, float(value) - float(row.overkill_by_type.get(kind, 0.0)))
+            for kind, value in row.damage_by_type.items() if _finite(value)}
+
 def _segments(row: PanelSourceRow, ranking: Ranking,
               effective: bool = False) -> tuple[tuple[dict, ...], bool]:
     if effective:
         total = _effective_damage(row)
-        by_type = {kind: max(0.0, float(value) -
-                             float((row.overkill_by_type or {}).get(kind, 0.0)))
-                   for kind, value in row.damage_by_type.items() if _finite(value)}
+        by_type = _effective_by_type(row)
+        if by_type is None:
+            by_type = {kind: max(0.0, float(value) -
+                                 float((row.overkill_by_type or {}).get(kind, 0.0)))
+                       for kind, value in row.damage_by_type.items() if _finite(value)}
     else:
         total = row.damage if ranking is Ranking.TOTAL else row.recent_damage
         by_type = row.damage_by_type if ranking is Ranking.TOTAL else row.recent_damage_by_type
@@ -636,7 +685,8 @@ def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
 
 
 def detail_rates(rows: Iterable[PanelSourceRow],
-                 event: EventAvailability | None = None) -> dict:
+                 event: EventAvailability | None = None, *,
+                 effective: bool = False) -> dict:
     """Per-owner engagement display state for both damage and healing.
 
     Detail views use the same classification as the panel rate column so a
@@ -648,7 +698,9 @@ def detail_rates(rows: Iterable[PanelSourceRow],
     for row in rows:
         kinds = {}
         for kind, category in (('damage', Category.DAMAGE), ('healing', Category.HEALING)):
-            raw = row.engagement(category)
+            raw = (row.effective_observed()
+                   if effective and category is Category.DAMAGE
+                   else row.engagement(category))
             state, text, note = _rate_display(
                 row, category, raw if _finite(raw) else None, available)
             kinds[kind] = {'state': state, 'text': text, 'note': note}
@@ -801,6 +853,20 @@ def render_panel(config: PanelConfig,
                     'overkill_coverage_complete': row.overkill_complete,
                     'overkill_unknown_reason': row.overkill_unknown_reason,
                     'effective_damage': _effective_damage(row) if effective else row.effective_damage,
+                    'effective_damage_by_type': _effective_by_type(row),
+                    'effective_engagement_damage': row.effective_observed(),
+                    'skill_damage': row.skill_damage,
+                    'non_skill_damage': row.non_skill_damage,
+                    'skill_damage_effective': row.skill_damage_effective,
+                    'non_skill_damage_effective': row.non_skill_damage_effective,
+                    'skill_split_complete': row.skill_split_complete,
+                    'skill_split_effective_complete': row.skill_split_effective_complete,
+                    'skill_split_reason': row.skill_split_reason,
+                    'skill_active_seconds': row.skill_active_seconds,
+                    'skill_coverage': row.skill_coverage(),
+                    'skill_coverage_complete': row.skill_coverage_complete,
+                    'skill_window_count': row.skill_window_count,
+                    'skill_seen': row.skill_seen,
                     'recent_overkill_damage': row.recent_overkill,
                     'presence_seconds': row.presence_seconds,
                     'presence_complete': row.presence_complete,

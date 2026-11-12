@@ -1,7 +1,8 @@
 """A temporary, explicitly attached Frida event observer for Android 2.7.91."""
 from enum import Enum
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
+from types import SimpleNamespace
 
 from connection import VersionStatus
 
@@ -12,6 +13,10 @@ class ObserverStatus(str, Enum):
     INCOMPATIBLE = 'incompatible'
     STOPPED = 'stopped'
     FAILED = 'failed'
+
+
+class ObserverReadRetry(RuntimeError):
+    """A live observer did not deliver a response within the request window."""
 
 
 def _while_live(operation, released):
@@ -37,13 +42,34 @@ class FridaEventObserver:
         self.script = None
         self.ready = Event()
         self.cleanup_errors = {}
+        self._request_lock = Lock()
+        self._request_id = 0
+        self._pending_request = None
+        self._committed_sequence = 0
+        self._acknowledged_sequence = 0
+        self._ack_error = None
+
+    request_timeout = 5.0
+
+    def _wake_request(self):
+        with self._request_lock:
+            if self._pending_request is not None:
+                self._pending_request.done.set()
 
     def _message(self, message, _data):
+        payload = message.get('payload')
         if message.get('type') == 'error':
             self.error = message.get('description', 'observer script error')
             self.status = ObserverStatus.FAILED
             self.ready.set()
-        elif message.get('payload', {}).get('ready'):
+            self._wake_request()
+        elif isinstance(payload, dict) and payload.get('kind') == 'arkdps-event-response':
+            with self._request_lock:
+                pending = self._pending_request
+                if pending is not None and pending.id == payload.get('id'):
+                    pending.response = payload.get('result')
+                    pending.done.set()
+        elif isinstance(payload, dict) and payload.get('ready'):
             self.ready.set()
 
     def _detached(self, reason, *_args):
@@ -51,6 +77,7 @@ class FridaEventObserver:
             self.error = f'observer detached: {reason}'
             self.status = ObserverStatus.FAILED
             self.ready.set()
+            self._wake_request()
 
     def start(self):
         if self.status != ObserverStatus.STOPPED or self.session is not None:
@@ -62,6 +89,8 @@ class FridaEventObserver:
         self.status = ObserverStatus.ATTACHING
         self.error = None
         self.ready.clear()
+        self._committed_sequence = self._acknowledged_sequence = 0
+        self._ack_error = None
         try:
             import frida
             if frida.__version__ != '17.26.1':
@@ -84,15 +113,64 @@ class FridaEventObserver:
                 self.status = ObserverStatus.FAILED
             raise
 
-    def mark(self):
-        if self.status != ObserverStatus.READY:
+    def _request(self, operation, **arguments):
+        script = self.script
+        if self.status != ObserverStatus.READY or script is None:
             raise RuntimeError(self.error or f'observer is {self.status.value}')
-        return self.script.exports_sync.mark()
+        # Frida's synchronous export wrapper has no response deadline. A
+        # request ID lets a late answer expire without changing the cursor.
+        with self._request_lock:
+            if self._pending_request is not None:
+                raise RuntimeError('observer request is already in flight')
+            self._request_id += 1
+            pending = SimpleNamespace(id=self._request_id, done=Event(), response=None)
+            self._pending_request = pending
+        try:
+            try:
+                script.post(dict(type='arkdps-event-request', id=pending.id,
+                                 operation=operation, **arguments))
+            except Exception as exc:
+                if self.status != ObserverStatus.READY or script.is_destroyed:
+                    raise RuntimeError(self.error or str(exc)) from exc
+                raise ObserverReadRetry(f'observer {operation} request failed: {exc}') from exc
+            received = pending.done.wait(self.request_timeout)
+            if self.status != ObserverStatus.READY or script.is_destroyed:
+                raise RuntimeError(self.error or 'observer no longer available')
+            if not received:
+                raise ObserverReadRetry(f'observer {operation} response timed out')
+            if not isinstance(pending.response, dict):
+                raise RuntimeError(f'invalid observer {operation} response')
+            return pending.response
+        finally:
+            with self._request_lock:
+                self._pending_request = None
 
-    def drain(self):
-        if self.status != ObserverStatus.READY:
-            raise RuntimeError(self.error or f'observer is {self.status.value}')
-        return self.script.exports_sync.drain()
+    def mark(self):
+        return self._request('mark')
+
+    def read_through(self, sequence):
+        if self._ack_error:
+            raise RuntimeError(self._ack_error)
+        return self._request('read', after=self._committed_sequence, through=sequence)
+
+    def commit_events(self, sequence):
+        """Release the prefix only after it was accepted by the host."""
+        self._committed_sequence = max(sequence, self._committed_sequence)
+        if self._committed_sequence <= self._acknowledged_sequence:
+            return
+        try:
+            reply = self._request('ack', sequence=self._committed_sequence)
+        except ObserverReadRetry:
+            # A lost response can mean the producer already released this
+            # prefix. A future acknowledgement is cumulative and idempotent.
+            return
+        except RuntimeError as exc:
+            self._ack_error = str(exc)
+            return
+        if reply.get('error') or reply.get('acknowledged') != self._committed_sequence:
+            self._ack_error = reply.get('error') or 'observer acknowledgement did not match the committed watermark'
+        else:
+            self._acknowledged_sequence = self._committed_sequence
 
     def _release(self):
         # Both releases must be attempted. Keep failed handles available for a

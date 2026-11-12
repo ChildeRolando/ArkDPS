@@ -7,12 +7,17 @@ native damage total and is never subtracted from it. Source keys identify
 distinct client statistic entries, not transient entities.
 """
 from collections import deque
-from math import isfinite
+from math import isclose, isfinite
+
+from source_classification import classify_unmapped_source
 
 # Native DamageType values used by the verified 2.7.91 event probe.
 # 0=NONE, 4=HEAL and unknown values cannot be attributed to a damage segment.
 NATIVE_DAMAGE_TYPES = {1: 'physical', 2: 'arts', 3: 'true', 5: 'elemental'}
 DAMAGE_TYPE_KEYS = ('physical', 'arts', 'elemental', 'true')
+ENEMY_STATE_KINDS = frozenset({
+    'enemy_enter', 'enemy_hp', 'enemy_fake_death', 'enemy_reborn', 'enemy_finish',
+})
 
 
 class Statistics:
@@ -24,6 +29,7 @@ class Statistics:
         self.end_time = None
         self.event_coverage = event_coverage
         self.event_coverage_end = None
+        self.event_coverage_broken = False
         self.baseline_ready = False
         self.owners = {}
         self.sources = {}
@@ -41,6 +47,8 @@ class Statistics:
         # source: amount minus observed shield absorption minus HP before.
         self.hp_overkill = {}
         self.hp_overkill_incomplete = set()
+        self.hp_overkill_by_type = {}
+        self.hp_overkill_type_incomplete = set()
         self.hp_seen = set()
         self.overkill_reason = {}
         # Elemental bar damage is not HP damage; only its source matters.
@@ -61,6 +69,31 @@ class Statistics:
         self.all_engagement_unknown = False
         # Shield-only uncertainty must not close damage/overkill coverage.
         self.shield_unknown = False
+        # Active-skill windows and the observed damage split. A skill event is
+        # supplemental; an unmapped source or a missing hook makes the split
+        # unknown rather than closing the authoritative damage stream.
+        self.skill_active = {}
+        self.skill_windows = {}
+        self.skill_observed = {}
+        self.non_skill_observed = {}
+        self.skill_seen = set()
+        self.skill_unknown = False
+        self.enemy_entry_start_frame = None
+        self.enemy_entry_incomplete = False
+        self.enemy_entries = {}
+        self.enemy_phase_incomplete = False
+        self.enemy_phases = {}
+        self.enemy_state_start_frame = None
+        self.enemy_state_incomplete = False
+        self.enemy_state_events = []
+        self.enemy_state_identities = {}
+        # Per-event overkill is split by the same skill window as its damage.
+        # HP evidence is kept separately because it overrides the ApplyModifier
+        # overkill total for owners that produced target-side evidence.
+        self.skill_overkill = {}
+        self.non_skill_overkill = {}
+        self.hp_skill_overkill = {}
+        self.hp_non_skill_overkill = {}
 
     @staticmethod
     def _time(value):
@@ -82,6 +115,130 @@ class Statistics:
             self.overkill_incomplete.add(owner)
         if source in self.unknown_engagement_sources:
             self.engagement_incomplete.add(owner)
+
+    def mark_skill_unknown(self):
+        self.skill_unknown = True
+
+    def observe_enemy_entry(self, start_frame, *, complete):
+        if self.enemy_entry_start_frame is None:
+            self.enemy_entry_start_frame = start_frame
+        if not complete:
+            self.mark_enemy_entry_unknown()
+
+    def mark_enemy_entry_unknown(self):
+        self.enemy_entry_incomplete = True
+
+    def observe_enemy_state(self, start_frame, *, complete):
+        if self.enemy_state_start_frame is None:
+            self.enemy_state_start_frame = start_frame
+        if not complete:
+            self.mark_enemy_state_unknown()
+
+    def mark_enemy_state_unknown(self):
+        self.enemy_state_incomplete = True
+
+    @staticmethod
+    def _enemy_identity(eid, uid):
+        return (isinstance(eid, str) and bool(eid)
+                and isinstance(uid, str) and uid.isascii()
+                and uid.isdecimal() and len(uid) <= 10
+                and int(uid) <= 0xffffffff and str(int(uid)) == uid)
+
+    def record_enemy_entry(self, frame, game_time, source, amount, eid, instance_uid,
+                           attributes=None):
+        self._time(game_time)
+        if (source is not None or amount != 0 or isinstance(amount, bool)
+                or not self._enemy_identity(eid, instance_uid)
+                or not self.start_time <= game_time <= self.now):
+            raise ValueError('invalid enemy entry')
+        if instance_uid in self.enemy_entries:
+            # The event stream already handles retries of the same sequence.
+            raise ValueError('enemy entry was emitted more than once')
+        entry = dict(
+            instance_uid=instance_uid, eid=eid, frame=frame, game_time=game_time)
+        if isinstance(attributes, dict):
+            evidence = {}
+            for name in ('max_hp', 'atk', 'def', 'res', 'move_speed', 'attack_speed'):
+                value = attributes.get(name)
+                if (type(value) in (int, float) and -1e10 < value < 1e10
+                        and (name != 'max_hp' or value > 0)):
+                    evidence[name] = value
+            if evidence:
+                entry['enemy_entry_attributes'] = evidence
+        self.enemy_entries[instance_uid] = entry
+
+    def mark_enemy_phase_unknown(self):
+        self.enemy_phase_incomplete = True
+
+    def record_enemy_reborn(self, frame, game_time, source, amount, eid, instance_uid,
+                            hp_before, hp_after, phase_total_hp, phase_count, phase_from_birth):
+        values = (amount, hp_before, hp_after, phase_total_hp)
+        if (source is not None or not self._enemy_identity(eid, instance_uid)
+                or not self.start_time <= game_time <= self.now
+                or not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                           and isfinite(value) and value >= 0 for value in values)
+                or amount <= 0
+                or not isclose(hp_after, amount, rel_tol=1e-9, abs_tol=1e-6)
+                or phase_total_hp < amount
+                or type(phase_count) is not int or phase_count < 1
+                or type(phase_from_birth) is not bool
+                or phase_from_birth and (phase_count < 2 or phase_total_hp <= amount)):
+            raise ValueError('invalid enemy phase')
+        entry = self.enemy_entries.get(instance_uid)
+        previous = self.enemy_phases.get(instance_uid)
+        if ((entry is not None and entry['eid'] != eid)
+                or (previous is not None and (
+                    previous['eid'] != eid
+                    or phase_count != previous['phase_count'] + 1
+                    or phase_from_birth != previous['phase_from_birth']
+                    or not isclose(previous['phase_total_hp'] + amount, phase_total_hp,
+                                   rel_tol=1e-9, abs_tol=1e-6)))):
+            raise ValueError('enemy phase progression conflicts')
+        self.enemy_phases[instance_uid] = dict(
+            eid=eid, frame=frame, game_time=game_time, phase_total_hp=phase_total_hp,
+            phase_count=phase_count, phase_from_birth=phase_from_birth)
+
+    def record_enemy_state(self, sequence, kind, frame, game_time, source, amount,
+                           eid, instance_uid, *, hp_before=None, hp_after=None,
+                           phase_total_hp=None, phase_count=None, phase_from_birth=None,
+                           finish_reason=None):
+        if self.enemy_state_start_frame is None:
+            return
+        if (kind not in ENEMY_STATE_KINDS
+                or not self._enemy_identity(eid, instance_uid)
+                or source is not None
+                or (kind != 'enemy_reborn' and (amount != 0 or isinstance(amount, bool)))
+                or not self.start_time <= game_time <= self.now
+                or self.enemy_state_identities.get(instance_uid, eid) != eid):
+            raise ValueError('invalid enemy state identity or amount')
+        if (any(value is not None and (not self._optional_number(value) or value < 0)
+                for value in (hp_before, hp_after))
+                or (kind == 'enemy_hp' and hp_after is None)):
+            raise ValueError('invalid enemy state HP')
+        if kind == 'enemy_finish':
+            if (type(finish_reason) is not int or finish_reason == 0
+                    or not -(1 << 31) <= finish_reason < (1 << 31)):
+                raise ValueError('invalid enemy finish reason')
+        elif finish_reason is not None:
+            raise ValueError('only enemy finish carries a finish reason')
+
+        event = dict(sequence=sequence, kind=kind, frame=frame, game_time=game_time,
+                     eid=eid, instance_uid=instance_uid)
+        if hp_before is not None:
+            event['hp_before'] = hp_before
+        if hp_after is not None:
+            event['hp_after'] = hp_after
+        if kind == 'enemy_enter':
+            attributes = self.enemy_entries[instance_uid].get('enemy_entry_attributes')
+            if attributes:
+                event['enemy_entry_attributes'] = dict(attributes)
+        elif kind == 'enemy_reborn':
+            event.update(phase_total_hp=phase_total_hp, phase_count=phase_count,
+                         phase_from_birth=phase_from_birth)
+        elif kind == 'enemy_finish':
+            event['finish_reason'] = finish_reason
+        self.enemy_state_identities[instance_uid] = eid
+        self.enemy_state_events.append(event)
 
     def mark_overkill_unknown(self, source):
         """Record a probe-level event gap for one source without closing coverage."""
@@ -124,6 +281,7 @@ class Statistics:
     def finish(self, game_time):
         self.advance(game_time)
         self.end_time = game_time
+        self._close_skill_windows(game_time)
 
     def invalidate_snapshots(self):
         """Mark a known collection gap; retain totals but stop certifying them.
@@ -159,14 +317,43 @@ class Statistics:
             if state['totals_valid']:
                 state['totals_time'] = self.now
 
-    def invalidate_events(self, end_time=None):
-        """Close event coverage at the last reliable game time."""
+    def invalidate_events(self, end_time=None, *, complete=False):
+        """Close event coverage at the last reliable game time.
+
+        ``complete`` is reserved for a confirmed battle boundary: the stream
+        ended because the battle ended, not because evidence was lost. A clean
+        close still certifies the covered interval; a broken close does not.
+        """
         if self.event_coverage and self.event_coverage_end is None:
             end_time = self.now if end_time is None else end_time
             self._time(end_time)
             if not self.last_event_time <= end_time <= self.now:
                 raise ValueError('invalid event coverage end')
             self.event_coverage_end = end_time
+            if not complete:
+                self.event_coverage_broken = True
+            self._close_skill_windows(end_time)
+
+    def _skill_active_seconds(self, owner):
+        end = (self.event_coverage_end if self.event_coverage_end is not None
+               else self.now)
+        total = 0.0
+        for window in self.skill_windows.get(owner, ()):
+            start = window.get('start')
+            stop = window.get('end')
+            if self._optional_number(start) and self._optional_number(stop):
+                total += max(0.0, min(stop, end) - start)
+        active = self.skill_active.get(owner)
+        if active is not None and self._optional_number(active.get('start')):
+            total += max(0.0, end - active['start'])
+        return total
+
+    def _close_skill_windows(self, game_time):
+        for owner, window in list(self.skill_active.items()):
+            window['end'] = game_time
+            window['reason'] = 'coverage_end'
+            self.skill_windows.setdefault(owner, []).append(window)
+        self.skill_active.clear()
 
     def snapshot(self, game_time, counters):
         """Apply a complete source-key snapshot; omitted sources become unknown.
@@ -324,7 +511,8 @@ class Statistics:
     def event(self, event_id, game_time, source, kind, amount, *,
               target=None, real_delta=None, hp_before=None, hp_after=None,
               killed=None, target_type=None, damage_type=None,
-              cancel_reason=None, shield_absorbed=None, target_instance=None):
+              cancel_reason=None, shield_absorbed=None, target_instance=None,
+              skill_key=None, skill_id=None, skill_name=None, skill_reason=None):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
         Duplicate IDs with identical payload are ignored; conflicts are rejected.
@@ -344,9 +532,20 @@ class Statistics:
         self._amount(amount)
         if not self.event_coverage or self.event_coverage_end is not None or not self.baseline_ready:
             raise ValueError('event coverage or baseline is unavailable')
-        kinds = ('damage', 'healing', 'shield_absorbed', 'elemental_bar', 'elemental_burst', 'hp_damage')
+        kinds = ('damage', 'healing', 'shield_absorbed', 'elemental_bar', 'elemental_burst',
+                 'hp_damage', 'skill_start', 'skill_end')
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
+        if kind == 'hp_damage' and source not in self.owners:
+            # Target-side HP evidence is supplemental. An unmapped source must
+            # not tear down the authoritative damage/engagement stream.
+            return
+        if kind in ('skill_start', 'skill_end') and source not in self.owners:
+            # A verified stage device has no squad skill window. A source
+            # without verified ownership still makes the split uncertain.
+            if classify_unmapped_source(source) is None:
+                self.skill_unknown = True
+            return
         if kind != 'elemental_burst' and source not in self.owners:
             raise ValueError('invalid event source')
         if kind == 'elemental_burst' and source is not None and source not in self.owners:
@@ -387,13 +586,49 @@ class Statistics:
                 self.burst_unknown = True
                 self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
                 return
-            entry = self.burst.setdefault(attributed, {'actual': 0.0, 'overkill': 0.0,
-                                                        'settlement': 0.0, 'count': 0})
+            entry = self.burst.setdefault(attributed, {
+                'actual': 0.0, 'overkill': 0.0, 'settlement': 0.0, 'count': 0,
+                'added_settlement': 0.0, 'added_overkill': 0.0,
+                'added_skill_overkill': 0.0, 'added_non_skill_overkill': 0.0,
+            })
+            burst_overkill = max(0.0, amount - actual)
             entry['actual'] += actual
-            entry['overkill'] += max(0.0, amount - actual)
+            entry['overkill'] += burst_overkill
             entry['settlement'] += amount
             entry['count'] += 1
+            # The client already includes explicitly sourced burst settlement
+            # in that source's native counter. Only attributed sourceless
+            # settlement needs adding to native totals and target-side evidence.
+            if source is None:
+                entry['added_settlement'] += amount
+                entry['added_overkill'] += burst_overkill
+                window = ('added_skill_overkill' if attributed in self.skill_active
+                          else 'added_non_skill_overkill')
+                entry[window] += burst_overkill
+            bucket = (self.skill_observed if attributed in self.skill_active
+                      else self.non_skill_observed)
+            bucket[attributed] = bucket.get(attributed, 0.0) + amount
+            if burst_overkill > 0:
+                overkill_bucket = (self.skill_overkill
+                                   if attributed in self.skill_active
+                                   else self.non_skill_overkill)
+                overkill_bucket[attributed] = (
+                    overkill_bucket.get(attributed, 0.0) + burst_overkill)
             self.last_elemental.pop(target_instance, None)
+            return
+        if kind in ('skill_start', 'skill_end'):
+            if kind == 'skill_start':
+                self.skill_seen.add(owner)
+                if owner not in self.skill_active:
+                    self.skill_active[owner] = {
+                        'start': game_time, 'key': skill_key, 'id': skill_id,
+                        'name': skill_name, 'method': target_instance}
+            else:
+                window = self.skill_active.pop(owner, None)
+                if window is not None:
+                    window['end'] = game_time
+                    window['reason'] = skill_reason
+                    self.skill_windows.setdefault(owner, []).append(window)
             return
         if kind == 'damage':
             known, overkill, reason = self._overkill(
@@ -413,9 +648,19 @@ class Statistics:
                     else:
                         per_type = self.overkill_by_type.setdefault(owner, {})
                         per_type[type_key] = per_type.get(type_key, 0.0) + overkill
+                    bucket = (self.skill_overkill if owner in self.skill_active
+                              else self.non_skill_overkill)
+                    bucket[owner] = bucket.get(owner, 0.0) + overkill
             else:
                 self.overkill_incomplete.add(owner)
                 self.overkill_reason[owner] = reason
+        if kind == 'damage' and amount > 0:
+            friendly = (isinstance(target, str)
+                        and (target.startswith('char_') or target.startswith('token_')))
+            if not friendly:
+                bucket = (self.skill_observed if owner in self.skill_active
+                          else self.non_skill_observed)
+                bucket[owner] = bucket.get(owner, 0.0) + amount
         if kind == 'hp_damage':
             if not isinstance(target, str) or not target:
                 self.hp_seen.add(owner)
@@ -437,6 +682,16 @@ class Statistics:
                     return
                 overkill = max(0.0, amount - shield_absorbed - hp_before)
             self.hp_overkill[owner] = self.hp_overkill.get(owner, 0.0) + overkill
+            if overkill > 0:
+                bucket = (self.hp_skill_overkill if owner in self.skill_active
+                          else self.hp_non_skill_overkill)
+                bucket[owner] = bucket.get(owner, 0.0) + overkill
+                type_key = NATIVE_DAMAGE_TYPES.get(damage_type)
+                if type_key is None:
+                    self.hp_overkill_type_incomplete.add(owner)
+                else:
+                    per_type = self.hp_overkill_by_type.setdefault(owner, {})
+                    per_type[type_key] = per_type.get(type_key, 0.0) + overkill
             return
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
@@ -498,7 +753,8 @@ class Statistics:
             # settlement or battle boundary retires rates, not final counters.
             complete = all(s in self.sources and self.sources[s]['totals_valid'] and
                            self.sources[s]['totals_time'] == self.now for s in registered)
-            overkill_known = (bool(self.event_coverage) and self.event_coverage_end is None
+            coverage_complete = bool(self.event_coverage) and not self.event_coverage_broken
+            overkill_known = (coverage_complete
                               and not self.all_overkill_unknown
                               and owner not in self.overkill_incomplete)
             overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
@@ -506,7 +762,7 @@ class Statistics:
                 overkill_unknown_reason = None
             elif not self.event_coverage:
                 overkill_unknown_reason = '事件观测未建立'
-            elif self.event_coverage_end is not None:
+            elif not coverage_complete:
                 overkill_unknown_reason = '事件覆盖已结束'
             elif self.all_overkill_unknown:
                 overkill_unknown_reason = '存在未归属的伤害事件'
@@ -522,7 +778,7 @@ class Statistics:
                    'shield_coverage_start': self.start_time if self.event_coverage else None,
                    'event_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                           else self.end_time if self.event_coverage else None),
-                   'event_coverage_complete': self.event_coverage and self.event_coverage_end is None,
+                   'event_coverage_complete': coverage_complete,
                    'shield_absorbed': (self.shields.get(owner, 0)
                                        if self.event_coverage and not self.shield_unknown else None),
                    'shield_unknown': self.shield_unknown,
@@ -541,6 +797,7 @@ class Statistics:
             row['burst_damage'] = (burst['actual'] if burst and burst_complete else None)
             row['burst_overkill'] = (burst['overkill'] if burst and burst_complete else None)
             row['burst_settlement'] = (burst['settlement'] if burst and burst_complete else None)
+            row['burst_added_settlement'] = (burst['added_settlement'] if burst and burst_complete else None)
             row['burst_count'] = (burst['count'] if burst and burst_complete else 0)
             row['burst_complete'] = burst_complete
             row['burst_unknown_reason'] = self.burst_unknown_reason if not burst_complete else None
@@ -579,22 +836,32 @@ class Statistics:
                     row['engagement_' + kind] = None
                     row['active_' + kind] = None
                     row['observed_' + kind] = None
-            if burst_complete and burst:
+            covered_burst = burst if burst_complete else None
+            if covered_burst:
                 if row['damage'] is not None:
-                    row['damage'] += burst['settlement']
+                    row['damage'] += covered_burst['added_settlement']
                 if row['overkill_damage'] is not None:
-                    row['overkill_damage'] += burst['overkill']
+                    row['overkill_damage'] += covered_burst['overkill']
                     types = row['overkill_damage_by_type']
                     if types is not None:
-                        types['elemental'] = types.get('elemental', 0.0) + burst['overkill']
+                        types['elemental'] = types.get('elemental', 0.0) + covered_burst['overkill']
             if owner in self.hp_seen:
                 hp_known = bool(self.event_coverage) and owner not in self.hp_overkill_incomplete
                 if hp_known:
                     row['overkill_damage'] = self.hp_overkill.get(owner, 0.0)
+                    added_overkill = covered_burst['added_overkill'] if covered_burst else 0.0
+                    row['overkill_damage'] += added_overkill
                     row['overkill_coverage_complete'] = True
                     row['overkill_unknown_reason'] = None
-                    row['overkill_damage_by_type'] = None
-                    row['overkill_type_complete'] = False
+                    if owner in self.hp_overkill_type_incomplete:
+                        row['overkill_damage_by_type'] = None
+                        row['overkill_type_complete'] = False
+                    else:
+                        types = dict(self.hp_overkill_by_type.get(owner, {}))
+                        if added_overkill:
+                            types['elemental'] = types.get('elemental', 0.0) + added_overkill
+                        row['overkill_damage_by_type'] = types
+                        row['overkill_type_complete'] = True
                 else:
                     row['overkill_damage'] = None
                     row['overkill_coverage_complete'] = False
@@ -603,16 +870,94 @@ class Statistics:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
                 row['effective_damage'] = None
+            skill_known = coverage_complete and not self.skill_unknown
+            skill_value = self.skill_observed.get(owner, 0.0)
+            non_skill_value = self.non_skill_observed.get(owner, 0.0)
+            expected = row.get('observed_damage')
+            if expected is not None and burst_complete and burst:
+                expected += burst['settlement']
+            covers_total = (expected is not None
+                            and abs(skill_value + non_skill_value - expected)
+                            <= max(0.01, abs(expected) * 1e-6))
+            if not skill_known:
+                reason = ('事件观测未建立' if not self.event_coverage else
+                          '事件覆盖已结束' if not coverage_complete else
+                          '技能事件覆盖不完整')
+            elif not covers_total:
+                reason = '技能窗口未覆盖全部伤害事件'
+            else:
+                reason = None
+            hp_overkill_known = owner in self.hp_seen and owner not in self.hp_overkill_incomplete
+            apply_overkill_known = overkill_known
+            if hp_overkill_known:
+                split_skill_overkill = self.hp_skill_overkill.get(owner, 0.0)
+                split_non_skill_overkill = self.hp_non_skill_overkill.get(owner, 0.0)
+                if covered_burst:
+                    split_skill_overkill += covered_burst['added_skill_overkill']
+                    split_non_skill_overkill += covered_burst['added_non_skill_overkill']
+                split_overkill_known = True
+            elif apply_overkill_known:
+                split_skill_overkill = self.skill_overkill.get(owner, 0.0)
+                split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
+                split_overkill_known = True
+            else:
+                split_skill_overkill = split_non_skill_overkill = None
+                split_overkill_known = False
+            effective_split_known = skill_known and covers_total and split_overkill_known
+            row['skill_damage'] = skill_value if skill_known else None
+            row['non_skill_damage'] = non_skill_value if skill_known else None
+            row['skill_damage_effective'] = (
+                max(0.0, skill_value - split_skill_overkill)
+                if effective_split_known else None)
+            row['non_skill_damage_effective'] = (
+                max(0.0, non_skill_value - split_non_skill_overkill)
+                if effective_split_known else None)
+            row['skill_seen'] = owner in self.skill_seen
+            row['skill_window_count'] = (len(self.skill_windows.get(owner, ()))
+                                         + (1 if owner in self.skill_active else 0))
+            row['skill_active_seconds'] = (
+                self._skill_active_seconds(owner)
+                if self.event_coverage else None)
+            row['skill_coverage_complete'] = coverage_complete and not self.skill_unknown
+            row['skill_split_complete'] = skill_known and covers_total
+            row['skill_split_effective_complete'] = effective_split_known
+            row['skill_split_reason'] = reason
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())
-        return {'session': self.session, 'game_time': self.now, 'ended': self.end_time is not None,
-                'coverage_start': self.start_time,
-                'totals_complete': all(row['counter_snapshot_complete'] for row in rows.values()),
-                'rows': rows,
-                'overkill_damage': (sum(row['overkill_damage'] for row in rows.values())
-                                    if overkill_complete else None),
-                'overkill_coverage_complete': overkill_complete,
-                'overkill_coverage_start': self.start_time if self.event_coverage else None,
-                'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
-                                          else self.end_time if self.event_coverage else None)}
+        result = {
+            'session': self.session, 'game_time': self.now, 'ended': self.end_time is not None,
+            'coverage_start': self.start_time,
+            'totals_complete': all(row['counter_snapshot_complete'] for row in rows.values()),
+            'rows': rows,
+            'overkill_damage': (sum(row['overkill_damage'] for row in rows.values())
+                                if overkill_complete else None),
+            'overkill_coverage_complete': overkill_complete,
+            'overkill_coverage_start': self.start_time if self.event_coverage else None,
+            'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
+                                      else self.end_time if self.event_coverage else None),
+        }
+        if self.enemy_entry_start_frame is not None:
+            result['enemy_entry'] = {
+                'complete': not (self.enemy_entry_incomplete or self.event_coverage_broken),
+                'start_frame': self.enemy_entry_start_frame,
+                'events': [dict(entry) for entry in self.enemy_entries.values()],
+            }
+        if self.enemy_phases:
+            result['enemy_phases'] = {
+                'complete': not (self.enemy_phase_incomplete or self.event_coverage_broken),
+                'instances': {uid: dict(phase) for uid, phase in self.enemy_phases.items()},
+            }
+        if self.enemy_state_start_frame is not None:
+            events = []
+            for event in self.enemy_state_events:
+                snapshot = dict(event)
+                if 'enemy_entry_attributes' in snapshot:
+                    snapshot['enemy_entry_attributes'] = dict(snapshot['enemy_entry_attributes'])
+                events.append(snapshot)
+            result['enemy_state'] = {
+                'complete': not (self.enemy_state_incomplete or self.event_coverage_broken),
+                'start_frame': self.enemy_state_start_frame,
+                'events': events,
+            }
+        return result

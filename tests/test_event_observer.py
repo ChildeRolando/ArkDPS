@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from connection import VersionStatus
-from event_observer import FridaEventObserver, ObserverStatus
+from event_observer import FridaEventObserver, ObserverReadRetry, ObserverStatus
 
 
 def collector(status):
@@ -81,3 +81,42 @@ def test_stop_after_target_exit_is_idempotent(monkeypatch, already_detached):
     assert calls == ([] if already_detached else ['stop'])
     assert observer.script is observer.session is None
     assert observer.status == ObserverStatus.STOPPED
+
+
+def test_read_and_ack_timeouts_reuse_the_committed_cursor():
+    observer = FridaEventObserver(collector(VersionStatus.COMPATIBLE), 'unused')
+    observer.status = ObserverStatus.READY
+    observer.request_timeout = 0
+    requests = []
+    missed = {}
+
+    def response(request, result):
+        observer._message({'type': 'send', 'payload': {
+            'kind': 'arkdps-event-response', 'id': request['id'], 'result': result,
+        }}, None)
+
+    def post(request):
+        requests.append(request)
+        operation = request['operation']
+        if operation not in missed:
+            missed[operation] = request
+            return
+        response(missed[operation], {'error': 'late response'})
+        if operation == 'read':
+            response(request, {'events': list(range(request['after'] + 1, request['through'] + 1))})
+        else:
+            response(request, {'acknowledged': request['sequence'], 'error': None})
+
+    observer.script = SimpleNamespace(post=post, is_destroyed=False)
+    with pytest.raises(ObserverReadRetry, match='response timed out'):
+        observer.read_through(2)
+    assert observer.read_through(3)['events'] == [1, 2, 3]
+    observer.commit_events(3)
+    assert observer.read_through(4)['events'] == [4]
+    observer.commit_events(4)
+    observer.commit_events(4)
+    assert [(r['operation'], r.get('after'), r.get('through'), r.get('sequence')) for r in requests] == [
+        ('read', 0, 2, None), ('read', 0, 3, None), ('ack', None, None, 3),
+        ('read', 3, 4, None), ('ack', None, None, 4),
+    ]
+    assert observer.status == ObserverStatus.READY

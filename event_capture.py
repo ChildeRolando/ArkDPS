@@ -1,11 +1,12 @@
 """Join a quiescent event observer to frame-guarded native snapshots.
 
-The observer must serialize RPC marks with callback entry/exit and must retain
-all numbered records until drain. This module does not start or install Frida.
+The observer must serialize marks with callback entry/exit and retain numbered
+records until the host has committed the corresponding watermark.
 """
 from collections import deque
 
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
+from event_observer import ObserverReadRetry
 from roster import RosterUnavailable
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
@@ -13,6 +14,20 @@ from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 class CaptureRetry(RuntimeError):
     """No stable frame was obtained; queued events remain available."""
+
+
+def read_event_batch(observer, sequence):
+    try:
+        if hasattr(observer, 'read_through'):
+            return observer.read_through(sequence)
+        return observer.drain()
+    except ObserverReadRetry as exc:
+        raise CaptureRetry(str(exc)) from exc
+
+
+def acknowledge_event_batch(observer, sequence):
+    if hasattr(observer, 'commit_events'):
+        observer.commit_events(sequence)
 
 
 class LiveEventCapture:
@@ -29,12 +44,15 @@ class LiveEventCapture:
 
     def close(self):
         if not self.closed:
-            self.adapter.on_gap()
+            # Event coverage is separate from native snapshots/presence.
+            self.adapter.on_event_gap()
             self.closed = True
 
     def _mark(self):
         try:
             mark = self.observer.mark()
+        except ObserverReadRetry as exc:
+            raise CaptureRetry(str(exc)) from exc
         except Exception as exc:
             self.close()
             raise StreamGap(f'observer unavailable: {exc}') from exc
@@ -111,13 +129,19 @@ class LiveEventCapture:
             self.close()
             raise
         try:
-            self.adapter.update(sample, roster)
             try:
-                drained = self.observer.drain()
+                drained = read_event_batch(self.observer, sequence)
+            except CaptureRetry:
+                raise
             except Exception as exc:
-                raise StreamGap(f'observer drain unavailable: {exc}') from exc
+                raise StreamGap(f'observer event batch unavailable: {exc}') from exc
+            self.adapter.update(sample, roster)
             self.audit('drain', drained)
-            return self.ingest(sample, roster, sequence, drained)
+            result = self.ingest(sample, roster, sequence, drained)
+            acknowledge_event_batch(self.observer, sequence)
+            return result
+        except CaptureRetry:
+            raise
         except MappingUnavailable as exc:
             if self.baseline_sequence is None and self.adapter.statistics is None:
                 raise CaptureRetry(str(exc)) from exc
@@ -128,7 +152,7 @@ class LiveEventCapture:
             raise
 
     def _apply_quality(self, payload):
-        """Keep recoverable per-event gaps scoped to overkill/engagement/shield."""
+        """Keep recoverable gaps scoped to their affected event metric."""
         statistics = self.adapter.statistics
         if statistics is None:
             return
@@ -142,6 +166,28 @@ class LiveEventCapture:
             statistics.mark_all_engagement_unknown()
         if payload.get('shield_unknown'):
             statistics.mark_shields_unknown()
+        if payload.get('skill_unknown'):
+            statistics.mark_skill_unknown()
+        if 'enemy_entry_ready' in payload or 'enemy_entry_unknown' in payload:
+            statistics.observe_enemy_entry(
+                self.adapter.event_stream.baseline_frame,
+                complete=(payload.get('enemy_entry_ready') is True
+                          and payload.get('enemy_entry_unknown') is not True
+                          and (self.initial_drain
+                               or statistics.enemy_entry_start_frame is not None)),
+            )
+        if payload.get('enemy_phase_unknown') or payload.get('enemy_phase_ready') is False:
+            statistics.mark_enemy_phase_unknown()
+        if 'enemy_state_ready' in payload or 'enemy_state_unknown' in payload:
+            statistics.observe_enemy_state(
+                self.adapter.event_stream.baseline_frame,
+                complete=(payload.get('enemy_state_ready') is True
+                          and payload.get('enemy_state_unknown') is not True
+                          and (self.initial_drain
+                               or statistics.enemy_state_start_frame is not None)),
+            )
+        elif statistics.enemy_state_start_frame is not None:
+            statistics.mark_enemy_state_unknown()
 
     def ingest(self, sample, roster, sequence, drained):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.
@@ -170,7 +216,7 @@ class LiveEventCapture:
                 if self.initial_drain and event['sequence'] <= self.baseline_sequence:
                     continue
                 payload = {k: v for k, v in event.items() if k != 'proof'}
-                self.adapter.accept_event(session=sample['session'], **payload)
+                self.adapter.accept_event(session=sample['session'], refresh_result=False, **payload)
             self.initial_drain = False
             if any(event.get('sequence', -1) <= sequence for event in self.pending):
                 raise StreamGap('event records were delivered out of order')

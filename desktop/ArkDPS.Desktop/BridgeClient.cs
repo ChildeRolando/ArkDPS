@@ -65,6 +65,7 @@ internal sealed class BridgeClient : IAsyncDisposable
 {
     public const int Version = 1;
     private const int MaxMessage = 32 * 1024 * 1024;
+    private static readonly UTF8Encoding ReplyEncoding = new(false, true);
     // Bounded so a worker that stops answering cannot keep the UI alive:
     // quit must be answered in QuitSeconds, and the process must exit in ExitSeconds.
     internal const int QuitSeconds = 5;
@@ -107,20 +108,27 @@ internal sealed class BridgeClient : IAsyncDisposable
     }
     private async Task<string> ReadLineAsync(CancellationToken token)
     {
-        // Bound input while reading, rather than allocating an unbounded line.
-        var result=new StringBuilder();char[] chunk=new char[4096];
-        while(true)
+        // A StreamReader character read can try to fill its caller's buffer
+        // after a full byte-buffer read, even when it already has the newline.
+        // The worker waits for the next command once that newline is sent.
+        var stream = process.StandardOutput.BaseStream;
+        using var result = new MemoryStream();
+        var chunk = new byte[4096];
+        while (true)
         {
-            int count=await process.StandardOutput.ReadAsync(chunk.AsMemory(),token);
-            if(count==0)throw new IOException("Python 采集进程已退出；日志："+LogPath);
-            int end=Array.IndexOf(chunk,(char)10,0,count);
-            if(result.Length+(end>=0 ? end : count)>MaxMessage)throw new IOException("worker 响应长度越界");
-            result.Append(chunk,0,end>=0 ? end : count);
-            if(end>=0)
-            {
-                if(end!=count-1)throw new IOException("worker 发送了未请求的消息");
-                return result.ToString();
-            }
+            int count = await stream.ReadAsync(chunk.AsMemory(), token);
+            if (count == 0) throw new IOException("Python 采集进程已退出；日志：" + LogPath);
+            int end = Array.IndexOf(chunk, (byte)'\n', 0, count);
+            int length = end < 0 ? count : end;
+            long size = result.Length + length;
+            bool trailingCr = length > 0 ? chunk[length - 1] == '\r'
+                : result.Length > 0 && result.GetBuffer()[(int)result.Length - 1] == '\r';
+            if (size - (trailingCr ? 1 : 0) > MaxMessage)
+                throw new IOException("worker 响应长度越界");
+            result.Write(chunk, 0, length);
+            if (end < 0) continue;
+            if (end != count - 1) throw new IOException("worker 发送了未请求的消息");
+            return ReplyEncoding.GetString(result.GetBuffer(), 0, (int)size - (trailingCr ? 1 : 0));
         }
     }
 

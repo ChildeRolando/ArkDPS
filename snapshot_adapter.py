@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
-from stats_core import Statistics
+from stats_core import ENEMY_STATE_KINDS, Statistics
 from event_stream import EventStream, StreamGap
 from source_classification import classify_unmapped_source
 
@@ -176,6 +176,16 @@ class BattleStatisticsAdapter:
             self.last_result = self.statistics.result()
             self.types_current.clear()
 
+    def on_event_gap(self) -> None:
+        """Close event coverage only; snapshot totals and presence stay valid."""
+        if self.statistics is None or self.statistics.end_time is not None:
+            return
+        if self.event_stream is not None:
+            self.event_stream.stop()
+        self.statistics.invalidate_events()
+        self.types_current.clear()
+        self.last_result = self.statistics.result()
+
     def on_end(self) -> None:
         """Freeze a battle boundary that is not a collection gap.
 
@@ -188,7 +198,11 @@ class BattleStatisticsAdapter:
         if self.statistics is None:
             return
         if self.event_stream is not None:
-            self.event_stream.stop()
+            # The observed boundary does not certify a final enemy watermark.
+            self.statistics.mark_enemy_entry_unknown()
+            self.statistics.mark_enemy_phase_unknown()
+            self.statistics.mark_enemy_state_unknown()
+            self.event_stream.stop(complete=True)
         self.statistics.seal_totals()
         self.statistics.invalidate_rates()
         self.types_current.clear()
@@ -263,31 +277,49 @@ class BattleStatisticsAdapter:
             raise
         self.last_result = self.statistics.result()
 
-    def accept_event(self, **event):
+    def accept_event(self, *, refresh_result=True, **event):
         if self.event_stream is None:
             raise StreamGap('event stream is unavailable')
-        source = event.get('source')
+        try:
+            self._accept_event(**event)
+        finally:
+            if refresh_result:
+                self.last_result = self.statistics.result()
+
+    def _accept_event(self, **event):
         kind = event.get('kind')
-        if kind != 'elemental_burst' and (not isinstance(source, str) or not source):
+        if kind in ENEMY_STATE_KINDS:
+            self.event_stream.accept(**event)
+            return
+        source = event.get('source')
+        if kind in ('hp_damage', 'skill_start', 'skill_end') and self.event_stream.closed:
+            # Supplemental evidence may still be in flight after authoritative
+            # coverage ended. Drop it without raising again.
+            return
+        # Target-side HP evidence is supplemental. An unattributable HP record
+        # must not tear down the authoritative damage/engagement stream; the
+        # ordered receiver drops it while advancing the shared sequence.
+        supplemental = kind in ('hp_damage', 'skill_start', 'skill_end')
+        if not supplemental and kind != 'elemental_burst' and (
+                not isinstance(source, str) or not source):
             self.event_stream.stop()
-            self.last_result = self.statistics.result()
             raise StreamGap('event source is invalid')
         blocked = (self.owner_map.unknown_token_cids | self.owner_map.ambiguous_cids
                    | self.mapping_conflicts)
-        if source is not None and (source in blocked or self.owner_map.owners.get(source) in blocked):
+        if (not supplemental and source is not None
+                and (source in blocked or self.owner_map.owners.get(source) in blocked)):
             self.event_stream.stop()
-            self.last_result = self.statistics.result()
             raise StreamGap('event source is ambiguous')
         owner = self.owner_map.owners.get(source) if source is not None else None
         if owner is not None and source not in self.statistics.owners:
-            if not self._register(source, owner):
+            can_register = not (source in blocked or owner in blocked)
+            if not can_register and not supplemental:
                 self.event_stream.stop()
-                self.last_result = self.statistics.result()
                 raise StreamGap('event source cannot be registered')
-        try:
-            self.event_stream.accept(**event)
-        finally:
-            self.last_result = self.statistics.result()
+            if can_register and not self._register(source, owner):
+                self.event_stream.stop()
+                raise StreamGap('event source cannot be registered')
+        self.event_stream.accept(**event)
 
     def _register(self, cid: str, owner: str) -> bool:
         if cid in self.owner_map.owners and self.owner_map.owners[cid] != owner:
@@ -399,6 +431,10 @@ class BattleStatisticsAdapter:
                 raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
         if terminal:
             if self.statistics.end_time is None:
+                if self.event_stream is not None and self.event_stream.frame != frame:
+                    self.statistics.mark_enemy_entry_unknown()
+                    self.statistics.mark_enemy_phase_unknown()
+                    self.statistics.mark_enemy_state_unknown()
                 if game_time > self.last_game_time:
                     self.statistics.snapshot(game_time, counters)
                 self.finish(game_time)
@@ -446,12 +482,12 @@ class BattleStatisticsAdapter:
             self.last_result = self.statistics.result()
             return self.last_result
         end = game_time if game_time is not None else self.last_game_time
-        if self.event_stream is not None:
-            if (not self.event_stream.closed and self.event_stream.game_time == end
-                    and self.statistics.now == end):
-                self.event_stream.closed = True
-            else:
-                self.event_stream.stop()
+        if self.event_stream is not None and not self.event_stream.closed:
+            if self.event_stream.game_time < end:
+                self.statistics.mark_enemy_entry_unknown()
+                self.statistics.mark_enemy_phase_unknown()
+                self.statistics.mark_enemy_state_unknown()
+            self.event_stream.stop(complete=True)
         self.statistics.finish(end)
         # A frozen battle has no future observation: last reliable cumulative
         # counters are final. A gap-invalidated source stays unknown.
@@ -496,7 +532,7 @@ class BattleStatisticsAdapter:
             enriched['damage_by_type'] = (
                 {kind: sum(values[kind] for values in known_types)
                  for kind in DAMAGE_TYPES} if known_types else {})
-            burst = enriched.get('burst_settlement')
+            burst = enriched.get('burst_added_settlement')
             if burst is not None:
                 types = dict(enriched['damage_by_type'])
                 types['elemental'] = types.get('elemental', 0.0) + burst
