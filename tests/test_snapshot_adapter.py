@@ -662,12 +662,13 @@ def test_supplemental_hp_evidence_after_coverage_closed_is_dropped_quietly():
     assert result['damage'] == 100
 
 
-def test_skill_window_from_unmapped_source_marks_split_unknown_without_closing_events():
+@pytest.mark.parametrize('kind', ['skill_start', 'skill_end'])
+def test_skill_window_from_unmapped_source_marks_split_unknown_without_closing_events(kind):
     a = BattleStatisticsAdapter()
     a.update(sample([row('char_a')], 0, 1), roster([CHAR_A], frame=1))
     a.start_events(session='battle-1', frame=1, sequence=0)
     a.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
-                   source='enemy_1', kind='skill_start', amount=1, skill_key='k')
+                   source='enemy_1', kind=kind, amount=1, skill_key='k')
     a.accept_event(session='battle-1', sequence=2, frame=1, game_time=0,
                    source='char_a', kind='damage', amount=5)
     result = a.result()['rows']['char_a']
@@ -697,3 +698,54 @@ def test_stage_altar_skill_events_leave_squad_skill_split_intact():
     assert result['skill_window_count'] == 1
     assert result['skill_split_complete'] is True
     assert result['event_coverage_complete'] is True
+
+
+
+def test_undeployed_roster_character_finish_preserves_order_without_creating_counter_row():
+    aroma = entry('char_446_aroma', 2147483655)
+    team = roster([CHAR_A, aroma], present=(1,), frame=32)
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100)], 1, 32), team)
+    adapter.start_events(session='battle-1', frame=32, sequence=1272)
+    adapter.update(sample([row('char_a', 125)], 120, 3617), paired(team, 3617))
+    finish = dict(session='battle-1', sequence=1273, frame=3534, game_time=117,
+                  source=aroma.cid, kind='skill_end', amount=1, skill_reason=7)
+    adapter.accept_event(**finish)
+    adapter.accept_event(session='battle-1', sequence=1274, frame=3617, game_time=120,
+                         source='char_a', kind='damage', amount=25)
+    adapter.event_stream.watermark(session='battle-1', sequence=1274,
+                                   frame=3617, game_time=120)
+
+    result = adapter.result()
+    assert adapter.owner_map.lookup(aroma.cid) == aroma.cid
+    assert aroma.cid not in adapter.statistics.owners
+    assert aroma.cid not in result['rows']
+    assert result['totals_complete']
+    assert result['rows']['char_a']['observed_damage'] == 25
+    assert result['rows']['char_a']['skill_coverage_complete']
+
+    deployed = roster([CHAR_A, aroma], present=(1, aroma.unique_id), frame=3618)
+    adapter.update(sample([row('char_a', 125), row(aroma.cid, 0)], 121, 3618), deployed)
+    # A later registration cannot turn a replay of the same raw event into a conflict.
+    adapter.accept_event(**finish)
+    assert adapter.result()['rows'][aroma.cid]['counter_snapshot_complete']
+
+
+def test_registered_character_finish_closes_skill_without_hiding_a_missing_counter():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('char_b', 50)], 0, 1), paired(BASE, 1))
+    adapter.start_events(session='battle-1', frame=1, sequence=0)
+    adapter.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
+                         source='char_b', kind='skill_start', amount=1)
+    adapter.update(sample([row('char_a', 100)], 1, 2), paired(BASE, 2))
+    adapter.accept_event(session='battle-1', sequence=2, frame=2, game_time=1,
+                         source='char_b', kind='skill_end', amount=1, skill_reason=7)
+    adapter.update(sample([row('char_a', 100)], 2, 3), paired(BASE, 3))
+
+    result = adapter.result()
+    assert not result['totals_complete']
+    assert not result['rows']['char_b']['counter_snapshot_complete']
+    assert result['rows']['char_b']['event_coverage_complete']
+    assert result['rows']['char_b']['skill_window_count'] == 1
+    assert result['rows']['char_b']['skill_active_seconds'] == 1
+    assert adapter.statistics.skill_windows['char_b'][0]['reason'] == 7

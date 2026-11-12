@@ -518,7 +518,8 @@ class Statistics:
               target=None, real_delta=None, hp_before=None, hp_after=None,
               killed=None, target_type=None, damage_type=None,
               cancel_reason=None, shield_absorbed=None, target_instance=None,
-              skill_key=None, skill_id=None, skill_name=None, skill_reason=None):
+              skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
+              verified_skill_end_owner=None):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
         Duplicate IDs with identical payload are ignored; conflicts are rejected.
@@ -542,17 +543,20 @@ class Statistics:
                  'hp_damage', 'skill_start', 'skill_end')
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
-        if kind == 'hp_damage' and source not in self.owners:
+        owner = self.owners.get(source)
+        if kind == 'skill_end' and owner is None:
+            owner = verified_skill_end_owner
+        if kind == 'hp_damage' and owner is None:
             # Target-side HP evidence is supplemental. An unmapped source must
             # not tear down the authoritative damage/engagement stream.
             return
-        if kind in ('skill_start', 'skill_end') and source not in self.owners:
+        if kind in ('skill_start', 'skill_end') and owner is None:
             # A verified stage device has no squad skill window. A source
             # without verified ownership still makes the split uncertain.
             if classify_unmapped_source(source) is None:
                 self.skill_unknown = True
             return
-        if kind != 'elemental_burst' and source not in self.owners:
+        if kind != 'elemental_burst' and owner is None:
             raise ValueError('invalid event source')
         if kind == 'elemental_burst' and source is not None and source not in self.owners:
             raise ValueError('invalid burst source')
@@ -560,7 +564,7 @@ class Statistics:
                     target_type, damage_type, cancel_reason, shield_absorbed)
         if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
             raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
-        payload = (game_time, source, kind, amount, evidence, target_instance)
+        payload = (game_time, source, kind, amount, evidence, target_instance, owner)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
@@ -569,7 +573,6 @@ class Statistics:
             raise ValueError('event outside ordered observation')
         self.events[event_id] = payload
         self.last_event_time = game_time
-        owner = self.owners.get(source)
         if kind == 'elemental_bar':
             if not target_instance or owner is None:
                 raise ValueError('elemental bar needs a source and target instance')

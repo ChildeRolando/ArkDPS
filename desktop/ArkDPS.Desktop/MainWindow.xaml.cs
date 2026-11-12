@@ -317,7 +317,8 @@ public partial class MainWindow : Window
         if(historyBattle!=selected.Text("battle_id")){historyBattle=selected.Text("battle_id");HistoryInspector.Reset();HistoryPanel.ClearSelection();}
         HistorySummary.Text="历史 · "+string.Join(" · ",selected.Get("labels").Items().Select(x=>x.Text()))+"\n"+
             selected.Text("stage_detail")+"\n所选副本独立于实时战斗；实时 HUD 继续跟随新局。";
-        HistoryPanel.Update(selected.Get("view"));HistoryInspector.Update(selected.Get("view").Get("source"));
+        var view=selected.Get("view");
+        HistoryPanel.Update(view);HistoryInspector.Update(view);
     }
     private void ApplyHistoryFilter()
     {

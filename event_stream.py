@@ -80,7 +80,8 @@ class EventStream:
         self.stop()
         raise StreamGap(message)
 
-    def accept(self, *, session, sequence, frame, game_time, source, kind, amount,
+    def accept(self, verified_skill_end_owner=None, /, *, session, sequence, frame,
+               game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
                cancel_reason=None, shield_absorbed=None, target_instance=None,
@@ -125,7 +126,7 @@ class EventStream:
                     damage_type=damage_type, cancel_reason=cancel_reason,
                     shield_absorbed=shield_absorbed, target_instance=target_instance,
                     skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
-                    skill_reason=skill_reason)
+                    skill_reason=skill_reason, verified_skill_end_owner=verified_skill_end_owner)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':

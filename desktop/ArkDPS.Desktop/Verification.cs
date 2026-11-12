@@ -71,6 +71,62 @@ public partial class MainWindow
             Require(!entry.Text("rate_text").StartsWith("0"),"unavailable engagement rendered as zero");
         }
     }
+    private void VerifyShareScope(string id,HudWindow hud)
+    {
+        const string knownLabel="已知数据内占比";
+        const string teamLabel="全队同口径占比";
+        const string reason="部分干员累计快照不完整";
+        const string note="已排除非队伍来源：场景装置";
+        var original=State.Clone();
+        var modified=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!.AsObject();
+        var live=modified["panels"]!.AsArray().First(panel=>
+            panel!["config"]!["panel_id"]!.GetValue<string>()==id)!.AsObject();
+        var history=modified["history_selected"]!["view"]!.AsObject();
+
+        void Apply(string? scope,bool teamKnown,string shareText)
+        {
+            foreach(var view in new[]{live,history})
+            {
+                if(scope==null)view.Remove("share_scope");else view["share_scope"]=scope;
+                view["share_known"]=teamKnown;
+                view["share_reason"]=teamKnown ? "" : reason;
+                view["share_note"]=note;
+                foreach(var entry in view["entries"]!.AsArray())entry!["share_display"]=shareText;
+            }
+            ApplyState(JsonSerializer.SerializeToElement(modified));
+        }
+
+        try
+        {
+            Apply("known",false,"42.5%");
+            var livePanel=Panels[id];
+            LiveInspector.Pin(livePanel.View.Get("entries").Items().First().Text("owner_id"),livePanel.View);
+            HistoryInspector.Pin(HistoryPanel.View.Get("entries").Items().First().Text("owner_id"),HistoryPanel.View);
+            foreach(var panel in new[]{livePanel,HistoryPanel})
+                Require(panel.Coverage.Text.Contains(knownLabel) && panel.Coverage.Text.Contains(reason) &&
+                        panel.Coverage.Text.Contains(note),"ranking lost known share scope or coverage details");
+            Require(hud.Panel.PanelKind.Visibility==Visibility.Visible && hud.Panel.PanelKind.Text==knownLabel &&
+                    Equals(hud.Panel.PanelKind.ToolTip,knownLabel+" · "+reason+" · "+note),
+                    "HUD did not identify the partial share denominator");
+            var row=(RowItem)livePanel.Rows.Items[0];
+            Require(row.Share=="42.5%" && row.Tooltip.Contains(knownLabel) && row.Tooltip.Contains(reason),
+                    "row share text or tooltip changed its coverage");
+            Require(HasText(LiveInspector,knownLabel) && HasText(HistoryInspector,knownLabel),
+                    "operator details lost the share denominator");
+            var screenshot=Screenshot.StatisticsDocument(State.Get("history_selected"),Theme.Key);
+            Require(HasText(screenshot,knownLabel) && HasText(screenshot,reason) && HasText(screenshot,note),
+                    "ranking screenshot lost the partial share explanation");
+
+            Apply(null,true,"50%");
+            Require(livePanel.Coverage.Text.Contains(teamLabel) && hud.Panel.PanelKind.Text==teamLabel &&
+                    HasText(HistoryInspector,teamLabel),"legacy complete share scope or history refresh was lost");
+            Require(row.Share=="50%" && row.Tooltip.Contains(teamLabel),"reused row retained an old share tooltip");
+            Apply(null,false,"—");
+            Require(HistoryPanel.Coverage.Text.Contains(reason) && hud.Panel.PanelKind.Text=="占比未知" &&
+                    row.Share=="—", "legacy unknown shares acquired a denominator");
+        }
+        finally { ApplyState(original); }
+    }
     private static void Click(int x,int y)
     {
         Require(SetCursorPos(x,y),"SetCursorPos failed");
@@ -408,6 +464,8 @@ public partial class MainWindow
         checks.Add("effective switch drives inspector composition, engagement rates and skill split");
         OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         await Settle();
+        VerifyShareScope(id,originalHud);
+        checks.Add("share scope reaches live, history, HUD, details and ranking PNG with legacy fallback");
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
         Require(ranks==string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share"))),"rate changed ranking / bars / shares");
@@ -449,7 +507,7 @@ public partial class MainWindow
             var selected=State.Get("history_selected");
             if(selected.ValueKind==JsonValueKind.Object)
             {
-                await Navigate("history");HistoryInspector.Pin(selected.Get("view").Get("source").EnumerateObject().First().Name,selected.Get("view").Get("source"));await Settle();
+                await Navigate("history");HistoryInspector.Pin(selected.Get("view").Get("source").EnumerateObject().First().Name,selected.Get("view"));await Settle();
                 Screenshot.Window(this,Path.Combine(output,theme+"-history.png"));
                 File.WriteAllBytes(Path.Combine(output,theme+"-ranking.png"),Screenshot.Statistics(selected,theme));
                 string selectedId=selected.Text("battle_id");Search.Text="no-such-record";await Command("history_refresh");

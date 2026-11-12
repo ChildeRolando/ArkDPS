@@ -136,6 +136,8 @@ def main():
         subprocess.run(command + ['--offline', '--state-dir', str(directory), '--fixture', str(fixture),
                         '--verify', str(target)], cwd=ROOT, timeout=120, check=True)
         receipt = json.loads((target/'receipt.json').read_text('utf-8'))
+        assert ('share scope reaches live, history, HUD, details and ranking PNG with legacy fallback'
+                in receipt['checks']), 'share scope UI checks did not run'
         if args.bundle:
             assert receipt['worker_runtime']['python'] == '3.12.10'
             assert Path(receipt['worker_runtime']['executable']).resolve() == (args.bundle/'python/python.exe').resolve()

@@ -45,7 +45,7 @@ public sealed class Inspector : Border
         int index=Array.FindIndex(entries,x=>x.Text("owner_id")==owner);
         string rank=index<0 ? "—" : (index+1).ToString("00");
         string share=entry.ValueKind==JsonValueKind.Object ? entry.Text("share_display") : "—";
-        string shareLabel=view.Get("config").Text("ranking")=="recent" ? "近期贡献" : "本局贡献";
+        var shareInfo=SharePresentation.From(view);
         string metric=view.Text("metric_label");
         string selected=entry.ValueKind==JsonValueKind.Object ? entry.Text("display_value") : "—";
         body.Children.Clear();
@@ -72,9 +72,9 @@ public sealed class Inspector : Border
         copy.Children.Add(Text(row.Text("name"),18,true,"Ink"));
         identity.Children.Add(copy);Grid.SetColumn(identity,1);top.Children.Add(identity);
 
-        var shareStack=new StackPanel{HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Center};
+        var shareStack=new StackPanel{HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Center,ToolTip=shareInfo.Description};
         shareStack.Children.Add(Mono(share,20,true,"Accent"));
-        shareStack.Children.Add(Text(shareLabel,9,false,"Muted"));
+        shareStack.Children.Add(Text(shareInfo.Label,9,false,"Muted"));
         Grid.SetColumn(shareStack,2);top.Children.Add(shareStack);
         body.Children.Add(top);
 

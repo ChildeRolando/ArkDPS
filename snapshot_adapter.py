@@ -311,15 +311,20 @@ class BattleStatisticsAdapter:
             self.event_stream.stop()
             raise StreamGap('event source is ambiguous')
         owner = self.owner_map.owners.get(source) if source is not None else None
+        verified_skill_end_owner = None
         if owner is not None and source not in self.statistics.owners:
             can_register = not (source in blocked or owner in blocked)
             if not can_register and not supplemental:
                 self.event_stream.stop()
                 raise StreamGap('event source cannot be registered')
-            if can_register and not self._register(source, owner):
+            if can_register and kind == 'skill_end':
+                # A character-finish callback may have no matching start or
+                # native counter. Resolve it without creating a counter source.
+                verified_skill_end_owner = owner
+            elif can_register and not self._register(source, owner):
                 self.event_stream.stop()
                 raise StreamGap('event source cannot be registered')
-        self.event_stream.accept(**event)
+        self.event_stream.accept(verified_skill_end_owner, **event)
 
     def _register(self, cid: str, owner: str) -> bool:
         if cid in self.owner_map.owners and self.owner_map.owners[cid] != owner:
