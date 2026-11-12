@@ -508,6 +508,12 @@ class PanelView:
     details_by_owner: dict[str, dict] = field(default_factory=dict)
     # team | known | unavailable; share_known retains the full-team meaning.
     share_scope: str = 'unavailable'
+    footer_total: float | None = None
+    footer_rate: float | None = None
+    footer_total_complete: bool = False
+    footer_rate_complete: bool = False
+    footer_total_display: str = '—'
+    footer_rate_display: str = '—'
 
 
 def _finite(value: float | None) -> bool:
@@ -813,21 +819,20 @@ def render_panel(config: PanelConfig,
     def total_value(row: PanelSourceRow) -> float | None:
         return _effective_damage(row) if effective else row.total(category)
 
-    def metric_complete(row: PanelSourceRow) -> bool:
+    def metric_complete(row: PanelSourceRow, basis: RateBasis | None = None,
+                        *, recent: bool = False) -> bool:
         if not row.source_complete:
             return False
-        if recent_ranking:
+        if recent or basis is RateBasis.RECENT_5S:
             complete = row.event_complete if category is Category.SHIELD else row.counter_complete
             return complete and _valid_window(row.recent_window(category))
-        if engagement_ranking:
+        if basis is RateBasis.ENGAGEMENT:
             return rate_available and row.event_complete
         if category is Category.SHIELD:
             return row.event_complete
         if effective and not (_finite(row.effective_damage) or row.overkill_complete):
             return False
-        if full_cycle_ranking:
-            return row.counter_complete and row.presence_complete
-        return row.counter_complete
+        return row.counter_complete and (basis is not RateBasis.FULL_CYCLE or row.presence_complete)
 
     def rate_info(row: PanelSourceRow) -> tuple[float | None, str, str, str]:
         if not rate_supported:
@@ -847,19 +852,41 @@ def render_panel(config: PanelConfig,
     complete: dict[str, bool] = {}
     row_by_owner: dict[str, PanelSourceRow] = {}
     rates: dict[str, tuple[float | None, str, str, str]] = {}
+    totals = []
+    footer_rates = []
+    rate_windows = set()
+    ranking_basis = config.rate_basis if ranking is Ranking.DPS else None
     for row in rows:
         value = metric_value(row)
         row_by_owner[row.owner_id] = row
         rates[row.owner_id] = rate_info(row)
+        rate, state, _, _ = rates[row.owner_id]
         if _finite(value):
             values[row.owner_id] = float(value)
-            complete[row.owner_id] = metric_complete(row)
+            complete[row.owner_id] = metric_complete(row, ranking_basis, recent=ranking is Ranking.RECENT)
+
+        # The footer aggregates the displayed columns independently of sorting.
+        column_total = value if ranking is Ranking.RECENT else total_value(row)
+        if (_finite(column_total) and column_total >= 0
+                and metric_complete(row, recent=ranking is Ranking.RECENT)):
+            totals.append(column_total)
+        if rate_supported and metric_complete(row, config.rate_basis):
+            if rate is not None and rate >= 0:
+                footer_rates.append(rate)
+                if config.rate_basis is RateBasis.RECENT_5S:
+                    rate_windows.add(tuple(row.recent_window(category)))
+            elif state == 'no_engagement':
+                footer_rates.append(0.0)
 
     displayed = {owner: value for owner, value in values.items() if value > 0}
     known_values = {owner: value for owner, value in values.items()
                     if value >= 0 and complete[owner]}
     windows = ({tuple(row_by_owner[owner].recent_window(category)) for owner in known_values}
                if recent_ranking else set())
+    footer_total = sum(totals) if totals and (ranking is not Ranking.RECENT or len(windows) <= 1) else None
+    footer_rate = sum(footer_rates) if footer_rates and len(rate_windows) <= 1 else None
+    footer_total = footer_total if _finite(footer_total) else None
+    footer_rate = footer_rate if _finite(footer_rate) else None
     known_total = sum(known_values.values())
     denominator = known_total if _finite(known_total) and known_total > 0 and len(windows) <= 1 else None
     missing_rows = len(known_values) != len(rows)
@@ -925,7 +952,14 @@ def render_panel(config: PanelConfig,
                      rate_available=rate_available, rate_reason=rate_reason,
                      rate_hint=rate_hint, rate_action=rate_action,
                      rate_action_label=rate_action_label, details_by_owner=details,
-                     share_scope=share_scope)
+                     share_scope=share_scope,
+                     footer_total=footer_total, footer_rate=footer_rate,
+                     footer_total_display=format_compact(footer_total),
+                     footer_rate_display=f'{format_compact(footer_rate)}/s' if footer_rate is not None else '—',
+                     footer_total_complete=(footer_total is not None and team_complete
+                                            and len(totals) == len(rows)),
+                     footer_rate_complete=(footer_rate is not None and team_complete
+                                           and len(footer_rates) == len(rows)))
 
 
 def render_board(configs: Iterable[PanelConfig],

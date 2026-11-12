@@ -50,8 +50,11 @@ public partial class MainWindow : Window
         Theme.Apply(Theme.Key);
         InitializeComponent();
         CompactTrend.Bind(trendModel);
-        BattleTrend.Bind(trendModel);
         OperatorTrend.Bind(trendModel);
+        RankingScroll.SizeChanged += (_, _) => FitLivePanels();
+        PanelHost.SizeChanged += (_, _) => FitLivePanels();
+        LiveDetailScroll.SizeChanged += (_, _) => FitLivePanels();
+        LiveInspector.SizeChanged += (_, _) => FitLivePanels();
         TargetSummary.OpenEnemies += async () => await Navigate("enemies");
         ApplyThemeArtwork();
         SetNavState("live");
@@ -149,7 +152,6 @@ public partial class MainWindow : Window
             ApplyThemeArtwork();
             SetNavState(route);
             CompactTrend.RefreshTheme();
-            BattleTrend.RefreshTheme();
             OperatorTrend.RefreshTheme();
         }
         Skin.SelectedIndex=Theme.IndexOf(theme);
@@ -159,14 +161,16 @@ public partial class MainWindow : Window
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
         var analysis = state.Get("live_analysis");
         var totals=state.Get("totals");
-        CurrentDps.Text = RateText(analysis.Get("team_recent_dps"));
-        AverageDps.Text = RateText(analysis.Get("team_average_dps"));
-        PeakDps.Text = RateText(analysis.Get("observed_peak_dps"));
-        TotalDamage.Text = TotalText(analysis.ValueKind == JsonValueKind.Object
+        CurrentDps.Text = OverviewNumber(analysis.Get("team_recent_dps"));
+        AverageDps.Text = OverviewNumber(analysis.Get("team_average_dps"));
+        PeakDps.Text = OverviewNumber(analysis.Get("observed_peak_dps"));
+        TotalDamage.Text = OverviewNumber(analysis.ValueKind == JsonValueKind.Object
             ? analysis.Get("team_total_damage") : totals.Get("damage"));
         Status.ToolTip = string.Join(" · ", new[] { Stage.Text, EventStatus.Text, ErrorText.Text }.Where(text => text.Length > 0));
         trendModel.Apply(state);
-        var seconds=state.Get("game_time");double t=seconds.TryNumber();Clock.Text=seconds.ValueKind==JsonValueKind.Number ? $"{(int)t/60:00}:{t%60:00.00}" : "—";
+        double time = state.Get("game_time").TryNumber(double.NaN);
+        int elapsed = double.IsFinite(time) ? (int)Math.Clamp(Math.Round(time, MidpointRounding.AwayFromZero), 0, int.MaxValue) : 0;
+        Clock.Text = double.IsFinite(time) && time >= 0 ? $"{elapsed / 60:00}:{elapsed % 60:00}" : "—";
         Footer.Text=state.Text("connection_text");
         if(App.BridgeArguments.Contains("--offline")) ModeLabel.Text="离线验收 · 合成数据 · 不访问游戏";
         var views=state.Get("panels").Items().ToArray();var ids=views.Select(v=>v.Get("config").Text("panel_id")).ToHashSet();
@@ -235,6 +239,7 @@ public partial class MainWindow : Window
         if (PanelHost == null || HistoryDetailHost == null || !double.IsFinite(ActualWidth)) return;
         bool narrow = ActualWidth < 1100;
         bool wide = ActualWidth >= 1320;
+        bool scrollLive = narrow || ActualHeight < (wide ? 640 : 820);
         bool narrowOverview = ActualWidth < 920;
         NavigationColumn.Width = new GridLength(narrow ? 92 : 208);
         ChromeLab.Visibility = ActualWidth < 940 ? Visibility.Collapsed : Visibility.Visible;
@@ -255,8 +260,12 @@ public partial class MainWindow : Window
         EnemySummaryColumn.Width = wide ? new GridLength(22, GridUnitType.Star) : new GridLength(0);
         RankingColumn.Width = new GridLength(41, GridUnitType.Star);
         DetailColumn.Width = wide ? new GridLength(37, GridUnitType.Star) : new GridLength(narrow ? 0 : 340);
+        LivePage.VerticalScrollBarVisibility = scrollLive ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;
+        LiveBodyFirstRow.Height = wide && !scrollLive ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        LiveBodySecondRow.Height = wide ? new GridLength(0) : scrollLive
+            ? GridLength.Auto : new GridLength(1, GridUnitType.Star);
+        LiveBodyThirdRow.Height = narrow ? GridLength.Auto : new GridLength(0);
         Grid.SetColumnSpan(EnemySummary, wide ? 1 : 3);
-        Grid.SetRowSpan(EnemySummary, wide ? 2 : 1);
         EnemySummary.Margin = wide ? new Thickness(0, 0, 5, 0) : new Thickness(0, 0, 0, 5);
         Grid.SetRow(RankingFrame, wide ? 0 : 1);
         Grid.SetColumnSpan(RankingFrame, narrow ? 2 : 1);
@@ -265,17 +274,15 @@ public partial class MainWindow : Window
         Grid.SetColumnSpan(LiveDetail, narrow ? 2 : 1);
         Grid.SetRow(LiveDetail, wide ? 0 : narrow ? 2 : 1);
         LiveDetail.Margin = narrow ? new Thickness(0, 5, 0, 0) : new Thickness(0);
-        Grid.SetRow(TimelineFrame, wide ? 1 : narrow ? 3 : 2);
-        Grid.SetColumn(TimelineFrame, wide ? 1 : 0);
-        Grid.SetColumnSpan(TimelineFrame, wide ? 2 : 3);
-        RankingScroll.MaxHeight = wide ? 260 : 390;
-        LiveDetailScroll.MaxHeight = wide ? 283 : 440;
+        RankingScroll.MaxHeight = scrollLive ? 390 : double.PositiveInfinity;
+        LiveDetailScroll.MaxHeight = scrollLive ? 440 : double.PositiveInfinity;
         LiveInspector.CompactReference = Theme.Key == "lone-trail" && wide;
         foreach (var panel in Panels.Values)
         {
             panel.Width = double.NaN;
             panel.SetReferenceStyle(Theme.Key == "lone-trail" && wide);
         }
+        FitLivePanels();
         ArrangeHistory();
         ArrangeEnemyPage();
         bool stackedSettings = ActualWidth < 1000;
@@ -283,6 +290,14 @@ public partial class MainWindow : Window
         Grid.SetColumn(ConnectionEventForm, stackedSettings ? 0 : 1);
         Grid.SetRow(ConnectionEventForm, stackedSettings ? 1 : 0);
         ConnectionForm.Margin = new Thickness(0, 0, stackedSettings ? 0 : 12, 12);
+    }
+    private void FitLivePanels()
+    {
+        bool fill = LivePage.VerticalScrollBarVisibility == ScrollBarVisibility.Disabled;
+        double panelHeight = fill ? RankingScroll.ActualHeight / Math.Max(1,Panels.Count) : 0;
+        foreach (var panel in Panels.Values) panel.FitRankingRows(panelHeight);
+        double trendHeight = fill ? LiveDetailScroll.ActualHeight - LiveInspector.ActualHeight - OperatorTrend.Margin.Top : 0;
+        OperatorTrend.FitOperatorChart(trendHeight);
     }
     private void ArrangeHistory()
     {
@@ -399,17 +414,9 @@ public partial class MainWindow : Window
             button.BorderThickness=active?new Thickness(2):new Thickness(1);
         }
     }
-    private static string TotalText(JsonElement value)
-    {
-        if(value.ValueKind!=JsonValueKind.Number) return "—";
-        double number=value.GetDouble();
-        if(!double.IsFinite(number)) return "—";
-        if(number>=1_000_000) return (number/1_000_000).ToString("0.00",System.Globalization.CultureInfo.InvariantCulture)+"M";
-        return number.ToString("N0",System.Globalization.CultureInfo.InvariantCulture);
-    }
-    private static string RateText(JsonElement value) =>
+    private static string OverviewNumber(JsonElement value) =>
         value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
-            ? number.ToString("#,##0.#", System.Globalization.CultureInfo.InvariantCulture) : "—";
+            ? Math.Round(number, MidpointRounding.AwayFromZero).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "—";
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
     private void MinimizeWindow(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void ToggleMaximizeWindow(object sender, RoutedEventArgs e) =>

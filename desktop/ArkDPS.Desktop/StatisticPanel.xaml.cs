@@ -56,7 +56,6 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Total => Entry.Text("display_value");
     public string Rate => Entry.Text("rate_text");
     public string Share => Entry.Text("share_display");
-    public double SharePercent => Math.Clamp(Entry.Number("share"),0,1)*100;
     internal SharePresentation ShareInfo { get; set; }=new("占比","",false);
     public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
     public string BarTooltip
@@ -223,9 +222,7 @@ public partial class StatisticPanel : UserControl
         RateNoticePanel.Margin=enable ? new Thickness(5,0,5,3) : new Thickness(14,0,14,8);
         RateNoticePanel.Padding=enable ? new Thickness(5,2,5,2) : new Thickness(10,7,10,7);
         HudControls.Margin=enable ? new Thickness(5,2,5,4) : new Thickness(14,0,14,10);
-        Coverage.Margin=enable ? new Thickness(5,3,5,4) : new Thickness(14,8,14,9);
-        Coverage.TextWrapping=enable ? TextWrapping.NoWrap : TextWrapping.Wrap;
-        Coverage.TextTrimming=enable ? TextTrimming.CharacterEllipsis : TextTrimming.None;
+        Coverage.Margin=enable ? new Thickness(5,2,5,3) : new Thickness(14,8,14,9);
         Coverage.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Empty.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Plot.MinHeight=enable ? 0 : 120;
@@ -266,20 +263,42 @@ public partial class StatisticPanel : UserControl
         {
             if(enable)
             {
-                button.MinHeight=22;
-                button.FontSize=11;
-                button.Padding=new Thickness(7,1,7,1);
+                button.SetResourceReference(StyleProperty,"ReferencePanelAction");
+                button.ClearValue(FontSizeProperty);
+                button.ClearValue(PaddingProperty);
+                button.ClearValue(BackgroundProperty);
             }
             else
             {
-                button.ClearValue(MinHeightProperty);
-                if(button==OpenHudButton||button==DuplicateButton||button==DeleteButton) button.FontSize=13;
-                else button.ClearValue(FontSizeProperty);
+                button.ClearValue(StyleProperty);
+                if(button==OpenHudButton||button==DuplicateButton||button==DeleteButton)
+                {
+                    button.FontSize=13;
+                    button.SetResourceReference(BackgroundProperty,"Inset");
+                }
+                if(button==RateAction) button.SetResourceReference(BackgroundProperty,"Card");
                 button.Padding=button==RateAction ? new Thickness(9,4,9,4)
                     : button==OpenHudButton||button==LockButton ? new Thickness(10,5,10,5) : new Thickness(9,5,9,5);
             }
         }
         if(view.ValueKind==JsonValueKind.Object) Update(view,DeleteButton.IsEnabled);
+    }
+
+    private void ReferenceScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if(!referenceStyle || e.OriginalSource is not ScrollViewer viewer) return;
+        // Keep the fixed header and footer on the same content width as the scrolling rows.
+        var gutter = new Thickness(0,0,Math.Max(0,viewer.ActualWidth-viewer.ViewportWidth),0);
+        ReferenceTableHeader.Margin=gutter;
+        ReferenceFooter.Margin=gutter;
+    }
+
+    internal void FitRankingRows(double availableHeight)
+    {
+        if (!referenceStyle) return;
+        double chrome = Math.Max(0, ActualHeight - Rows.ActualHeight);
+        double rowLimit = Math.Clamp(availableHeight - chrome, 168, 520);
+        if (Math.Abs(Rows.MaxHeight - rowLimit) >= 1) Rows.MaxHeight = rowLimit;
     }
 
     private static void StyleSelector(ComboBox combo, StackPanel field, TextBlock label,
@@ -333,7 +352,6 @@ public partial class StatisticPanel : UserControl
         Ranking.IsEnabled=category!="shield";
         ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
         ((ComboBoxItem)Ranking.Items[1]).Content=category=="shield" ? "近期" : "DPS";
-        Rate.ToolTip=config.Text("rate_basis")=="full_cycle" ? "全周期 DPS = 总伤 / 在场时间（自本次观测起）" : null;
         Rate.IsEnabled=config.Text("category")!="shield";
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
@@ -341,7 +359,8 @@ public partial class StatisticPanel : UserControl
         // The engagement column depends on event observation. Never leave it as a
         // silently blank column: show the reason and a retry/settings entry while
         // still allowing a switch back to the five-second window.
-        var isEngagement=config.Text("category")!="shield" && config.Text("rate_basis")=="engagement";
+        var rateBasis=config.Text("rate_basis");
+        var isEngagement=category!="shield" && rateBasis=="engagement";
         var reason=value.Text("rate_reason");
         var action=isEngagement ? value.Text("rate_action") : "";
         RateNotice.Text=reason;
@@ -349,11 +368,13 @@ public partial class StatisticPanel : UserControl
         RateNoticePanel.Visibility=RateNotice.Visibility;
         RateAction.Content=value.Text("rate_action_label");
         RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        RateHeading.Text=category switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
         Rate.ToolTip=isEngagement && reason.Length>0 ? reason
-            : referenceStyle ? "选择 DPS 算法" : null;
-        RateHeading.Text=config.Text("category") switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
+            : rateBasis=="full_cycle" ? "全周期速率 = 累计量 / 在场时间（自本次观测起）"
+            : referenceStyle && category!="shield" ? "选择"+RateHeading.Text+"算法" : null;
         ReferenceRateHeading.Text=RateHeading.Text;
-        ReferenceTotalHeading.Text=category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
+        ReferenceTotalHeading.Text=config.Text("ranking")=="recent" ? "近期"
+            : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
         Actions.Visibility=IsHistory||IsHud ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         DeleteButton.IsEnabled=canDelete;
@@ -362,24 +383,33 @@ public partial class StatisticPanel : UserControl
         OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
             ? Visibility.Visible : Visibility.Collapsed;
+        var incoming=value.Get("entries").Items().ToArray();
         ShareHeading.ToolTip=share.Description;
-        if(referenceStyle)
+        ReferenceShareHeading.ToolTip=share.Description;
+        var hasFooterTotal=value.Get("footer_total").ValueKind==JsonValueKind.Number;
+        var hasFooterRate=value.Get("footer_rate").ValueKind==JsonValueKind.Number;
+        var showFooter=referenceStyle && (incoming.Length>0 || hasFooterTotal || hasFooterRate);
+        ReferenceFooter.Visibility=showFooter ? Visibility.Visible : Visibility.Collapsed;
+        if(showFooter)
         {
-            Coverage.ToolTip=share.Description;
-            var total=value.Get("total");
-            var totalLabel=value.Bool("share_known") ? "∑  全队合计   " : "∑  榜单合计   ";
-            Coverage.Text=total.ValueKind==JsonValueKind.Number ? totalLabel+Json.UiText(total.GetRawText()) : "";
-            if(!value.Bool("share_known"))
-                Coverage.Text=Coverage.Text.Length>0 ? share.Label+" · "+Coverage.Text : share.Description;
+            var totalComplete=value.Bool("footer_total_complete");
+            var rateComplete=value.Bool("footer_rate_complete");
+            ReferenceFooterLabel.Text=totalComplete && (!hasFooterRate || rateComplete) ? "全队合计" : "已知合计";
+            ReferenceFooterTotal.Text=value.Text("footer_total_display");
+            ReferenceFooterTotal.ToolTip=hasFooterTotal
+                ? (totalComplete ? "全队" : "已知干员")+ReferenceTotalHeading.Text+" "+value.Ui("footer_total")
+                : null;
+            ReferenceFooterRate.Text=value.Text("footer_rate_display");
+            ReferenceFooterRate.ToolTip=hasFooterRate
+                ? (rateComplete ? "全队" : "已知")+"干员"+value.Text("rate_label")+"之和 "+value.Ui("footer_rate")+"/s"
+                : rateBasis=="engagement" && reason.Length>0 ? reason : null;
         }
-        else
-        {
-            Coverage.ToolTip=null;
-            Coverage.Text=share.Description+(share.Available ? " · 点击干员固定明细" : "");
-        }
+        Coverage.ToolTip=referenceStyle ? share.Description : null;
+        Coverage.Text=referenceStyle
+            ? showFooter && !value.Bool("share_known") ? share.Label : ""
+            : share.Description+(share.Available ? " · 点击干员固定明细" : "");
         if(IsHud){Plot.MinHeight=56;Rows.MinHeight=30;Rows.MaxHeight=double.PositiveInfinity;}
         Coverage.Visibility=IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
-        var incoming=value.Get("entries").Items().ToArray();
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
         foreach(var old in items.Where(x=>!ids.Contains(x.Id)).ToArray()) items.Remove(old);
         var map=items.ToDictionary(x=>x.Id);

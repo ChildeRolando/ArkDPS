@@ -369,6 +369,47 @@ def test_dps_ranking_follows_selected_algorithm():
     assert [e.value for e in full.entries] == [100, 50]
 
 
+def test_footer_keeps_cumulative_totals_when_the_ranking_uses_rates():
+    ranked = PanelSourceRow(owner_id='A', name='A', damage=1000, effective_damage=900,
+                            presence_seconds=10, presence_complete=True)
+    retired = PanelSourceRow(owner_id='B', name='B', damage=500, effective_damage=400,
+                             present=False)
+    config = PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE,
+                         effective_only=True)
+    view = render_panel(config, [ranked, retired])
+    assert [entry.owner_id for entry in view.entries] == ['A']
+    assert view.total == 90
+    assert view.footer_total == 1300
+    assert view.footer_total_display == '1.3K'
+    assert view.footer_total_complete
+    assert view.footer_rate == 90
+    assert view.footer_rate_display == '90/s'
+    assert not view.footer_rate_complete
+
+
+def test_footer_preserves_recent_window_and_team_coverage():
+    rows = [src('A', damage=1000, recent_damage=200),
+            src('B', damage=500, recent_damage=100, recent_window=(1, 5))]
+    view = render_panel(total(), rows)
+    assert view.footer_total == 1500
+    assert view.footer_total_complete
+    assert view.footer_rate is None
+    assert not view.footer_rate_complete
+    assert render_panel(recent(), rows).footer_total is None
+
+    rows[1].counter_complete = False
+    view = render_panel(total(), rows)
+    assert view.footer_total == 1000
+    assert view.footer_rate == 200
+    assert not view.footer_total_complete
+    assert not view.footer_rate_complete
+
+    view = render_panel(total(Category.SHIELD), [src('A', shield=75)])
+    assert view.footer_total == 75
+    assert view.footer_total_complete
+    assert view.footer_rate is None
+
+
 def test_full_cycle_denominator_cannot_be_shorter_than_active_engagement():
     # Mirrors 冬时 in a real archive: roster presence started ~3s after the
     # first event, so the raw sampled presence was shorter than active time.

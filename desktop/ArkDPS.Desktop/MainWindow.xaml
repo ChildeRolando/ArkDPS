@@ -159,8 +159,10 @@
     </StackPanel>
    </DockPanel>
    <Grid Grid.Row="1">
-    <ScrollViewer x:Name="LivePage" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="5,18,3,2">
-     <StackPanel Margin="0,0,4,0">
+    <ScrollViewer x:Name="LivePage" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"
+      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Margin="5,18,3,2">
+     <Grid Margin="0,0,4,0">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <HeaderedContentControl Style="{StaticResource ResearchFrame}" Padding="22,7,14,5" Margin="0,0,0,5" MinHeight="304">
        <HeaderedContentControl.Header>
         <DockPanel>
@@ -196,10 +198,10 @@
         </WrapPanel>
        </Grid>
       </HeaderedContentControl>
-      <Grid x:Name="LiveBody">
+      <Grid x:Name="LiveBody" Grid.Row="1">
        <Grid.ColumnDefinitions><ColumnDefinition x:Name="EnemySummaryColumn" Width="22*"/><ColumnDefinition x:Name="RankingColumn" Width="41*"/><ColumnDefinition x:Name="DetailColumn" Width="37*"/></Grid.ColumnDefinitions>
-       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-       <HeaderedContentControl x:Name="EnemySummary" Header="敌方单位 / ENEMY UNIT" Style="{StaticResource ResearchFrame}" Padding="4" Grid.RowSpan="2" Margin="0,0,5,0">
+       <Grid.RowDefinitions><RowDefinition x:Name="LiveBodyFirstRow" Height="*"/><RowDefinition x:Name="LiveBodySecondRow" Height="0"/><RowDefinition x:Name="LiveBodyThirdRow" Height="0"/></Grid.RowDefinitions>
+       <HeaderedContentControl x:Name="EnemySummary" Header="敌方单位 / ENEMY UNIT" Style="{StaticResource ResearchFrame}" Padding="4" Margin="0,0,5,0">
         <local:LiveTargetSummary x:Name="TargetSummary"/>
        </HeaderedContentControl>
        <HeaderedContentControl x:Name="RankingFrame" Grid.Column="1" Header="干员DPS排行 / OPERATOR DPS RANKING" Style="{StaticResource ResearchFrame}" Padding="3" Margin="0,0,5,0">
@@ -220,11 +222,8 @@
          </StackPanel>
         </ScrollViewer>
        </HeaderedContentControl>
-       <HeaderedContentControl x:Name="TimelineFrame" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource ResearchFrame}" Padding="0" Margin="0,5,0,0">
-        <local:LiveTrendView x:Name="BattleTrend" Kind="Timeline"/>
-       </HeaderedContentControl>
       </Grid>
-     </StackPanel>
+     </Grid>
     </ScrollViewer>
 
     <Grid x:Name="HistoryPage" Visibility="Collapsed">

@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace ArkDPS.Desktop;
 
@@ -21,6 +22,8 @@ public sealed class LiveTargetSummary : Border
     private readonly TextBlock identity = new();
     private readonly TextBlock badge = new();
     private readonly Image portrait = new();
+    private readonly Button previousTarget;
+    private readonly Button nextTarget;
     private readonly TextBlock health;
     private readonly TextBlock defense;
     private readonly TextBlock resistance;
@@ -38,6 +41,8 @@ public sealed class LiveTargetSummary : Border
     private string battle = "";
     private string targetUid = "";
     private string targetRoster = "";
+    private (string Uid, JsonElement Row)[] targets = Array.Empty<(string, JsonElement)>();
+    private int targetIndex = -1;
 
     internal event Action? OpenEnemies;
 
@@ -65,11 +70,17 @@ public sealed class LiveTargetSummary : Border
         var target = new Grid();
         target.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(98) });
         target.ColumnDefinitions.Add(new ColumnDefinition());
-        var targetSurface = new Border { Child = target, Padding = new Thickness(7),
-            Margin = new Thickness(0, 3, 0, 4), BorderThickness = new Thickness(1) };
+        var targetCard = new Grid { Margin = new Thickness(0, 3, 0, 4) };
+        var targetSurface = new Border { Child = target, Padding = new Thickness(7, 7, 20, 7),
+            BorderThickness = new Thickness(1) };
         targetSurface.SetResourceReference(BackgroundProperty, "Console");
         targetSurface.SetResourceReference(BorderBrushProperty, "ConsoleLine");
-        Place(content, targetSurface, 1);
+        targetCard.Children.Add(targetSurface);
+        previousTarget = TargetArrow(previous: true);
+        nextTarget = TargetArrow(previous: false);
+        targetCard.Children.Add(previousTarget);
+        targetCard.Children.Add(nextTarget);
+        Place(content, targetCard, 1);
 
         var art = new Grid();
         portrait.Stretch = Stretch.Uniform;
@@ -136,42 +147,25 @@ public sealed class LiveTargetSummary : Border
         }
 
         var enemy = displayedEnemy.ValueKind == JsonValueKind.Object ? displayedEnemy : state.Get("enemy");
-        var rows = enemy.Get("rows").Items().ToArray();
-        var row = rows.FirstOrDefault(MatchesTarget);
-        if (row.ValueKind != JsonValueKind.Object || row.Text("lifecycle") == "departed")
-        {
-            var active = rows.Where(candidate => candidate.Bool("alive")
-                || candidate.Text("lifecycle") is "active" or "rebirthing")
-                .OrderByDescending(candidate => candidate.Number("max_hp", 0)).FirstOrDefault();
-            if (active.ValueKind == JsonValueKind.Object) row = active;
-            else if (row.ValueKind != JsonValueKind.Object) row = rows.FirstOrDefault();
-        }
-
-        if (row.ValueKind == JsonValueKind.Object)
-        {
-            targetUid = EnemyItem.InstanceUid(row);
-            targetRoster = EnemyItem.RosterIdentity(row);
-            var target = new EnemyItem(row, targetUid, targetRoster);
-            Show(name, target.Name);
-            var code = row.Text("code");
-            Show(identity, code.Length == 0 ? target.Eid : code + " · " + target.Eid);
-            Show(badge, target.Portrait is null ? target.Badge : "");
-            if (portrait.Source != target.Portrait) portrait.Source = target.Portrait;
-            portrait.ToolTip = target.Tooltip;
-            Show(health, target.HpText);
-            Show(defense, Json.UiInt(row, "def"));
-            Show(resistance, Json.UiInt(row, "res"));
-        }
+        var live = enemy.Get("rows").Items()
+            .Where(row => row.Bool("alive") && !row.Bool("entry_inferred")
+                && row.Text("lifecycle") is "active" or "rebirthing")
+            .Select(row => (Uid: EnemyItem.InstanceUid(row), Row: row))
+            .OrderByDescending(candidate => candidate.Row.Number("hp", double.NegativeInfinity))
+            .ThenBy(candidate => candidate.Uid, StringComparer.Ordinal)
+            .ToArray();
+        targets = live.Where(candidate => candidate.Uid.Length > 0)
+            .DistinctBy(candidate => candidate.Uid).ToArray();
+        targetIndex = Array.FindIndex(targets, candidate => candidate.Uid == targetUid);
+        if (targetIndex < 0 && targets.Length > 0) targetIndex = 0;
+        if (targetIndex >= 0)
+            ShowTarget(targets[targetIndex].Row, status);
         else
         {
-            Show(name, "等待敌方数据");
-            Show(identity, status.Length > 0 ? status : "—");
-            Show(badge, "—");
-            portrait.Source = null;
-            portrait.ToolTip = null;
-            Show(health, "—");
-            Show(defense, "—");
-            Show(resistance, "—");
+            // Older snapshots may identify a live enemy by roster alone.
+            var row = live.FirstOrDefault(candidate => targetRoster.Length > 0
+                && EnemyItem.RosterIdentity(candidate.Row) == targetRoster).Row;
+            ShowTarget(row.ValueKind == JsonValueKind.Object ? row : live.FirstOrDefault().Row, status);
         }
 
         Show(stage, state.Text("stage") is { Length: > 0 } label ? label : "—");
@@ -189,12 +183,71 @@ public sealed class LiveTargetSummary : Border
         Show(shield, Json.UiInt(totals, "shield_absorbed"));
     }
 
-    private bool MatchesTarget(JsonElement row)
+    private void ShowTarget(JsonElement row, string status)
     {
-        string uid = EnemyItem.InstanceUid(row);
-        return targetUid.Length > 0 && uid.Length > 0
-            ? uid == targetUid
-            : targetRoster.Length > 0 && EnemyItem.RosterIdentity(row) == targetRoster;
+        previousTarget.Visibility = nextTarget.Visibility = targets.Length > 1
+            ? Visibility.Visible : Visibility.Collapsed;
+        previousTarget.IsEnabled = targetIndex > 0;
+        nextTarget.IsEnabled = targetIndex >= 0 && targetIndex < targets.Length - 1;
+        if (row.ValueKind == JsonValueKind.Object)
+        {
+            targetUid = EnemyItem.InstanceUid(row);
+            targetRoster = EnemyItem.RosterIdentity(row);
+            var target = new EnemyItem(row, targetUid, targetRoster);
+            Show(name, target.Name);
+            var code = row.Text("code");
+            Show(identity, code.Length == 0 ? target.Eid : code + " · " + target.Eid);
+            Show(badge, target.Portrait is null ? target.Badge : "");
+            if (portrait.Source != target.Portrait) portrait.Source = target.Portrait;
+            portrait.ToolTip = target.Tooltip;
+            Show(health, target.HpText);
+            Show(defense, Json.UiInt(row, "def"));
+            Show(resistance, Json.UiInt(row, "res"));
+        }
+        else
+        {
+            targetUid = "";
+            targetRoster = "";
+            Show(name, "等待敌方数据");
+            Show(identity, status.Length > 0 ? status : "—");
+            Show(badge, "—");
+            portrait.Source = null;
+            portrait.ToolTip = null;
+            Show(health, "—");
+            Show(defense, "—");
+            Show(resistance, "—");
+        }
+    }
+
+    private Button TargetArrow(bool previous)
+    {
+        var label = previous ? "上一名敌人" : "下一名敌人";
+        var icon = new Path
+        {
+            Data = Geometry.Parse(previous ? "M 7,1 L 2,6 L 7,11" : "M 2,1 L 7,6 L 2,11"),
+            StrokeThickness = 1.7, StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round,
+            IsHitTestVisible = false,
+        };
+        icon.SetResourceReference(Shape.StrokeProperty, "Ink");
+        var arrow = new Button
+        {
+            Content = icon, Width = 24, Height = 34, Padding = new Thickness(0),
+            HorizontalAlignment = previous ? HorizontalAlignment.Left : HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = previous ? new Thickness(-5, 0, 0, 0) : new Thickness(0, 0, -5, 0),
+            ToolTip = label + "（按当前 HP 从高到低）",
+        };
+        AutomationProperties.SetName(arrow, label);
+        AutomationProperties.SetAutomationId(arrow, previous ? "PreviousLiveEnemy" : "NextLiveEnemy");
+        arrow.Click += (_, _) =>
+        {
+            int next = targetIndex + (previous ? -1 : 1);
+            if (next < 0 || next >= targets.Length) return;
+            targetIndex = next;
+            ShowTarget(targets[targetIndex].Row, "");
+        };
+        return arrow;
     }
 
     private void ApplyPalette()

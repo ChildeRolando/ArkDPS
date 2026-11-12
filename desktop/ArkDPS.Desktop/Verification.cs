@@ -52,6 +52,78 @@ public partial class MainWindow
         using var document = JsonDocument.Parse(state.ToJsonString());
         ApplyState(document.RootElement.Clone());
     }
+    private void VerifyEnemyPaging(System.Text.Json.Nodes.JsonNode fixture)
+    {
+        static Button? FindArrow(DependencyObject parent, string id)
+        {
+            if (parent is Button button && System.Windows.Automation.AutomationProperties.GetAutomationId(button)==id)
+                return button;
+            foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
+                if (FindArrow(child,id) is { } match) return match;
+            return null;
+        }
+
+        var previous=FindArrow(TargetSummary,"PreviousLiveEnemy")
+            ?? throw new InvalidOperationException("previous enemy arrow not exposed");
+        var next=FindArrow(TargetSummary,"NextLiveEnemy")
+            ?? throw new InvalidOperationException("next enemy arrow not exposed");
+        Require(System.Windows.Automation.AutomationProperties.GetName(previous)=="上一名敌人" &&
+                System.Windows.Automation.AutomationProperties.GetName(next)=="下一名敌人",
+                "enemy paging arrows lack accessible names");
+
+        var state=fixture.DeepClone();
+        state["battle_id"]="synthetic-enemy-paging";
+        var rows=System.Text.Json.Nodes.JsonNode.Parse("""
+            [
+              {"instance_uid":"101","eid":"enemy_a","name":"首位敌人","lifecycle":"active","alive":true,"hp":900,"max_hp":1000},
+              {"instance_uid":"102","eid":"enemy_a","name":"次位敌人","lifecycle":"active","alive":true,"hp":400,"max_hp":5000},
+              {"instance_uid":"103","eid":"enemy_b","name":"血量未知敌人","lifecycle":"active","alive":true,"hp":null},
+              {"instance_uid":"104","eid":"enemy_c","name":"已离场敌人","lifecycle":"departed","alive":false,"hp":9000},
+              {"instance_uid":"105","eid":"enemy_d","name":"推断敌人","lifecycle":"active","alive":true,"hp":10000,"entry_inferred":true}
+            ]
+            """)!.AsArray();
+        state["enemy"]!["rows"]=rows;
+
+        void Publish() => TargetSummary.Update(JsonSerializer.SerializeToElement(state), "—", "—", "—", "");
+        static void ClickArrow(Button arrow) =>
+            arrow.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+        try
+        {
+            Publish();
+            Require(HasText(TargetSummary,"首位敌人") && previous.Visibility==Visibility.Visible &&
+                    next.Visibility==Visibility.Visible && !previous.IsEnabled && next.IsEnabled,
+                    "first enemy is not the confirmed live instance with highest current HP");
+            ClickArrow(next);
+            Require(HasText(TargetSummary,"次位敌人") && previous.IsEnabled && next.IsEnabled,
+                    "right arrow did not select the next live UID");
+            ClickArrow(next);
+            Require(HasText(TargetSummary,"血量未知敌人") && previous.IsEnabled && !next.IsEnabled,
+                    "unknown HP did not sort last or next arrow remained enabled at the end");
+            ClickArrow(previous);
+            rows[1]!["hp"]=1100;
+            Publish();
+            Require(HasText(TargetSummary,"次位敌人") && !previous.IsEnabled && next.IsEnabled,
+                    "HP reorder changed the selected UID or left stale arrow bounds");
+            rows[1]!["alive"]=false;
+            rows[1]!["lifecycle"]="departed";
+            Publish();
+            Require(HasText(TargetSummary,"首位敌人"), "departed selection did not fall back to a live enemy");
+            rows[2]!["alive"]=false;
+            rows[2]!["lifecycle"]="departed";
+            Publish();
+            Require(previous.Visibility==Visibility.Collapsed && next.Visibility==Visibility.Collapsed &&
+                    !previous.IsEnabled && !next.IsEnabled, "single live enemy still has paging controls");
+            rows[0]!["alive"]=false;
+            rows[0]!["lifecycle"]="departed";
+            Publish();
+            Require(HasText(TargetSummary,"等待敌方数据"), "enemy card retained a departed enemy with no live targets");
+        }
+        finally
+        {
+            UpdateEnemySummary();
+        }
+    }
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
     {
         await Command("theme", new() { ["theme"] = "lone-trail" });
@@ -95,11 +167,23 @@ public partial class MainWindow
             fixture["game_time"] = second;
             analysis["game_time"] = second;
             SetIllustrativeRates(6800 + (second % 5) * 380);
+            if (second == 22) analysis["team_recent_dps"] = null;
             ApplyFixture(fixture);
         }
         Require(trendModel.Points.Count > 1 && trendModel.Points[^1].Team == 7940,
             "advancing worker values did not reach live trend");
-        Require(CurrentDps.Text == "7,940" && AverageDps.Text == "59,302.5", "certified team DPS not rendered");
+        Require(CurrentDps.Text == "7,940" && AverageDps.Text == "59,303", "overview did not round DPS");
+        Require(trendModel.Points.Any(point => point.Time == 22 && !point.Team.HasValue),
+            "an unavailable sample was converted to a measured zero");
+        var gapDrawing = new System.Windows.Media.DrawingGroup();
+        using (var drawing = gapDrawing.Open())
+            ChartLine.DrawGap(drawing, new System.Windows.Media.Pen(System.Windows.Media.Brushes.White, 1),
+                new Point(4, 5), new Point(18, 8), 30);
+        Require(gapDrawing.Children.OfType<System.Windows.Media.GeometryDrawing>().Any(item =>
+            item.Geometry is System.Windows.Media.LineGeometry line &&
+            line.StartPoint == new Point(4,30) && line.EndPoint == new Point(18,30)),
+            "a sampling gap did not connect the trace to the baseline");
+        VerifyEnemyPaging(fixture);
         fixture["status"] = "paused";
         analysis["game_time"] = 24;
         ApplyFixture(fixture);
@@ -112,6 +196,12 @@ public partial class MainWindow
         ApplyFixture(fixture);
         Require(trendModel.Points[^1].StartsSegment && trendModel.Points[^1].Team == 0,
             "recovery lost the gap or the reliable zero");
+        fixture["game_time"] = 59.5;
+        analysis["team_total_damage"] = 1234567.5;
+        ApplyFixture(fixture);
+        Require(Clock.Text == "01:00" && TotalDamage.Text == "1,234,568",
+            "overview time or damage did not round to a whole number");
+        analysis["team_total_damage"] = 711630;
 
         await Navigate("enemies");
         EnemyList.SelectedIndex = 0;
@@ -158,6 +248,20 @@ public partial class MainWindow
                 Grid.GetColumn(LiveDetail) == (width < 1100 ? 1 : 2) &&
                 (LiveNavLabel.Visibility == Visibility.Collapsed) == (width < 1100),
                 "live dashboard breakpoint did not reflow the expected surfaces");
+            if (width >= 1320)
+            {
+                Require(LivePage.ScrollableHeight < 1 &&
+                    Math.Abs(LiveBody.TranslatePoint(new Point(0,LiveBody.ActualHeight),LivePage).Y - LivePage.ActualHeight) < 6,
+                    "dashboard body did not fill the available window height");
+                var panel = Panels.Values.First();
+                Require(panel.ReferenceFooter.IsVisible && panel.ReferenceFooterTotal.Text==panel.View.Text("footer_total_display") &&
+                    panel.ReferenceFooterRate.Text==panel.View.Text("footer_rate_display") &&
+                    Grid.GetColumn(panel.ReferenceFooterTotal)==3 && Grid.GetColumn(panel.ReferenceFooterRate)==4,
+                    "team total or DPS did not render in its ranking column");
+                var avatar = FindAutomationElement(LiveInspector,"CompactOperatorPortrait");
+                Require(avatar?.ActualWidth==36 && avatar.ActualHeight==36 && HasText(LiveInspector,"1,167"),
+                    "compact detail did not keep its smaller portrait and rounded values");
+            }
             Screenshot.Window(this, Path.Combine(output, $"lone-trail-live-{width}x{height}-dip.png"));
             if (width == 1380)
             {
@@ -173,10 +277,13 @@ public partial class MainWindow
         await Navigate("live");
         Width = savedWidth; Height = savedHeight;
         await Settle();
-        LivePage.ScrollToEnd();
+        WindowState = WindowState.Maximized;
         await Settle();
-        Screenshot.Window(this, Path.Combine(output, "lone-trail-timeline.png"));
-        LivePage.ScrollToTop();
+        if (ActualWidth >= 1320 && ActualHeight >= 640)
+            Require(LivePage.ScrollableHeight < 1 &&
+                Math.Abs(LiveBody.TranslatePoint(new Point(0,LiveBody.ActualHeight),LivePage).Y - LivePage.ActualHeight) < 6,
+                "maximized dashboard left unused space below the panels");
+        WindowState = WindowState.Normal;
         Width = 560; Height = 540;
         await Navigate("history");
         await Settle();
@@ -187,7 +294,15 @@ public partial class MainWindow
         await Settle();
         ApplyState(initial);
         await Command("theme", new() { ["theme"] = "original" });
-        checks.Add("certified DPS, pause/recovery/known zero, enemy transform MaxHP lower-bound/confirmed with retained selection, and four Lone Trail DIP layouts");
+        checks.Add("rounded overview/detail, HP-ordered enemy paging, aligned team footer, pause/recovery/known zero and four Lone Trail DIP layouts");
+    }
+    private static FrameworkElement? FindAutomationElement(DependencyObject root, string id)
+    {
+        if(root is FrameworkElement element && System.Windows.Automation.AutomationProperties.GetAutomationId(element)==id)
+            return element;
+        for(int i=0;i<System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);i++)
+            if(FindAutomationElement(System.Windows.Media.VisualTreeHelper.GetChild(root,i),id) is { } found) return found;
+        return null;
     }
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
     private static bool HasText(DependencyObject root,string text)

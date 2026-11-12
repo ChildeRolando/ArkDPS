@@ -317,7 +317,7 @@ public sealed class EnemyChart : FrameworkElement
         double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         var typeface = new Typeface("Cascadia Mono, Consolas");
         dc.DrawRectangle(Brushes.Transparent,null,new Rect(RenderSize));
-        if (!points.Any(point=>point.TotalHp.HasValue || point.RemainingHp.HasValue || point.Damage.HasValue))
+        if (points.Count == 0)
         {
             var empty = new FormattedText("等待可靠的血量或伤害样本", CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight, new Typeface("Microsoft YaHei UI"), 12, muted, dpi);
@@ -370,12 +370,17 @@ public sealed class EnemyChart : FrameworkElement
             {
                 var prior=points[i-1];
                 var current=points[i];
-                if(current.BreakBefore || value(prior) is not double fromValue
-                    || value(current) is not double toValue) continue;
-                var from=Map(prior.GameTime,fromValue);
-                var to=Map(current.GameTime,toValue);
-                var pen=complete(prior) && complete(current) ? exact : partial;
-                if (step && from.Y != to.Y)
+                double? fromValue=value(prior),toValue=value(current);
+                var from=Map(prior.GameTime,fromValue.GetValueOrDefault());
+                var to=Map(current.GameTime,toValue.GetValueOrDefault());
+                if(current.BreakBefore)
+                {
+                    ChartLine.DrawGap(dc,partial,from,to,top+height);
+                    continue;
+                }
+                bool hasBothValues=fromValue.HasValue && toValue.HasValue;
+                var pen=hasBothValues && complete(prior) && complete(current) ? exact : partial;
+                if (step && hasBothValues && from.Y != to.Y)
                 {
                     var change = new Point(to.X, from.Y);
                     dc.DrawLine(pen, from, change);
@@ -383,13 +388,12 @@ public sealed class EnemyChart : FrameworkElement
                 }
                 dc.DrawLine(pen, from, to);
             }
-            var last=points.LastOrDefault(point=>value(point).HasValue);
-            if(last!=null && value(last) is double lastValue)
-            {
-                double radius=thickness+1;
-                dc.DrawEllipse(complete(last) ? brush : null,complete(last) ? null : exact,
-                    Map(last.GameTime,lastValue),radius,radius);
-            }
+            var last=points[^1];
+            var lastValue=value(last);
+            bool finalKnown=lastValue.HasValue && complete(last);
+            double radius=thickness+1;
+            dc.DrawEllipse(finalKnown ? brush : null,finalKnown ? null : exact,
+                Map(last.GameTime,lastValue.GetValueOrDefault()),radius,radius);
         }
 
         Series(point=>point.TotalHp,point=>point.TotalComplete,accent,2.2,step:true);
