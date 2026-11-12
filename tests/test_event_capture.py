@@ -83,6 +83,36 @@ def test_baseline_event_and_replay_keep_snapshot_authoritative():
     assert capture.sample()['rows']['char_a']['observed_damage'] == 20
 
 
+def test_enemy_settlement_reuses_the_ordered_queue_without_changing_native_totals():
+    class EnemyDamageObserver(Observer):
+        def drain(self):
+            return {**super().drain(), 'enemy_damage_ready': True}
+
+    collector = Collector()
+    observer = EnemyDamageObserver(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    settled = dict(event(1, frame=2, game_time=1), kind='enemy_damage',
+                   target='enemy_a', target_uid='10', target_instance='0x1', damage_type=2)
+    bar = dict(event(2, frame=2, game_time=1), kind='elemental_bar', target_instance='0x1')
+    burst = dict(settled, sequence=3, source=None, damage_type=5, amount=15)
+    unknown = dict(burst, sequence=4, target_uid='20', target_instance='0x2', amount=11)
+    observer.events = [settled, bar, burst, unknown, dict(event(5, frame=2, game_time=1),
+                                                       target='enemy_a', hp_after=20, killed=False)]
+    observer.sequence = observer.epoch = 5
+
+    result = capture.sample()
+    assert result['enemy_damage'] == {
+        'complete': False, 'by_uid': {'10': {'eid': 'enemy_a', 'amount': 35.0}},
+    }
+    assert result['rows']['char_a']['damage'] == 120
+    assert result['rows']['char_a']['observed_damage'] == 20
+    assert result['rows']['char_a']['event_coverage_complete']
+    observer.events = [settled]
+    assert capture.sample()['enemy_damage'] == result['enemy_damage']
+
+
 def test_missing_event_closes_coverage_at_last_watermark():
     collector = Collector()
     observer = Observer(collector)

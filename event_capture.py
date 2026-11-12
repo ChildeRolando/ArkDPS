@@ -188,6 +188,11 @@ class LiveEventCapture:
             )
         elif statistics.enemy_state_start_frame is not None:
             statistics.mark_enemy_state_unknown()
+        if 'enemy_damage_ready' in payload or statistics.enemy_damage is not None:
+            statistics.observe_enemy_damage(complete=(
+                payload.get('enemy_damage_ready') is True
+                and payload.get('enemy_damage_unknown') is not True
+                and (self.initial_drain or statistics.enemy_damage is not None)))
 
     def ingest(self, sample, roster, sequence, drained):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.

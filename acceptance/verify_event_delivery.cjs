@@ -103,4 +103,39 @@ assert.equal(sequence,full.sequence);
 assert.equal(queue.length,EVENT_BUFFER_LIMIT);
 `, {assert}, {filename: 'product-event-delivery'});
 
+vm.runInNewContext(`
+let enemyDamageUnknown=false;
+const enemyDamageReady=true;
+const enemyEntryConfig={bObject:{},assignable:(_base,klass)=>klass===1};
+const emitted=[];
+const targetKey=target=>target?.eid;
+const own=source=>source.startsWith('char_')||source.startsWith('token_');
+const record=(source,kind,amount,when,proof,evidence)=>emitted.push({source,kind,amount,evidence});
+${between('function recordEnemyDamage(', 'function includeEnemyHp(')}
+${between('function nonlethalSettlement(', 'function dynamic(')}
+const mod=type=>({add:offset=>({readS32:()=>{
+  assert.equal(offset,0x68);
+  return type;
+}})});
+const target={
+  eid:'trap_box',readPointer:()=>1,toString:()=>'0x1',
+  add:offset=>({readU32:()=>{
+    assert.equal(offset,0x18);
+    return 123;
+  }})
+};
+recordEnemyDamage({source:'char_a',real:-17,mod:mod(2),target},{frame:1});
+recordEnemyDamage({source:'char_a',real:0,mod:mod(2),target},{frame:1});
+recordEnemyDamage({source:'enemy_a',real:-17,mod:mod(2),target},{frame:1});
+assert.equal(emitted.length,1);
+assert.equal(emitted[0].kind,'enemy_damage');
+assert.equal(emitted[0].amount,17);
+assert.equal(emitted[0].evidence.target_uid,'123');
+assert.equal(enemyDamageUnknown,false);
+recordEnemyDamage({source:'char_a',real:-17,mod:mod(2),target:null},{frame:1});
+assert.equal(enemyDamageUnknown,true);
+assert.equal(nonlethalSettlement(target,30,-17,17).hp_after,13);
+assert.equal(nonlethalSettlement(target,17,-17,17),null);
+`, {assert}, {filename: 'product-enemy-settlement'});
+
 console.log('PASS_EVENT_DELIVERY');

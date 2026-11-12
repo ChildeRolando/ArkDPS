@@ -660,9 +660,13 @@ public partial class MainWindow
             await Navigate("enemies");await Settle();
             Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
             Require(EnemyTotalHp.Text.Contains("26000"),"enemy total HP did not render");
-            Require(EnemyOurDamage.Text.Contains("18700"),"cumulative damage line value did not render");
+            Require(EnemyOurDamageLabel.Text=="我方对敌扣血" && EnemyOurDamage.Text=="≥ 18700" &&
+                !EnemyChart.Points[^1].DamageComplete,"scoped damage lower bound did not render");
             Require(EnemyStatusHint.Text.Contains("离场时尚余 600 HP（1 个实例）"),
                 "HP remaining at enemy departure did not render");
+            Require(EnemyStatusHint.Text.Contains("已观测敌方回血 400 HP") &&
+                EnemyStatusHint.Text.Contains("含回血累计可承受量 ≥ 26400 HP"),
+                "enemy recovery and damage capacity did not render");
             if (State.Get("enemy").Get("non_team_native_damage").TryNumber() > 0)
                 Require(EnemyStatusHint.Text.Contains("其他来源原生伤害 500"),"non-team damage basis did not render");
             Require(!EnemyEmpty.IsVisible,"enemy empty state shown with entered enemies");

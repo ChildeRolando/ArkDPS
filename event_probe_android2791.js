@@ -132,6 +132,9 @@ let enemyPhaseReady=false,enemyPhaseUnknown=false;
 const enemyHealthPhases=new Map(),pendingEnemyRebirth=new Map();
 let enemyStateReady=false,enemyStateUnknown=false;
 let enemyMaxHpReady=false;
+const enemyDamageReady=!!enemyEntryConfig
+ &&cfg.methods.filter(m=>m.owner==='Entity'&&m.name==='OnAfterOutputDamage').length===1;
+let enemyDamageUnknown=false;
 const enemyHpWrites=new Map();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
@@ -228,6 +231,14 @@ function nonlethalEvidence(targetPtr){
   return {target:key,hp_after:hp,killed:false};
  }catch(e){return null;}
 }
+function nonlethalSettlement(target, before, real, amount) {
+ // The output callback can run after a nested modifier has killed the
+ // target. Its signed delta still belongs to this exact modifier.
+ if(!Number.isFinite(before)||!Number.isFinite(real)||!Number.isFinite(amount)
+    ||real>=0||-real>amount+0.01||before+real<=0.01)return null;
+ const key=targetKey(target);
+ return key?{target:key,hp_after:before+real,killed:false}:null;
+}
 function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
@@ -316,6 +327,28 @@ function endEnemyHook(label) {
 function enemyIdentity(enemy,uid) {
  if(!uid)throw new Error('missing enemy instance UID');
  return {target:entityId(enemy),target_instance:String(uid)};
+}
+function recordEnemyDamage(scope,when) {
+ if(!enemyDamageReady||scope.source&&!own(scope.source))return;
+ try{
+  const type=scope.mod.add(0x68).readS32();
+  if(![1,2,3,5].includes(type))return;
+  if(scope.sourceReadFailed)throw new Error('missing settled source identity');
+  if(!scope.source&&type!==5)return;
+  if(!Number.isFinite(scope.real)||scope.real>0)throw new Error('invalid settled HP delta');
+  if(scope.real===0)return;
+  const target=scope.target,key=targetKey(target);
+  if(!key)throw new Error('missing settled target');
+  // Some targetable stage objects enter the HP pool, others do not. Keep
+  // the UID for both and let the host match the exact admitted instance.
+  if(!key.startsWith('enemy_')&&!key.startsWith('trap_'))return;
+  if(!enemyEntryConfig.assignable(enemyEntryConfig.bObject,target.readPointer()))
+   throw new Error('settled target is not a battle object');
+  const uid=target.add(0x18).readU32();
+  if(!uid)throw new Error('missing settled target UID');
+  record(scope.source,'enemy_damage',-scope.real,when,{method:scope.name},
+         {target:key,target_uid:String(uid),target_instance:target.toString(),damage_type:type});
+ }catch(e){enemyDamageUnknown=true;}
 }
 function includeEnemyHp(evidence,enemy) {
  try{
@@ -704,10 +737,14 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.name.endsWith('.OnAfterOutputDamage')){
      // args[0] is the hidden IL2CPP `this` receiver; modifier is args[1].
      this.mod=args[1];
-     try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.ignore=true;return;}
-     try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
+     try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
+     try{
+      const source=this.mod.readPointer();
+      this.source=source.isNull()?null:entityId(source);
+     }catch(e){this.source=null;this.sourceReadFailed=true;}
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
+     if(this.name==='Entity.OnAfterOutputDamage')recordEnemyDamage(this,this.when);
      this.modifierScope=damageModifier(this.tid,this.mod);
      return;
     }
@@ -774,6 +811,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
+     if(!this.target||this.target.isNull())return;
      if(this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
       const targetKeyValue=targetKey(this.target)||this.target.toString();
       const shield=shieldContextUnknown(end.frame,this.target)?null:shieldTotal(end.frame,this.target);
@@ -786,7 +824,8 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
         &&scope.when.frame===end.frame&&scope.targetHit.target.equals(this.target)){
       if(scope.outputSeen)scope.outputAmbiguous=true;
       scope.outputSeen=true;
-      const settled=overkillEvidence(this.mod,this.target,scope.targetHit.hpBefore,end.frame);
+      const settled=overkillEvidence(this.mod,this.target,scope.targetHit.hpBefore,end.frame)
+       ||nonlethalSettlement(this.target,scope.targetHit.hpBefore,this.real,this.amount);
       if(settled&&Number.isFinite(this.amount)&&!scope.outputAmbiguous)
        scope.settlement={amount:this.amount,evidence:settled,method:this.name};
      }
@@ -880,7 +919,8 @@ function enemyEntryQuality(frame){
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
-  skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,...enemyEntryQuality(frame)};
+  skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
+  enemy_damage_ready:enemyDamageReady,enemy_damage_unknown:enemyDamageUnknown,...enemyEntryQuality(frame)};
 }
 function markEvents(){
  const current=time(true);

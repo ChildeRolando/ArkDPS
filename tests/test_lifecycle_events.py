@@ -199,10 +199,44 @@ def test_product_snapshot_events_final_revision_and_archive_have_one_id():
         assert archive['statistics']['rows']['char_a']['damage'] == 125
         assert archive['statistics']['rows']['char_a']['observed_damage'] == 20
         assert archive['statistics']['game_time'] == 1
+        assert archive['event_status'] == last['event_status'] == 'finished'
+        assert archive['event_error'] is None
         assert archive['metadata']['outcome'] == 'unknown'
     finally:
         session.close()
     assert calls.count('attach') == calls.count('detach') == 1
+
+
+@pytest.mark.parametrize('ending', ['scene_left', 'terminal_without_observer'])
+def test_missing_terminal_event_watermark_archives_a_gap_and_keeps_native_totals(ending):
+    session, collector, _, records = connected()
+    try:
+        session.read()
+        advance(session, collector)
+        assert session.read()['event_status'] == 'recording'
+        if ending == 'terminal_without_observer':
+            collector.state = 3
+            observer, session.observer = session.observer, None
+            try:
+                # Matching the last live frame alone cannot verify the event endpoint.
+                collector.damage = 125
+                terminal = session.read()
+                assert terminal['event_status'] == 'gap'
+            finally:
+                session.observer = observer
+        collector.state = 1
+        with pytest.raises(CaptureRetry):
+            session.read()
+        archive, = [data for kind, data in records if kind == 'archive_ready']
+        row = archive['statistics']['rows']['char_a']
+        assert row['damage'] == (120 if ending == 'scene_left' else 125)
+        assert row['observed_damage'] == 20
+        assert row['event_coverage_end'] == 1
+        assert not row['event_coverage_complete']
+        assert archive['event_status'] == 'gap'
+        assert archive['event_error'] == '未取得最终事件水位'
+    finally:
+        session.close()
 
 
 def test_same_map_clock_and_address_reuse_discards_old_event_queue_and_history_stays_pinned():

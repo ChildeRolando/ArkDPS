@@ -72,7 +72,7 @@ def enemy_rows(snapshot, *, include_pending=False):
         state_id = getattr(enemy, 'state_id', None)
         if not isinstance(state_id, int):
             state_id = None
-        rows.append({
+        row = {
             'roster_id': getattr(enemy, 'roster_id', None),
             'instance_uid': getattr(enemy, 'instance_uid', None),
             'spawn_order': getattr(enemy, 'spawn_order', None),
@@ -105,7 +105,8 @@ def enemy_rows(snapshot, *, include_pending=False):
                 'x': _finite(getattr(enemy, 'pos_x', 0.0)),
                 'y': _finite(getattr(enemy, 'pos_y', 0.0)),
             },
-        })
+        }
+        rows.append(_remember_capacity_floor(row))
     if include_pending:
         # A planned enemy that died between polls has no live attributes. The
         # same enemy type's observed MaxHP is still a valid denominator; never
@@ -127,7 +128,8 @@ def enemy_rows(snapshot, *, include_pending=False):
 
 
 def _max_hp(row):
-    return _finite(row.get('max_hp'), None) if row['hp_known'] else None
+    hp = _finite(row.get('max_hp'))
+    return hp if row['hp_known'] and hp > 0 else None
 
 
 def _same_hp(left, right):
@@ -199,6 +201,25 @@ def _phase_key(row):
     return (uid, row['eid']) if uid is not None else None
 
 
+def _observed_hp_floor(row):
+    if _phase_key(row) is None or row.get('entry_inferred'):
+        return 0
+    if row['lifecycle'] == 'departed':
+        hp = row.get('hp_at_finish')
+    else:
+        hp = row.get('hp') if row['alive'] else None
+    return max(_finite(hp), row.get('observed_hp_floor', 0))
+
+
+def _remember_capacity_floor(row, native_hp=0):
+    if _phase_key(row) is None or row.get('entry_inferred') or _phase_capacity(row) is not None:
+        return row
+    floor = max(_observed_hp_floor(row), native_hp)
+    if floor > row.get('observed_hp_floor', 0):
+        return dict(row, observed_hp_floor=floor)
+    return row
+
+
 def _hp_pool(row, planned_hp=None):
     base = _phase_capacity(row)
     phase_hp = _finite(row.get('phase_total_hp'), None)
@@ -216,13 +237,22 @@ def _hp_pool(row, planned_hp=None):
                               phase_hp + max(0, covered_expansion)) if hp is not None)
 
 
+def _observed_pool(row):
+    pool = _hp_pool(row)
+    # Positive HP is a floor for an observed instance with missing MaxHP.
+    # A known phase sum may already cover this HP.
+    floor = _observed_hp_floor(row) if _phase_capacity(row) is None else 0
+    return (floor, True) if floor > (pool or 0) else (pool, False)
+
+
 def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
     """Total confirmed entrants and current HP, alongside the stage estimate."""
     entered = [row for row in rows if row['lifecycle'] in ENTERED_LIFECYCLES
                and not row.get('entry_inferred')]
     unknown_lifecycle_count = sum(row['alive'] is None for row in entered)
-    observed_pool = [_hp_pool(row) for row in entered]
-    observed_total = sum(hp for hp in observed_pool if hp is not None)
+    observed_pool = [_observed_pool(row) for row in entered]
+    observed_total = sum(hp for hp, _ in observed_pool if hp is not None)
+    recovered_hp = sum(_finite(row.get('recovered_hp')) for row in entered)
     remaining = [_finite(row.get('hp'), None) for row in entered if row['alive']]
     remaining_complete = (bool(entered) and not unknown_lifecycle_count
                           and all(hp is not None for hp in remaining))
@@ -263,10 +293,11 @@ def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
                 adjusted_planned_total += max(0, hp - overlap)
     phases_complete = all(row.get('phase_from_birth') and row.get('phase_coverage_complete')
                           for row in phases)
-    capacity_complete = not any(_phase_capacity_is_partial(row)
-                                or row.get('prior_phase_capacity_partial') for row in entered)
+    capacity_complete = (not any(_phase_capacity_is_partial(row)
+                                 or row.get('prior_phase_capacity_partial') for row in entered)
+                         and not any(partial for _, partial in observed_pool))
     total_complete = (entered_coverage_complete and bool(entered) and phases_complete
-                      and capacity_complete and all(hp is not None for hp in observed_pool))
+                      and capacity_complete and all(hp is not None for hp, _ in observed_pool))
     if planned:
         missing_enemies = Counter(row['eid'] for row in entered) - Counter(row['eid'] for row in planned)
         stage_complete = (phases_complete and capacity_complete and matched == len(phases)
@@ -288,6 +319,8 @@ def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
                             for row, hp in zip(planned, planned_hp) if hp is None],
         'entered_total_hp': observed_total,
         'observed_total_hp': observed_total,
+        'recovered_hp': recovered_hp,
+        'damage_capacity_with_recovery': observed_total + recovered_hp,
         'stage_total_hp_estimate': max(adjusted_planned_total, observed_total),
         'stage_total_hp_complete': stage_complete,
         'remaining_hp': sum(max(0.0, hp) for hp in remaining if hp is not None),
@@ -309,7 +342,7 @@ class EnemyTimeline:
         self.points = []
 
     def add(self, game_time, rows, our_effective_damage, planned=None, *,
-            replace_current=False, entered_coverage_complete=True):
+            replace_current=False, entered_coverage_complete=True, damage_complete=True):
         if not isinstance(game_time, (int, float)) or isinstance(game_time, bool):
             return None
         if not math.isfinite(game_time):
@@ -326,6 +359,8 @@ class EnemyTimeline:
             'game_time': float(game_time),
             'entered_total_hp': totals['entered_total_hp'],
             'observed_total_hp': totals['observed_total_hp'],
+            'recovered_hp': totals['recovered_hp'],
+            'damage_capacity_with_recovery': totals['damage_capacity_with_recovery'],
             'planned_count': totals['planned_count'],
             'planned_total_hp': totals['planned_total_hp'],
             'planned_complete': totals['planned_complete'],
@@ -334,6 +369,7 @@ class EnemyTimeline:
             'remaining_hp': totals['remaining_hp'],
             'our_effective_damage': float(our_effective_damage) if damage_known else None,
             'our_damage_known': damage_known,
+            'our_damage_complete': damage_known and damage_complete,
             'entered_count': totals['entered_count'],
             'alive_count': totals['alive_count'],
             'unknown_lifecycle_count': totals['unknown_lifecycle_count'],
@@ -479,6 +515,7 @@ class EnemyTelemetry:
         self._seeded = False
         self._row_frames = {}
         self._event_frames = {}
+        self._recovery_events = {}
         self._spawn_hp_evidence = {}
         self._pending_events = defaultdict(list)
         self._finished = set()
@@ -535,10 +572,25 @@ class EnemyTelemetry:
             # An attribute refresh immediately after a full-HP birth can
             # clamp HP to the final initial maximum without taking damage.
             return dict(row, max_hp=max_hp, phase_initial_max_hp=max_hp, phase_max_hp=max_hp,
+                        observed_hp_floor=min(row.get('observed_hp_floor', 0), max_hp),
                         birth_hp_adjustment=max_hp - birth_hp)
         if hp < before:
             self._spawn_hp_evidence.pop(key)
         return row
+
+    def _record_recovery(self, row, event, key, hp, max_hp):
+        before = _finite(event.get('hp_before'), None)
+        spawn_frame = row.get('spawn_frame')
+        event_key = (event['frame'], event['sequence'])
+        if (row['lifecycle'] != 'active' or row['alive'] is not True or row.get('entry_inferred')
+                or before is None or before <= 0 or hp <= before
+                or not _same_hp(row['hp'], before) or not _same_hp(_max_hp(row), max_hp)
+                or (hp > max_hp and not _same_hp(hp, max_hp))
+                or (spawn_frame is not None and event['frame'] <= spawn_frame + 1)
+                or event_key <= self._recovery_events.get(key, (-1, -1))):
+            return row
+        self._recovery_events[key] = event_key
+        return dict(row, recovered_hp=row.get('recovered_hp', 0) + (hp - before))
 
     def _apply_event(self, row, event, key):
         kind, frame = event['kind'], event['frame']
@@ -582,6 +634,8 @@ class EnemyTelemetry:
             max_hp = _finite(event.get('enemy_max_hp'), None)
             if max_hp is not None and max_hp <= 0:
                 max_hp = None
+            row = self._record_recovery(row, event, key, hp, max_hp)
+            row = _remember_capacity_floor(row, max(hp, _finite(event.get('hp_before'))))
             row = self._settle_spawn_max_hp(row, event, key, hp, max_hp)
             old_floor = row.get('max_hp_lower_bound')
             row = _observe_max_hp(dict(row, hp=hp), hp, max_hp,
@@ -592,7 +646,7 @@ class EnemyTelemetry:
                 self._phase_calibration.discard(key)
         self._row_frames[key] = frame if fake_departure else max(frame, self._row_frames.get(key, -1))
         self._event_frames[key] = frame
-        return dict(row, hp_ratio=_current_hp_ratio(row))
+        return _remember_capacity_floor(dict(row, hp_ratio=_current_hp_ratio(row)))
 
     def _apply_pending(self, row, key):
         for event in self._pending_events.pop(key, ()):
@@ -715,7 +769,8 @@ class EnemyTelemetry:
             planned.append(row)
         return planned
 
-    def _state(self, status, *, error=None, frame=None, game_time=None, our_damage=None):
+    def _state(self, status, *, error=None, frame=None, game_time=None, our_damage=None,
+               enemy_damage=None):
         self._status = status
         self.error = error
         current = self._rows_with_phases(self._rows)
@@ -733,7 +788,8 @@ class EnemyTelemetry:
         if self._stream_complete and not stream_ready:
             totals.update(remaining_hp_complete=False, hp_complete=False)
         if game_time is not None and (not self._stream_complete or stream_ready):
-            self._update_timeline(game_time, our_damage, current, planned, entered_coverage)
+            self._update_timeline(game_time, our_damage, current, planned, entered_coverage,
+                                  enemy_damage)
         state = {
             'status': status,
             'error': error,
@@ -741,6 +797,7 @@ class EnemyTelemetry:
             'rows': current,
             'totals': totals,
             'damage_baseline': self._damage_baseline,
+            'damage_scope': 'entered' if enemy_damage is not None else 'legacy',
             'series': self.timeline.series(),
             'last_point': self.timeline.last,
         }
@@ -770,7 +827,7 @@ class EnemyTelemetry:
         merged = dict(current)
         merged.update({name: value for name, value in observed.items()
                        if value is not None and name not in _LIVE_FIELDS
-                       and name not in ('hp_known', 'hp_ratio', 'max_hp')})
+                       and name not in ('hp_known', 'hp_ratio', 'max_hp', 'observed_hp_floor')})
         if not keep_live:
             merged.update({name: observed[name] for name in _LIVE_FIELDS})
         elif current['alive'] is None and observed['alive'] and not older:
@@ -784,7 +841,7 @@ class EnemyTelemetry:
         if observed['hp_known'] and not older:
             merged = _observe_max_hp(merged, observed['hp'], observed['max_hp'], seed=True)
         merged['hp_ratio'] = _current_hp_ratio(merged)
-        return merged
+        return _remember_capacity_floor(merged, observed.get('observed_hp_floor', 0) if not older else 0)
 
     def _reconcile_snapshot(self, rows, frame, *, calibration):
         previous = {_phase_key(row): row for row in self._rows
@@ -896,7 +953,27 @@ class EnemyTelemetry:
                           or row['spawn_kind'] == 'scheduled'], calibration=calibration)
         return 'ready', None
 
-    def _update_timeline(self, game_time, our_damage, rows, planned, entered_coverage):
+    def _update_timeline(self, game_time, our_damage, rows, planned, entered_coverage,
+                         enemy_damage):
+        if enemy_damage is not None:
+            by_uid = enemy_damage['by_uid']
+            observed = 0.0
+            complete = enemy_damage['complete'] and entered_coverage
+            counted = set()
+            for row in rows:
+                if row['lifecycle'] not in ENTERED_LIFECYCLES:
+                    continue
+                uid = row['instance_uid']
+                damage = by_uid.get(uid)
+                if uid is None or (damage and damage['eid'] != row['eid']):
+                    complete = False
+                elif damage and uid not in counted:
+                    observed += damage['amount']
+                    counted.add(uid)
+            self.timeline.add(game_time, rows, observed if complete or observed > 0 else None,
+                              planned, replace_current=self._stream_complete is True,
+                              entered_coverage_complete=entered_coverage, damage_complete=complete)
+            return
         our_damage = _finite(our_damage, None)
         if self._damage_baseline is None and our_damage is not None:
             # Align the damage curve with the enemy-observation window. Native
@@ -910,7 +987,7 @@ class EnemyTelemetry:
                           entered_coverage_complete=entered_coverage)
 
     def sample(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None,
-               enemy_state=None, frame=None):
+               enemy_state=None, enemy_damage=None, frame=None):
         self._record_entries(enemy_entry)
         if enemy_phases is not None:
             self._phase_data = enemy_phases
@@ -931,4 +1008,5 @@ class EnemyTelemetry:
                 return self._state(status, error=error, frame=frame)
         else:
             return self._state(self._status, error=self.error, frame=frame)
-        return self._state('ready', frame=frame, game_time=game_time, our_damage=our_damage)
+        return self._state('ready', frame=frame, game_time=game_time, our_damage=our_damage,
+                           enemy_damage=enemy_damage)

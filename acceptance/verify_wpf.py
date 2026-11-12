@@ -63,7 +63,8 @@ def seed(directory):
         dict(game_time=6., entered_total_hp=26000., remaining_hp=14100.,
              our_effective_damage=11900., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
         dict(game_time=12., entered_total_hp=26000., remaining_hp=6200.,
-             our_effective_damage=18700., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
+             our_effective_damage=18700., our_damage_known=True, our_damage_complete=False,
+             entered_count=3, alive_count=2, hp_complete=True),
     ]
     enemies = [
         dict(instance_uid='acceptance-1', roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',
@@ -86,10 +87,12 @@ def seed(directory):
              is_summon=False, position={'x': 6.0, 'y': 3.5}),
     ]
     enemy = dict(status='ready', error=None, ready=True, rows=enemies, non_team_native_damage=500,
+                 damage_scope='entered',
                  totals=dict(entered_count=3, alive_count=2,
                              entered_total_hp=26000., remaining_hp=6200.,
                              stage_total_hp_estimate=36000., stage_total_hp_complete=False,
                              departed_hp=600., departed_hp_count=1,
+                             recovered_hp=400., damage_capacity_with_recovery=26400.,
                              hp_complete=True),
                  series=series, last_point=series[-1])
     sample = dict(battle_id='synthetic-live', session='synthetic-live', frame=360,

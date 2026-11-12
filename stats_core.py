@@ -86,6 +86,8 @@ class Statistics:
         self.enemy_state_incomplete = False
         self.enemy_state_events = []
         self.enemy_state_identities = {}
+        self.enemy_damage = None
+        self.enemy_damage_incomplete = False
         # Per-event overkill is split by the same skill window as its damage.
         self.skill_overkill = {}
         self.non_skill_overkill = {}
@@ -131,6 +133,31 @@ class Statistics:
 
     def mark_enemy_state_unknown(self):
         self.enemy_state_incomplete = True
+
+    def observe_enemy_damage(self, *, complete):
+        if self.enemy_damage is None:
+            self.enemy_damage = {}
+        self.enemy_damage_incomplete |= not complete
+
+    def record_enemy_damage(self, source, owner, damage_type, amount, eid, uid, instance):
+        if self.enemy_damage is None:
+            return
+        if (not self._enemy_identity(eid, uid) or not self._optional_number(amount)
+                or amount <= 0 or type(damage_type) is not int
+                or damage_type not in NATIVE_DAMAGE_TYPES):
+            self.enemy_damage_incomplete = True
+            return
+        if source is None and damage_type == 5:
+            owner = self.last_elemental.get(instance)
+        if owner is None:
+            if classify_unmapped_source(source) is None:
+                self.enemy_damage_incomplete = True
+            return
+        existing = self.enemy_damage.setdefault(uid, {'eid': eid, 'amount': 0.0})
+        if existing['eid'] != eid:
+            self.enemy_damage_incomplete = True
+            return
+        existing['amount'] += amount
 
     @staticmethod
     def _enemy_identity(eid, uid):
@@ -791,7 +818,11 @@ class Statistics:
             row['burst_damage'] = (burst['actual'] if burst and burst_complete else None)
             row['burst_overkill'] = (burst['overkill'] if burst and burst_complete else None)
             row['burst_settlement'] = (burst['settlement'] if burst and burst_complete else None)
-            row['burst_added_settlement'] = (burst['added_settlement'] if burst and burst_complete else None)
+            # Only attributed sourceless settlements augment the native total.
+            # Keep a verified supplement even when another burst was unowned.
+            row['burst_added_settlement'] = (
+                burst['added_settlement']
+                if burst and (burst_complete or burst['added_settlement'] > 0) else None)
             row['burst_count'] = (burst['count'] if burst and burst_complete else 0)
             row['burst_complete'] = burst_complete
             row['burst_unknown_reason'] = self.burst_unknown_reason if not burst_complete else None
@@ -830,15 +861,16 @@ class Statistics:
                     row['engagement_' + kind] = None
                     row['active_' + kind] = None
                     row['observed_' + kind] = None
-            covered_burst = burst if burst_complete else None
-            if covered_burst:
+            # Unowned sourceless bursts are outside the credited damage total.
+            # Adjust the native total and overkill with the same attributed evidence.
+            if burst:
                 if row['damage'] is not None:
-                    row['damage'] += covered_burst['added_settlement']
+                    row['damage'] += burst['added_settlement']
                 if row['overkill_damage'] is not None:
-                    row['overkill_damage'] += covered_burst['overkill']
+                    row['overkill_damage'] += burst['overkill']
                     types = row['overkill_damage_by_type']
                     if types is not None:
-                        types['elemental'] = types.get('elemental', 0.0) + covered_burst['overkill']
+                        types['elemental'] += burst['overkill']
             if row['damage'] is not None and row['overkill_damage'] is not None:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
@@ -919,5 +951,10 @@ class Statistics:
                 'complete': not (self.enemy_state_incomplete or self.event_coverage_broken),
                 'start_frame': self.enemy_state_start_frame,
                 'events': events,
+            }
+        if self.enemy_damage is not None:
+            result['enemy_damage'] = {
+                'complete': not (self.enemy_damage_incomplete or self.event_coverage_broken),
+                'by_uid': {uid: dict(damage) for uid, damage in self.enemy_damage.items()},
             }
         return result

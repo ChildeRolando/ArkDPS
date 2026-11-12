@@ -530,7 +530,8 @@ def test_unattributed_elemental_burst_is_unknown_not_guessed():
     assert row['damage'] == pytest.approx(1000)
 
 
-def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_once():
+@pytest.mark.parametrize('unresolved', [False, True])
+def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_once(unresolved):
     s = Statistics('battle', 0, event_coverage=True)
     s.register_source('a', 'a')
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
@@ -542,8 +543,20 @@ def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_onc
     s.event('bar', .6, 'a', 'elemental_bar', 100, target_instance='second')
     s.event('sourceless-burst', .7, None, 'elemental_burst', 300, target='enemy_1',
             hp_before=100, hp_after=0, real_delta=-100, target_instance='second')
+    if unresolved:
+        s.event('unowned-burst', .9, None, 'elemental_burst', 900, target='enemy_1',
+                hp_before=50, hp_after=0, real_delta=-50, target_instance='third')
     row = s.result()['rows']['a']
-    assert row['burst_settlement'] == 800
+    assert row['burst_complete'] is (not unresolved)
+    if unresolved:
+        assert row['burst_unknown_reason']
+        assert row['burst_damage'] is None
+        assert row['burst_overkill'] is None
+        assert row['burst_settlement'] is None
+    else:
+        assert row['burst_damage'] == 400
+        assert row['burst_overkill'] == 400
+        assert row['burst_settlement'] == 800
     assert row['burst_added_settlement'] == 300
     assert row['damage'] == 1800
     assert row['overkill_damage'] == 400
