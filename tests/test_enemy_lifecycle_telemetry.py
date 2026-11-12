@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from collector import EnemyTelemetry
 
 
@@ -290,3 +292,55 @@ def test_confirmed_stage_object_uses_uid_for_hp_and_finish_without_admitting_ano
     assert (row['instance_uid'], row['hp'], row['lifecycle']) == ('10', 0, 'departed')
     assert finished['totals']['entered_count'] == 1
     assert finished['totals']['remaining_hp'] == 0
+
+
+@pytest.mark.parametrize('adjustment_delay', [0, 1, 2])
+def test_full_health_spawn_clamp_corrects_only_the_initial_frames(adjustment_delay):
+    battle = Battle((10, []))
+    battle.sample(10)
+    eid = 'enemy_1266_nhapos'
+    birth_max, effective_max = 81249.99701976776, 16249.998435378075
+    entered = battle.sample(11, event(
+        1, 11, 'enemy_enter', eid=eid, hp_after=birth_max,
+        enemy_entry_attributes={'max_hp': birth_max},
+    ))
+    assert entered['totals']['entered_total_hp'] == birth_max
+    frame = 11 + adjustment_delay
+    clamped = battle.sample(frame, event(
+        2, frame, 'enemy_hp', eid=eid, hp_before=birth_max,
+        hp_after=effective_max, enemy_max_hp=effective_max,
+    ))
+    row, = clamped['rows']
+    assert row['max_hp'] == effective_max
+    assert row['hp'] == effective_max
+    assert row['hp_ratio'] == 1
+    assert clamped['totals']['entered_count'] == 1
+    expected_capacity = effective_max if adjustment_delay <= 1 else birth_max
+    assert clamped['totals']['entered_total_hp'] == expected_capacity
+    assert clamped['last_point']['entered_total_hp'] == expected_capacity
+
+
+def test_spawn_clamp_does_not_erase_hp_capacity_after_damage_and_healing():
+    battle = Battle((10, []))
+    battle.sample(10)
+    result = battle.sample(
+        12, event(1, 11, 'enemy_enter', hp_after=100,
+                  enemy_entry_attributes={'max_hp': 100}),
+        event(2, 11, 'enemy_hp', hp_before=100, hp_after=80, enemy_max_hp=100),
+        event(3, 11, 'enemy_hp', hp_before=80, hp_after=100),
+        event(4, 12, 'enemy_hp', hp_before=100, hp_after=20, enemy_max_hp=20),
+    )
+    assert result['rows'][0]['max_hp'] == 20
+    assert result['totals']['entered_total_hp'] == 100
+
+
+def test_snapshot_first_seen_frame_does_not_open_the_spawn_clamp_window():
+    seeded = enemy('10', hp=100)
+    seeded.spawn_frame = 10
+    battle = Battle((10, [seeded]))
+    battle.sample(10)
+    result = battle.sample(
+        11, event(1, 11, 'enemy_hp', hp_before=100, hp_after=20, enemy_max_hp=20),
+    )
+    assert result['rows'][0]['max_hp'] == 20
+    assert result['totals']['entered_total_hp'] == 100

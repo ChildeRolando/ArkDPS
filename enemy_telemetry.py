@@ -130,6 +130,11 @@ def _max_hp(row):
     return _finite(row.get('max_hp'), None) if row['hp_known'] else None
 
 
+def _same_hp(left, right):
+    return left is not None and right is not None and math.isclose(
+        left, right, rel_tol=1e-9, abs_tol=1e-6)
+
+
 def _phase_capacity(row):
     return max((value for value in (_max_hp(row), row.get('phase_max_hp'),
                                     row.get('phase_max_hp_lower_bound')) if value is not None),
@@ -470,6 +475,7 @@ class EnemyTelemetry:
         self._seeded = False
         self._row_frames = {}
         self._event_frames = {}
+        self._spawn_hp_frames = {}
         self._pending_events = defaultdict(list)
         self._finished = set()
         self._phase_calibration = set()
@@ -508,6 +514,26 @@ class EnemyTelemetry:
             hp_ratio=None, hp_inferred=False, entry_inferred=False,
         )
 
+    def _settle_spawn_max_hp(self, row, event, key, hp, max_hp):
+        birth_frame = self._spawn_hp_frames.get(key)
+        if birth_frame is None:
+            return row
+        before = _finite(event.get('hp_before'), None)
+        if (not self._stream_complete or not birth_frame <= event['frame'] <= birth_frame + 1
+                or not _same_hp(row['hp'], before)):
+            self._spawn_hp_frames.pop(key)
+            return row
+        old_max = _max_hp(row)
+        if (max_hp is not None and old_max is not None and max_hp < old_max
+                and _same_hp(before, old_max) and _same_hp(hp, max_hp)
+                and _same_hp(_phase_capacity(row), old_max)):
+            # An attribute refresh immediately after a full-HP birth can
+            # clamp HP to the final initial maximum without taking damage.
+            return dict(row, max_hp=max_hp, phase_initial_max_hp=max_hp, phase_max_hp=max_hp)
+        if hp < before:
+            self._spawn_hp_frames.pop(key)
+        return row
+
     def _apply_event(self, row, event, key):
         kind, frame = event['kind'], event['frame']
         if kind == 'enemy_enter':
@@ -526,12 +552,18 @@ class EnemyTelemetry:
             row = dict(row, lifecycle='active', alive=True, state_id=None, state='在场',
                        end_frame=None, end_reason=None, finish_reason=None, hp=hp)
             if kind == 'enemy_reborn':
+                self._spawn_hp_frames.pop(key, None)
                 row = _next_hp_phase(row)
                 self._phase_calibration.add(key)
+            elif (key not in self._event_frames and self._stream_complete
+                  and _same_hp(_finite(event.get('hp_after'), None), _max_hp(row))):
+                self._spawn_hp_frames[key] = frame
         elif kind == 'enemy_fake_death':
+            self._spawn_hp_frames.pop(key, None)
             row = dict(row, lifecycle='rebirthing', alive=True, state_id=8,
                        state='等待重生', end_frame=None, end_reason=None, finish_reason=None, hp=hp)
         elif kind == 'enemy_finish':
+            self._spawn_hp_frames.pop(key, None)
             reason = event.get('finish_reason')
             end_reason, state_id, state = _FINISH_STATES.get(
                 reason, (f'finish_{reason}', None, '已离场'))
@@ -544,6 +576,7 @@ class EnemyTelemetry:
             max_hp = _finite(event.get('enemy_max_hp'), None)
             if max_hp is not None and max_hp <= 0:
                 max_hp = None
+            row = self._settle_spawn_max_hp(row, event, key, hp, max_hp)
             old_floor = row.get('max_hp_lower_bound')
             row = _observe_max_hp(dict(row, hp=hp), hp, max_hp,
                                   seed='initial_phase_hp_expansion' in row)
@@ -564,6 +597,7 @@ class EnemyTelemetry:
         complete = bool(observation and observation['complete'])
         if self._stream_complete and not complete:
             self._seeded = False
+            self._spawn_hp_frames.clear()
         if observation is None:
             if self._stream_complete is not None:
                 self._stream_complete = False
@@ -572,6 +606,7 @@ class EnemyTelemetry:
         if self._stream_start_frame != start_frame:
             self._seeded = False
             self._last_sequence = -1
+            self._spawn_hp_frames.clear()
         self._stream_complete = complete
         self._stream_start_frame = start_frame
         events = observation['events']
