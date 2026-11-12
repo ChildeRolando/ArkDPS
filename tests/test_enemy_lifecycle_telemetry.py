@@ -344,3 +344,66 @@ def test_snapshot_first_seen_frame_does_not_open_the_spawn_clamp_window():
     )
     assert result['rows'][0]['max_hp'] == 20
     assert result['totals']['entered_total_hp'] == 100
+
+
+@pytest.mark.parametrize('from_birth', [True, False])
+def test_phase_summary_replaces_only_its_recorded_initial_birth_hp(from_birth):
+    battle = Battle((10, []))
+    battle.sample(10)
+    battle.sample(
+        13, event(1, 11, 'enemy_enter', hp_after=100, enemy_entry_attributes={'max_hp': 100}),
+        event(2, 12, 'enemy_hp', hp_before=100, hp_after=20, enemy_max_hp=20),
+        event(3, 13, 'enemy_fake_death', hp_after=0),
+    )
+    raw_total = 140 if from_birth else 40
+    phase = {'eid': 'enemy_a', 'phase_total_hp': raw_total,
+             'phase_count': 2 if from_birth else 1, 'phase_from_birth': from_birth}
+    phases = {'complete': True, 'instances': {'10': phase}}
+    result = battle.sample(14, event(4, 14, 'enemy_reborn', hp_after=40), phases=phases)
+    row, = result['rows']
+    total = 60 if from_birth else 40
+    assert row['phase_total_hp'] == total
+    assert row['phase_count'] == phase['phase_count']
+    assert row['hp'] == result['totals']['remaining_hp'] == 40
+    assert result['totals']['entered_count'] == 1
+    assert result['totals']['entered_total_hp'] == total
+    assert result['last_point']['entered_total_hp'] == total
+    assert result['totals']['total_hp_complete'] is from_birth
+    assert phase['phase_total_hp'] == raw_total
+    assert battle.sample(15)['totals']['entered_total_hp'] == total
+
+
+def test_departed_hp_counts_only_positive_hp_confirmed_by_finish_events():
+    battle = Battle((10, [
+        enemy('10', roster_id=1), enemy('20', roster_id=2),
+        enemy('30', roster_id=3), enemy('40', roster_id=4),
+        enemy('50', hp=35, roster_id=5, lifecycle='departed', alive=False),
+        enemy('60', roster_id=6),
+    ]))
+    seeded = battle.sample(10)
+    assert seeded['totals']['departed_hp'] == seeded['totals']['departed_hp_count'] == 0
+    result = battle.sample(
+        11, event(1, 11, 'enemy_finish', uid='10', hp_after=0, finish_reason=2),
+        event(2, 11, 'enemy_finish', uid='20', hp_after=27, finish_reason=3),
+        event(3, 11, 'enemy_finish', uid='30', hp_after=75, finish_reason=7),
+        event(4, 11, 'enemy_fake_death', uid='40', hp_after=0),
+        event(5, 11, 'enemy_finish', uid='60', finish_reason=7),
+    )
+    totals = result['totals']
+    assert totals['departed_hp'] == 102
+    assert totals['departed_hp_count'] == 2
+    assert totals['entered_total_hp'] == 600
+    assert totals['remaining_hp'] == 0
+    assert totals['alive_count'] == 1  # waiting to revive
+    assert totals['total_hp_complete'] is True
+    assert totals['remaining_hp_complete'] is True
+
+    phase = {'eid': 'enemy_a', 'phase_total_hp': 200, 'phase_count': 2, 'phase_from_birth': True}
+    reborn = battle.sample(
+        12, event(6, 12, 'enemy_reborn', uid='40', hp_after=100),
+        phases={'complete': True, 'instances': {'40': phase}},
+    )
+    assert reborn['totals']['departed_hp'] == 102
+    assert reborn['totals']['departed_hp_count'] == 2
+    assert reborn['totals']['entered_total_hp'] == 700
+    assert reborn['totals']['remaining_hp'] == 100

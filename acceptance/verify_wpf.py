@@ -60,7 +60,7 @@ def seed(directory):
         dict(game_time=6., entered_total_hp=26000., remaining_hp=14100.,
              our_effective_damage=11900., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
         dict(game_time=12., entered_total_hp=26000., remaining_hp=6200.,
-             our_effective_damage=19800., our_damage_known=True, entered_count=3, alive_count=1, hp_complete=True),
+             our_effective_damage=18700., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
     ]
     enemies = [
         dict(roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',
@@ -70,10 +70,10 @@ def seed(directory):
              spawn_frame=120, end_frame=None, end_reason=None,
              is_summon=False, position={'x': 1.5, 'y': 2.5}),
         dict(roster_id=2, spawn_order=2, eid='enemy_1048_hirman', name='碎岩者',
-             code='B2', hp=0., max_hp=9800., hp_known=True, hp_ratio=0.,
+             code='B2', hp=600., max_hp=9800., hp_known=True, hp_ratio=600./9800.,
              atk=750., **{'def': 120.}, res=20., move_speed=.55, attack_speed=86.,
-             alive=False, lifecycle='departed', state_id=5, state='死亡',
-             spawn_frame=240, end_frame=540, end_reason='death',
+             alive=False, lifecycle='departed', state_id=None, state='已离场',
+             spawn_frame=240, end_frame=330, end_reason='finish_7',
              is_summon=False, position={'x': 3.25, 'y': 4.0}),
         dict(roster_id=3, spawn_order=3, eid='enemy_1506_patrt', name='重装防御者',
              code='B3', hp=5000., max_hp=13800., hp_known=True, hp_ratio=.36,
@@ -85,6 +85,7 @@ def seed(directory):
     enemy = dict(status='ready', error=None, ready=True, rows=enemies, non_team_native_damage=500,
                  totals=dict(entered_count=3, alive_count=2,
                              entered_total_hp=26000., remaining_hp=6200.,
+                             departed_hp=600., departed_hp_count=1,
                              hp_complete=True),
                  series=series, last_point=series[-1])
     sample = dict(battle_id='synthetic-live', session='synthetic-live', frame=360,

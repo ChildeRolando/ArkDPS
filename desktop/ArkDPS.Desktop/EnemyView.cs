@@ -353,6 +353,9 @@ public partial class MainWindow
         string hint = error.Length > 0 ? error
             : entryHint + stateHint + " 已入场总血量含已记录的重生阶段。"
                 + (totalComplete && remainingComplete ? "" : " ≥ 表示已知下限。");
+        if (totals.Get("departed_hp").TryNumber() > 0)
+            hint += " 离场时尚余 " + Json.UiInt(totals, "departed_hp")
+                + " HP（" + Json.UiInt(totals, "departed_hp_count") + " 个实例）。";
         if (enemy.Get("non_team_native_damage").TryNumber() > 0)
             hint += " 其他来源原生伤害 " + Json.UiInt(enemy, "non_team_native_damage") + "。";
         double baseline = enemy.Get("damage_baseline").TryNumber(-1);
