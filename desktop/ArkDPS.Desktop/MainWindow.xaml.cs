@@ -239,7 +239,7 @@ public partial class MainWindow : Window
         if (PanelHost == null || HistoryDetailHost == null || !double.IsFinite(ActualWidth)) return;
         bool narrow = ActualWidth < 1100;
         bool wide = ActualWidth >= 1320;
-        bool scrollLive = narrow || ActualHeight < (wide ? 640 : 820);
+        bool scrollLive = narrow || ActualHeight < (wide ? 640 : 960);
         bool narrowOverview = ActualWidth < 920;
         NavigationColumn.Width = new GridLength(narrow ? 92 : 208);
         ChromeLab.Visibility = ActualWidth < 940 ? Visibility.Collapsed : Visibility.Visible;
@@ -276,7 +276,7 @@ public partial class MainWindow : Window
         LiveDetail.Margin = narrow ? new Thickness(0, 5, 0, 0) : new Thickness(0);
         RankingScroll.MaxHeight = scrollLive ? 390 : double.PositiveInfinity;
         LiveDetailScroll.MaxHeight = scrollLive ? 440 : double.PositiveInfinity;
-        LiveInspector.CompactReference = Theme.Key == "lone-trail" && wide;
+        LiveInspector.CompactReference = Theme.Key == "lone-trail";
         foreach (var panel in Panels.Values)
         {
             panel.Width = double.NaN;

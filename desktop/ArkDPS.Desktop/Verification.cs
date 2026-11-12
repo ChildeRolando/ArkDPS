@@ -238,7 +238,7 @@ public partial class MainWindow
             ranked.PinRequested?.Invoke(ranked.View.Get("entries").Items().First().Text("owner_id"));
         }
         double savedWidth = Width, savedHeight = Height;
-        foreach (var (width, height) in new[] { (1920, 1080), (1672, 941), (1380, 900), (560, 540) })
+        foreach (var (width, height) in new[] { (1920, 1080), (1672, 941), (1380, 900), (1200, 820), (560, 540) })
         {
             Width = width; Height = height;
             await Settle();
@@ -258,10 +258,8 @@ public partial class MainWindow
                     panel.ReferenceFooterRate.Text==panel.View.Text("footer_rate_display") &&
                     Grid.GetColumn(panel.ReferenceFooterTotal)==3 && Grid.GetColumn(panel.ReferenceFooterRate)==4,
                     "team total or DPS did not render in its ranking column");
-                var avatar = FindAutomationElement(LiveInspector,"CompactOperatorPortrait");
-                Require(avatar?.ActualWidth==36 && avatar.ActualHeight==36 && HasText(LiveInspector,"1,167"),
-                    "compact detail did not keep its smaller portrait and rounded values");
             }
+            if (width >= 1200) VerifyCompactPortraitLayout();
             Screenshot.Window(this, Path.Combine(output, $"lone-trail-live-{width}x{height}-dip.png"));
             if (width == 1380)
             {
@@ -294,7 +292,23 @@ public partial class MainWindow
         await Settle();
         ApplyState(initial);
         await Command("theme", new() { ["theme"] = "original" });
-        checks.Add("rounded overview/detail, HP-ordered enemy paging, aligned team footer, pause/recovery/known zero and four Lone Trail DIP layouts");
+        checks.Add("portrait beside three rounded metrics, HP-ordered enemy paging, aligned team footer, pause/recovery/known zero and five Lone Trail DIP layouts");
+    }
+    private void VerifyCompactPortraitLayout()
+    {
+        var avatar = FindAutomationElement(LiveInspector,"CompactOperatorPortrait")
+            ?? throw new InvalidOperationException("compact detail portrait missing");
+        var rows = Enumerable.Range(0,4).Select(index =>
+            FindAutomationElement(LiveInspector,"CompactOperatorMetric"+index)
+            ?? throw new InvalidOperationException("compact detail metric missing")).ToArray();
+        var avatarPosition=avatar.TranslatePoint(new Point(),LiveInspector);
+        var positions=rows.Select(row=>row.TranslatePoint(new Point(),LiveInspector)).ToArray();
+        Require(avatar.ActualWidth==36 && avatar.ActualHeight==36 && HasText(LiveInspector,"1,167") &&
+            positions.Take(3).All(point=>point.X>=avatarPosition.X+avatar.ActualWidth) &&
+            avatarPosition.Y>=positions[0].Y-1 &&
+            avatarPosition.Y+avatar.ActualHeight<=positions[2].Y+rows[2].ActualHeight+1 &&
+            positions[3].X<positions[0].X,
+            "portrait did not sit left of the three metrics or the next row failed to regain its width");
     }
     private static FrameworkElement? FindAutomationElement(DependencyObject root, string id)
     {

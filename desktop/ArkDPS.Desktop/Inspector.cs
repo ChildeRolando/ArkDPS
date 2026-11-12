@@ -333,29 +333,18 @@ public sealed class Inspector : Border
 
         internal ReferenceReport()
         {
-            var identity=new Grid{MinHeight=46,Margin=new Thickness(0,0,0,6),Background=LightFace};
-            identity.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
+            var identity=new Grid{MinHeight=32,Margin=new Thickness(0,0,0,6),Background=LightFace};
             identity.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
             identity.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-
-            var portraitCanvas=new Grid{Background=DarkFace,ClipToBounds=true};
-            initial.HorizontalAlignment=HorizontalAlignment.Center;
-            initial.VerticalAlignment=VerticalAlignment.Center;
-            portraitCanvas.Children.Add(initial);
-            portraitCanvas.Children.Add(portrait);
-            var avatar=new Border{Child=portraitCanvas,Width=36,Height=36,
-                Margin=new Thickness(6,4,0,4),BorderBrush=Divider,BorderThickness=new Thickness(1)};
-            AutomationProperties.SetAutomationId(avatar,"CompactOperatorPortrait");
-            identity.Children.Add(avatar);
-
-            var content=new StackPanel{Margin=new Thickness(8,2,8,2),VerticalAlignment=VerticalAlignment.Center};
+            identity.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
+            name.Margin=new Thickness(8,0,8,0);
             name.TextTrimming=TextTrimming.CharacterEllipsis;
-            content.Children.Add(name);
-            content.Children.Add(new Border{Child=role,Background=Theme.Brush("#586370"),CornerRadius=new CornerRadius(2),
-                HorizontalAlignment=HorizontalAlignment.Left,Padding=new Thickness(6,0,6,0)});
-            Grid.SetColumn(content,1);
-            identity.Children.Add(content);
-            more.Margin=new Thickness(0,0,6,0);
+            identity.Children.Add(name);
+            var badge=new Border{Child=role,Background=Theme.Brush("#586370"),CornerRadius=new CornerRadius(2),
+                VerticalAlignment=VerticalAlignment.Center,Padding=new Thickness(6,1,6,1),Margin=new Thickness(0,0,7,0)};
+            Grid.SetColumn(badge,1);
+            identity.Children.Add(badge);
+            more.Margin=new Thickness(0,2,6,2);
             Grid.SetColumn(more,2);
             identity.Children.Add(more);
             Children.Add(identity);
@@ -380,7 +369,22 @@ public sealed class Inspector : Border
             modules.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
             modules.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
 
+            const int primaryMetricCount=3;
             var readings=new Grid{Margin=new Thickness(0,2,0,0)};
+            readings.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
+            readings.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
+
+            var portraitCanvas=new Grid{Background=DarkFace,ClipToBounds=true};
+            initial.HorizontalAlignment=HorizontalAlignment.Center;
+            initial.VerticalAlignment=VerticalAlignment.Center;
+            portraitCanvas.Children.Add(initial);
+            portraitCanvas.Children.Add(portrait);
+            var avatar=new Border{Child=portraitCanvas,Width=36,Height=36,VerticalAlignment=VerticalAlignment.Center,
+                Margin=new Thickness(0,0,7,0),BorderBrush=Divider,BorderThickness=new Thickness(1)};
+            AutomationProperties.SetAutomationId(avatar,"CompactOperatorPortrait");
+            Grid.SetRowSpan(avatar,primaryMetricCount);
+            readings.Children.Add(avatar);
+
             for(int index=0;index<metricLabels.Length;index++)
             {
                 readings.RowDefinitions.Add(new RowDefinition{MinHeight=19});
@@ -405,7 +409,11 @@ public sealed class Inspector : Border
                 row.Children.Add(key);
                 var cell=new Border{Child=row,BorderBrush=Divider,
                     BorderThickness=new Thickness(0,0,0,index==metricLabels.Length-1 ? 0 : 1)};
-                Grid.SetRow(cell,index);readings.Children.Add(cell);
+                AutomationProperties.SetAutomationId(cell,$"CompactOperatorMetric{index}");
+                Grid.SetRow(cell,index);
+                if(index<primaryMetricCount) Grid.SetColumn(cell,1);
+                else Grid.SetColumnSpan(cell,2);
+                readings.Children.Add(cell);
             }
             var statsPanel=PanelFrame(Module(Label("主要数据",13,DarkInk,true),readings),new Thickness(0,0,3,0));
             AutomationProperties.SetAutomationId(statsPanel,"CompactOperatorStats");
