@@ -434,7 +434,23 @@ public partial class MainWindow
             Require(!entry.Text("rate_text").StartsWith("0"),"unavailable engagement rendered as zero");
         }
     }
-    private async Task<HudWindow> VerifyHudLayoutEditor(string id,HudWindow hud,string output)
+    private async Task VerifyHudLayoutEditor(string sourceId,string output)
+    {
+        var existing=Panels.Keys.ToHashSet();
+        await Command("panel_duplicate",new(){["panel_id"]=sourceId});
+        string id=Panels.Keys.Single(key=>!existing.Contains(key));
+        OpenHud(id);
+        HudWindow hud=Huds[id];
+        try { await VerifyHudLayoutEditorPanel(id,hud,output); }
+        finally
+        {
+            CloseHud(id);
+            await Command("panel_delete",new(){["panel_id"]=id});
+            await Navigate("live");
+        }
+    }
+
+    private async Task VerifyHudLayoutEditorPanel(string id,HudWindow hud,string output)
     {
         await Navigate("settings");
         Require(EditHudLayoutButton.IsEnabled && HudLayoutTarget.Items.Count==Panels.Count,
@@ -501,12 +517,10 @@ public partial class MainWindow
             Require(ReadHudLayout(id)==null && hud.LayoutProfile==HudLayout.Default &&
                     Math.Abs(hud.ActualWidth-HudLayout.Default.Width)<2,
                     "HUD layout reset did not restore default rendering");
-            return hud;
         }
         finally
         {
             if(editor.IsVisible) editor.Close();
-            await Navigate("live");
         }
     }
 
@@ -635,6 +649,12 @@ public partial class MainWindow
         var input=new[]{new Input{Mouse=new MouseInput{Flags=2}},new Input{Mouse=new MouseInput{Flags=4}}};
         Require(SendInput(2,input,Marshal.SizeOf<Input>())==2,"SendInput failed");
     }
+    private static async Task WaitForClick(Func<bool> delivered)
+    {
+        long deadline=Environment.TickCount64+1000;
+        while(!delivered() && Environment.TickCount64<deadline) await Task.Delay(25);
+    }
+
     internal async Task Verify(string output)
     {
         Directory.CreateDirectory(output);poll.Stop();save.Stop();
@@ -1000,7 +1020,8 @@ public partial class MainWindow
         LiveInspector.Update(priorView);
         checks.Add("effective switch drives inspector composition, engagement rates and skill split");
         OpenHud(id);
-        var originalHud=await VerifyHudLayoutEditor(id,Huds[id],output);
+        var originalHud=Huds[id];
+        await VerifyHudLayoutEditor(id,output);
         originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         checks.Add("HUD layout editor previews fonts and columns, validates inputs, saves and restores profiles");
         await Settle();
@@ -1125,11 +1146,17 @@ public partial class MainWindow
             originalHud.Topmost=false;under.Show();under.Activate();originalHud.Topmost=true;originalHud.Activate();await Settle();
             bounds=Native.Bounds(originalHud);int x=bounds[0]+90,y=bounds[1]+Math.Min(130,bounds[3]-14);
             Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(originalHud),"unlocked HUD does not own test point");
-            Click(x,y);await Task.Delay(150);Require(hudClicks>0 && underClicks==0,"unlocked HUD input route");
+            Click(x,y);await WaitForClick(()=>hudClicks>0 || underClicks>0);
+            Require(hudClicks==1 && underClicks==0,"unlocked HUD input route");
             originalHud.SetLocked(true);await Settle();
             Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(under),"locked HUD point is not private underlay; no click sent");
-            Click(x,y);await Task.Delay(150);Require(underClicks==1,"locked HUD did not pass input to private underlay");
-            originalHud.SetLocked(false);await Settle();Click(x,y);await Task.Delay(150);Require(hudClicks>=2,"unlocked input not restored");
+            Click(x,y);await WaitForClick(()=>underClicks>0 || hudClicks>1);
+            Require(underClicks==1 && hudClicks==1,"locked HUD did not pass input to private underlay");
+            originalHud.SetLocked(false);await Settle();
+            Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(originalHud),
+                "unlocked HUD did not reclaim the private test point");
+            Click(x,y);await WaitForClick(()=>hudClicks>1 || underClicks>1);
+            Require(hudClicks==2 && underClicks==1,"unlocked input not restored");
             checks.Add("Win32 SendInput: HUD -> private underlay -> HUD (NOT game certification)");
         }
         finally{under.Close();SetCursorPos(pointer.X,pointer.Y);}

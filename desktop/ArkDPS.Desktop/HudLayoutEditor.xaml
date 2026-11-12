@@ -3,7 +3,7 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  Style="{StaticResource {x:Type Window}}" Title="HUD 布局"
  Width="1120" Height="780" MinWidth="730" MinHeight="470"
- ShowInTaskbar="False" WindowStartupLocation="CenterOwner"
+ ShowInTaskbar="False" Topmost="True" WindowStartupLocation="CenterOwner"
  UseLayoutRounding="True" SnapsToDevicePixels="True">
  <Border Background="{DynamicResource Bg}">
  <Grid Margin="18">
