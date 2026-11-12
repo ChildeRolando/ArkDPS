@@ -30,7 +30,7 @@ from connection import (ConnectionConfig, ConnectionConfigStore, detect_instance
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
 from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
-from layout_store import LayoutStore, GuiGeometry, HudPlacement
+from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
 from panel_model import (EventAvailability, PanelConfig, detail_rates,
                          live_damage_rates, render_panel, rows_from_statistics,
@@ -305,12 +305,25 @@ class DesktopState:
             panels = tuple(p for p in self.layout.panels if p.panel_id != cmd['panel_id'])
             if not panels:
                 raise ValueError('至少保留一个面板')
+            panel_id = cmd['panel_id']
             self.persist(replace(self.layout, panels=panels,
-                                 huds=tuple(h for h in self.layout.huds if h.panel_id != cmd['panel_id'])))
+                                 huds=tuple(h for h in self.layout.huds if h.panel_id != panel_id),
+                                 hud_styles=tuple((key, style) for key, style in self.layout.hud_styles
+                                                  if key != panel_id)))
         elif op == 'theme':
             self.persist(replace(self.layout, theme=cmd['theme']))
         elif op == 'number_units':
             self.persist(replace(self.layout, number_units=cmd['number_units']))
+        elif op == 'hud_style':
+            panel_id = cmd['panel_id']
+            if panel_id not in {p.panel_id for p in self.layout.panels}:
+                raise ValueError('HUD 源面板已删除')
+            styles = dict(self.layout.hud_styles)
+            if cmd['style'] is None:
+                styles.pop(panel_id, None)
+            else:
+                styles[panel_id] = HudStyle.from_dict(cmd['style'])
+            self.persist(replace(self.layout, hud_styles=tuple(styles.items())))
         elif op == 'placement':
             known = {p.panel_id for p in self.layout.panels}
             huds = tuple(HudPlacement.from_dict(h) for h in cmd['huds'])

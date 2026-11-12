@@ -90,35 +90,41 @@
    </ScrollViewer>
   </ControlTemplate>
   <Style x:Key="HudRankedRow" TargetType="ListBoxItem" BasedOn="{StaticResource RankedRow}">
-   <Setter Property="Height" Value="{x:Static local:StatisticPanel.HudRowHeight}"/>
+   <Setter Property="Height" Value="{DynamicResource HudProfileRowHeight}"/>
+   <Setter Property="Margin" Value="{DynamicResource HudProfileRowGap}"/>
   </Style>
   <Style x:Key="HudNumber" TargetType="TextBlock">
    <Setter Property="FontFamily" Value="{DynamicResource DataFont}"/>
-   <Setter Property="FontSize" Value="18"/>
+   <Setter Property="FontSize" Value="{DynamicResource HudProfileNumberFont}"/>
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
    <Setter Property="TextAlignment" Value="Right"/>
    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
    <Setter Property="VerticalAlignment" Value="Center"/>
   </Style>
   <DataTemplate x:Key="HudRow" DataType="{x:Type local:RowItem}">
-   <Grid x:Name="HudOperatorRow" Margin="0,0,8,0" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
+   <Grid x:Name="HudOperatorRow" Margin="{DynamicResource HudProfileRowPadding}" ClipToBounds="True" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
     <Grid.ColumnDefinitions>
-     <ColumnDefinition Width="36*"/><ColumnDefinition Width="44*"/><ColumnDefinition Width="140*"/>
-     <ColumnDefinition Width="42*"/><ColumnDefinition Width="94*"/><ColumnDefinition Width="104*"/><ColumnDefinition Width="76*"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileRankWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfilePortraitWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileNameWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileBarWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileTotalWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileRateWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileShareWidth}"/>
     </Grid.ColumnDefinitions>
     <TextBlock Text="{Binding Rank}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" TextAlignment="Center"/>
     <Viewbox Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" StretchDirection="DownOnly">
-     <Border Width="36" Height="36" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
-      <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
+     <Border Width="{DynamicResource HudProfilePortraitSize}" Height="{DynamicResource HudProfilePortraitSize}" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
+      <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNumberFont}" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
      </Border>
     </Viewbox>
-    <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0"/>
-    <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="2,0,6,0">
+    <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNameFont}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="{DynamicResource HudProfileNameGap}"/>
+    <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="{DynamicResource HudProfileBarGap}">
      <local:ContributionBar Data="{Binding Entry}" Height="8" VerticalAlignment="Center"/>
     </Border>
     <TextBlock x:Name="HudOperatorTotal" Grid.Column="4" Text="{Binding Total}" Style="{StaticResource HudNumber}"/>
-    <TextBlock Grid.Column="5" Text="{Binding Rate}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" Margin="4,0,0,0"/>
-    <TextBlock Grid.Column="6" Text="{Binding Share}" Style="{StaticResource HudNumber}" Margin="4,0,0,0"/>
+    <TextBlock Grid.Column="5" Text="{Binding Rate}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" Margin="{DynamicResource HudProfileValueGap}"/>
+    <TextBlock Grid.Column="6" Text="{Binding Share}" Style="{StaticResource HudNumber}" Margin="{DynamicResource HudProfileValueGap}"/>
    </Grid>
   </DataTemplate>
   <Style x:Key="EffectiveSwitch" TargetType="ToggleButton">

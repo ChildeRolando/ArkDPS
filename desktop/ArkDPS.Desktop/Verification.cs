@@ -434,6 +434,82 @@ public partial class MainWindow
             Require(!entry.Text("rate_text").StartsWith("0"),"unavailable engagement rendered as zero");
         }
     }
+    private async Task<HudWindow> VerifyHudLayoutEditor(string id,HudWindow hud,string output)
+    {
+        await Navigate("settings");
+        Require(EditHudLayoutButton.IsEnabled && HudLayoutTarget.Items.Count==Panels.Count,
+                "settings cannot select a source HUD panel");
+        var empty=JsonSerializer.SerializeToElement(new { config=Panels[id].View.Get("config"), entries=Array.Empty<object>() });
+        var sampleEditor=new HudLayoutEditor("示例验收",empty,HudLayout.Default,_=>Task.FromResult(false)){Owner=this};
+        sampleEditor.Show();
+        try
+        {
+            await Settle();
+            Require(sampleEditor.PreviewLabel.Text=="示例预览" &&
+                    FindVisual<StatisticPanel>(sampleEditor,_=>true)?.Rows.Items.Count==5,
+                    "HUD editor did not supply a labeled preview outside battle");
+        }
+        finally { sampleEditor.Close(); }
+        var completion=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var editor=new HudLayoutEditor("HUD 布局验收",Panels[id].View,HudLayout.Default,async style=>
+        {
+            bool saved=await SaveHudLayout(id,style);
+            completion.TrySetResult(saved);
+            return saved;
+        }){Owner=this};
+        editor.Show();
+        try
+        {
+            await Settle();
+            TextBox Field(string key) => (TextBox)(FindAutomationElement(editor,"HudLayout"+key)
+                ?? throw new InvalidOperationException("HUD layout field missing: "+key));
+            var width=Field("Width");
+            width.Text="2200";
+            Require(!editor.SaveButton.IsEnabled && editor.StatusText.Text.Contains("HUD 宽度"),
+                    "HUD layout editor accepted a width outside its range");
+            width.Text="640";
+            Field("NameFont").Text="23";
+            Field("NameWidth").Text="160";
+            Field("RowGap").Text="5";
+            Field("ColumnGap").Text="7";
+            Field("BarWidth").Text="0";
+            await Settle();
+            var preview=FindVisual<StatisticPanel>(editor,_=>true)
+                ?? throw new InvalidOperationException("HUD layout preview missing");
+            var previewName=FindVisual<TextBlock>(preview,element=>element.Name=="HudOperatorName");
+            var previewRow=FindVisual<Grid>(preview,element=>element.Name=="HudOperatorRow");
+            Require(editor.SaveButton.IsEnabled && editor.PreviewSurface.Width==640 && previewName?.FontSize==23 &&
+                    previewRow?.ColumnDefinitions[3].ActualWidth==0 && hud.LayoutProfile==HudLayout.Default,
+                    "HUD draft did not update only the preview or hide a zero-width column");
+            Require(!HasVisibleScrollbar(editor),"HUD layout editor displayed a scrollbar");
+            Screenshot.Window(editor,Path.Combine(output,"hud-layout-editor.png"));
+            editor.SaveButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Require(await completion.Task.WaitAsync(TimeSpan.FromSeconds(10)),"HUD layout save did not succeed");
+            await Settle();
+            var saved=ReadHudLayout(id);
+            Require(saved is { Width:640, NameFont:23, NameWidth:160, RowGap:5, ColumnGap:7, BarWidth:0 } &&
+                    hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-640)<2,
+                    "HUD layout did not persist or apply to the open HUD");
+            CloseHud(id);
+            OpenHud(id);
+            hud=Huds[id];
+            await Settle();
+            Require(hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-640)<2,
+                    "reopened HUD lost its saved style");
+            Require(await SaveHudLayout(id,null),"HUD layout reset did not succeed");
+            await Settle();
+            Require(ReadHudLayout(id)==null && hud.LayoutProfile==HudLayout.Default &&
+                    Math.Abs(hud.ActualWidth-HudLayout.Default.Width)<2,
+                    "HUD layout reset did not restore default rendering");
+            return hud;
+        }
+        finally
+        {
+            if(editor.IsVisible) editor.Close();
+            await Navigate("live");
+        }
+    }
+
     private async Task VerifyHudRows(HudWindow hud,string output)
     {
         var original=hud.Panel.View.Clone();
@@ -923,7 +999,10 @@ public partial class MainWindow
             "pinned operator lost detail after leaving the ranking");
         LiveInspector.Update(priorView);
         checks.Add("effective switch drives inspector composition, engagement rates and skill split");
-        OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
+        OpenHud(id);
+        var originalHud=await VerifyHudLayoutEditor(id,Huds[id],output);
+        originalHud.SetLocked(false);originalHud.SetOpacity(.83);
+        checks.Add("HUD layout editor previews fonts and columns, validates inputs, saves and restores profiles");
         await Settle();
         VerifyShareScope(id,originalHud);
         await VerifyHudRows(originalHud,output);

@@ -349,12 +349,19 @@
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="SettingsRightColumn" Width="*"/></Grid.ColumnDefinitions>
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
       <Border Grid.ColumnSpan="2" Style="{StaticResource SurfaceCard}" Padding="20,12" Margin="0,0,0,12">
-       <StackPanel Orientation="Horizontal">
-        <TextBlock Text="数值缩写单位" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
-        <ComboBox x:Name="NumberUnits" AutomationProperties.Name="数值缩写单位" SelectionChanged="NumberUnitsChanged" MinWidth="150">
-         <ComboBoxItem Content="K / M" Tag="western"/>
-         <ComboBoxItem Content="万 / 亿" Tag="chinese"/>
-        </ComboBox>
+       <StackPanel>
+        <StackPanel Orientation="Horizontal">
+         <TextBlock Text="数值缩写单位" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+         <ComboBox x:Name="NumberUnits" AutomationProperties.Name="数值缩写单位" SelectionChanged="NumberUnitsChanged" MinWidth="150">
+          <ComboBoxItem Content="K / M" Tag="western"/>
+          <ComboBoxItem Content="万 / 亿" Tag="chinese"/>
+         </ComboBox>
+        </StackPanel>
+        <WrapPanel Margin="0,8,0,0">
+         <TextBlock Text="HUD 布局" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+         <ComboBox x:Name="HudLayoutTarget" AutomationProperties.Name="HUD 源面板" DisplayMemberPath="Label" Width="186"/>
+         <Button x:Name="EditHudLayoutButton" Content="调整布局" Click="EditHudLayoutClick" Margin="0" IsEnabled="False"/>
+        </WrapPanel>
        </StackPanel>
       </Border>
       <Border x:Name="ConnectionForm" Grid.Row="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,12,12">

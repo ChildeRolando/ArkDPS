@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     private int commands;
     private string activePanel="",lastBattle="",historyBattle="",historySignature="";
     private string route="live";
+    private sealed record HudLayoutTargetItem(string Id,string Label);
     internal string LastUiError="";
     public MainWindow()
     {
@@ -214,6 +215,7 @@ public partial class MainWindow : Window
             else panel.HudState(false,false,.9);
             if(activePanel==id) LiveInspector.Update(view);
         }
+        RefreshHudLayoutTargets(views);
         if(!initialized)
         {
             Native.Restore(this,layout.Get("gui"));
@@ -397,12 +399,54 @@ public partial class MainWindow : Window
         var hud=new HudWindow(id,ShowGui);hud.Panel.RateActionRequested=HandleRateAction;Huds.Add(id,hud);
         hud.PlacementChanged+=()=>{SyncHudControls(id);ScheduleSave();};
         hud.ClosedByUser+=()=>{Huds.Remove(id);SyncHudControls(id);if(!closingRequested && Huds.Count==0 && (!IsVisible || WindowState==WindowState.Minimized))ShowGui();ScheduleSave();};
+        if(ReadHudLayout(id) is { } profile) hud.ApplyHudLayout(profile);
         hud.Update(Panels[id].View,Status.Text+" · "+EventStatus.Text);
         hud.Show();
         if(placement.ValueKind==JsonValueKind.Object) hud.RestorePlacement(placement);
         SyncHudControls(id);
         ScheduleSave();
     }
+    private HudLayout? ReadHudLayout(string panelId)
+    {
+        var profile=State.Get("layout").Get("hud_styles").Get(panelId);
+        return profile.ValueKind==JsonValueKind.Object ? HudLayout.FromJson(profile) : null;
+    }
+
+    private void RefreshHudLayoutTargets(JsonElement[] views)
+    {
+        var choices=views.Select((view,index)=>new HudLayoutTargetItem(
+            view.Get("config").Text("panel_id"),$"{index+1}. {view.Text("title")}")).ToArray();
+        if(HudLayoutTarget.ItemsSource is HudLayoutTargetItem[] old && old.SequenceEqual(choices)) return;
+        string? selected=(HudLayoutTarget.SelectedItem as HudLayoutTargetItem)?.Id;
+        HudLayoutTarget.ItemsSource=choices;
+        HudLayoutTarget.SelectedItem=choices.FirstOrDefault(item=>item.Id==selected) ?? choices.FirstOrDefault();
+        EditHudLayoutButton.IsEnabled=choices.Length>0;
+    }
+
+    private void EditHudLayoutClick(object sender,RoutedEventArgs e)
+    {
+        if(HudLayoutTarget.SelectedItem is not HudLayoutTargetItem item ||
+           !Panels.TryGetValue(item.Id,out var panel)) return;
+        var initial=ReadHudLayout(item.Id) ?? HudLayout.Default;
+        if(Huds.TryGetValue(item.Id,out var hud) && hud.ActualWidth>0)
+            initial=initial with {Width=Math.Clamp(hud.ActualWidth,240,2000)};
+        var editor=new HudLayoutEditor(item.Label,panel.View,initial,style=>SaveHudLayout(item.Id,style)){Owner=this};
+        editor.ShowDialog();
+    }
+
+    internal async Task<bool> SaveHudLayout(string panelId,HudLayout? layout)
+    {
+        if(bridge==null || closingRequested || !Panels.ContainsKey(panelId)) return false;
+        await Command("hud_style",new(){["panel_id"]=panelId,["style"]=layout});
+        if(ReadHudLayout(panelId)!=layout || !Panels.ContainsKey(panelId)) return false;
+        if(Huds.TryGetValue(panelId,out var hud))
+        {
+            hud.ApplyHudLayout(layout ?? HudLayout.Default);
+            ScheduleSave();
+        }
+        return true;
+    }
+
     private void CloseHud(string id)
     {
         if(!Huds.Remove(id,out var hud))return;hud.SuppressClose=true;hud.Close();

@@ -14,51 +14,25 @@ internal sealed class HudWindow : Window
 {
     public string PanelId { get; }
     public bool Locked { get; private set; }
-    public StatisticPanel Panel { get; }=new(){IsHud=true};
+    public StatisticPanel Panel { get; }=new();
     internal event Action? PlacementChanged;
     internal event Action? ClosedByUser;
     internal bool SuppressClose;
     private const double StandardMinimumWidth=548;
-    private bool? loneTrailSkin;
+    internal HudLayout LayoutProfile { get; private set; }=HudLayout.Default;
+    private double ProfileMinimumWidth => Math.Min(StandardMinimumWidth,LayoutProfile.Width);
+    private double? preferredWidthDips;
     private bool movingOrSizing, fitQueued;
     private int? restoredWidthPixels;
     public HudWindow(string id,Action show)
     {
         Style=(Style)FindResource(typeof(Window));PanelId=id;Title="ArkDPS · HUD · "+id;
-        Width=568;MinWidth=StandardMinimumWidth;SizeToContent=SizeToContent.Height;
+        Width=LayoutProfile.Width;MinWidth=ProfileMinimumWidth;SizeToContent=SizeToContent.Height;
         WindowStyle=WindowStyle.None;AllowsTransparency=true;ResizeMode=ResizeMode.CanResizeWithGrip;
         ShowInTaskbar=false;Topmost=true;
         Background=Brushes.Transparent;
-        Panel.MinWidth=0;
-        Panel.PanelFrame.Margin=new Thickness(0);
-        Panel.PanelFrame.BorderThickness=new Thickness(0);
-        Panel.LegendRow.Visibility=Visibility.Collapsed;
-        Panel.TitleRegion.Height=44;
-        Panel.TitleText.Orientation=Orientation.Horizontal;
-        Panel.Heading.FontSize=28;
-        Panel.Heading.SetResourceReference(TextBlock.FontFamilyProperty,"InterfaceFont");
-        Panel.PanelKind.FontSize=17;
-        Panel.PanelKind.SetResourceReference(TextBlock.FontFamilyProperty,"InterfaceFont");
-        Panel.PanelKind.Margin=new Thickness(18,0,0,0);
-        Panel.PanelKind.VerticalAlignment=VerticalAlignment.Center;
-        Panel.HudClose.MinWidth=44;
-        Panel.HudClose.MinHeight=40;
-        Panel.HudClose.Margin=new Thickness(0);
-        Panel.TitleAccent.Height=23;
-        Panel.LoneTrailHudMark.Height=23;
-        Panel.LoneTrailHudMark.Width=14;
-        Panel.Plot.MinHeight=0;
-        Panel.Rows.MinHeight=StatisticPanel.HudRowHeight;
-        Panel.Rows.MaxHeight=StatisticPanel.HudRowHeight*StatisticPanel.HudVisibleRows;
-        Panel.Rows.Padding=new Thickness(0);
-        Panel.Rows.ItemContainerStyle=(Style)Panel.FindResource("HudRankedRow");
-        Panel.Rows.Template=(ControlTemplate)Panel.FindResource("HudRowsTemplate");
-        Panel.Empty.FontSize=18;
-        Panel.Empty.MaxWidth=440;
-        Panel.Empty.Margin=new Thickness(0);
-        Panel.CloseRequested=Close;
+        Panel.ConfigureHud(Close);
         Panel.TitleRegion.PreviewMouseLeftButtonDown+=DragTitle;
-        ApplySkin();
         Content=Panel;
         SourceInitialized+=(_,_)=>HwndSource.FromHwnd(Native.Handle(this))?.AddHook(Hook);
         LocationChanged+=(_,_)=>PlacementChanged?.Invoke();
@@ -67,33 +41,21 @@ internal sealed class HudWindow : Window
         Loaded+=(_,_)=>QueueWorkAreaFit();
         Closed+=(_,_)=>{if(!SuppressClose) ClosedByUser?.Invoke();};
     }
-    private void ApplySkin()
+    internal void ApplyHudLayout(HudLayout style,bool applyWidth=true)
     {
-        bool loneTrail=Theme.Key=="lone-trail";
-        if(loneTrailSkin==loneTrail) return;
-        loneTrailSkin=loneTrail;
-
-        Panel.PanelFrame.SetResourceReference(Border.BackgroundProperty,loneTrail ? "Console" : "Card");
-        Panel.TitleBar.Margin=new Thickness(10,2,4,2);
-        Panel.TitleAccent.Visibility=loneTrail ? Visibility.Collapsed : Visibility.Visible;
-        Panel.LoneTrailHudMark.Visibility=loneTrail ? Visibility.Visible : Visibility.Collapsed;
-        Panel.TitleRegion.BorderThickness=loneTrail ? new Thickness(0,0,0,1) : new Thickness(0);
-        if(loneTrail)
+        LayoutProfile=style;
+        Panel.ApplyHudLayout(style);
+        if(applyWidth)
         {
-            Panel.PanelFrame.CornerRadius=new CornerRadius(0);
-            Panel.TitleRegion.SetResourceReference(Border.BackgroundProperty,"ConsoleCard");
-            Panel.TitleRegion.SetResourceReference(Border.BorderBrushProperty,"ConsoleLine");
-            Panel.HudClose.SetResourceReference(StyleProperty,"Quiet");
-            Panel.HudClose.BorderBrush=Brushes.Transparent;
+            preferredWidthDips=style.Width;
+            restoredWidthPixels=null;
         }
-        else
+        if(!IsVisible && applyWidth)
         {
-            Panel.PanelFrame.SetResourceReference(Border.CornerRadiusProperty,"CardRadius");
-            Panel.TitleRegion.Background=Brushes.Transparent;
-            Panel.TitleRegion.ClearValue(Border.BorderBrushProperty);
-            Panel.HudClose.ClearValue(StyleProperty);
-            Panel.HudClose.SetResourceReference(Control.BorderBrushProperty,"Line");
+            MinWidth=ProfileMinimumWidth;
+            Width=style.Width;
         }
+        QueueWorkAreaFit();
     }
 
     internal bool IsTitleDragSource(DependencyObject? source)
@@ -144,9 +106,13 @@ internal sealed class HudWindow : Window
             var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(this)).WorkingArea;
             var dpi=VisualTreeHelper.GetDpi(this);
             MaxWidth=work.Width/dpi.DpiScaleX;
-            MinWidth=Math.Min(StandardMinimumWidth,MaxWidth);
+            MinWidth=Math.Min(ProfileMinimumWidth,MaxWidth);
             MaxHeight=work.Height/dpi.DpiScaleY;
-            double preferredWidth=restoredWidthPixels is int saved ? saved/dpi.DpiScaleX : Width;
+            double noticeHeight=Panel.RateNoticePanel.Visibility==Visibility.Visible
+                ? Panel.RateNoticePanel.ActualHeight+Panel.RateNoticePanel.Margin.Bottom : 0;
+            Panel.LimitHudViewport(MaxHeight-LayoutProfile.TitleHeight-noticeHeight);
+            double preferredWidth=preferredWidthDips??(restoredWidthPixels is int saved ? saved/dpi.DpiScaleX : Width);
+            preferredWidthDips=null;
             restoredWidthPixels=null;
             Width=Math.Clamp(preferredWidth,MinWidth,MaxWidth);
             // The native resize grip switches WPF to manual sizing. Keep the
@@ -156,9 +122,10 @@ internal sealed class HudWindow : Window
         },DispatcherPriority.Loaded);
     }
 
-    internal void RestorePlacement(JsonElement placement)
+    internal void RestorePlacement(JsonElement placement,bool restoreWidth=true)
     {
-        restoredWidthPixels=(int)placement.Number("width");
+        preferredWidthDips=restoreWidth ? null : LayoutProfile.Width;
+        restoredWidthPixels=restoreWidth ? (int)placement.Number("width") : null;
         Native.Restore(this,placement,restoreHeight:false);
         SetOpacity(placement.Number("opacity",.9));
         SetLocked(placement.Bool("locked"));
@@ -172,11 +139,7 @@ internal sealed class HudWindow : Window
     {
         Opacity=Math.Clamp(value,.7,1);PlacementChanged?.Invoke();
     }
-    public void Update(JsonElement view,string status)
-    {
-        ApplySkin();
-        Panel.Update(view);
-    }
+    public void Update(JsonElement view,string status)=>Panel.Update(view);
     public object Placement()
     {
         var bounds=Native.Bounds(this);return new {panel_id=PanelId,x=bounds[0],y=bounds[1],width=bounds[2],height=bounds[3],opacity=Opacity,locked=Locked};

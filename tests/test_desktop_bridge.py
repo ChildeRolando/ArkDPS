@@ -231,6 +231,58 @@ def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp
         cmd(state, 'panel_delete', panel_id='default')
 
 
+def test_hud_styles_are_per_panel_and_survive_closing_and_restarting(tmp_path):
+    state = DesktopState(tmp_path)
+    cmd(state, 'panel_duplicate', panel_id='default')
+    second = state.layout.panels[-1].panel_id
+    assert state.snapshot()['layout']['hud_styles'] == {}
+
+    cmd(state, 'hud_style', panel_id='default',
+        style={'name_font': 21.5, 'name_width': 168, 'column_gap': 9, 'bar_width': 0})
+    cmd(state, 'hud_style', panel_id=second, style={'width': 700, 'row_gap': 4})
+    profiles = state.snapshot()['layout']['hud_styles']
+    assert profiles['default']['name_font'] == 21.5
+    assert profiles['default']['name_width'] == 168
+    assert profiles['default']['column_gap'] == 9
+    assert profiles['default']['bar_width'] == 0
+    assert profiles['default']['width'] == 568
+    assert profiles[second]['name_font'] == 20
+    assert profiles[second]['width'] == 700
+
+    gui = dict(x=50, y=60, width=1200, height=800)
+    hud = dict(panel_id=second, x=-700, y=30, width=830, height=480, opacity=.83, locked=True)
+    cmd(state, 'placement', gui=gui, huds=[hud])
+    assert state.snapshot()['layout']['huds'] == [hud]
+    cmd(state, 'placement', gui=gui, huds=[])
+    state = DesktopState(tmp_path)
+    assert state.snapshot()['layout']['hud_styles'] == profiles
+    assert state.snapshot()['layout']['huds'] == []
+
+    cmd(state, 'hud_style', panel_id='default', style=None)
+    assert state.snapshot()['layout']['hud_styles'] == {second: profiles[second]}
+    cmd(state, 'panel_delete', panel_id=second)
+    assert DesktopState(tmp_path).snapshot()['layout']['hud_styles'] == {}
+    with pytest.raises(ValueError, match='源面板'):
+        cmd(state, 'hud_style', panel_id=second, style={'width': 700})
+
+
+@pytest.mark.parametrize('style', [
+    {'number_font': True}, {'title_font': float('nan')}, {'width': float('inf')},
+    {'row_height': 0}, {'column_gap': -1}, {'share_width': 601}, {'unknown': 18}, [],
+])
+def test_bad_hud_style_command_preserves_saved_profile(tmp_path, style):
+    state = DesktopState(tmp_path)
+    cmd(state, 'hud_style', panel_id='default', style={'number_font': 19})
+    before = state.layout
+    original = state.store.path.read_bytes()
+
+    with pytest.raises(ValueError, match='HUD 样式'):
+        cmd(state, 'hud_style', panel_id='default', style=style)
+
+    assert state.layout == before
+    assert state.store.path.read_bytes() == original
+
+
 def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_path):
     state = DesktopState(tmp_path)
     data = sample()

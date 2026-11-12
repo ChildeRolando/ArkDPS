@@ -123,6 +123,23 @@ def test_fully_invalid_panel_list_is_treated_as_damaged(tmp_path):
     assert not result.ok and result.layout == ls.Layout.default()
 
 
+def test_invalid_hud_styles_only_skip_affected_profiles(tmp_path):
+    path = tmp_path / 'layout.json'
+    path.write_text(json.dumps({
+        'version': 3,
+        'panels': [{'panel_id': 'one'}, {'panel_id': 'two'}],
+        'huds': [{'panel_id': 'two', 'x': 0, 'y': 0, 'width': 500, 'height': 200}],
+        'hud_styles': {'one': {'name_font': 22}, 'two': {'width': -10},
+                       'removed': {'padding': 8}},
+    }), encoding='utf-8')
+    result = ls.LayoutStore(path).load()
+
+    assert result.ok and result.backup is None
+    assert '2 个无效 HUD 样式' in result.warning
+    assert dict(result.layout.hud_styles) == {'one': ls.HudStyle(name_font=22)}
+    assert result.layout.huds[0].panel_id == 'two'
+
+
 def test_saved_hud_requires_a_matching_panel(tmp_path):
     path = tmp_path / 'layout.json'
     path.write_text(json.dumps({
