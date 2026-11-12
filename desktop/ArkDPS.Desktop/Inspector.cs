@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 
@@ -12,42 +12,62 @@ public sealed class Inspector : Border
 {
     private readonly StackPanel body=new();
     private string? owner;
-    private JsonElement source;
+    private (string Owner, string Theme, string Row, string Entry, string Detail,
+        string Rates, int Rank, bool Effective, string Metric, string Ranking,
+        string RateReason, string RateHint)? displayed;
+    internal string? Owner => owner;
     public Inspector()
     {
         SetResourceReference(BackgroundProperty,"Card");
         SetResourceReference(BorderBrushProperty,"Line");
         SetResourceReference(CornerRadiusProperty,"CardRadius");
         BorderThickness=new Thickness(1); Padding=new Thickness(14);
+        AutomationProperties.SetName(this,"干员详情");
         Child=body; Empty();
     }
     internal void Empty()
     {
+        displayed=null;
         body.Children.Clear();
-        body.Children.Add(Text("OPERATOR / FIELD REPORT",10,true,"Accent"));
-        body.Children.Add(Text("干员详情",22,true,"Ink",new Thickness(0,2,0,8)));
-        body.Children.Add(Text("点击排行中的干员，固定查看有效伤害、过量拆分与属性构成。",12,false,"Muted"));
-        body.Children.Add(Text("近期输出归零后保留固定条目；新战局清除选择。",11,false,"Muted",new Thickness(0,6,0,0)));
+        body.Children.Add(Text("干员详情",18,true,"Ink",new Thickness(0,0,0,7)));
+        body.Children.Add(Text("从排行选择干员，查看伤害构成、技能覆盖和接敌速率。",12,false,"Muted"));
     }
     internal void Pin(string id,JsonElement view) {owner=id;Update(view);}
     internal void Reset() {owner=null;Empty();}
     internal void Update(JsonElement view)
     {
-        var rows=view.Get("source");
-        source=rows;
         if(owner==null) return;
-        var row=rows.Get(owner);
-        if(row.ValueKind!=JsonValueKind.Object) return;
+        var row=view.Get("source").Get(owner);
+        if(row.ValueKind!=JsonValueKind.Object)
+        {
+            if(displayed.HasValue && displayed.Value.Owner!=owner) Empty();
+            return;
+        }
         var entries=view.Get("entries").Items().ToArray();
-        var entry=entries.FirstOrDefault(x=>x.Text("owner_id")==owner);
-        bool effective=view.Get("config").Bool("effective_only");
-        var detail=entry.ValueKind==JsonValueKind.Object ? entry.Get("detail") : default;
         int index=Array.FindIndex(entries,x=>x.Text("owner_id")==owner);
-        string rank=index<0 ? "—" : (index+1).ToString("00");
-        string share=entry.ValueKind==JsonValueKind.Object ? entry.Text("share_display") : "—";
-        string shareLabel=view.Get("config").Text("ranking")=="recent" ? "近期贡献" : "本局贡献";
+        var entry=index<0 ? default : entries[index];
+        var config=view.Get("config");
+        bool effective=config.Text("category")=="damage" && config.Bool("effective_only");
+        var detail=view.Get("details_by_owner").Get(owner);
+        if(detail.ValueKind!=JsonValueKind.Object) detail=entry.Get("detail");
+        var rates=view.Get("rates").Get(owner);
         string metric=view.Text("metric_label");
-        string selected=entry.ValueKind==JsonValueKind.Object ? entry.Text("display_value") : "—";
+        string ranking=config.Text("ranking");
+        string rateReason=view.Text("rate_reason"), rateHint=view.Text("rate_hint");
+        var signature=(owner,Theme.Key,Raw(row),Raw(entry),Raw(detail),Raw(rates),
+            index,effective,metric,ranking,rateReason,rateHint);
+        if(displayed==signature) return;
+        displayed=signature;
+
+        string rank=index<0 ? "—" : (index+1).ToString();
+        string share=entry.ValueKind==JsonValueKind.Object ? entry.Text("share_display") : "—";
+        string shareLabel=ranking switch
+        {
+            "recent" => "近期贡献",
+            "dps" => "DPS 贡献",
+            _ => "本局贡献",
+        };
+        string selected=index<0 ? "—" : entry.Text(ranking=="dps" ? "rate_display" : "display_value");
         body.Children.Clear();
 
         var top=new Grid{Margin=new Thickness(0,0,0,10)};
@@ -56,7 +76,7 @@ public sealed class Inspector : Border
         top.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
         var rankBox=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource("Accent"),BorderThickness=new Thickness(1),
             CornerRadius=new CornerRadius(2),Padding=new Thickness(6,4,6,4),Margin=new Thickness(0,0,8,0),VerticalAlignment=VerticalAlignment.Center};
-        var rankStack=new StackPanel();rankStack.Children.Add(Text("RANK",9,true,"Muted"));rankStack.Children.Add(Mono(rank,16,true,"Accent"));
+        var rankStack=new StackPanel();rankStack.Children.Add(Text("排名",10,true,"Muted"));rankStack.Children.Add(Mono(rank,16,true,"Accent"));
         rankBox.Child=rankStack;top.Children.Add(rankBox);
 
         var identity=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center};
@@ -68,7 +88,9 @@ public sealed class Inspector : Border
         if(portrait!=null) frameGrid.Children.Add(new Image{Source=portrait,Stretch=Stretch.UniformToFill,Opacity=row.Get("present").ValueKind==JsonValueKind.False?.65:1});
         frame.Child=frameGrid;identity.Children.Add(frame);
         var copy=new StackPanel{VerticalAlignment=VerticalAlignment.Center};
-        copy.Children.Add(Text(row.Get("present").ValueKind switch{JsonValueKind.True=>"在场",JsonValueKind.False=>"已离场",_=>"在场状态未知"},8,true,"Good"));
+        var present=row.Get("present").ValueKind;
+        copy.Children.Add(Text(present switch{JsonValueKind.True=>"在场",JsonValueKind.False=>"已离场",_=>"在场状态未知"},
+            10,false,present==JsonValueKind.True ? "Good" : "Muted"));
         copy.Children.Add(Text(row.Text("name"),18,true,"Ink"));
         identity.Children.Add(copy);Grid.SetColumn(identity,1);top.Children.Add(identity);
 
@@ -78,11 +100,11 @@ public sealed class Inspector : Border
         Grid.SetColumn(shareStack,2);top.Children.Add(shareStack);
         body.Children.Add(top);
 
-        var hero=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource("Accent"),BorderThickness=new Thickness(3,1,1,1),Padding=new Thickness(10,8,10,8),Margin=new Thickness(0,0,0,10)};
+        var hero=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource("Line"),BorderThickness=new Thickness(1),Padding=new Thickness(10,8,10,8),Margin=new Thickness(0,0,0,10)};
         var heroDock=new DockPanel();
         var heroValue=Mono(selected,28,true,"Accent");heroValue.HorizontalAlignment=HorizontalAlignment.Right;
         DockPanel.SetDock(heroValue,Dock.Right);heroDock.Children.Add(heroValue);
-        heroDock.Children.Add(Text(entry.ValueKind==JsonValueKind.Object?metric:"本局指标",11,true,"Muted"));
+        heroDock.Children.Add(Text(entry.ValueKind==JsonValueKind.Object?metric:"当前榜单无该干员",11,true,"Muted"));
         hero.Child=heroDock;body.Children.Add(hero);
 
         var stats=new WrapPanel{Margin=new Thickness(0,0,0,4)};
@@ -98,34 +120,38 @@ public sealed class Inspector : Border
             body.Children.Add(Text("元素爆条归属未知："+row.Text("burst_unknown_reason"),10,false,"Muted",new Thickness(0,2,0,0)));
 
         Section("技能 / 非技能");
-        var skillValue = effective ? detail.Get("skill_damage_effective") : detail.Get("skill_damage");
-        var nonSkillValue = effective ? detail.Get("non_skill_damage_effective") : detail.Get("non_skill_damage");
-        double skillDamage = skillValue.TryNumber();
-        double nonSkillDamage = nonSkillValue.TryNumber();
-        bool skillKnown = skillValue.ValueKind == JsonValueKind.Number &&
-                          nonSkillValue.ValueKind == JsonValueKind.Number;
-        double coverageValue = detail.Get("skill_coverage").TryNumber(-1);
-        bool coverageKnown = detail.Bool("skill_coverage_complete") && coverageValue >= 0;
+        string skillKey=effective ? "skill_damage_effective" : "skill_damage";
+        string nonSkillKey=effective ? "non_skill_damage_effective" : "non_skill_damage";
+        double skillDamage=detail.Number(skillKey,double.NaN);
+        double nonSkillDamage=detail.Number(nonSkillKey,double.NaN);
+        bool skillKnown=detail.Bool(effective ? "skill_split_effective_complete" : "skill_split_complete")
+            && double.IsFinite(skillDamage) && skillDamage>=0
+            && double.IsFinite(nonSkillDamage) && nonSkillDamage>=0;
+        double coverageValue=detail.Number("skill_coverage",double.NaN);
+        bool coverageKnown=detail.Bool("skill_coverage_complete") && coverageValue is >= 0 and <= 1;
         var splitStats = new WrapPanel();
         AddStat(splitStats, effective ? "技能有效伤害" : "技能伤害",
-            skillKnown ? Json.UiIntText(skillValue.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture)) : "—");
+            skillKnown ? detail.UiInt(skillKey) : "—",showZero:true);
         AddStat(splitStats, effective ? "非技能有效伤害" : "非技能伤害",
-            skillKnown ? Json.UiIntText(nonSkillValue.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture)) : "—");
+            skillKnown ? detail.UiInt(nonSkillKey) : "—",showZero:true);
         AddStat(splitStats, "技能覆盖率", coverageKnown
             ? Math.Round(coverageValue * 100, 0).ToString("0") + "%" : "—");
-        AddStat(splitStats, "技能开启秒", detail.Ui("skill_active_seconds"));
-        AddStat(splitStats, "在场秒", row.Ui("presence_seconds"));
+        AddStat(splitStats, "技能开启秒", detail.Bool("skill_coverage_complete")
+            ? detail.Ui("skill_active_seconds") : "—",showZero:true);
+        AddStat(splitStats, "在场秒", row.Bool("presence_complete")
+            ? row.Ui("presence_seconds") : "—",showZero:true);
         body.Children.Add(splitStats);
-        if (skillKnown)
+        double splitTotal=skillDamage+nonSkillDamage;
+        if (skillKnown && double.IsFinite(splitTotal) && splitTotal>0)
         {
-            double splitSkillWeight = double.IsFinite(skillDamage) && skillDamage > 0 ? skillDamage : 0;
-            double splitNormalWeight = double.IsFinite(nonSkillDamage) && nonSkillDamage > 0 ? nonSkillDamage : 0;
-            double splitTotal = splitSkillWeight + splitNormalWeight;
+            double skillShare=skillDamage/splitTotal;
+            string splitSummary=$"技能伤害占比 {skillShare:P0} · 非技能伤害占比 {1-skillShare:P0}";
             var splitBar = new Grid { Height = 8, Margin = new Thickness(0, 3, 0, 5) };
-            splitBar.ColumnDefinitions.Add(new ColumnDefinition {
-                Width = new GridLength(splitTotal > 0 ? splitSkillWeight : 1, GridUnitType.Star) });
-            splitBar.ColumnDefinitions.Add(new ColumnDefinition {
-                Width = new GridLength(splitTotal > 0 ? splitNormalWeight : 1, GridUnitType.Star) });
+            AutomationProperties.SetName(splitBar,splitSummary);
+            AutomationProperties.SetAutomationId(splitBar,"InspectorSkillSplitBar");
+            splitBar.ToolTip=splitSummary;
+            splitBar.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(skillShare,GridUnitType.Star) });
+            splitBar.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1-skillShare,GridUnitType.Star) });
             var skillPart = new Border { Background = Theme.Resource("Accent"),
                 CornerRadius = new CornerRadius(2, 0, 0, 2) };
             var normalPart = new Border { Background = Theme.Resource("Muted"),
@@ -135,63 +161,57 @@ public sealed class Inspector : Border
             splitBar.Children.Add(normalPart);
             body.Children.Add(splitBar);
         }
-        string splitReason = row.Text("skill_split_reason");
-        bool splitComplete = effective
-            ? detail.Bool("skill_split_effective_complete")
-            : detail.Bool("skill_split_complete");
-        if (!splitComplete)
+        string splitReason=detail.Text("skill_split_reason");
+        if (!skillKnown)
             body.Children.Add(Text(splitReason.Length > 0
                 ? "技能拆分未知：" + splitReason
-                : "技能拆分未知：事件观测或技能窗口未覆盖。",
-                10, false, "Muted", new Thickness(0, 1, 0, 2)));
-        else
-            body.Children.Add(Text("技能覆盖率 = 技能开启总时间 ÷ 干员在场时间；被动技能计入非技能。",
-                10, false, "Muted", new Thickness(0, 1, 0, 2)));
-        if (!coverageKnown)
-            body.Children.Add(Text(detail.Bool("skill_coverage_complete")
-                ? "技能覆盖未知：未建立在场时间或技能窗口。"
-                : "技能覆盖未知：事件/技能窗口覆盖不完整。",
-                10, false, "Muted", new Thickness(0, 1, 0, 2)));
+                : effective && detail.Bool("skill_split_complete")
+                    ? "有效技能拆分未知：过量伤害证据不足。"
+                    : "技能拆分未知：事件观测或技能窗口未覆盖。",
+                11, false, "Muted", new Thickness(0, 1, 0, 2)));
+        var coverageNote=coverageKnown
+            ? "覆盖率按技能开启时间占在场时间计算；被动技能计入非技能。"
+            : "技能覆盖率未知：在场时间或技能窗口证据不足。";
+        body.Children.Add(Text(coverageNote,11,false,"Muted"));
 
         Section("被减伤率");
         Pair("被减伤率",Mitigation(row));
         var mitigationNote=MitigationNote(row,view);
         if(mitigationNote.Length>0) body.Children.Add(Text(mitigationNote,10,false,"Muted",new Thickness(0,5,0,0)));
 
-        Section("伤害构成");
-        if(entry.ValueKind==JsonValueKind.Object)
+        Section(effective ? "有效伤害构成" : "伤害构成");
+        var types=effective ? detail.Get("effective_damage_by_type") : row.Get("damage_by_type");
+        bool typeKnown=types.ValueKind==JsonValueKind.Object
+            && (effective || (row.Bool("types_available") && !row.Bool("types_stale")));
+        if(!typeKnown)
         {
-            var bar=new ContributionBar{Data=entry,Height=9,Margin=new Thickness(0,0,0,6)};
-            body.Children.Add(bar);
-            var types=effective ? detail.Get("effective_damage_by_type") : row.Get("damage_by_type");
-            if(types.ValueKind!=JsonValueKind.Object)
+            body.Children.Add(Text(effective
+                ? "有效伤害构成未知：按类型的过量证据不足。"
+                : "伤害构成未知：累计类型字段不完整。",11,false,"Muted"));
+        }
+        else
+        {
+            var kinds=new[]{("physical","物理","Physical"),("arts","法术","Arts"),
+                ("elemental","元素","Elemental"),("true","真实","True")};
+            double total=kinds.Sum(kind=>types.Number(kind.Item1));
+            var mix=new WrapPanel();
+            foreach(var (key,label,token) in kinds)
             {
-                body.Children.Add(Text(effective
-                    ? "有效伤害构成未知：按类型的过量证据不足。"
-                    : "伤害构成未知：累计类型字段不完整。",10,false,"Muted"));
+                double amount=types.Number(key);
+                if(amount<=0) continue;
+                string fraction=total>0 ? Math.Round(amount/total*100).ToString("0")+"%" : "—";
+                var card=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource(token),BorderThickness=new Thickness(1),Padding=new Thickness(6,5,6,5),Margin=new Thickness(0,0,4,4),MinWidth=66};
+                var stack=new StackPanel();stack.Children.Add(Text(label,11,false,"Muted"));stack.Children.Add(Mono(fraction,13,true,"Ink"));stack.Children.Add(Text(types.UiInt(key),11,false,"Muted"));
+                card.Child=stack;mix.Children.Add(card);
             }
-            else
-            {
-                double total=new[]{"physical","arts","elemental","true"}.Sum(k=>types.TryGetProperty(k,out var v)&&v.ValueKind==JsonValueKind.Number?v.GetDouble():0);
-                var mix=new WrapPanel();
-                foreach(var (key,label,token) in new[]{("physical","物理","Physical"),("arts","法术","Arts"),("elemental","元素","Elemental"),("true","真实","True")})
-                {
-                    double amount=types.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Number?v.GetDouble():0;
-                    if(amount<=0) continue;
-                    string fraction=total>0 ? Math.Round(amount/total*100).ToString("0")+"%" : "—";
-                    var card=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource(token),BorderThickness=new Thickness(1,2,1,1),Padding=new Thickness(6,5,6,5),Margin=new Thickness(0,0,4,4),MinWidth=66};
-                    var stack=new StackPanel();stack.Children.Add(Text(label,9,false,"Muted"));stack.Children.Add(Mono(fraction,13,true,"Ink"));stack.Children.Add(Text(Json.UiIntText(amount.ToString(System.Globalization.CultureInfo.InvariantCulture)),9,false,"Muted"));
-                    card.Child=stack;mix.Children.Add(card);
-                }
-                body.Children.Add(mix);
-            }
+            if(mix.Children.Count>0) body.Children.Add(mix);
+            else body.Children.Add(Text("已观测伤害为 0",11,false,"Muted"));
         }
 
         Section("独立接敌速率");
-        var rates=view.Get("rates").Get(owner);
         var damageRate=rates.Get("damage");var healingRate=rates.Get("healing");
         var rateStats=new WrapPanel();
-        AddStat(rateStats,"DPS",RateText(row,damageRate,"engagement_damage",
+        AddStat(rateStats,effective ? "有效 DPS" : "DPS",RateText(row,damageRate,"engagement_damage",
             effective ? detail : default, effective ? "effective_engagement_damage" : ""));
         AddStat(rateStats,"HPS",RateText(row,healingRate,"engagement_healing",default,""));
         AddStat(rateStats,"伤害活跃秒",row.UiInt("active_damage"));
@@ -199,8 +219,8 @@ public sealed class Inspector : Border
         body.Children.Add(rateStats);
         var rateNote=damageRate.Text("note");if(rateNote.Length==0) rateNote=healingRate.Text("note");
         if(rateNote.Length>0) body.Children.Add(Text(rateNote,10,false,"Muted",new Thickness(0,5,0,0)));
-        var rateReason=view.Text("rate_reason");if(rateReason.Length>0) body.Children.Add(Text(rateReason,10,false,"Muted",new Thickness(0,3,0,0)));
-        var rateHint=view.Text("rate_hint");if(rateHint.Length>0) body.Children.Add(Text(rateHint,10,false,"Muted",new Thickness(0,3,0,0)));
+        if(rateReason.Length>0) body.Children.Add(Text(rateReason,11,false,"Muted",new Thickness(0,3,0,0)));
+        if(rateHint.Length>0) body.Children.Add(Text(rateHint,11,false,"Muted",new Thickness(0,3,0,0)));
 
         if(!row.Bool("event_coverage_complete"))
             body.Children.Add(Text("事件覆盖不完整：未建立事件覆盖的区间保持未知，不补零",10,false,"Muted",new Thickness(0,5,0,0)));
@@ -209,14 +229,17 @@ public sealed class Inspector : Border
         string sources=string.Join("\n",row.Get("sources").Items().Select(x=>x.Text()));
         body.Children.Add(Text(sources.Length>0 ? sources : "—",10,false,"Muted"));
     }
+    private static string Raw(JsonElement value) => value.ValueKind==JsonValueKind.Undefined ? "" : value.GetRawText();
+
     private static string RateText(JsonElement row,JsonElement rate,string exact,
         JsonElement detail=default,string detailExact="")
     {
-        bool detailNumber=detailExact.Length>0 && detail.Get(detailExact).ValueKind==JsonValueKind.Number;
-        if(rate.Text("state")=="value") return detailNumber ? detail.UiInt(detailExact) : row.UiInt(exact);
-        var text=rate.Text("text");
+        bool effective=detailExact.Length>0;
+        if(rate.Text("state")=="value")
+            return effective ? detail.UiInt(detailExact) : row.UiInt(exact);
+        string text=rate.Text("text");
         if(text.Length>0) return text;
-        return detailNumber ? detail.UiInt(detailExact) : row.UiInt(exact);
+        return effective ? detail.UiInt(detailExact) : row.UiInt(exact);
     }
     private static string Effective(JsonElement row)
     {
@@ -261,11 +284,11 @@ public sealed class Inspector : Border
         var overkillReason=row.Text("overkill_unknown_reason");
         return "过量未知："+(overkillReason.Length>0 ? overkillReason : "目标或实际扣血证据不足");
     }
-    private void AddStat(Panel host,string label,string value)
+    private void AddStat(Panel host,string label,string value,bool showZero=false)
     {
-        if(value=="0") return;
-        var border=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource("Edge"),BorderThickness=new Thickness(1,2,1,1),Padding=new Thickness(7,5,7,5),Margin=new Thickness(0,0,4,4),MinWidth=92};
-        var stack=new StackPanel();stack.Children.Add(Text(label,9,false,"Muted"));stack.Children.Add(Mono(value,13,true,"Ink"));
+        if(!showZero && value=="0") return;
+        var border=new Border{Background=Theme.Resource("Inset"),BorderBrush=Theme.Resource("Line"),BorderThickness=new Thickness(1),Padding=new Thickness(7,5,7,5),Margin=new Thickness(0,0,4,4),MinWidth=92};
+        var stack=new StackPanel();stack.Children.Add(Text(label,11,false,"Muted"));stack.Children.Add(Mono(value,13,true,"Ink"));
         border.Child=stack;host.Children.Add(border);
     }
     private void Section(string title)

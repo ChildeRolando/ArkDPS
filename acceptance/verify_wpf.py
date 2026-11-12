@@ -48,7 +48,7 @@ def seed(directory):
             recent_damage_by_type={'physical': (12-i)*97.23},
             recent_damage_window=[7., 12.], recent_healing_window=[7., 12.])
         rows[owner] = value
-    original['statistics']['rows'] = rows
+    original['statistics'].update(rows=rows, game_time=12., totals_complete=True)
     archive = BattleRecord.from_dict(original)
     history = BattleHistory(directory / 'history')
     history.save(archive)
@@ -63,19 +63,19 @@ def seed(directory):
              our_effective_damage=19800., our_damage_known=True, entered_count=3, alive_count=1, hp_complete=True),
     ]
     enemies = [
-        dict(roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',
+        dict(instance_uid='acceptance-1', roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',
              code='B1', hp=1200., max_hp=2400., hp_known=True, hp_ratio=.5,
              atk=180., **{'def': 20.}, res=0., move_speed=.7, attack_speed=100.,
              alive=True, lifecycle='active', state_id=1, state='移动',
              spawn_frame=120, end_frame=None, end_reason=None,
              is_summon=False, position={'x': 1.5, 'y': 2.5}),
-        dict(roster_id=2, spawn_order=2, eid='enemy_1048_hirman', name='碎岩者',
+        dict(instance_uid='acceptance-2', roster_id=2, spawn_order=2, eid='enemy_1048_hirman', name='碎岩者',
              code='B2', hp=0., max_hp=9800., hp_known=True, hp_ratio=0.,
              atk=750., **{'def': 120.}, res=20., move_speed=.55, attack_speed=86.,
              alive=False, lifecycle='departed', state_id=5, state='死亡',
              spawn_frame=240, end_frame=540, end_reason='death',
              is_summon=False, position={'x': 3.25, 'y': 4.0}),
-        dict(roster_id=3, spawn_order=3, eid='enemy_1506_patrt', name='重装防御者',
+        dict(instance_uid='acceptance-3', roster_id=3, spawn_order=3, eid='enemy_1506_patrt', name='重装防御者',
              code='B3', hp=5000., max_hp=13800., hp_known=True, hp_ratio=.36,
              atk=320., **{'def': 400.}, res=0., move_speed=.45, attack_speed=100.,
              alive=True, lifecycle='active', state_id=2, state='攻击',
@@ -85,6 +85,7 @@ def seed(directory):
     enemy = dict(status='ready', error=None, ready=True, rows=enemies, non_team_native_damage=500,
                  totals=dict(entered_count=3, alive_count=2,
                              entered_total_hp=26000., remaining_hp=6200.,
+                             stage_total_hp_estimate=36000., stage_total_hp_complete=False,
                              hp_complete=True),
                  series=series, last_point=series[-1])
     sample = dict(battle_id='synthetic-live', session='synthetic-live', frame=360,

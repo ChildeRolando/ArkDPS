@@ -47,6 +47,130 @@ public partial class MainWindow
     private static void WriteArchive(string stateDirectory,string battleId,string stage)=>
         File.WriteAllText(HistoryPath(stateDirectory,battleId),
             ArchiveJson(stateDirectory,battleId,stage),new System.Text.UTF8Encoding(false));
+    private void ApplyFixture(System.Text.Json.Nodes.JsonNode state)
+    {
+        using var document = JsonDocument.Parse(state.ToJsonString());
+        ApplyState(document.RootElement.Clone());
+    }
+    private async Task VerifyLoneTrailLayout(string output, List<string> checks)
+    {
+        await Command("theme", new() { ["theme"] = "lone-trail" });
+        await Navigate("live");
+        var initial = State.Clone();
+        var fixture = System.Text.Json.Nodes.JsonNode.Parse(initial.GetRawText())!;
+        var analysis = fixture["live_analysis"] ?? new System.Text.Json.Nodes.JsonObject
+        {
+            ["segment"] = 0,
+            ["team_total_damage"] = 711630,
+            ["operators"] = System.Text.Json.Nodes.JsonNode.Parse("""
+                [{"owner_id":"char_002_amiya","name":"阿米娅","recent_dps":1090},
+                 {"owner_id":"char_017_huang","name":"煌","recent_dps":1010},
+                 {"owner_id":"char_003_kalts","name":"凯尔希","recent_dps":950}]
+                """),
+        };
+        if (analysis.Parent == null) fixture["live_analysis"] = analysis;
+        const string layoutBattle = "synthetic-lone-trail-layout";
+        fixture["battle_id"] = layoutBattle;
+        analysis["battle_id"] = layoutBattle;
+        analysis["team_average_dps"] = 59302.5;
+        analysis["observed_peak_dps"] = 8450;
+        fixture["status"] = "live";
+        fixture["status_text"] = "正在统计 · 离线验收";
+        for (int second = 13; second <= 23; second++)
+        {
+            fixture["game_time"] = second;
+            analysis["game_time"] = second;
+            analysis["team_recent_dps"] = 6800 + (second % 5) * 380;
+            ApplyFixture(fixture);
+        }
+        Require(trendModel.Points.Count > 1 && trendModel.Points[^1].Team == 7940,
+            "advancing worker values did not reach live trend");
+        Require(CurrentDps.Text == "7,940" && AverageDps.Text == "59,302.5", "certified team DPS not rendered");
+        fixture["status"] = "paused";
+        analysis["game_time"] = 24;
+        ApplyFixture(fixture);
+        Require(trendModel.Points[^1].Time == 23, "pause advanced the chart");
+        fixture["status"] = "disconnected";
+        ApplyFixture(fixture);
+        fixture["status"] = "live";
+        analysis["game_time"] = 25;
+        analysis["team_recent_dps"] = 0;
+        ApplyFixture(fixture);
+        Require(trendModel.Points[^1].StartsSegment && trendModel.Points[^1].Team == 0,
+            "recovery lost the gap or the reliable zero");
+
+        await Navigate("enemies");
+        EnemyList.SelectedIndex = 0;
+        var selected = (EnemyItem)EnemyList.SelectedItem;
+        var firstEnemy = fixture["enemy"]!["rows"]![0]!;
+        firstEnemy["hp"] = 2700;
+        firstEnemy["max_hp_lower_bound"] = 2700;
+        firstEnemy["hp_ratio"] = null;
+        fixture["enemy"]!["totals"]!["total_hp_complete"] = false;
+        fixture["enemy"]!["series"]![2]!["total_hp_complete"] = false;
+        ApplyFixture(fixture);
+        Require(ReferenceEquals(selected, EnemyList.SelectedItem) && selected.HpText.Contains("≥") &&
+            !selected.HpPercentKnown, "transform replaced selection or represented an unverified denominator as exact");
+        Require(EnemyTotalHp.Text.Contains("≥") && !EnemyChart.Points[^1].TotalComplete,
+            "enemy total lower bound lost in display or series");
+        firstEnemy["max_hp"] = 2800;
+        firstEnemy["hp_ratio"] = .964;
+        firstEnemy["max_hp_lower_bound"] = null;
+        fixture["enemy"]!["totals"]!["total_hp_complete"] = true;
+        fixture["enemy"]!["series"]![2]!["total_hp_complete"] = true;
+        ApplyFixture(fixture);
+        Require(ReferenceEquals(selected, EnemyList.SelectedItem) && selected.HpPercentKnown &&
+            !selected.HpText.Contains("≥"), "native MaxHP confirmation did not update the same enemy");
+        Require(HasText(EnemyPage, "关卡预估血量"), "stage estimate is not independently labeled");
+
+        await Navigate("live");
+        analysis["game_time"] = 26;
+        analysis["team_recent_dps"] = 7630;
+        ApplyFixture(fixture);
+        if (Panels.Values.FirstOrDefault() is StatisticPanel ranked)
+            ranked.PinRequested?.Invoke(ranked.View.Get("entries").Items().First().Text("owner_id"));
+        double savedWidth = Width, savedHeight = Height;
+        foreach (var (width, height) in new[] { (1920, 1080), (1380, 900), (560, 540) })
+        {
+            Width = width; Height = height;
+            await Settle();
+            Require(Math.Abs(ActualWidth - width) < 2 && Math.Abs(ActualHeight - height) < 2,
+                "test window did not reach requested DIP size");
+            Require(Grid.GetColumnSpan(EnemySummary) == (width >= 1480 ? 1 : 3) &&
+                Grid.GetColumn(LiveDetail) == (width < 1100 ? 1 : 2) &&
+                (LiveNavLabel.Visibility == Visibility.Collapsed) == (width < 1100),
+                "live dashboard breakpoint did not reflow the expected surfaces");
+            Screenshot.Window(this, Path.Combine(output, $"lone-trail-live-{width}x{height}-dip.png"));
+            if (width == 1380)
+            {
+                Screenshot.Window(this, Path.Combine(output, "lone-trail-live-render-125-percent.png"), 120);
+                Screenshot.Window(this, Path.Combine(output, "lone-trail-live-render-150-percent.png"), 144);
+            }
+        }
+        await Navigate("enemies");
+        await Settle();
+        Require(EnemyPageScroll.ScrollableHeight > 0 && EnemyChartHost.ActualHeight >= 300,
+            "minimum window does not scroll to the full enemy chart");
+        Screenshot.Window(this, Path.Combine(output, "lone-trail-enemies-minimum.png"));
+        await Navigate("live");
+        Width = savedWidth; Height = savedHeight;
+        await Settle();
+        LivePage.ScrollToEnd();
+        await Settle();
+        Screenshot.Window(this, Path.Combine(output, "lone-trail-timeline.png"));
+        LivePage.ScrollToTop();
+        Width = 560; Height = 540;
+        await Navigate("history");
+        await Settle();
+        Require(HistoryList.ActualHeight >= 58, $"minimum history viewport too short ({HistoryList.ActualHeight:F1} DIPs)");
+        Screenshot.Window(this, Path.Combine(output, "lone-trail-history-minimum.png"));
+        await Navigate("live");
+        Width = savedWidth; Height = savedHeight;
+        await Settle();
+        ApplyState(initial);
+        await Command("theme", new() { ["theme"] = "original" });
+        checks.Add("certified DPS, pause/recovery/known zero, enemy transform MaxHP lower-bound/confirmed with retained selection, and three Lone Trail DIP layouts");
+    }
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
     private static bool HasText(DependencyObject root,string text)
     {
@@ -405,6 +529,16 @@ public partial class MainWindow
         await Settle();
         Require(HasText(LiveInspector,"技能伤害") &&
                 !HasText(LiveInspector,"技能有效伤害"),"inspector did not restore total skill split");
+        var priorView = Panels[id].View;
+        var unranked = System.Text.Json.Nodes.JsonNode.Parse(priorView.GetRawText())!;
+        var rankedRows = unranked["entries"]!.AsArray();
+        for (int index = rankedRows.Count - 1; index >= 0; index--)
+            if (rankedRows[index]!["owner_id"]!.GetValue<string>() == owner) rankedRows.RemoveAt(index);
+        using (var unrankedDoc = JsonDocument.Parse(unranked.ToJsonString()))
+            LiveInspector.Update(unrankedDoc.RootElement);
+        Require(LiveInspector.Owner == owner && HasText(LiveInspector,"技能覆盖率"),
+            "pinned operator lost detail after leaving the ranking");
+        LiveInspector.Update(priorView);
         checks.Add("effective switch drives inspector composition, engagement rates and skill split");
         OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         await Settle();
@@ -449,7 +583,10 @@ public partial class MainWindow
             var selected=State.Get("history_selected");
             if(selected.ValueKind==JsonValueKind.Object)
             {
-                await Navigate("history");HistoryInspector.Pin(selected.Get("view").Get("source").EnumerateObject().First().Name,selected.Get("view").Get("source"));await Settle();
+                await Navigate("history");
+                var selectedView = selected.Get("view");
+                HistoryInspector.Pin(selectedView.Get("source").EnumerateObject().First().Name, selectedView);
+                await Settle();
                 Screenshot.Window(this,Path.Combine(output,theme+"-history.png"));
                 File.WriteAllBytes(Path.Combine(output,theme+"-ranking.png"),Screenshot.Statistics(selected,theme));
                 string selectedId=selected.Text("battle_id");Search.Text="no-such-record";await Command("history_refresh");
@@ -459,6 +596,7 @@ public partial class MainWindow
             await Navigate("settings");await Settle();Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));await Navigate("live");
             checks.Add(theme+" theme switch keeps HUD HWND, values and source");
         }
+        await VerifyLoneTrailLayout(output, checks);
         await SavePlacement();string normal=State.Get("layout").Get("gui").GetRawText();
         WindowState=WindowState.Minimized;await Settle();await SavePlacement();
         Require(State.Get("layout").Get("gui").GetRawText()==normal,"minimized HWND overwrote normal GUI rectangle");ShowGui();await Settle();
