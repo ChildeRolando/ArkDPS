@@ -25,7 +25,8 @@
  <SolidColorBrush x:Key="ChromeInk" Color="#282321"/>
  <SolidColorBrush x:Key="ChromeMuted" Color="#5F4D42"/>
  <ImageBrush x:Key="ShellBackdrop" ImageSource="/Assets/People/people-square-landscape.jpg" Stretch="UniformToFill" Opacity=".42"/>
- <SolidColorBrush x:Key="SubpageHeadingSurface" Color="#F3EADF"/>
+ <SolidColorBrush x:Key="SubpageHeadingSurface" Color="Transparent"/>
+ <SolidColorBrush x:Key="SubpageHeadingInk" Color="#161211"/>
  <Thickness x:Key="SubpageHeadingPadding">10,5,16,5</Thickness>
  <SolidColorBrush x:Key="ShellSidebarEdge" Color="#6E5547"/>
  <ImageBrush x:Key="ShellSidebarArtwork" ImageSource="/Assets/People/people-street-portrait.jpg" Stretch="UniformToFill" AlignmentX="Left"/>

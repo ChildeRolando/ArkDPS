@@ -400,6 +400,8 @@ public partial class MainWindow : Window
         Resources.MergedDictionaries.Clear();
         Resources.MergedDictionaries.Add(shell);
         ApplyShellLayout();
+        PageTitle.SetResourceReference(TextBlock.ForegroundProperty, Theme.IsPeople ? "SubpageHeadingInk" : "HeroInk");
+        PageSubtitle.SetResourceReference(TextBlock.ForegroundProperty, Theme.IsPeople ? "SubpageHeadingInk" : "HeroMuted");
         Skin.Resources["Focus"] = Theme.Resource("FocusOnDark");
         if (Theme.IsBabel) ChromeControls.Resources["Focus"] = Theme.Resource("FocusOnDark");
         else ChromeControls.Resources.Remove("Focus");
