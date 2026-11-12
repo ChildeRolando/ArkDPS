@@ -283,7 +283,6 @@ public partial class MainWindow : Window
         BrandBadge.Width = narrow ? 87 : 202;
         if (narrow) Skin.Padding = new Thickness(8, 24, 27, 4);
         else Skin.ClearValue(Control.PaddingProperty);
-        ChromeDescription.Visibility = width < 740 ? Visibility.Collapsed : Visibility.Visible;
         ArrangeThemeArtwork(narrow);
         foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (SettingsNav, SettingsNavLabel) })
         {
@@ -373,8 +372,7 @@ public partial class MainWindow : Window
         HeaderArtwork.Visibility = people ? Visibility.Collapsed : Visibility.Visible;
         PeoplePennant.Visibility = people ? Visibility.Visible : Visibility.Collapsed;
         bool offline = App.BridgeArguments.Contains("--offline");
-        SystemTitle.Text = people ? "人们，我们。" : "COMBAT DPS ANALYSIS SYSTEM";
-        SystemTitle.SetResourceReference(TextBlock.FontFamilyProperty, people ? "HeadingFont" : "DataFont");
+        SystemTitle.Visibility = people ? Visibility.Collapsed : Visibility.Visible;
         ModeLabel.Visibility = offline || !people ? Visibility.Visible : Visibility.Collapsed;
         ModeLabel.Text = offline ? "离线验收 · 合成数据 · 不访问游戏" : "ARKDPS / ORBITAL CONSOLE";
         ArrangeThemeArtwork(ContentRoot.ActualWidth is > 0 and < 1100);
@@ -383,6 +381,8 @@ public partial class MainWindow : Window
     private void ArrangeThemeArtwork(bool narrow)
     {
         bool people = Theme.IsPeople;
+        ChromeDescription.Visibility = ContentRoot.ActualWidth >= 740 && (!people || ModeLabel.Visibility == Visibility.Visible)
+            ? Visibility.Visible : Visibility.Collapsed;
         BrandMark.Visibility = !people && !narrow ? Visibility.Visible : Visibility.Collapsed;
         CompactBrandMark.Visibility = !people && narrow ? Visibility.Visible : Visibility.Collapsed;
         PeopleBrandMark.Visibility = people && !narrow ? Visibility.Visible : Visibility.Collapsed;

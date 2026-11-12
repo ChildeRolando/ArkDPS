@@ -35,10 +35,57 @@
  </LinearGradientBrush>
  <SolidColorBrush x:Key="ShellNavActive" Color="#752C28"/>
  <SolidColorBrush x:Key="ShellNavSelectedEdge" Color="#C77F6D"/>
- <BitmapImage x:Key="ShellLiveNavIcon" UriSource="/Assets/People/tile-combat.png"/>
- <BitmapImage x:Key="ShellEnemyNavIcon" UriSource="/Assets/People/tile-enemy.png"/>
- <BitmapImage x:Key="ShellHistoryNavIcon" UriSource="/Assets/People/tile-history.png"/>
- <BitmapImage x:Key="ShellSettingsNavIcon" UriSource="/Assets/People/tile-connection.png"/>
+ <Pen x:Key="PeopleNavIconPen" Brush="#F1DEC8" Thickness="1.8"
+      StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+ <GeometryDrawing x:Key="PeopleNavIconBounds" Brush="Transparent" Geometry="M0,0 H24 V24 H0 Z"/>
+ <DrawingImage x:Key="ShellLiveNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="PeopleNavIconBounds"/>
+    <GeometryDrawing Pen="{StaticResource PeopleNavIconPen}" Geometry="M3,4 V20 H21 M6,14 H9 L12,7 L15,16 L18,11 H21"/>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <DrawingImage x:Key="ShellEnemyNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="PeopleNavIconBounds"/>
+    <GeometryDrawing Pen="{StaticResource PeopleNavIconPen}">
+     <GeometryDrawing.Geometry>
+      <GeometryGroup>
+       <EllipseGeometry Center="12,12" RadiusX="7.5" RadiusY="7.5"/>
+       <EllipseGeometry Center="12,12" RadiusX="2" RadiusY="2"/>
+       <PathGeometry Figures="M12,2 V6 M12,18 V22 M2,12 H6 M18,12 H22"/>
+      </GeometryGroup>
+     </GeometryDrawing.Geometry>
+    </GeometryDrawing>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <DrawingImage x:Key="ShellHistoryNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="PeopleNavIconBounds"/>
+    <GeometryDrawing Pen="{StaticResource PeopleNavIconPen}">
+     <GeometryDrawing.Geometry>
+      <GeometryGroup>
+       <EllipseGeometry Center="12,12" RadiusX="9" RadiusY="9"/>
+       <PathGeometry Figures="M12,7 V12 L16,14"/>
+      </GeometryGroup>
+     </GeometryDrawing.Geometry>
+    </GeometryDrawing>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <DrawingImage x:Key="ShellSettingsNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="PeopleNavIconBounds"/>
+    <GeometryDrawing Pen="{StaticResource PeopleNavIconPen}"
+                     Geometry="M3,6 H8 M12,6 H21 M8,3 V9 H12 V3 Z M3,12 H13 M17,12 H21 M13,9 V15 H17 V9 Z M3,18 H7 M11,18 H21 M7,15 V21 H11 V15 Z"/>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
  <BitmapImage x:Key="PeopleMasthead" UriSource="/Assets/People/masthead-paper.png"/>
  <BitmapImage x:Key="PeopleEmblem" UriSource="/Assets/People/emblem-paper.png"/>
  <BitmapImage x:Key="PeoplePennantArtwork" UriSource="/Assets/People/people-pennant-red.png"/>

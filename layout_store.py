@@ -101,22 +101,22 @@ class HudPlacement:
 class HudStyle:
     """User-adjustable HUD dimensions in device-independent pixels."""
 
-    title_font: float = 28
-    name_font: float = 20
-    number_font: float = 18
-    width: float = 568
+    title_font: float = 20
+    name_font: float = 15
+    number_font: float = 15
+    width: float = 484
     row_height: float = 46
     title_height: float = 44
-    portrait_size: float = 36
-    rank_width: float = 36
-    portrait_width: float = 44
-    name_width: float = 140
-    bar_width: float = 42
-    total_width: float = 94
-    rate_width: float = 104
-    share_width: float = 76
-    row_gap: float = 0
-    column_gap: float = 4
+    portrait_size: float = 38
+    rank_width: float = 28
+    portrait_width: float = 52
+    name_width: float = 92
+    bar_width: float = 158
+    total_width: float = 78
+    rate_width: float = 76
+    share_width: float = 68
+    row_gap: float = 1
+    column_gap: float = 2
     padding: float = 4
 
     def __post_init__(self):

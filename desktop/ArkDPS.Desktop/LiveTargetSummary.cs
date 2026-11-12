@@ -8,7 +8,6 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 
 namespace ArkDPS.Desktop;
@@ -32,6 +31,7 @@ public sealed class LiveTargetSummary : Border
         cardScroll = new ScrollViewer
         {
             Content = stack, MaxHeight = 540, CanContentScroll = true, Focusable = true,
+            VerticalAlignment = VerticalAlignment.Top,
             VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
@@ -228,16 +228,11 @@ public sealed class LiveTargetSummary : Border
     {
         private static readonly Geometry UnlockedGlyph = Geometry.Parse("M 3,7 L 3,4 C 3,0 9,0 9,4 M 1,7 L 11,7 L 11,14 L 1,14 Z M 6,10 L 6,12");
         private static readonly Geometry LockedGlyph = Geometry.Parse("M 3,7 L 3,4 C 3,0 9,0 9,4 L 9,7 M 1,7 L 11,7 L 11,14 L 1,14 Z M 6,10 L 6,12");
-        private static readonly Lazy<ImageSource> PeoplePortraitTrim = new(() => new BitmapImage(
-            new Uri("pack://application:,,,/Assets/People/Components/frame-a-red.png")));
         private readonly TextBlock name = Label(17, "ConsoleInk", bold: true);
         private readonly TextBlock identity = Label(12, "ConsoleMuted");
         private readonly TextBlock badge = Label(28, "ConsoleMuted", bold: true);
-        private readonly Image portrait = new() { Stretch = Stretch.Uniform, Margin = new Thickness(1) };
-        private readonly Image portraitTrim = new()
-        {
-            Stretch = Stretch.Uniform, Height = 93, Visibility = Visibility.Collapsed, IsHitTestVisible = false,
-        };
+        private readonly Image portrait = new() { Stretch = Stretch.Uniform };
+        private readonly Border portraitFrame;
         private readonly Border headerMark = new()
         {
             Width = 3, Height = 25, Margin = new Thickness(0, 0, 7, 0),
@@ -300,16 +295,20 @@ public sealed class LiveTargetSummary : Border
             var art = new Grid();
             art.Children.Add(badge);
             art.Children.Add(portrait);
-            art.Children.Add(portraitTrim);
-            var frame = new Border { Child = art, Height = 100, BorderThickness = new Thickness(1) };
-            frame.SetResourceReference(BackgroundProperty, "ConsoleCard");
-            frame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
+            portraitFrame = new Border
+            {
+                Child = art, Height = 100, HorizontalAlignment = HorizontalAlignment.Center,
+                BorderThickness = new Thickness(1),
+            };
+            portraitFrame.SetBinding(WidthProperty, new Binding(nameof(Height)) { Source = portraitFrame });
+            portraitFrame.SetResourceReference(BackgroundProperty, "ConsoleCard");
+            portraitFrame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
             SizeChanged += (_, args) =>
             {
-                if (args.WidthChanged) frame.Height = args.NewSize.Width < 230 ? 94 : 100;
+                if (args.WidthChanged) portraitFrame.Height = args.NewSize.Width < 230 ? 94 : 100;
             };
             var overlay = new Grid { Margin = new Thickness(0, 0, 8, 0) };
-            overlay.Children.Add(frame);
+            overlay.Children.Add(portraitFrame);
             previous = Arrow(true, suffix, () => page(this, -1));
             next = Arrow(false, suffix, () => page(this, 1));
             overlay.Children.Add(previous);
@@ -340,8 +339,13 @@ public sealed class LiveTargetSummary : Border
             next.IsEnabled = canNext;
             targetLock.IsEnabled = Current is { Uid.Length: > 0 };
             if (Visibility == Visibility.Collapsed) return;
-            portraitTrim.Visibility = headerMark.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
-            if (Theme.IsPeople) portraitTrim.Source ??= PeoplePortraitTrim.Value;
+            var markVisibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+            if (headerMark.Visibility != markVisibility)
+            {
+                headerMark.Visibility = markVisibility;
+                portraitFrame.BorderThickness = new Thickness(Theme.IsPeople ? 2 : 1);
+                portraitFrame.SetResourceReference(BorderBrushProperty, Theme.IsPeople ? "MetricHighlight" : "ConsoleLine");
+            }
             lockIcon.Data = Pinned ? LockedGlyph : UnlockedGlyph;
             string lockLabel = Pinned ? "解锁当前敌人" : "锁定当前敌人";
             targetLock.ToolTip = lockLabel;
