@@ -125,6 +125,13 @@ public partial class MainWindow
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
     {
         await Command("theme", new() { ["theme"] = "lone-trail" });
+        foreach (var (token,family) in new[] { ("DisplayFont","Barlow Semi Condensed"),("DataFont","IBM Plex Mono") })
+        {
+            Require(Theme.Typeface(token,FontWeights.SemiBold).TryGetGlyphTypeface(out var glyph) &&
+                    glyph.FamilyNames.Values.Contains(family) &&
+                    glyph.FontUri.AbsoluteUri.Contains("/Assets/Fonts/",StringComparison.OrdinalIgnoreCase),
+                    "Lone Trail did not load the packaged "+family+" font");
+        }
         await Navigate("live");
         var initial = State.Clone();
         var fixture = System.Text.Json.Nodes.JsonNode.Parse(initial.GetRawText())!;
@@ -341,7 +348,8 @@ public partial class MainWindow
             avatarPosition.Y>=positions[0].Y-1 &&
             avatarPosition.Y+avatar.ActualHeight<=positions[2].Y+rows[2].ActualHeight+1 &&
             positions[3].X<positions[0].X,
-            "portrait did not sit left of the three metrics or the next row failed to regain its width");
+            $"portrait or metrics misaligned at {ActualWidth} DIPs: avatar {avatarPosition} {avatar.ActualWidth}x{avatar.ActualHeight}, " +
+            $"rows {string.Join(" / ",positions)}, DPS available {HasText(LiveInspector,"1,167")}");
     }
     private FrameworkElement FindOperatorRatio(string suffix) =>
         FindAutomationElement(LiveInspector,"CompactOperatorRatio"+suffix)
@@ -351,11 +359,18 @@ public partial class MainWindow
     {
         var ratios=new[] { FindOperatorRatio("Overkill"), FindOperatorRatio("Mitigation"), FindOperatorRatio("SkillShare") };
         var values=new[] { "8%", "18%", "42%" };
-        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 实际伤害 ÷ 公式前伤害", "技能期伤害 ÷ 已拆分的总伤害" };
+        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 公式后伤害 ÷ 公式前伤害", "技能期伤害 ÷ 已拆分的总伤害" };
         var positions=ratios.Select(field=>field.TranslatePoint(new Point(),LiveInspector)).ToArray();
+        var stats=FindAutomationElement(LiveInspector,"CompactOperatorStats")
+            ?? throw new InvalidOperationException("main data card missing");
+        var presence=FindAutomationElement(stats,"CompactOperatorMetric4")
+            ?? throw new InvalidOperationException("presence row missing");
+        double presenceBottom=presence.TranslatePoint(new Point(0,presence.ActualHeight),LiveInspector).Y;
+        Require(FindAutomationElement(stats,"CompactOperatorRatios") is not null && positions[0].Y>=presenceBottom,
+                "ratio rings are not inside the main data card below on-field time");
         Require(positions.All(position=>Math.Abs(position.Y-positions[0].Y)<1) &&
                 positions[0].X<positions[1].X && positions[1].X<positions[2].X &&
-                ratios.All(field=>field.ActualWidth>75 && field.ActualHeight>=58),
+                ratios.All(field=>field.ActualWidth>=62 && field.ActualHeight>=58),
                 "the three ratio rings did not fit side by side");
         for(int index=0;index<ratios.Length;index++)
         {
@@ -376,14 +391,17 @@ public partial class MainWindow
                 "compact inspector still displays the removed title, row or details button");
     }
 
-    private static FrameworkElement? FindAutomationElement(DependencyObject root, string id)
+    private static FrameworkElement? FindAutomationElement(DependencyObject root,string id) =>
+        FindVisual<FrameworkElement>(root,element=>System.Windows.Automation.AutomationProperties.GetAutomationId(element)==id);
+
+    private static T? FindVisual<T>(DependencyObject root,Func<T,bool> match) where T : DependencyObject
     {
-        if(root is FrameworkElement element && System.Windows.Automation.AutomationProperties.GetAutomationId(element)==id)
-            return element;
-        for(int i=0;i<System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);i++)
-            if(FindAutomationElement(System.Windows.Media.VisualTreeHelper.GetChild(root,i),id) is { } found) return found;
+        if(root is T visual && match(visual)) return visual;
+        for(int index=0;index<System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);index++)
+            if(FindVisual(System.Windows.Media.VisualTreeHelper.GetChild(root,index),match) is { } found) return found;
         return null;
     }
+
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
     private static bool HasVisibleScrollbar(DependencyObject root)
     {
@@ -416,6 +434,56 @@ public partial class MainWindow
             Require(!entry.Text("rate_text").StartsWith("0"),"unavailable engagement rendered as zero");
         }
     }
+    private async Task VerifyHudRows(HudWindow hud,string output)
+    {
+        var original=hud.Panel.View.Clone();
+        var fixture=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
+        var entries=fixture["entries"]!.AsArray().ToArray();
+        var heights=new Dictionary<int,double>();
+        poll.Stop();
+        try
+        {
+            foreach(int count in new[] { 1,4,5,6 })
+            {
+                fixture["entries"]=new System.Text.Json.Nodes.JsonArray(entries.Take(count)
+                    .Select(entry=>entry!.DeepClone()).ToArray());
+                hud.Update(JsonSerializer.SerializeToElement(fixture),"");
+                await Settle();
+                heights[count]=hud.ActualHeight;
+                var bounds=Native.Bounds(hud);
+                var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
+                Require(bounds[0]>=work.Left && bounds[1]>=work.Top &&
+                        bounds[0]+bounds[2]<=work.Right+1 && bounds[1]+bounds[3]<=work.Bottom+1,
+                        "auto-sized HUD went outside its monitor work area");
+                if(count is 1 or 5) Screenshot.Window(hud,Path.Combine(output,$"{Theme.Key}-hud-{count}-rows.png"));
+            }
+            Require(Math.Abs(heights[4]-heights[1]-3*StatisticPanel.HudRowHeight)<2 &&
+                    Math.Abs(heights[5]-heights[4]-StatisticPanel.HudRowHeight)<2 &&
+                    Math.Abs(heights[6]-heights[5])<2,
+                    $"HUD height did not fit one through five rows: {string.Join(", ",heights.Values)}");
+            var rows=hud.Panel.Rows;
+            var row=FindVisual<Grid>(rows,element=>element.Name=="HudOperatorRow");
+            var name=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorName");
+            var amount=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorTotal");
+            Require(row?.ColumnDefinitions[2].ActualWidth>=134 && name?.FontSize==20 &&
+                    amount?.FontSize==18 && hud.Panel.Heading.FontSize==28,
+                    "HUD operator name column or type did not reach its larger size");
+            var scroll=FindVisual<ScrollViewer>(rows,_=>true);
+            Require(scroll is { ScrollableHeight: > 0 } && !HasVisibleScrollbar(hud),
+                    "HUD cannot show extra rows without a scrollbar");
+            rows.ScrollIntoView(rows.Items[^1]);
+            await Settle();
+            Require(scroll!.VerticalOffset>0,"sixth HUD row cannot be brought into view");
+            scroll.ScrollToTop();
+        }
+        finally
+        {
+            hud.Update(original,"");
+            await Settle();
+            poll.Start();
+        }
+    }
+
     private void VerifyShareScope(string id,HudWindow hud)
     {
         const string knownLabel="已知数据内占比";
@@ -846,6 +914,8 @@ public partial class MainWindow
         OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         await Settle();
         VerifyShareScope(id,originalHud);
+        await VerifyHudRows(originalHud,output);
+        checks.Add("HUD typography, one/four/five rows auto-fit, sixth row scroll and monitor work area");
         checks.Add("share scope reaches live, history, HUD, details and ranking PNG with legacy fallback");
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
@@ -934,7 +1004,9 @@ public partial class MainWindow
                 Panels[id].View.Get("entries").Items().Any(row => row.Text("display_value").Contains("K")),
                 "western display units did not restore without restarting");
         checks.Add("global number units switch updates live ranking, chart labels and existing HUD");
-        await VerifyLoneTrailLayout(output, checks);
+        poll.Stop();
+        try { await VerifyLoneTrailLayout(output,checks); }
+        finally { poll.Start(); }
         await SavePlacement();string normal=State.Get("layout").Get("gui").GetRawText();
         WindowState=WindowState.Minimized;await Settle();await SavePlacement();
         Require(State.Get("layout").Get("gui").GetRawText()==normal,"minimized HWND overwrote normal GUI rectangle");ShowGui();await Settle();
@@ -955,14 +1027,14 @@ public partial class MainWindow
         checks.Add("closing HUD leaves source; source deletion closes only linked HUD");
         originalHud.SetLocked(false);var bounds=Native.Bounds(originalHud);
         int hudClicks=0,underClicks=0;
-        var under=new Window{Title="ArkDPS private click underlay — NOT MuMu",Width=originalHud.Width+30,Height=originalHud.Height+30,Left=originalHud.Left,Top=originalHud.Top,Topmost=true,Background=System.Windows.Media.Brushes.DarkSlateGray};
+        var under=new Window{Title="ArkDPS private click underlay — NOT MuMu",Width=originalHud.ActualWidth+30,Height=originalHud.ActualHeight+30,Left=originalHud.Left,Top=originalHud.Top,Topmost=true,Background=System.Windows.Media.Brushes.DarkSlateGray};
         under.PreviewMouseDown+=(_,_)=>underClicks++;
         originalHud.PreviewMouseDown+=(_,_)=>hudClicks++;
         GetCursorPos(out var pointer);
         try
         {
             originalHud.Topmost=false;under.Show();under.Activate();originalHud.Topmost=true;originalHud.Activate();await Settle();
-            bounds=Native.Bounds(originalHud);int x=bounds[0]+90,y=bounds[1]+130;
+            bounds=Native.Bounds(originalHud);int x=bounds[0]+90,y=bounds[1]+Math.Min(130,bounds[3]-14);
             Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(originalHud),"unlocked HUD does not own test point");
             Click(x,y);await Task.Delay(150);Require(hudClicks>0 && underClicks==0,"unlocked HUD input route");
             originalHud.SetLocked(true);await Settle();

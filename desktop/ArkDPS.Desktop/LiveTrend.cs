@@ -165,9 +165,6 @@ public sealed class LiveTrendView : Border
     private static readonly Brush MajorGrid = ColorBrush("#37424D");
     private static readonly Brush AxisInk = ColorBrush("#CBD7E3");
     private static readonly Brush OtherBrush = ColorBrush("#8797A7");
-    private static readonly Typeface NumberFont = new("Cascadia Mono, Consolas");
-    private static readonly Typeface TextFont = new("Segoe UI, Microsoft YaHei UI");
-    private static readonly Typeface StrongText = new(TextFont.FontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
 
     private readonly ChartSurface chart;
     private readonly TextBlock heading = new();
@@ -568,8 +565,9 @@ public sealed class LiveTrendView : Border
             double donutWidth = reference && ActualWidth >= 690 ? Math.Min(360, ActualWidth * .29) : 0;
             var muted = reference ? AxisInk : Theme.Resource("ConsoleMuted");
             double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            var numberFont=Theme.Typeface("DataFont",FontWeights.Normal);
             FormattedText Label(string label) => new(label, CultureInfo.CurrentUICulture,
-                FlowDirection.LeftToRight, NumberFont, 10, muted, dpi);
+                FlowDirection.LeftToRight, numberFont, 10, muted, dpi);
             double left = bareCompact ? 3 : Math.Min(ActualWidth * .35, Math.Max(49, Label(Json.CompactAmount(ceiling)).Width + 10));
             double top = reference ? 17 : 7;
             plot = new Rect(left, top, Math.Max(1, ActualWidth - left - 13 - donutWidth),
@@ -721,14 +719,17 @@ public sealed class LiveTrendView : Border
                 turn += sweep;
             }
 
+            var numberFont=Theme.Typeface("DataFont",FontWeights.Normal);
+            var textFont=Theme.Typeface("InterfaceFont",FontWeights.Normal);
+            var strongText=Theme.Typeface("HeadingFont",FontWeights.SemiBold);
             FormattedText Label(string value, Typeface font, double size) => new(value, CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight, font, size, AxisInk, dpi);
             double valueSize = Math.Clamp(radius * .45, 13, 20);
             string rounded = Json.CompactAmount(team);
-            var valueLabel = Label(rounded, StrongText, valueSize);
+            var valueLabel = Label(rounded, strongText, valueSize);
             double valueWidth = radius * 2 - thickness - 6;
-            if (valueLabel.Width > valueWidth) valueLabel = Label(rounded, StrongText, valueSize * valueWidth / valueLabel.Width);
-            var dpsLabel = Label("DPS", StrongText, Math.Clamp(radius * .28, 9, 12));
+            if (valueLabel.Width > valueWidth) valueLabel = Label(rounded, strongText, valueSize * valueWidth / valueLabel.Width);
+            var dpsLabel = Label("DPS", strongText, Math.Clamp(radius * .28, 9, 12));
             double textTop = center.Y - (valueLabel.Height + dpsLabel.Height) / 2;
             dc.DrawText(valueLabel, new Point(center.X - valueLabel.Width / 2, textTop));
             dc.DrawText(dpsLabel, new Point(center.X - dpsLabel.Width / 2, textTop + valueLabel.Height));
@@ -736,11 +737,11 @@ public sealed class LiveTrendView : Border
             double left = center.X + radius + thickness / 2 + 12;
             double available = bounds.Right - left;
             if (available < 53) return;
-            var title = Label("近 5 秒贡献", StrongText, 10);
+            var title = Label("近 5 秒贡献", strongText, 10);
             dc.DrawText(title, new Point(left, bounds.Top));
             if (entries.Count == 0)
             {
-                var empty = Label(team == 0 ? "暂无输出" : "等待完整采样", TextFont, 10);
+                var empty = Label(team == 0 ? "暂无输出" : "等待完整采样", textFont, 10);
                 dc.DrawText(empty, new Point(left, bounds.Top + 18));
                 return;
             }
@@ -749,10 +750,10 @@ public sealed class LiveTrendView : Border
             {
                 var entry = entries[i];
                 double y = bounds.Top + 14 + rowHeight * i;
-                var percent = Label(Number(100 * entry.Rate / team!.Value) + "%", NumberFont, 10);
+                var percent = Label(Number(100 * entry.Rate / team!.Value) + "%", numberFont, 10);
                 double nameWidth = available - percent.Width - 16;
                 if (nameWidth < 5) break;
-                var name = Label(entry.Name, TextFont, 10.5);
+                var name = Label(entry.Name, textFont, 10.5);
                 name.MaxTextWidth = nameWidth;
                 name.MaxLineCount = 1;
                 name.Trimming = TextTrimming.CharacterEllipsis;

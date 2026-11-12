@@ -203,6 +203,8 @@ public partial class StatisticPanel : UserControl
     private bool updating, hold;
     private bool referenceStyle;
     private const double ReferenceRowsDefaultHeight=185;
+    public const double HudRowHeight=54;
+    internal const int HudVisibleRows=5;
     internal bool IsHistory, IsHud;
     public string PanelId => view.Get("config").Text("panel_id");
     internal JsonElement View => view;
@@ -386,6 +388,7 @@ public partial class StatisticPanel : UserControl
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
             ? Visibility.Visible : Visibility.Collapsed;
         var incoming=value.Get("entries").Items().ToArray();
+        if(IsHud) Rows.Height=HudRowHeight*Math.Clamp(incoming.Length,1,HudVisibleRows);
         ShareHeading.ToolTip=share.Description;
         ReferenceShareHeading.ToolTip=share.Description;
         var hasFooterTotal=value.Get("footer_total").ValueKind==JsonValueKind.Number;
@@ -410,7 +413,6 @@ public partial class StatisticPanel : UserControl
         Coverage.Text=referenceStyle
             ? showFooter && !value.Bool("share_known") ? share.Label : ""
             : share.Description+(share.Available ? " · 点击干员固定明细" : "");
-        if(IsHud){Plot.MinHeight=56;Rows.MinHeight=30;Rows.MaxHeight=double.PositiveInfinity;}
         Coverage.Visibility=IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
         foreach(var old in items.Where(x=>!ids.Contains(x.Id)).ToArray()) items.Remove(old);

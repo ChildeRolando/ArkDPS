@@ -397,9 +397,11 @@ public partial class MainWindow : Window
         var hud=new HudWindow(id,ShowGui);hud.Panel.RateActionRequested=HandleRateAction;Huds.Add(id,hud);
         hud.PlacementChanged+=()=>{SyncHudControls(id);ScheduleSave();};
         hud.ClosedByUser+=()=>{Huds.Remove(id);SyncHudControls(id);if(!closingRequested && Huds.Count==0 && (!IsVisible || WindowState==WindowState.Minimized))ShowGui();ScheduleSave();};
+        hud.Update(Panels[id].View,Status.Text+" · "+EventStatus.Text);
         hud.Show();
-        if(placement.ValueKind==JsonValueKind.Object){Native.Restore(hud,placement);hud.SetOpacity(placement.Number("opacity",.9));hud.SetLocked(placement.Bool("locked"));}
-        hud.Update(Panels[id].View,Status.Text+" · "+EventStatus.Text);SyncHudControls(id);ScheduleSave();
+        if(placement.ValueKind==JsonValueKind.Object) hud.RestorePlacement(placement);
+        SyncHudControls(id);
+        ScheduleSave();
     }
     private void CloseHud(string id)
     {

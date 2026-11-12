@@ -50,7 +50,7 @@
   </DrawingBrush>
 
   <Style TargetType="Window">
-   <Setter Property="FontFamily" Value="Segoe UI Variable Text, Microsoft YaHei UI"/>
+   <Setter Property="FontFamily" Value="{DynamicResource InterfaceFont}"/>
    <Setter Property="FontSize" Value="14"/>
    <Setter Property="Background" Value="{DynamicResource Bg}"/>
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
@@ -59,14 +59,14 @@
   </Style>
   <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
   <Style x:Key="Eyebrow" TargetType="TextBlock">
-   <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
+   <Setter Property="FontFamily" Value="{DynamicResource DataFont}"/>
    <Setter Property="FontSize" Value="11"/>
    <Setter Property="FontWeight" Value="Bold"/>
    <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
   </Style>
   <Style x:Key="PageTitle" TargetType="TextBlock">
-   <Setter Property="FontFamily" Value="Segoe UI Variable Display, Microsoft YaHei UI"/>
+   <Setter Property="FontFamily" Value="{DynamicResource HeadingFont}"/>
    <Setter Property="FontSize" Value="36"/>
    <Setter Property="FontWeight" Value="Bold"/>
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
@@ -88,7 +88,7 @@
    <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
   </Style>
   <Style x:Key="Mono" TargetType="TextBlock">
-   <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
+   <Setter Property="FontFamily" Value="{DynamicResource DataFont}"/>
    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
   </Style>
   <Style x:Key="Readout" TargetType="TextBlock" BasedOn="{StaticResource Mono}">

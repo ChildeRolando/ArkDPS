@@ -71,7 +71,7 @@
    <Setter Property="Foreground" Value="#EDF3F7"/><Setter Property="FontWeight" Value="Bold"/><Setter Property="FontSize" Value="13"/>
   </Style>
   <Style x:Key="ResearchReadout" TargetType="TextBlock" BasedOn="{StaticResource Readout}">
-   <Setter Property="Foreground" Value="#F6F8FA"/><Setter Property="FontFamily" Value="Bahnschrift, Segoe UI"/><Setter Property="FontSize" Value="27"/>
+   <Setter Property="Foreground" Value="#F6F8FA"/><Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/><Setter Property="FontSize" Value="27"/>
   </Style>
  </Window.Resources>
  <Border x:Name="WindowSurface" Background="{DynamicResource Bg}">
@@ -94,13 +94,13 @@
     <TextBlock x:Name="BrandText" Text="ArkDPS" Foreground="#F4F7FA" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
    </Grid>
    <StackPanel Grid.Column="1" x:Name="ChromeDescription" Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left" Background="#CF202930" Margin="5,0,0,0">
-    <TextBlock Text="COMBAT DPS ANALYSIS SYSTEM" FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="#F6F8FA" Margin="9,1,12,0"/>
-    <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="#BFC9D1" Margin="9,0,12,1"/>
+    <TextBlock Text="COMBAT DPS ANALYSIS SYSTEM" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="#F6F8FA" Margin="9,1,12,0"/>
+    <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="#BFC9D1" Margin="9,0,12,1"/>
    </StackPanel>
    <StackPanel x:Name="ChromeControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Background="#DF202930" Margin="4,0,8,0">
     <StackPanel x:Name="ChromeLab" Margin="4,0,13,0" VerticalAlignment="Center">
-     <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="#F2F5F7"/>
-     <TextBlock Text="ORCU / DPS LAB" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="#CBD5DF" Margin="0,2,0,0"/>
+     <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="#F2F5F7"/>
+     <TextBlock Text="ORCU / DPS LAB" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="#CBD5DF" Margin="0,2,0,0"/>
     </StackPanel>
     <Button Click="MinimizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最小化"><Path Data="M 0 5 H 10" Stroke="#F5F8FA" StrokeThickness="1.2"/></Button>
     <Button Click="ToggleMaximizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最大化或还原"><Path Data="M 0 0 H 9 V 9 H 0 Z" Stroke="#F5F8FA" StrokeThickness="1.2"/></Button>
@@ -147,7 +147,7 @@
      </StackPanel>
      <StackPanel x:Name="SidebarFooter" DockPanel.Dock="Bottom" Margin="3,0,3,10">
       <TextBlock x:Name="SideLab" Text="ORCU" Foreground="#DCE5ED" FontSize="21" FontWeight="Bold" Margin="8,0,0,2"/>
-      <TextBlock x:Name="SideLabName" Text="ORBITAL COMBAT&#x0a;RESEARCH UNIT" Foreground="#DCE5ED" FontSize="11" FontFamily="Cascadia Mono, Consolas" Margin="8,0,0,10"/>
+      <TextBlock x:Name="SideLabName" Text="ORBITAL COMBAT&#x0a;RESEARCH UNIT" Foreground="#DCE5ED" FontSize="11" FontFamily="{DynamicResource DataFont}" Margin="8,0,0,10"/>
       <Grid>
        <ComboBox x:Name="Skin" SelectionChanged="SkinChanged" Style="{StaticResource SidebarSkin}" AutomationProperties.Name="皮肤" ToolTip="切换皮肤">
         <ComboBoxItem Content="孤星" Tag="lone-trail"/><ComboBoxItem Content="危机合约" Tag="contingency-contract"/>
@@ -283,10 +283,10 @@
     <Grid x:Name="EnemyPage" Margin="0,0,0,12">
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
      <UniformGrid x:Name="EnemyMetrics" Columns="4" Margin="0,0,0,8">
-      <Border Style="{StaticResource MetricCard}" Grid.Column="0" Margin="0,0,8,0"><StackPanel><TextBlock Text="已入场敌人" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyEntered" Text="—" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="含已离场实例" Style="{StaticResource Caption}"/></StackPanel></Border>
-      <Border Style="{StaticResource MetricCard}" Grid.Column="1" Margin="0,0,8,0"><StackPanel><TextBlock Text="已入场总血量" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyTotalHp" Text="—" Foreground="{DynamicResource Accent}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="随入场和重生累计" Style="{StaticResource Caption}"/></StackPanel></Border>
-      <Border Style="{StaticResource MetricCard}" Grid.Column="2" Margin="0,0,8,0"><StackPanel><TextBlock x:Name="EnemyOurDamageLabel" Text="我方有效伤害" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyOurDamage" Text="—" Foreground="{DynamicResource Good}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="干员与归属召唤物" Style="{StaticResource Caption}"/></StackPanel></Border>
-      <Border Style="{StaticResource MetricCard}" Grid.Column="3" Margin="0"><StackPanel><TextBlock Text="敌方剩余" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyRemaining" Text="—" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="仅场上存活实例" Style="{StaticResource Caption}"/></StackPanel></Border>
+      <Border Style="{StaticResource MetricCard}" Grid.Column="0" Margin="0,0,8,0"><StackPanel><TextBlock Text="已入场敌人" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyEntered" Text="—" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DataFont}" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="含已离场实例" Style="{StaticResource Caption}"/></StackPanel></Border>
+      <Border Style="{StaticResource MetricCard}" Grid.Column="1" Margin="0,0,8,0"><StackPanel><TextBlock Text="已入场总血量" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyTotalHp" Text="—" Foreground="{DynamicResource Accent}" FontFamily="{DynamicResource DataFont}" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="随入场和重生累计" Style="{StaticResource Caption}"/></StackPanel></Border>
+      <Border Style="{StaticResource MetricCard}" Grid.Column="2" Margin="0,0,8,0"><StackPanel><TextBlock x:Name="EnemyOurDamageLabel" Text="我方有效伤害" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyOurDamage" Text="—" Foreground="{DynamicResource Good}" FontFamily="{DynamicResource DataFont}" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="干员与归属召唤物" Style="{StaticResource Caption}"/></StackPanel></Border>
+      <Border Style="{StaticResource MetricCard}" Grid.Column="3" Margin="0"><StackPanel><TextBlock Text="敌方剩余" Foreground="{DynamicResource Muted}" FontSize="12"/><TextBlock x:Name="EnemyRemaining" Text="—" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DataFont}" FontSize="27" FontWeight="Bold" Margin="0,3,0,1"/><TextBlock Text="仅场上存活实例" Style="{StaticResource Caption}"/></StackPanel></Border>
      </UniformGrid>
      <Grid Grid.Row="1">
       <Grid.ColumnDefinitions><ColumnDefinition Width="1.08*"/><ColumnDefinition x:Name="EnemyChartColumn" Width="*"/></Grid.ColumnDefinitions>
@@ -301,8 +301,8 @@
            <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <Border Width="34" Height="34" CornerRadius="3" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True"><Grid><TextBlock Text="{Binding Badge}" Foreground="{DynamicResource Accent}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Stretch="UniformToFill"/></Grid></Border>
-            <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center"><TextBlock Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Eid}" Foreground="{DynamicResource Muted}" FontFamily="Cascadia Mono, Consolas" FontSize="10" TextTrimming="CharacterEllipsis"/></StackPanel>
-            <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="{Binding Status}" Foreground="{DynamicResource Muted}" FontSize="10" TextAlignment="Right"/><TextBlock Text="{Binding HpText}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="12" TextAlignment="Right" Margin="0,2,0,0"/></StackPanel>
+            <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center"><TextBlock Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Eid}" Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="10" TextTrimming="CharacterEllipsis"/></StackPanel>
+            <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="{Binding Status}" Foreground="{DynamicResource Muted}" FontSize="10" TextAlignment="Right"/><TextBlock Text="{Binding HpText}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DataFont}" FontSize="12" TextAlignment="Right" Margin="0,2,0,0"/></StackPanel>
            </Grid>
            <ProgressBar Value="{Binding HpPercent, Mode=OneWay}" Maximum="100" Height="4" Margin="0,7,0,5" Foreground="{DynamicResource Accent}" Background="{DynamicResource Track}" BorderThickness="0">
             <ProgressBar.Style>

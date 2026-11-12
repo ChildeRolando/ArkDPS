@@ -42,6 +42,7 @@ internal static class Screenshot
     {
         var view=selected.Get("view");var document=new StackPanel{Width=900,Background=Theme.Resource("Card")};
         var header=new StackPanel{Background=Theme.Resource("Console"),Margin=new Thickness(0)};
+        document.SetResourceReference(System.Windows.Documents.TextElement.FontFamilyProperty,"InterfaceFont");
         header.Children.Add(Inspector.Text("ArkDPS / "+view.Text("title"),26,true,"ConsoleInk",new Thickness(24,22,24,12)));
         header.Children.Add(Inspector.Text(string.Join(" · ",selected.Get("labels").Items().Select(x=>x.Text())),12,false,"ConsoleMuted",new Thickness(24,0,24,18)));document.Children.Add(header);
         document.Children.Add(Inspector.Text("有效伤害 = 总伤害 − 过量伤害 · 过量来自事件派生 · 斜纹 = 过量伤害 · 护盾仅实际吸收 · 未知为 —",12,false,"Muted",new Thickness(24,18,24,4)));
@@ -53,7 +54,7 @@ internal static class Screenshot
             var portrait=new Image{Source=item.Portrait,Width=40,Height=40,Margin=new Thickness(10,8,10,16)};row.Children.Add(portrait);
             var text=new StackPanel{Margin=new Thickness(0,9,12,16)};text.Children.Add(Inspector.Text(item.Name,16,true,"ConsoleInk"));text.Children.Add(Inspector.Text(item.Presence,11,false,"ConsoleMuted"));Grid.SetColumn(text,1);row.Children.Add(text);
             var values=new StackPanel{Margin=new Thickness(0,8,12,16),HorizontalAlignment=HorizontalAlignment.Right};
-            var exact=Inspector.Text(Json.UiText(entry.Text("exact_value")),18,true,"ConsoleInk");exact.FontFamily=new FontFamily("Bahnschrift");exact.TextWrapping=TextWrapping.NoWrap;exact.TextAlignment=TextAlignment.Right;
+            var exact=Inspector.Text(Json.UiText(entry.Text("exact_value")),18,true,"ConsoleInk");exact.SetResourceReference(TextBlock.FontFamilyProperty,"DisplayFont");exact.TextWrapping=TextWrapping.NoWrap;exact.TextAlignment=TextAlignment.Right;
             var secondary=Inspector.Text(item.Share+(item.Rate.Length>0 ? "   "+item.Rate : ""),12,false,"ConsoleMuted");secondary.TextAlignment=TextAlignment.Right;
             var overkill=Inspector.Text(OverkillText(entry),11,false,"ConsoleMuted");overkill.TextAlignment=TextAlignment.Right;
             values.Children.Add(exact);values.Children.Add(secondary);values.Children.Add(overkill);Grid.SetColumn(values,2);row.Children.Add(values);

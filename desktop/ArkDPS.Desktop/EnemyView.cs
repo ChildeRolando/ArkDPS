@@ -314,12 +314,12 @@ public sealed class EnemyChart : FrameworkElement
         var muted = Theme.Resource("Muted");
         var line = Theme.Resource("Line");
         double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        var typeface = new Typeface("Cascadia Mono, Consolas");
+        var typeface = Theme.Typeface("DataFont",FontWeights.Normal);
         dc.DrawRectangle(Brushes.Transparent,null,new Rect(RenderSize));
         if (points.Count == 0)
         {
             var empty = new FormattedText("等待可靠的血量或伤害样本", CultureInfo.CurrentUICulture,
-                FlowDirection.LeftToRight, new Typeface("Microsoft YaHei UI"), 12, muted, dpi);
+                FlowDirection.LeftToRight, Theme.Typeface("InterfaceFont",FontWeights.Normal), 12, muted, dpi);
             dc.DrawText(empty, new Point(Math.Max(8, (ActualWidth - empty.Width) / 2),
                                          Math.Max(8, (ActualHeight - empty.Height) / 2)));
             return;

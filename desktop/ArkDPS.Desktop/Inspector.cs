@@ -354,7 +354,7 @@ public sealed class Inspector : Border
                 key.TextTrimming=TextTrimming.CharacterEllipsis;
                 var value=metricValues[index]=Label("—",14,DarkInk,true);
                 value.Margin=new Thickness(6,0,0,0);
-                value.FontFamily=new FontFamily("Cascadia Mono, Consolas");
+                value.SetResourceReference(TextBlock.FontFamilyProperty,"DataFont");
                 value.TextTrimming=TextTrimming.CharacterEllipsis;
                 value.MaxWidth=120;
                 DockPanel.SetDock(value,Dock.Right);
@@ -376,7 +376,20 @@ public sealed class Inspector : Border
                 else Grid.SetColumnSpan(cell,2);
                 readings.Children.Add(cell);
             }
-            var statsPanel=PanelFrame(Module(Label("主要数据",15,DarkInk,true),readings),new Thickness(0,0,3,0));
+            var ratios=new UniformGrid{Rows=1,Columns=3};
+            ratios.Children.Add(overkill);
+            ratios.Children.Add(mitigation);
+            ratios.Children.Add(skillShare);
+            AutomationProperties.SetAutomationId(ratios,"CompactOperatorRatios");
+            var statsBody=new StackPanel();
+            statsBody.Children.Add(readings);
+            statsBody.Children.Add(new Border
+            {
+                Child=ratios,BorderBrush=Divider,BorderThickness=new Thickness(0,1,0,0),
+                Margin=new Thickness(0,4,0,0),
+            });
+
+            var statsPanel=PanelFrame(Module(Label("主要数据",15,DarkInk,true),statsBody),new Thickness(0,0,3,0));
             AutomationProperties.SetAutomationId(statsPanel,"CompactOperatorStats");
             modules.Children.Add(statsPanel);
 
@@ -387,6 +400,7 @@ public sealed class Inspector : Border
             var center=new StackPanel{HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center};
             ringTitle.HorizontalAlignment=HorizontalAlignment.Center;
             ringValue.HorizontalAlignment=HorizontalAlignment.Center;
+            ringValue.SetResourceReference(TextBlock.FontFamilyProperty,"DisplayFont");
             center.Children.Add(ringTitle);
             center.Children.Add(ringValue);
             chart.Children.Add(new Viewbox{Child=center,StretchDirection=StretchDirection.DownOnly,
@@ -397,7 +411,7 @@ public sealed class Inspector : Border
                 var line=typeFields[index]=new DockPanel{MinHeight=25,Background=Brushes.Transparent};
                 var item=DamageTypes[index];
                 var value=typeValues[index]=Label("—",13,DarkInk);
-                value.FontFamily=new FontFamily("Cascadia Mono, Consolas");
+                value.SetResourceReference(TextBlock.FontFamilyProperty,"DataFont");
                 value.Margin=new Thickness(9,0,0,0);
                 value.MinWidth=33;
                 value.TextAlignment=TextAlignment.Right;
@@ -414,13 +428,6 @@ public sealed class Inspector : Border
             Grid.SetColumn(chartPanel,1);
             modules.Children.Add(chartPanel);
             Children.Add(modules);
-
-            var ratios=new UniformGrid{Rows=1,Columns=3};
-            ratios.Children.Add(overkill);
-            ratios.Children.Add(mitigation);
-            ratios.Children.Add(skillShare);
-            AutomationProperties.SetAutomationId(ratios,"CompactOperatorRatios");
-            Children.Add(PanelFrame(ratios,new Thickness(0,6,0,0)));
 
             bool stacked=false;
             modules.SizeChanged+=(_,e)=>
@@ -534,7 +541,8 @@ public sealed class Inspector : Border
                 : OverkillNote(row,view);
             overkill.Update(overflow,WithNote("过量伤害 ÷ 总伤害（含过量）。",overflowNote));
             double reduction=row.Get("mitigation_rate").TryNumber(double.NaN)/100;
-            mitigation.Update(reduction,WithNote("1 − 实际伤害 ÷ 公式前伤害。",
+            mitigation.Update(reduction,WithNote(
+                "1 − 公式后伤害 ÷ 公式前伤害。两项都取自护盾与生命值结算前的原生公式。",
                 double.IsFinite(reduction) ? "" : MitigationNote(row,view)));
             string splitBasis=effective ? "技能期有效伤害 ÷ 已拆分的总有效伤害。" : "技能期伤害 ÷ 已拆分的总伤害。";
             skillShare.Caption=effective ? "技能期有效伤害占比" : "技能期伤害占比";
@@ -622,16 +630,16 @@ public sealed class Inspector : Border
             {
                 ring=new Ring(4,color);
                 Background=Brushes.Transparent;
-                Padding=new Thickness(3,5,3,6);
+                Padding=new Thickness(2,5,2,4);
                 var dial=new Grid{Width=50,Height=50,HorizontalAlignment=HorizontalAlignment.Center};
                 dial.Children.Add(ring);
-                value.FontFamily=new FontFamily("Cascadia Mono, Consolas");
+                value.SetResourceReference(TextBlock.FontFamilyProperty,"DataFont");
                 value.HorizontalAlignment=HorizontalAlignment.Center;
                 dial.Children.Add(new Viewbox{Child=value,StretchDirection=StretchDirection.DownOnly,
                     Margin=new Thickness(7)});
                 var content=new StackPanel();
                 content.Children.Add(dial);
-                title=Label(label,13,MutedInk,true);
+                title=Label(label,12,MutedInk,true);
                 title.Margin=new Thickness(0,2,0,0);
                 title.TextWrapping=TextWrapping.Wrap;
                 title.TextAlignment=TextAlignment.Center;
@@ -652,12 +660,15 @@ public sealed class Inspector : Border
         {
             private double[] values=new double[colors.Length];
             private double total;
+            private bool reverse;
 
             internal void SetFraction(double fraction)
             {
-                double portion=double.IsFinite(fraction) ? Math.Clamp(fraction,0,1) : 0;
-                if(total==1 && values[0]==portion) return;
+                double portion=double.IsFinite(fraction) ? Math.Min(Math.Abs(fraction),1) : 0;
+                bool negative=fraction<0;
+                if(total==1 && values[0]==portion && reverse==negative) return;
                 values[0]=portion;
+                reverse=negative;
                 total=1;
                 InvalidateVisual();
             }
@@ -691,8 +702,9 @@ public sealed class Inspector : Border
                     using(var path=geometry.Open())
                     {
                         path.BeginFigure(At(angle),false,false);
-                        path.ArcTo(At(angle+sweep),new Size(radius,radius),0,sweep>Math.PI,
-                            SweepDirection.Clockwise,true,false);
+                        double end=angle+(reverse ? -sweep : sweep);
+                        path.ArcTo(At(end),new Size(radius,radius),0,sweep>Math.PI,
+                            reverse ? SweepDirection.Counterclockwise : SweepDirection.Clockwise,true,false);
                     }
                     geometry.Freeze();
                     context.DrawGeometry(null,pen,geometry);
@@ -754,7 +766,7 @@ public sealed class Inspector : Border
     }
     private static string MitigationNote(JsonElement row,JsonElement view)
     {
-        if(row.Get("mitigation_rate").ValueKind==JsonValueKind.Number) return "被减伤率 = 1 − 实际伤害 / 公式前伤害";
+        if(row.Get("mitigation_rate").ValueKind==JsonValueKind.Number) return "被减伤率 = 1 − 公式后伤害 ÷ 公式前伤害";
         string reason=row.Text("mitigation_unknown_reason");
         if(reason.Length>0) return "被减伤未知："+reason;
         return "被减伤未知：尚未采集公式前伤害；不推测、不补零。";
@@ -803,6 +815,6 @@ public sealed class Inspector : Border
     }
     internal static TextBlock Mono(string text,double size,bool bold=false,string token="Ink")
     {
-        var block=Text(text,size,bold,token);block.FontFamily=new FontFamily("Cascadia Mono, Consolas");return block;
+        var block=Text(text,size,bold,token);block.SetResourceReference(TextBlock.FontFamilyProperty,"DataFont");return block;
     }
 }
