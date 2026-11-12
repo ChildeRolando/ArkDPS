@@ -7,7 +7,7 @@ receiver cannot establish those producer guarantees by itself.
 """
 from math import isfinite
 
-from stats_core import Statistics
+from stats_core import ENEMY_STATE_KINDS, Statistics
 
 
 class StreamGap(ValueError):
@@ -86,14 +86,15 @@ class EventStream:
                cancel_reason=None, shield_absorbed=None, target_instance=None,
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
-               enemy_entry_attributes=None):
+               enemy_entry_attributes=None, finish_reason=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
                    target, real_delta, hp_before, hp_after, killed,
                    target_type, damage_type, cancel_reason, shield_absorbed,
                    target_instance, skill_key, skill_id, skill_name, skill_reason,
-                   phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes)
+                   phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
+                   finish_reason)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -116,7 +117,7 @@ class EventStream:
                 self.statistics.record_enemy_reborn(
                     frame, game_time, source, amount, target, target_instance,
                     hp_before, hp_after, phase_total_hp, phase_count, phase_from_birth)
-            else:
+            elif kind not in ENEMY_STATE_KINDS:
                 self.statistics.event(
                     f'{self.session}:{sequence}', game_time, source, kind, amount,
                     target=target, real_delta=real_delta, hp_before=hp_before,
@@ -129,10 +130,22 @@ class EventStream:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':
                 self.statistics.mark_enemy_entry_unknown()
+                self.statistics.mark_enemy_state_unknown()
             elif kind == 'enemy_reborn':
                 self.statistics.mark_enemy_phase_unknown()
+                self.statistics.mark_enemy_state_unknown()
             elif kind != 'hp_damage':
                 self._fail(f'event is invalid or cannot be attributed: {exc}')
+        else:
+            if kind in ENEMY_STATE_KINDS:
+                try:
+                    self.statistics.record_enemy_state(
+                        sequence, kind, frame, game_time, source, amount, target, target_instance,
+                        hp_before=hp_before, hp_after=hp_after, phase_total_hp=phase_total_hp,
+                        phase_count=phase_count, phase_from_birth=phase_from_birth,
+                        finish_reason=finish_reason)
+                except (ValueError, TypeError, OverflowError):
+                    self.statistics.mark_enemy_state_unknown()
         self.sequence = sequence
         self.frame = frame
         self.game_time = game_time

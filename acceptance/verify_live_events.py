@@ -6,9 +6,44 @@ import math
 from pathlib import Path
 
 
+STATE_ONLY = {'enemy_hp', 'enemy_fake_death', 'enemy_finish'}
+
+
 def near(left, right):
     if not math.isclose(left, right, rel_tol=1e-7, abs_tol=.01):
         raise ValueError(f'amount mismatch: {left} != {right}')
+
+
+def enemy_state_event(event):
+    kind = event['kind']
+    uid, eid = event.get('target_instance'), event.get('target')
+    if (event['source'] is not None or (kind != 'enemy_reborn' and event['amount'] != 0)
+            or not isinstance(uid, str) or not uid.isascii() or not uid.isdecimal()
+            or len(uid) > 10 or not 0 <= int(uid) <= 0xffffffff or str(int(uid)) != uid
+            or not isinstance(eid, str) or not eid):
+        raise ValueError('invalid enemy state identity or amount')
+    result = {key: event[key] for key in ('sequence', 'kind', 'frame', 'game_time')}
+    result.update(eid=eid, instance_uid=uid)
+    for key in ('hp_before', 'hp_after'):
+        value = event.get(key)
+        if value is not None:
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError('invalid enemy state HP')
+            result[key] = value
+    if kind == 'enemy_hp' and 'hp_after' not in result:
+        raise ValueError('enemy HP event has no settlement value')
+    reason = event.get('finish_reason')
+    if kind == 'enemy_finish':
+        if type(reason) is not int or reason == 0 or not -(1 << 31) <= reason < (1 << 31):
+            raise ValueError('invalid enemy finish reason')
+        result['finish_reason'] = reason
+    elif reason is not None:
+        raise ValueError('only enemy finish carries a finish reason')
+    if kind == 'enemy_enter' and event.get('enemy_entry_attributes'):
+        result['enemy_entry_attributes'] = event['enemy_entry_attributes']
+    if kind == 'enemy_reborn':
+        result.update({key: event[key] for key in ('phase_total_hp', 'phase_count', 'phase_from_birth')})
+    return result
 
 
 def verify(directory, *, source_owners=(), require_partial=False, require_zero=False,
@@ -57,6 +92,8 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
     totals = defaultdict(float)
     enemy_entries = {}
     enemy_phases = {}
+    published_enemy_state = last['statistics'].get('enemy_state')
+    enemy_state_events = []
     partial, zeros = [], []
     sources_with_absorption = set()
     previous_time = first['game_time']
@@ -71,6 +108,11 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
         if not previous_frame <= event['frame'] <= last['frame']:
             raise ValueError('event frame is outside ordered coverage')
         previous_frame = event['frame']
+        if kind in STATE_ONLY or (published_enemy_state is not None
+                                 and kind in ('enemy_enter', 'enemy_reborn')):
+            enemy_state_events.append(enemy_state_event(event))
+        if kind in STATE_ONLY:
+            continue
         if kind == 'enemy_enter':
             uid, eid = event.get('target_instance'), event.get('target')
             if (source is not None or amount != 0 or not isinstance(uid, str)
@@ -150,6 +192,12 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
             not isinstance(published_phases, dict)
             or published_phases.get('instances') != enemy_phases):
         raise ValueError('published enemy phases differ from ordered events')
+    if (enemy_state_events or published_enemy_state is not None) and (
+            not isinstance(published_enemy_state, dict)
+            or type(published_enemy_state.get('complete')) is not bool
+            or published_enemy_state.get('start_frame') != first['frame']
+            or published_enemy_state.get('events') != enemy_state_events):
+        raise ValueError('published enemy state differs from ordered events')
     native = {row['id']: row for row in last.get('native_rows', last['rows'])}
     references = {}
     for publication in publications:
@@ -198,6 +246,9 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
         result['enemy_entry_complete'] = enemy_entry.get('complete') is True
     if published_phases is not None:
         result['enemy_phases'] = published_phases
+    if published_enemy_state is not None:
+        result['enemy_state_complete'] = published_enemy_state['complete']
+        result['enemy_state_events'] = len(enemy_state_events)
     return result
 
 

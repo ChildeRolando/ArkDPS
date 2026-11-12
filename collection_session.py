@@ -204,7 +204,7 @@ class CollectionSession:
         return sample
 
     def _attach_enemy(self, sample):
-        """Attach throttled enemy telemetry without touching battle statistics."""
+        """Project committed enemy events alongside the independent damage total."""
         session = sample.get('session')
         if session is not None and session != self._enemy_session:
             self._enemy_session = session
@@ -235,13 +235,16 @@ class CollectionSession:
             return
         now = time.monotonic()
         poll_due = now - self._enemy_last_poll >= 1.0
-        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases') if key in stats}
-        if poll_due or event_data != self._enemy_event_data:
+        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state')
+                      if key in stats}
+        state = event_data.get('enemy_state')
+        if poll_due or (state is not None and state['complete']) or event_data != self._enemy_event_data:
             if poll_due:
                 self._enemy_last_poll = now
             try:
-                self._enemy_payload = read(game_time=sample.get('game_time'),
-                                           our_damage=our_damage, **event_data)
+                context = {'frame': sample.get('frame')} if state is not None else {}
+                self._enemy_payload = read(game_time=sample.get('game_time'), our_damage=our_damage,
+                                            **event_data, **context)
                 self._enemy_event_data = event_data
             except Exception as exc:
                 self._enemy_payload = {

@@ -178,6 +178,16 @@ class LiveEventCapture:
             )
         if payload.get('enemy_phase_unknown') or payload.get('enemy_phase_ready') is False:
             statistics.mark_enemy_phase_unknown()
+        if 'enemy_state_ready' in payload or 'enemy_state_unknown' in payload:
+            statistics.observe_enemy_state(
+                self.adapter.event_stream.baseline_frame,
+                complete=(payload.get('enemy_state_ready') is True
+                          and payload.get('enemy_state_unknown') is not True
+                          and (self.initial_drain
+                               or statistics.enemy_state_start_frame is not None)),
+            )
+        elif statistics.enemy_state_start_frame is not None:
+            statistics.mark_enemy_state_unknown()
 
     def ingest(self, sample, roster, sequence, drained):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.
@@ -206,7 +216,7 @@ class LiveEventCapture:
                 if self.initial_drain and event['sequence'] <= self.baseline_sequence:
                     continue
                 payload = {k: v for k, v in event.items() if k != 'proof'}
-                self.adapter.accept_event(session=sample['session'], **payload)
+                self.adapter.accept_event(session=sample['session'], refresh_result=False, **payload)
             self.initial_drain = False
             if any(event.get('sequence', -1) <= sequence for event in self.pending):
                 raise StreamGap('event records were delivered out of order')

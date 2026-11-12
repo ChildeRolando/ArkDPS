@@ -321,12 +321,15 @@ class Collector:
             read_ms=round((time.perf_counter() - started) * 1000, 2),
             observed_at=time.time(), captured_monotonic=captured_monotonic, guard=guard)
 
-    def read_enemies(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None):
+    def read_enemies(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None,
+                     enemy_state=None, frame=None):
         """Read supplemental enemy live telemetry without affecting counters."""
         return self.enemy_telemetry.sample(game_time=game_time,
                                            our_damage=our_damage,
                                            enemy_entry=enemy_entry,
-                                           enemy_phases=enemy_phases)
+                                            enemy_phases=enemy_phases,
+                                            enemy_state=enemy_state,
+                                            frame=frame)
 
     def read_lifecycle(self):
         if self._lifecycle_reader is None:

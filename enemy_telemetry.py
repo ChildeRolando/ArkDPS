@@ -6,6 +6,7 @@ unavailable so the UI cannot render invented enemies or HP.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter, defaultdict
 import math
 import time
@@ -24,9 +25,14 @@ ENEMY_STATE_NAMES = {
 if _gs is not None:
     ENEMY_STATE_NAMES = dict(getattr(_gs, 'ENEMY_STATE_NAMES', ENEMY_STATE_NAMES))
 
-ENTERED_LIFECYCLES = ('active', 'departed', 'entered')
+ENTERED_LIFECYCLES = ('active', 'departed', 'entered', 'rebirthing')
 MAX_TIMELINE_POINTS = 7200
 MAX_SERIES_POINTS = 360
+EVENT_CALIBRATION_INTERVAL = 5.0
+_LIVE_FIELDS = ('hp', 'alive', 'lifecycle', 'state_id', 'state', 'end_frame',
+                'end_reason', 'finish_reason')
+_ATTRIBUTES = ('atk', 'def', 'res', 'move_speed', 'attack_speed')
+_FINISH_STATES = {1: ('reach_exit', 7, '到达终点'), 2: ('death', 5, '死亡')}
 
 
 def _finite(value, default=0.0):
@@ -36,6 +42,12 @@ def _finite(value, default=0.0):
 
 def _text(value):
     return value if isinstance(value, str) else ''
+
+
+def _hp_ratio(hp, max_hp):
+    if hp is not None and max_hp is not None and max_hp > 0:
+        return min(1.0, max(0.0, hp / max_hp))
+    return None
 
 
 def _snapshot_attribute(enemy, native_key, field):
@@ -70,7 +82,7 @@ def enemy_rows(snapshot, *, include_pending=False):
             'hp': hp,
             'max_hp': max_hp,
             'hp_known': max_hp > 0,
-            'hp_ratio': min(1.0, max(0.0, hp / max_hp)) if max_hp > 0 else None,
+            'hp_ratio': _hp_ratio(hp, max_hp),
             'atk': _snapshot_attribute(enemy, 'ATK', 'atk'),
             'def': _snapshot_attribute(enemy, 'DEF', 'def_'),
             'res': _snapshot_attribute(enemy, 'MAGIC_RESISTANCE', 'res'),
@@ -84,6 +96,7 @@ def enemy_rows(snapshot, *, include_pending=False):
             'spawn_frame': getattr(enemy, 'spawn_frame', None),
             'end_frame': getattr(enemy, 'end_frame', None),
             'end_reason': getattr(enemy, 'end_reason', None),
+            'finish_reason': getattr(enemy, 'finish_reason', None),
             'is_summon': bool(getattr(enemy, 'is_summon', False)),
             'planned': bool(getattr(enemy, 'planned', False)),
             'spawn_kind': _text(getattr(enemy, 'spawn_kind', '')) or 'scheduled',
@@ -209,7 +222,7 @@ def enemy_totals(rows, planned=None):
 
 
 class EnemyTimeline:
-    """One point per observed game second; the UI downsamples for drawing."""
+    """One point per published battle time; the UI downsamples for drawing."""
 
     def __init__(self):
         self.points = []
@@ -217,7 +230,7 @@ class EnemyTimeline:
     def reset(self):
         self.points = []
 
-    def add(self, game_time, rows, our_effective_damage, planned=None):
+    def add(self, game_time, rows, our_effective_damage, planned=None, *, replace_current=False):
         if not isinstance(game_time, (int, float)) or isinstance(game_time, bool):
             return None
         if not math.isfinite(game_time):
@@ -225,7 +238,9 @@ class EnemyTimeline:
         damage_known = (isinstance(our_effective_damage, (int, float))
                         and not isinstance(our_effective_damage, bool)
                         and math.isfinite(our_effective_damage))
-        if self.points and game_time <= self.points[-1]['game_time']:
+        last_time = self.points[-1]['game_time'] if self.points else None
+        if last_time is not None and (game_time < last_time
+                                     or (game_time == last_time and not replace_current)):
             return None
         totals = enemy_totals(rows, planned)
         point = {
@@ -245,7 +260,10 @@ class EnemyTimeline:
             'remaining_hp_complete': totals['remaining_hp_complete'],
             'hp_complete': totals['hp_complete'],
         }
-        self.points.append(point)
+        if game_time == last_time:
+            self.points[-1] = point
+        else:
+            self.points.append(point)
         if len(self.points) > MAX_TIMELINE_POINTS:
             del self.points[:len(self.points) - MAX_TIMELINE_POINTS]
         return point
@@ -344,16 +362,17 @@ def bootstrap_at_battle(reader):
 
 
 class EnemyTelemetry:
-    """Throttled bootstrap/poll wrapper; never raises into collection."""
+    """Reduce enemy events with an initial snapshot and polling fallback."""
 
     def __init__(self, reader, *, log=None, poll_interval=1.0,
                  bootstrap_retry=3.0, clock=time.monotonic,
-                 bootstrap=None):
+                 bootstrap=None, calibration_interval=EVENT_CALIBRATION_INTERVAL):
         self.reader = reader
         self.bootstrap = bootstrap or bootstrap_at_battle
         self.log = log or (lambda *_args: None)
         self.poll_interval = poll_interval
         self.bootstrap_retry = bootstrap_retry
+        self.calibration_interval = calibration_interval
         self.clock = clock
         self.timeline = EnemyTimeline()
         self.reset()
@@ -372,6 +391,16 @@ class EnemyTelemetry:
         self._entry_events_complete = None
         self._entry_events_start_frame = None
         self._phase_data = None
+        self._stream_complete = None
+        self._stream_start_frame = None
+        self._last_sequence = -1
+        self._snapshot_frame = None
+        self._seeded = False
+        self._row_frames = {}
+        self._event_frames = {}
+        self._pending_events = defaultdict(list)
+        self._finished = set()
+        self._phase_calibration = set()
 
     def _record_entries(self, observation):
         if observation is None:
@@ -390,9 +419,99 @@ class EnemyTelemetry:
         if not row['hp_known'] and 'max_hp' in attributes:
             max_hp = attributes['max_hp']
             hp = row['hp']
-            fallback.update(max_hp=max_hp, hp_known=True,
-                            hp_ratio=min(1.0, max(0.0, hp / max_hp)) if hp is not None else None)
-        return dict(row, attributes_from_entry=bool(fallback), **fallback)
+            fallback.update(max_hp=max_hp, hp_known=True, hp_ratio=_hp_ratio(hp, max_hp))
+        return dict(row, attributes_from_entry=bool(fallback or row.get('attributes_from_entry')),
+                    **fallback)
+
+    def _event_row(self, eid, uid):
+        identity = (getattr(self.reader, '_db', None) or {}).get(eid) or {}
+        return dict(
+            instance_uid=uid, roster_id=None, spawn_order=None, eid=eid,
+            name=identity.get('name') or eid, code=identity.get('code') or '',
+            lifecycle='entered', alive=None, state_id=None, state='未知',
+            spawn_frame=None, spawn_time=None, end_frame=None, end_reason=None,
+            finish_reason=None, hp=None, max_hp=None, hp_known=False,
+            hp_ratio=None, hp_inferred=False, entry_inferred=False,
+        )
+
+    def _apply_event(self, row, event, key):
+        kind, frame = event['kind'], event['frame']
+        if kind == 'enemy_enter':
+            row = self._attach_entry_attributes(
+                dict(row, spawn_frame=frame, spawn_time=event['game_time']), event)
+        if key in self._finished:
+            return row
+        fake_departure = (self._stream_complete and kind == 'enemy_fake_death'
+                          and row['lifecycle'] == 'departed')
+        if kind != 'enemy_finish' and not fake_departure and frame < self._row_frames.get(key, -1):
+            return row
+        hp = _finite(event.get('hp_after'), None)
+        if kind == 'enemy_enter' or kind == 'enemy_reborn':
+            if hp is None and kind == 'enemy_enter':
+                hp = row['hp']
+            row = dict(row, lifecycle='active', alive=True, state_id=None, state='在场',
+                       end_frame=None, end_reason=None, finish_reason=None, hp=hp)
+            if kind == 'enemy_reborn':
+                self._phase_calibration.add(key)
+        elif kind == 'enemy_fake_death':
+            row = dict(row, lifecycle='rebirthing', alive=True, state_id=8,
+                       state='等待重生', end_frame=None, end_reason=None, finish_reason=None, hp=hp)
+        elif kind == 'enemy_finish':
+            reason = event.get('finish_reason')
+            end_reason, state_id, state = _FINISH_STATES.get(
+                reason, (f'finish_{reason}', None, '已离场'))
+            row = dict(row, lifecycle='departed', alive=False, state_id=state_id, state=state,
+                       end_frame=frame, end_reason=end_reason,
+                       finish_reason=reason, hp=hp)
+            self._finished.add(key)
+            self._phase_calibration.discard(key)
+        elif kind == 'enemy_hp' and hp is not None:
+            row = dict(row, hp=hp)
+        self._row_frames[key] = frame if fake_departure else max(frame, self._row_frames.get(key, -1))
+        self._event_frames[key] = frame
+        return dict(row, hp_ratio=_hp_ratio(row['hp'], row['max_hp']))
+
+    def _apply_pending(self, row, key):
+        for event in self._pending_events.pop(key, ()):
+            row = self._apply_event(row, event, key)
+        return row
+
+    def _record_state_events(self, observation):
+        complete = bool(observation and observation['complete'])
+        if self._stream_complete and not complete:
+            self._seeded = False
+        if observation is None:
+            if self._stream_complete is not None:
+                self._stream_complete = False
+            return
+        start_frame = observation['start_frame']
+        if self._stream_start_frame != start_frame:
+            self._seeded = False
+            self._last_sequence = -1
+        self._stream_complete = complete
+        self._stream_start_frame = start_frame
+        events = observation['events']
+        start = bisect_right(events, self._last_sequence, key=lambda event: event['sequence'])
+        if start == len(events):
+            return
+        rows = {_phase_key(row): index for index, row in enumerate(self._rows)
+                if _phase_key(row) is not None}
+        for event in events[start:]:
+            self._last_sequence = event['sequence']
+            uid = event.get('instance_uid') or event.get('target_instance')
+            eid = event.get('eid') or event.get('target')
+            key = (uid, eid)
+            index = rows.get(key)
+            if index is None:
+                entry = self._entry_events.get(uid)
+                if event['kind'] != 'enemy_enter' and (entry is None or entry['eid'] != eid):
+                    self._pending_events[key].append(event)
+                    continue
+                row = self._apply_pending(self._event_row(eid, uid), key)
+                rows[key] = len(self._rows)
+                self._rows.append(self._apply_event(row, event, key))
+            else:
+                self._rows[index] = self._apply_event(self._rows[index], event, key)
 
     def _merged_rows(self, rows):
         if self._entry_events_complete is None:
@@ -417,20 +536,11 @@ class EnemyTelemetry:
             if uid is not None:
                 by_uid[uid] = len(merged)
             merged.append(row)
-        catalog = getattr(self.reader, '_db', None) or {}
         for uid, entry in self._entry_events.items():
             if uid in by_uid:
                 continue
-            eid = entry['eid']
-            identity = catalog.get(eid) or {}
-            row = dict(
-                instance_uid=uid, roster_id=None, spawn_order=None, eid=eid,
-                name=identity.get('name') or eid, code=identity.get('code') or '',
-                lifecycle='entered', alive=None, state_id=None, state='未知',
-                spawn_frame=entry['frame'], spawn_time=entry['game_time'],
-                end_frame=None, end_reason=None, hp=None, max_hp=None,
-                hp_known=False, hp_ratio=None, hp_inferred=False,
-            )
+            row = dict(self._event_row(entry['eid'], uid),
+                       spawn_frame=entry['frame'], spawn_time=entry['game_time'])
             merged.append(self._attach_entry_attributes(row, entry))
         return merged
 
@@ -449,18 +559,49 @@ class EnemyTelemetry:
                     )
         return current
 
-    def _state(self, status, *, rows=None, error=None):
+    def _current_plan(self, rows):
+        if self._stream_complete is None:
+            return self._planned_rows
+        by_instance = {}
+        by_eid = defaultdict(set)
+        for row in rows:
+            # A later phase's max HP does not estimate the initial stage.
+            hp = _max_hp(row)
+            if hp is not None and row.get('phase_count', 0) <= 1:
+                key = _phase_key(row)
+                if key is not None:
+                    by_instance[key] = hp
+                by_eid[row['eid']].add(hp)
+        planned = []
+        for row in self._planned_rows:
+            key = _phase_key(row)
+            hp = by_instance.get(key)
+            inferred = False
+            if hp is None and key is None and len(by_eid[row['eid']]) == 1:
+                hp = next(iter(by_eid[row['eid']]))
+                inferred = True
+            if hp is not None and (not row['hp_known'] or row['hp_inferred']):
+                row = dict(row, max_hp=hp, hp_known=True, hp_inferred=inferred)
+            planned.append(row)
+        return planned
+
+    def _state(self, status, *, error=None, frame=None, game_time=None, our_damage=None):
         self._status = status
         self.error = error
-        if rows is not None:
-            self._rows = list(rows)
         current = self._rows_with_phases(self._rows)
+        planned = self._current_plan(current)
+        totals = enemy_totals(current, planned)
+        stream_ready = self._stream_ready(frame)
+        if self._stream_complete and not stream_ready:
+            totals.update(remaining_hp_complete=False, hp_complete=False)
+        if game_time is not None and (not self._stream_complete or stream_ready):
+            self._update_timeline(game_time, our_damage, current, planned)
         state = {
             'status': status,
             'error': error,
             'ready': self.ready,
             'rows': current,
-            'totals': enemy_totals(current, self._planned_rows),
+            'totals': totals,
             'damage_baseline': self._damage_baseline,
             'series': self.timeline.series(),
             'last_point': self.timeline.last,
@@ -468,7 +609,83 @@ class EnemyTelemetry:
         if self._entry_events_complete is not None:
             state['entry_events_complete'] = self._entry_events_complete
             state['entry_events_start_frame'] = self._entry_events_start_frame
+        if self._stream_complete is not None:
+            state['enemy_state_complete'] = stream_ready
         return state
+
+    def _stream_ready(self, frame):
+        return bool(self._stream_complete and self._seeded
+                    and (frame is None or self._snapshot_frame is None
+                         or frame >= self._snapshot_frame))
+
+    def _calibration_pending(self):
+        return any(
+            row['alive'] is not False
+            and (_phase_key(row) is None or not row['hp_known'] or row['hp'] is None
+                 or _phase_key(row) in self._phase_calibration
+                 or any(row.get(attribute) is None for attribute in _ATTRIBUTES))
+            for row in self._rows
+        )
+
+    @staticmethod
+    def _with_snapshot_details(current, observed, *, keep_live, older):
+        merged = dict(current)
+        merged.update({name: value for name, value in observed.items()
+                       if value is not None and name not in _LIVE_FIELDS
+                       and name not in ('hp_known', 'hp_ratio', 'max_hp')})
+        if not keep_live:
+            merged.update({name: observed[name] for name in _LIVE_FIELDS})
+        elif current['alive'] is None and observed['alive'] and not older:
+            merged.update(lifecycle='active', alive=True, state_id=observed['state_id'],
+                          state=observed['state'])
+            if current['hp'] is None:
+                merged['hp'] = observed['hp']
+        elif (current['hp'] is None and current['lifecycle'] == observed['lifecycle']
+              and current['alive'] == observed['alive']):
+            merged['hp'] = observed['hp']
+        if observed['hp_known'] and (not older or not current['hp_known']):
+            merged.update(max_hp=observed['max_hp'], hp_known=True)
+        merged['hp_ratio'] = _hp_ratio(merged['hp'], merged['max_hp'])
+        return merged
+
+    def _reconcile_snapshot(self, rows, frame, *, calibration):
+        previous = {_phase_key(row): row for row in self._rows
+                    if _phase_key(row) is not None}
+        prior_anonymous = {row['roster_id']: row for row in self._rows if _phase_key(row) is None}
+        merged = []
+        for row in rows:
+            key = _phase_key(row)
+            current = previous.pop(key, None)
+            anonymous = prior_anonymous.pop(row['roster_id'], None)
+            if current is None and calibration and anonymous is None and key not in self._pending_events:
+                continue
+            if current is not None:
+                current_frame = self._row_frames.get(key, -1)
+                current_event = self._event_frames.get(key, -1) >= self._stream_start_frame
+                keep_live = (key in self._finished or calibration or current_frame >= frame
+                             or (self._stream_complete and current_event))
+                row = self._with_snapshot_details(current, row, keep_live=keep_live,
+                                                  older=frame < current_frame)
+                if row['hp_known'] and row['alive'] and frame >= current_frame:
+                    self._phase_calibration.discard(key)
+                if not keep_live:
+                    self._row_frames[key] = frame
+            elif key is not None:
+                self._row_frames[key] = frame
+                row = self._apply_pending(row, key)
+            merged.append(row)
+        if calibration:
+            merged.extend(prior_anonymous.values())
+        for key, row in previous.items():
+            if (not self._stream_complete and row['alive']
+                    and self._row_frames.get(key, -1) < frame):
+                # After a gap, a missing row gives no reason to infer how the
+                # enemy left or how much HP it has.
+                row = dict(row, lifecycle='entered', alive=None, hp=None, hp_ratio=None,
+                           state='未知', state_id=None)
+                self._row_frames[key] = frame
+            merged.append(row)
+        self._rows = merged
 
     def _bootstrap(self):
         now = self.clock()
@@ -486,16 +703,24 @@ class EnemyTelemetry:
         self.log('敌人遥测已定位')
         return True
 
-    def sample(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None):
-        self._record_entries(enemy_entry)
-        if enemy_phases is not None:
-            self._phase_data = enemy_phases
-        if not self.ready and not self._bootstrap():
-            return self._state(self._status, error=self.error)
-        now = self.clock()
-        if now - self._last_poll < self.poll_interval:
-            return self._state(self._status, error=self.error)
-        self._last_poll = now
+    def _cache_plan(self, planned, *, calibration):
+        if not calibration:
+            self._planned_rows = planned
+            return
+        refreshed = {(row['roster_id'], row['eid']): row for row in planned}
+        retained = []
+        for row in self._planned_rows:
+            new = refreshed.pop((row['roster_id'], row['eid']), None)
+            if new is None:
+                retained.append(row)
+            elif row['hp_known'] and not new['hp_known']:
+                retained.append(dict(new, max_hp=row['max_hp'], hp_known=True,
+                                     hp_inferred=row['hp_inferred']))
+            else:
+                retained.append(new)
+        self._planned_rows = retained + list(refreshed.values())
+
+    def _poll(self, *, frame, calibration):
         try:
             snapshot = self.reader.poll_fast()
         except Exception as exc:
@@ -507,24 +732,64 @@ class EnemyTelemetry:
                     self.reader._chan = self.reader.mc.channel()
                 except Exception:
                     pass
-            return self._state('unavailable', error=f'敌人读取失败：{exc}')
+            return 'unavailable', f'敌人读取失败：{exc}'
         if not snapshot or not snapshot.get('ok'):
             message = (snapshot or {}).get('msg') or '敌人快照不完整'
-            return self._state('stale', error=message)
+            return 'stale', message
         rows = enemy_rows(snapshot)
+        if self._stream_complete is None:
+            self._rows = rows
+        else:
+            observed_frame = snapshot.get('fixed_frame')
+            if observed_frame is None:
+                observed_frame = frame if frame is not None else self._stream_start_frame
+            if self._snapshot_frame is not None and observed_frame < self._snapshot_frame:
+                return 'stale', '敌人快照帧早于已读取帧'
+            if self._stream_complete and not calibration and observed_frame < self._stream_start_frame:
+                return 'stale', '敌人快照早于事件流起点'
+            self._reconcile_snapshot(rows, observed_frame, calibration=calibration)
+            if not calibration:
+                self._snapshot_frame = observed_frame
+                self._seeded = self._stream_complete
         planned = enemy_rows(snapshot, include_pending=True)
         # Conditional branches only count once observed; scheduled waves form
         # the deterministic stage HP pool even when a poll misses a short life.
-        self._planned_rows = [row for row in planned
-                              if row['lifecycle'] in ENTERED_LIFECYCLES
-                              or row['spawn_kind'] == 'scheduled']
-        if self._damage_baseline is None and isinstance(our_damage, (int, float)):
+        self._cache_plan([row for row in planned if row['lifecycle'] in ENTERED_LIFECYCLES
+                          or row['spawn_kind'] == 'scheduled'], calibration=calibration)
+        return 'ready', None
+
+    def _update_timeline(self, game_time, our_damage, rows, planned):
+        our_damage = _finite(our_damage, None)
+        if self._damage_baseline is None and our_damage is not None:
             # Align the damage curve with the enemy-observation window. Native
             # counters can include damage dealt before ArkDPS attached; comparing
             # that cumulative value with entered-enemy MaxHP would overstate it.
             self._damage_baseline = float(our_damage)
         adjusted = (max(0.0, float(our_damage) - self._damage_baseline)
-                    if self._damage_baseline is not None
-                    and isinstance(our_damage, (int, float)) else None)
-        self.timeline.add(game_time, self._rows_with_phases(rows), adjusted, self._planned_rows)
-        return self._state('ready', rows=rows)
+                    if self._damage_baseline is not None and our_damage is not None else None)
+        self.timeline.add(game_time, rows, adjusted, planned,
+                          replace_current=self._stream_complete is True)
+
+    def sample(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None,
+               enemy_state=None, frame=None):
+        self._record_entries(enemy_entry)
+        if enemy_phases is not None:
+            self._phase_data = enemy_phases
+        self._record_state_events(enemy_state)
+        if not self.ready and not self._bootstrap():
+            return self._state(self._status, error=self.error, frame=frame)
+        now = self.clock()
+        calibration = self._stream_complete and self._seeded
+        if calibration:
+            if (now - self._last_poll >= self.calibration_interval
+                    and self._calibration_pending()):
+                self._last_poll = now
+                self._poll(frame=frame, calibration=True)
+        elif now - self._last_poll >= self.poll_interval:
+            self._last_poll = now
+            status, error = self._poll(frame=frame, calibration=False)
+            if status != 'ready':
+                return self._state(status, error=error, frame=frame)
+        else:
+            return self._state(self._status, error=self.error, frame=frame)
+        return self._state('ready', frame=frame, game_time=game_time, our_damage=our_damage)

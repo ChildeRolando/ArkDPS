@@ -150,3 +150,32 @@ def test_enemy_phases_reconcile_without_becoming_operator_damage(tmp_path):
     path.write_text('\n'.join(json.dumps(record) for record in records))
     with pytest.raises(ValueError, match='amount mismatch'):
         module.verify(tmp_path)
+
+
+def test_enemy_hp_and_finish_reconcile_as_ordered_enemy_state(tmp_path):
+    records, path = evidence(tmp_path)
+    last = records[2]['data']
+    last['event_watermark']['sequence'] = 5
+    raw_events = records[1]['data']['events']
+    common = dict(frame=2, game_time=1, source=None, target='enemy_a', target_instance='12', amount=0)
+    raw_events.extend([
+        dict(common, sequence=3, kind='enemy_hp', hp_before=50, hp_after=0),
+        dict(common, sequence=4, kind='enemy_fake_death', hp_after=0),
+        dict(common, sequence=5, kind='enemy_finish', hp_after=0, finish_reason=2),
+    ])
+    shared = dict(frame=2, game_time=1, eid='enemy_a', instance_uid='12', hp_after=0)
+    projected = [
+        dict(shared, sequence=3, kind='enemy_hp', hp_before=50),
+        dict(shared, sequence=4, kind='enemy_fake_death'),
+        dict(shared, sequence=5, kind='enemy_finish', finish_reason=2),
+    ]
+    last['statistics']['enemy_state'] = {'complete': True, 'start_frame': 1, 'events': projected}
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    result = module.verify(tmp_path)
+    assert result['enemy_state_complete'] and result['enemy_state_events'] == 3
+    assert result['shield_totals'] == {'char_cathy': 2}
+
+    projected[-1]['instance_uid'] = '13'
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='published enemy state differs'):
+        module.verify(tmp_path)

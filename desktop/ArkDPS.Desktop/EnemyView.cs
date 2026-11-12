@@ -55,7 +55,12 @@ public sealed class EnemyItem
         bool alive = row.Bool("alive");
         string lifecycle = row.Text("lifecycle");
         bool departed = lifecycle == "departed";
-        string status = lifecycle == "departed" ? "已离场" : alive ? "存活" : "状态未知";
+        string status = lifecycle switch
+        {
+            "departed" => "已离场",
+            "rebirthing" => "等待重生",
+            _ => alive ? "存活" : "状态未知",
+        };
         bool hpKnown = row.Bool("hp_known");
         var currentHp = row.Get("hp");
         double hpRatio = row.Get("hp_ratio").TryNumber(double.NaN);
@@ -288,7 +293,7 @@ public partial class MainWindow
         var status = enemy.Text("status");
         EnemyStatusText.Text = status switch
         {
-            "ready" => "实时读取",
+            "ready" => enemy.Bool("enemy_state_complete") ? "事件更新" : "实时读取",
             "locating" => "正在定位敌人",
             "stale" => "本帧读取不完整",
             "unavailable" => "敌人遥测不可用",
@@ -329,8 +334,14 @@ public partial class MainWindow
             JsonValueKind.False => "入场事件覆盖不完整，已入场人数为已确认下限。",
             _ => "已入场人数来自敌人快照。",
         };
+        string stateHint = enemy.Get("enemy_state_complete").ValueKind switch
+        {
+            JsonValueKind.True => " HP 和离场状态随事件更新。",
+            JsonValueKind.False => " 敌人状态正在由快照补齐。",
+            _ => "",
+        };
         string hint = error.Length > 0 ? error
-            : entryHint + " 总血量含已记录的重生阶段。"
+            : entryHint + stateHint + " 总血量含已记录的重生阶段。"
                 + (totalComplete && remainingComplete ? "" : " ≥ 表示已知下限。");
         double baseline = enemy.Get("damage_baseline").TryNumber(-1);
         if (baseline > 0)

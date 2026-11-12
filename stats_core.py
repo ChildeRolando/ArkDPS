@@ -15,6 +15,9 @@ from source_classification import classify_unmapped_source
 # 0=NONE, 4=HEAL and unknown values cannot be attributed to a damage segment.
 NATIVE_DAMAGE_TYPES = {1: 'physical', 2: 'arts', 3: 'true', 5: 'elemental'}
 DAMAGE_TYPE_KEYS = ('physical', 'arts', 'elemental', 'true')
+ENEMY_STATE_KINDS = frozenset({
+    'enemy_enter', 'enemy_hp', 'enemy_fake_death', 'enemy_reborn', 'enemy_finish',
+})
 
 
 class Statistics:
@@ -80,6 +83,10 @@ class Statistics:
         self.enemy_entries = {}
         self.enemy_phase_incomplete = False
         self.enemy_phases = {}
+        self.enemy_state_start_frame = None
+        self.enemy_state_incomplete = False
+        self.enemy_state_events = []
+        self.enemy_state_identities = {}
         # Per-event overkill is split by the same skill window as its damage.
         # HP evidence is kept separately because it overrides the ApplyModifier
         # overkill total for owners that produced target-side evidence.
@@ -120,6 +127,15 @@ class Statistics:
 
     def mark_enemy_entry_unknown(self):
         self.enemy_entry_incomplete = True
+
+    def observe_enemy_state(self, start_frame, *, complete):
+        if self.enemy_state_start_frame is None:
+            self.enemy_state_start_frame = start_frame
+        if not complete:
+            self.mark_enemy_state_unknown()
+
+    def mark_enemy_state_unknown(self):
+        self.enemy_state_incomplete = True
 
     @staticmethod
     def _enemy_identity(eid, uid):
@@ -181,6 +197,48 @@ class Statistics:
         self.enemy_phases[instance_uid] = dict(
             eid=eid, frame=frame, game_time=game_time, phase_total_hp=phase_total_hp,
             phase_count=phase_count, phase_from_birth=phase_from_birth)
+
+    def record_enemy_state(self, sequence, kind, frame, game_time, source, amount,
+                           eid, instance_uid, *, hp_before=None, hp_after=None,
+                           phase_total_hp=None, phase_count=None, phase_from_birth=None,
+                           finish_reason=None):
+        if self.enemy_state_start_frame is None:
+            return
+        if (kind not in ENEMY_STATE_KINDS
+                or not self._enemy_identity(eid, instance_uid)
+                or source is not None
+                or (kind != 'enemy_reborn' and (amount != 0 or isinstance(amount, bool)))
+                or not self.start_time <= game_time <= self.now
+                or self.enemy_state_identities.get(instance_uid, eid) != eid):
+            raise ValueError('invalid enemy state identity or amount')
+        if (any(value is not None and (not self._optional_number(value) or value < 0)
+                for value in (hp_before, hp_after))
+                or (kind == 'enemy_hp' and hp_after is None)):
+            raise ValueError('invalid enemy state HP')
+        if kind == 'enemy_finish':
+            if (type(finish_reason) is not int or finish_reason == 0
+                    or not -(1 << 31) <= finish_reason < (1 << 31)):
+                raise ValueError('invalid enemy finish reason')
+        elif finish_reason is not None:
+            raise ValueError('only enemy finish carries a finish reason')
+
+        event = dict(sequence=sequence, kind=kind, frame=frame, game_time=game_time,
+                     eid=eid, instance_uid=instance_uid)
+        if hp_before is not None:
+            event['hp_before'] = hp_before
+        if hp_after is not None:
+            event['hp_after'] = hp_after
+        if kind == 'enemy_enter':
+            attributes = self.enemy_entries[instance_uid].get('enemy_entry_attributes')
+            if attributes:
+                event['enemy_entry_attributes'] = dict(attributes)
+        elif kind == 'enemy_reborn':
+            event.update(phase_total_hp=phase_total_hp, phase_count=phase_count,
+                         phase_from_birth=phase_from_birth)
+        elif kind == 'enemy_finish':
+            event['finish_reason'] = finish_reason
+        self.enemy_state_identities[instance_uid] = eid
+        self.enemy_state_events.append(event)
 
     def mark_overkill_unknown(self, source):
         """Record a probe-level event gap for one source without closing coverage."""
@@ -889,5 +947,17 @@ class Statistics:
             result['enemy_phases'] = {
                 'complete': not (self.enemy_phase_incomplete or self.event_coverage_broken),
                 'instances': {uid: dict(phase) for uid, phase in self.enemy_phases.items()},
+            }
+        if self.enemy_state_start_frame is not None:
+            events = []
+            for event in self.enemy_state_events:
+                snapshot = dict(event)
+                if 'enemy_entry_attributes' in snapshot:
+                    snapshot['enemy_entry_attributes'] = dict(snapshot['enemy_entry_attributes'])
+                events.append(snapshot)
+            result['enemy_state'] = {
+                'complete': not (self.enemy_state_incomplete or self.event_coverage_broken),
+                'start_frame': self.enemy_state_start_frame,
+                'events': events,
             }
         return result

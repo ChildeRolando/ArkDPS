@@ -20,7 +20,7 @@ function expectFields(k,expected){
 const domain=api('il2cpp_domain_get','pointer',[])();
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
 const cfg={methods:[]};let clock;let skillF=null;
-let enemyEntryConfig=null,enemyPhaseMethods=null,enemyAttributesReady=false;
+let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 function uniqueMethod(klass,name,argCount) {
  const methods=klass.add(0x98).readPointer(),count=klass.add(0x120).readU16(),matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
@@ -89,6 +89,12 @@ try{
   try{enemyPhaseMethods={fakeDeath:uniqueMethod(found.Enemy,'DoFakeDeath',1),
     reborn:uniqueMethod(found.Enemy,'DoReborn',1)};}
   catch(e){cfg.enemyPhaseError=String(e);}
+  try{
+   expectFields(found.Entity,{'<finishReason>k__BackingField':0x158});
+   enemyStateMethods={finish:uniqueMethod(found.Enemy,'OnFinish',1),
+    hp:uniqueMethod(found.Entity,'SetHpInternal',4),
+    directHp:uniqueMethod(found.Entity,'SetHpInternalDirectly',1)};
+  }catch(e){cfg.enemyStateError=String(e);}
  }
  for(const [owner,k] of Object.entries(found)){
   if(['Modifier','BattleController'].includes(owner)||enemyClasses.has(owner))continue;
@@ -117,7 +123,9 @@ const activeHooks=new Map();
 let enemyEntryReady=false,enemyEntryUnknown=false,enemyEntryFrame=null;
 const awaitingEnemyTile=new Map(),enemyClassCache=new Map();
 let enemyPhaseReady=false,enemyPhaseUnknown=false;
-const enemyHealthPhases=new Map(),pendingEnemyRebirth=new Set();
+const enemyHealthPhases=new Map(),pendingEnemyRebirth=new Map();
+let enemyStateReady=false,enemyStateUnknown=false;
+const enemyHpWrites=new Map();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
 const engagementUnknownSources=new Set();
@@ -258,6 +266,8 @@ function refreshEnemyEntryFrame(frame) {
   enemyHealthPhases.clear();
   pendingEnemyRebirth.clear();
   enemyPhaseUnknown=false;
+  enemyHpWrites.clear();
+  enemyStateUnknown=false;
  }
  enemyEntryFrame=frame;
 }
@@ -267,6 +277,28 @@ function isEnemy(object) {
  const key=klass.toString();
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
+}
+function beginEnemyHook(label) {
+ epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
+}
+function endEnemyHook(label) {
+ active--;
+ const left=activeHooks.get(label)-1;
+ if(left)activeHooks.set(label,left);else activeHooks.delete(label);
+}
+function enemyIdentity(enemy,uid) {
+ if(!uid)throw new Error('missing enemy instance UID');
+ return {target:entityId(enemy),target_instance:String(uid)};
+}
+function includeEnemyHp(evidence,enemy) {
+ try{
+  const hp=targetHp(enemy);
+  if(hp!==null)evidence.hp_after=hp;
+ }catch(e){/* Identity and lifecycle remain observable without current HP. */}
+}
+function omitPendingHpWrite(enemy) {
+ const write=enemyHpWrites.get(enemy.toString());
+ if(write)write.superseded=true;
 }
 function enemyEntryAttributes(enemy) {
  if(!enemyAttributesReady)return null;
@@ -290,6 +322,14 @@ function enemyEntryAttributes(enemy) {
  }catch(e){/* Keep any fields that were read successfully. */}
  return Object.keys(result).length?result:null;
 }
+function recordEnemyEntry(enemy,uid,when,method) {
+ const evidence=enemyIdentity(enemy,uid);
+ includeEnemyHp(evidence,enemy);
+ const attributes=enemyEntryAttributes(enemy);
+ if(attributes)evidence.enemy_entry_attributes=attributes;
+ awaitingEnemyTile.delete(uid);
+ record(null,'enemy_enter',0,when,{method},evidence);
+}
 function installEnemyEntryHooks() {
  if(!enemyEntryConfig)return;
  const installed=[];
@@ -311,7 +351,7 @@ function installEnemyEntryHooks() {
       refreshEnemyEntryFrame(when.frame);
       if(!isBorn&&!awaitingEnemyTile.has(uid))return;
       this.enemy=enemy;this.uid=uid;this.when=when;
-      epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
+      beginEnemyHook(label);
      }catch(e){enemyEntryUnknown=true;}
     },
     onLeave(){
@@ -337,28 +377,19 @@ function installEnemyEntryHooks() {
        return;
       }
       if(!isBorn&&!awaitingEnemyTile.has(uid))return;
-      awaitingEnemyTile.delete(uid);
-      const eid=entityId(enemy);
-      const evidence={target:eid,target_instance:String(uid)};
-      const attributes=enemyEntryAttributes(enemy);
-      if(attributes)evidence.enemy_entry_attributes=attributes;
-      try{
-       record(null,'enemy_enter',0,when,{method},evidence);
-      }catch(e){fatal=String(e);}
+      recordEnemyEntry(enemy,uid,when,method);
      }catch(e){enemyEntryUnknown=true;}
-     finally{
-      active--;
-      const left=activeHooks.get(label)-1;
-      if(left)activeHooks.set(label,left);else activeHooks.delete(label);
-     }
+     finally{endEnemyHook(label);}
     }
    }));
   }
   installed.push(Interceptor.attach(enemyEntryConfig.recycle,{
    onEnter(args){
-    if(!awaitingEnemyTile.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size)return;
+     if(!awaitingEnemyTile.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size)return;
     try{
      const object=args[0],uid=object.add(0x18).readU32();
+      // Retire an in-flight setter before the pooled pointer can be reused.
+      enemyHpWrites.delete(object.toString());
      if(awaitingEnemyTile.get(uid)?.equals(object))awaitingEnemyTile.delete(uid);
      enemyHealthPhases.delete(uid);
      pendingEnemyRebirth.delete(uid);
@@ -381,9 +412,21 @@ function installEnemyPhaseHook() {
    onEnter(args){
     if(stopped||fatal)return;
     try{
-     refreshEnemyEntryFrame(time().frame);
-     pendingEnemyRebirth.add(args[0].add(0x18).readU32());
+      const enemy=args[0],when=time(),uid=enemy.add(0x18).readU32();
+      refreshEnemyEntryFrame(when.frame);
+      if(pendingEnemyRebirth.has(uid))return;
+      pendingEnemyRebirth.set(uid,'waiting');
+      omitPendingHpWrite(enemy);
+      this.started=true;beginEnemyHook('Enemy.DoFakeDeath');
+      try{
+       const evidence=enemyIdentity(enemy,uid);
+       includeEnemyHp(evidence,enemy);
+       record(null,'enemy_fake_death',0,when,{method:'Enemy.DoFakeDeath'},evidence);
+      }catch(e){enemyStateUnknown=true;}
     }catch(e){enemyPhaseUnknown=true;}
+    },
+    onLeave(){
+     if(this.started)endEnemyHook('Enemy.DoFakeDeath');
    }
   }));
   installed.push(Interceptor.attach(enemyPhaseMethods.reborn,{
@@ -393,13 +436,15 @@ function installEnemyPhaseHook() {
      const enemy=args[0],when=time();
      refreshEnemyEntryFrame(when.frame);
      this.uid=enemy.add(0x18).readU32();
-     if(!pendingEnemyRebirth.delete(this.uid)){
+      if(pendingEnemyRebirth.get(this.uid)!=='waiting'){
       enemyPhaseUnknown=true;
       return;
      }
+      omitPendingHpWrite(enemy);
      this.hpBefore=targetHp(enemy);
+      pendingEnemyRebirth.set(this.uid,'restoring');
      this.enemy=enemy;this.when=when;
-     epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
+      beginEnemyHook(label);
     }catch(e){enemyPhaseUnknown=true;}
    },
    onLeave(){
@@ -409,6 +454,7 @@ function installEnemyPhaseHook() {
      const when=time(),enemy=this.enemy,uid=this.uid;
      if(when.frame!==this.when.frame||when.game_time!==this.when.game_time||enemy.add(0x18).readU32()!==uid)
       throw new Error('enemy rebirth changed identity or crossed a frame');
+      if(pendingEnemyRebirth.get(uid)!=='restoring')throw new Error('enemy rebirth was interrupted');
      const hp=targetHp(enemy);
      if(this.hpBefore===null||!(hp>0))throw new Error('enemy rebirth HP could not be confirmed');
      const old=enemyHealthPhases.get(uid)||{total:0,count:0,fromBirth:false};
@@ -421,11 +467,10 @@ function installEnemyPhaseHook() {
       enemyHealthPhases.set(uid,phase);
      }catch(e){fatal=String(e);}
     }catch(e){enemyPhaseUnknown=true;}
-    finally{
-     active--;
-     const left=activeHooks.get(label)-1;
-     if(left)activeHooks.set(label,left);else activeHooks.delete(label);
-    }
+     finally{
+      if(pendingEnemyRebirth.get(this.uid)==='restoring')pendingEnemyRebirth.delete(this.uid);
+      endEnemyHook(label);
+     }
    }
   }));
   hooks.push(...installed);
@@ -433,6 +478,91 @@ function installEnemyPhaseHook() {
  }catch(e){
   for(const hook of installed)hook.detach();
   cfg.enemyPhaseError=String(e);
+ }
+}
+function installEnemyStateHooks() {
+ if(!enemyEntryReady||!enemyStateMethods)return;
+ const installed=[];
+ try{
+  for(const [label,address] of [['Entity.SetHpInternal',enemyStateMethods.hp],
+    ['Entity.SetHpInternalDirectly',enemyStateMethods.directHp]]){
+   installed.push(Interceptor.attach(address,{
+    onEnter(args){
+     if(stopped||fatal)return;
+     try{
+      const enemy=args[0],key=enemy.toString();
+      // Only the outer setter for this object reports the net change. HP
+      // initialization before Born is captured by enemy_enter instead.
+      if(enemy.isNull()||enemyHpWrites.has(key)||!isEnemy(enemy)||!enemy.add(0x25).readU8())return;
+      const when=time(),uid=enemy.add(0x18).readU32();
+      refreshEnemyEntryFrame(when.frame);
+      if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
+      const evidence=enemyIdentity(enemy,uid),hpBefore=targetHp(enemy);
+      if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
+      this.write={enemy,key,uid,when,evidence,hpBefore,superseded:false};
+      enemyHpWrites.set(key,this.write);
+      beginEnemyHook(label);
+     }catch(e){enemyStateUnknown=true;}
+    },
+    onLeave(){
+     const write=this.write;
+     if(!write)return;
+     try{
+      const {enemy,key,uid,when,evidence,hpBefore,superseded}=write;
+      if(enemyHpWrites.get(key)!==write)return;
+      enemyHpWrites.delete(key);
+      if(stopped||fatal||superseded)return;
+      const end=time();
+      if(end.frame!==when.frame||end.game_time!==when.game_time||enemy.add(0x18).readU32()!==uid)
+       throw new Error('enemy HP setter changed identity or crossed a frame');
+      const hp=targetHp(enemy);
+      if(hp===null)throw new Error('enemy HP unreadable after setter');
+      if(hp!==hpBefore)record(null,'enemy_hp',0,end,{method:label},
+       {...evidence,hp_before:hpBefore,hp_after:hp});
+     }catch(e){enemyStateUnknown=true;}
+     finally{endEnemyHook(label);}
+    }
+   }));
+  }
+  const label='Enemy.OnFinish';
+  installed.push(Interceptor.attach(enemyStateMethods.finish,{
+   onEnter(args){
+    if(stopped||fatal)return;
+    try{
+     const enemy=args[0];
+     if(enemy.isNull()||!isEnemy(enemy))return;
+     const when=time(),uid=enemy.add(0x18).readU32();
+     refreshEnemyEntryFrame(when.frame);
+     // FinishMe sets the backing field before invoking this callback. The
+     // instance may be recycled or have its fields cleared during the call.
+     const reason=args[1].toInt32();
+     if(reason===0||enemy.add(0x158).readS32()!==reason)throw new Error('enemy finish reason unavailable');
+     const evidence={...enemyIdentity(enemy,uid),finish_reason:reason};
+     includeEnemyHp(evidence,enemy);
+     if(awaitingEnemyTile.get(uid)?.equals(enemy)){
+      // A delayed tile assignment can finish the unit inside the layer hook,
+      // before its onLeave sees the already committed entry state.
+      if(enemy.add(0x25).readU8()&&!enemy.add(0x360).readPointer().isNull()){
+       if(enemy.add(0x26).readU8())enemyEntryUnknown=true;
+       else recordEnemyEntry(enemy,uid,when,label);
+      }
+      awaitingEnemyTile.delete(uid);
+     }
+     pendingEnemyRebirth.delete(uid);
+     omitPendingHpWrite(enemy);
+     this.started=true;beginEnemyHook(label);
+     record(null,'enemy_finish',0,when,{method:label},evidence);
+    }catch(e){enemyStateUnknown=true;}
+   },
+   onLeave(){
+    if(this.started)endEnemyHook(label);
+   }
+  }));
+  hooks.push(...installed);
+  enemyStateReady=true;
+ }catch(e){
+  for(const hook of installed)hook.detach();
+  cfg.enemyStateError=String(e);
  }
 }
 const SKILL_START_METHODS=new Set(['OnSkillStart','SwitchToSkillState','OnSkillCastSucceed','OnToggleSkillStart','OnSkillRetriggered']);
@@ -628,10 +758,15 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
 }
 installEnemyEntryHooks();
 installEnemyPhaseHook();
+installEnemyStateHooks();
+const enemyStateError=cfg.enemyStateError||cfg.enemyPhaseError||cfg.enemyEntryError||null;
 function enemyEntryQuality(frame){
  if(enemyEntryReady&&frame!==undefined)refreshEnemyEntryFrame(frame);
  return {enemy_entry_ready:enemyEntryReady,enemy_entry_unknown:enemyEntryUnknown,
-  enemy_phase_ready:enemyPhaseReady,enemy_phase_unknown:enemyPhaseUnknown};
+  enemy_phase_ready:enemyPhaseReady,enemy_phase_unknown:enemyPhaseUnknown,
+  enemy_state_ready:enemyStateReady&&enemyPhaseReady,
+  enemy_state_unknown:enemyStateUnknown||enemyPhaseUnknown||enemyEntryUnknown,
+  enemy_state_error:enemyStateError};
 }
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
@@ -671,4 +806,5 @@ receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  skill_finish_error:cfg.skillFinishError||null,
  enemy_entry_ready:enemyEntryReady,enemy_entry_error:cfg.enemyEntryError||null,
- enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null});
+ enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null,
+ enemy_state_ready:enemyStateReady&&enemyPhaseReady,enemy_state_error:enemyStateError});
