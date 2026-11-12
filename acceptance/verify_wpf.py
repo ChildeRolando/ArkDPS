@@ -32,6 +32,9 @@ def seed(directory):
         overkill = damage * .08
         value.update(name=name, damage=damage, healing=(i % 3) * 4567.89,
             overkill_damage=overkill, effective_damage=damage - overkill,
+            overkill_damage_by_type={'physical': overkill*.55, 'arts': overkill*.3,
+                'elemental': overkill*.1, 'true': overkill*.05},
+            overkill_type_complete=True, types_available=True, types_stale=False,
             skill_damage=damage * .42, non_skill_damage=damage * .58,
             skill_damage_effective=(damage - overkill) * .42,
             non_skill_damage_effective=(damage - overkill) * .58,

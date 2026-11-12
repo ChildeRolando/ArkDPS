@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Forms=System.Windows.Forms;
@@ -51,6 +52,7 @@ public partial class MainWindow : Window
         CompactTrend.Bind(trendModel);
         BattleTrend.Bind(trendModel);
         OperatorTrend.Bind(trendModel);
+        TargetSummary.OpenEnemies += async () => await Navigate("enemies");
         ApplyThemeArtwork();
         SetNavState("live");
         HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;HistoryPanel.RateActionRequested=HandleRateAction;
@@ -162,10 +164,9 @@ public partial class MainWindow : Window
         PeakDps.Text = RateText(analysis.Get("observed_peak_dps"));
         TotalDamage.Text = TotalText(analysis.ValueKind == JsonValueKind.Object
             ? analysis.Get("team_total_damage") : totals.Get("damage"));
-        TotalHealing.Text=TotalText(totals.Get("healing"));
-        TotalShield.Text=TotalText(totals.Get("shield_absorbed"));
+        Status.ToolTip = string.Join(" · ", new[] { Stage.Text, EventStatus.Text, ErrorText.Text }.Where(text => text.Length > 0));
         trendModel.Apply(state);
-        var seconds=state.Get("game_time");double t=seconds.TryNumber();Clock.Text=seconds.ValueKind==JsonValueKind.Number ? $"游戏时间 {(int)t/60:00}:{t%60:00.0}" : "游戏时间 —";
+        var seconds=state.Get("game_time");double t=seconds.TryNumber();Clock.Text=seconds.ValueKind==JsonValueKind.Number ? $"{(int)t/60:00}:{t%60:00.00}" : "—";
         Footer.Text=state.Text("connection_text");
         if(App.BridgeArguments.Contains("--offline")) ModeLabel.Text="离线验收 · 合成数据 · 不访问游戏";
         var views=state.Get("panels").Items().ToArray();var ids=views.Select(v=>v.Get("config").Text("panel_id")).ToHashSet();
@@ -211,7 +212,7 @@ public partial class MainWindow : Window
         ConnectionDiagnostics.Text=state.Text("connection_text")+"\n"+state.Text("event_text")+"\n"+
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected")+"\n"+diag.Text("message")+"\n"+diag.Text("error");
         applying=false;
-        if (panelLayoutChanged) ArrangePanels();
+        if (panelLayoutChanged || changed) ArrangePanels();
         var enemy = state.Get("enemy");
         UpdateEnemies(enemy, battle, state.Text("status"));
         UpdateEnemySummary();
@@ -233,34 +234,48 @@ public partial class MainWindow : Window
     {
         if (PanelHost == null || HistoryDetailHost == null || !double.IsFinite(ActualWidth)) return;
         bool narrow = ActualWidth < 1100;
-        bool wide = ActualWidth >= 1480;
+        bool wide = ActualWidth >= 1320;
         bool narrowOverview = ActualWidth < 920;
-        NavigationColumn.Width = new GridLength(narrow ? 92 : 174);
-        HeaderArtwork.Width = narrow ? 310 : 520;
+        NavigationColumn.Width = new GridLength(narrow ? 92 : 208);
+        ChromeLab.Visibility = ActualWidth < 940 ? Visibility.Collapsed : Visibility.Visible;
+        ChromeDescription.Visibility = ActualWidth < 740 ? Visibility.Collapsed : Visibility.Visible;
+        SideLab.Visibility = SideLabName.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         ApplyThemeArtwork();
         foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (SettingsNav, SettingsNavLabel) })
         {
             button.HorizontalContentAlignment = narrow ? HorizontalAlignment.Center : HorizontalAlignment.Left;
             label.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         }
-        OverviewStatsColumn.Width = narrowOverview ? new GridLength(0) : new GridLength(3, GridUnitType.Star);
+        OverviewStatsColumn.Width = narrowOverview ? new GridLength(0) : new GridLength(4.15, GridUnitType.Star);
         Grid.SetColumn(MetricCards, narrowOverview ? 0 : 1);
         Grid.SetRow(MetricCards, narrowOverview ? 1 : 0);
-        MetricCards.Columns = ActualWidth < 710 ? 3 : 5;
-        CurrentMetric.Margin = new Thickness(0, 0, narrowOverview ? 0 : 12, 0);
+        MetricCards.Columns = ActualWidth < 710 ? 2 : 4;
+        CurrentMetric.Margin = new Thickness(4, 0, 4, narrowOverview ? 4 : 0);
 
-        EnemySummaryColumn.Width = new GridLength(wide ? 215 : 0);
-        DetailColumn.Width = new GridLength(narrow ? 0 : 340);
+        EnemySummaryColumn.Width = wide ? new GridLength(22, GridUnitType.Star) : new GridLength(0);
+        RankingColumn.Width = new GridLength(41, GridUnitType.Star);
+        DetailColumn.Width = wide ? new GridLength(37, GridUnitType.Star) : new GridLength(narrow ? 0 : 340);
         Grid.SetColumnSpan(EnemySummary, wide ? 1 : 3);
-        EnemySummary.Margin = wide ? new Thickness(0, 0, 10, 0) : new Thickness(0, 0, 0, 12);
-        Grid.SetRow(PanelHost, wide ? 0 : 1);
+        Grid.SetRowSpan(EnemySummary, wide ? 2 : 1);
+        EnemySummary.Margin = wide ? new Thickness(0, 0, 5, 0) : new Thickness(0, 0, 0, 5);
+        Grid.SetRow(RankingFrame, wide ? 0 : 1);
+        Grid.SetColumnSpan(RankingFrame, narrow ? 2 : 1);
+        RankingFrame.Margin = narrow ? new Thickness(0) : new Thickness(0, 0, 5, 0);
         Grid.SetColumn(LiveDetail, narrow ? 1 : 2);
+        Grid.SetColumnSpan(LiveDetail, narrow ? 2 : 1);
         Grid.SetRow(LiveDetail, wide ? 0 : narrow ? 2 : 1);
-        LiveDetail.Margin = narrow ? new Thickness(0, 10, 0, 0) : new Thickness(10, 0, 0, 0);
-        double rankWidth = Math.Max(300, ActualWidth - NavigationColumn.Width.Value - 60
-            - EnemySummaryColumn.Width.Value - DetailColumn.Width.Value);
-        int columns = Math.Max(1, (int)(rankWidth / 440));
-        foreach (var panel in Panels.Values) panel.Width = Math.Floor(rankWidth / columns);
+        LiveDetail.Margin = narrow ? new Thickness(0, 5, 0, 0) : new Thickness(0);
+        Grid.SetRow(TimelineFrame, wide ? 1 : narrow ? 3 : 2);
+        Grid.SetColumn(TimelineFrame, wide ? 1 : 0);
+        Grid.SetColumnSpan(TimelineFrame, wide ? 2 : 3);
+        RankingScroll.MaxHeight = wide ? 260 : 390;
+        LiveDetailScroll.MaxHeight = wide ? 283 : 440;
+        LiveInspector.CompactReference = Theme.Key == "lone-trail" && wide;
+        foreach (var panel in Panels.Values)
+        {
+            panel.Width = double.NaN;
+            panel.SetReferenceStyle(Theme.Key == "lone-trail" && wide);
+        }
         ArrangeHistory();
         ArrangeEnemyPage();
         bool stackedSettings = ActualWidth < 1000;
@@ -313,10 +328,7 @@ public partial class MainWindow : Window
     }
     private void UpdateEnemySummary()
     {
-        LiveEnemyEntered.Text = EnemyEntered.Text;
-        LiveEnemyTotal.Text = EnemyTotalHp.Text;
-        LiveEnemyRemaining.Text = EnemyRemaining.Text;
-        LiveEnemyStatus.Text = EnemyStatusText.Text;
+        TargetSummary.Update(State, EnemyEntered.Text, EnemyTotalHp.Text, EnemyRemaining.Text, EnemyStatusText.Text, shownEnemy);
     }
     private void ScheduleSave(){if(initialized && !applying && !quitting){if(IsVisible && WindowState==WindowState.Normal)normalGeometry=Native.Geometry(this);save.Stop();save.Start();}}
     internal async Task SavePlacement()
@@ -364,6 +376,7 @@ public partial class MainWindow : Window
         EnemyPageScroll.Visibility=page=="enemies" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         bool live=page=="live";
+        SubpageHeader.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
         PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","settings"=>"连接设置",_=>"实时战况"};
         PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","settings"=>"MuMu 连接与事件观测",_=>"团队输出与干员详情"};
         SetNavState(page);
@@ -378,10 +391,12 @@ public partial class MainWindow : Window
         foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(EnemyNav,"enemies"),(SettingsNav,"settings")})
         {
             bool active=tag==page;
-            button.Background=active?Theme.Resource("SidebarActive"):Brushes.Transparent;
+            button.Background = active && Theme.Key == "lone-trail"
+                ? new LinearGradientBrush(Color.FromRgb(95, 55, 27), Color.FromRgb(170, 87, 27), 90)
+                : active ? Theme.Resource("SidebarActive") : Theme.Resource("Sidebar");
             button.Foreground=active?Theme.Resource("SidebarInk"):Theme.Resource("SidebarMuted");
-            button.BorderBrush=active?Theme.Resource("Accent"):Brushes.Transparent;
-            button.BorderThickness=active?new Thickness(2,0,0,0):new Thickness(0);
+            button.BorderBrush=active?Theme.Resource("Accent"):Theme.Resource("SidebarLine");
+            button.BorderThickness=active?new Thickness(2):new Thickness(1);
         }
     }
     private static string TotalText(JsonElement value)
@@ -396,6 +411,18 @@ public partial class MainWindow : Window
         value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
             ? number.ToString("#,##0.#", System.Globalization.CultureInfo.InvariantCulture) : "—";
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
+    private void MinimizeWindow(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void ToggleMaximizeWindow(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    private void DragTitleBar(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2) ToggleMaximizeWindow(sender, e);
+        else if (WindowState == WindowState.Normal)
+        {
+            try { DragMove(); }
+            catch (InvalidOperationException) { }
+        }
+    }
     // 事件不可用时的恢复入口：重试会重新连接采集（不重启应用）；否则打开连接设置。
     private async void HandleRateAction(string action)
     {

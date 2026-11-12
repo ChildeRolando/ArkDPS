@@ -1,6 +1,6 @@
 # Native meter
 
-Operate surface: Windows C# / .NET 10 / WPF. The Lone Trail v1.0 materials guide the orbital theme. The four pages are live, history, enemy intelligence and connection settings. Initial size is 1380×900 DIPs, with a 560×540 minimum. First launch has one Damage/Totals/Recent DPS panel and no HUD.
+Operate surface: Windows C# / .NET 10 / WPF. The Lone Trail v1.0 materials guide the orbital theme. The four pages are live, history, enemy intelligence and connection settings. The reference and initial size are 1672×941 DIPs, with a 560×540 minimum. First launch has one Damage/Totals/Recent DPS panel and no HUD.
 
 ## Composition and skins
 
@@ -8,7 +8,7 @@ The common WPF templates and dynamic brush resources support six palettes. Defau
 
 The live enemy summary links to the full enemy page. Battle and instance identity preserve selection across HP, transformation and rebirth updates. Current HP, current form MaxHP, recorded phase capacity and the separate stage estimate retain their own evidence. A known lower bound uses ≥ and leaves the HP ratio blank. Enemy chart points distinguish exact HP, lower bounds and gaps. Effective damage starts at the enemy observation baseline, with other native sources listed separately.
 
-The overview leads with team near-five-second DPS and a 60-game-second trend, followed by average, observed peak, damage, healing and shield metrics. At 1480 DIPs and above, enemy summary, ranking and inspector sit side by side. At 1100–1479 DIPs, the summary moves above ranking and inspector. Smaller windows collapse navigation labels and stack the live panels. The full-width timeline switches team DPS, up to six operators' stacked contribution and cumulative damage. Keyboard and pointer can inspect the same samples.
+The overview leads with team near-five-second DPS and a 60-game-second trend, followed by average, observed peak, damage, healing and shield metrics. At 1320 DIPs and above, the alloy-framed overview spans the workspace. The enemy and mission column continues beside the ranking, compact inspector and timeline below it. At 1100–1319 DIPs the summary moves above the ranking and inspector. Smaller windows collapse navigation labels and stack the live panels. The full-width timeline switches team DPS, up to six operators' stacked contribution and cumulative damage. Keyboard and pointer can inspect the same samples.
 
 The inspector reads the pinned operator independently of ranked visibility. Its total/effective switch controls damage composition, engagement and skill split. Skill coverage divides observed skill-on time by certified presence. Passive skills count as non-skill and incomplete coverage keeps affected metrics unknown. History reads its independent selected record.
 

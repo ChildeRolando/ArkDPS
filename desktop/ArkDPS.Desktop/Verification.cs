@@ -74,13 +74,27 @@ public partial class MainWindow
         analysis["battle_id"] = layoutBattle;
         analysis["team_average_dps"] = 59302.5;
         analysis["observed_peak_dps"] = 8450;
+        var owners = new[]
+        {
+            ("char_002_amiya", "阿米娅", 39), ("char_017_huang", "煌", 22),
+            ("char_003_kalts", "凯尔希", 16), ("char_010_chen", "陈", 10),
+            ("char_009_12fce", "12F", 8), ("char_103_angel", "能天使", 5),
+        };
+        void SetIllustrativeRates(int total)
+        {
+            analysis["team_recent_dps"] = total;
+            analysis["operators"] = JsonSerializer.SerializeToNode(owners.Select(owner => new
+            {
+                owner_id = owner.Item1, name = owner.Item2, recent_dps = total * (owner.Item3 / 100.0),
+            }));
+        }
         fixture["status"] = "live";
         fixture["status_text"] = "正在统计 · 离线验收";
         for (int second = 13; second <= 23; second++)
         {
             fixture["game_time"] = second;
             analysis["game_time"] = second;
-            analysis["team_recent_dps"] = 6800 + (second % 5) * 380;
+            SetIllustrativeRates(6800 + (second % 5) * 380);
             ApplyFixture(fixture);
         }
         Require(trendModel.Points.Count > 1 && trendModel.Points[^1].Team == 7940,
@@ -94,7 +108,7 @@ public partial class MainWindow
         ApplyFixture(fixture);
         fixture["status"] = "live";
         analysis["game_time"] = 25;
-        analysis["team_recent_dps"] = 0;
+        SetIllustrativeRates(0);
         ApplyFixture(fixture);
         Require(trendModel.Points[^1].StartsSegment && trendModel.Points[^1].Team == 0,
             "recovery lost the gap or the reliable zero");
@@ -124,19 +138,23 @@ public partial class MainWindow
         Require(HasText(EnemyPage, "关卡预估血量"), "stage estimate is not independently labeled");
 
         await Navigate("live");
+        fixture["game_time"] = 26;
         analysis["game_time"] = 26;
-        analysis["team_recent_dps"] = 7630;
+        SetIllustrativeRates(7630);
         ApplyFixture(fixture);
         if (Panels.Values.FirstOrDefault() is StatisticPanel ranked)
+        {
+            ranked.Rows.SelectedIndex = 0;
             ranked.PinRequested?.Invoke(ranked.View.Get("entries").Items().First().Text("owner_id"));
+        }
         double savedWidth = Width, savedHeight = Height;
-        foreach (var (width, height) in new[] { (1920, 1080), (1380, 900), (560, 540) })
+        foreach (var (width, height) in new[] { (1920, 1080), (1672, 941), (1380, 900), (560, 540) })
         {
             Width = width; Height = height;
             await Settle();
             Require(Math.Abs(ActualWidth - width) < 2 && Math.Abs(ActualHeight - height) < 2,
                 "test window did not reach requested DIP size");
-            Require(Grid.GetColumnSpan(EnemySummary) == (width >= 1480 ? 1 : 3) &&
+            Require(Grid.GetColumnSpan(EnemySummary) == (width >= 1320 ? 1 : 3) &&
                 Grid.GetColumn(LiveDetail) == (width < 1100 ? 1 : 2) &&
                 (LiveNavLabel.Visibility == Visibility.Collapsed) == (width < 1100),
                 "live dashboard breakpoint did not reflow the expected surfaces");
@@ -169,7 +187,7 @@ public partial class MainWindow
         await Settle();
         ApplyState(initial);
         await Command("theme", new() { ["theme"] = "original" });
-        checks.Add("certified DPS, pause/recovery/known zero, enemy transform MaxHP lower-bound/confirmed with retained selection, and three Lone Trail DIP layouts");
+        checks.Add("certified DPS, pause/recovery/known zero, enemy transform MaxHP lower-bound/confirmed with retained selection, and four Lone Trail DIP layouts");
     }
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
     private static bool HasText(DependencyObject root,string text)
