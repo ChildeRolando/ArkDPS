@@ -302,18 +302,29 @@ def test_living_target_proves_zero_overkill_without_full_hp_reconstruction():
 
 
 
-def test_friendly_self_damage_does_not_enter_engagement_dps():
+@pytest.mark.parametrize('friendly_target', ['char_1041_angel2', 'char_002_amiya', 'token_friendly'])
+def test_friendly_self_damage_does_not_enter_engagement_dps(friendly_target):
     s = Statistics('friendly', 0, event_coverage=True)
-    s.register_source('a', 'A')
-    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
-    s.advance(10)
-    s.event('self', 1, 'a', 'damage', 25, target='char_a', hp_after=10, killed=False)
-    s.event('enemy', 2, 'a', 'damage', 100, target='enemy_1',
-            hp_after=10, killed=False)
+    angel = 'char_1041_angel2'
+    s.register_source(angel, 'A')
+    s.snapshot(0, {angel: {'damage': 0, 'healing': 0}})
+    s.snapshot(10, {angel: {'damage': 100, 'healing': 0}})
+    s.event('skill-start', .5, angel, 'skill_start', 1)
+    s.event('friendly-hp', 1, angel, 'hp_damage', 25, target=friendly_target, damage_type=3)
+    s.event('friendly', 1, angel, 'damage', 25, target=friendly_target, hp_after=10,
+            killed=False, damage_type=3, mitigation_before=25, mitigation_after=25)
+    s.event('skill-end', 1.5, angel, 'skill_end', 1)
+    s.event('enemy', 2, angel, 'damage', 60, target='enemy_1', hp_after=10, killed=False,
+            damage_type=1, mitigation_before=75, mitigation_after=60)
+    s.event('stage-object', 2, angel, 'damage', 40, target='trap_321_shnbox', hp_after=10,
+            killed=False, damage_type=1, mitigation_before=50, mitigation_after=40)
     row = s.result()['rows']['A']
     assert row['observed_damage'] == 100
     assert row['active_damage'] == pytest.approx(1.5)
     assert row['engagement_damage'] == pytest.approx(100 / 1.5)
+    assert row['skill_damage'] == 0 and row['non_skill_damage'] == 100
+    assert row['mitigation_matched_hits'] == 2
+    assert row['mitigation_rate'] == pytest.approx(20)
 
 
 
