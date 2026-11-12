@@ -1,7 +1,7 @@
 """Offline statistics core. Times are game seconds; inputs must be reliable.
 
 Snapshots own damage/healing totals and sampled recent rates. Event callbacks own
-engagement rates, shield absorption and event-derived overkill; never add
+engagement rates, shield absorption, overkill and formula damage pairs; never add
 damage/heal events to totals. Overkill is a subset of the already inclusive
 native damage total and is never subtracted from it. Source keys identify
 distinct client statistic entries, not transient entities.
@@ -49,6 +49,11 @@ class Statistics:
         self.incoming_damage_sources = set()
         self.settled_damage_sources = set()
         self.overkill_reason = {}
+        # Match formula totals per source against its own cumulative counter
+        # before aggregating a character and its summons.
+        self.mitigation = {}
+        self.mitigation_incomplete = set()
+        self.mitigation_probe_incomplete = False
         # Elemental bar damage is not HP damage; only its source matters.
         self.last_elemental = {}
         self.burst = {}
@@ -485,6 +490,53 @@ class Statistics:
         return (isinstance(value, (int, float)) and not isinstance(value, bool)
                 and isfinite(value))
 
+    def mark_mitigation_unknown(self):
+        self.mitigation_probe_incomplete = True
+
+    def _record_mitigation(self, source, owner, amount, before, after):
+        try:
+            valid = (self._optional_number(before) and before > 0
+                     and self._optional_number(after) and after >= 0
+                     and isclose(after, amount, rel_tol=0, abs_tol=1e-6))
+        except OverflowError:
+            valid = False
+        if not valid:
+            self.mitigation_incomplete.add(owner)
+            return
+        before_total, after_total = self.mitigation.get(source, (0.0, 0.0))
+        totals = before_total + before, after_total + after
+        if not all(isfinite(value) for value in totals):
+            self.mitigation_incomplete.add(owner)
+            return
+        self.mitigation[source] = totals
+
+    def _mitigation_result(self, owner, registered, *, complete):
+        unknown = None, None, None
+        if not self.event_coverage:
+            return (*unknown, '事件观测未建立')
+        if self.event_coverage_broken:
+            return (*unknown, '事件覆盖已结束')
+        if self.mitigation_probe_incomplete:
+            return (*unknown, '伤害公式回调覆盖不足')
+        if owner in self.mitigation_incomplete:
+            return (*unknown, '部分伤害缺少同次命中的公式前后值')
+        if not complete:
+            return (*unknown, '原生累计伤害尚不可核对')
+        before = after = 0.0
+        for source in registered:
+            source_before, source_after = self.mitigation.get(source, (0.0, 0.0))
+            cumulative = self.sources[source]['values']['damage']
+            if not isclose(source_after, cumulative, rel_tol=1e-6, abs_tol=0.01):
+                return (*unknown, '公式后伤害与本局累计不一致')
+            before += source_before
+            after += source_after
+        if not isfinite(before) or not isfinite(after) or before <= 0:
+            return (*unknown, '尚无可核对的公式前后伤害')
+        rate = (1 - after / before) * 100
+        if not isfinite(rate):
+            return (*unknown, '公式前后伤害无法形成有限的比率')
+        return rate, before, after, None
+
     def _overkill(self, amount, *, target, real_delta, hp_before, hp_after,
                   killed, target_type, damage_type, cancel_reason, shield_absorbed):
         """Derive one hit's overkill from native settlement evidence.
@@ -541,7 +593,8 @@ class Statistics:
               killed=None, target_type=None, damage_type=None,
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-              verified_skill_end_owner=None, skill_method=None):
+              verified_skill_end_owner=None, skill_method=None,
+              mitigation_before=None, mitigation_after=None):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
         Duplicate IDs with identical payload are ignored; conflicts are rejected.
@@ -586,7 +639,8 @@ class Statistics:
                     target_type, damage_type, cancel_reason, shield_absorbed)
         if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
             raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
-        payload = (game_time, source, kind, amount, evidence, target_instance, owner, skill_method)
+        payload = (game_time, source, kind, amount, evidence, target_instance, owner, skill_method,
+                   mitigation_before, mitigation_after)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
@@ -617,6 +671,8 @@ class Statistics:
                 self.burst_unknown = True
                 self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
                 return
+            if amount > 0:
+                self.mitigation_incomplete.add(attributed)
             entry = self.burst.setdefault(attributed, {
                 'actual': 0.0, 'overkill': 0.0, 'settlement': 0.0, 'count': 0,
                 'added_settlement': 0.0,
@@ -678,6 +734,10 @@ class Statistics:
                     and hp_before == hp_after
                     and (hp_before == 0 and killed is True or cancel_reason == 1)):
                 return
+            friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
+            if not friendly and (amount > 0 or mitigation_before is not None
+                                 or mitigation_after is not None):
+                self._record_mitigation(source, owner, amount, mitigation_before, mitigation_after)
             known, overkill, reason = self._overkill(
                 amount, target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
@@ -813,6 +873,9 @@ class Statistics:
                    'overkill_coverage_start': self.start_time if self.event_coverage else None,
                    'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                              else self.end_time if self.event_coverage else None)}
+            (row['mitigation_rate'], row['mitigation_before'], row['mitigation_after'],
+             row['mitigation_unknown_reason']) = self._mitigation_result(
+                 owner, registered, complete=complete)
             burst = self.burst.get(owner)
             burst_complete = not self.burst_unknown
             row['burst_damage'] = (burst['actual'] if burst and burst_complete else None)

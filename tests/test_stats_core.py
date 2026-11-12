@@ -72,6 +72,34 @@ def test_source_keys_and_event_dedup_keep_host_attribution():
         s.register_source('summon-key', 'other')
 
 
+def test_formula_coverage_checks_each_source_before_aggregating_a_summon():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('host', 'operator')
+    s.register_source('summon', 'operator')
+    s.register_source('untouched', 'other')
+    s.snapshot(0, {key: {'damage': 0, 'healing': 0} for key in s.owners})
+    s.snapshot(1, {'host': {'damage': 30, 'healing': 0},
+                   'summon': {'damage': 70, 'healing': 0},
+                   'untouched': {'damage': 25, 'healing': 0}})
+    s.event('a', 1, 'host', 'damage', 20, mitigation_before=25, mitigation_after=20)
+    s.event('b', 1, 'summon', 'damage', 80, mitigation_before=100, mitigation_after=80)
+    s.event('c', 1, 'untouched', 'damage', 25, mitigation_before=25, mitigation_after=25)
+    rows = s.result()['rows']
+    assert rows['operator']['mitigation_rate'] is None
+    assert rows['other']['mitigation_rate'] == 0
+
+
+def test_formula_gain_retains_a_signed_mitigation_rate_and_gap_hides_it():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 50, 'healing': 0}})
+    s.event('a', 1, 'a', 'damage', 50, mitigation_before=40, mitigation_after=50)
+    assert s.result()['rows']['a']['mitigation_rate'] == -25
+    s.invalidate_events()
+    assert s.result()['rows']['a']['mitigation_rate'] is None
+
+
 def test_missing_source_and_counter_failure_are_not_zero_filled():
     s = Statistics('battle', 0)
     s.register_source('a', 'a')

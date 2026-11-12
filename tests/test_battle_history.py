@@ -84,6 +84,25 @@ def test_event_zero_and_partial_coverage_and_summon_sources_round_trip(tmp_path)
     assert history.get(value.battle_id).records[0].to_dict() == data
 
 
+def test_signed_formula_rate_and_optional_legacy_fields_round_trip(tmp_path):
+    history = BattleHistory(tmp_path)
+    data = record().to_dict()
+    row = data['statistics']['rows']['a']
+    fields = {'mitigation_before': 40., 'mitigation_after': 50.,
+              'mitigation_rate': -25., 'mitigation_unknown_reason': None}
+    row.update(fields)
+    value = BattleRecord.from_dict(data)
+    history.save(value)
+    restored = history.get(value.battle_id).records[0].statistics['rows']['a']
+    assert {key: restored[key] for key in fields} == fields
+
+    legacy = record(1).to_dict()
+    for key in fields:
+        legacy['statistics']['rows']['a'].pop(key, None)
+    history.save(BattleRecord.from_dict(legacy))
+    assert not fields.keys() & history.get('battle:1').records[0].statistics['rows']['a'].keys()
+
+
 @pytest.mark.parametrize('damage', ['truncated', 'version', 'content', 'nan', 'wrong_id'])
 def test_one_bad_file_diagnosed_other_records_read_and_not_overwritten(tmp_path, damage):
     history = BattleHistory(tmp_path)

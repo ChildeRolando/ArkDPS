@@ -168,6 +168,8 @@ class LiveEventCapture:
             statistics.mark_shields_unknown()
         if payload.get('skill_unknown'):
             statistics.mark_skill_unknown()
+        if payload.get('mitigation_ready') is False or payload.get('mitigation_unknown'):
+            statistics.mark_mitigation_unknown()
         if 'enemy_entry_ready' in payload or 'enemy_entry_unknown' in payload:
             statistics.observe_enemy_entry(
                 self.adapter.event_stream.baseline_frame,

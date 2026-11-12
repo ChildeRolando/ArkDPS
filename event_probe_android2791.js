@@ -21,6 +21,7 @@ const domain=api('il2cpp_domain_get','pointer',[])();
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
 const cfg={methods:[]};let clock;let skillF=null;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
+let mitigationMethods=null;
 function uniqueMethod(klass,name,argCount) {
  const methods=klass.add(0x98).readPointer(),count=klass.add(0x120).readU16(),matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
@@ -33,6 +34,58 @@ function uniqueMethod(klass,name,argCount) {
   throw new Error('missing or ambiguous method '+name);
  return matches[0];
 }
+function resolveMitigationMethods(formula,entity,modifier){
+ if(!formula)throw new Error('BattleFormula missing');
+ const classFrom=api('il2cpp_class_from_type','pointer',['pointer']);
+ const declaringClass=api('il2cpp_class_get_declaring_type','pointer',['pointer']);
+ const isByRef=api('il2cpp_type_is_byref','bool',['pointer']);
+ const isValueType=api('il2cpp_class_is_valuetype','bool',['pointer']);
+ const valueSize=api('il2cpp_class_value_size','int',['pointer','pointer']);
+ const paramCount=api('il2cpp_method_get_param_count','uint',['pointer']);
+ const paramAt=api('il2cpp_method_get_param','pointer',['pointer','uint']);
+ const resultOf=api('il2cpp_method_get_return_type','pointer',['pointer']);
+ const flagsOf=api('il2cpp_method_get_flags','uint',['pointer','pointer']);
+ const metadataOut=Memory.alloc(4);
+ function valueTypeSize(klass){
+  return !klass.isNull()&&isValueType(klass)?valueSize(klass,metadataOut):0;
+ }
+ function fixedPoint(klass){return valueTypeSize(klass)===8&&className(klass)==='FP';}
+ function signature(klass,name,count,isStatic,match){
+  const array=klass.add(0x98).readPointer(),length=klass.add(0x120).readU16(),matches=[];
+  if(length>2000)throw new Error('invalid mitigation method metadata');
+  for(let i=0;i<length;i++){
+   const method=array.add(i*8).readPointer();
+   if(!method.add(0x20).readPointer().equals(klass)||method.add(0x18).readPointer().readCString()!==name
+      ||paramCount(method)!==count||!!(flagsOf(method,metadataOut)&0x10)!==isStatic
+      ||!fixedPoint(classFrom(resultOf(method))))continue;
+   const params=Array.from({length:count},(_,index)=>paramAt(method,index));
+   if(match(params)){
+    const address=method.readPointer();
+    if(!address.isNull()&&Process.findModuleByAddress(address)?.name===il.name)
+     matches.push({address,params});
+   }
+  }
+  if(matches.length!==1)throw new Error('unsupported mitigation signature '+name);
+  return matches[0];
+ }
+ function named(type,name){return !isByRef(type)&&className(classFrom(type))===name;}
+ function entityParam(type){return !isByRef(type)&&classFrom(type).equals(entity);}
+ const outer=signature(formula,'CalculateDamage',5,true,params=>{
+  const attack=classFrom(params[4]);
+  return entityParam(params[0])&&entityParam(params[1])&&named(params[2],'Boolean')&&named(params[3],'Boolean')
+   &&isByRef(params[4])&&!attack.isNull()&&className(attack)==='AttackInfo'&&declaringClass(attack).equals(formula);
+ });
+ const attack=classFrom(outer.params[4]);
+ const attackSize=valueTypeSize(attack);
+ const damageType=fieldOffsets(attack,['damageType']).damageType-0x10;
+ if(attackSize<=16||attackSize>256||damageType<0||damageType%4!==0||damageType+4>attackSize||!isValueType(modifier))
+  throw new Error('unsupported mitigation value-type ABI');
+ const internal=signature(formula,'CalculateDamageInternal',4,true,params=>
+  !isByRef(params[0])&&classFrom(params[0]).equals(attack)
+  &&params.slice(1,3).every(type=>!isByRef(type)&&fixedPoint(classFrom(type)))&&entityParam(params[3]));
+ const final=signature(attack,'GetFinalAtk',0,false,()=>true);
+ return {outer:outer.address,internal:internal.address,final:final.address,damageType};
+}
 try{
  const size=Memory.alloc(8), assemblies=api('il2cpp_domain_get_assemblies','pointer',['pointer','pointer'])(domain,size);
  const imageOf=api('il2cpp_assembly_get_image','pointer',['pointer']), imageName=api('il2cpp_image_get_name','pointer',['pointer']);
@@ -43,8 +96,9 @@ try{
  const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController',
   'Character','BasicSkill','SkillData']);const found={};
  const enemyClasses=new Set(['Enemy','BObject','Attributes']);
+ const optionalClasses=new Set([...enemyClasses,'BattleFormula']);
  for(let i=0,n=classCount(im);i<n;i++){
-  const k=classAt(im,i),name=className(k);if(!wanted.has(name)&&!enemyClasses.has(name))continue;
+  const k=classAt(im,i),name=className(k);if(!wanted.has(name)&&!optionalClasses.has(name))continue;
   const ns=k.add(0x18).readPointer().readCString();
   const expectedNs=(['BuffContainer','BlockDamage'].includes(name)?'':
     (name==='SkillData'?'Torappu':'Torappu.Battle'));
@@ -60,6 +114,8 @@ try{
  expectFields(found.Modifier,{'m_source':0x10,'m_target':0x20,'m_originalSource':0x30,'m_value':0x40,'realDelta':0x58,'<targetType>k__BackingField':0x70,'<damageType>k__BackingField':0x78,'<cancelReason>k__BackingField':0x80});
  // FIXED_FRAME_COUNT is verified from the current class metadata, not an old battle object.
  expectFields(found.BattleController,{'s_fixedFrameCnt':0x14,'s_fixedPlayTime':0x18});
+ try{mitigationMethods=resolveMitigationMethods(found.BattleFormula,found.Entity,found.Modifier);}
+ catch(e){cfg.mitigationError=String(e);}
  const CF=fieldOffsets(found.Character,['m_skill']);
  const BF=fieldOffsets(found.BasicSkill,['m_owner','m_data']);
  const SF=fieldOffsets(found.SkillData,['prefabKey','skillId','name']);
@@ -103,7 +159,7 @@ try{
   }
  }
  for(const [owner,k] of Object.entries(found)){
-  if(['Modifier','BattleController'].includes(owner)||enemyClasses.has(owner))continue;
+  if(['Modifier','BattleController'].includes(owner)||optionalClasses.has(owner))continue;
   const ma=k.add(0x98).readPointer(),mn=k.add(0x120).readU16();if(mn>2000)throw new Error('method count invalid');
   for(let i=0;i<mn;i++){
    const m=ma.add(i*8).readPointer();if(!m.add(0x20).readPointer().equals(k))continue;
@@ -368,6 +424,136 @@ function recordSourcelessEnemyBurst(scope,evidence,when) {
   // elemental bar owner. Both records stay within this callback's barrier.
   record(null,'enemy_damage',-real,when,{method:scope.name},{...target,damage_type:5});
  }catch(e){enemyDamageUnknown=true;}
+}
+// One optional observation joins the existing ApplyModifier damage event.
+let mitigationReady=false;
+const formulaScopes=new Map(),pendingFormulaDamage=new Map();
+const FORMULA_PENDING_LIMIT=256;
+function sameFormulaHit(scope,attack){
+ return scope&&(scope.attack.equals(attack)||scope.internalAttack?.equals(attack));
+}
+function formulaDamageKey(source,target,type){return [source,target,type].join('/');}
+function formulaBatch(thread,when){
+ let batch=pendingFormulaDamage.get(thread);
+ if(!batch||batch.frame!==when.frame||batch.game_time!==when.game_time){
+  batch={...when,hits:new Map()};
+  pendingFormulaDamage.set(thread,batch);
+ }
+ return batch.hits;
+}
+function rememberFormulaDamage(scope,raw,after){
+ const hits=formulaBatch(scope.tid,scope.when);
+ const key=formulaDamageKey(scope.source,scope.target,scope.type);
+ if(hits.has(key))hits.set(key,null); // multiple unmatched formula calls are ambiguous
+ else if(hits.size<FORMULA_PENDING_LIMIT)
+  hits.set(key,{raw,before:scope.before,after,source:scope.source,target:scope.target,type:scope.type});
+}
+function takeFormulaDamage(thread,when,source,target,type,raw){
+ const hits=pendingFormulaDamage.get(thread);
+ if(!hits||hits.frame!==when.frame||hits.game_time!==when.game_time)return null;
+ const key=formulaDamageKey(source,target,type);
+ const result=hits.hits.get(key);
+ hits.hits.delete(key); // mismatched or canceled settlement cannot leak to a later hit
+ return result?.raw===raw?result:null;
+}
+function fixedBits(value){return BigInt.asIntN(64,BigInt(value.toString()));}
+function captureMitigation(scope,source){
+ if(!mitigationReady||!scope.target||scope.target.isNull()||scope.mod.add(0x60).readS32()!==0)return;
+ const type=scope.mod.add(0x68).readS32();
+ if(type<1||type>3)return;
+ const raw=fixedBits(scope.mod.add(0x30).readS64());
+ scope.mitigation=takeFormulaDamage(scope.tid,scope.when,source,scope.target,type,raw);
+}
+function mitigationEvidence(scope,type,amount){
+ const result=scope.mitigation;
+ if(!result||result.type!==type||result.after!==amount||
+    !result.source.equals(scope.mod.readPointer())||!result.target.equals(scope.mod.add(0x10).readPointer())||
+    result.raw!==fixedBits(scope.mod.add(0x30).readS64())||scope.mod.add(0x70).readS32()!==0)
+  return null;
+ return {mitigation_before:result.before,mitigation_after:result.after};
+}
+function installMitigationHooks(){
+ if(!mitigationMethods)return;
+ const attached=[];
+ function observe(address,name,enter,leave,cleanup,barrier=false){
+  attached.push(Interceptor.attach(address,{
+   onEnter(args){
+    this.tid=this.threadId;
+    if(barrier){
+     active++;epoch++;
+     activeHooks.set(name,(activeHooks.get(name)||0)+1);
+    }
+    try{enter.call(this,args);}catch(e){this.failed=true;}
+   },
+   onLeave(result){
+    try{if(!this.failed)leave.call(this,result);}catch(e){/* Unmatched hit has no mitigation fields. */}
+    finally{
+     if(cleanup)cleanup.call(this);
+     if(barrier){
+      active--;
+      const left=(activeHooks.get(name)||1)-1;
+      if(left>0)activeHooks.set(name,left);else activeHooks.delete(name);
+     }
+    }
+   }
+  }));
+ }
+ try{
+  observe(mitigationMethods.outer,'BattleFormula.CalculateDamage',function(args){
+   // A nested outer calculation must shadow the previous calculation on this thread.
+   this.previous=formulaScopes.get(this.tid);
+   formulaScopes.set(this.tid,null);
+   this.entered=true;
+   const target=args[0],source=args[1],attack=args[4];
+   if(source.isNull()||target.isNull()||attack.isNull()||!own(entityId(source))
+      ||!targetKey(target)?.startsWith('enemy_')||!(args[2].toInt32()||args[3].toInt32()))return;
+   this.formula={tid:this.tid,source,target,attack,when:time()};
+   formulaScopes.set(this.tid,this.formula);
+  },function(result){
+   const scope=this.formula;
+   if(!scope||scope.conflict||!Number.isFinite(scope.before)||scope.before<=0)return;
+   const end=time();
+   if(scope.when.frame!==end.frame||scope.when.game_time!==end.game_time)return;
+   const type=scope.attack.add(mitigationMethods.damageType).readS32(),raw=fixedBits(result);
+   const after=Number(raw)/4294967296;
+   if(type===scope.type&&Number.isFinite(after)&&after>=0)rememberFormulaDamage(scope,raw,after);
+  },function(){
+   if(!this.entered)return;
+   if(this.previous)formulaScopes.set(this.tid,this.previous);
+   else formulaScopes.delete(this.tid);
+  },true);
+  // The outer formula owns the barrier and the only publication path.
+  observe(mitigationMethods.internal,'BattleFormula.CalculateDamageInternal',function(args){
+   const scope=formulaScopes.get(this.tid);
+   if(!scope||!scope.target.equals(args[3]))return;
+   // The verified AttackInfo is larger than 16 bytes, so AArch64 passes
+   // its by-value argument indirectly. Borrow that copy only during this call.
+   this.scope=scope;
+   this.previousAttack=scope.internalAttack;
+   scope.internalAttack=args[0];
+  },function(){},function(){
+   if(this.scope)this.scope.internalAttack=this.previousAttack;
+  });
+  observe(mitigationMethods.final,'AttackInfo.GetFinalAtk',function(args){
+   const scope=formulaScopes.get(this.tid);
+   if(sameFormulaHit(scope,args[0])){
+    this.scope=scope;
+    this.type=args[0].add(mitigationMethods.damageType).readS32();
+   }
+  },function(result){
+   const scope=this.scope;
+   if(!scope||this.type<1||this.type>3)return;
+   const before=fixedArg(result);
+   if(scope.before!==undefined&&(scope.before!==before||scope.type!==this.type))scope.conflict=true;
+   scope.before=before;
+   scope.type=this.type;
+  });
+  hooks.push(...attached);
+  mitigationReady=true;
+ }catch(e){
+  for(const handle of attached)handle.detach();
+  cfg.mitigationError=String(e);
+ }
 }
 function includeEnemyHp(evidence,enemy) {
  try{
@@ -802,7 +988,10 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
        if(this.mod.add(0x68).readS32()===5)this.burstTarget=enemyDamageIdentity(this.target);
       }catch(e){/* An unverified target only affects an actual settlement. */}
      }
-     if(this.source&&own(this.source))enterModifier(this);
+     if(this.source&&own(this.source)){
+      enterModifier(this);
+      try{captureMitigation(this,this.mod.readPointer());}catch(e){/* Existing damage remains observable. */}
+     }
      return;
     }
     const s=stacks.get(this.tid)||[];if(!s.length){shieldUnknown=true;markShieldUnknown(this.when.frame,null);this.ignore=true;return;}
@@ -912,6 +1101,10 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
       if(evidence&&damageInstance)evidence.target_instance=damageInstance;
       if(evidence&&evidence.real_delta===0&&evidence.hp_before===evidence.hp_after
          &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1))return;
+      try{
+       const reduction=mitigationEvidence(this,type,amount);
+       if(reduction)evidence=Object.assign(evidence||{},reduction);
+      }catch(e){/* Missing formula evidence affects only mitigation. */}
      }
      try{record(this.source,kind,amount,end,proof,evidence);}catch(e){fatal=String(e);}
     }else{
@@ -934,6 +1127,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
 installEnemyEntryHooks();
 installEnemyPhaseHook();
 installEnemyStateHooks();
+installMitigationHooks();
 const enemyStateError=cfg.enemyStateError||cfg.enemyPhaseError||cfg.enemyEntryError||null;
 function enemyEntryQuality(frame){
  if(enemyEntryReady&&frame!==undefined)refreshEnemyEntryFrame(frame);
@@ -949,7 +1143,8 @@ function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
   skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
-  enemy_damage_ready:enemyDamageReady,enemy_damage_unknown:enemyDamageUnknown,...enemyEntryQuality(frame)};
+  enemy_damage_ready:enemyDamageReady,enemy_damage_unknown:enemyDamageUnknown,
+  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,...enemyEntryQuality(frame)};
 }
 function markEvents(){
  const current=time(true);
@@ -983,6 +1178,7 @@ rpc.exports={
 receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  skill_finish_error:cfg.skillFinishError||null,
+ mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
  enemy_entry_ready:enemyEntryReady,enemy_entry_error:cfg.enemyEntryError||null,
  enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null,
  enemy_state_ready:enemyStateReady&&enemyPhaseReady,enemy_state_error:enemyStateError,

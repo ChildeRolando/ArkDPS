@@ -83,6 +83,99 @@ def test_baseline_event_and_replay_keep_snapshot_authoritative():
     assert capture.sample()['rows']['char_a']['observed_damage'] == 20
 
 
+def test_formula_pair_flows_through_damage_queue_without_using_hp_delta():
+    collector = Collector()
+    collector.damage = 0
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time, collector.damage = 2, 1, 170
+    first = dict(event(1, frame=2, game_time=1, amount=20),
+                 target='enemy_a', mitigation_before=100, mitigation_after=20,
+                 hp_before=20, hp_after=0, real_delta=-20, killed=True)
+    second = dict(event(2, frame=2, game_time=1, amount=150),
+                  target='enemy_b', mitigation_before=150, mitigation_after=150,
+                  hp_before=15, hp_after=0, real_delta=-15, killed=True,
+                  shield_absorbed=30)
+    observer.events = [first, second]
+    observer.sequence = observer.epoch = 2
+    row = capture.sample()['rows']['char_a']
+
+    assert row['damage'] == row['observed_damage'] == row['mitigation_after'] == 170
+    assert row['mitigation_before'] == 250
+    assert row['mitigation_rate'] == pytest.approx(32)
+    assert row['mitigation_unknown_reason'] is None
+    observer.events = [first, second]
+    assert capture.sample()['rows']['char_a']['mitigation_rate'] == pytest.approx(32)
+
+    capture.adapter.on_end()
+    assert capture.adapter.result()['rows']['char_a']['mitigation_rate'] == pytest.approx(32)
+
+
+@pytest.mark.parametrize('fields', [
+    {}, {'mitigation_before': 45},
+    {'mitigation_before': True, 'mitigation_after': 20},
+    {'mitigation_before': float('inf'), 'mitigation_after': 20},
+    {'mitigation_before': 10 ** 500, 'mitigation_after': 20},
+    {'mitigation_before': 45, 'mitigation_after': 15},
+])
+def test_missing_or_invalid_formula_pair_does_not_break_damage_events(fields):
+    collector = Collector()
+    collector.damage = 0
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time, collector.damage = 2, 1, 40
+    observer.events = [dict(event(1, frame=2, game_time=1),
+                            mitigation_before=35, mitigation_after=20),
+                       dict(event(2, frame=2, game_time=1), **fields)]
+    observer.sequence = observer.epoch = 2
+    row = capture.sample()['rows']['char_a']
+
+    assert row['damage'] == row['observed_damage'] == 40
+    assert row['event_coverage_complete']
+    assert row['mitigation_rate'] is None
+    assert row['mitigation_unknown_reason'] == '部分伤害缺少同次命中的公式前后值'
+
+
+def test_pre_baseline_native_damage_cannot_be_inferred_from_subsequent_formula_pairs():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    observer.events = [dict(event(1, frame=2, game_time=1),
+                            mitigation_before=40, mitigation_after=20)]
+    observer.sequence = observer.epoch = 1
+    row = capture.sample()['rows']['char_a']
+
+    assert row['damage'] == 120
+    assert row['mitigation_rate'] is None
+    assert row['mitigation_unknown_reason'] == '公式后伤害与本局累计不一致'
+
+
+def test_unavailable_formula_probe_only_degrades_mitigation():
+    class FormulaUnavailable(Observer):
+        def drain(self):
+            return {**super().drain(), 'mitigation_ready': False}
+
+    collector = Collector()
+    collector.damage = 0
+    observer = FormulaUnavailable(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time, collector.damage = 2, 1, 20
+    observer.events = [dict(event(1, frame=2, game_time=1),
+                            mitigation_before=40, mitigation_after=20)]
+    observer.sequence = observer.epoch = 1
+    row = capture.sample()['rows']['char_a']
+
+    assert row['event_coverage_complete']
+    assert row['observed_damage'] == 20
+    assert row['mitigation_rate'] is None
+    assert row['mitigation_unknown_reason'] == '伤害公式回调覆盖不足'
+
+
 def test_enemy_settlement_reuses_the_ordered_queue_without_changing_native_totals():
     class EnemyDamageObserver(Observer):
         def drain(self):

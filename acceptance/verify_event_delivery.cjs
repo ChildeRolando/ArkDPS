@@ -169,4 +169,116 @@ assert.equal(nonlethalSettlement(target,30,-17,17).hp_after,13);
 assert.equal(nonlethalSettlement(target,17,-17,17),null);
 `, {assert}, {filename: 'product-enemy-settlement'});
 
+vm.runInNewContext(`
+const hooks=[],activeHooks=new Map(),registered=new Map(),cfg={};
+let active=0,epoch=0,frame=30,gameTime=1;
+const mitigationMethods={outer:'outer',internal:'internal',final:'final',damageType:0};
+const Interceptor={attach(address,hook){
+  registered.set(address,hook);
+  return {detach(){registered.delete(address);}};
+}};
+const time=()=>({frame,game_time:gameTime});
+const targetKey=pointer=>pointer.id;
+const entityId=pointer=>pointer.id;
+const own=id=>id.startsWith('char_');
+const fixedArg=value=>Number(BigInt(value.toString()))/4294967296;
+${between('let mitigationReady=false;', 'function includeEnemyHp(')}
+installMitigationHooks();
+assert.equal(mitigationReady,true);
+assert.equal(hooks.length,3);
+
+const raw=value=>BigInt(value)*4294967296n;
+function pointer(address,id='',type=1){
+  return {
+    id,equals(other){return address===other.toString();},
+    isNull(){return false;},toString(){return address;},add(offset){assert.equal(offset,0);return this;},readS32(){return type;}
+  };
+}
+const source=pointer('0x101','char_one'),target=pointer('0x202','enemy_one');
+const other=pointer('0x203','enemy_two'),attack=pointer('0x303'),copy=pointer('0x404');
+const flag=value=>({toInt32:()=>value});
+function enter(address,args,threadId=7){
+  const hook=registered.get(address);
+  const context={threadId};
+  hook.onEnter.call(context,args);
+  return result=>hook.onLeave.call(context,result);
+}
+function calculate(before,after,to=target,actionFlags=[1,1]){
+  const finish=enter('outer',[to,source,...actionFlags.map(flag),attack]);
+  assert.equal(active,1);
+  const finishInner=enter('internal',[copy,raw(0),raw(0),to]);
+  const finishPre=enter('final',[copy]);
+  finishPre(raw(before));finishInner(raw(after));finish(raw(after));
+  assert.equal(active,0);
+}
+function modifier(after,type=1,cancel=0,to=target,from=source){
+  return {
+    readPointer:()=>from,
+    add:offset=>({
+      readS32:()=>({0x60:0,0x68:type,0x70:cancel})[offset],
+      readS64:()=>raw(after),
+      readPointer:()=>to,
+    }),
+  };
+}
+function apply(after,to=target,thread=7,type=1,from=source){
+  const scope={tid:thread,target:to,when:time(),mod:modifier(after,type,0,to,from)};
+  captureMitigation(scope,from);
+  return scope;
+}
+function ratio(scope,amount,type=1){
+  return JSON.stringify(mitigationEvidence(scope,type,amount));
+}
+
+calculate(100,60);
+assert.equal(ratio(apply(60,target,8),60),'null');
+assert.equal(ratio(apply(60,target,7,1,pointer('0x102','char_two')),60),'null');
+assert.equal(ratio(apply(60,other),60),'null');
+assert.equal(ratio(apply(60,target,7,2),60,2),'null');
+assert.equal(ratio(apply(60),60),'{"mitigation_before":100,"mitigation_after":60}');
+assert.equal(ratio(apply(60),60),'null');
+
+calculate(200,80);
+assert.equal(ratio(apply(79),79),'null');
+assert.equal(ratio(apply(80),80),'null');
+
+calculate(100,60);
+calculate(101,61);
+assert.equal(ratio(apply(60),60),'null');
+assert.equal(ratio(apply(61),61),'null');
+
+calculate(100,60,other);
+calculate(110,90);
+assert.equal(ratio(apply(90),90),'{"mitigation_before":110,"mitigation_after":90}');
+assert.equal(ratio(apply(60,other),60),'{"mitigation_before":100,"mitigation_after":60}');
+
+calculate(100,60,target,[0,0]);
+assert.equal(ratio(apply(60),60),'null');
+
+calculate(100,60);
+let hit=apply(60);
+hit.mod=modifier(60,1,1);
+assert.equal(ratio(hit,60),'null');
+hit.mod=modifier(62);
+assert.equal(ratio(hit,62),'null');
+hit.mod=modifier(60,2);
+assert.equal(ratio(hit,60,2),'null');
+hit.mod=modifier(60,1,0,other);
+assert.equal(ratio(hit,60),'null');
+
+calculate(100,60);
+frame++;
+gameTime+=1/30;
+assert.equal(ratio(apply(60),60),'null');
+assert.equal(formulaScopes.size,0);
+assert.equal(activeHooks.size,0);
+assert.equal(epoch,9); // the outer formula alone accounts for callback barriers
+
+for(let index=0;index<=FORMULA_PENDING_LIMIT;index++)
+  calculate(100,60,pointer(String(index),'enemy_limit'));
+assert.equal(pendingFormulaDamage.get(7).hits.size,FORMULA_PENDING_LIMIT);
+assert.equal(ratio(apply(60,pointer(String(FORMULA_PENDING_LIMIT),'enemy_limit')),60),'null');
+assert.equal(ratio(apply(60,pointer('0','enemy_limit')),60),'{"mitigation_before":100,"mitigation_after":60}');
+`, {assert}, {filename: 'product-mitigation-delivery'});
+
 console.log('PASS_EVENT_DELIVERY');
