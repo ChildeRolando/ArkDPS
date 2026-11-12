@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -29,6 +31,14 @@ internal sealed class HistoryItem
 public partial class MainWindow : Window
 {
     private BridgeClient? bridge;
+    private Task? recoveryTask;
+    private readonly CancellationTokenSource recoveryCancellation=new();
+    private const int MaxAutomaticRecoveryAttempts=3;
+    private static readonly TimeSpan HealthyRecoveryPeriod=TimeSpan.FromMinutes(1);
+    private int automaticRecoveryAttempts;
+    private long healthyResponsesSince;
+    private bool workerUnavailable;
+    private string? lastPollError;
     private const string EmptyHistoryText="暂无可读战绩；完成对局归档后自动出现。";
     private static readonly Brush StatusGreen=Theme.Brush("#348447");
     private static readonly Brush StatusRed=Theme.Brush("#C84F49");
@@ -45,10 +55,21 @@ public partial class MainWindow : Window
     private object? normalGeometry;
     private bool closingRequested;
     private DispatcherOperation? workAreaLayout;
-    private long lastResponse=System.Diagnostics.Stopwatch.GetTimestamp();
+    private long lastResponse=Stopwatch.GetTimestamp();
     private bool responseStale;
+    private bool retainBattleSnapshot;
+    private bool ShowingPreviousBattle=>retainBattleSnapshot && State.Text("battle_id").Length==0;
     private int commands;
     private string activePanel="",lastBattle="",historyBattle="",historySignature="";
+    private const int HistoryCacheLimit=8;
+    private readonly Dictionary<string,JsonElement> historyViews=new();
+    private readonly LinkedList<string> historyViewOrder=new();
+    private string historyCacheUnits="";
+    private HistoryItem? cachedHistorySelection;
+    private string? historySelectionInFlight;
+    private bool HistoryCacheOnly=>workerUnavailable || bridge is not {CanSend:true};
+    private string HistorySelectionId=>cachedHistorySelection?.Id ?? State.Get("history_selected").Text("battle_id");
+    private JsonElement HistoryRecoveryConfig=>State.Get("history_selected").Get("view").Get("config");
     private string route="live";
     private sealed record HudLayoutTargetItem(string Id,string Label);
     internal string LastUiError="";
@@ -87,7 +108,6 @@ public partial class MainWindow : Window
         }
         catch(Exception ex)
         {
-            Lost(ex.Message);
             if(App.Verification!=null)
             {
                 Directory.CreateDirectory(App.Verification);
@@ -99,33 +119,52 @@ public partial class MainWindow : Window
     }
     private async Task Poll()
     {
-        if(initialized && !responseStale && System.Diagnostics.Stopwatch.GetElapsedTime(lastResponse)>TimeSpan.FromSeconds(2))
+        if(closingRequested || quitting || workerUnavailable) return;
+        if(initialized && !responseStale && Stopwatch.GetElapsedTime(lastResponse)>TimeSpan.FromSeconds(2))
         {
-            responseStale=true;
-            UpdateLiveStatus("stale","数据已过期 · 等待 worker 响应 · 保留最后有效记录");
-            trendModel.Interrupt();
-            UpdateEnemies(State.Get("enemy"), State.Text("battle_id"), "stale");
-            UpdateEnemySummary();
-            foreach(var hud in Huds.Values)if(Panels.TryGetValue(hud.PanelId,out var panel))hud.Update(panel.View,Status.Text);
+            MarkDataStale("stale","数据已过期 · 等待 worker 响应 · 保留最后有效记录");
         }
-        if(polling || commands>0 || quitting || bridge==null) return;
+        if(polling || commands>0 || bridge is not { } source) return;
         polling=true;
-        try {var reply=await bridge.RequestAsync("snapshot");ApplyState(reply.Get("state"));}
-        catch(Exception ex){RecordUiError(ex);Lost(ex.Message);}
+        try
+        {
+            var reply=await source.RequestAsync("snapshot");
+            if(closingRequested || workerUnavailable || bridge!=source) return;
+            ApplyState(reply.Get("state"));
+            lastPollError=null;
+        }
+        catch(BridgeTransportException ex){ReportTransportFailure(source,ex);}
+        catch(Exception ex)
+        {
+            if(closingRequested || workerUnavailable || bridge!=source) return;
+            ReportSnapshotFailure(ex);
+        }
         finally{polling=false;}
     }
     internal async Task Command(string op,Dictionary<string,object?>? fields=null)
     {
-        if(bridge==null || quitting) return;
+        if(bridge is not { CanSend:true } source || workerUnavailable || quitting ||
+           (closingRequested && op!="placement") ||
+           recoveryTask is { IsCompleted:false }) return;
         commands++;
         try
         {
-            var reply=await bridge.RequestAsync(op,fields);ApplyState(reply.Get("state"));
+            var reply=await source.RequestAsync(op,fields);
+            if(bridge!=source || workerUnavailable || closingRequested || quitting) return;
+            ApplyState(reply.Get("state"));
             if(reply.Get("result").ValueKind==JsonValueKind.String) Footer.Text=reply.Text("result");
         }
+        catch(BridgeTransportException ex){ReportTransportFailure(source,ex);}
         // Never raise a modal dialog once shutdown has begun: it would block the close.
         catch(BridgeCommandException ex){if(App.Verification!=null)throw;if(!closingRequested)MessageBox.Show(this,ex.Message,"操作未完成");else WriteQuitLog("命令失败："+ex.Message);}
-        catch(Exception ex){RecordUiError(ex);Lost(ex.Message);if(App.Verification==null&&!closingRequested) MessageBox.Show(this,ex.Message,"采集进程连接中断");}
+        catch(Exception ex)
+        {
+            if(App.Verification!=null) throw;
+            if(bridge!=source || workerUnavailable || closingRequested) return;
+            RecordUiError(ex);
+            ErrorText.Text=ex.Message;
+            MarkDataStale("stale","统计更新失败 · 保留最后有效记录");
+        }
         finally{commands--;}
     }
     internal void RecordUiError(Exception ex)
@@ -140,20 +179,64 @@ public partial class MainWindow : Window
         catch(IOException){}
         catch(UnauthorizedAccessException){}
     }
-    private void Lost(string message)
+    private void MarkDataStale(string status,string label)
     {
-        poll.Stop();ErrorText.Text=message;
-        UpdateLiveStatus("disconnected","采集进程断开 · 数值为最后有效记录");
+        responseStale=true;
+        UpdateLiveStatus(status,label);
         trendModel.Interrupt();
-        UpdateEnemies(State.Get("enemy"), State.Text("battle_id"), "disconnected");
+        UpdateEnemies(State.Get("enemy"),DisplayedBattleId,
+            ShowingPreviousBattle ? "previous" : status=="reconnecting" ? "disconnected" : status);
         UpdateEnemySummary();
-        Footer.Text="请检查日志并退出后重新启动；未将旧数值冒充实时数据。";
+        RefreshLiveAvailability();
+        RefreshHistoryAvailability();
         foreach(var hud in Huds.Values) if(Panels.TryGetValue(hud.PanelId,out var panel)) hud.Update(panel.View,Status.Text);
+    }
+    private void ReportSnapshotFailure(Exception error)
+    {
+        if(lastPollError!=error.Message) RecordUiError(error);
+        lastPollError=error.Message;
+        ErrorText.Text=error.Message;
+        MarkDataStale("stale","统计刷新失败 · 保留最后有效记录");
+    }
+    private void ReportTransportFailure(BridgeClient source,BridgeTransportException error)
+    {
+        if(bridge!=source || workerUnavailable || closingRequested) return;
+        RecordUiError(error);
+        healthyResponsesSince=0;
+        retainBattleSnapshot=lastBattle.Length>0;
+        if(automaticRecoveryAttempts<MaxAutomaticRecoveryAttempts)
+        {
+            ErrorText.Text=error.Message;
+            recoveryTask=RecoverWorker(automatic:true);
+        }
+        else ShowWorkerUnavailable(error.Message,"自动重连次数已用完");
+    }
+    private void ShowWorkerUnavailable(string message,string label)
+    {
+        poll.Stop();
+        workerUnavailable=true;
+        ErrorText.Text=message;
+        MarkDataStale("disconnected",label+" · 点击重连观测者");
+        HistoryNotice.Text="显示已载入的战绩 · 点击重连观测者恢复更新";
+        ConnectionDiagnostics.Text=Status.Text+"\n"+message;
     }
     internal void ApplyState(JsonElement state)
     {
         if(state.Number("protocol")!=BridgeClient.Version) throw new IOException("不支持的统计消息版本");
-        lastResponse=System.Diagnostics.Stopwatch.GetTimestamp();responseStale=false;
+        var lastState=State;
+        try {ApplySnapshot(state);}
+        catch {State=lastState;throw;}
+        finally{applying=false;}
+        long now=Stopwatch.GetTimestamp();
+        if(healthyResponsesSince==0 || responseStale || Stopwatch.GetElapsedTime(lastResponse,now)>TimeSpan.FromSeconds(2))
+            healthyResponsesSince=now;
+        if(automaticRecoveryAttempts>0 && Stopwatch.GetElapsedTime(healthyResponsesSince,now)>=HealthyRecoveryPeriod)
+            automaticRecoveryAttempts=0;
+        lastResponse=now;
+        responseStale=false;
+    }
+    private void ApplySnapshot(JsonElement state)
+    {
         applying=true;State=state;
         var layout=state.Get("layout");string theme=Theme.Normalize(layout.Text("theme"));
         string units = layout.Text("number_units") == "chinese" ? "chinese" : "western";
@@ -176,6 +259,41 @@ public partial class MainWindow : Window
         Skin.SelectedIndex=Theme.IndexOf(theme);
         EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
+        bool previousBattle=ShowingPreviousBattle;
+        bool panelLayoutChanged=ApplyLiveSnapshot(state,previousBattle,changed || unitsChanged);
+        Footer.Text=state.Text("connection_text");
+        if(!initialized)
+        {
+            Native.Restore(this,layout.Get("gui"));
+            foreach(var placement in layout.Get("huds").Items()) OpenHud(placement.Text("panel_id"),placement);
+            InitializeSettings();initialized=true;normalGeometry=Native.Geometry(this);
+            LivePage.ScrollToTop();
+            panelLayoutChanged = true;
+        }
+        UpdateHistory();
+        var diag=state.Get("diagnostic");
+        ConnectionDiagnostics.Text=state.Text("connection_text")+"\n"+state.Text("event_text")+"\n"+
+            "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected")+"\n"+diag.Text("message")+"\n"+diag.Text("error");
+        applying=false;
+        if (panelLayoutChanged || changed) ArrangePanels();
+        UpdateEnemies(state.Get("enemy"),DisplayedBattleId,previousBattle ? "previous" : state.Text("status"));
+        UpdateEnemySummary();
+        if(changed){InvalidateVisualTree(this);foreach(var hud in Huds.Values)InvalidateVisualTree(hud);}
+    }
+    private bool ApplyLiveSnapshot(JsonElement state,bool previousBattle,bool appearanceChanged)
+    {
+        if(previousBattle)
+        {
+            // The replacement can be healthy in the lobby before it has any battle
+            // samples. Keep the existing rows, pins, and chart points intact.
+            UpdateLiveStatus(state.Text("status"),state.Text("status_text"));
+            if(appearanceChanged)
+                foreach(var (id,panel) in Panels)
+                    UpdateLivePanel(id,panel,panel.View,Panels.Count>1);
+            RefreshLiveAvailability();
+            return false;
+        }
+        retainBattleSnapshot=false;
         Stage.Text=state.Text("stage").Length>0 ? state.Text("stage") : "关卡未知";
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
         var analysis = state.Get("live_analysis");
@@ -190,7 +308,6 @@ public partial class MainWindow : Window
         double time = state.Get("game_time").TryNumber(double.NaN);
         int elapsed = double.IsFinite(time) ? (int)Math.Clamp(Math.Round(time, MidpointRounding.AwayFromZero), 0, int.MaxValue) : 0;
         Clock.Text = double.IsFinite(time) && time >= 0 ? $"{elapsed / 60:00}:{elapsed % 60:00}" : "—";
-        Footer.Text=state.Text("connection_text");
         var views=state.Get("panels").Items().ToArray();var ids=views.Select(v=>v.Get("config").Text("panel_id")).ToHashSet();
         bool panelLayoutChanged = !ids.SetEquals(Panels.Keys);
         foreach(string id in Panels.Keys.Where(x=>!ids.Contains(x)).ToArray())
@@ -216,30 +333,28 @@ public partial class MainWindow : Window
                 };
                 Panels.Add(id,panel);PanelHost.Children.Add(panel);
             }
-            panel.Update(view,views.Length>1);
-            if(Huds.TryGetValue(id,out var hud)) {hud.Update(view,Status.Text+" · "+EventStatus.Text);panel.HudState(true,hud.Locked,hud.Opacity);}
-            else panel.HudState(false,false,.9);
-            if(activePanel==id) LiveInspector.Update(view);
+            UpdateLivePanel(id,panel,view,views.Length>1);
         }
         RefreshHudLayoutTargets(views);
-        if(!initialized)
+        RefreshLiveAvailability();
+        return panelLayoutChanged;
+    }
+    private void UpdateLivePanel(string id,StatisticPanel panel,JsonElement view,bool canDelete)
+    {
+        panel.Update(view,canDelete);
+        if(Huds.TryGetValue(id,out var hud))
         {
-            Native.Restore(this,layout.Get("gui"));
-            foreach(var placement in layout.Get("huds").Items()) OpenHud(placement.Text("panel_id"),placement);
-            InitializeSettings();initialized=true;normalGeometry=Native.Geometry(this);
-            LivePage.ScrollToTop();
-            panelLayoutChanged = true;
+            hud.Update(view,Status.Text+" · "+EventStatus.Text);
+            panel.HudState(true,hud.Locked,hud.Opacity);
         }
-        UpdateHistory();
-        var diag=state.Get("diagnostic");
-        ConnectionDiagnostics.Text=state.Text("connection_text")+"\n"+state.Text("event_text")+"\n"+
-            "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected")+"\n"+diag.Text("message")+"\n"+diag.Text("error");
-        applying=false;
-        if (panelLayoutChanged || changed) ArrangePanels();
-        var enemy = state.Get("enemy");
-        UpdateEnemies(enemy, battle, state.Text("status"));
-        UpdateEnemySummary();
-        if(changed){InvalidateVisualTree(this);foreach(var hud in Huds.Values)InvalidateVisualTree(hud);}
+        else panel.HudState(false,false,.9);
+        if(activePanel==id) LiveInspector.Update(view);
+    }
+    private void RefreshLiveAvailability()
+    {
+        bool available=!workerUnavailable && !ShowingPreviousBattle;
+        AddPanelButton.IsEnabled=available;
+        foreach(var panel in Panels.Values) panel.SetConfigurationAvailable(available);
     }
     private void UpdateLiveStatus(string status,string workerLabel)
     {
@@ -256,6 +371,7 @@ public partial class MainWindow : Window
         (string label,Brush light) = status switch
         {
             "stale" or "disconnected" => (workerLabel,StatusRed),
+            "reconnecting" => (workerLabel,StatusAmber),
             "locating" => (disabled ? workerLabel : "正在连接观测者",StatusAmber),
             _ when disabled => ($"观测已关闭·{phase}",StatusGray),
             _ when (observer is "failed" or "incompatible" or "stopped") ||
@@ -266,6 +382,7 @@ public partial class MainWindow : Window
             "waiting" => ("等待连接观测者",StatusAmber),
             _ => ($"等待观测·{phase}",StatusAmber),
         };
+        if(ShowingPreviousBattle) label="上次快照 · "+label;
         Status.Text=label;
         StatusLight.Fill=light;
         StatusBadge.ToolTip=string.Join(" · ",new[] { label,Stage.Text,EventStatus.Text,ErrorText.Text }
@@ -504,11 +621,12 @@ public partial class MainWindow : Window
         OperatorTrend.SetOwner(null);
         OperatorTrend.Visibility = Visibility.Collapsed;
     }
+    private string DisplayedBattleId=>ShowingPreviousBattle ? lastBattle : State.Text("battle_id");
     private void UpdateEnemySummary()
     {
-        TargetSummary.Update(State.Text("battle_id"), shownEnemy, EnemyStatusText.Text);
+        TargetSummary.Update(DisplayedBattleId,shownEnemy,EnemyStatusText.Text);
     }
-    private void ScheduleSave(){if(initialized && !applying && !quitting){if(IsVisible && WindowState==WindowState.Normal)normalGeometry=Native.Geometry(this);save.Stop();save.Start();}}
+    private void ScheduleSave(){if(initialized && !applying && !quitting && !closingRequested){if(IsVisible && WindowState==WindowState.Normal)normalGeometry=Native.Geometry(this);save.Stop();save.Start();}}
     internal async Task SavePlacement()
     {
         if(!initialized || bridge==null) return;
@@ -647,10 +765,99 @@ public partial class MainWindow : Window
     // 事件不可用时的恢复入口：重试会重新连接采集（不重启应用）；否则打开连接设置。
     private async void HandleRateAction(string action)
     {
-        if(action=="retry"){ShowGui();await Navigate("live");await Command("rescan");}
+        if(action=="retry"){ShowGui();await Navigate("live");await ReconnectObserver();}
         else if(action=="settings"){ShowGui();await Navigate("settings");}
     }
-    private async void Rescan(object sender,RoutedEventArgs e)=>await Command("rescan");
+    private async void Rescan(object sender,RoutedEventArgs e)=>await ReconnectObserver();
+    private Task ReconnectObserver()
+    {
+        if(closingRequested || quitting) return Task.CompletedTask;
+        if(recoveryTask is {IsCompleted:false}) return recoveryTask;
+        if(bridge is {CanSend:true} && !workerUnavailable) return Command("rescan");
+        return recoveryTask=RecoverWorker(automatic:false);
+    }
+    private async Task RecoverWorker(bool automatic)
+    {
+        poll.Stop();
+        save.Stop();
+        workerUnavailable=true;
+        retainBattleSnapshot=lastBattle.Length>0;
+        LiveReconnectButton.IsEnabled=SubpageReconnectButton.IsEnabled=false;
+        var stop=recoveryCancellation.Token;
+        try
+        {
+            do
+            {
+                int attempt=automatic ? ++automaticRecoveryAttempts : 1;
+                string progress=automatic ? $"正在自动重连观测者 · {attempt}/{MaxAutomaticRecoveryAttempts}" : "正在重连观测者";
+                MarkDataStale("reconnecting",progress+" · 保留最后有效记录");
+                HistoryNotice.Text=Status.Text;
+                ConnectionDiagnostics.Text=Status.Text+"\n"+ErrorText.Text;
+                if(attempt>1) await Task.Delay(TimeSpan.FromSeconds(attempt-1),stop);
+                try
+                {
+                    var state=await RestoreWorkerSnapshot(stop);
+                    workerUnavailable=false;
+                    lastPollError=null;
+                    try {ApplyState(state);}
+                    catch(Exception ex){ReportSnapshotFailure(ex);}
+                    ScheduleSave();
+                    poll.Start();
+                    return;
+                }
+                catch(OperationCanceledException) when(stop.IsCancellationRequested){return;}
+                catch(Exception ex)
+                {
+                    workerUnavailable=true;
+                    RecordUiError(ex);
+                    ErrorText.Text=ex.Message;
+                }
+            }
+            while(automatic && automaticRecoveryAttempts<MaxAutomaticRecoveryAttempts && !stop.IsCancellationRequested);
+            if(!stop.IsCancellationRequested)
+                ShowWorkerUnavailable(ErrorText.Text,automatic ? "自动重连失败" : "重连失败");
+        }
+        catch(OperationCanceledException) when(stop.IsCancellationRequested){}
+        finally{LiveReconnectButton.IsEnabled=SubpageReconnectButton.IsEnabled=true;}
+    }
+    private async Task<JsonElement> RestoreWorkerSnapshot(CancellationToken stop)
+    {
+        stop.ThrowIfCancellationRequested();
+        var retired=bridge;
+        bridge=null;
+        if(retired!=null)
+        {
+            try {await retired.DisposeAsync();}
+            catch(Exception ex){RecordUiError(ex);}
+        }
+        stop.ThrowIfCancellationRequested();
+        var replacement=new BridgeClient(App.Root,App.Python,App.BridgeArguments.ToArray());
+        bridge=replacement;
+        var timeout=TimeSpan.FromSeconds(5);
+        await replacement.ConnectAsync(timeout);
+        stop.ThrowIfCancellationRequested();
+        var reply=await replacement.RequestAsync("snapshot",timeoutOverride:timeout);
+        stop.ThrowIfCancellationRequested();
+        var state=reply.Get("state");
+        string selected=HistorySelectionId;
+        if(selected.Length>0 && selected!=state.Get("history_selected").Text("battle_id") &&
+           state.Get("history").Items().Any(item=>item.Text("battle_id")==selected))
+        {
+            reply=await replacement.RequestAsync("history_select",new(){["battle_id"]=selected},timeout);
+            stop.ThrowIfCancellationRequested();
+            state=reply.Get("state");
+        }
+        JsonElement historyConfig=HistoryRecoveryConfig;
+        if(historyConfig.ValueKind==JsonValueKind.Object &&
+           state.Get("history_selected").Get("view").Get("config") is {ValueKind:JsonValueKind.Object} restored &&
+           !JsonElement.DeepEquals(historyConfig,restored))
+        {
+            reply=await replacement.RequestAsync("history_config",new(){["config"]=historyConfig},timeout);
+            stop.ThrowIfCancellationRequested();
+            state=reply.Get("state");
+        }
+        return state;
+    }
     private async void SkinChanged(object sender,SelectionChangedEventArgs e)
     {
         if(applying || !initialized || Skin.SelectedItem is not ComboBoxItem item)return;
@@ -663,45 +870,126 @@ public partial class MainWindow : Window
     }
     private void UpdateHistory()
     {
-        var records=State.Get("history");string signature=records.GetRawText();
-        if(signature!=historySignature){historySignature=signature;ApplyHistoryFilter();}
         var selected=State.Get("history_selected");
-        bool available=selected.ValueKind==JsonValueKind.Object;ExportJson.IsEnabled=ExportPng.IsEnabled=available;
-        HistoryNotice.Text=State.Text("history_notice");
-        if(!available)
+        var view=selected.Get("view");
+        string id=selected.Text("battle_id");
+        string units=State.Get("layout").Text("number_units");
+        if(historyCacheUnits!=units)
         {
-            // No readable record: show the empty state instead of a stale detail.
-            if(historyBattle.Length>0)
+            historyCacheUnits=units;
+            historyViews.Clear();
+            historyViewOrder.Clear();
+        }
+        if(id.Length>0 && view.ValueKind==JsonValueKind.Object &&
+           historyViewOrder.Last?.Value!=id)
+        {
+            historyViewOrder.Remove(id);
+            if(historyViewOrder.Count>=HistoryCacheLimit)
             {
-                historyBattle="";HistoryInspector.Reset();HistoryPanel.ClearSelection();
-                HistorySummary.Text=EmptyHistoryText;
+                historyViews.Remove(historyViewOrder.First!.Value);
+                historyViewOrder.RemoveFirst();
             }
+            historyViewOrder.AddLast(id);
+        }
+        if(id.Length>0 && view.ValueKind==JsonValueKind.Object) historyViews[id]=view;
+        var records=State.Get("history");
+        if(cachedHistorySelection is { } pending &&
+           (pending.Id==id && (historySelectionInFlight is null || historySelectionInFlight==id) ||
+            (!HistoryCacheOnly && !records.Items().Any(item=>item.Text("battle_id")==pending.Id))))
+            cachedHistorySelection=null;
+        string signature=records.GetRawText();
+        if(signature!=historySignature){historySignature=signature;ApplyHistoryFilter();}
+        else if((HistoryList.SelectedItem as HistoryItem)?.Id!=HistorySelectionId &&
+                (HistoryList.SelectedItem!=null || HistoryList.Items.Cast<HistoryItem>().Any(item=>item.Id==HistorySelectionId)))
+            SelectHistoryListItem();
+        if(!HistoryCacheOnly) HistoryNotice.Text=State.Text("history_notice");
+        if(cachedHistorySelection is { } cached)
+            RenderHistory(cached,historyViews.GetValueOrDefault(cached.Id));
+        else RenderHistory(id.Length>0 ? new HistoryItem{Data=selected} : null,view);
+        if(cachedHistorySelection is not null && !HistoryCacheOnly && historySelectionInFlight is null)
+            _=Dispatcher.InvokeAsync(SyncCachedHistorySelection);
+    }
+    private void RenderHistory(HistoryItem? item,JsonElement view)
+    {
+        string id=item?.Id ?? "";
+        if(historyBattle!=id)
+        {
+            historyBattle=id;HistoryInspector.Reset();HistoryPanel.ClearSelection();
+        }
+        bool available=view.ValueKind==JsonValueKind.Object;
+        HistoryPanel.Visibility=HistoryInspector.Visibility=available ? Visibility.Visible : Visibility.Collapsed;
+        RefreshHistoryAvailability();
+        if(item is null)
+        {
+            HistorySummary.Text=EmptyHistoryText;
             return;
         }
-        if(historyBattle!=selected.Text("battle_id")){historyBattle=selected.Text("battle_id");HistoryInspector.Reset();HistoryPanel.ClearSelection();}
-        var item=new HistoryItem{Data=selected};
         HistorySummary.Text=string.Join(" · ","历史",item.Stage,item.Summary,item.Date)+"\n"+
-            item.StageDescription+"\n查看战绩时，实时 HUD 仍跟随当前战斗。";
-        var view = selected.Get("view");
+            item.StageDescription+"\n"+(available ? "查看战绩时，实时 HUD 仍跟随当前战斗。"
+                : HistoryCacheOnly ? "这场战绩的详情尚未载入，连接恢复后可查看。" : "正在载入这场战绩的详情。");
+        if(!available) return;
         HistoryPanel.Update(view);
         HistoryInspector.Update(view);
+    }
+    private void RefreshHistoryAvailability()
+    {
+        bool connected=!HistoryCacheOnly;
+        HistoryPanel.SetConfigurationAvailable(connected && cachedHistorySelection is null);
+        HistoryRefreshButton.IsEnabled=connected;
+        ExportJson.IsEnabled=ExportPng.IsEnabled=connected && cachedHistorySelection is null &&
+            State.Get("history_selected").Get("record").ValueKind==JsonValueKind.Object;
+    }
+    private async Task SyncCachedHistorySelection()
+    {
+        if(historySelectionInFlight is not null) return;
+        while(!HistoryCacheOnly && !closingRequested && recoveryTask is not {IsCompleted:false} &&
+              cachedHistorySelection is { } desired)
+        {
+            historySelectionInFlight=desired.Id;
+            try{await Command("history_select",new(){["battle_id"]=desired.Id});}
+            finally{historySelectionInFlight=null;}
+            if(!HistoryCacheOnly && !closingRequested && cachedHistorySelection?.Id==desired.Id)
+            {
+                cachedHistorySelection=null;
+                UpdateHistory();
+            }
+        }
     }
     private void ApplyHistoryFilter()
     {
         if(HistoryList==null || State.ValueKind!=JsonValueKind.Object)return;
-        historyUpdating=true;
         string query=Search.Text.Trim();string outcome=(Outcome.SelectedItem as ComboBoxItem)?.Content.ToString()??"全部结果";
         string practice=(Practice.SelectedItem as ComboBoxItem)?.Content.ToString()??"全部模式";
         var values=State.Get("history").Items().Select(data=>new HistoryItem{Data=data}).Where(item=>
             (query.Length==0 || item.Data.Text("search").Contains(query,StringComparison.OrdinalIgnoreCase)) &&
             (outcome=="全部结果" || item.Outcome==outcome) && (practice=="全部模式" || item.Practice==practice)).ToArray();
-        HistoryList.ItemsSource=values;string selected=State.Get("history_selected").Text("battle_id");
-        HistoryList.SelectedItem=values.FirstOrDefault(x=>x.Id==selected);historyUpdating=false;
+        historyUpdating=true;
+        try
+        {
+            HistoryList.ItemsSource=values;
+            HistoryList.SelectedItem=values.FirstOrDefault(item=>item.Id==HistorySelectionId);
+        }
+        finally{historyUpdating=false;}
+    }
+    private void SelectHistoryListItem()
+    {
+        historyUpdating=true;
+        try{HistoryList.SelectedItem=HistoryList.Items.Cast<HistoryItem>().FirstOrDefault(item=>item.Id==HistorySelectionId);}
+        finally{historyUpdating=false;}
     }
     private void FilterHistory(object sender,RoutedEventArgs e)=>ApplyHistoryFilter();
     private async void SelectHistory(object sender,SelectionChangedEventArgs e)
     {
-        if(!historyUpdating && HistoryList.SelectedItem is HistoryItem item)await Command("history_select",new(){["battle_id"]=item.Id});
+        if(historyUpdating || HistoryList.SelectedItem is not HistoryItem item) return;
+        if(item.Id==State.Get("history_selected").Text("battle_id") && historySelectionInFlight is null)
+        {
+            cachedHistorySelection=null;
+            UpdateHistory();
+            return;
+        }
+        cachedHistorySelection=item;
+        RenderHistory(item,historyViews.GetValueOrDefault(item.Id));
+        await SyncCachedHistorySelection();
     }
     private async void RefreshHistory(object sender,RoutedEventArgs e)=>await Command("history_refresh");
     private void ToggleHistoryList(object sender,RoutedEventArgs e)
@@ -711,15 +999,20 @@ public partial class MainWindow : Window
     }
     private async void Detect(object sender,RoutedEventArgs e)
     {
-        if(bridge==null)return;DetectButton.IsEnabled=false;commands++;
+        if(bridge is not {CanSend:true} source || workerUnavailable ||
+           recoveryTask is {IsCompleted:false} || closingRequested) return;
+        DetectButton.IsEnabled=false;commands++;
         try
         {
-            var reply=await bridge.RequestAsync("detect",new(){["adb"]=AdbPath.Text.Trim()});ApplyState(reply.Get("state"));
+            var reply=await source.RequestAsync("detect",new(){["adb"]=AdbPath.Text.Trim()});
+            if(bridge!=source || workerUnavailable || closingRequested) return;
+            ApplyState(reply.Get("state"));
             var diag=reply.Get("result");DetectionNote.Text=diag.Text("message")+" "+diag.Text("error");
             Instances.Items.Clear();
             foreach(var instance in diag.Get("instances").Items())
                 Instances.Items.Add(new ListBoxItem{Content=instance.Text("model")+" · "+instance.Text("primary_serial")+" · "+instance.Text("problem"),Tag=instance.Text("primary_serial"),IsEnabled=instance.Bool("accessible")&&instance.Bool("certified")});
         }
+        catch(BridgeTransportException ex){ReportTransportFailure(source,ex);DetectionNote.Text=Status.Text;}
         catch(Exception ex){DetectionNote.Text=ex.Message;}
         finally{DetectButton.IsEnabled=true;commands--;}
     }
@@ -729,12 +1022,21 @@ public partial class MainWindow : Window
     }
     private async void ApplySettings(object sender,RoutedEventArgs e)
     {
-        await Command("connection_apply",new(){["config"]=new{adb_path=AdbPath.Text.Trim(),serial=Serial.Text.Trim(),auto_detect=AutoDetect.IsChecked==true},["events"]=EventsEnabled.IsChecked==true});
+        if(closingRequested || quitting) return;
+        var config=new{adb_path=AdbPath.Text.Trim(),serial=Serial.Text.Trim(),auto_detect=AutoDetect.IsChecked==true};
+        bool events=EventsEnabled.IsChecked==true;
+        if(bridge is not {CanSend:true} || workerUnavailable)
+        {
+            await ReconnectObserver();
+            if(workerUnavailable) return;
+        }
+        await Command("connection_apply",new(){["config"]=config,["events"]=events});
     }
     private async void SaveJson(object sender,RoutedEventArgs e)=>await Export("json");
     private async void SavePng(object sender,RoutedEventArgs e)=>await Export("png");
     private async Task Export(string format)
     {
+        if(HistoryCacheOnly || cachedHistorySelection is not null) return;
         var selected=State.Get("history_selected");if(selected.ValueKind!=JsonValueKind.Object)return;
         var frozen=selected.Clone();string theme=Theme.Key;
         byte[]? png=format=="png" ? Screenshot.Statistics(frozen,theme) : null;
@@ -764,6 +1066,7 @@ public partial class MainWindow : Window
     internal async Task Quit(int code=0)
     {
         if(quitting || closingRequested)return;closingRequested=true;
+        recoveryCancellation.Cancel();
         poll.Stop();save.Stop();
         // Exit must never depend on a healthy worker or on a dialog. Every step is
         // bounded and failures are logged; the window closes even if cleanup stalls.
@@ -781,7 +1084,8 @@ public partial class MainWindow : Window
     }
     private async Task<int> Release(int code)
     {
-        if(code==0)
+        if(recoveryTask is {IsCompleted:false} recovery) await recovery;
+        if(code==0 && commands==0 && !polling && !workerUnavailable && bridge is {CanSend:true})
         {
             try{await SavePlacement();}catch(Exception ex){code=1;WriteQuitLog("保存布局失败："+ex.Message);}
         }

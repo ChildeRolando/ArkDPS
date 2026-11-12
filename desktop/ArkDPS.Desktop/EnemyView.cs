@@ -433,7 +433,7 @@ public partial class MainWindow
         }
 
         string status=enemy.Text("status");
-        bool blocked=battleStatus is "stale" or "disconnected" or "locating" or "frozen";
+        bool blocked=battleStatus is "stale" or "disconnected" or "locating" or "frozen" or "previous";
         bool ready=battleId.Length>0 && status=="ready" && !blocked;
         // An unavailable enemy sample does not erase the last published rows for this battle.
         if(ready || (shownEnemy.ValueKind==JsonValueKind.Undefined && status=="ready" && battleId.Length>0))
@@ -477,6 +477,7 @@ public partial class MainWindow
             "ended" => "战斗结束" + (status=="ready" ? "" : " · "+enemyStatus),
             "finalizing" => "等待战斗结算",
             "disconnected" => "采集连接中断",
+            "previous" => "显示上次快照 · 等待新的战斗数据",
             "frozen" => "战局冻结",
             "stale" => "战斗数据已过期",
             _ => enemyStatus,

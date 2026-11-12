@@ -220,6 +220,8 @@ public partial class StatisticPanel : UserControl
     private readonly ObservableCollection<RowItem> items=new();
     private JsonElement view;
     private bool updating, hold;
+    private bool configurationAvailable=true;
+    private bool deleteAvailable;
     private bool referenceStyle, liveToolbar;
     private string? appliedHudSkin;
     private HudLayout? hudLayout;
@@ -399,7 +401,7 @@ public partial class StatisticPanel : UserControl
                     : new Thickness(10,5,10,5);
             }
         }
-        if(view.ValueKind==JsonValueKind.Object) Update(view,DeleteButton.IsEnabled);
+        if(view.ValueKind==JsonValueKind.Object) Update(view,deleteAvailable);
     }
 
     private void ReferenceScrollChanged(object sender, ScrollChangedEventArgs e)
@@ -462,10 +464,8 @@ public partial class StatisticPanel : UserControl
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         var category=config.Text("category");
         if(category=="shield") Select(Ranking,"total");
-        Ranking.IsEnabled=category!="shield";
         ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
         ((ComboBoxItem)Ranking.Items[1]).Content=category=="shield" ? "近期" : "DPS";
-        Rate.IsEnabled=config.Text("category")!="shield";
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
             ? Visibility.Visible : Visibility.Collapsed;
@@ -497,7 +497,8 @@ public partial class StatisticPanel : UserControl
             : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
         Actions.Visibility=IsHistory||IsHud ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
-        DeleteButton.IsEnabled=canDelete;
+        deleteAvailable=canDelete;
+        SetConfigurationAvailable(configurationAvailable);
         Legend.Visibility=!IsHud && !referenceStyle && config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
         LegendRow.Visibility=IsHud || referenceStyle || liveToolbar && category!="damage" ? Visibility.Collapsed : Visibility.Visible;
         LegendRow.MinHeight=IsHud ? 0 : 28;
@@ -593,14 +594,36 @@ public partial class StatisticPanel : UserControl
         ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag,
         ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0
     };
+    internal void SetConfigurationAvailable(bool available)
+    {
+        bool restoreSelection=configurationAvailable && !available && !updating;
+        configurationAvailable=available;
+        var config=view.Get("config");
+        bool hasRate=config.Text("category")!="shield";
+        if(restoreSelection && config.ValueKind==JsonValueKind.Object)
+        {
+            updating=true;
+            try
+            {
+                Select(Category,config.Text("category"));
+                Select(Ranking,config.Text("ranking"));
+                Select(Rate,config.Text("rate_basis"));
+                EffectiveOnly.IsChecked=config.Bool("effective_only");
+            }
+            finally{updating=false;}
+        }
+        Category.IsEnabled=EffectiveOnly.IsEnabled=DuplicateButton.IsEnabled=available;
+        Ranking.IsEnabled=Rate.IsEnabled=available && hasRate;
+        DeleteButton.IsEnabled=available && deleteAvailable;
+    }
     private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e)
     {
-        if(updating || Command==null || Category.SelectedItem==null || Ranking.SelectedItem==null || Rate.SelectedItem==null) return;
+        if(updating || !configurationAvailable || Command==null || Category.SelectedItem==null || Ranking.SelectedItem==null || Rate.SelectedItem==null) return;
         await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
     }
     private async void EffectiveChanged(object sender,RoutedEventArgs e)
     {
-        if(updating||Command==null||Category.SelectedItem==null||Ranking.SelectedItem==null||Rate.SelectedItem==null) return;
+        if(updating||!configurationAvailable||Command==null||Category.SelectedItem==null||Ranking.SelectedItem==null||Rate.SelectedItem==null) return;
         await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
     }
     private async void Duplicate(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_duplicate",new(){["panel_id"]=PanelId});}
@@ -610,7 +633,7 @@ public partial class StatisticPanel : UserControl
     private void RateActionClicked(object sender,RoutedEventArgs e) => RateActionRequested?.Invoke(view.Text("rate_action"));
     private void RowSelected(object sender,SelectionChangedEventArgs e) {if(!updating && Rows.SelectedItem is RowItem item) PinRequested?.Invoke(item.Id);}
     private void HoldOrder(object sender,MouseEventArgs e) => hold=true;
-    private void ReleaseOrder(object sender,MouseEventArgs e) {hold=false;if(view.ValueKind==JsonValueKind.Object) Update(view,DeleteButton.IsEnabled);}
+    private void ReleaseOrder(object sender,MouseEventArgs e) {hold=false;if(view.ValueKind==JsonValueKind.Object) Update(view,deleteAvailable);}
     private void ToggleLock(object sender,RoutedEventArgs e) => LockRequested?.Invoke(PanelId);
     private void OpacityChanged(object sender,RoutedPropertyChangedEventArgs<double> e) {if(!updating) AlphaRequested?.Invoke(PanelId,e.NewValue);}
     internal void HudState(bool open,bool locked,double opacity)

@@ -407,6 +407,7 @@ def test_json_lines_handshake_state_error_and_clean_exit(tmp_path):
     assert [v['kind'] for v in values] == ['error', 'error', 'hello', 'snapshot', 'bye']
     assert [v['id'] for v in values] == [1, 2, 3, 4, 5]
     assert values[2]['result']['transport'] == 'stdio-jsonl'
+    assert values[2]['result']['request_replay'] is True
     assert values[3]['state']['status'] == 'waiting'
 
 
@@ -415,6 +416,101 @@ def test_bad_json_is_diagnostic_not_protocol_corruption(tmp_path):
     serve(io.StringIO('not JSON\n'), output, DesktopState(tmp_path))
     value = json.loads(output.getvalue())
     assert value['kind'] == 'error' and not value['ok']
+
+
+def test_same_request_replays_reply_without_applying_command_or_events_twice(tmp_path):
+    state = DesktopState(tmp_path)
+
+    class Worker:
+        events = queue.Queue()
+
+    worker = Worker()
+    first = dict(version=1, id=1, op='hello')
+    mutation = dict(version=1, id=2, op='panel_add')
+    conflict = dict(version=1, id=2, op='theme', theme='people')
+    followup = dict(version=1, id=3, op='snapshot')
+    output = io.StringIO()
+
+    def command_lines():
+        for request in (first, mutation):
+            yield json.dumps(request) + '\n'
+        worker.events.put(('connection', '新连接状态'))
+        for request in (conflict, mutation, first, followup):
+            yield json.dumps(request) + '\n'
+
+    class Input:
+        lines = iter(command_lines())
+
+        def readline(self, _limit):
+            return next(self.lines, '')
+
+    serve(Input(), output, state, worker)
+
+    lines = output.getvalue().splitlines()
+    replies = [json.loads(line) for line in lines]
+    assert [reply['kind'] for reply in replies] == ['hello', 'state', 'error', 'state', 'error', 'snapshot']
+    assert [reply['id'] for reply in replies] == [1, 2, 2, 2, 1, 3]
+    assert lines[1] == lines[3]
+    assert replies[1]['state']['connection_text'] != '新连接状态'
+    assert replies[-1]['state']['connection_text'] == '新连接状态'
+    assert len(state.layout.panels) == 2
+    assert state.layout.theme == 'lone-trail'
+
+
+def test_same_request_replays_original_command_error(tmp_path):
+    state = DesktopState(tmp_path)
+    failed = dict(version=1, id=2, op='theme', theme='original')
+    requests = (dict(version=1, id=1, op='hello'), failed, failed,
+                dict(version=1, id=3, op='snapshot'))
+    output = io.StringIO()
+    with patch.object(state, 'command', wraps=state.command) as command:
+        serve(io.StringIO(''.join(json.dumps(request) + '\n' for request in requests)), output, state)
+    lines = output.getvalue().splitlines()
+    assert lines[1] == lines[2]
+    assert json.loads(lines[1])['kind'] == 'error'
+    assert json.loads(lines[-1])['kind'] == 'snapshot'
+    assert command.call_count == 2
+
+
+def test_request_without_delimiter_at_eof_does_not_apply_command(tmp_path):
+    state = DesktopState(tmp_path)
+    first = dict(version=1, id=1, op='hello')
+    interrupted = dict(version=1, id=2, op='panel_add')
+    output = io.StringIO()
+    serve(io.StringIO(json.dumps(first) + '\n' + json.dumps(interrupted)), output, state)
+    assert [json.loads(line)['kind'] for line in output.getvalue().splitlines()] == ['hello']
+    assert len(state.layout.panels) == 1
+
+
+@pytest.mark.parametrize(('bad_state', 'message'), [
+    ({'field': object()}, 'worker 无法编码响应'),
+    ({'field': float('nan')}, 'worker 无法编码响应'),
+    ({'field': '战' * 600}, 'worker 响应长度越界'),
+])
+def test_failed_reply_keeps_command_stream_usable(tmp_path, monkeypatch, capsys, bad_state, message):
+    import desktop_bridge
+
+    monkeypatch.setattr(desktop_bridge, 'MAX_MESSAGE', 1024)
+    monkeypatch.delenv('ARKDPS_BRIDGE_TRACE', raising=False)
+    state = DesktopState(tmp_path)
+    states = iter(({}, bad_state, {'status': 'waiting'}, {}))
+    monkeypatch.setattr(state, 'snapshot', lambda: next(states))
+    operations = ('hello', 'history_refresh', 'snapshot', 'quit')
+    requests = [dict(version=1, id=index, op=op) for index, op in enumerate(operations, 1)]
+    output = io.StringIO()
+    serve(io.StringIO(''.join(json.dumps(request) + '\n' for request in requests)), output, state)
+
+    values = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [reply['id'] for reply in values] == [1, 2, 3, 4]
+    assert [reply['kind'] for reply in values] == ['hello', 'error', 'snapshot', 'bye']
+    assert values[1]['ok'] is False and values[1]['error'] == message
+    assert values[2]['state'] == {'status': 'waiting'}
+    error_log = capsys.readouterr().err
+    assert 'op=history_refresh id=2 phase=request event=received' in error_log
+    assert 'op=history_refresh id=2 phase=encode event=failed' in error_log
+    assert 'op=history_refresh id=2 phase=complete event=sent' in error_log
+    assert 'op=snapshot' not in error_log
+    assert '战战' not in error_log
 
 
 def test_statuses_keep_last_valid_values_and_do_not_convert_unknown_to_zero(tmp_path):

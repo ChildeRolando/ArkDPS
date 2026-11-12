@@ -10,6 +10,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import socket
@@ -39,6 +40,12 @@ import stage_names
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
+BRIDGE_SLOW_PHASE_SECONDS = .5
+BRIDGE_COMMANDS = frozenset((
+    'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
+    'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
+    'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
+))
 
 
 def event_label(status, error=None):
@@ -565,24 +572,97 @@ class CollectionWorker:
 def serve(input_stream, output, state, worker=None):
     """Versioned UTF-8 JSON Lines: hello, snapshot/state/error, quit/bye."""
     handshake = False
+    trace = os.environ.get('ARKDPS_BRIDGE_TRACE') == '1'
+    last_reply: tuple[int, str, str, int] | None = None
     while True:
-        line = input_stream.readline(MAX_MESSAGE + 1)
+        line = input_stream.readline(MAX_MESSAGE + 2)
         if not line:
             return
-        if len(line.encode('utf-8')) > MAX_MESSAGE:
+        delimiter_size = 2 if line.endswith('\r\n') else int(line.endswith('\n'))
+        if len(line.encode('utf-8')) - delimiter_size > MAX_MESSAGE:
             raise ValueError('worker 消息长度越界')
+        if not line.endswith('\n'):
+            # EOF can interrupt a write after the JSON object but before its delimiter.
+            return
         cmd = {}
+        log_op, request_id = 'unknown', None
+        phase = 'request'
+        phase_start = started = time.perf_counter()
+        response_bytes = None
         quit_requested = False
+        cache_response = False
+
+        def diagnostic(event, *, error=None):
+            now = time.perf_counter()
+            size = '' if response_bytes is None else f' bytes={response_bytes}'
+            failure = '' if error is None else f' error={error}'
+            try:
+                print(f'[bridge] {datetime.now(timezone.utc).isoformat()} op={log_op} id={request_id} '
+                      f'phase={phase} event={event} elapsed_ms={(now - started) * 1000:.1f} '
+                      f'phase_ms={(now - phase_start) * 1000:.1f}{size}{failure}', file=sys.stderr, flush=True)
+            except OSError:
+                pass
+
+        def advance(next_phase):
+            nonlocal phase, phase_start
+            now = time.perf_counter()
+            if now - phase_start >= BRIDGE_SLOW_PHASE_SECONDS:
+                diagnostic('slow')
+            phase, phase_start = next_phase, now
+            if trace:
+                diagnostic('begin')
+
+        def send(payload):
+            advance('write')
+            if log_op != 'snapshot' and not trace:
+                diagnostic('reply_ready')
+            try:
+                output.write(payload + '\n')
+                advance('flush')
+                output.flush()
+            except OSError as exc:
+                diagnostic('failed', error=type(exc).__name__)
+                return False
+            advance('complete')
+            if log_op != 'snapshot' or trace or time.perf_counter() - started >= BRIDGE_SLOW_PHASE_SECONDS:
+                diagnostic('sent')
+            return True
+
         try:
             cmd = json.loads(line)
+            if isinstance(cmd, dict):
+                request_op, raw_id = cmd.get('op'), cmd.get('id')
+                if isinstance(request_op, str) and request_op in BRIDGE_COMMANDS:
+                    log_op = request_op
+                if type(raw_id) is int:
+                    request_id = raw_id
+            if log_op != 'snapshot' or trace:
+                diagnostic('received')
             if not isinstance(cmd, dict) or type(cmd.get('version')) is not int or cmd.get('version') != PROTOCOL_VERSION:
                 raise ValueError('不支持的 worker 协议版本')
+            if request_id is None and ('id' in cmd or last_reply is not None):
+                raise ValueError('worker 命令缺少整数编号')
+            if request_id is not None and last_reply is not None:
+                last_id, last_line, last_payload, last_size = last_reply
+                if request_id < last_id:
+                    raise ValueError('worker 命令编号已过期')
+                if request_id == last_id:
+                    if line != last_line:
+                        raise ValueError('worker 重试内容与原命令不一致')
+                    response_bytes = last_size
+                    diagnostic('replay')
+                    if not send(last_payload):
+                        return
+                    continue
+            cache_response = request_id is not None
+            advance('events')
             if worker:
                 while True:
                     try:
                         state.accept(*worker.events.get_nowait())
                     except queue.Empty:
                         break
+            advance('command')
             op = cmd['op']
             if op == 'hello':
                 handshake = True
@@ -592,7 +672,8 @@ def serve(input_stream, output, state, worker=None):
                 except PackageNotFoundError:
                     frida_version = None
                 result = dict(transport='stdio-jsonl', worker='ArkDPS Python', version=PROTOCOL_VERSION,
-                              python=sys.version.split()[0], executable=sys.executable, frida=frida_version)
+                              python=sys.version.split()[0], executable=sys.executable, frida=frida_version,
+                              request_replay=True)
                 kind = 'hello'
             elif not handshake:
                 raise ValueError('必须先完成 hello 握手')
@@ -612,20 +693,33 @@ def serve(input_stream, output, state, worker=None):
                 if op == 'connection_apply' and worker:
                     worker.request(state.connection, state.layout.event_observation)
                 kind = 'snapshot' if op == 'snapshot' else 'state'
-            reply = dict(version=PROTOCOL_VERSION, id=cmd.get('id'), kind=kind, ok=True,
+            advance('snapshot')
+            reply = dict(version=PROTOCOL_VERSION, id=request_id, kind=kind, ok=True,
                          result=result, state=state.snapshot())
         except Exception as exc:
-            reply = dict(version=PROTOCOL_VERSION, id=cmd.get('id') if isinstance(cmd, dict) else None,
+            diagnostic('failed', error=type(exc).__name__)
+            reply = dict(version=PROTOCOL_VERSION, id=request_id,
                          kind='error', ok=False, error=str(exc))
-        payload = json.dumps(reply, ensure_ascii=False, allow_nan=False)
-        if len(payload.encode('utf-8')) > MAX_MESSAGE:
-            raise ValueError('worker 响应长度越界')
+        advance('encode')
+        encode_error = None
         try:
-            output.write(payload + chr(10))
-            output.flush()
-        except (BrokenPipeError, OSError):
-            return
-        if quit_requested:
+            payload = json.dumps(reply, ensure_ascii=False, allow_nan=False)
+            response_bytes = len(payload.encode('utf-8'))
+            if response_bytes > MAX_MESSAGE:
+                diagnostic('failed', error='oversize')
+                encode_error = 'worker 响应长度越界'
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+            diagnostic('failed', error=type(exc).__name__)
+            encode_error = 'worker 无法编码响应'
+        if encode_error is not None:
+            payload = json.dumps(dict(version=PROTOCOL_VERSION, id=request_id, kind='error',
+                                      ok=False, error=encode_error), ensure_ascii=False)
+            response_bytes = len(payload.encode('utf-8'))
+        # A completed command can outlive the parent's wait for its response.
+        # Cache the actual reply, including errors, before the first pipe write.
+        if cache_response:
+            last_reply = (request_id, line, payload, response_bytes)
+        if not send(payload) or quit_requested:
             return
 
 

@@ -40,7 +40,7 @@ def endpoint_ready(remote=DEFAULT_REMOTE, timeout=0.6):
 
 def _adb(adb_path, serial, arguments, timeout=8):
     return subprocess.run([adb_path, '-s', serial, *arguments],
-                          capture_output=True, text=True, timeout=timeout)
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
 
 
 def keep_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE):

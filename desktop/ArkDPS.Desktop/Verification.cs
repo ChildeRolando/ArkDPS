@@ -977,12 +977,16 @@ public partial class MainWindow
         try
         {
             await partial.ConnectAsync();
-            try{await partial.RequestAsync("snapshot",timeoutOverride:TimeSpan.FromSeconds(1));}catch(OperationCanceledException){timedOut=true;}
+            try{await partial.RequestAsync("snapshot",timeoutOverride:TimeSpan.FromSeconds(1));}
+            catch(BridgeTransportException ex){timedOut=ex.InnerException is TimeoutException && ex.Message.Contains("snapshot #2");}
             try{await partial.RequestAsync("snapshot");}
             catch(IOException ex){followupRejected=ex.Message.Contains("通道已失效");}
         }
         finally{await partial.DisposeAsync();}
         Require(timedOut&&followupRejected,"partial response timeout allowed a later command or failed to reject it");
+        string partialLog=File.ReadAllText(partial.LogPath);
+        Require(partialLog.Contains("op=snapshot id=2 phase=read") && partialLog.Contains("reply_bytes=13"),
+            "partial reply timeout did not retain operation, phase and received bytes");
         checks.Add("partial JSONL timeout marks transport unusable, rejects follow-up, and closes via stdin EOF");
         string alignedRoot=Path.Combine(output,"aligned-worker");Directory.CreateDirectory(alignedRoot);
         File.WriteAllLines(Path.Combine(alignedRoot,"desktop_bridge.py"),new[]{
@@ -1013,6 +1017,64 @@ public partial class MainWindow
             }
         }
         checks.Add("UTF-8 worker replies complete at the pipe buffer boundary while the worker awaits the next request");
+        string replayRoot=Path.Combine(output,"replaying-worker");Directory.CreateDirectory(replayRoot);
+        File.WriteAllText(Path.Combine(replayRoot,"desktop_bridge.py"),"""
+            import json, sys, time
+
+            def reply(command, kind, **extra):
+                return json.dumps(dict(version=1, id=command['id'], ok=True, kind=kind, **extra))
+
+            def send(payload):
+                print(payload, flush=True)
+
+            applied = 0
+            previous = None
+            ignored = set()
+            for line in sys.stdin:
+                cmd = json.loads(line)
+                op = cmd['op']
+                if op == 'hello':
+                    send(reply(cmd, 'hello', result=dict(transport='stdio-jsonl', request_replay=True)))
+                elif op == 'quit':
+                    send(reply(cmd, 'bye'))
+                    break
+                elif op == 'snapshot':
+                    send(reply(cmd, 'snapshot', state=dict(applied=applied)))
+                elif op == 'panel_add':
+                    mode = cmd['test']
+                    if mode == 'drop_request' and cmd['id'] not in ignored:
+                        ignored.add(cmd['id'])
+                        continue
+                    if previous is not None and cmd['id'] == previous[0]:
+                        assert line == previous[1]
+                        send(previous[2])
+                        continue
+                    applied += 1
+                    payload = reply(cmd, 'state', state=dict(applied=applied))
+                    previous = cmd['id'], line, payload
+                    if mode == 'late_reply':
+                        time.sleep(0.7)
+                        send(payload)
+                    elif mode != 'drop_reply':
+                        send(payload)
+            """);
+        var replaying=new BridgeClient(replayRoot,App.Python,Array.Empty<string>());
+        await using(replaying)
+        {
+            await replaying.ConnectAsync();
+            int applied=0;
+            foreach(string mode in new[]{"drop_request","drop_reply","late_reply"})
+            {
+                var reply=await replaying.RequestAsync("panel_add",new(){["test"]=mode},TimeSpan.FromSeconds(1.2));
+                Require(reply.Get("state").Number("applied")==++applied,"retried action applied more than once: "+mode);
+                var following=await replaying.RequestAsync("snapshot");
+                Require(following.Get("state").Number("applied")==applied,"late duplicate broke the next request: "+mode);
+            }
+        }
+        string replayLog=File.ReadAllText(replaying.LogPath);
+        Require(replayLog.Split("event=retry").Length==4 && replayLog.Contains("ignored_duplicate_id="),
+            "retry and duplicate reply diagnostics missing");
+        checks.Add("lost command, lost reply and late duplicate recover with one mutation and a healthy pipe");
         string errorRoot=Path.Combine(output,"error-reply-worker");Directory.CreateDirectory(errorRoot);
         File.WriteAllLines(Path.Combine(errorRoot,"desktop_bridge.py"),new[]{
             "import json,sys",
@@ -1139,7 +1201,8 @@ public partial class MainWindow
         string fixturePath=App.BridgeArguments[App.BridgeArguments.IndexOf("--fixture")+1];
         string phase=Path.GetFileName(output.TrimEnd(Path.DirectorySeparatorChar));
         string entryBattle="ark-23-entry-"+phase;
-        WriteArchive(stateDirectory,entryBattle,"ARK23-ENTRY · 合成验收");
+        string entryStage="ARK23-ENTRY-"+phase;
+        WriteArchive(stateDirectory,entryBattle,entryStage+" · 合成验收");
         await Navigate("history");
         Require(State.Get("history").Items().Any(x=>x.Text("battle_id")==entryBattle),
                 "entering history did not re-read an archive written while running");
@@ -1147,6 +1210,55 @@ public partial class MainWindow
                 "new archive missing from the rendered history list after page entry");
         Require(HistoryPage.Visibility==Visibility.Visible,"history page entry did not show the page");
         checks.Add("history page entry re-reads archives without pressing 刷新");
+        string previousHistory=State.Get("history_selected").Text("battle_id");
+        await Command("history_select",new(){["battle_id"]=entryBattle});
+        await Command("history_select",new(){["battle_id"]=previousHistory});
+        workerUnavailable=true;
+        RefreshHistoryAvailability();
+        try
+        {
+            HistoryList.SelectedItem=HistoryList.Items.Cast<HistoryItem>().Single(item=>item.Id==entryBattle);
+            Require(State.Get("history_selected").Text("battle_id")==previousHistory && HistorySelectionId==entryBattle &&
+                    HistoryPanel.IsVisible && HistorySummary.Text.Contains("ARK23-ENTRY") && !ExportJson.IsEnabled,
+                    "history cache did not display the locally selected record during a connection failure");
+            string cachedOwner=HistoryPanel.View.Get("entries").Items().First().Text("owner_id");
+            HistoryPanel.PinRequested?.Invoke(cachedOwner);
+            Require(HistoryInspector.Owner==cachedOwner,"cached history could not inspect an operator");
+            string unloaded=HistoryList.Items.Cast<HistoryItem>().First(item=>!historyViews.ContainsKey(item.Id)).Id;
+            HistoryList.SelectedItem=HistoryList.Items.Cast<HistoryItem>().Single(item=>item.Id==unloaded);
+            Require(HistorySummary.Text.Contains("详情尚未载入") && !HistoryPanel.IsVisible &&
+                    !ExportJson.IsEnabled && !ExportPng.IsEnabled,
+                    "uncached history showed details or export from a different record");
+            Search.Text=entryStage;
+            Require(HistoryList.Items.Cast<HistoryItem>().Select(item=>item.Id).SequenceEqual(new[]{entryBattle}),
+                    "history search did not work with cached metadata");
+            HistoryList.SelectedItem=HistoryList.Items[0];
+            Require(HistorySelectionId==entryBattle && HistoryPanel.IsVisible,
+                    "cached history did not return to a loaded record after search");
+        }
+        finally
+        {
+            Search.Text="";
+            workerUnavailable=false;
+            await SyncCachedHistorySelection();
+            await Command("history_select",new(){["battle_id"]=previousHistory});
+        }
+        checks.Add("during bridge downtime cached history supports search, selection and operator inspection without stale exports");
+        var historyBeforeRapidSelection=State.Clone();
+        HistoryList.SelectedItem=HistoryList.Items.Cast<HistoryItem>().Single(item=>item.Id==entryBattle);
+        HistoryList.SelectedItem=HistoryList.Items.Cast<HistoryItem>().Single(item=>item.Id==previousHistory);
+        ApplyState(historyBeforeRapidSelection);
+        Require(HistorySelectionId==previousHistory,
+                "an older snapshot overrode the latest history selection while its first command was in flight");
+        long rapidSelectionDeadline=Environment.TickCount64+4000;
+        while((historySelectionInFlight is not null || cachedHistorySelection is not null) &&
+              Environment.TickCount64<rapidSelectionDeadline)
+            await Task.Delay(10);
+        Require(State.Get("history_selected").Text("battle_id")==previousHistory &&
+                HistoryList.SelectedItem is HistoryItem rapidSelection && rapidSelection.Id==previousHistory &&
+                historySelectionInFlight is null && cachedHistorySelection is null,
+                "rapid history selection did not end on the latest selected record");
+        checks.Add("rapid history selections keep the latest selection across an older in-flight worker reply");
         string archiveBattle="ark-23-archive-"+phase;
         string recordPath=Path.Combine(output,"archive-record.json");
         File.WriteAllText(recordPath,ArchiveJson(stateDirectory,archiveBattle,"ARK23-ARCHIVE · 合成验收"),new System.Text.UTF8Encoding(false));
@@ -1466,6 +1578,55 @@ public partial class MainWindow
         }
         checks.Add(trayEvidence);
         await Command("theme",new(){["theme"]=Theme.Babel});originalHud.SetOpacity(.83);originalHud.SetLocked(true);await SavePlacement();
+        poll.Stop();save.Stop();
+        while(polling || commands>0) await Task.Delay(10);
+        var retained=State;
+        await bridge!.DisposeAsync();
+        var failedWorker=new BridgeClient(fakeRoot,App.Python,Array.Empty<string>());
+        bridge=failedWorker;
+        await failedWorker.ConnectAsync();
+        await Poll();
+        Require(workerUnavailable && recoveryTask is { IsCompleted:false } &&
+                JsonElement.DeepEquals(State,retained) && Huds[id]==originalHud,
+            "a dead worker discarded cached statistics or the HUD");
+        await recoveryTask!;
+        Require(!workerUnavailable && bridge!=failedWorker && bridge is {CanSend:true} &&
+                poll.IsEnabled && Huds[id]==originalHud &&
+                State.Get("history_selected").Text("battle_id")==retained.Get("history_selected").Text("battle_id"),
+            "automatic worker reconnect did not restore the archive and the original HUD in place");
+        var restoredBattle=State;
+        var retainedPanel=Panels[id];
+        var retainedView=retainedPanel.View;
+        var retainedEnemyPoints=EnemyChart.Points.ToArray();
+        string retainedDamage=TotalDamage.Text, retainedBattleId=DisplayedBattleId;
+        Require(retainedBattleId.Length>0 && retainedDamage!="—" && retainedView.Get("entries").Items().Any(),
+            "waiting fallback test lacks a meaningful previous battle");
+        var waiting=System.Text.Json.Nodes.JsonNode.Parse(restoredBattle.GetRawText())!;
+        waiting["battle_id"]=null;
+        waiting["status"]="waiting";
+        waiting["live_analysis"]=null;
+        waiting["totals"]=new System.Text.Json.Nodes.JsonObject();
+        waiting["enemy"]=new System.Text.Json.Nodes.JsonObject();
+        waiting["panels"]=new System.Text.Json.Nodes.JsonArray();
+        retainBattleSnapshot=true; // A replacement worker may reconnect before its first battle.
+        ApplyFixture(waiting);
+        Require(ShowingPreviousBattle && State.Text("battle_id").Length==0 &&
+                Status.Text.StartsWith("上次快照",StringComparison.Ordinal) && DisplayedBattleId==retainedBattleId &&
+                TotalDamage.Text==retainedDamage && Panels[id]==retainedPanel &&
+                JsonElement.DeepEquals(retainedPanel.View,retainedView) && Huds[id]==originalHud &&
+                EnemyChart.Points.SequenceEqual(retainedEnemyPoints) && !AddPanelButton.IsEnabled &&
+                !retainedPanel.Category.IsEnabled && EnemyStatusText.Text.Contains("上次快照"),
+            "an empty post-recovery snapshot erased or mislabelled the last battle");
+        var nextBattle=System.Text.Json.Nodes.JsonNode.Parse(restoredBattle.GetRawText())!;
+        nextBattle["battle_id"]="verification-next-recovery-battle";
+        ApplyFixture(nextBattle);
+        Require(!ShowingPreviousBattle && !retainBattleSnapshot && DisplayedBattleId=="verification-next-recovery-battle" &&
+                AddPanelButton.IsEnabled && retainedPanel.Category.IsEnabled && Huds[id]==originalHud,
+            "the first new battle did not replace the read-only recovery snapshot");
+        ApplyState(restoredBattle);
+        await SavePlacement();
+        checks.Add("worker transport failure keeps cached statistics and automatically replaces only the worker");
+        checks.Add("reconnected worker in the lobby keeps the last battle visible until a new sample arrives");
         var disk=JsonDocument.Parse(File.ReadAllText(Path.Combine(App.BridgeArguments[App.BridgeArguments.IndexOf("--state-dir")+1],"layout.json")));
         Require(disk.RootElement.Text("theme")==Theme.Babel,"theme persistence");checks.Add("shared v3 layout saved: Babel theme / locked HUD / 83% opacity / physical geometry");
         File.WriteAllText(Path.Combine(output,"receipt.json"),JsonSerializer.Serialize(new{stack="C# / .NET 10 / WPF",transport="parent-child stdio JSON Lines",dotnet=Environment.Version.ToString(),protocol=BridgeClient.Version,offline=true,worker_runtime=bridge?.Hello,checks,restored_layout=restoredLayout,restored_connection=restoredConnection,layout=State.Get("layout"),limitations=new[]{"Synthetic data only; no MuMu / game input acceptance",trayEvidence}},new JsonSerializerOptions{WriteIndented=true}));

@@ -188,7 +188,7 @@
   <Grid Grid.Row="1" Grid.Column="1" Background="Transparent">
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
    <DockPanel x:Name="SubpageHeader" Visibility="Collapsed" Grid.Row="0" Margin="12,13,12,8">
-    <Button Content="重连观测者" DockPanel.Dock="Right" Click="Rescan" Padding="11,7" VerticalAlignment="Center"/>
+    <Button x:Name="SubpageReconnectButton" Content="重连观测者" DockPanel.Dock="Right" Click="Rescan" Padding="11,7" VerticalAlignment="Center"/>
     <Border HorizontalAlignment="Left" Background="{DynamicResource SubpageHeadingSurface}" Padding="{DynamicResource SubpageHeadingPadding}">
      <StackPanel>
       <TextBlock x:Name="PageTitle" Style="{StaticResource PageTitle}" Foreground="{DynamicResource HeroInk}" FontSize="25" Text="实时战况"/>
@@ -272,7 +272,7 @@
         <DockPanel>
          <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,2,0,0">
           <Button x:Name="AddPanelButton" Content="+ 新建面板" Click="AddPanel" Padding="6,1" MinHeight="22" FontSize="11"/>
-          <Button Content="重连观测者" Click="Rescan" Padding="6,1" MinHeight="22" FontSize="11"/>
+          <Button x:Name="LiveReconnectButton" Content="重连观测者" Click="Rescan" Padding="6,1" MinHeight="22" FontSize="11"/>
          </StackPanel>
          <ScrollViewer x:Name="RankingScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
           <StackPanel x:Name="PanelHost"/>
@@ -296,7 +296,7 @@
       <DockPanel>
        <StackPanel DockPanel.Dock="Top">
         <DockPanel Margin="0,0,0,8">
-         <Button Content="刷新" Click="RefreshHistory" DockPanel.Dock="Right" Padding="10,6" Margin="6,0,0,0"/>
+         <Button x:Name="HistoryRefreshButton" Content="刷新" Click="RefreshHistory" DockPanel.Dock="Right" Padding="10,6" Margin="6,0,0,0"/>
          <TextBox x:Name="Search" TextChanged="FilterHistory" AutomationProperties.Name="搜索最近 100 局" ToolTip="搜索关卡、干员或日期"/>
         </DockPanel>
         <WrapPanel Margin="0,0,0,8">
@@ -323,7 +323,7 @@
       <StackPanel DockPanel.Dock="Top" Margin="0,0,4,10">
        <WrapPanel><Button Content="收起 / 展开列表" Click="ToggleHistoryList" Padding="10,6"/><Button x:Name="ExportJson" Content="导出 JSON" Click="SaveJson" IsEnabled="False" Padding="10,6"/><Button x:Name="ExportPng" Content="完整排行 PNG" Click="SavePng" IsEnabled="False" Style="{StaticResource Primary}" Padding="12,6"/></WrapPanel>
        <TextBlock x:Name="HistorySummary" Text="暂无可读战绩；完成对局归档后自动出现。" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,0"/>
-       <TextBlock x:Name="HistoryNotice" Foreground="{DynamicResource Danger}" FontSize="11" Margin="0,3,0,0"/>
+       <TextBlock x:Name="HistoryNotice" Foreground="{DynamicResource Danger}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,0"/>
       </StackPanel>
       <ScrollViewer VerticalScrollBarVisibility="Hidden"><StackPanel><local:StatisticPanel x:Name="HistoryPanel" Margin="0,0,0,12"/><local:Inspector x:Name="HistoryInspector"/></StackPanel></ScrollViewer>
      </DockPanel>
