@@ -2,9 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -807,13 +810,110 @@ public partial class MainWindow
         while(!delivered() && Environment.TickCount64<deadline) await Task.Delay(25);
     }
 
+    private sealed class ReleaseFixture(Func<Task<HttpResponseMessage>> reply) : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Require(request.RequestUri?.Host == "api.github.com" &&
+                    request.RequestUri.AbsolutePath == "/repos/ChildeRolando/ArkDPS/releases" &&
+                    request.Headers.UserAgent.Count == 1, "incorrect public Release request");
+            Requests++;
+            return reply();
+        }
+    }
+
+    private async Task VerifyReleaseUpdates()
+    {
+        if (App.InstalledVersion is { } installed)
+            Require(ReleaseSettings.Visibility == Visibility.Visible && !CheckUpdateButton.IsEnabled &&
+                InstalledVersion.Text == $"当前版本 v{installed}", "offline portable version settings");
+        else
+            Require(ReleaseSettings.Visibility == Visibility.Collapsed, "source build exposed release controls");
+
+        const string releases = """
+            [
+              {"tag_name":"v1.0.0-rc.10","draft":false,"prerelease":true,"assets":[{"name":"ArkDPS-1.0.0-rc.10-win-x64.zip","state":"uploaded"}]},
+              {"tag_name":"v1.0.0","draft":false,"prerelease":false,"assets":[{"name":"ArkDPS-1.0.0-win-x64.zip","state":"uploaded"}]},
+              {"tag_name":"v1.0.0-rc.9","draft":false,"prerelease":true,"assets":[{"name":"ArkDPS-1.0.0-rc.9-win-x64.zip","state":"uploaded"}]},
+              {"tag_name":"v2.0.0-rc.1","draft":false,"prerelease":true,"assets":[{"name":"ArkDPS-2.0.0-rc.1-win-x64.zip","state":"uploaded"}]},
+              {"tag_name":"v3.0.0","draft":false,"prerelease":false,"assets":[{"name":"ArkDPS-3.0.0-win-x64-snapshot.zip","state":"uploaded"}]},
+              {"tag_name":"v4.0.0","draft":false,"prerelease":false,"assets":[{"name":"ArkDPS-4.0.0-win-x64.zip","state":"new"}]},
+              {"tag_name":"v5.0.0","draft":true,"prerelease":false,"assets":[{"name":"ArkDPS-5.0.0-win-x64.zip","state":"uploaded"}]}
+            ]
+            """;
+        static HttpResponseMessage ReleaseList(string body) => new(HttpStatusCode.OK) { Content = new StringContent(body) };
+        using var data = new HttpClient(new ReleaseFixture(() => Task.FromResult(ReleaseList(releases))));
+        var updates = new ReleaseUpdates(data);
+        var stable = new ReleaseVersion(1, 0, 0, 0);
+        var rc = new ReleaseVersion(1, 0, 0, 9);
+        Require(await updates.Check(stable) == null && await updates.Check(new(1, 0, 1, 0)) == null &&
+                await updates.Check(new(0, 9, 0, 0)) == stable, "stable channel update filtering");
+        Require(await updates.Check(rc) == new ReleaseVersion(2, 0, 0, 1), "RC channel update filtering");
+        using var rcData = new HttpClient(new ReleaseFixture(() => Task.FromResult(ReleaseList(releases
+            .Replace("v2.0.0-rc.1", "v0.2.0-rc.1").Replace("v1.0.0\"", "v0.1.0\"")))));
+        Require(await new ReleaseUpdates(rcData).Check(rc) == new ReleaseVersion(1, 0, 0, 10), "numeric RC precedence");
+        using var stableData = new HttpClient(new ReleaseFixture(() => Task.FromResult(
+            ReleaseList(releases.Replace("v2.0.0-rc.1", "v0.2.0-rc.1")))));
+        Require(await new ReleaseUpdates(stableData).Check(new(1, 0, 0, 10)) == stable, "RC to stable promotion");
+
+        var reply = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fixture = new ReleaseFixture(() => reply.Task);
+        using var shared = new HttpClient(fixture);
+        var sharedUpdates = new ReleaseUpdates(shared);
+        await Command("snapshot");
+        poll.Start();
+        try
+        {
+            var automatic = CheckForUpdates(sharedUpdates, new(0, 9, 0, 0), manual: false);
+            var manual = CheckForUpdates(sharedUpdates, new(0, 9, 0, 0), manual: true);
+            await Command("snapshot");
+            Require(fixture.Requests == 1 && !manual.IsCompleted && !CheckUpdateButton.IsEnabled &&
+                    UpdateDownload.Visibility == Visibility.Collapsed, "update check blocked or duplicated");
+            reply.SetResult(ReleaseList(releases));
+            await Task.WhenAll(automatic, manual);
+            Require(availableUpdate == stable && UpdateDownload.Visibility == Visibility.Visible &&
+                ReleaseUpdates.DownloadPage(stable) == "https://github.com/ChildeRolando/ArkDPS/releases/tag/v1.0.0",
+                "missing or incorrect release download action");
+
+            foreach (var failure in new Func<Task<HttpResponseMessage>>[]
+            {
+                () => Task.FromException<HttpResponseMessage>(new HttpRequestException("offline")),
+                () => Task.FromException<HttpResponseMessage>(new TaskCanceledException("timeout")),
+                () => Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests))
+            })
+            {
+                using var failed = new HttpClient(new ReleaseFixture(failure));
+                var failedUpdates = new ReleaseUpdates(failed);
+                UpdateStatus.Text = "";
+                await CheckForUpdates(failedUpdates, stable, manual: false);
+                Require(UpdateStatus.Text == "", "automatic check exposed a network failure");
+                await CheckForUpdates(failedUpdates, stable, manual: true);
+                Require(UpdateStatus.Text == "暂时无法检查更新" && CheckUpdateButton.IsEnabled, "manual failure feedback");
+            }
+        }
+        finally
+        {
+            poll.Stop();
+            availableUpdate = null;
+            UpdateDownload.Visibility = Visibility.Collapsed;
+            UpdateDownload.ToolTip = null;
+            UpdateStatus.Text = "";
+            CheckUpdateButton.IsEnabled = false;
+        }
+    }
+
     internal async Task Verify(string output)
     {
         Directory.CreateDirectory(output);poll.Stop();save.Stop();
         var checks=new List<string>();
         // Check the initial worker reply before any later fixture or layout changes.
         var restoredLayout=State.Get("layout").Clone();
+        var restoredConnection=State.Get("connection_config").Clone();
         await Settle();
+        await VerifyReleaseUpdates();
+        checks.Add("release version, channels, shared request and network failures verified with mock HTTP");
         foreach(var placement in restoredLayout.Get("huds").Items())
         {
             Require(Huds.TryGetValue(placement.Text("panel_id"),out var hud) && hud is not null,
@@ -1368,7 +1468,7 @@ public partial class MainWindow
         await Command("theme",new(){["theme"]=Theme.Babel});originalHud.SetOpacity(.83);originalHud.SetLocked(true);await SavePlacement();
         var disk=JsonDocument.Parse(File.ReadAllText(Path.Combine(App.BridgeArguments[App.BridgeArguments.IndexOf("--state-dir")+1],"layout.json")));
         Require(disk.RootElement.Text("theme")==Theme.Babel,"theme persistence");checks.Add("shared v3 layout saved: Babel theme / locked HUD / 83% opacity / physical geometry");
-        File.WriteAllText(Path.Combine(output,"receipt.json"),JsonSerializer.Serialize(new{stack="C# / .NET 10 / WPF",transport="parent-child stdio JSON Lines",dotnet=Environment.Version.ToString(),protocol=BridgeClient.Version,offline=true,worker_runtime=bridge?.Hello,checks,restored_layout=restoredLayout,layout=State.Get("layout"),limitations=new[]{"Synthetic data only; no MuMu / game input acceptance",trayEvidence}},new JsonSerializerOptions{WriteIndented=true}));
+        File.WriteAllText(Path.Combine(output,"receipt.json"),JsonSerializer.Serialize(new{stack="C# / .NET 10 / WPF",transport="parent-child stdio JSON Lines",dotnet=Environment.Version.ToString(),protocol=BridgeClient.Version,offline=true,worker_runtime=bridge?.Hello,checks,restored_layout=restoredLayout,restored_connection=restoredConnection,layout=State.Get("layout"),limitations=new[]{"Synthetic data only; no MuMu / game input acceptance",trayEvidence}},new JsonSerializerOptions{WriteIndented=true}));
         await Quit();
     }
 }

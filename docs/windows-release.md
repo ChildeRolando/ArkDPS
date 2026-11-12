@@ -11,7 +11,7 @@
 Windows 10、干净 Windows 安装、多开、其他游戏版本/模拟器及原生 PC 未因构建成功而获得认证。
 本工单仅准备候选；不得创建 GitHub Release、公开下载页或发布 tag，实际对外发布须另行授权。
 
-产物身份以包内 `release.json` 为准：它记录源提交 `head`、UI/worker/运行时/资源文件的逐文件 SHA-256、
+产物身份以包内 `metadata/release.json` 为准。它记录发行版本、源提交 `head`、载荷文件的逐文件 SHA-256、
 .NET SDK 与运行时、协议版本及内置 Python/Frida 版本。`build-manifest.json` / `artifact.json` 属旧的
 PyInstaller 候选，已随归档停用。独立验收必须同时固定候选 SHA、ZIP SHA-256、命令、原始日志/回执和截图，
 不能用以前候选的 PASS 冒充。
@@ -27,6 +27,7 @@ PyInstaller 候选，已随归档停用。独立验收必须同时固定候选 S
    无端点时伤害/治疗快照仍可用，护盾与接敌指标未知，不是零；设置可关闭事件观测。
 7. 关闭主窗是隐藏到托盘，采集/HUD 继续；从托盘或主窗选择“退出 ArkDPS”才真正清理退出。
    日志、战绩和配置位于程序旁 `collector/runtime/`。
+8. 设置页显示当前版本，提供「检查更新」。便携版启动后会在后台检查一次。发现新版时，在主界面点击「查看下载」打开对应的 GitHub Release。
 
 ### 升级与回退
 
@@ -43,13 +44,18 @@ PyInstaller 候选，已随归档停用。独立验收必须同时固定候选 S
 python -m pip install -r requirements-windows.txt -r requirements-test.txt
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 python -m pytest tests -q --assert=plain
-python tools/package_windows.py --output runtime/packages
+python tools/package_windows.py --version 1.0.0-rc.1 --output runtime/packages
 ```
 
-构建器先验证「HEAD 精确 + 工作区干净」，再 `dotnet publish` 自包含 WPF、解包固定 SHA-256 的
+构建器先验证「HEAD 精确 + 工作区干净」，再 `dotnet publish` 自包含 WPF 单文件、解包固定 SHA-256 的
 CPython 3.12.10 embeddable 运行时、下载并核验固定 Frida 17.26.1 wheel，然后按 `BACKEND` 白名单复制
 worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还会断言包内 manifest 不存在
 `tkinter` / Tcl / Tk 文件，并用包内 Python 执行 `import desktop_bridge` 且断言 `"tkinter" not in sys.modules`。
+
+解压根目录包含启动 EXE、README 和 `collector/`、`python/`、`metadata/`、`licenses/`。GitHub Release 标签使用
+`v<版本>`，附上 `ArkDPS-<版本>-win-x64.zip` 和同名的 `.sha256` 文件。RC 在 GitHub 标记为预发行。
+正式版只提示正式更新，RC 也提示较新的 RC。上传完成的标准 ZIP 是版本提醒识别的下载资产。
+`--without-events` 的 ZIP 带 `-snapshot` 后缀。
 
 `requirements-test.txt` 单独固定 pytest 与 Pillow（Python 包名 `PIL`）：后者仅用于测试中独立解码 PNG，
 不是产品运行时依赖。`requirements-windows.txt` 只保留事件客户端 pin。
@@ -64,8 +70,9 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 
 `verify_wpf.py` 驱动真实 WPF 与真实 stdio 握手，覆盖合成历史、双主题、HUD 几何/锁定/透明度恢复、
 历史页进入自动刷新与归档后自动更新、事件不可用原因与恢复入口、PNG 导出和新进程重启恢复。
-`verify_wpf_package.py` 在新目录验证清洁解压、全部文件摘要、缺少全局 Python/.NET 的运行、
-v1 → WPF v3 迁移以及 WPF 重启恢复。
+`verify_wpf_package.py` 在新目录验证清洁解压、根目录布局、全部载荷摘要、缺少全局 Python/.NET 的运行、
+采集器不匹配时的启动拒绝、复制旧版数据后的战绩与连接设置、v1 → WPF v3 布局迁移和 WPF 重启恢复。
+WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 
 **这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确
 `NOT VERIFIED`。混合 DPI 与实机项仍以独立验收为准，不得把离线回执当作实机通过证据。

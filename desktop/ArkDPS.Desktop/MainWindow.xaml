@@ -118,6 +118,8 @@
     <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="9,0,12,1"/>
    </StackPanel>
    <StackPanel x:Name="ChromeControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Background="{DynamicResource ChromeControlsSurface}" Margin="4,0,8,0">
+    <Button x:Name="UpdateDownload" Content="发现新版本 · 查看下载" Click="OpenReleaseDownload" Visibility="Collapsed"
+            AutomationProperties.Name="查看新版本下载" Padding="8,3" Margin="0,0,8,0"/>
     <StackPanel x:Name="ChromeLab" Margin="4,0,13,0" VerticalAlignment="Center">
      <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="{DynamicResource ChromeInk}"/>
      <TextBlock Text="ORCU / DPS LAB" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="0,2,0,0"/>
@@ -409,6 +411,11 @@
          <TextBlock Text="HUD 布局" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
          <ComboBox x:Name="HudLayoutTarget" AutomationProperties.Name="HUD 源面板" DisplayMemberPath="Label" Width="186"/>
          <Button x:Name="EditHudLayoutButton" Content="调整布局" Click="EditHudLayoutClick" Margin="0" IsEnabled="False"/>
+        </WrapPanel>
+        <WrapPanel x:Name="ReleaseSettings" Visibility="Collapsed" Margin="0,8,0,0">
+         <TextBlock x:Name="InstalledVersion" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+         <Button x:Name="CheckUpdateButton" Content="检查更新" Click="CheckUpdateClick" Margin="0,0,12,0"/>
+         <TextBlock x:Name="UpdateStatus" AutomationProperties.LiveSetting="Polite" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
         </WrapPanel>
        </StackPanel>
       </Border>

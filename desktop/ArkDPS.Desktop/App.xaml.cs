@@ -13,6 +13,7 @@ public partial class App : System.Windows.Application
     internal static string Root = "";
     internal static string Python = "python.exe";
     internal static string? Verification;
+    internal static ReleaseVersion? InstalledVersion;
     internal static readonly List<string> BridgeArguments = new();
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -61,15 +62,21 @@ public partial class App : System.Windows.Application
                 AppDomain.CurrentDomain.UnhandledException += (_, failure) =>
                     File.WriteAllText(Path.Combine(evidence, "runtime-failure.txt"), failure.ExceptionObject.ToString());
             }
-            string release=Path.Combine(AppContext.BaseDirectory,"release.json");
-            if(File.Exists(release))
+            string release = Path.Combine(AppContext.BaseDirectory, "metadata", "release.json");
+            if (File.Exists(release) || string.Equals(Root, packagedRoot, StringComparison.OrdinalIgnoreCase))
             {
                 using var manifest=System.Text.Json.JsonDocument.Parse(File.ReadAllText(release));
                 string worker=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(Root,"desktop_bridge.py")))).ToLowerInvariant();
-                if(manifest.RootElement.Number("protocol")!=BridgeClient.Version || manifest.RootElement.Text("collector_sha256")!=worker)
+                if (manifest.RootElement.Number("format") != 2 ||
+                    manifest.RootElement.Number("protocol") != BridgeClient.Version ||
+                    manifest.RootElement.Text("collector_sha256") != worker ||
+                    !ReleaseVersion.TryParse(manifest.RootElement.Text("version"), out var version))
                     throw new IOException("安装包两端不匹配；请完整替换同一发布包，不混用旧采集器。");
+                InstalledVersion = version;
             }
             var window = new MainWindow(); MainWindow = window; window.Show();
+            if (InstalledVersion is ReleaseVersion installed)
+                window.InitializeReleaseUpdates(installed, BridgeArguments.Contains("--offline"));
         }
         catch (Exception ex)
         {

@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from release_identity import candidate_head
+DEFAULT_VERSION = '1.0.0-rc.1'
+RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
+PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
 PYTHON_URL = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip'
 PYTHON_SHA256 = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
 FRIDA_VERSION = '17.26.1'
@@ -67,7 +71,15 @@ def assert_no_tk_files(names):
         raise RuntimeError('Sealed Tk artifacts in package: ' + ', '.join(bad))
 
 
-def build(output, *, python_zip=None, frida_wheel=None, with_events=True):
+def archive_name(version, with_events):
+    suffix = '' if with_events else '-snapshot'
+    return f'ArkDPS-{version}-win-x64{suffix}.zip'
+
+
+def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None, with_events=True):
+    if not RELEASE_VERSION.fullmatch(version) or any(
+            int(part) > 2147483647 for part in re.findall(r'[0-9]+', version)):
+        raise ValueError('Use a version such as 1.0.0 or 1.0.0-rc.1')
     head = candidate_head(ROOT)
     output.mkdir(parents=True, exist_ok=True)
     inputs = Path(tempfile.mkdtemp(prefix='inputs-', dir=output))
@@ -84,12 +96,17 @@ def build(output, *, python_zip=None, frida_wheel=None, with_events=True):
             frida_wheel, = inputs.glob('frida-*.whl')
         check(frida_wheel, FRIDA_SHA256)
     bundle = Path(tempfile.mkdtemp(prefix='ArkDPS-win-x64-', dir=output))
+    build_artifacts = inputs / 'dotnet'
     dotnet_executable = os.environ.get('ARKDPS_DOTNET') or shutil.which('dotnet')
     if not dotnet_executable:
         raise RuntimeError('.NET 10 SDK required; set ARKDPS_DOTNET for a task-local SDK')
     subprocess.run([dotnet_executable, 'publish', str(ROOT / 'desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj'),
         '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
-        '-p:ContinuousIntegrationBuild=true', '-o', str(bundle)], cwd=ROOT, check=True)
+        '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=true',
+        '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:PublishTrimmed=false',
+        '-p:DebugType=none', '--artifacts-path', str(build_artifacts), '-o', str(bundle)],
+        cwd=ROOT, check=True)
+    runtime_config, = (build_artifacts / 'bin/ArkDPS.Desktop').glob('*/ArkDPS.Desktop.runtimeconfig.json')
     unpack(python_zip, bundle / 'python')
     # Isolated embedded interpreter: no user site, registry Python, PATH or pip.
     (bundle/'python/python312._pth').write_text('python312.zip\n.\n../collector\nLib/site-packages\n', encoding='ascii')
@@ -101,53 +118,70 @@ def build(output, *, python_zip=None, frida_wheel=None, with_events=True):
         shutil.copy2(ROOT / name, collector / name)
     for name in ('assets', 'vendor'):
         shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    for name in ('LICENSE', 'THIRD_PARTY.md'):
-        shutil.copy2(ROOT / name, bundle / name)
     notices = bundle / 'licenses'
     notices.mkdir()
+    for name in ('LICENSE', 'THIRD_PARTY.md'):
+        shutil.copy2(ROOT / name, notices / name)
+    if (bundle / 'Assets').is_dir():
+        (bundle / 'Assets').rename(notices / 'Assets')
     dotnet = Path(dotnet_executable).parent
     for name in ('LICENSE.txt', 'ThirdPartyNotices.txt'):
         if not (dotnet/name).is_file():
             raise FileNotFoundError('Required .NET redistribution notice missing: '+name)
         shutil.copy2(dotnet/name, notices/('dotnet-'+name))
     # Python LICENSE.txt and Frida dist-info/licenses/COPYING stay in their archives.
-    manifest = dict(format=1, protocol=1, target_framework='net10.0-windows',
+    metadata = bundle / 'metadata'
+    metadata.mkdir()
+    (bundle / 'README.txt').write_text(
+        f'ArkDPS {version} · Windows x64\n\n'
+        '解压到可写目录，双击 ArkDPS.Desktop.exe。无需安装 Python 或 .NET。\n'
+        '实时统计需要开启 Root 的 MuMu 12 和已适配的安卓游戏 2.7.91。\n'
+        '包内不含 ADB、模拟器或 Frida server。\n\n'
+        '更新可在设置页检查。发现新版后点击「查看下载」打开 GitHub Release。\n'
+        '升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
+        '如果旧版有 collector/runtime，将整个 runtime 目录复制到新版的 collector 后再启动。\n'
+        '保留旧目录。需要回退时，先退出新版，再启动旧目录中的程序。\n',
+        encoding='utf-8-sig')
+    if {entry.name for entry in bundle.iterdir()} != PACKAGE_ROOT:
+        raise RuntimeError('Unexpected files in portable package root')
+    manifest = dict(format=2, version=version, protocol=1, target_framework='net10.0-windows',
         dotnet_sdk=subprocess.check_output([dotnet_executable,'--version'],cwd=ROOT,text=True).strip(),
-        dotnet_runtime=json.loads((bundle/'ArkDPS.Desktop.runtimeconfig.json').read_text('utf-8')), head=head,
+        dotnet_runtime=json.loads(runtime_config.read_text('utf-8')), head=head,
         collector_sha256=digest(collector/'desktop_bridge.py'), python='3.12.10',
         python_source=PYTHON_URL, python_archive_sha256=PYTHON_SHA256,
         frida=FRIDA_VERSION if with_events else None, frida_wheel_sha256=FRIDA_SHA256 if with_events else None,
         files={str(p.relative_to(bundle)).replace('\\','/'):digest(p) for p in sorted(bundle.rglob('*')) if p.is_file()})
     assert_no_tk_files(manifest['files'])
-    (bundle/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    (bundle/'使用说明.txt').write_text('双击 ArkDPS.Desktop.exe。两端和运行时随同一包发布，无需安装 Python 或 .NET。\n'
-        '请解压到可写目录；配置和历史在 collector/runtime。整个目录一起替换，不混用旧 worker。\n'
-        '不含 ADB、模拟器或 Frida server，不会自动安装/启动设备服务。\n'
-        '明确“退出”会等待采集清理；关闭主窗仅收起到托盘，HUD 和采集继续。\n',encoding='utf-8')
+    (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
     environment=dict(os.environ, PYTHONHOME='Z:/not-a-python', PYTHONPATH='Z:/not-a-python', DOTNET_MULTILEVEL_LOOKUP='0')
     script='import desktop_bridge, sys; assert "tkinter" not in sys.modules; print(sys.version); print(sys.executable)'
     if with_events:
         script += '; import frida; assert frida.__version__ == "17.26.1"; print(frida.__version__)'
-    subprocess.run([str(bundle/'python/python.exe'), '-I', '-c', script], cwd=ROOT,env=environment,check=True)
-    archive = output / (bundle.name + '.zip')
-    with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
+    subprocess.run([str(bundle/'python/python.exe'), '-I', '-B', '-c', script], cwd=ROOT,env=environment,check=True)
+    archive = output / archive_name(version, with_events)
+    staged_archive = inputs / archive.name
+    with zipfile.ZipFile(staged_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
         for path in sorted(bundle.rglob('*')):
             if path.is_file():
                 stream.write(path,str(Path('ArkDPS')/path.relative_to(bundle)))
-    (output/(archive.name+'.sha256')).write_text(digest(archive)+'  '+archive.name+'\n',encoding='ascii')
-    print(json.dumps(dict(bundle=str(bundle), archive=str(archive), sha256=digest(archive)),ensure_ascii=False))
+    sha256 = digest(staged_archive)
+    staged_archive.replace(archive)
+    (output/(archive.name+'.sha256')).write_text(sha256+'  '+archive.name+'\n',encoding='ascii')
+    print(json.dumps(dict(bundle=str(bundle), archive=str(archive), sha256=sha256),ensure_ascii=False))
     return bundle
 
 
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--output',type=Path,default=ROOT/'runtime'/'packages')
+    parser.add_argument('--version', default=DEFAULT_VERSION)
     parser.add_argument('--python-zip',type=Path)
     parser.add_argument('--frida-wheel',type=Path)
     parser.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
     args=parser.parse_args()
-    build(args.output.resolve(),python_zip=args.python_zip,frida_wheel=args.frida_wheel,with_events=not args.without_events)
+    build(args.output.resolve(), version=args.version, python_zip=args.python_zip,
+          frida_wheel=args.frida_wheel, with_events=not args.without_events)
 
 
 if __name__=='__main__':

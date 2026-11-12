@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -119,12 +120,23 @@ def main():
                     '-c', 'Release', '--nologo'], cwd=ROOT, check=True)
     # Each invocation owns a NEW directory. Never overwrite a user's settings.
     import tempfile
-    directory = Path(tempfile.mkdtemp(prefix='state-', dir=output))
+    previous_state = Path(tempfile.mkdtemp(prefix='state-', dir=output))
+    directory = previous_state
     fixture = seed(directory)
     panel = dict(panel_id='default', category='damage', ranking='total', rate_basis='recent_5s')
     legacy_layout = dict(version=1, panels=[panel]) if args.migrate_v1 else dict(
         version=3, panels=[panel], theme='original')
     (directory/'layout.json').write_text(json.dumps(legacy_layout), encoding='utf-8')
+    old_history = {}
+    if args.bundle and args.migrate_v1:
+        from connection import ConnectionConfig, ConnectionConfigStore
+        connection = ConnectionConfig(serial='127.0.0.1:16384', auto_detect=False)
+        ConnectionConfigStore(previous_state / 'connection.json').save(connection)
+        old_history = {path.name: path.read_bytes() for path in (previous_state / 'history').glob('*.json')}
+        assert len(old_history) == 2
+        directory = args.bundle.resolve() / 'collector/runtime'
+        shutil.copytree(previous_state, directory)
+        fixture = directory / fixture.name
     executable = (args.bundle.resolve()/'ArkDPS.Desktop.exe') if args.bundle else ROOT/'desktop/ArkDPS.Desktop/bin/Release/net10.0-windows/ArkDPS.Desktop.exe'
     # Reject a mismatched worker before accepting any snapshots.
     if not args.bundle:
@@ -151,6 +163,12 @@ def main():
             assert receipt['worker_runtime']['python'] == '3.12.10'
             assert Path(receipt['worker_runtime']['executable']).resolve() == (args.bundle/'python/python.exe').resolve()
             assert receipt['worker_runtime']['frida'] == '17.26.1'
+        if old_history:
+            assert receipt['restored_connection'] == connection.to_dict()
+            for name, original in old_history.items():
+                assert (directory / 'history' / name).read_bytes() == original, name
+                assert (previous_state / 'history' / name).read_bytes() == original, name
+            assert json.loads((previous_state / 'layout.json').read_text('utf-8')) == legacy_layout
         receipts.append(receipt)
     import struct
     for phase in ('first-launch', 'restart'):
@@ -167,6 +185,8 @@ def main():
                    checks=['Native WPF + versioned parent-child stdio JSON Lines', 'Separate process restart matches saved v3 layout'],
                    phases=receipts, screenshots_sha256=files,
                    limitations=['Synthetic data only; no MuMu/game input acceptance. See phase receipts for physical tray result.'])
+    if old_history:
+        receipt['checks'].append('copied legacy runtime retains connection settings and history; old state remains usable')
     (output/'receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2),encoding='utf-8')
     print('PASS_OFFLINE_WPF', output)
 

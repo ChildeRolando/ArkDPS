@@ -55,7 +55,7 @@ python tools/package_windows.py --output runtime/packages
 
 Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新的隔离目录；ZIP 拒绝路径穿越/符号链接/超大展开。Python `._pth` 仅白名单包内目录，不读系统 Python、用户 site-packages 或 `PYTHONPATH`。没有全局 pip install。
 
-`release.json` 同时登记 UI/worker/运行时/资源文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本；两端不一致明确拒绝。完整升级整个目录，不单独替换旧 worker。用户配置和历史不打进构建产物；已有配置可在退出应用后迁移到包内 `collector/runtime`，不要覆盖历史。运行目录必须可写；保护目录下会明确报错，而不是偷偷改存储位置。
+`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本；两端不一致明确拒绝。升级时解压新版到新目录，退出旧版后复制 `collector/runtime` 中的用户配置和历史。运行目录必须可写。
 
 ## 可复核验收
 
