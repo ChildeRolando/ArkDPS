@@ -20,7 +20,7 @@ function expectFields(k,expected){
 const domain=api('il2cpp_domain_get','pointer',[])();
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
 const cfg={methods:[]};let clock;let skillF=null;
-let enemyEntryConfig=null,enemyPhaseMethods=null;
+let enemyEntryConfig=null,enemyPhaseMethods=null,enemyAttributesReady=false;
 function uniqueMethod(klass,name,argCount) {
  const methods=klass.add(0x98).readPointer(),count=klass.add(0x120).readU16(),matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
@@ -30,7 +30,7 @@ function uniqueMethod(klass,name,argCount) {
    matches.push(method.readPointer());
  }
  if(matches.length!==1||matches[0].isNull()||Process.findModuleByAddress(matches[0])?.name!==il.name)
-  throw new Error('missing or ambiguous enemy entry method '+name);
+  throw new Error('missing or ambiguous method '+name);
  return matches[0];
 }
 try{
@@ -42,7 +42,7 @@ try{
  if(!im)throw new Error('Assembly-CSharp not found');
  const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController',
   'Character','BasicSkill','SkillData']);const found={};
- const enemyClasses=new Set(['Enemy','BObject']);
+ const enemyClasses=new Set(['Enemy','BObject','Attributes']);
  for(let i=0,n=classCount(im);i<n;i++){
   const k=classAt(im,i),name=className(k);if(!wanted.has(name)&&!enemyClasses.has(name))continue;
   const ns=k.add(0x18).readPointer().readCString();
@@ -80,6 +80,12 @@ try{
    recycle:uniqueMethod(found.BObject,'OnRecycle',0)};
  }catch(e){cfg.enemyEntryError=String(e);}
  if(enemyEntryConfig){
+  try{
+   if(!found.Attributes)throw new Error('enemy attribute class unavailable');
+   expectFields(found.Entity,{'m_attributes':0xb0});
+   expectFields(found.Attributes,{'m_cachedData':0x68});
+   enemyAttributesReady=true;
+  }catch(e){/* Enemy identity is still observable. */}
   try{enemyPhaseMethods={fakeDeath:uniqueMethod(found.Enemy,'DoFakeDeath',1),
     reborn:uniqueMethod(found.Enemy,'DoReborn',1)};}
   catch(e){cfg.enemyPhaseError=String(e);}
@@ -99,6 +105,10 @@ try{
  const skillStarts=cfg.methods.filter(m=>m.owner==='Character'&&['OnSkillStart','SwitchToSkillState','OnSkillCastSucceed','OnToggleSkillStart','OnSkillRetriggered'].includes(m.name));
  const skillEnds=cfg.methods.filter(m=>m.owner==='Character'&&['OnSkillFinish','SwitchOutFromSkillState','OnAfterSkill'].includes(m.name));
  cfg.skillReady=skillStarts.length>0&&skillEnds.length>0;
+ try{
+  const finished=uniqueMethod(found.BattleController,'OnCharacterFinished',2);
+  cfg.methods.push({owner:'BattleController',name:'OnCharacterFinished',address:finished.toString()});
+ }catch(e){cfg.skillFinishError=String(e);}
 } finally {api('il2cpp_thread_detach','void',['pointer'])(thread);}
 // A callback increments epoch on entry and remains active until its native
 // invocation returns. RPC marks are serialized with these JS callbacks.
@@ -117,7 +127,9 @@ let engagementUnknown=false;
 let skillUnknown=false;
 // Recoverable unattributable callbacks are counted, not escalated globally.
 let skippedUnattributed=0;
-let queue=[];let hpContext=[];
+const EVENT_BUFFER_LIMIT=100000,HP_CONTEXT_BUFFER_LIMIT=10000;
+const queue=[],hpContext=[];
+let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
 const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
@@ -185,16 +197,59 @@ function nonlethalEvidence(targetPtr){
   return {target:key,hp_after:hp,killed:false};
  }catch(e){return null;}
 }
-function hpContextQueue(){const result=hpContext;hpContext=[];return result;}
 function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
 function record(source,kind,amount,when,proof,evidence){
+ if(stopped||fatal)return;
  if(!Number.isFinite(amount)||amount<0)throw new Error('invalid amount');
- if(queue.length>=100000)throw new Error('event buffer overflow');
+ if(queue.length>=EVENT_BUFFER_LIMIT){
+  // A later read or mark must expose the gap even if the emitting hook only
+  // degrades its own diagnostic quality on failure.
+  fatal='event buffer overflow: too many unacknowledged events';
+  return;
+ }
+ if(sequence>=Number.MAX_SAFE_INTEGER){
+  fatal='event sequence exhausted';
+  return;
+ }
  const event={sequence:++sequence,frame:when.frame,game_time:when.game_time,source,kind,amount,proof};
  if(evidence)Object.assign(event,evidence);
  queue.push(event);
+}
+function recordHpContext(context){
+ if(stopped||fatal)return;
+ if(hpContext.length>=HP_CONTEXT_BUFFER_LIMIT){
+  hpContextDropped++;
+  return;
+ }
+ // Diagnostics do not advance the authoritative sequence. Attach late
+ // diagnostics to the next event so repeating a read returns the same slice.
+ hpContext.push({eventSequence:Math.max(sequence,readThroughSequence+1),context});
+}
+function readEvents(after,through){
+ const valid=Number.isSafeInteger(after)&&Number.isSafeInteger(through)&&
+  acknowledgedSequence<=after&&after<=through&&through<=sequence;
+ const error=fatal||(valid?null:'event read range is unavailable');
+ const result={events:[],hp_context:[],hp_context_dropped:hpContextDropped,error,stopped,...eventQuality()};
+ if(error||stopped)return result;
+ result.events=queue.slice(after-acknowledgedSequence,through-acknowledgedSequence);
+ result.hp_context=hpContext.filter(item=>after<item.eventSequence&&item.eventSequence<=through)
+  .map(item=>item.context);
+ readThroughSequence=Math.max(readThroughSequence,through);
+ return result;
+}
+function ackEvents(through){
+ if(!Number.isSafeInteger(through)||through<0||through>readThroughSequence)
+  return {acknowledged:acknowledgedSequence,error:fatal||'event acknowledgement exceeds the read watermark'};
+ if(through>acknowledgedSequence){
+  queue.splice(0,through-acknowledgedSequence);
+  acknowledgedSequence=through;
+  let count=0;
+  while(count<hpContext.length&&hpContext[count].eventSequence<=through)count++;
+  hpContext.splice(0,count);
+ }
+ return {acknowledged:acknowledgedSequence,error:fatal};
 }
 function refreshEnemyEntryFrame(frame) {
  if(enemyEntryFrame!==null&&frame<enemyEntryFrame){
@@ -212,6 +267,28 @@ function isEnemy(object) {
  const key=klass.toString();
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
+}
+function enemyEntryAttributes(enemy) {
+ if(!enemyAttributesReady)return null;
+ const result={};
+ try{
+  const attributes=enemy.add(0xb0).readPointer();
+  if(attributes.isNull())return null;
+  const cached=attributes.add(0x68).readPointer();
+  if(cached.isNull())return null;
+  const count=cached.add(0x18).readU32();
+  if(!count||count>64)return null;
+  // AttributeType slots in the verified ARM64 ObscuredFP[] layout.
+  for(const [name,index] of [['max_hp',0],['atk',1],['def',2],['res',3],['move_speed',6],['attack_speed',7]]){
+   if(index>=count)continue;
+   const slot=cached.add(0x20+index*0x28);
+   if(slot.add(0x10).readU8()!==1)continue;
+   const key=BigInt(slot.readU64().toString()),hidden=BigInt(slot.add(8).readU64().toString());
+   const value=Number(BigInt.asIntN(64,hidden^key))/4294967296;
+   if(Math.abs(value)<1e10&&(name!=='max_hp'||value>0))result[name]=value;
+  }
+ }catch(e){/* Keep any fields that were read successfully. */}
+ return Object.keys(result).length?result:null;
 }
 function installEnemyEntryHooks() {
  if(!enemyEntryConfig)return;
@@ -262,8 +339,11 @@ function installEnemyEntryHooks() {
       if(!isBorn&&!awaitingEnemyTile.has(uid))return;
       awaitingEnemyTile.delete(uid);
       const eid=entityId(enemy);
+      const evidence={target:eid,target_instance:String(uid)};
+      const attributes=enemyEntryAttributes(enemy);
+      if(attributes)evidence.enemy_entry_attributes=attributes;
       try{
-       record(null,'enemy_enter',0,when,{method},{target:eid,target_instance:String(uid)});
+       record(null,'enemy_enter',0,when,{method},evidence);
       }catch(e){fatal=String(e);}
      }catch(e){enemyEntryUnknown=true;}
      finally{
@@ -369,12 +449,20 @@ function skillIdentity(charPtr,skillPtr){
   return {skill_key:key||id||null,skill_id:id||null,skill_name:name||null};
  }catch(e){return {};}
 }
-for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&x.name==='ApplyModifier'||(x.owner==='Entity'||x.owner==='Unit')&&(x.name==='OnTakeDamage'||x.name==='OnAfterOutputDamage')||x.owner==='Character')){
+for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&x.name==='ApplyModifier'||(x.owner==='Entity'||x.owner==='Unit')&&(x.name==='OnTakeDamage'||x.name==='OnAfterOutputDamage')||x.owner==='Character'||x.owner==='BattleController'&&x.name==='OnCharacterFinished')){
  hooks.push(Interceptor.attach(ptr(m.address),{
   onEnter(args){
    active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);
    try{
+    if(this.name==='BattleController.OnCharacterFinished'){
+     this.skillEnd=true;
+     this.source=entityId(args[1]);
+     // A deployable's removal does not end its owner's skill.
+     if(!this.source.startsWith('char_')){this.ignore=true;return;}
+     this.skillReason=args[2].toInt32();
+     return;
+    }
     if(this.name.startsWith('Character.')){
      const method=this.name.slice('Character.'.length);
      if(SKILL_START_METHODS.has(method)||SKILL_END_METHODS.has(method)){
@@ -460,7 +548,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
       try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()});}catch(e){fatal=String(e);}
      }
      const hpAfter=targetHp(this.target);
-     hpContext.push({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
+     recordHpContext({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
       source:this.source||null,target:targetKey(this.target)||this.target.toString(),
       target_instance:this.target.toString(),amount:this.amount,
       real_delta:this.real,hp_before:this.hpBefore,hp_after:hpAfter,
@@ -545,16 +633,42 @@ function enemyEntryQuality(frame){
  return {enemy_entry_ready:enemyEntryReady,enemy_entry_unknown:enemyEntryUnknown,
   enemy_phase_ready:enemyPhaseReady,enemy_phase_unknown:enemyPhaseUnknown};
 }
-rpc.exports={
- mark() {
-  const current = time(true);
-   const quality={unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,...enemyEntryQuality(current?.frame)};
+function eventQuality(frame){
+ return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
+  shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
+  skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,...enemyEntryQuality(frame)};
+}
+function markEvents(){
+ const current=time(true);
+ const quality=eventQuality(current?.frame);
   if (current === null) return {retry:true,error:fatal,stopped,...quality};
   return {...current,sequence,epoch,active,active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
- },
- drain(){const result=queue;queue=[];const context=hpContextQueue();return {events:result,hp_context:context,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,...enemyEntryQuality()};},
+}
+function receiveEventRequest(){
+ // Frida recv is one-shot. Rearm before dispatch; a late reply can be safely
+ // ignored by the host because reads are replayable and ACKs idempotent.
+ recv('arkdps-event-request',request=>{
+  receiveEventRequest();
+  let result;
+  try{
+   switch(request.operation){
+    case 'mark':result=markEvents();break;
+    case 'read':result=readEvents(request.after,request.through);break;
+    case 'ack':result=ackEvents(request.sequence);break;
+    default:result={error:'unknown event transport operation'};
+   }
+  }catch(e){result={error:String(e)};}
+  send({kind:'arkdps-event-response',id:request.id,result});
+ });
+}
+rpc.exports={
+ mark:markEvents,
+ readEvents,
+ ackEvents,
  stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
 };
+receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
+ skill_finish_error:cfg.skillFinishError||null,
  enemy_entry_ready:enemyEntryReady,enemy_entry_error:cfg.enemyEntryError||null,
  enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null});

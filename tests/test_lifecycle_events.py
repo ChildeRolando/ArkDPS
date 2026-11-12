@@ -7,6 +7,7 @@ import pytest
 
 from collection_session import CollectionSession
 from event_capture import CaptureRetry
+from event_observer import ObserverReadRetry
 from test_collection_session import Collector, LiveObserver
 from test_event_capture import event
 
@@ -27,6 +28,43 @@ def advance(session, collector, *, terminal=False):
     collector.state = 3 if terminal else 2
     session.observer.sequence = session.observer.epoch = 1
     session.observer.events = [event(1)]
+
+
+def test_event_read_timeout_preserves_terminal_batch_until_host_commit():
+    session, collector, _, records = connected()
+    acknowledgements = []
+    try:
+        observer = session.observer
+        fail = True
+
+        def read_through(sequence):
+            nonlocal fail
+            if sequence == 1 and fail:
+                fail = False
+                raise ObserverReadRetry('observer read response timed out')
+            return observer.drain()
+
+        def commit_events(sequence):
+            result = session.runtime.sessions.adapter.result()
+            acknowledgements.append((sequence, result['rows']['char_a']['observed_damage']))
+
+        observer.read_through = read_through
+        observer.commit_events = commit_events
+        baseline = session.read()
+        assert baseline['event_status'] == 'recording'
+        advance(session, collector, terminal=True)
+        with pytest.raises(CaptureRetry, match='response timed out'):
+            session.read()
+        assert acknowledgements == [(0, 0)]
+        assert len([kind for kind, _ in records if kind == 'published']) == 1
+        finished = session.read()
+        assert finished['event_status'] == 'finished'
+        assert finished['statistics']['rows']['char_a']['observed_damage'] == 20
+        assert acknowledgements == [(0, 0), (1, 20)]
+        session.read()
+        assert acknowledgements == [(0, 0), (1, 20)]
+    finally:
+        session.close()
 
 
 @pytest.mark.parametrize('before_baseline', [True, False])

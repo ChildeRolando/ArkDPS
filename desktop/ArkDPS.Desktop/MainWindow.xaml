@@ -163,7 +163,15 @@
             <StackPanel Margin="9,0,0,0" VerticalAlignment="Center"><TextBlock Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Eid}" Foreground="{DynamicResource Muted}" FontFamily="Cascadia Mono, Consolas" FontSize="10" TextTrimming="CharacterEllipsis"/></StackPanel>
             <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="{Binding Status}" Foreground="{DynamicResource Muted}" FontSize="10" TextAlignment="Right"/><TextBlock Text="{Binding HpText}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="12" TextAlignment="Right" Margin="0,2,0,0"/></StackPanel>
            </DockPanel>
-           <ProgressBar Value="{Binding HpPercent}" Maximum="100" Height="4" Margin="0,7,0,5" Foreground="{DynamicResource Accent}" Background="{DynamicResource Track}" BorderThickness="0"/>
+           <ProgressBar Value="{Binding HpPercent}" Maximum="100" Height="4" Margin="0,7,0,5" Foreground="{DynamicResource Accent}" Background="{DynamicResource Track}" BorderThickness="0">
+            <ProgressBar.Style>
+             <Style TargetType="ProgressBar">
+              <Style.Triggers>
+               <DataTrigger Binding="{Binding HpPercentKnown}" Value="False"><Setter Property="Visibility" Value="Hidden"/></DataTrigger>
+              </Style.Triggers>
+             </Style>
+            </ProgressBar.Style>
+           </ProgressBar>
            <TextBlock Text="{Binding PhaseHpText}" Foreground="{DynamicResource Ink}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4">
             <TextBlock.Style>
              <Style TargetType="TextBlock">

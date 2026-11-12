@@ -6,6 +6,7 @@ unavailable so the UI cannot render invented enemies or HP.
 """
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 import math
 import time
 
@@ -37,6 +38,15 @@ def _text(value):
     return value if isinstance(value, str) else ''
 
 
+def _snapshot_attribute(enemy, native_key, field):
+    attributes = getattr(enemy, 'attributes', None)
+    if _gs is not None and attributes is not None:
+        index = getattr(_gs.AttributeType, native_key)
+        if index not in attributes:
+            return None
+    return _finite(getattr(enemy, field, None), None)
+
+
 def enemy_rows(snapshot, *, include_pending=False):
     """Serializable enemy rows; pending plan entries are opt-in."""
     allowed = ENTERED_LIFECYCLES + (('pending',) if include_pending else ())
@@ -61,11 +71,11 @@ def enemy_rows(snapshot, *, include_pending=False):
             'max_hp': max_hp,
             'hp_known': max_hp > 0,
             'hp_ratio': min(1.0, max(0.0, hp / max_hp)) if max_hp > 0 else None,
-            'atk': _finite(getattr(enemy, 'atk', 0.0)),
-            'def': _finite(getattr(enemy, 'def_', 0.0)),
-            'res': _finite(getattr(enemy, 'res', 0.0)),
-            'move_speed': _finite(getattr(enemy, 'mspd', 0.0)),
-            'attack_speed': _finite(getattr(enemy, 'aspd', 0.0)),
+            'atk': _snapshot_attribute(enemy, 'ATK', 'atk'),
+            'def': _snapshot_attribute(enemy, 'DEF', 'def_'),
+            'res': _snapshot_attribute(enemy, 'MAGIC_RESISTANCE', 'res'),
+            'move_speed': _snapshot_attribute(enemy, 'MOVE_SPEED', 'mspd'),
+            'attack_speed': _snapshot_attribute(enemy, 'ATTACK_SPEED', 'aspd'),
             'alive': bool(getattr(enemy, 'alive', False)),
             'lifecycle': lifecycle,
             'entry_inferred': lifecycle == 'departed' and getattr(enemy, 'addr', None) == 0,
@@ -103,37 +113,98 @@ def enemy_rows(snapshot, *, include_pending=False):
     return rows
 
 
-def enemy_totals(rows, planned=None):
-    """Observed entered enemies plus the stage's full planned HP pool.
+def _max_hp(row):
+    return _finite(row.get('max_hp'), None) if row['hp_known'] else None
 
-    A short-lived enemy can spawn and die between polls, so observed rows alone
-    can understate the HP that our damage actually consumed. The LevelData
-    plan is the authoritative denominator when every planned record has HP.
-    """
+
+def _phase_key(row):
+    uid = row.get('instance_uid')
+    return (uid, row['eid']) if uid is not None else None
+
+
+def _hp_pool(row, planned_hp=None):
+    base = _max_hp(row)
+    phase_hp = _finite(row.get('phase_total_hp'), None)
+    if phase_hp is None:
+        return base
+    if row.get('phase_from_birth'):
+        return phase_hp
+    # Without the first stage, the observed max HP might already be from a
+    # counted stage. Either observation gives a lower bound, but summing them
+    # could count the same stage twice.
+    return max(hp for hp in (base, planned_hp, phase_hp) if hp is not None)
+
+
+def enemy_totals(rows, planned=None):
+    """Estimate the stage HP pool and independently total observed current HP."""
     entered = [row for row in rows if row['lifecycle'] in ENTERED_LIFECYCLES]
-    known = [row for row in entered if row['hp_known']]
     unknown_lifecycle_count = sum(row['alive'] is None for row in entered)
-    observed_total = sum(row['max_hp'] for row in known)
+    observed_pool = [_hp_pool(row) for row in entered]
+    observed_total = sum(hp for hp in observed_pool if hp is not None)
+    remaining = [_finite(row.get('hp'), None) for row in entered if row['alive']]
+    remaining_complete = (bool(entered) and not unknown_lifecycle_count
+                          and all(hp is not None for hp in remaining))
     planned = list(planned or ())
-    planned_known = [row for row in planned if row['hp_known']]
+    planned_hp = [_max_hp(row) for row in planned]
+    planned_known = [hp for hp in planned_hp if hp is not None]
     plan_complete = bool(planned) and len(planned_known) == len(planned)
+    phases = [row for row in entered if _finite(row.get('phase_total_hp'), None) is not None]
+    phase_by_uid = {key: row for row in phases if (key := _phase_key(row)) is not None}
+    planned_pool = []
+    anonymous_plan = defaultdict(list)
+    matched = 0
+    for row, hp in zip(planned, planned_hp):
+        key = _phase_key(row)
+        phase = phase_by_uid.pop(key, None)
+        if phase is not None:
+            # Replace this instance's single-stage value. The phase total
+            # already contains its initial HP.
+            hp = _hp_pool(phase, planned_hp=hp)
+            matched += 1
+        elif key is None:
+            anonymous_plan[row['eid']].append(hp or 0)
+        planned_pool.append(hp)
+    adjusted_planned_total = sum(hp for hp in planned_pool if hp is not None)
+    if planned:
+        unmatched_pool = defaultdict(list)
+        for row in phase_by_uid.values():
+            unmatched_pool[row['eid']].append(_hp_pool(row))
+        for eid, observations in unmatched_pool.items():
+            candidates = sorted(anonymous_plan[eid], reverse=True)
+            # Give each observation the largest remaining potential overlap.
+            # This retains a conservative contribution from observed stages
+            # without assuming which unbound plan slot supplied the first one.
+            for index, hp in enumerate(sorted(observations, reverse=True)):
+                overlap = candidates[index] if index < len(candidates) else 0
+                adjusted_planned_total += max(0, hp - overlap)
+    phases_complete = all(row.get('phase_from_birth') and row.get('phase_coverage_complete')
+                          for row in phases)
+    if planned:
+        missing_enemies = Counter(row['eid'] for row in entered) - Counter(row['eid'] for row in planned)
+        total_complete = (phases_complete and matched == len(phases)
+                          and not missing_enemies
+                          and all(hp is not None for hp in planned_pool)
+                          and (observed_total <= adjusted_planned_total
+                               or math.isclose(observed_total, adjusted_planned_total)))
+    else:
+        total_complete = bool(entered) and phases_complete and all(hp is not None for hp in observed_pool)
     return {
         'entered_count': len(entered),
         'alive_count': sum(1 for row in entered if row['alive']),
         'unknown_lifecycle_count': unknown_lifecycle_count,
         'planned_count': len(planned),
         'planned_known_count': len(planned_known),
-        'planned_total_hp': sum(row['max_hp'] for row in planned_known),
+        'planned_total_hp': sum(planned_known),
         'planned_complete': plan_complete,
         'planned_unknown': [{'eid': row.get('eid'), 'name': row.get('name'),
                              'spawn_order': row.get('spawn_order')}
-                            for row in planned if not row['hp_known']],
-        'entered_total_hp': (sum(row['max_hp'] for row in planned_known)
-                             if plan_complete else observed_total),
+                            for row, hp in zip(planned, planned_hp) if hp is None],
+        'entered_total_hp': max(adjusted_planned_total, observed_total),
         'observed_total_hp': observed_total,
-        'remaining_hp': sum(max(0.0, row['hp']) for row in known if row['alive']),
-        'hp_complete': not unknown_lifecycle_count and (
-            plan_complete if planned else (len(known) == len(entered) and bool(entered))),
+        'remaining_hp': sum(max(0.0, hp) for hp in remaining if hp is not None),
+        'total_hp_complete': total_complete,
+        'remaining_hp_complete': remaining_complete,
+        'hp_complete': total_complete and remaining_complete,
     }
 
 
@@ -170,6 +241,8 @@ class EnemyTimeline:
             'entered_count': totals['entered_count'],
             'alive_count': totals['alive_count'],
             'unknown_lifecycle_count': totals['unknown_lifecycle_count'],
+            'total_hp_complete': totals['total_hp_complete'],
+            'remaining_hp_complete': totals['remaining_hp_complete'],
             'hp_complete': totals['hp_complete'],
         }
         self.points.append(point)
@@ -308,6 +381,19 @@ class EnemyTelemetry:
         for event in observation['events']:
             self._entry_events.setdefault(event['instance_uid'], event)
 
+    @staticmethod
+    def _attach_entry_attributes(row, entry):
+        attributes = entry.get('enemy_entry_attributes')
+        if not attributes:
+            return row
+        fallback = {name: value for name, value in attributes.items() if row.get(name) is None}
+        if not row['hp_known'] and 'max_hp' in attributes:
+            max_hp = attributes['max_hp']
+            hp = row['hp']
+            fallback.update(max_hp=max_hp, hp_known=True,
+                            hp_ratio=min(1.0, max(0.0, hp / max_hp)) if hp is not None else None)
+        return dict(row, attributes_from_entry=bool(fallback), **fallback)
+
     def _merged_rows(self, rows):
         if self._entry_events_complete is None:
             return list(rows)
@@ -320,8 +406,9 @@ class EnemyTelemetry:
                 continue
             uid = row['instance_uid']
             entry = self._entry_events.get(uid)
-            if entry is not None:
-                row = dict(row, spawn_frame=entry['frame'], spawn_time=entry['game_time'])
+            if entry is not None and row['eid'] == entry['eid']:
+                row = self._attach_entry_attributes(
+                    dict(row, spawn_frame=entry['frame'], spawn_time=entry['game_time']), entry)
             if uid in by_uid:
                 index = by_uid[uid]
                 if row['lifecycle'] == 'active':
@@ -336,22 +423,19 @@ class EnemyTelemetry:
                 continue
             eid = entry['eid']
             identity = catalog.get(eid) or {}
-            merged.append(dict(
+            row = dict(
                 instance_uid=uid, roster_id=None, spawn_order=None, eid=eid,
                 name=identity.get('name') or eid, code=identity.get('code') or '',
                 lifecycle='entered', alive=None, state_id=None, state='未知',
                 spawn_frame=entry['frame'], spawn_time=entry['game_time'],
                 end_frame=None, end_reason=None, hp=None, max_hp=None,
                 hp_known=False, hp_ratio=None, hp_inferred=False,
-            ))
+            )
+            merged.append(self._attach_entry_attributes(row, entry))
         return merged
 
-    def _state(self, status, *, rows=None, error=None):
-        self._status = status
-        self.error = error
-        if rows is not None:
-            self._rows = list(rows)
-        current = self._merged_rows(self._rows)
+    def _rows_with_phases(self, rows):
+        current = self._merged_rows(rows)
         if self._phase_data:
             phases = self._phase_data['instances']
             for index, row in enumerate(current):
@@ -363,6 +447,14 @@ class EnemyTelemetry:
                         phase_from_birth=phase['phase_from_birth'],
                         phase_coverage_complete=self._phase_data['complete'],
                     )
+        return current
+
+    def _state(self, status, *, rows=None, error=None):
+        self._status = status
+        self.error = error
+        if rows is not None:
+            self._rows = list(rows)
+        current = self._rows_with_phases(self._rows)
         state = {
             'status': status,
             'error': error,
@@ -434,5 +526,5 @@ class EnemyTelemetry:
         adjusted = (max(0.0, float(our_damage) - self._damage_baseline)
                     if self._damage_baseline is not None
                     and isinstance(our_damage, (int, float)) else None)
-        self.timeline.add(game_time, self._merged_rows(rows), adjusted, self._planned_rows)
+        self.timeline.add(game_time, self._rows_with_phases(rows), adjusted, self._planned_rows)
         return self._state('ready', rows=rows)

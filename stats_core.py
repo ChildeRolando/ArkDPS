@@ -9,6 +9,8 @@ distinct client statistic entries, not transient entities.
 from collections import deque
 from math import isclose, isfinite
 
+from source_classification import classify_unmapped_source
+
 # Native DamageType values used by the verified 2.7.91 event probe.
 # 0=NONE, 4=HEAL and unknown values cannot be attributed to a damage segment.
 NATIVE_DAMAGE_TYPES = {1: 'physical', 2: 'arts', 3: 'true', 5: 'elemental'}
@@ -126,7 +128,8 @@ class Statistics:
                 and uid.isdecimal() and len(uid) <= 10
                 and int(uid) <= 0xffffffff and str(int(uid)) == uid)
 
-    def record_enemy_entry(self, frame, game_time, source, amount, eid, instance_uid):
+    def record_enemy_entry(self, frame, game_time, source, amount, eid, instance_uid,
+                           attributes=None):
         self._time(game_time)
         if (source is not None or amount != 0 or isinstance(amount, bool)
                 or not self._enemy_identity(eid, instance_uid)
@@ -135,8 +138,18 @@ class Statistics:
         if instance_uid in self.enemy_entries:
             # The event stream already handles retries of the same sequence.
             raise ValueError('enemy entry was emitted more than once')
-        self.enemy_entries[instance_uid] = dict(
+        entry = dict(
             instance_uid=instance_uid, eid=eid, frame=frame, game_time=game_time)
+        if isinstance(attributes, dict):
+            evidence = {}
+            for name in ('max_hp', 'atk', 'def', 'res', 'move_speed', 'attack_speed'):
+                value = attributes.get(name)
+                if (type(value) in (int, float) and -1e10 < value < 1e10
+                        and (name != 'max_hp' or value > 0)):
+                    evidence[name] = value
+            if evidence:
+                entry['enemy_entry_attributes'] = evidence
+        self.enemy_entries[instance_uid] = entry
 
     def mark_enemy_phase_unknown(self):
         self.enemy_phase_incomplete = True
@@ -470,9 +483,10 @@ class Statistics:
             # not tear down the authoritative damage/engagement stream.
             return
         if kind in ('skill_start', 'skill_end') and source not in self.owners:
-            # Skill windows explain only the split; they are never authoritative
-            # damage evidence.
-            self.skill_unknown = True
+            # A verified stage device has no squad skill window. A source
+            # without verified ownership still makes the split uncertain.
+            if classify_unmapped_source(source) is None:
+                self.skill_unknown = True
             return
         if kind != 'elemental_burst' and source not in self.owners:
             raise ValueError('invalid event source')
@@ -514,16 +528,28 @@ class Statistics:
                 self.burst_unknown = True
                 self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
                 return
-            entry = self.burst.setdefault(attributed, {'actual': 0.0, 'overkill': 0.0,
-                                                        'settlement': 0.0, 'count': 0})
+            entry = self.burst.setdefault(attributed, {
+                'actual': 0.0, 'overkill': 0.0, 'settlement': 0.0, 'count': 0,
+                'added_settlement': 0.0, 'added_overkill': 0.0,
+                'added_skill_overkill': 0.0, 'added_non_skill_overkill': 0.0,
+            })
+            burst_overkill = max(0.0, amount - actual)
             entry['actual'] += actual
-            entry['overkill'] += max(0.0, amount - actual)
+            entry['overkill'] += burst_overkill
             entry['settlement'] += amount
             entry['count'] += 1
+            # The client already includes explicitly sourced burst settlement
+            # in that source's native counter. Only attributed sourceless
+            # settlement needs adding to native totals and target-side evidence.
+            if source is None:
+                entry['added_settlement'] += amount
+                entry['added_overkill'] += burst_overkill
+                window = ('added_skill_overkill' if attributed in self.skill_active
+                          else 'added_non_skill_overkill')
+                entry[window] += burst_overkill
             bucket = (self.skill_observed if attributed in self.skill_active
                       else self.non_skill_observed)
             bucket[attributed] = bucket.get(attributed, 0.0) + amount
-            burst_overkill = max(0.0, amount - actual)
             if burst_overkill > 0:
                 overkill_bucket = (self.skill_overkill
                                    if attributed in self.skill_active
@@ -713,6 +739,7 @@ class Statistics:
             row['burst_damage'] = (burst['actual'] if burst and burst_complete else None)
             row['burst_overkill'] = (burst['overkill'] if burst and burst_complete else None)
             row['burst_settlement'] = (burst['settlement'] if burst and burst_complete else None)
+            row['burst_added_settlement'] = (burst['added_settlement'] if burst and burst_complete else None)
             row['burst_count'] = (burst['count'] if burst and burst_complete else 0)
             row['burst_complete'] = burst_complete
             row['burst_unknown_reason'] = self.burst_unknown_reason if not burst_complete else None
@@ -751,26 +778,31 @@ class Statistics:
                     row['engagement_' + kind] = None
                     row['active_' + kind] = None
                     row['observed_' + kind] = None
-            if burst_complete and burst:
+            covered_burst = burst if burst_complete else None
+            if covered_burst:
                 if row['damage'] is not None:
-                    row['damage'] += burst['settlement']
+                    row['damage'] += covered_burst['added_settlement']
                 if row['overkill_damage'] is not None:
-                    row['overkill_damage'] += burst['overkill']
+                    row['overkill_damage'] += covered_burst['overkill']
                     types = row['overkill_damage_by_type']
                     if types is not None:
-                        types['elemental'] = types.get('elemental', 0.0) + burst['overkill']
+                        types['elemental'] = types.get('elemental', 0.0) + covered_burst['overkill']
             if owner in self.hp_seen:
                 hp_known = bool(self.event_coverage) and owner not in self.hp_overkill_incomplete
                 if hp_known:
                     row['overkill_damage'] = self.hp_overkill.get(owner, 0.0)
+                    added_overkill = covered_burst['added_overkill'] if covered_burst else 0.0
+                    row['overkill_damage'] += added_overkill
                     row['overkill_coverage_complete'] = True
                     row['overkill_unknown_reason'] = None
                     if owner in self.hp_overkill_type_incomplete:
                         row['overkill_damage_by_type'] = None
                         row['overkill_type_complete'] = False
                     else:
-                        row['overkill_damage_by_type'] = dict(
-                            self.hp_overkill_by_type.get(owner, {}))
+                        types = dict(self.hp_overkill_by_type.get(owner, {}))
+                        if added_overkill:
+                            types['elemental'] = types.get('elemental', 0.0) + added_overkill
+                        row['overkill_damage_by_type'] = types
                         row['overkill_type_complete'] = True
                 else:
                     row['overkill_damage'] = None
@@ -802,6 +834,9 @@ class Statistics:
             if hp_overkill_known:
                 split_skill_overkill = self.hp_skill_overkill.get(owner, 0.0)
                 split_non_skill_overkill = self.hp_non_skill_overkill.get(owner, 0.0)
+                if covered_burst:
+                    split_skill_overkill += covered_burst['added_skill_overkill']
+                    split_non_skill_overkill += covered_burst['added_non_skill_overkill']
                 split_overkill_known = True
             elif apply_overkill_known:
                 split_skill_overkill = self.skill_overkill.get(owner, 0.0)

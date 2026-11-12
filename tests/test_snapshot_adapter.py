@@ -674,3 +674,26 @@ def test_skill_window_from_unmapped_source_marks_split_unknown_without_closing_e
     assert result['event_coverage_complete'] is True
     assert result['skill_damage'] is None
     assert result['skill_split_complete'] is False
+
+
+def test_stage_altar_skill_events_leave_squad_skill_split_intact():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a')], 0, 1), roster([CHAR_A], frame=1))
+    adapter.start_events(session='battle-1', frame=1, sequence=0)
+    events = [
+        ('trap_011_ore', 'skill_start', 1),
+        ('char_a', 'damage', 8),
+        ('char_a', 'skill_start', 1),
+        ('trap_011_ore', 'skill_end', 1),
+        ('char_a', 'damage', 12),
+        ('char_a', 'skill_end', 1),
+    ]
+    for sequence, (source, kind, amount) in enumerate(events, 1):
+        adapter.accept_event(session='battle-1', sequence=sequence, frame=1,
+                             game_time=0, source=source, kind=kind, amount=amount)
+    result = adapter.result()['rows']['char_a']
+    assert result['skill_damage'] == 12
+    assert result['non_skill_damage'] == 8
+    assert result['skill_window_count'] == 1
+    assert result['skill_split_complete'] is True
+    assert result['event_coverage_complete'] is True

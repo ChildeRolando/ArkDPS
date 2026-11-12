@@ -85,14 +85,15 @@ class EventStream:
                killed=None, target_type=None, damage_type=None,
                cancel_reason=None, shield_absorbed=None, target_instance=None,
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-               phase_total_hp=None, phase_count=None, phase_from_birth=None):
+               phase_total_hp=None, phase_count=None, phase_from_birth=None,
+               enemy_entry_attributes=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
                    target, real_delta, hp_before, hp_after, killed,
                    target_type, damage_type, cancel_reason, shield_absorbed,
                    target_instance, skill_key, skill_id, skill_name, skill_reason,
-                   phase_total_hp, phase_count, phase_from_birth)
+                   phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -109,7 +110,8 @@ class EventStream:
         try:
             if kind == 'enemy_enter':
                 self.statistics.record_enemy_entry(
-                    frame, game_time, source, amount, target, target_instance)
+                    frame, game_time, source, amount, target, target_instance,
+                    enemy_entry_attributes)
             elif kind == 'enemy_reborn':
                 self.statistics.record_enemy_reborn(
                     frame, game_time, source, amount, target, target_instance,

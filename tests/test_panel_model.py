@@ -598,3 +598,10 @@ def test_skill_coverage_and_effective_skill_split_reach_entry_detail():
     assert detail['skill_coverage'] == .5
     assert detail['skill_split_effective_complete'] is True
     assert detail['effective_damage_by_type'] == {'physical': 600}
+
+
+def test_skill_window_longer_than_observed_presence_has_unknown_coverage():
+    row = PanelSourceRow(owner_id='A', name='A',
+                         skill_active_seconds=260.2, presence_seconds=16.97,
+                         presence_complete=True, skill_coverage_complete=True)
+    assert row.skill_coverage() is None

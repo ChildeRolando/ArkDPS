@@ -530,6 +530,27 @@ def test_unattributed_elemental_burst_is_unknown_not_guessed():
     assert row['damage'] == pytest.approx(1000)
 
 
+def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_once():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 1500, 'healing': 0}})
+    s.event('direct-hp', .5, 'a', 'hp_damage', 500, target='enemy_1',
+            hp_before=300, shield_absorbed=0, damage_type=5)
+    s.event('direct-burst', .5, 'a', 'elemental_burst', 500, target='enemy_1',
+            hp_before=300, hp_after=0, real_delta=-300, target_instance='first')
+    s.event('bar', .6, 'a', 'elemental_bar', 100, target_instance='second')
+    s.event('sourceless-burst', .7, None, 'elemental_burst', 300, target='enemy_1',
+            hp_before=100, hp_after=0, real_delta=-100, target_instance='second')
+    row = s.result()['rows']['a']
+    assert row['burst_settlement'] == 800
+    assert row['burst_added_settlement'] == 300
+    assert row['damage'] == 1800
+    assert row['overkill_damage'] == 400
+    assert row['overkill_damage_by_type'] == {'elemental': 400}
+    assert row['effective_damage'] == 1400
+
+
 def test_skill_windows_split_observed_damage_and_close_at_finish():
     s = Statistics('skill-split', 0, event_coverage=True)
     s.register_source('a', 'A')

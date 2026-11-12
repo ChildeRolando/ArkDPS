@@ -347,9 +347,10 @@ class PanelSourceRow:
         if (not self.skill_coverage_complete or not self.presence_complete
                 or not _finite(self.skill_active_seconds)
                 or not _finite(self.presence_seconds)
-                or self.presence_seconds <= 0):
+                or self.presence_seconds <= 0
+                or not 0 <= self.skill_active_seconds <= self.presence_seconds):
             return None
-        return min(1.0, max(0.0, self.skill_active_seconds) / self.presence_seconds)
+        return self.skill_active_seconds / self.presence_seconds
 
     def full_cycle(self, category: Category, *, effective: bool = False) -> float | None:
         """总量 / 在场时间, only when numerator and presence are certified."""

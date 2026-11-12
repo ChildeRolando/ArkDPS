@@ -1,11 +1,12 @@
 """Join a quiescent event observer to frame-guarded native snapshots.
 
-The observer must serialize RPC marks with callback entry/exit and must retain
-all numbered records until drain. This module does not start or install Frida.
+The observer must serialize marks with callback entry/exit and retain numbered
+records until the host has committed the corresponding watermark.
 """
 from collections import deque
 
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
+from event_observer import ObserverReadRetry
 from roster import RosterUnavailable
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
@@ -13,6 +14,20 @@ from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 class CaptureRetry(RuntimeError):
     """No stable frame was obtained; queued events remain available."""
+
+
+def read_event_batch(observer, sequence):
+    try:
+        if hasattr(observer, 'read_through'):
+            return observer.read_through(sequence)
+        return observer.drain()
+    except ObserverReadRetry as exc:
+        raise CaptureRetry(str(exc)) from exc
+
+
+def acknowledge_event_batch(observer, sequence):
+    if hasattr(observer, 'commit_events'):
+        observer.commit_events(sequence)
 
 
 class LiveEventCapture:
@@ -36,6 +51,8 @@ class LiveEventCapture:
     def _mark(self):
         try:
             mark = self.observer.mark()
+        except ObserverReadRetry as exc:
+            raise CaptureRetry(str(exc)) from exc
         except Exception as exc:
             self.close()
             raise StreamGap(f'observer unavailable: {exc}') from exc
@@ -112,13 +129,19 @@ class LiveEventCapture:
             self.close()
             raise
         try:
-            self.adapter.update(sample, roster)
             try:
-                drained = self.observer.drain()
+                drained = read_event_batch(self.observer, sequence)
+            except CaptureRetry:
+                raise
             except Exception as exc:
-                raise StreamGap(f'observer drain unavailable: {exc}') from exc
+                raise StreamGap(f'observer event batch unavailable: {exc}') from exc
+            self.adapter.update(sample, roster)
             self.audit('drain', drained)
-            return self.ingest(sample, roster, sequence, drained)
+            result = self.ingest(sample, roster, sequence, drained)
+            acknowledge_event_batch(self.observer, sequence)
+            return result
+        except CaptureRetry:
+            raise
         except MappingUnavailable as exc:
             if self.baseline_sequence is None and self.adapter.statistics is None:
                 raise CaptureRetry(str(exc)) from exc

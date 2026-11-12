@@ -533,7 +533,7 @@ class BattleStatisticsAdapter:
             enriched['damage_by_type'] = (
                 {kind: sum(values[kind] for values in known_types)
                  for kind in DAMAGE_TYPES} if known_types else {})
-            burst = enriched.get('burst_settlement')
+            burst = enriched.get('burst_added_settlement')
             if burst is not None:
                 types = dict(enriched['damage_by_type'])
                 types['elemental'] = types.get('elemental', 0.0) + burst

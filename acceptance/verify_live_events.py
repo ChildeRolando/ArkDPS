@@ -80,8 +80,18 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 raise ValueError('invalid enemy entry')
             if uid in enemy_entries:
                 raise ValueError('enemy entry was emitted more than once: ' + uid)
-            enemy_entries[uid] = dict(
+            entry = dict(
                 instance_uid=uid, eid=eid, frame=event['frame'], game_time=event['game_time'])
+            if 'enemy_entry_attributes' in event:
+                attributes = event['enemy_entry_attributes']
+                if (not isinstance(attributes, dict) or not attributes
+                        or any(name not in ('max_hp', 'atk', 'def', 'res', 'move_speed', 'attack_speed')
+                               or type(value) not in (int, float) or not -1e10 < value < 1e10
+                               or name == 'max_hp' and value <= 0
+                               for name, value in attributes.items())):
+                    raise ValueError('invalid enemy entry attributes')
+                entry['enemy_entry_attributes'] = attributes
+            enemy_entries[uid] = entry
             continue
         if kind == 'enemy_reborn':
             uid, eid = event.get('target_instance'), event.get('target')

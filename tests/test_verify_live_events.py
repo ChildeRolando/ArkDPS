@@ -98,12 +98,13 @@ def test_enemy_entries_reconcile_without_becoming_operator_damage(tmp_path):
     last['event_watermark']['sequence'] = 3
     enemy = {'sequence': 3, 'frame': 2, 'game_time': 1, 'source': None,
              'kind': 'enemy_enter', 'amount': 0, 'target': 'enemy_a',
-             'target_instance': '12'}
+             'target_instance': '12', 'enemy_entry_attributes': {'max_hp': 300, 'def': 0}}
     records[1]['data']['events'].extend([enemy, dict(enemy)])
     last['statistics']['enemy_entry'] = {
         'complete': True,
         'start_frame': 1,
-        'events': [{'instance_uid': '12', 'eid': 'enemy_a', 'frame': 2, 'game_time': 1}],
+        'events': [{'instance_uid': '12', 'eid': 'enemy_a', 'frame': 2, 'game_time': 1,
+                    'enemy_entry_attributes': {'max_hp': 300, 'def': 0}}],
     }
     path.write_text('\n'.join(json.dumps(record) for record in records))
     result = module.verify(tmp_path)

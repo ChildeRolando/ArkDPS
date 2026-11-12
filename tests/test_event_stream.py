@@ -143,6 +143,25 @@ def test_skill_window_events_cross_the_ordered_receiver():
     assert row['event_coverage_complete'] is True
 
 
+def test_character_finish_ends_an_unfinished_skill_window_at_the_event_frame():
+    stats, receiver = stream()
+    stats.advance(35)
+    receiver.accept(session='battle', sequence=11, frame=900, game_time=30,
+                    source='a', kind='skill_start', amount=1, skill_key='skill')
+    receiver.accept(session='battle', sequence=12, frame=930, game_time=31,
+                    source='a', kind='damage', amount=20)
+    receiver.accept(session='battle', sequence=13, frame=960, game_time=32,
+                    source='a', kind='skill_end', amount=1,
+                    target_instance='BattleController.OnCharacterFinished')
+    receiver.accept(session='battle', sequence=14, frame=990, game_time=33,
+                    source='a', kind='damage', amount=5)
+    row = stats.result()['rows']['host']
+    assert row['skill_active_seconds'] == 2
+    assert row['skill_damage'] == 20
+    assert row['non_skill_damage'] == 5
+    assert row['skill_split_complete'] is True
+
+
 @pytest.mark.parametrize('repeat', [{}, {'target': 'enemy_b'}, {'frame': 901}])
 def test_duplicate_enemy_entry_does_not_break_the_damage_stream(repeat):
     stats, receiver = stream()

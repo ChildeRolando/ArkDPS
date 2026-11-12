@@ -32,6 +32,7 @@ public sealed class EnemyItem
     public string AttrsText { get; init; } = "";
     public string Tooltip { get; init; } = "";
     public double HpPercent { get; init; }
+    public bool HpPercentKnown { get; init; }
     public double Opacity { get; init; } = 1;
     public ImageSource? Portrait { get; init; }
 
@@ -56,8 +57,11 @@ public sealed class EnemyItem
         bool departed = lifecycle == "departed";
         string status = lifecycle == "departed" ? "已离场" : alive ? "存活" : "状态未知";
         bool hpKnown = row.Bool("hp_known");
-        string hpText = hpKnown
-            ? $"{Int(row.Get("hp"))} / {Int(row.Get("max_hp"))}"
+        var currentHp = row.Get("hp");
+        double hpRatio = row.Get("hp_ratio").TryNumber(double.NaN);
+        string hpText = hpKnown ? (currentHp.ValueKind == JsonValueKind.Number
+            ? $"{Int(currentHp)} / {Int(row.Get("max_hp"))}"
+            : $"最大 HP {Int(row.Get("max_hp"))}")
             : "HP 未知";
         var phaseTotal = row.Get("phase_total_hp");
         string? phaseHp = phaseTotal.ValueKind == JsonValueKind.Number
@@ -70,9 +74,14 @@ public sealed class EnemyItem
         }
         double speed = row.Get("move_speed").TryNumber(double.NaN);
         string moveSpeed = double.IsFinite(speed) ? speed.ToString("0.##", CultureInfo.InvariantCulture) : "—";
-        string attrs = lifecycle == "entered" ? "属性未知"
-            : $"攻击 {Int(row.Get("atk"))}  ·  防御 {Int(row.Get("def"))}  ·  法抗 {Int(row.Get("res"))}" +
-              $"  ·  移速 {moveSpeed}  ·  攻速 {Int(row.Get("attack_speed"))}";
+        bool entryAttributes = lifecycle == "entered" || row.Bool("attributes_from_entry");
+        bool anyAttribute = new[] { "atk", "def", "res", "move_speed", "attack_speed" }
+            .Any(key => row.Get(key).ValueKind == JsonValueKind.Number);
+        string attrs = anyAttribute
+            ? (entryAttributes ? "入场属性 · " : "") +
+              $"攻击 {Int(row.Get("atk"))}  ·  防御 {Int(row.Get("def"))}  ·  法抗 {Int(row.Get("res"))}" +
+              $"  ·  移速 {moveSpeed}  ·  攻速 {Int(row.Get("attack_speed"))}"
+            : "属性未知";
         string detail = string.Join("\n", new[]
         {
             name,
@@ -88,7 +97,8 @@ public sealed class EnemyItem
             Badge = badge, Name = name, Code = code, Eid = eid,
             State = row.Text("state"), Status = status,
             HpText = hpText, PhaseHpText = phaseHp ?? "", AttrsText = attrs, Tooltip = detail,
-            HpPercent = hpKnown ? Math.Clamp(row.Get("hp_ratio").TryNumber() * 100, 0, 100) : 0,
+            HpPercent = double.IsFinite(hpRatio) ? Math.Clamp(hpRatio * 100, 0, 100) : 0,
+            HpPercentKnown = double.IsFinite(hpRatio),
             Opacity = departed ? .56 : 1,
             Portrait = EnemyPortraits.Get(eid, departed),
         };
@@ -287,13 +297,17 @@ public partial class MainWindow
         var rows = enemy.Get("rows").Items().Select(EnemyItem.From).ToArray();
         EnemyList.ItemsSource = rows;
         var totals = enemy.Get("totals");
-        bool complete = totals.Get("hp_complete").ValueKind == JsonValueKind.True;
+        bool legacyHpComplete = totals.Bool("hp_complete");
+        bool totalComplete = totals.Get("total_hp_complete").ValueKind == JsonValueKind.Undefined
+            ? legacyHpComplete : totals.Bool("total_hp_complete");
+        bool remainingComplete = totals.Get("remaining_hp_complete").ValueKind == JsonValueKind.Undefined
+            ? legacyHpComplete : totals.Bool("remaining_hp_complete");
         string entered = Json.UiInt(totals, "entered_count");
         string totalHp = Json.UiInt(totals, "entered_total_hp");
         string remaining = Json.UiInt(totals, "remaining_hp");
         EnemyEntered.Text = entered;
-        EnemyTotalHp.Text = complete ? totalHp : "≥ " + totalHp;
-        EnemyRemaining.Text = complete ? remaining : "≥ " + remaining;
+        EnemyTotalHp.Text = totalComplete ? totalHp : "≥ " + totalHp;
+        EnemyRemaining.Text = remainingComplete ? remaining : "≥ " + remaining;
         var last = enemy.Get("last_point");
         EnemyOurDamage.Text = last.ValueKind == JsonValueKind.Object
             && last.Get("our_damage_known").ValueKind == JsonValueKind.True
@@ -316,8 +330,8 @@ public partial class MainWindow
             _ => "已入场人数来自敌人快照。",
         };
         string hint = error.Length > 0 ? error
-            : entryHint + (complete ? " 总血量参考关卡计划与同类型实例的 MaxHP。"
-                : " 血量数据不完整，≥ 表示下限。");
+            : entryHint + " 总血量含已记录的重生阶段。"
+                + (totalComplete && remainingComplete ? "" : " ≥ 表示已知下限。");
         double baseline = enemy.Get("damage_baseline").TryNumber(-1);
         if (baseline > 0)
             hint += " 我方有效伤害从敌情观测起点累计（起点 " +
@@ -331,8 +345,8 @@ public partial class MainWindow
             "stale" => "本帧敌人数据不完整，保留上一帧。",
             _ => "场上暂无已入场敌人。",
         };
-        EnemyChartLegendTotal.Text = "敌方总血量  " + (complete ? totalHp : "≥ " + totalHp);
+        EnemyChartLegendTotal.Text = "敌方总血量  " + (totalComplete ? totalHp : "≥ " + totalHp);
         EnemyChartLegendDamage.Text = "我方有效伤害  " + EnemyOurDamage.Text;
-        EnemyChartLegendRemaining.Text = "敌方剩余  " + (complete ? remaining : "≥ " + remaining);
+        EnemyChartLegendRemaining.Text = "敌方剩余  " + (remainingComplete ? remaining : "≥ " + remaining);
     }
 }
