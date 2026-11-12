@@ -11,15 +11,16 @@ namespace ArkDPS.Desktop;
 
 internal static class Screenshot
 {
-    public static byte[] Capture(FrameworkElement element)
+    public static byte[] Capture(FrameworkElement element, double dpi=96)
     {
         element.UpdateLayout();
-        int width=Math.Max(1,(int)Math.Ceiling(element.ActualWidth)),height=Math.Max(1,(int)Math.Ceiling(element.ActualHeight));
-        var target=new RenderTargetBitmap(width,height,96,96,PixelFormats.Pbgra32);target.Render(element);
+        double scale=dpi/96;
+        int width=Math.Max(1,(int)Math.Ceiling(element.ActualWidth*scale)),height=Math.Max(1,(int)Math.Ceiling(element.ActualHeight*scale));
+        var target=new RenderTargetBitmap(width,height,dpi,dpi,PixelFormats.Pbgra32);target.Render(element);
         var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(target));
         using var stream=new MemoryStream();encoder.Save(stream);return stream.ToArray();
     }
-    public static void Window(Window window,string path)=>File.WriteAllBytes(path,Capture((FrameworkElement)window.Content));
+    public static void Window(Window window,string path,double dpi=96)=>File.WriteAllBytes(path,Capture((FrameworkElement)window.Content,dpi));
     private static string OverkillText(JsonElement entry)
     {
         var detail=entry.Get("detail");var value=detail.Get("overkill_damage");

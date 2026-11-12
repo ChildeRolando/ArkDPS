@@ -56,6 +56,144 @@ def test_snapshot_team_totals_keep_unknown_unknown():
     assert team_totals({})['damage'] is None
 
 
+def analysis_sample(game_time=22.3, rate=100., *, battle_id='battle-a'):
+    data = sample()
+    data.update(battle_id=battle_id, session=battle_id, game_time=game_time,
+                frame=int(game_time * 30))
+    data['statistics']['game_time'] = game_time
+    rows = data['statistics']['rows']
+    rows['a']['recent_damage'] = rate
+    for row in rows.values():
+        row['recent_damage_window'] = (max(0., game_time - 5), game_time)
+    return data
+
+
+def test_live_analysis_preserves_known_zero_and_excludes_non_team_output(tmp_path):
+    state = DesktopState(tmp_path)
+    assert state.snapshot()['live_analysis'] is None
+    data = analysis_sample(rate=0.)
+    data['statistics']['non_team_sources'] = ['trap_321_shnbox']
+    data['statistics']['non_team_output'] = {'trap_321_shnbox': {'damage': 999}}
+    state.accept('sample', data)
+    snapshot = state.snapshot()
+    assert snapshot['status'] == 'degraded'
+    assert snapshot['live_analysis'] == {
+        'battle_id': 'battle-a', 'game_time': 22.3, 'segment': 0,
+        'team_recent_dps': 0., 'team_average_dps': pytest.approx(1730. / 22.3),
+        'observed_peak_dps': 0., 'team_total_damage': 1730.,
+        'operators': [{'owner_id': 'a', 'name': '赫默', 'recent_dps': 0.},
+                      {'owner_id': 'b', 'name': '夜刀', 'recent_dps': 0.}],
+    }
+
+
+@pytest.mark.parametrize('coverage_issue', ['different_window', 'stale_window', 'uncertified',
+                                             'unattributed'])
+def test_live_analysis_requires_joint_coverage_for_team_dps(tmp_path, coverage_issue):
+    state = DesktopState(tmp_path)
+    data = analysis_sample()
+    stats = data['statistics']
+    other = stats['rows']['b']
+    if coverage_issue == 'different_window':
+        other['recent_damage_window'] = (20., 22.3)
+    elif coverage_issue == 'stale_window':
+        other['recent_damage_window'] = (19., 22.)
+    elif coverage_issue == 'uncertified':
+        other['counter_snapshot_complete'] = False
+    else:
+        stats['unknown_sources'] = ['unknown']
+    state.accept('sample', data)
+    dto = state.snapshot()['live_analysis']
+    assert dto['team_recent_dps'] is None
+    assert dto['observed_peak_dps'] is None
+    assert dto['operators'][0]['recent_dps'] == 100.
+    assert dto['operators'][1]['recent_dps'] == (
+        None if coverage_issue in ('stale_window', 'uncertified') else 0.)
+    assert dto['team_total_damage'] == (
+        None if coverage_issue in ('unattributed', 'uncertified') else 1730.)
+
+
+def test_live_analysis_preserves_peak_across_gaps_and_resets_at_new_battle(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', analysis_sample(20., 50.))
+    first = state.snapshot()['live_analysis']
+
+    state.last_progress -= 1
+    assert state.snapshot()['status'] == 'paused'
+    assert state.snapshot()['live_analysis'] == first
+
+    event_gap = dict(analysis_sample(21., 90.), event_status='gap')
+    state.accept('sample', event_gap)
+    dto = state.snapshot()['live_analysis']
+    assert dto['segment'] == 0 and dto['observed_peak_dps'] == 90.
+
+    counter_gap = analysis_sample(22., 999.)
+    counter_gap['statistics']['rows']['b']['counter_snapshot_complete'] = False
+    state.accept('sample', counter_gap)
+    state.accept('sample', analysis_sample(23., 70.))
+    dto = state.snapshot()['live_analysis']
+    assert dto['segment'] == 1 and dto['observed_peak_dps'] == 90.
+
+    state.accept('error', 'lost')
+    assert state.snapshot()['status'] == 'disconnected'
+    assert state.snapshot()['live_analysis'] == dto
+    state.accept('sample', analysis_sample(24., 80.))
+    dto = state.snapshot()['live_analysis']
+    assert dto['segment'] == 2 and dto['observed_peak_dps'] == 90.
+
+    terminal = analysis_sample(24., 1000.)
+    terminal['statistics']['ended'] = True
+    state.accept('lifecycle', 'ended')
+    state.accept('sample', terminal)
+    dto = state.snapshot()['live_analysis']
+    assert dto['team_total_damage'] == 1730.
+    assert dto['team_recent_dps'] is None
+    assert dto['segment'] == 2 and dto['observed_peak_dps'] == 90.
+
+    state.accept('lifecycle', 'live')
+    state.accept('sample', analysis_sample(2., 15., battle_id='battle-b'))
+    dto = state.snapshot()['live_analysis']
+    assert dto['battle_id'] == 'battle-b'
+    assert dto['segment'] == 0 and dto['observed_peak_dps'] == 15.
+
+
+def test_live_analysis_cuts_series_when_stale_and_recovers(tmp_path):
+    state = DesktopState(tmp_path)
+    data = analysis_sample(20.)
+    state.accept('sample', data)
+    first = state.snapshot()['live_analysis']
+    data['captured_monotonic'] -= 3
+    assert state.snapshot()['status'] == 'stale'
+    assert state.snapshot()['live_analysis'] == first
+    state.accept('sample', analysis_sample(23., 30.))
+    resumed = state.snapshot()['live_analysis']
+    assert resumed['segment'] == 1
+    assert resumed['observed_peak_dps'] == 100.
+
+
+def test_panel_details_keep_owners_outside_rank_and_in_old_history(tmp_path):
+    legacy = record().to_dict()
+    for key in tuple(legacy['statistics']['rows']['a']):
+        if 'skill' in key:
+            del legacy['statistics']['rows']['a'][key]
+    BattleHistory(tmp_path / 'history').save(BattleRecord.from_dict(legacy))
+    state = DesktopState(tmp_path)
+    data = analysis_sample()
+    data['statistics']['rows']['b'].update(
+        overkill_damage=100., overkill_damage_by_type={'physical': 100.},
+        overkill_coverage_complete=True, overkill_type_complete=True,
+        skill_damage_effective=75., non_skill_damage_effective=325.,
+        skill_split_effective_complete=True)
+    state.accept('sample', data)
+    config = state.layout.panels[0].to_dict()
+    cmd(state, 'panel_update', config=dict(config, ranking='dps', effective_only=True))
+    snapshot = state.snapshot()
+    view = snapshot['panels'][0]
+    assert not any(entry['owner_id'] == 'b' for entry in view['entries'])
+    assert view['details_by_owner']['b']['effective_damage_by_type'] == {'physical': 400.}
+    assert view['details_by_owner']['b']['skill_damage_effective'] == 75.
+    assert snapshot['history_selected']['view']['details_by_owner']['a']['skill_damage'] is None
+
+
 def test_rate_does_not_change_ranks_bars_shares_and_shield_rejects_engagement(tmp_path):
     state = DesktopState(tmp_path)
     state.accept('sample', sample())

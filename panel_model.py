@@ -505,6 +505,7 @@ class PanelView:
     rate_action_label: str = ''
     # Present even when shares are known: names sources excluded from the team.
     share_note: str = ''
+    details_by_owner: dict[str, dict] = field(default_factory=dict)
     # team | known | unavailable; share_known retains the full-team meaning.
     share_scope: str = 'unavailable'
 
@@ -598,7 +599,28 @@ def team_status(statistics: Mapping) -> tuple[bool, str, str]:
 
 def _valid_window(window) -> bool:
     return (isinstance(window, (tuple, list)) and len(window) == 2
-            and all(_finite(t) for t in window) and 0 < window[1] - window[0] <= 5)
+            and all(_finite(t) and not isinstance(t, bool) for t in window)
+            and 0 < window[1] - window[0] <= 5)
+
+
+def live_damage_rates(statistics: Mapping, game_time: float) -> tuple[float | None, list[dict]]:
+    """Publish certified raw damage rates independently of rank or display mode."""
+    operators = []
+    windows = []
+    for owner, row in sorted((statistics.get('rows') or {}).items()):
+        rate = row.get('recent_damage')
+        window = row.get('recent_damage_window')
+        certified = (row.get('counter_snapshot_complete') is True
+                     and _valid_window(window) and 0 <= window[0] < window[1] == game_time
+                     and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
+        operators.append(dict(owner_id=owner, name=row.get('name') or owner,
+                              recent_dps=rate if certified else None))
+        if certified:
+            windows.append(tuple(window))
+    if operators and len(windows) == len(operators) and all(w == windows[0] for w in windows):
+        recent = sum(operator['recent_dps'] for operator in operators)
+        return (recent if _finite(recent) else None), operators
+    return None, operators
 
 
 def _effective_damage(row: PanelSourceRow) -> float | None:
@@ -703,6 +725,58 @@ def detail_rates(rows: Iterable[PanelSourceRow],
             kinds[kind] = {'state': state, 'text': text, 'note': note}
         result[row.owner_id] = kinds
     return result
+
+
+def _owner_detail(row: PanelSourceRow, *, effective: bool, rate_reason: str) -> dict:
+    if row.event_complete:
+        event_reason = ''
+    elif rate_reason:
+        event_reason = rate_reason
+    elif _finite(row.event_coverage_end):
+        event_reason = ('事件仅覆盖到 ' + format_one_decimal(row.event_coverage_end)
+                        + ' 游戏秒，之后未知')
+    else:
+        event_reason = '事件观测未建立覆盖'
+    return {'damage_by_type': dict(row.damage_by_type),
+            'damage': row.damage, 'healing': row.healing,
+            'shield_absorbed': row.shield,
+            'overkill_damage': row.overkill,
+            'overkill_damage_by_type': (dict(row.overkill_by_type)
+                                        if row.overkill_type_complete else None),
+            'overkill_type_complete': row.overkill_type_complete,
+            'overkill_coverage_complete': row.overkill_complete,
+            'overkill_unknown_reason': row.overkill_unknown_reason,
+            'effective_damage': _effective_damage(row) if effective else row.effective_damage,
+            'effective_damage_by_type': _effective_by_type(row),
+            'effective_engagement_damage': row.effective_observed(),
+            'skill_damage': row.skill_damage,
+            'non_skill_damage': row.non_skill_damage,
+            'skill_damage_effective': row.skill_damage_effective,
+            'non_skill_damage_effective': row.non_skill_damage_effective,
+            'skill_split_complete': row.skill_split_complete,
+            'skill_split_effective_complete': row.skill_split_effective_complete,
+            'skill_split_reason': row.skill_split_reason,
+            'skill_active_seconds': row.skill_active_seconds,
+            'skill_coverage': row.skill_coverage(),
+            'skill_coverage_complete': row.skill_coverage_complete,
+            'skill_window_count': row.skill_window_count,
+            'skill_seen': row.skill_seen,
+            'recent_overkill_damage': row.recent_overkill,
+            'presence_seconds': row.presence_seconds,
+            'presence_complete': row.presence_complete,
+            'burst_damage': row.burst_damage,
+            'burst_overkill': row.burst_overkill,
+            'burst_settlement': row.burst_settlement,
+            'burst_complete': row.burst_complete,
+            'burst_count': row.burst_count,
+            'burst_unknown_reason': row.burst_unknown_reason,
+            'event_coverage_complete': row.event_complete,
+            'event_reason': event_reason,
+            'active_damage': row.active_damage,
+            'active_healing': row.active_healing,
+            'observed_damage': row.observed_damage,
+            'observed_healing': row.observed_healing,
+            'sources': list(row.sources)}
 
 
 def render_panel(config: PanelConfig,
@@ -817,6 +891,8 @@ def render_panel(config: PanelConfig,
                     '有效伤害 · ' + ranking_label(category, ranking) if effective else
                     CATEGORY_LABELS[category] + ' · ' + ranking_label(category, ranking))
 
+    details = {owner: _owner_detail(row, effective=effective, rate_reason=rate_reason)
+               for owner, row in row_by_owner.items()}
     entries: list[PanelEntry] = []
     for owner, value in displayed.items():
         row = row_by_owner[owner]
@@ -826,15 +902,6 @@ def render_panel(config: PanelConfig,
             if category is Category.DAMAGE and not (effective and ranking is Ranking.RECENT)
             else ((), False))
         share = value / denominator if denominator is not None and owner in known_values else None
-        if row.event_complete:
-            event_reason = ''
-        elif rate_reason:
-            event_reason = rate_reason
-        elif _finite(row.event_coverage_end):
-            event_reason = ('事件仅覆盖到 ' + format_one_decimal(row.event_coverage_end)
-                            + ' 游戏秒，之后未知')
-        else:
-            event_reason = '事件观测未建立覆盖'
         rate, rate_state, rate_text, rate_note = rates[owner]
         shown = total_value(row) if ranking is Ranking.DPS else value
         entries.append(PanelEntry(
@@ -847,46 +914,7 @@ def render_panel(config: PanelConfig,
             present=row.present, portrait_muted=row.present is False,
             incomplete=not complete.get(owner, False),
             segments=segments, segments_complete=segments_complete,
-            detail={'damage_by_type': dict(row.damage_by_type),
-                    'damage': row.damage, 'healing': row.healing,
-                    'shield_absorbed': row.shield,
-                    'overkill_damage': row.overkill,
-                    'overkill_damage_by_type': (dict(row.overkill_by_type)
-                                                if row.overkill_type_complete else None),
-                    'overkill_type_complete': row.overkill_type_complete,
-                    'overkill_coverage_complete': row.overkill_complete,
-                    'overkill_unknown_reason': row.overkill_unknown_reason,
-                    'effective_damage': _effective_damage(row) if effective else row.effective_damage,
-                    'effective_damage_by_type': _effective_by_type(row),
-                    'effective_engagement_damage': row.effective_observed(),
-                    'skill_damage': row.skill_damage,
-                    'non_skill_damage': row.non_skill_damage,
-                    'skill_damage_effective': row.skill_damage_effective,
-                    'non_skill_damage_effective': row.non_skill_damage_effective,
-                    'skill_split_complete': row.skill_split_complete,
-                    'skill_split_effective_complete': row.skill_split_effective_complete,
-                    'skill_split_reason': row.skill_split_reason,
-                    'skill_active_seconds': row.skill_active_seconds,
-                    'skill_coverage': row.skill_coverage(),
-                    'skill_coverage_complete': row.skill_coverage_complete,
-                    'skill_window_count': row.skill_window_count,
-                    'skill_seen': row.skill_seen,
-                    'recent_overkill_damage': row.recent_overkill,
-                    'presence_seconds': row.presence_seconds,
-                    'presence_complete': row.presence_complete,
-                    'burst_damage': row.burst_damage,
-                    'burst_overkill': row.burst_overkill,
-                    'burst_settlement': row.burst_settlement,
-                    'burst_complete': row.burst_complete,
-                    'burst_count': row.burst_count,
-                    'burst_unknown_reason': row.burst_unknown_reason,
-                    'event_coverage_complete': row.event_complete,
-                    'event_reason': event_reason,
-                    'active_damage': row.active_damage,
-                    'active_healing': row.active_healing,
-                    'observed_damage': row.observed_damage,
-                    'observed_healing': row.observed_healing,
-                    'sources': list(row.sources)},
+            detail=details[owner],
             rate_state=rate_state, rate_text=rate_text, rate_note=rate_note))
     entries.sort(key=lambda e: (-e.value, e.name, e.owner_id))
     return PanelView(config=config, title=config.display_title, entries=entries,
@@ -896,7 +924,8 @@ def render_panel(config: PanelConfig,
                      metric_label=metric_label, share_note=team_note,
                      rate_available=rate_available, rate_reason=rate_reason,
                      rate_hint=rate_hint, rate_action=rate_action,
-                     rate_action_label=rate_action_label, share_scope=share_scope)
+                     rate_action_label=rate_action_label, details_by_owner=details,
+                     share_scope=share_scope)
 
 
 def render_board(configs: Iterable[PanelConfig],

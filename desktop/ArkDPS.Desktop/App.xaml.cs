@@ -47,6 +47,20 @@ public partial class App : System.Windows.Application
                 throw new ArgumentException("离线验收必须指定独立 --state-dir，不能覆盖产品设置。");
             if (Verification != null && !BridgeArguments.Contains("--offline"))
                 throw new ArgumentException("--verify 必须使用 --offline");
+            if (Verification is string evidence)
+            {
+                Directory.CreateDirectory(evidence);
+                DispatcherUnhandledException += (sender, failure) =>
+                {
+                    File.AppendAllText(Path.Combine(evidence, "dispatcher-failure.txt"),
+                        failure.Exception + Environment.NewLine);
+                    failure.Handled = true;
+                    if (MainWindow is MainWindow main) _ = main.Quit(1);
+                    else Shutdown(1);
+                };
+                AppDomain.CurrentDomain.UnhandledException += (_, failure) =>
+                    File.WriteAllText(Path.Combine(evidence, "runtime-failure.txt"), failure.ExceptionObject.ToString());
+            }
             string release=Path.Combine(AppContext.BaseDirectory,"release.json");
             if(File.Exists(release))
             {
@@ -79,48 +93,48 @@ internal static class Theme
     {
         ["lone-trail"]=new()
         {
-            ["Bg"]="#E9E6DC",
-            ["Card"]="#FFFCF3",
-            ["Inset"]="#EFEBE0",
-            ["Ink"]="#202E34",
-            ["Muted"]="#4D5C60",
-            ["Line"]="#C8C3B4",
-            ["Edge"]="#7E8176",
-            ["Accent"]="#A33A18",
-            ["AccentInk"]="#FFF9ED",
-            ["AccentText"]="#A33A18",
-            ["Focus"]="#A33A18",
-            ["Good"]="#285546",
-            ["Warn"]="#71450F",
-            ["Danger"]="#93292D",
-            ["Physical"]="#B84D50",
-            ["Arts"]="#3D6E9F",
-            ["Elemental"]="#78579C",
-            ["True"]="#FFFDF6",
-            ["Heal"]="#3B785D",
-            ["Shield"]="#516F79",
-            ["Away"]="#E9E5DA",
-            ["Track"]="#E4DFD2",
-            ["Console"]="#17272E",
-            ["ConsoleCard"]="#223740",
-            ["ConsoleInk"]="#F5EDDA",
-            ["ConsoleMuted"]="#BED0D3",
-            ["ConsoleLine"]="#698590",
-            ["Signal"]="#F2AC7A",
-            ["Sidebar"]="#17272E",
-            ["SidebarCard"]="#223740",
-            ["SidebarInk"]="#F5EDDA",
-            ["SidebarMuted"]="#BED0D3",
-            ["SidebarLine"]="#698590",
-            ["SidebarActive"]="#2B424B",
-            ["Hero"]="#17272E",
-            ["HeroInk"]="#F5EDDA",
-            ["HeroMuted"]="#BED0D3",
-            ["HeroLine"]="#698590",
-            ["HeroCard"]="#223740",
-            ["HeroStatusInk"]="#F2AC7A",
-            ["HeroCardInk"]="#F5EDDA",
-            ["HeroCardMuted"]="#BED0D3",
+            ["Bg"]="#0E141B",
+            ["Card"]="#151F29",
+            ["Inset"]="#1C2935",
+            ["Ink"]="#F1F5F9",
+            ["Muted"]="#AFBECF",
+            ["Line"]="#516476",
+            ["Edge"]="#708497",
+            ["Accent"]="#FF982F",
+            ["AccentInk"]="#201509",
+            ["AccentText"]="#FFAD5A",
+            ["Focus"]="#FFBE7D",
+            ["Good"]="#78DCAE",
+            ["Warn"]="#FFD275",
+            ["Danger"]="#FF9597",
+            ["Physical"]="#E5484D",
+            ["Arts"]="#3D8BFD",
+            ["Elemental"]="#9B5CF6",
+            ["True"]="#FFFFFF",
+            ["Heal"]="#7CD9A8",
+            ["Shield"]="#A1CBEC",
+            ["Away"]="#202D38",
+            ["Track"]="#293B4A",
+            ["Console"]="#0F1B25",
+            ["ConsoleCard"]="#182833",
+            ["ConsoleInk"]="#F1F5F9",
+            ["ConsoleMuted"]="#B8CCDB",
+            ["ConsoleLine"]="#566E82",
+            ["Signal"]="#FF9B44",
+            ["Sidebar"]="#0D1721",
+            ["SidebarCard"]="#172636",
+            ["SidebarInk"]="#F1F5F9",
+            ["SidebarMuted"]="#B9CBDA",
+            ["SidebarLine"]="#495F72",
+            ["SidebarActive"]="#223549",
+            ["Hero"]="#111C27",
+            ["HeroInk"]="#F1F5F9",
+            ["HeroMuted"]="#B9CBDA",
+            ["HeroLine"]="#647B8F",
+            ["HeroCard"]="#192B3B",
+            ["HeroStatusInk"]="#FFAD5A",
+            ["HeroCardInk"]="#F1F5F9",
+            ["HeroCardMuted"]="#B9CBDA",
             ["Radius"]="3",
         },
         ["contingency-contract"]=new()
@@ -360,6 +374,7 @@ internal static class Theme
         Key=key;
         foreach(var pair in colors)
             if(pair.Key!="Radius") System.Windows.Application.Current.Resources[pair.Key]=Brush(pair.Value);
+        System.Windows.Application.Current.Resources["DataHighlight"]=Brush(key=="lone-trail" ? "#61DFFF" : colors["Ink"]);
         int radius=int.Parse(colors["Radius"]);
         System.Windows.Application.Current.Resources["CardRadius"]=new CornerRadius(radius);
         System.Windows.Application.Current.Resources["ControlRadius"]=new CornerRadius(Math.Max(2,radius-1));

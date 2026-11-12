@@ -9,6 +9,7 @@ import base64
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import queue
 import socket
@@ -31,8 +32,9 @@ from event_observer import ObserverStatus
 from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
-from panel_model import (EventAvailability, PanelConfig, detail_rates, render_panel,
-                        rows_from_statistics, team_status)
+from panel_model import (EventAvailability, PanelConfig, detail_rates,
+                         live_damage_rates, render_panel, rows_from_statistics,
+                         team_status)
 import stage_names
 
 PROTOCOL_VERSION = 1
@@ -94,6 +96,8 @@ class DesktopState:
         self.last = None
         self.last_frame = None
         self.last_progress = 0.
+        self.live_analysis = None
+        self.analysis_interrupted = False
         self.error = ''
         self.connection_text = '等待定位本局'
         self.diagnostic = None
@@ -111,6 +115,8 @@ class DesktopState:
 
     def accept(self, kind, value):
         if kind == 'sample':
+            if self.last is not None and observation_age(self.last) > 2:
+                self.analysis_interrupted = True
             self.error = ''
             frame = (value.get('session'), value.get('frame'))
             if frame != self.last_frame:
@@ -118,8 +124,10 @@ class DesktopState:
                 self.last_frame = frame
             self.last = value
             self.event_status, self.event_error = value.get('event_status'), value.get('event_error')
+            self.update_live_analysis(value)
         elif kind == 'error':
             self.error = str(value)
+            self.analysis_interrupted = True
         elif kind == 'warning':
             if value not in self.warnings:
                 self.warnings.append(value)
@@ -139,6 +147,54 @@ class DesktopState:
             self.scanning = value
             if value:
                 self.error = ''
+                self.analysis_interrupted = True
+
+    def update_live_analysis(self, sample):
+        """Keep one chart sample and its in-process observed peak per battle."""
+        statistics = sample.get('statistics') or {}
+        battle_id = sample.get('battle_id', sample.get('session'))
+        game_time = statistics.get('game_time', sample.get('game_time'))
+        previous = self.live_analysis
+        same_battle = previous is not None and previous['battle_id'] == battle_id
+        if not same_battle:
+            self.live_analysis = None
+            self.analysis_interrupted = False
+        if (not isinstance(battle_id, str) or not battle_id or
+                type(game_time) not in (float, int) or not math.isfinite(game_time) or game_time < 0 or
+                observation_age(sample) > 2 or (same_battle and game_time < previous['game_time'])):
+            self.analysis_interrupted = True
+            return
+
+        terminal = statistics.get('ended') is True or self.lifecycle in ('ended', 'frozen', 'finalizing')
+        team_recent, operators = live_damage_rates(statistics, game_time)
+        complete, _, _ = team_status(statistics)
+        team_total = team_totals(statistics)['damage'] if complete else None
+        if team_total is not None and (not math.isfinite(team_total) or team_total < 0):
+            team_total = None
+        if not complete or terminal:
+            team_recent = None
+        if terminal:
+            for operator in operators:
+                operator['recent_dps'] = None
+
+        segment = previous['segment'] if same_battle else 0
+        peak = previous['observed_peak_dps'] if same_battle else None
+        if same_battle:
+            lost_coverage = (
+                previous['team_total_damage'] is not None and team_total is None
+                or previous['team_recent_dps'] is not None and team_recent is None and not terminal
+            )
+            if self.analysis_interrupted or lost_coverage:
+                segment += 1
+        if team_recent is not None:
+            peak = team_recent if peak is None else max(peak, team_recent)
+        average = team_total / game_time if team_total is not None and game_time > 0 else None
+        self.live_analysis = dict(
+            battle_id=battle_id, game_time=game_time, segment=segment,
+            team_recent_dps=team_recent,
+            team_average_dps=average if average is not None and math.isfinite(average) else None,
+            observed_peak_dps=peak, team_total_damage=team_total, operators=operators)
+        self.analysis_interrupted = False
 
     def status(self):
         if self.scanning:
@@ -217,6 +273,7 @@ class DesktopState:
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
+                    live_analysis=self.live_analysis,
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),
                     history=history, history_selected=selected, history_notice=self.history_notice)

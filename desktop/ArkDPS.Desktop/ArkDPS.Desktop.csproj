@@ -9,4 +9,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>../../assets/arkdps.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets/LoneTrail/*.png" />
+  </ItemGroup>
 </Project>
