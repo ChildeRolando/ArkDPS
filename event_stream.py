@@ -60,6 +60,7 @@ class EventStream:
         self.statistics = statistics
         self.session = session
         self.baseline_sequence = baseline_sequence
+        self.baseline_frame = baseline_frame
         self.sequence = baseline_sequence
         self.frame = baseline_frame
         self.game_time = statistics.now
@@ -83,13 +84,15 @@ class EventStream:
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
                cancel_reason=None, shield_absorbed=None, target_instance=None,
-               skill_key=None, skill_id=None, skill_name=None, skill_reason=None):
+               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
+               phase_total_hp=None, phase_count=None, phase_from_birth=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
                    target, real_delta, hp_before, hp_after, killed,
                    target_type, damage_type, cancel_reason, shield_absorbed,
-                   target_instance, skill_key, skill_id, skill_name, skill_reason)
+                   target_instance, skill_key, skill_id, skill_name, skill_reason,
+                   phase_total_hp, phase_count, phase_from_birth)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -100,23 +103,33 @@ class EventStream:
             self._fail('event sequence gap')
         if (not self._nonnegative_int(frame) or frame < self.frame
                 or not isinstance(game_time, (int, float)) or isinstance(game_time, bool)
-                or game_time < self.game_time
+                or not isfinite(game_time) or game_time < self.game_time
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
         try:
-            self.statistics.event(
-                f'{self.session}:{sequence}', game_time, source, kind, amount,
-                target=target, real_delta=real_delta, hp_before=hp_before,
-                hp_after=hp_after, killed=killed, target_type=target_type,
-                damage_type=damage_type, cancel_reason=cancel_reason,
-                shield_absorbed=shield_absorbed, target_instance=target_instance,
-                skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
-                skill_reason=skill_reason)
-        except (ValueError, TypeError) as exc:
-            # Target-side HP evidence is supplemental and must never tear down
-            # the authoritative damage/engagement stream. Keep the ordered
-            # sequence advancing; overkill still has the ApplyModifier path.
-            if kind != 'hp_damage':
+            if kind == 'enemy_enter':
+                self.statistics.record_enemy_entry(
+                    frame, game_time, source, amount, target, target_instance)
+            elif kind == 'enemy_reborn':
+                self.statistics.record_enemy_reborn(
+                    frame, game_time, source, amount, target, target_instance,
+                    hp_before, hp_after, phase_total_hp, phase_count, phase_from_birth)
+            else:
+                self.statistics.event(
+                    f'{self.session}:{sequence}', game_time, source, kind, amount,
+                    target=target, real_delta=real_delta, hp_before=hp_before,
+                    hp_after=hp_after, killed=killed, target_type=target_type,
+                    damage_type=damage_type, cancel_reason=cancel_reason,
+                    shield_absorbed=shield_absorbed, target_instance=target_instance,
+                    skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
+                    skill_reason=skill_reason)
+        except (ValueError, TypeError, OverflowError) as exc:
+            # Supplemental evidence can fail without losing ordered damage.
+            if kind == 'enemy_enter':
+                self.statistics.mark_enemy_entry_unknown()
+            elif kind == 'enemy_reborn':
+                self.statistics.mark_enemy_phase_unknown()
+            elif kind != 'hp_damage':
                 self._fail(f'event is invalid or cannot be attributed: {exc}')
         self.sequence = sequence
         self.frame = frame

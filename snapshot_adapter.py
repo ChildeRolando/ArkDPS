@@ -198,6 +198,9 @@ class BattleStatisticsAdapter:
         if self.statistics is None:
             return
         if self.event_stream is not None:
+            # The observed boundary does not certify a final enemy watermark.
+            self.statistics.mark_enemy_entry_unknown()
+            self.statistics.mark_enemy_phase_unknown()
             self.event_stream.stop(complete=True)
         self.statistics.seal_totals()
         self.statistics.invalidate_rates()
@@ -276,8 +279,14 @@ class BattleStatisticsAdapter:
     def accept_event(self, **event):
         if self.event_stream is None:
             raise StreamGap('event stream is unavailable')
-        source = event.get('source')
         kind = event.get('kind')
+        if kind in ('enemy_enter', 'enemy_reborn'):
+            try:
+                self.event_stream.accept(**event)
+            finally:
+                self.last_result = self.statistics.result()
+            return
+        source = event.get('source')
         if kind in ('hp_damage', 'skill_start', 'skill_end') and self.event_stream.closed:
             # Supplemental evidence may still be in flight after authoritative
             # coverage ended. Drop it without raising again.
@@ -425,6 +434,9 @@ class BattleStatisticsAdapter:
                 raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
         if terminal:
             if self.statistics.end_time is None:
+                if self.event_stream is not None and self.event_stream.frame != frame:
+                    self.statistics.mark_enemy_entry_unknown()
+                    self.statistics.mark_enemy_phase_unknown()
                 if game_time > self.last_game_time:
                     self.statistics.snapshot(game_time, counters)
                 self.finish(game_time)
@@ -473,6 +485,9 @@ class BattleStatisticsAdapter:
             return self.last_result
         end = game_time if game_time is not None else self.last_game_time
         if self.event_stream is not None and not self.event_stream.closed:
+            if self.event_stream.game_time < end:
+                self.statistics.mark_enemy_entry_unknown()
+                self.statistics.mark_enemy_phase_unknown()
             self.event_stream.stop(complete=True)
         self.statistics.finish(end)
         # A frozen battle has no future observation: last reliable cumulative

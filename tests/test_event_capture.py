@@ -408,3 +408,105 @@ def test_probe_hooks_character_skill_windows_and_keeps_them_out_of_onenter():
     assert "record(this.source,this.skillStart?'skill_start':'skill_end'" not in enter
     assert "record(this.source,this.skillStart?'skill_start':'skill_end'" in leave
     assert 'skill_unknown' in leave and 'skillUnknown' in js
+
+
+def test_enemy_entries_share_the_watermark_and_ignore_drain_replays():
+    collector = Collector()
+    observer = Observer(collector)
+    drain = observer.drain
+    flags = {'enemy_entry_ready': True, 'enemy_entry_unknown': False}
+    observer.drain = lambda: {**drain(), **flags}
+    capture = LiveEventCapture(collector, observer)
+
+    observer.sequence = observer.epoch = 1
+    observer.events = [{**event(1), 'kind': 'enemy_enter', 'source': None,
+                        'amount': 0, 'target': 'enemy_a', 'target_instance': '1'}]
+    assert capture.sample()['enemy_entry'] == {'complete': True, 'start_frame': 1, 'events': []}
+
+    first = {**event(2, frame=2, game_time=1, amount=0), 'kind': 'enemy_enter',
+             'source': None, 'target': 'enemy_a', 'target_instance': '2'}
+    second = {**first, 'sequence': 3, 'target_instance': '3'}
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    observer.sequence = observer.epoch = 4
+    observer.events = [first, second, event(4, frame=2, game_time=1)]
+    result = capture.sample()
+    assert result['enemy_entry'] == {
+        'complete': True,
+        'start_frame': 1,
+        'events': [
+            {'instance_uid': '2', 'eid': 'enemy_a', 'frame': 2, 'game_time': 1},
+            {'instance_uid': '3', 'eid': 'enemy_a', 'frame': 2, 'game_time': 1},
+        ],
+    }
+    assert result['rows']['char_a']['observed_damage'] == 20
+    assert capture.adapter.event_stream.sequence == 4
+
+    observer.events = [first, second]
+    assert capture.sample()['enemy_entry'] == result['enemy_entry']
+    flags['enemy_entry_unknown'] = True
+    result = capture.sample()
+    assert not result['enemy_entry']['complete']
+    assert result['rows']['char_a']['event_coverage_complete']
+
+
+def test_enemy_entries_keep_the_verified_prefix_when_stream_closes():
+    collector = Collector()
+    observer = Observer(collector)
+    drain = observer.drain
+    observer.drain = lambda: {**drain(), 'enemy_entry_ready': True}
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+
+    collector.frame, collector.game_time = 2, 1
+    observer.sequence = observer.epoch = 2
+    observer.events = [{**event(1, frame=2, game_time=1, amount=0), 'kind': 'enemy_enter',
+                        'source': None, 'target': 'enemy_a', 'target_instance': '1'}]
+    with pytest.raises(StreamGap):
+        capture.sample()
+    result = capture.adapter.result()
+    assert result['enemy_entry'] == {
+        'complete': False,
+        'start_frame': 1,
+        'events': [{'instance_uid': '1', 'eid': 'enemy_a', 'frame': 2, 'game_time': 1}],
+    }
+
+
+def test_enemy_entry_result_is_absent_without_an_observer_capability():
+    collector = Collector()
+    capture = LiveEventCapture(collector, Observer(collector))
+    assert 'enemy_entry' not in capture.sample()
+
+
+def test_enemy_entry_capability_failure_does_not_affect_damage_coverage():
+    collector = Collector()
+    observer = Observer(collector)
+    drain = observer.drain
+    observer.drain = lambda: {**drain(), 'enemy_entry_ready': False}
+    result = LiveEventCapture(collector, observer).sample()
+    assert result['enemy_entry'] == {'complete': False, 'start_frame': 1, 'events': []}
+    assert result['rows']['char_a']['event_coverage_complete']
+
+
+def test_capture_accepts_rebirth_evidence_and_marks_an_unknown_phase_prefix():
+    collector = Collector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    assert 'enemy_phases' not in capture.sample()
+    collector.frame, collector.game_time = 2, 1
+    observer.sequence = observer.epoch = 1
+    observer.events = [{**event(1, frame=2, game_time=1, amount=60_000),
+                        'kind': 'enemy_reborn', 'source': None, 'target': 'enemy_1506_patrt',
+                        'target_instance': '7', 'hp_before': 0, 'hp_after': 60_000,
+                        'phase_total_hp': 120_000, 'phase_count': 2, 'phase_from_birth': True}]
+    assert capture.sample()['enemy_phases']['complete']
+
+    drain = observer.drain
+    observer.drain = lambda: {**drain(), 'enemy_phase_unknown': True}
+    result = capture.sample()
+    assert result['enemy_phases'] == {
+        'complete': False,
+        'instances': {'7': {'eid': 'enemy_1506_patrt', 'frame': 2, 'game_time': 1,
+                            'phase_total_hp': 120_000, 'phase_count': 2,
+                            'phase_from_birth': True}},
+    }
+    assert result['rows']['char_a']['event_coverage_complete']

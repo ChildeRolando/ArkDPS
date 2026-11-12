@@ -28,6 +28,7 @@ public sealed class EnemyItem
     public string State { get; init; } = "";
     public string Status { get; init; } = "";
     public string HpText { get; init; } = "";
+    public string PhaseHpText { get; init; } = "";
     public string AttrsText { get; init; } = "";
     public string Tooltip { get; init; } = "";
     public double HpPercent { get; init; }
@@ -36,7 +37,7 @@ public sealed class EnemyItem
 
     private static string Int(JsonElement value)
     {
-        var number = value.TryNumber();
+        var number = value.TryNumber(double.NaN);
         return double.IsFinite(number)
             ? Math.Round(number, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture)
             : "—";
@@ -52,19 +53,33 @@ public sealed class EnemyItem
             : name[..Math.Min(1, name.Length)];
         bool alive = row.Bool("alive");
         string lifecycle = row.Text("lifecycle");
+        bool departed = lifecycle == "departed";
         string status = lifecycle == "departed" ? "已离场" : alive ? "存活" : "状态未知";
         bool hpKnown = row.Bool("hp_known");
         string hpText = hpKnown
             ? $"{Int(row.Get("hp"))} / {Int(row.Get("max_hp"))}"
             : "HP 未知";
-        string attrs = $"攻击 {Int(row.Get("atk"))}  ·  防御 {Int(row.Get("def"))}  ·  法抗 {Int(row.Get("res"))}" +
-                       $"  ·  移速 {row.Get("move_speed").TryNumber():0.##}  ·  攻速 {Int(row.Get("attack_speed"))}";
+        var phaseTotal = row.Get("phase_total_hp");
+        string? phaseHp = phaseTotal.ValueKind == JsonValueKind.Number
+            ? $"已记录 {Int(row.Get("phase_count"))} 阶段起始 HP 合计 {Int(phaseTotal)}"
+            : null;
+        if (phaseHp != null)
+        {
+            if (!row.Bool("phase_from_birth") || !row.Bool("phase_coverage_complete"))
+                phaseHp += "（观测不完整）";
+        }
+        double speed = row.Get("move_speed").TryNumber(double.NaN);
+        string moveSpeed = double.IsFinite(speed) ? speed.ToString("0.##", CultureInfo.InvariantCulture) : "—";
+        string attrs = lifecycle == "entered" ? "属性未知"
+            : $"攻击 {Int(row.Get("atk"))}  ·  防御 {Int(row.Get("def"))}  ·  法抗 {Int(row.Get("res"))}" +
+              $"  ·  移速 {moveSpeed}  ·  攻速 {Int(row.Get("attack_speed"))}";
         string detail = string.Join("\n", new[]
         {
             name,
             eid.Length > 0 ? eid : null,
             code.Length > 0 ? "图鉴 " + code : null,
             "状态 " + row.Text("state"),
+            phaseHp,
             row.Get("spawn_frame").ValueKind == JsonValueKind.Number ? "入场帧 " + Int(row.Get("spawn_frame")) : null,
             row.Get("end_frame").ValueKind == JsonValueKind.Number ? "离场帧 " + Int(row.Get("end_frame")) : null,
         }.Where(x => !string.IsNullOrEmpty(x)));
@@ -72,10 +87,10 @@ public sealed class EnemyItem
         {
             Badge = badge, Name = name, Code = code, Eid = eid,
             State = row.Text("state"), Status = status,
-            HpText = hpText, AttrsText = attrs, Tooltip = detail,
+            HpText = hpText, PhaseHpText = phaseHp ?? "", AttrsText = attrs, Tooltip = detail,
             HpPercent = hpKnown ? Math.Clamp(row.Get("hp_ratio").TryNumber() * 100, 0, 100) : 0,
-            Opacity = alive ? 1 : .56,
-            Portrait = EnemyPortraits.Get(eid, !alive),
+            Opacity = departed ? .56 : 1,
+            Portrait = EnemyPortraits.Get(eid, departed),
         };
     }
 }
@@ -292,9 +307,17 @@ public partial class MainWindow
             DamageKnown = p.Get("our_damage_known").ValueKind == JsonValueKind.True,
         }).ToArray());
         var error = enemy.Text("error");
+        var entryCoverage = enemy.Get("entry_events_complete").ValueKind;
+        string entryHint = entryCoverage switch
+        {
+            JsonValueKind.True => "已入场人数合并游戏事件与快照。入场事件从第 "
+                + Json.UiInt(enemy, "entry_events_start_frame") + " 帧开始记录。",
+            JsonValueKind.False => "入场事件覆盖不完整，已入场人数为已确认下限。",
+            _ => "已入场人数来自敌人快照。",
+        };
         string hint = error.Length > 0 ? error
-            : complete ? "已入场列表只含观测到的实例；总血量按关卡出怪计划与同类型实例的 MaxHP 统计，漏采实例按同类型推断。"
-            : "关卡计划中仍有未观测到的敌种，总血量以 ≥ 表示下限。";
+            : entryHint + (complete ? " 总血量参考关卡计划与同类型实例的 MaxHP。"
+                : " 血量数据不完整，≥ 表示下限。");
         double baseline = enemy.Get("damage_baseline").TryNumber(-1);
         if (baseline > 0)
             hint += " 我方有效伤害从敌情观测起点累计（起点 " +

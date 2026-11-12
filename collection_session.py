@@ -27,6 +27,7 @@ class CollectionSession:
         self._enemy_session = None
         self._enemy_last_poll = float('-inf')
         self._enemy_payload = None
+        self._enemy_event_data = {}
         self.runtime = None
         self.closed = False
         self._resources_closed = False
@@ -209,6 +210,7 @@ class CollectionSession:
             self._enemy_session = session
             self._enemy_last_poll = float('-inf')
             self._enemy_payload = None
+            self._enemy_event_data = {}
             telemetry = getattr(self.collector, 'enemy_telemetry', None)
             if telemetry is not None:
                 telemetry.reset()
@@ -232,11 +234,15 @@ class CollectionSession:
                 'rows': [], 'totals': {}, 'series': []}
             return
         now = time.monotonic()
-        if now - self._enemy_last_poll >= 1.0:
-            self._enemy_last_poll = now
+        poll_due = now - self._enemy_last_poll >= 1.0
+        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases') if key in stats}
+        if poll_due or event_data != self._enemy_event_data:
+            if poll_due:
+                self._enemy_last_poll = now
             try:
                 self._enemy_payload = read(game_time=sample.get('game_time'),
-                                           our_damage=our_damage)
+                                           our_damage=our_damage, **event_data)
+                self._enemy_event_data = event_data
             except Exception as exc:
                 self._enemy_payload = {
                     'status': 'unavailable', 'error': f'敌人遥测失败：{exc}',

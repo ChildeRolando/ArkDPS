@@ -90,3 +90,62 @@ def test_lifecycle_envelope_uses_native_sources_and_preserves_raw_proofs(tmp_pat
     path.write_text('\n'.join(json.dumps(record) for record in records))
     with pytest.raises(ValueError, match='amount mismatch'):
         module.verify(tmp_path)
+
+
+def test_enemy_entries_reconcile_without_becoming_operator_damage(tmp_path):
+    records, path = evidence(tmp_path)
+    last = records[2]['data']
+    last['event_watermark']['sequence'] = 3
+    enemy = {'sequence': 3, 'frame': 2, 'game_time': 1, 'source': None,
+             'kind': 'enemy_enter', 'amount': 0, 'target': 'enemy_a',
+             'target_instance': '12'}
+    records[1]['data']['events'].extend([enemy, dict(enemy)])
+    last['statistics']['enemy_entry'] = {
+        'complete': True,
+        'start_frame': 1,
+        'events': [{'instance_uid': '12', 'eid': 'enemy_a', 'frame': 2, 'game_time': 1}],
+    }
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    result = module.verify(tmp_path)
+    assert result['enemy_entry_count'] == 1
+    assert result['enemy_entry_complete'] is True
+    assert result['shield_totals'] == {'char_cathy': 2}
+
+    records[1]['data']['events'][-1]['sequence'] = 4
+    last['event_watermark']['sequence'] = 4
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='enemy entry was emitted more than once'):
+        module.verify(tmp_path)
+
+    records[1]['data']['events'].pop()
+    last['event_watermark']['sequence'] = 3
+    last['statistics']['enemy_entry']['events'].clear()
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='published enemy entries differ'):
+        module.verify(tmp_path)
+
+
+def test_enemy_phases_reconcile_without_becoming_operator_damage(tmp_path):
+    records, path = evidence(tmp_path)
+    last = records[2]['data']
+    last['event_watermark']['sequence'] = 3
+    phase = {'sequence': 3, 'frame': 2, 'game_time': 1, 'source': None,
+             'kind': 'enemy_reborn', 'amount': 60_000, 'target': 'enemy_1506_patrt',
+             'target_instance': '12', 'hp_before': 0, 'hp_after': 60_000,
+             'phase_total_hp': 120_000, 'phase_count': 2, 'phase_from_birth': True}
+    records[1]['data']['events'].append(phase)
+    last['statistics']['enemy_phases'] = {
+        'complete': True,
+        'instances': {'12': {'eid': 'enemy_1506_patrt', 'frame': 2, 'game_time': 1,
+                             'phase_total_hp': 120_000, 'phase_count': 2,
+                             'phase_from_birth': True}},
+    }
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    result = module.verify(tmp_path)
+    assert result['enemy_phases'] == last['statistics']['enemy_phases']
+    assert result['shield_totals'] == {'char_cathy': 2}
+
+    phase['amount'] = 70_000
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='amount mismatch'):
+        module.verify(tmp_path)

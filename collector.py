@@ -186,6 +186,7 @@ class Collector:
                 f'当前仅验证 Android {expected}，检测到 {actual}；需更新适配后再读取',
                 self.diagnostics)
         self.diagnostics.version_status = VersionStatus.COMPATIBLE
+        self.core.read_instance_uids = actual == '2.7.91'
         self.core._chan = self.core.mc.channel()
         self.last_pid_check = time.monotonic()
         if lifecycle:
@@ -320,10 +321,12 @@ class Collector:
             read_ms=round((time.perf_counter() - started) * 1000, 2),
             observed_at=time.time(), captured_monotonic=captured_monotonic, guard=guard)
 
-    def read_enemies(self, *, game_time, our_damage):
+    def read_enemies(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None):
         """Read supplemental enemy live telemetry without affecting counters."""
         return self.enemy_telemetry.sample(game_time=game_time,
-                                           our_damage=our_damage)
+                                           our_damage=our_damage,
+                                           enemy_entry=enemy_entry,
+                                           enemy_phases=enemy_phases)
 
     def read_lifecycle(self):
         if self._lifecycle_reader is None:

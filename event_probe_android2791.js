@@ -20,6 +20,19 @@ function expectFields(k,expected){
 const domain=api('il2cpp_domain_get','pointer',[])();
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
 const cfg={methods:[]};let clock;let skillF=null;
+let enemyEntryConfig=null,enemyPhaseMethods=null;
+function uniqueMethod(klass,name,argCount) {
+ const methods=klass.add(0x98).readPointer(),count=klass.add(0x120).readU16(),matches=[];
+ const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
+ for(let i=0;i<count;i++){
+  const method=methods.add(i*8).readPointer();
+  if(method.add(0x20).readPointer().equals(klass)&&method.add(0x18).readPointer().readCString()===name&&parameterCount(method)===argCount)
+   matches.push(method.readPointer());
+ }
+ if(matches.length!==1||matches[0].isNull()||Process.findModuleByAddress(matches[0])?.name!==il.name)
+  throw new Error('missing or ambiguous enemy entry method '+name);
+ return matches[0];
+}
 try{
  const size=Memory.alloc(8), assemblies=api('il2cpp_domain_get_assemblies','pointer',['pointer','pointer'])(domain,size);
  const imageOf=api('il2cpp_assembly_get_image','pointer',['pointer']), imageName=api('il2cpp_image_get_name','pointer',['pointer']);
@@ -29,13 +42,17 @@ try{
  if(!im)throw new Error('Assembly-CSharp not found');
  const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController',
   'Character','BasicSkill','SkillData']);const found={};
+ const enemyClasses=new Set(['Enemy','BObject']);
  for(let i=0,n=classCount(im);i<n;i++){
-  const k=classAt(im,i),name=className(k);if(!wanted.has(name))continue;
+  const k=classAt(im,i),name=className(k);if(!wanted.has(name)&&!enemyClasses.has(name))continue;
   const ns=k.add(0x18).readPointer().readCString();
   const expectedNs=(['BuffContainer','BlockDamage'].includes(name)?'':
     (name==='SkillData'?'Torappu':'Torappu.Battle'));
   if(ns!==expectedNs)continue;
-  if(found[name])throw new Error('ambiguous class '+name);found[name]=k;
+  if(name in found){
+   if(wanted.has(name))throw new Error('ambiguous class '+name);
+   found[name]=null;
+  }else found[name]=k;
  }
  for(const name of wanted)if(!found[name])throw new Error('class not found '+name);
  expectFields(found.Entity,{'m_hp':0x40,'<id>k__BackingField':0x148});
@@ -49,8 +66,26 @@ try{
  skillF={charSkill:CF.m_skill,owner:BF.m_owner,data:BF.m_data,
   prefab:SF.prefabKey,id:SF.skillId,name:SF.name};
  clock=found.BattleController.add(0xb8).readPointer().add(0x14);
+ // Init and movement share the layer update, but Init can find a tile before
+ // Born completes. Observe both transitions and emit once both are true.
+ try{
+  if(!found.Enemy||!found.BObject)throw new Error('enemy entry classes unavailable');
+  expectFields(found.Enemy,{'m_currentTile':0x360});
+  expectFields(found.BObject,{'<instanceUid>k__BackingField':0x18,
+   '<borned>k__BackingField':0x25,'<isDisappeared>k__BackingField':0x26});
+  enemyEntryConfig={enemy:found.Enemy,
+   assignable:api('il2cpp_class_is_assignable_from','bool',['pointer','pointer']),
+   layer:uniqueMethod(found.Enemy,'_UpdatePlayerSideAndMapLayer',0),
+   born:uniqueMethod(found.BObject,'Born',0),
+   recycle:uniqueMethod(found.BObject,'OnRecycle',0)};
+ }catch(e){cfg.enemyEntryError=String(e);}
+ if(enemyEntryConfig){
+  try{enemyPhaseMethods={fakeDeath:uniqueMethod(found.Enemy,'DoFakeDeath',1),
+    reborn:uniqueMethod(found.Enemy,'DoReborn',1)};}
+  catch(e){cfg.enemyPhaseError=String(e);}
+ }
  for(const [owner,k] of Object.entries(found)){
-  if(['Modifier','BattleController'].includes(owner))continue;
+  if(['Modifier','BattleController'].includes(owner)||enemyClasses.has(owner))continue;
   const ma=k.add(0x98).readPointer(),mn=k.add(0x120).readU16();if(mn>2000)throw new Error('method count invalid');
   for(let i=0;i<mn;i++){
    const m=ma.add(i*8).readPointer();if(!m.add(0x20).readPointer().equals(k))continue;
@@ -69,6 +104,10 @@ try{
 // invocation returns. RPC marks are serialized with these JS callbacks.
 let sequence=0, hpSequence=0, epoch=0, active=0, fatal=null, stopped=false;
 const activeHooks=new Map();
+let enemyEntryReady=false,enemyEntryUnknown=false,enemyEntryFrame=null;
+const awaitingEnemyTile=new Map(),enemyClassCache=new Map();
+let enemyPhaseReady=false,enemyPhaseUnknown=false;
+const enemyHealthPhases=new Map(),pendingEnemyRebirth=new Set();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
 const engagementUnknownSources=new Set();
@@ -156,6 +195,165 @@ function record(source,kind,amount,when,proof,evidence){
  const event={sequence:++sequence,frame:when.frame,game_time:when.game_time,source,kind,amount,proof};
  if(evidence)Object.assign(event,evidence);
  queue.push(event);
+}
+function refreshEnemyEntryFrame(frame) {
+ if(enemyEntryFrame!==null&&frame<enemyEntryFrame){
+  awaitingEnemyTile.clear();
+  enemyEntryUnknown=false;
+  enemyHealthPhases.clear();
+  pendingEnemyRebirth.clear();
+  enemyPhaseUnknown=false;
+ }
+ enemyEntryFrame=frame;
+}
+function isEnemy(object) {
+ const klass=object.readPointer();
+ if(klass.equals(enemyEntryConfig.enemy))return true;
+ const key=klass.toString();
+ if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
+ return enemyClassCache.get(key);
+}
+function installEnemyEntryHooks() {
+ if(!enemyEntryConfig)return;
+ const installed=[];
+ try{
+  for(const [method,address] of [['_UpdatePlayerSideAndMapLayer',enemyEntryConfig.layer],['Born',enemyEntryConfig.born]]){
+   const label='enemy entry '+method;
+   const isBorn=method==='Born';
+   installed.push(Interceptor.attach(address,{
+    onEnter(args){
+     if(stopped||fatal||!enemyEntryReady)return;
+     try{
+      const enemy=args[0];
+      if(enemy.isNull()||(isBorn&&(!isEnemy(enemy)||enemy.add(0x25).readU8())))return;
+      const uid=enemy.add(0x18).readU32();
+      // A tile change is only an entry if we saw this object Born without a
+      // tile. Moving, reappearing or attaching mid-battle cannot start a life.
+      if(!isBorn&&!awaitingEnemyTile.get(uid)?.equals(enemy))return;
+      const when=time();
+      refreshEnemyEntryFrame(when.frame);
+      if(!isBorn&&!awaitingEnemyTile.has(uid))return;
+      this.enemy=enemy;this.uid=uid;this.when=when;
+      epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
+     }catch(e){enemyEntryUnknown=true;}
+    },
+    onLeave(){
+     if(!this.when)return;
+     try{
+      if(stopped||fatal)return;
+      const when=time();
+      if(when.frame!==this.when.frame||when.game_time!==this.when.game_time)
+       throw new Error('enemy entry callback crossed frame');
+      const enemy=this.enemy,uid=this.uid;
+      if(enemy.add(0x18).readU32()!==uid)throw new Error('enemy identity changed during entry');
+      if(enemy.add(0x26).readU8()){
+       awaitingEnemyTile.delete(uid);
+       return;
+      }
+      if(!enemy.add(0x25).readU8())return;
+      if(isBorn&&enemyPhaseReady){
+       const hp=targetHp(enemy);
+       if(hp>0)enemyHealthPhases.set(uid,{total:hp,count:1,fromBirth:true});
+      }
+      if(enemy.add(0x360).readPointer().isNull()){
+       if(isBorn)awaitingEnemyTile.set(uid,enemy);
+       return;
+      }
+      if(!isBorn&&!awaitingEnemyTile.has(uid))return;
+      awaitingEnemyTile.delete(uid);
+      const eid=entityId(enemy);
+      try{
+       record(null,'enemy_enter',0,when,{method},{target:eid,target_instance:String(uid)});
+      }catch(e){fatal=String(e);}
+     }catch(e){enemyEntryUnknown=true;}
+     finally{
+      active--;
+      const left=activeHooks.get(label)-1;
+      if(left)activeHooks.set(label,left);else activeHooks.delete(label);
+     }
+    }
+   }));
+  }
+  installed.push(Interceptor.attach(enemyEntryConfig.recycle,{
+   onEnter(args){
+    if(!awaitingEnemyTile.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size)return;
+    try{
+     const object=args[0],uid=object.add(0x18).readU32();
+     if(awaitingEnemyTile.get(uid)?.equals(object))awaitingEnemyTile.delete(uid);
+     enemyHealthPhases.delete(uid);
+     pendingEnemyRebirth.delete(uid);
+    }catch(e){enemyEntryUnknown=true;}
+   }
+  }));
+  hooks.push(...installed);
+  enemyEntryReady=true;
+ }catch(e){
+  for(const hook of installed)hook.detach();
+  cfg.enemyEntryError=String(e);
+ }
+}
+function installEnemyPhaseHook() {
+ if(!enemyEntryReady||!enemyPhaseMethods)return;
+ const label='enemy phase DoReborn';
+ const installed=[];
+ try{
+  installed.push(Interceptor.attach(enemyPhaseMethods.fakeDeath,{
+   onEnter(args){
+    if(stopped||fatal)return;
+    try{
+     refreshEnemyEntryFrame(time().frame);
+     pendingEnemyRebirth.add(args[0].add(0x18).readU32());
+    }catch(e){enemyPhaseUnknown=true;}
+   }
+  }));
+  installed.push(Interceptor.attach(enemyPhaseMethods.reborn,{
+   onEnter(args){
+    if(stopped||fatal)return;
+    try{
+     const enemy=args[0],when=time();
+     refreshEnemyEntryFrame(when.frame);
+     this.uid=enemy.add(0x18).readU32();
+     if(!pendingEnemyRebirth.delete(this.uid)){
+      enemyPhaseUnknown=true;
+      return;
+     }
+     this.hpBefore=targetHp(enemy);
+     this.enemy=enemy;this.when=when;
+     epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
+    }catch(e){enemyPhaseUnknown=true;}
+   },
+   onLeave(){
+    if(!this.when)return;
+    try{
+     if(stopped||fatal)return;
+     const when=time(),enemy=this.enemy,uid=this.uid;
+     if(when.frame!==this.when.frame||when.game_time!==this.when.game_time||enemy.add(0x18).readU32()!==uid)
+      throw new Error('enemy rebirth changed identity or crossed a frame');
+     const hp=targetHp(enemy);
+     if(this.hpBefore===null||!(hp>0))throw new Error('enemy rebirth HP could not be confirmed');
+     const old=enemyHealthPhases.get(uid)||{total:0,count:0,fromBirth:false};
+     const phase={total:old.total+hp,count:old.count+1,fromBirth:old.fromBirth};
+     const eid=entityId(enemy);
+     try{
+      record(null,'enemy_reborn',hp,when,{method:'Enemy.DoReborn'},
+       {target:eid,target_instance:String(uid),hp_before:this.hpBefore,hp_after:hp,
+        phase_total_hp:phase.total,phase_count:phase.count,phase_from_birth:phase.fromBirth});
+      enemyHealthPhases.set(uid,phase);
+     }catch(e){fatal=String(e);}
+    }catch(e){enemyPhaseUnknown=true;}
+    finally{
+     active--;
+     const left=activeHooks.get(label)-1;
+     if(left)activeHooks.set(label,left);else activeHooks.delete(label);
+    }
+   }
+  }));
+  hooks.push(...installed);
+  enemyPhaseReady=true;
+ }catch(e){
+  for(const hook of installed)hook.detach();
+  cfg.enemyPhaseError=String(e);
+ }
 }
 const SKILL_START_METHODS=new Set(['OnSkillStart','SwitchToSkillState','OnSkillCastSucceed','OnToggleSkillStart','OnSkillRetriggered']);
 const SKILL_END_METHODS=new Set(['OnSkillFinish','SwitchOutFromSkillState','OnAfterSkill']);
@@ -340,14 +538,23 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
   }
  }));
 }
+installEnemyEntryHooks();
+installEnemyPhaseHook();
+function enemyEntryQuality(frame){
+ if(enemyEntryReady&&frame!==undefined)refreshEnemyEntryFrame(frame);
+ return {enemy_entry_ready:enemyEntryReady,enemy_entry_unknown:enemyEntryUnknown,
+  enemy_phase_ready:enemyPhaseReady,enemy_phase_unknown:enemyPhaseUnknown};
+}
 rpc.exports={
  mark() {
   const current = time(true);
-  const quality={unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady};
+   const quality={unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,...enemyEntryQuality(current?.frame)};
   if (current === null) return {retry:true,error:fatal,stopped,...quality};
   return {...current,sequence,epoch,active,active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
  },
- drain(){const result=queue,context=hpContextQueue();return {events:result,hp_context:context,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady};},
+ drain(){const result=queue;queue=[];const context=hpContextQueue();return {events:result,hp_context:context,error:fatal,stopped,unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,...enemyEntryQuality()};},
  stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
 };
-send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady});
+send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
+ enemy_entry_ready:enemyEntryReady,enemy_entry_error:cfg.enemyEntryError||null,
+ enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null});

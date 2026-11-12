@@ -164,6 +164,15 @@
             <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="{Binding Status}" Foreground="{DynamicResource Muted}" FontSize="10" TextAlignment="Right"/><TextBlock Text="{Binding HpText}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="12" TextAlignment="Right" Margin="0,2,0,0"/></StackPanel>
            </DockPanel>
            <ProgressBar Value="{Binding HpPercent}" Maximum="100" Height="4" Margin="0,7,0,5" Foreground="{DynamicResource Accent}" Background="{DynamicResource Track}" BorderThickness="0"/>
+           <TextBlock Text="{Binding PhaseHpText}" Foreground="{DynamicResource Ink}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4">
+            <TextBlock.Style>
+             <Style TargetType="TextBlock">
+              <Style.Triggers>
+               <DataTrigger Binding="{Binding PhaseHpText}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+              </Style.Triggers>
+             </Style>
+            </TextBlock.Style>
+           </TextBlock>
            <TextBlock Text="{Binding AttrsText}" Foreground="{DynamicResource Muted}" FontSize="10" TextTrimming="CharacterEllipsis"/>
           </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
          </ListBox>

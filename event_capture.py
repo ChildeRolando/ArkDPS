@@ -129,7 +129,7 @@ class LiveEventCapture:
             raise
 
     def _apply_quality(self, payload):
-        """Keep recoverable per-event gaps scoped to overkill/engagement/shield."""
+        """Keep recoverable gaps scoped to their affected event metric."""
         statistics = self.adapter.statistics
         if statistics is None:
             return
@@ -145,6 +145,16 @@ class LiveEventCapture:
             statistics.mark_shields_unknown()
         if payload.get('skill_unknown'):
             statistics.mark_skill_unknown()
+        if 'enemy_entry_ready' in payload or 'enemy_entry_unknown' in payload:
+            statistics.observe_enemy_entry(
+                self.adapter.event_stream.baseline_frame,
+                complete=(payload.get('enemy_entry_ready') is True
+                          and payload.get('enemy_entry_unknown') is not True
+                          and (self.initial_drain
+                               or statistics.enemy_entry_start_frame is not None)),
+            )
+        if payload.get('enemy_phase_unknown') or payload.get('enemy_phase_ready') is False:
+            statistics.mark_enemy_phase_unknown()
 
     def ingest(self, sample, roster, sequence, drained):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.

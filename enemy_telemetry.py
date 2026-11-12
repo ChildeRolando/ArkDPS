@@ -23,7 +23,7 @@ ENEMY_STATE_NAMES = {
 if _gs is not None:
     ENEMY_STATE_NAMES = dict(getattr(_gs, 'ENEMY_STATE_NAMES', ENEMY_STATE_NAMES))
 
-ENTERED_LIFECYCLES = ('active', 'departed')
+ENTERED_LIFECYCLES = ('active', 'departed', 'entered')
 MAX_TIMELINE_POINTS = 7200
 MAX_SERIES_POINTS = 360
 
@@ -52,6 +52,7 @@ def enemy_rows(snapshot, *, include_pending=False):
             state_id = None
         rows.append({
             'roster_id': getattr(enemy, 'roster_id', None),
+            'instance_uid': getattr(enemy, 'instance_uid', None),
             'spawn_order': getattr(enemy, 'spawn_order', None),
             'eid': _text(getattr(enemy, 'eid', '')),
             'name': _text(getattr(enemy, 'name', '')),
@@ -67,6 +68,7 @@ def enemy_rows(snapshot, *, include_pending=False):
             'attack_speed': _finite(getattr(enemy, 'aspd', 0.0)),
             'alive': bool(getattr(enemy, 'alive', False)),
             'lifecycle': lifecycle,
+            'entry_inferred': lifecycle == 'departed' and getattr(enemy, 'addr', None) == 0,
             'state_id': state_id,
             'state': ENEMY_STATE_NAMES.get(state_id, f'未知({state_id})') if state_id is not None else '未知',
             'spawn_frame': getattr(enemy, 'spawn_frame', None),
@@ -110,6 +112,7 @@ def enemy_totals(rows, planned=None):
     """
     entered = [row for row in rows if row['lifecycle'] in ENTERED_LIFECYCLES]
     known = [row for row in entered if row['hp_known']]
+    unknown_lifecycle_count = sum(row['alive'] is None for row in entered)
     observed_total = sum(row['max_hp'] for row in known)
     planned = list(planned or ())
     planned_known = [row for row in planned if row['hp_known']]
@@ -117,6 +120,7 @@ def enemy_totals(rows, planned=None):
     return {
         'entered_count': len(entered),
         'alive_count': sum(1 for row in entered if row['alive']),
+        'unknown_lifecycle_count': unknown_lifecycle_count,
         'planned_count': len(planned),
         'planned_known_count': len(planned_known),
         'planned_total_hp': sum(row['max_hp'] for row in planned_known),
@@ -128,8 +132,8 @@ def enemy_totals(rows, planned=None):
                              if plan_complete else observed_total),
         'observed_total_hp': observed_total,
         'remaining_hp': sum(max(0.0, row['hp']) for row in known if row['alive']),
-        'hp_complete': (plan_complete if planned else
-                        (len(known) == len(entered) and bool(entered))),
+        'hp_complete': not unknown_lifecycle_count and (
+            plan_complete if planned else (len(known) == len(entered) and bool(entered))),
     }
 
 
@@ -165,6 +169,7 @@ class EnemyTimeline:
             'our_damage_known': damage_known,
             'entered_count': totals['entered_count'],
             'alive_count': totals['alive_count'],
+            'unknown_lifecycle_count': totals['unknown_lifecycle_count'],
             'hp_complete': totals['hp_complete'],
         }
         self.points.append(point)
@@ -278,14 +283,7 @@ class EnemyTelemetry:
         self.bootstrap_retry = bootstrap_retry
         self.clock = clock
         self.timeline = EnemyTimeline()
-        self.ready = False
-        self.error = None
-        self._last_bootstrap = float('-inf')
-        self._last_poll = float('-inf')
-        self._status = 'starting'
-        self._rows = []
-        self._planned_rows = []
-        self._damage_baseline = None
+        self.reset()
 
     def reset(self):
         self.timeline.reset()
@@ -297,14 +295,75 @@ class EnemyTelemetry:
         self._rows = []
         self._planned_rows = []
         self._damage_baseline = None
+        self._entry_events = {}
+        self._entry_events_complete = None
+        self._entry_events_start_frame = None
+        self._phase_data = None
+
+    def _record_entries(self, observation):
+        if observation is None:
+            return
+        self._entry_events_complete = observation['complete']
+        self._entry_events_start_frame = observation['start_frame']
+        for event in observation['events']:
+            self._entry_events.setdefault(event['instance_uid'], event)
+
+    def _merged_rows(self, rows):
+        if self._entry_events_complete is None:
+            return list(rows)
+        merged = []
+        by_uid = {}
+        for row in rows:
+            if row['entry_inferred'] and (self._entry_events_complete or self._entry_events):
+                # Scheduler's initial count only establishes a plan prefix.
+                # It cannot identify the same instances as the event stream.
+                continue
+            uid = row['instance_uid']
+            entry = self._entry_events.get(uid)
+            if entry is not None:
+                row = dict(row, spawn_frame=entry['frame'], spawn_time=entry['game_time'])
+            if uid in by_uid:
+                index = by_uid[uid]
+                if row['lifecycle'] == 'active':
+                    merged[index] = row
+                continue
+            if uid is not None:
+                by_uid[uid] = len(merged)
+            merged.append(row)
+        catalog = getattr(self.reader, '_db', None) or {}
+        for uid, entry in self._entry_events.items():
+            if uid in by_uid:
+                continue
+            eid = entry['eid']
+            identity = catalog.get(eid) or {}
+            merged.append(dict(
+                instance_uid=uid, roster_id=None, spawn_order=None, eid=eid,
+                name=identity.get('name') or eid, code=identity.get('code') or '',
+                lifecycle='entered', alive=None, state_id=None, state='未知',
+                spawn_frame=entry['frame'], spawn_time=entry['game_time'],
+                end_frame=None, end_reason=None, hp=None, max_hp=None,
+                hp_known=False, hp_ratio=None, hp_inferred=False,
+            ))
+        return merged
 
     def _state(self, status, *, rows=None, error=None):
         self._status = status
         self.error = error
         if rows is not None:
             self._rows = list(rows)
-        current = list(self._rows)
-        return {
+        current = self._merged_rows(self._rows)
+        if self._phase_data:
+            phases = self._phase_data['instances']
+            for index, row in enumerate(current):
+                phase = phases.get(row['instance_uid'])
+                if phase and row['eid'] == phase['eid']:
+                    current[index] = dict(
+                        row, phase_total_hp=phase['phase_total_hp'],
+                        phase_count=phase['phase_count'],
+                        phase_from_birth=phase['phase_from_birth'],
+                        phase_coverage_complete=self._phase_data['complete'],
+                    )
+        state = {
             'status': status,
             'error': error,
             'ready': self.ready,
@@ -314,6 +373,10 @@ class EnemyTelemetry:
             'series': self.timeline.series(),
             'last_point': self.timeline.last,
         }
+        if self._entry_events_complete is not None:
+            state['entry_events_complete'] = self._entry_events_complete
+            state['entry_events_start_frame'] = self._entry_events_start_frame
+        return state
 
     def _bootstrap(self):
         now = self.clock()
@@ -331,7 +394,10 @@ class EnemyTelemetry:
         self.log('敌人遥测已定位')
         return True
 
-    def sample(self, *, game_time, our_damage):
+    def sample(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None):
+        self._record_entries(enemy_entry)
+        if enemy_phases is not None:
+            self._phase_data = enemy_phases
         if not self.ready and not self._bootstrap():
             return self._state(self._status, error=self.error)
         now = self.clock()
@@ -368,5 +434,5 @@ class EnemyTelemetry:
         adjusted = (max(0.0, float(our_damage) - self._damage_baseline)
                     if self._damage_baseline is not None
                     and isinstance(our_damage, (int, float)) else None)
-        self.timeline.add(game_time, rows, adjusted, self._planned_rows)
+        self.timeline.add(game_time, self._merged_rows(rows), adjusted, self._planned_rows)
         return self._state('ready', rows=rows)

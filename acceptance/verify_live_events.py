@@ -55,23 +55,69 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 raise ValueError('ambiguous source ownership')
             ownership[source] = owner
     totals = defaultdict(float)
+    enemy_entries = {}
+    enemy_phases = {}
     partial, zeros = [], []
     sources_with_absorption = set()
     previous_time = first['game_time']
     previous_frame = first['frame']
     for event in accepted:
-        source, amount = event['source'], event['amount']
-        if (source not in ownership or not math.isfinite(amount) or amount < 0
-                or event['kind'] not in ('damage', 'healing', 'shield_absorbed')):
-            raise ValueError('invalid or unowned event')
+        source, kind, amount = event['source'], event['kind'], event['amount']
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool) or not math.isfinite(amount) or amount < 0:
+            raise ValueError('invalid event amount')
         if not previous_time <= event['game_time'] <= last['game_time']:
             raise ValueError('event time is outside the ordered coverage')
         previous_time = event['game_time']
         if not previous_frame <= event['frame'] <= last['frame']:
             raise ValueError('event frame is outside ordered coverage')
         previous_frame = event['frame']
-        totals[ownership[source], event['kind']] += amount
-        if event['kind'] == 'shield_absorbed':
+        if kind == 'enemy_enter':
+            uid, eid = event.get('target_instance'), event.get('target')
+            if (source is not None or amount != 0 or not isinstance(uid, str)
+                    or not uid.isascii() or not uid.isdecimal() or len(uid) > 10
+                    or not 0 <= int(uid) <= 0xffffffff or str(int(uid)) != uid
+                    or not isinstance(eid, str) or not eid):
+                raise ValueError('invalid enemy entry')
+            if uid in enemy_entries:
+                raise ValueError('enemy entry was emitted more than once: ' + uid)
+            enemy_entries[uid] = dict(
+                instance_uid=uid, eid=eid, frame=event['frame'], game_time=event['game_time'])
+            continue
+        if kind == 'enemy_reborn':
+            uid, eid = event.get('target_instance'), event.get('target')
+            before, after, total = (event.get(key) for key in (
+                'hp_before', 'hp_after', 'phase_total_hp'))
+            count, from_birth = event.get('phase_count'), event.get('phase_from_birth')
+            if (source is not None or not isinstance(uid, str)
+                    or not uid.isascii() or not uid.isdecimal() or len(uid) > 10
+                    or not 0 <= int(uid) <= 0xffffffff or str(int(uid)) != uid
+                    or not isinstance(eid, str) or not eid
+                    or not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                               and math.isfinite(value) and value >= 0 for value in (before, after, total))
+                    or amount <= 0 or total < amount
+                    or type(count) is not int or count < 1 or type(from_birth) is not bool
+                    or from_birth and (count < 2 or total <= amount)):
+                raise ValueError('invalid enemy phase')
+            near(after, amount)
+            entry = enemy_entries.get(uid)
+            previous = enemy_phases.get(uid)
+            if ((entry is not None and entry['eid'] != eid)
+                    or (previous is not None and (previous['eid'] != eid
+                        or count != previous['phase_count'] + 1
+                        or from_birth != previous['phase_from_birth']))):
+                raise ValueError('enemy phase progression conflicts')
+            if previous is not None:
+                near(previous['phase_total_hp'] + amount, total)
+            enemy_phases[uid] = dict(
+                eid=eid, frame=event['frame'], game_time=event['game_time'],
+                phase_total_hp=total, phase_count=count, phase_from_birth=from_birth)
+            continue
+        if kind in ('hp_damage', 'elemental_bar', 'elemental_burst', 'skill_start', 'skill_end'):
+            continue
+        if source not in ownership or kind not in ('damage', 'healing', 'shield_absorbed'):
+            raise ValueError('invalid or unowned event')
+        totals[ownership[source], kind] += amount
+        if kind == 'shield_absorbed':
             proof = event['proof']
             if proof['buff'] not in ('shining_s_2', 'catsld_t_1[core]'):
                 raise ValueError('unverified shield mechanism')
@@ -83,6 +129,17 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 partial.append(event['sequence'])
             if amount == 0:
                 zeros.append(event['sequence'])
+    enemy_entry = last['statistics'].get('enemy_entry')
+    if (enemy_entries or enemy_entry is not None) and (
+            not isinstance(enemy_entry, dict)
+            or enemy_entry.get('start_frame') != first['frame']
+            or enemy_entry.get('events') != list(enemy_entries.values())):
+        raise ValueError('published enemy entries differ from ordered events')
+    published_phases = last['statistics'].get('enemy_phases')
+    if (enemy_phases or published_phases is not None) and (
+            not isinstance(published_phases, dict)
+            or published_phases.get('instances') != enemy_phases):
+        raise ValueError('published enemy phases differ from ordered events')
     native = {row['id']: row for row in last.get('native_rows', last['rows'])}
     references = {}
     for publication in publications:
@@ -116,7 +173,7 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
         raise ValueError('no partial shield break was observed')
     if require_zero and not zeros:
         raise ValueError('no zero-absorption callback was observed')
-    return {'head': summary['head'], 'session': last['session'],
+    result = {'head': summary['head'], 'session': last['session'],
             'complete': bool(complete), 'capture_error': summary.get('error'),
             'coverage_start': first['game_time'],
             'coverage_end': last['event_watermark'].get('game_time', last['game_time']),
@@ -126,6 +183,12 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
             'native_counter_deltas': counter_deltas,
             'zero_absorption_sequences': zeros,
             'shield_totals': {owner: totals[owner, 'shield_absorbed'] for owner in rows}}
+    if enemy_entry is not None:
+        result['enemy_entry_count'] = len(enemy_entries)
+        result['enemy_entry_complete'] = enemy_entry.get('complete') is True
+    if published_phases is not None:
+        result['enemy_phases'] = published_phases
+    return result
 
 
 if __name__ == '__main__':

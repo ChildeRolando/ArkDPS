@@ -7,7 +7,7 @@ native damage total and is never subtracted from it. Source keys identify
 distinct client statistic entries, not transient entities.
 """
 from collections import deque
-from math import isfinite
+from math import isclose, isfinite
 
 # Native DamageType values used by the verified 2.7.91 event probe.
 # 0=NONE, 4=HEAL and unknown values cannot be attributed to a damage segment.
@@ -73,6 +73,11 @@ class Statistics:
         self.non_skill_observed = {}
         self.skill_seen = set()
         self.skill_unknown = False
+        self.enemy_entry_start_frame = None
+        self.enemy_entry_incomplete = False
+        self.enemy_entries = {}
+        self.enemy_phase_incomplete = False
+        self.enemy_phases = {}
         # Per-event overkill is split by the same skill window as its damage.
         # HP evidence is kept separately because it overrides the ApplyModifier
         # overkill total for owners that produced target-side evidence.
@@ -104,6 +109,65 @@ class Statistics:
 
     def mark_skill_unknown(self):
         self.skill_unknown = True
+
+    def observe_enemy_entry(self, start_frame, *, complete):
+        if self.enemy_entry_start_frame is None:
+            self.enemy_entry_start_frame = start_frame
+        if not complete:
+            self.mark_enemy_entry_unknown()
+
+    def mark_enemy_entry_unknown(self):
+        self.enemy_entry_incomplete = True
+
+    @staticmethod
+    def _enemy_identity(eid, uid):
+        return (isinstance(eid, str) and bool(eid)
+                and isinstance(uid, str) and uid.isascii()
+                and uid.isdecimal() and len(uid) <= 10
+                and int(uid) <= 0xffffffff and str(int(uid)) == uid)
+
+    def record_enemy_entry(self, frame, game_time, source, amount, eid, instance_uid):
+        self._time(game_time)
+        if (source is not None or amount != 0 or isinstance(amount, bool)
+                or not self._enemy_identity(eid, instance_uid)
+                or not self.start_time <= game_time <= self.now):
+            raise ValueError('invalid enemy entry')
+        if instance_uid in self.enemy_entries:
+            # The event stream already handles retries of the same sequence.
+            raise ValueError('enemy entry was emitted more than once')
+        self.enemy_entries[instance_uid] = dict(
+            instance_uid=instance_uid, eid=eid, frame=frame, game_time=game_time)
+
+    def mark_enemy_phase_unknown(self):
+        self.enemy_phase_incomplete = True
+
+    def record_enemy_reborn(self, frame, game_time, source, amount, eid, instance_uid,
+                            hp_before, hp_after, phase_total_hp, phase_count, phase_from_birth):
+        values = (amount, hp_before, hp_after, phase_total_hp)
+        if (source is not None or not self._enemy_identity(eid, instance_uid)
+                or not self.start_time <= game_time <= self.now
+                or not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                           and isfinite(value) and value >= 0 for value in values)
+                or amount <= 0
+                or not isclose(hp_after, amount, rel_tol=1e-9, abs_tol=1e-6)
+                or phase_total_hp < amount
+                or type(phase_count) is not int or phase_count < 1
+                or type(phase_from_birth) is not bool
+                or phase_from_birth and (phase_count < 2 or phase_total_hp <= amount)):
+            raise ValueError('invalid enemy phase')
+        entry = self.enemy_entries.get(instance_uid)
+        previous = self.enemy_phases.get(instance_uid)
+        if ((entry is not None and entry['eid'] != eid)
+                or (previous is not None and (
+                    previous['eid'] != eid
+                    or phase_count != previous['phase_count'] + 1
+                    or phase_from_birth != previous['phase_from_birth']
+                    or not isclose(previous['phase_total_hp'] + amount, phase_total_hp,
+                                   rel_tol=1e-9, abs_tol=1e-6)))):
+            raise ValueError('enemy phase progression conflicts')
+        self.enemy_phases[instance_uid] = dict(
+            eid=eid, frame=frame, game_time=game_time, phase_total_hp=phase_total_hp,
+            phase_count=phase_count, phase_from_birth=phase_from_birth)
 
     def mark_overkill_unknown(self, source):
         """Record a probe-level event gap for one source without closing coverage."""
@@ -768,13 +832,27 @@ class Statistics:
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())
-        return {'session': self.session, 'game_time': self.now, 'ended': self.end_time is not None,
-                'coverage_start': self.start_time,
-                'totals_complete': all(row['counter_snapshot_complete'] for row in rows.values()),
-                'rows': rows,
-                'overkill_damage': (sum(row['overkill_damage'] for row in rows.values())
-                                    if overkill_complete else None),
-                'overkill_coverage_complete': overkill_complete,
-                'overkill_coverage_start': self.start_time if self.event_coverage else None,
-                'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
-                                          else self.end_time if self.event_coverage else None)}
+        result = {
+            'session': self.session, 'game_time': self.now, 'ended': self.end_time is not None,
+            'coverage_start': self.start_time,
+            'totals_complete': all(row['counter_snapshot_complete'] for row in rows.values()),
+            'rows': rows,
+            'overkill_damage': (sum(row['overkill_damage'] for row in rows.values())
+                                if overkill_complete else None),
+            'overkill_coverage_complete': overkill_complete,
+            'overkill_coverage_start': self.start_time if self.event_coverage else None,
+            'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
+                                      else self.end_time if self.event_coverage else None),
+        }
+        if self.enemy_entry_start_frame is not None:
+            result['enemy_entry'] = {
+                'complete': not (self.enemy_entry_incomplete or self.event_coverage_broken),
+                'start_frame': self.enemy_entry_start_frame,
+                'events': [dict(entry) for entry in self.enemy_entries.values()],
+            }
+        if self.enemy_phases:
+            result['enemy_phases'] = {
+                'complete': not (self.enemy_phase_incomplete or self.event_coverage_broken),
+                'instances': {uid: dict(phase) for uid, phase in self.enemy_phases.items()},
+            }
+        return result

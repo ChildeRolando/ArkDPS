@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from collection_session import CollectionSession
 from enemy_telemetry import (EnemyTelemetry, EnemyTimeline, enemy_rows,
                              enemy_totals)
 
@@ -143,6 +144,90 @@ def test_telemetry_throttles_without_dropping_last_rows():
     assert fresh['last_point']['our_effective_damage'] == 20
 
 
+def test_entries_publish_between_enemy_polls_and_merge_by_instance_uid(monkeypatch):
+    snapshots = iter([
+        {'ok': True, 'enemies': [enemy(instance_uid='5', spawn_frame=1)]},
+        {'ok': True, 'enemies': [
+            enemy(instance_uid='5', spawn_frame=1),
+            enemy(instance_uid='6', roster_id=2, spawn_frame=22, hp=70.0),
+        ]},
+    ])
+    now = [0.0]
+    telemetry = EnemyTelemetry(
+        SimpleNamespace(poll_fast=lambda: next(snapshots)),
+        clock=lambda: now[0], bootstrap=lambda reader: True)
+    session = CollectionSession(None, None, collector=SimpleNamespace(
+        enemy_telemetry=telemetry, read_enemies=telemetry.sample))
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: now[0])
+
+    def publish(events, *, complete=True):
+        sample = {'session': 'battle', 'game_time': 1.0 + now[0], 'statistics': {
+            'enemy_entry': {'complete': complete, 'start_frame': 10, 'events': events}}}
+        session._attach_enemy(sample)
+        return sample['enemy']
+
+    first = publish([])
+    assert first['totals']['entered_count'] == 1
+    assert first['rows'][0]['spawn_frame'] == 1
+    now[0] = 0.5
+    entries = [dict(instance_uid='6', eid='enemy_1', frame=12, game_time=1.2),
+               dict(instance_uid='7', eid='enemy_1', frame=13, game_time=1.3)]
+    during_throttle = publish(entries)
+    assert during_throttle['entry_events_complete'] is True
+    assert during_throttle['entry_events_start_frame'] == 10
+    assert during_throttle['totals']['entered_count'] == 3
+    assert during_throttle['totals']['alive_count'] == 1
+    assert during_throttle['totals']['unknown_lifecycle_count'] == 2
+    assert during_throttle['totals']['hp_complete'] is False
+    event_only = during_throttle['rows'][1]
+    assert event_only['lifecycle'] == 'entered'
+    assert event_only['alive'] is None
+    assert event_only['hp'] is None and event_only['max_hp'] is None
+    assert event_only['end_frame'] is None and event_only['end_reason'] is None
+
+    now[0] = 1.1
+    fresh = publish(entries, complete=False)
+    assert fresh['entry_events_complete'] is False
+    assert fresh['totals']['entered_count'] == 3
+    assert fresh['last_point']['entered_count'] == 3
+    observed = next(row for row in fresh['rows'] if row['instance_uid'] == '6')
+    assert observed['spawn_frame'] == 12 and observed['spawn_time'] == 1.2
+    assert observed['alive'] is True and observed['hp'] == 70.0
+    missed = next(row for row in fresh['rows'] if row['instance_uid'] == '7')
+    assert missed['alive'] is None
+
+
+def test_events_do_not_double_count_the_schedulers_inferred_prefix():
+    snapshot = {'ok': True, 'enemies': [
+        enemy(addr=0, lifecycle='departed', alive=False),
+    ]}
+    telemetry = EnemyTelemetry(SimpleNamespace(poll_fast=lambda: snapshot),
+                               bootstrap=lambda reader: True, poll_interval=0)
+    legacy = telemetry.sample(game_time=1.0, our_damage=0)
+    assert legacy['totals']['entered_count'] == 1
+    state = telemetry.sample(game_time=2.0, our_damage=0, enemy_entry={
+        'complete': True, 'start_frame': 10, 'events': [
+            dict(instance_uid='31', eid='enemy_1', frame=13, game_time=1.3),
+        ],
+    })
+    assert state['totals']['entered_count'] == 1
+    assert state['rows'][0]['instance_uid'] == '31'
+    assert state['totals']['planned_count'] == 1
+
+
+def test_enemy_snapshot_decodes_the_same_unsigned_instance_uid_as_the_probe():
+    import struct
+    from tools.enemy_health import game_structs as gs
+    from tools.enemy_health.enemy_reader import EnemyReader
+
+    block = bytearray(gs.EnemyFields.READ_SIZE)
+    struct.pack_into('<I', block, gs.BObjectFields.INSTANCE_UID, 0xffffffff)
+    observed = EnemyReader._parse_enemy_block(123, block, read_instance_uid=True)
+    legacy = EnemyReader._parse_enemy_block(123, block)
+    assert observed.instance_uid == '4294967295'
+    assert legacy.instance_uid is None
+
+
 def test_poll_failure_is_reported_not_raised():
     class Reader:
         def poll_fast(self):
@@ -267,6 +352,27 @@ def test_timeline_keeps_enemy_hp_when_effective_damage_is_unknown():
     assert point['entered_total_hp'] == 100
     assert point['our_effective_damage'] is None
     assert point['our_damage_known'] is False
+
+
+def test_reborn_hp_is_displayed_on_the_same_enemy_with_its_current_max_hp():
+    patriot = enemy(instance_uid='42', eid='enemy_1506_patrt',
+                    hp=60000, max_hp=60000)
+    snapshot = {'ok': True, 'enemies': [patriot]}
+    telemetry = EnemyTelemetry(
+        SimpleNamespace(poll_fast=lambda: snapshot),
+        clock=lambda: 1.0, bootstrap=lambda reader: True)
+    telemetry.sample(game_time=45, our_damage=60000)
+    phases = {'complete': True, 'instances': {'42': {
+        'eid': patriot.eid, 'phase_total_hp': 120000,
+        'phase_count': 2, 'phase_from_birth': True,
+    }}}
+    result = telemetry.sample(game_time=75, our_damage=60000, enemy_phases=phases)
+    row, = result['rows']
+    assert result['totals']['entered_count'] == 1
+    assert row['hp'] == row['max_hp'] == 60000
+    assert row['phase_total_hp'] == 120000
+    assert row['phase_count'] == 2
+    assert row['phase_from_birth'] and row['phase_coverage_complete']
 
 
 def test_bundled_enemy_catalog_provides_names_and_handbook_codes():
