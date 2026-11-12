@@ -161,7 +161,7 @@ public sealed class Inspector : Border
         AddStat(splitStats, effective ? "非技能有效伤害" : "非技能伤害",
             skillKnown ? detail.UiInt(nonSkillKey) : "—",showZero:true);
         AddStat(splitStats, "技能覆盖率", coverageKnown
-            ? Percentage(coverageValue) : "—");
+            ? SkillCoverageText(coverageValue) : "—");
         AddStat(splitStats, "技能开启秒", detail.Bool("skill_coverage_complete")
             ? detail.UiInt("skill_active_seconds") : "—",showZero:true);
         AddStat(splitStats, "在场秒", row.Bool("presence_complete")
@@ -529,7 +529,7 @@ public sealed class Inspector : Border
             SetMetric(1,category=="shield" ? Number(row.Get("shield_absorbed")) : rate,
                 WithNote(rateHint,entry.Text("rate_note")));
             SetMetric(2,share,WithNote("该干员当前排行指标 ÷ 同口径指标合计。",shareInfo.Description));
-            SetMetric(3,coverageKnown ? Percentage(skillCoverage) : "—",
+            SetMetric(3,coverageKnown ? SkillCoverageText(skillCoverage) : "—",
                 WithNote("技能开启时间 ÷ 干员在场时间。被动技能不计入开启时间。",
                     coverageKnown ? "" : (reason.Length>0 ? reason : "在场时间或技能窗口证据不足。")));
             SetMetric(4,presence,WithNote("累加干员确认在场的战斗时长。",
@@ -724,6 +724,9 @@ public sealed class Inspector : Border
         return double.IsFinite(percent) ? Number(percent)+"%" : "—";
     }
 
+    private static string SkillCoverageText(double fraction) =>
+        fraction is >0 and <0.01 ? "<1%" : Percentage(fraction);
+
     private static string EntryRate(JsonElement entry)=>entry.Text("rate_state") switch
     {
         "value"=>Number(entry.Get("rate")),
@@ -759,7 +762,7 @@ public sealed class Inspector : Border
 
     private static (double Fraction,string Label,string Explanation) MitigationReading(JsonElement row)
     {
-        const string formula="1 − 公式后伤害 ÷ 公式前伤害。两项都取自护盾与生命值结算前的原生公式。";
+        const string formula="1 − 结算伤害 ÷ 公式前伤害。结算伤害取自同一击在护盾吸收和实扣前的来伤，包含后续伤害修正。";
         double full=row.Get("mitigation_rate").TryNumber(double.NaN);
         if(double.IsFinite(full)) return (full/100,"被减伤率",formula);
 
@@ -772,11 +775,11 @@ public sealed class Inspector : Border
             double after=row.Get("observed_mitigation_after").TryNumber(double.NaN);
             double total=row.Get("damage").TryNumber(double.NaN);
             if(row.Bool("counter_snapshot_complete") && after>=0 && total>0 && after<=total)
-                coverage+=$"这些命中的公式后伤害占当前累计总伤的 {Percentage(after/total)}。";
+                coverage+=$"这些命中的结算伤害占当前累计总伤的 {Percentage(after/total)}。";
             if(reason.Length>0) coverage+="\n整局统计缺口："+reason;
             return (observed/100,"已观测减伤率",formula+"\n"+coverage);
         }
-        return (double.NaN,"被减伤率",formula+"\n"+(reason.Length>0 ? reason : "尚无同次命中的公式前后值。"));
+        return (double.NaN,"被减伤率",formula+"\n"+(reason.Length>0 ? reason : "尚无同一击的公式前伤害与结算伤害。"));
     }
     private static string OverkillNote(JsonElement row,JsonElement view)
     {

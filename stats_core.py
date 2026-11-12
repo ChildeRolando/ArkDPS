@@ -381,12 +381,67 @@ class Statistics:
             total += max(0.0, end - active['start'])
         return total
 
+    @staticmethod
+    def _unconfirmed_skill_reason(window):
+        if window is None or ('cast_completed_at' not in window and 'movement_at' not in window):
+            return None
+        if 'skchr_angel2_3' in (window['key'], window['id']):
+            return '未观测到弹药技能的实际结束'
+        return '未观测到技能效果的实际结束'
+
+    def _close_skill_window(self, owner, game_time, reason, *, confirmed):
+        window = self.skill_active.pop(owner)
+        if not confirmed:
+            unconfirmed = self._unconfirmed_skill_reason(window)
+            if unconfirmed is not None:
+                self.skill_incomplete[owner] = unconfirmed
+        window['end'] = game_time
+        window['reason'] = reason
+        self.skill_windows.setdefault(owner, []).append(window)
+
     def _close_skill_windows(self, game_time):
-        for owner, window in list(self.skill_active.items()):
-            window['end'] = game_time
-            window['reason'] = 'coverage_end'
-            self.skill_windows.setdefault(owner, []).append(window)
-        self.skill_active.clear()
+        for owner in tuple(self.skill_active):
+            self._close_skill_window(owner, game_time, 'coverage_end', confirmed=False)
+
+    def _record_skill_transition(self, owner, source, kind, game_time, *,
+                                 key, skill_id, name, method, reason):
+        window = self.skill_active.get(owner)
+        if kind == 'skill_start':
+            self.skill_seen.add(owner)
+            if (window is not None and source == window['source']
+                    and method != 'Character.OnSkillRetriggered'
+                    and self._unconfirmed_skill_reason(window) is not None
+                    and game_time > max(window.get('cast_completed_at', 0),
+                                        window.get('movement_at', 0))):
+                # A later activation cannot certify the previous effect's endpoint.
+                self._close_skill_window(owner, game_time, 'next_activation', confirmed=False)
+                window = None
+            if window is None:
+                self.skill_active[owner] = {
+                    'start': game_time, 'source': source, 'key': key, 'id': skill_id,
+                    'name': name, 'method': method}
+            return
+        if window is None or source != window['source']:
+            return
+        start_identity = {window['key'], window['id']} - {None}
+        end_identity = {key, skill_id} - {None}
+        if start_identity and end_identity and start_identity.isdisjoint(end_identity):
+            return
+        if method == 'Character.OnAfterSkill' and type(reason) is int and reason == 1:
+            # Ability.FinishReason.INTERRUPTED can end the cast action while
+            # the skill's damage effect is still active.
+            window.setdefault('cast_completed_at', game_time)
+            return
+        if method == 'BattleController.OnCharacterFinished' and reason == 11:
+            # Entity.FinishReason.MOVE_LIKE_RESPAWN_SELF reports both Ulpian
+            # S3's outward move on the cast-completion frame and his return.
+            if 'skchr_ulpia_3' in start_identity:
+                moved_at = window.setdefault('movement_at', game_time)
+                if moved_at == window.get('cast_completed_at') and game_time > moved_at:
+                    self._close_skill_window(owner, game_time, reason, confirmed=True)
+            return
+        confirmed = method in ('Character.OnSkillFinish', 'Character.SwitchOutFromSkillState')
+        self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
 
     def snapshot(self, game_time, counters):
         """Apply a complete source-key snapshot; omitted sources become unknown.
@@ -654,7 +709,8 @@ class Statistics:
                     target_type, damage_type, cancel_reason, shield_absorbed)
         if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
             raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
-        payload = (game_time, source, kind, amount, evidence, target_instance, owner, skill_method,
+        payload = (game_time, source, kind, amount, evidence, target_instance, owner,
+                   skill_key, skill_id, skill_name, skill_reason, skill_method,
                    mitigation_before, mitigation_after)
         if event_id in self.events:
             if self.events[event_id] != payload:
@@ -714,25 +770,9 @@ class Statistics:
             self.last_elemental.pop(target_instance, None)
             return
         if kind in ('skill_start', 'skill_end'):
-            if kind == 'skill_start':
-                self.skill_seen.add(owner)
-                if owner not in self.skill_active:
-                    self.skill_active[owner] = {
-                        'start': game_time, 'key': skill_key, 'id': skill_id,
-                        'name': skill_name, 'method': skill_method or target_instance}
-            elif (source == 'char_1041_angel2'
-                  and 'skchr_angel2_3' in (skill_key, skill_id)
-                  and skill_method == 'Character.OnAfterSkill'
-                  and type(skill_reason) is int and skill_reason == 1):
-                # This finishes the cast action. The damage effect remains
-                # active, and these callbacks do not prove when the ammo ran out.
-                self.skill_incomplete[owner] = '未观测到弹药技能的实际结束'
-            else:
-                window = self.skill_active.pop(owner, None)
-                if window is not None:
-                    window['end'] = game_time
-                    window['reason'] = skill_reason
-                    self.skill_windows.setdefault(owner, []).append(window)
+            self._record_skill_transition(
+                owner, source, kind, game_time, key=skill_key, skill_id=skill_id,
+                name=skill_name, method=skill_method or target_instance, reason=skill_reason)
             return
         if kind == 'hp_damage':
             friendly = (isinstance(target, str)
@@ -951,8 +991,10 @@ class Statistics:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
                 row['effective_damage'] = None
+            skill_incomplete_reason = (self.skill_incomplete.get(owner)
+                                       or self._unconfirmed_skill_reason(self.skill_active.get(owner)))
             skill_known = (coverage_complete and not self.skill_unknown
-                           and owner not in self.skill_incomplete)
+                           and skill_incomplete_reason is None)
             skill_value = self.skill_observed.get(owner, 0.0)
             non_skill_value = self.non_skill_observed.get(owner, 0.0)
             expected = row.get('observed_damage')
@@ -964,7 +1006,7 @@ class Statistics:
             if not skill_known:
                 reason = ('事件观测未建立' if not self.event_coverage else
                           '事件覆盖已结束' if not coverage_complete else
-                          self.skill_incomplete.get(owner, '技能事件覆盖不完整'))
+                          skill_incomplete_reason or '技能事件覆盖不完整')
             elif not covers_total:
                 reason = '技能窗口未覆盖全部伤害事件'
             else:
@@ -985,7 +1027,7 @@ class Statistics:
                                          + (1 if owner in self.skill_active else 0))
             row['skill_active_seconds'] = (
                 self._skill_active_seconds(owner)
-                if self.event_coverage and owner not in self.skill_incomplete else None)
+                if self.event_coverage and skill_incomplete_reason is None else None)
             row['skill_coverage_complete'] = skill_known
             row['skill_split_complete'] = skill_known and covers_total
             row['skill_split_effective_complete'] = effective_split_known

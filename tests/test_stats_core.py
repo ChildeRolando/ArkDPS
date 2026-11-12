@@ -639,6 +639,89 @@ def test_duplicate_skill_start_and_end_markers_stay_one_window():
     assert row['skill_window_count'] == 1
 
 
+@pytest.mark.parametrize('end_method', ['Character.OnSkillFinish', 'Character.SwitchOutFromSkillState'])
+def test_cast_completion_waits_for_matching_skill_effect_finish(end_method):
+    s = Statistics('cast-completion', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(12)
+    s.event('start', 1, 'a', 'skill_start', 1, skill_id='skill',
+            skill_method='Character.SwitchToSkillState')
+    s.event('cast', 2, 'a', 'skill_end', 1, skill_id='skill',
+            skill_method='Character.OnAfterSkill', skill_reason=1)
+    s.event('wrong-finish', 3, 'a', 'skill_end', 1, skill_id='other', skill_method=end_method)
+    s.event('during', 5, 'a', 'damage', 50, target='enemy_1', real_delta=-10,
+            hp_before=10, hp_after=0, killed=True, damage_type=1, shield_absorbed=0)
+    pending = s.result()['rows']['A']
+    assert pending['skill_active_seconds'] is None
+    assert pending['skill_damage_effective'] is None
+    assert not pending['skill_coverage_complete']
+    assert pending['skill_split_reason'] == '未观测到技能效果的实际结束'
+    s.event('finish', 10, 'a', 'skill_end', 1, skill_id='skill', skill_method=end_method)
+    s.event('after', 11, 'a', 'damage', 20, target='enemy_2', real_delta=-20,
+            hp_before=100, hp_after=80, killed=False, damage_type=1)
+    s.finish(12)
+    row = s.result()['rows']['A']
+    assert row['skill_active_seconds'] == 9
+    assert row['skill_window_count'] == 1
+    assert row['skill_coverage_complete']
+    assert row['skill_damage_effective'] == 10
+    assert row['non_skill_damage_effective'] == 20
+    assert row['skill_split_reason'] is None
+
+
+@pytest.mark.parametrize('recast', [False, True])
+def test_unconfirmed_cast_completion_survives_recast_and_battle_end(recast):
+    s = Statistics('unconfirmed-cast', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(10)
+    s.event('start', 1, 'a', 'skill_start', 1, skill_id='skill',
+            skill_method='Character.OnSkillStart')
+    s.event('cast', 2, 'a', 'skill_end', 1, skill_id='skill',
+            skill_method='Character.OnAfterSkill', skill_reason=1)
+    if recast:
+        s.event('recast', 6, 'a', 'skill_start', 1, skill_id='skill',
+                skill_method='Character.OnSkillStart')
+        s.event('finish', 7, 'a', 'skill_end', 1, skill_id='skill',
+                skill_method='Character.OnSkillFinish')
+    s.finish(10)
+    row = s.result()['rows']['A']
+    assert row['skill_active_seconds'] is None
+    assert not row['skill_coverage_complete']
+    assert not row['skill_split_complete']
+    assert row['skill_window_count'] == (2 if recast else 1)
+    assert row['skill_split_reason'] == '未观测到技能效果的实际结束'
+
+
+@pytest.mark.parametrize('outbound_first', [False, True])
+def test_ulpian_skill_window_extends_from_cast_through_return_movement(outbound_first):
+    s = Statistics('ulpian-movement', 0, event_coverage=True)
+    s.register_source('char_4145_ulpia', 'Ulpian')
+    s.snapshot(0, {'char_4145_ulpia': {'damage': 0, 'healing': 0}})
+    s.advance(12)
+
+    def transition(event_id, time, kind, method, reason=None, skill_id=None):
+        s.event(event_id, time, 'char_4145_ulpia', kind, 1, skill_method=method,
+                skill_reason=reason, skill_id=skill_id)
+
+    transition('start', 1, 'skill_start', 'Character.SwitchToSkillState', skill_id='skchr_ulpia_3')
+    cast = ('cast', 2, 'skill_end', 'Character.OnAfterSkill', 1, 'skchr_ulpia_3')
+    outbound = ('outbound', 2, 'skill_end', 'BattleController.OnCharacterFinished', 11)
+    for marker in (outbound, cast) if outbound_first else (cast, outbound):
+        transition(*marker)
+    transition('outbound-duplicate', 2, 'skill_end', 'BattleController.OnCharacterFinished', 11)
+    s.event('during', 5, 'char_4145_ulpia', 'damage', 50, target='enemy_1')
+    transition('return', 10, 'skill_end', 'BattleController.OnCharacterFinished', 11)
+    s.event('after', 11, 'char_4145_ulpia', 'damage', 20, target='enemy_1')
+    row = s.result()['rows']['Ulpian']
+    assert row['skill_window_count'] == 1
+    assert row['skill_active_seconds'] == 9
+    assert row['skill_damage'] == 50
+    assert row['non_skill_damage'] == 20
+    assert row['skill_coverage_complete']
+
+
 def test_skill_split_is_unknown_after_event_coverage_ends():
     s = Statistics('skill-gap', 0, event_coverage=True)
     s.register_source('a', 'A')

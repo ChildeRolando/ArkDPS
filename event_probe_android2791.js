@@ -236,6 +236,12 @@ function damageModifier(thread,modifier){
 }
 function enterModifier(scope){
  const scopes=activeModifiers.get(scope.tid)||[];
+ const overlapping=scopes.length?damageModifier(scope.tid,scope.mod):null;
+ if(overlapping){
+  // A recursive call on the same Modifier& can change either call's value.
+  overlapping.mitigationModifierReused=true;
+  scope.mitigationModifierReused=true;
+ }
  scopes.push(scope);activeModifiers.set(scope.tid,scopes);scope.tracksModifier=true;
 }
 function leaveModifier(scope){
@@ -434,10 +440,10 @@ const MITIGATION_SAMPLES_PER_REASON=2;
 const mitigationCounts={
  formula_scopes:0,formula_candidates:0,formula_missing_pre:0,
  apply_missing_candidate:0,apply_ambiguous_candidate:0,apply_value_mismatch:0,
- apply_changed_at_leave:0,emitted:0,
+ apply_changed_at_leave:0,emitted:0,emitted_after_adjustment:0,
 };
 const mitigationSamples=[];
-function noteMitigationMismatch(reason,source,when,formula,amount){
+function noteMitigationDiagnostic(reason,source,when,formula,amount){
  mitigationCounts[reason]++;
  const sameReason=mitigationSamples.filter(sample=>sample.reason===reason);
  if(sameReason.length>=MITIGATION_SAMPLES_PER_REASON
@@ -480,7 +486,7 @@ function takeFormulaDamage(scope,source,type,raw){
  hits.hits.delete(key); // mismatched or canceled settlement cannot leak to a later hit
  if(result===null){mitigationCounts.apply_ambiguous_candidate++;return null;}
  if(result.raw===raw)return result;
- noteMitigationMismatch('apply_value_mismatch',scope.source,when,result,Number(raw)/4294967296);
+ noteMitigationDiagnostic('apply_value_mismatch',scope.source,when,result,Number(raw)/4294967296);
  return null;
 }
 function fixedBits(value){return BigInt.asIntN(64,BigInt(value.toString()));}
@@ -494,14 +500,20 @@ function captureMitigation(scope,source){
 function mitigationEvidence(scope,type,amount){
  const result=scope.mitigation;
  if(!result)return null;
- if(result.type!==type||result.after!==amount||
+ if(scope.mitigationModifierReused||result.type!==type||scope.mod.add(0x60).readS32()!==0||
+    !Number.isFinite(amount)||amount<0||
     !result.source.equals(scope.mod.readPointer())||!result.target.equals(scope.mod.add(0x10).readPointer())||
-    result.raw!==fixedBits(scope.mod.add(0x30).readS64())||scope.mod.add(0x70).readS32()!==0){
-  noteMitigationMismatch('apply_changed_at_leave',scope.source,scope.when,result,amount);
+    scope.mod.add(0x70).readS32()!==0){
+  noteMitigationDiagnostic('apply_changed_at_leave',scope.source,scope.when,result,amount);
   return null;
  }
+ // The unique formula result matched m_value exactly on entry. Damage
+ // modifiers can adjust that value during this call before shield and HP
+ // settlement, so keep the matched formula input and report final m_value.
+ if(result.after!==amount)
+  noteMitigationDiagnostic('emitted_after_adjustment',scope.source,scope.when,result,amount);
  mitigationCounts.emitted++;
- return {mitigation_before:result.before,mitigation_after:result.after};
+ return {mitigation_before:result.before,mitigation_after:amount};
 }
 function installMitigationHooks(){
  if(!mitigationMethods)return;
@@ -551,7 +563,7 @@ function installMitigationHooks(){
    const after=Number(raw)/4294967296;
    if(type<1||type>3)return;
    if(scope.conflict||type!==scope.type||!Number.isFinite(scope.before)||scope.before<=0){
-    noteMitigationMismatch('formula_missing_pre',scope.sourceId,scope.when,{after},null);
+    noteMitigationDiagnostic('formula_missing_pre',scope.sourceId,scope.when,{after},null);
     return;
    }
    if(Number.isFinite(after)&&after>=0)rememberFormulaDamage(scope,raw,after);

@@ -726,8 +726,9 @@ def test_ammo_cast_completion_leaves_only_that_skill_window_unknown(prefab_key):
               prefab_key, 1, 'skchr_angel2_3'),
         skill(6, 3, 'char_1041_angel2', 'skill_end', 'Character.OnAfterSkill',
               prefab_key, 1, 'skchr_angel2_3'),
-        {**event(7, frame=4, game_time=3, amount=15), 'source': 'char_1041_angel2'},
-        event(8, frame=4, game_time=3, amount=5),
+        skill(7, 3, 'char_a', 'skill_end', 'Character.OnSkillFinish', 'regular'),
+        {**event(8, frame=4, game_time=3, amount=15), 'source': 'char_1041_angel2'},
+        event(9, frame=4, game_time=3, amount=5),
     ]
     collector.frame, collector.game_time, collector.damage = 4, 3, 115
     observer.sequence = observer.epoch = len(observer.events)
@@ -748,4 +749,4 @@ def test_ammo_cast_completion_leaves_only_that_skill_window_unknown(prefab_key):
     assert regular['skill_coverage_complete'] and regular['skill_split_complete']
     assert regular['skill_active_seconds'] == 1
     assert regular['skill_damage'] == 10 and regular['non_skill_damage'] == 5
-    assert capture.adapter.event_stream.sequence == 8
+    assert capture.adapter.event_stream.sequence == 9

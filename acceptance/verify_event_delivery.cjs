@@ -182,12 +182,13 @@ const targetKey=pointer=>pointer.id;
 const entityId=pointer=>pointer.id;
 const own=id=>id.startsWith('char_');
 const fixedArg=value=>Number(BigInt(value.toString()))/4294967296;
+${between('const activeModifiers=new Map();', 'function markShieldUnknown(')}
 ${between('let mitigationReady=false;', 'function includeEnemyHp(')}
 installMitigationHooks();
 assert.equal(mitigationReady,true);
 assert.equal(hooks.length,3);
 
-const raw=value=>BigInt(value)*4294967296n;
+const raw=value=>BigInt(Math.round(value*4294967296));
 function pointer(address,id='',type=1){
   return {
     id,equals(other){return address===other.toString();},
@@ -212,22 +213,30 @@ function calculate(before,after,to=target,actionFlags=[1,1]){
   assert.equal(active,0);
 }
 function modifier(after,type=1,cancel=0,to=target,from=source){
+  const fields={after,type,cancel,to,from};
   return {
-    readPointer:()=>from,
+    fields,
+    equals(other){return this===other;},
+    readPointer:()=>fields.from,
     add:offset=>({
-      readS32:()=>({0x60:0,0x68:type,0x70:cancel})[offset],
-      readS64:()=>raw(after),
-      readPointer:()=>to,
+      readS32:()=>({0x60:0,0x68:fields.type,0x70:fields.cancel})[offset],
+      readS64:()=>raw(fields.after),
+      readPointer:()=>fields.to,
     }),
   };
 }
-function apply(after,to=target,thread=7,type=1,from=source){
-  const scope={tid:thread,source:from.id,target:to,when:time(),mod:modifier(after,type,0,to,from)};
-  captureMitigation(scope,from);
+function openModifier(mod,thread=7){
+  const scope={tid:thread,source:mod.fields.from.id,target:mod.fields.to,when:time(),mod};
+  enterModifier(scope);
+  captureMitigation(scope,mod.fields.from);
   return scope;
 }
+function apply(after,to=target,thread=7,type=1,from=source){
+  return openModifier(modifier(after,type,0,to,from),thread);
+}
 function ratio(scope,amount,type=1){
-  return JSON.stringify(mitigationEvidence(scope,type,amount));
+  try{return JSON.stringify(mitigationEvidence(scope,type,amount));}
+  finally{leaveModifier(scope);}
 }
 
 calculate(100,60);
@@ -255,16 +264,19 @@ assert.equal(ratio(apply(60,other),60),'{"mitigation_before":100,"mitigation_aft
 calculate(100,60,target,[0,0]);
 assert.equal(ratio(apply(60),60),'null');
 
-calculate(100,60);
-let hit=apply(60);
-hit.mod=modifier(60,1,1);
-assert.equal(ratio(hit,60),'null');
-hit.mod=modifier(62);
-assert.equal(ratio(hit,62),'null');
-hit.mod=modifier(60,2);
-assert.equal(ratio(hit,60,2),'null');
-hit.mod=modifier(60,1,0,other);
-assert.equal(ratio(hit,60),'null');
+// CE-5 SilverAsh: the formula returned 306, then the same Modifier&
+// settled at 397.79998540878296 after adjustment.
+const adjusted=397.79998540878296;
+calculate(1306,306);
+const hit=apply(306);
+hit.mod.fields.after=adjusted;
+assert.equal(ratio(hit,adjusted),JSON.stringify({mitigation_before:1306,mitigation_after:adjusted}));
+for(const changed of [{cancel:1},{type:2},{to:other},{from:pointer('0x102','char_two')}]){
+  calculate(1306,306);
+  const invalid=apply(306);
+  Object.assign(invalid.mod.fields,{after:adjusted},changed);
+  assert.equal(ratio(invalid,adjusted,invalid.mod.fields.type),'null');
+}
 
 calculate(100,60);
 frame++;
@@ -272,39 +284,61 @@ gameTime+=1/30;
 assert.equal(ratio(apply(60),60),'null');
 assert.equal(formulaScopes.size,0);
 assert.equal(activeHooks.size,0);
-assert.equal(epoch,9); // the outer formula alone accounts for callback barriers
+assert.equal(epoch,13); // the outer formula alone accounts for callback barriers
 
 const diagnostics=mitigationDiagnostics();
-assert.equal(diagnostics.formula_scopes,8);
-assert.equal(diagnostics.formula_candidates,8);
+assert.equal(diagnostics.formula_scopes,12);
+assert.equal(diagnostics.formula_candidates,12);
 assert.equal(diagnostics.formula_missing_pre,0);
 assert.equal(diagnostics.apply_missing_candidate,9);
 assert.equal(diagnostics.apply_ambiguous_candidate,1);
 assert.equal(diagnostics.apply_value_mismatch,1);
 assert.equal(diagnostics.apply_changed_at_leave,4);
-assert.equal(diagnostics.emitted,3);
-assert.equal(diagnostics.samples.length,2);
+assert.equal(diagnostics.emitted,4);
+assert.equal(diagnostics.emitted_after_adjustment,1);
+assert.equal(diagnostics.samples.length,3);
 const mismatch=diagnostics.samples[0];
 assert.equal(mismatch.source,'char_one');
 assert.equal(mismatch.formula_before,200);
 assert.equal(mismatch.formula_after,80);
 assert.equal(mismatch.modifier_amount,79);
+const adjustment=diagnostics.samples[1];
+assert.equal(adjustment.reason,'emitted_after_adjustment');
+assert.equal(adjustment.formula_before,1306);
+assert.equal(adjustment.formula_after,306);
+assert.equal(adjustment.modifier_amount,adjusted);
 
 // An eligible calculation missing the native GetFinalAtk return records the
 // diagnostic but neither fabricates a candidate nor consumes any damage event.
 const finishWithoutPre=enter('outer',[target,source,flag(1),flag(1),attack]);
 finishWithoutPre(raw(58));
 assert.equal(mitigationDiagnostics().formula_missing_pre,1);
-assert.equal(mitigationDiagnostics().samples[2].formula_after,58);
+assert.equal(mitigationDiagnostics().samples[3].formula_after,58);
 assert.equal(ratio(apply(58),58),'null');
-for(const reason of ['formula_missing_pre','apply_value_mismatch','apply_changed_at_leave']){
+for(const reason of ['formula_missing_pre','apply_value_mismatch','apply_changed_at_leave','emitted_after_adjustment']){
   for(let index=0;index<10;index++)
-    noteMitigationMismatch(reason,'char_'+index,time(),{after:58},null);
+    noteMitigationDiagnostic(reason,'char_'+index,time(),{after:58},null);
   assert.equal(mitigationDiagnostics().samples.filter(sample=>sample.reason===reason).length,
                MITIGATION_SAMPLES_PER_REASON);
 }
-assert.equal(mitigationDiagnostics().samples.length,6);
-assert.equal(diagnostics.samples.length,2);
+assert.equal(mitigationDiagnostics().samples.length,8);
+assert.equal(diagnostics.samples.length,3);
+
+calculate(100,60);
+const outer=apply(60);
+calculate(110,90,other);
+const inner=apply(90,other);
+assert.equal(ratio(inner,90),'{"mitigation_before":110,"mitigation_after":90}');
+assert.equal(ratio(outer,60),'{"mitigation_before":100,"mitigation_after":60}');
+
+calculate(1306,306);
+const shared=apply(306);
+calculate(1400,306);
+const nested=openModifier(shared.mod);
+shared.mod.fields.after=adjusted;
+assert.equal(ratio(nested,adjusted),'null');
+assert.equal(ratio(shared,adjusted),'null');
+assert.equal(activeModifiers.size,0);
 
 for(let index=0;index<=FORMULA_PENDING_LIMIT;index++)
   calculate(100,60,pointer(String(index),'enemy_limit'));

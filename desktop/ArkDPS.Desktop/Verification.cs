@@ -263,6 +263,18 @@ public partial class MainWindow
                 !HasText(FindOperatorRatio("Mitigation"),"已观测减伤率"),
                 "complete zero mitigation did not take precedence over the observed subset");
         pinnedRow["mitigation_rate"]=18.34;
+        var pinnedDetail=liveView["details_by_owner"]![pinnedOwner]!;
+        var savedCoverage=pinnedDetail["skill_coverage"]?.DeepClone();
+        pinnedDetail["skill_coverage"]=0.0036;
+        ApplyFixture(fixture);
+        var coverageField=FindAutomationElement(LiveInspector,"CompactOperatorMetric3")
+            ?? throw new InvalidOperationException("missing skill coverage field");
+        Require(HasText(coverageField,"<1%"),
+            "short confirmed skill duration rendered as zero coverage");
+        pinnedDetail["skill_coverage"]=0;
+        ApplyFixture(fixture);
+        Require(HasText(coverageField,"0%"),"confirmed zero skill coverage was lost");
+        pinnedDetail["skill_coverage"]=savedCoverage;
         ApplyFixture(fixture);
         double savedWidth = Width, savedHeight = Height;
         foreach (var (width, height) in new[] { (1920, 1080), (1672, 941), (1380, 900), (1200, 820), (560, 540) })
@@ -372,7 +384,7 @@ public partial class MainWindow
     {
         var ratios=new[] { FindOperatorRatio("Overkill"), FindOperatorRatio("Mitigation"), FindOperatorRatio("SkillShare") };
         var values=new[] { "8%", "18%", "42%" };
-        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 公式后伤害 ÷ 公式前伤害", "技能期伤害 ÷ 已拆分的总伤害" };
+        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 结算伤害 ÷ 公式前伤害", "技能期伤害 ÷ 已拆分的总伤害" };
         var positions=ratios.Select(field=>field.TranslatePoint(new Point(),LiveInspector)).ToArray();
         var stats=FindAutomationElement(LiveInspector,"CompactOperatorStats")
             ?? throw new InvalidOperationException("main data card missing");
