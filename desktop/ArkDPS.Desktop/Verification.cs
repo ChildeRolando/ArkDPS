@@ -246,9 +246,22 @@ public partial class MainWindow
         string pinnedOwner=liveView["entries"]!.AsArray()[0]!["owner_id"]!.GetValue<string>();
         var pinnedRow=liveView["source"]![pinnedOwner]!;
         Require(HasText(FindOperatorRatio("Mitigation"),"—"),"unavailable mitigation rendered as zero");
+        pinnedRow["observed_mitigation_rate"]=58.4695;
+        pinnedRow["observed_mitigation_after"]=7660.38;
+        pinnedRow["mitigation_matched_hits"]=27;
+        pinnedRow["mitigation_unknown_reason"]="部分伤害缺少同次命中的公式前后值";
+        ApplyFixture(fixture);
+        var observedMitigation=FindOperatorRatio("Mitigation");
+        Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观测减伤率") &&
+                observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
+                observedTip.Text.Contains("已配对的 27 击"),
+                "partial mitigation did not expose its measured value and sample scope");
         pinnedRow["mitigation_rate"]=0;
         ApplyFixture(fixture);
-        Require(HasText(FindOperatorRatio("Mitigation"),"0%"),"measured zero mitigation was treated as unknown");
+        Require(HasText(FindOperatorRatio("Mitigation"),"0%") &&
+                HasText(FindOperatorRatio("Mitigation"),"被减伤率") &&
+                !HasText(FindOperatorRatio("Mitigation"),"已观测减伤率"),
+                "complete zero mitigation did not take precedence over the observed subset");
         pinnedRow["mitigation_rate"]=18.34;
         ApplyFixture(fixture);
         double savedWidth = Width, savedHeight = Height;

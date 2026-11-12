@@ -89,7 +89,7 @@ def test_formula_coverage_checks_each_source_before_aggregating_a_summon():
     assert rows['other']['mitigation_rate'] == 0
 
 
-def test_formula_gain_retains_a_signed_mitigation_rate_and_gap_hides_it():
+def test_formula_gain_retains_signed_observed_mitigation_through_terminal_gap():
     s = Statistics('battle', 0, event_coverage=True)
     s.register_source('a', 'a')
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
@@ -97,7 +97,15 @@ def test_formula_gain_retains_a_signed_mitigation_rate_and_gap_hides_it():
     s.event('a', 1, 'a', 'damage', 50, mitigation_before=40, mitigation_after=50)
     assert s.result()['rows']['a']['mitigation_rate'] == -25
     s.invalidate_events()
-    assert s.result()['rows']['a']['mitigation_rate'] is None
+    s.finish(2)
+    s.correct_final_totals({'a': {'damage': 75, 'healing': 0}})
+    row = s.result()['rows']['a']
+    assert row['mitigation_rate'] is None
+    assert row['mitigation_unknown_reason'] == '事件覆盖已结束'
+    assert row['observed_mitigation_rate'] == -25
+    assert row['observed_mitigation_before'] == 40
+    assert row['observed_mitigation_after'] == 50
+    assert row['mitigation_matched_hits'] == 1
 
 
 def test_missing_source_and_counter_failure_are_not_zero_filled():

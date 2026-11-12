@@ -105,8 +105,12 @@ def test_formula_pair_flows_through_damage_queue_without_using_hp_delta():
     assert row['mitigation_before'] == 250
     assert row['mitigation_rate'] == pytest.approx(32)
     assert row['mitigation_unknown_reason'] is None
+    assert row['observed_mitigation_rate'] == pytest.approx(32)
+    assert row['mitigation_matched_hits'] == 2
     observer.events = [first, second]
-    assert capture.sample()['rows']['char_a']['mitigation_rate'] == pytest.approx(32)
+    replayed = capture.sample()['rows']['char_a']
+    assert replayed['mitigation_rate'] == pytest.approx(32)
+    assert replayed['mitigation_matched_hits'] == 2
 
     capture.adapter.on_end()
     assert capture.adapter.result()['rows']['char_a']['mitigation_rate'] == pytest.approx(32)
@@ -136,6 +140,10 @@ def test_missing_or_invalid_formula_pair_does_not_break_damage_events(fields):
     assert row['event_coverage_complete']
     assert row['mitigation_rate'] is None
     assert row['mitigation_unknown_reason'] == '部分伤害缺少同次命中的公式前后值'
+    assert row['observed_mitigation_before'] == 35
+    assert row['observed_mitigation_after'] == 20
+    assert row['observed_mitigation_rate'] == pytest.approx((1 - 20/35) * 100)
+    assert row['mitigation_matched_hits'] == 1
 
 
 def test_pre_baseline_native_damage_cannot_be_inferred_from_subsequent_formula_pairs():
@@ -152,6 +160,8 @@ def test_pre_baseline_native_damage_cannot_be_inferred_from_subsequent_formula_p
     assert row['damage'] == 120
     assert row['mitigation_rate'] is None
     assert row['mitigation_unknown_reason'] == '公式后伤害与本局累计不一致'
+    assert row['observed_mitigation_rate'] == 50
+    assert row['mitigation_matched_hits'] == 1
 
 
 def test_unavailable_formula_probe_only_degrades_mitigation():
@@ -174,6 +184,8 @@ def test_unavailable_formula_probe_only_degrades_mitigation():
     assert row['observed_damage'] == 20
     assert row['mitigation_rate'] is None
     assert row['mitigation_unknown_reason'] == '伤害公式回调覆盖不足'
+    assert row['observed_mitigation_rate'] is None
+    assert row['mitigation_matched_hits'] == 0
 
 
 def test_enemy_settlement_reuses_the_ordered_queue_without_changing_native_totals():

@@ -494,6 +494,8 @@ class Statistics:
         self.mitigation_probe_incomplete = True
 
     def _record_mitigation(self, source, owner, amount, before, after):
+        if self.mitigation_probe_incomplete:
+            return
         try:
             valid = (self._optional_number(before) and before > 0
                      and self._optional_number(after) and after >= 0
@@ -503,39 +505,52 @@ class Statistics:
         if not valid:
             self.mitigation_incomplete.add(owner)
             return
-        before_total, after_total = self.mitigation.get(source, (0.0, 0.0))
+        before_total, after_total, hits = self.mitigation.get(source, (0.0, 0.0, 0))
         totals = before_total + before, after_total + after
         if not all(isfinite(value) for value in totals):
             self.mitigation_incomplete.add(owner)
             return
-        self.mitigation[source] = totals
+        self.mitigation[source] = (*totals, hits + 1)
 
     def _mitigation_result(self, owner, registered, *, complete):
-        unknown = None, None, None
+        totals = [self.mitigation.get(source, (0.0, 0.0, 0)) for source in registered]
+        before = sum(pair[0] for pair in totals)
+        after = sum(pair[1] for pair in totals)
+        hits = sum(pair[2] for pair in totals)
+        rate = (1 - after / before) * 100 if before > 0 and isfinite(before) and isfinite(after) else None
+        if rate is not None and not isfinite(rate):
+            rate = None
+
+        # Keep the original full-battle scope separate from valid matched hits.
+        # A later gap does not change the values of previously settled pairs.
         if not self.event_coverage:
-            return (*unknown, '事件观测未建立')
-        if self.event_coverage_broken:
-            return (*unknown, '事件覆盖已结束')
-        if self.mitigation_probe_incomplete:
-            return (*unknown, '伤害公式回调覆盖不足')
-        if owner in self.mitigation_incomplete:
-            return (*unknown, '部分伤害缺少同次命中的公式前后值')
-        if not complete:
-            return (*unknown, '原生累计伤害尚不可核对')
-        before = after = 0.0
-        for source in registered:
-            source_before, source_after = self.mitigation.get(source, (0.0, 0.0))
-            cumulative = self.sources[source]['values']['damage']
-            if not isclose(source_after, cumulative, rel_tol=1e-6, abs_tol=0.01):
-                return (*unknown, '公式后伤害与本局累计不一致')
-            before += source_before
-            after += source_after
-        if not isfinite(before) or not isfinite(after) or before <= 0:
-            return (*unknown, '尚无可核对的公式前后伤害')
-        rate = (1 - after / before) * 100
-        if not isfinite(rate):
-            return (*unknown, '公式前后伤害无法形成有限的比率')
-        return rate, before, after, None
+            reason = '事件观测未建立'
+        elif self.event_coverage_broken:
+            reason = '事件覆盖已结束'
+        elif self.mitigation_probe_incomplete:
+            reason = '伤害公式回调覆盖不足'
+        elif owner in self.mitigation_incomplete:
+            reason = '部分伤害缺少同次命中的公式前后值'
+        elif not complete:
+            reason = '原生累计伤害尚不可核对'
+        elif any(not isclose(pair[1], self.sources[source]['values']['damage'],
+                             rel_tol=1e-6, abs_tol=0.01)
+                 for source, pair in zip(registered, totals)):
+            reason = '公式后伤害与本局累计不一致'
+        elif rate is None:
+            reason = '尚无可核对的公式前后伤害'
+        else:
+            reason = None
+        return {
+            'mitigation_rate': rate if reason is None else None,
+            'mitigation_before': before if reason is None else None,
+            'mitigation_after': after if reason is None else None,
+            'mitigation_unknown_reason': reason,
+            'observed_mitigation_rate': rate,
+            'observed_mitigation_before': before if rate is not None else None,
+            'observed_mitigation_after': after if rate is not None else None,
+            'mitigation_matched_hits': hits,
+        }
 
     def _overkill(self, amount, *, target, real_delta, hp_before, hp_after,
                   killed, target_type, damage_type, cancel_reason, shield_absorbed):
@@ -873,9 +888,7 @@ class Statistics:
                    'overkill_coverage_start': self.start_time if self.event_coverage else None,
                    'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                              else self.end_time if self.event_coverage else None)}
-            (row['mitigation_rate'], row['mitigation_before'], row['mitigation_after'],
-             row['mitigation_unknown_reason']) = self._mitigation_result(
-                 owner, registered, complete=complete)
+            row.update(self._mitigation_result(owner, registered, complete=complete))
             burst = self.burst.get(owner)
             burst_complete = not self.burst_unknown
             row['burst_damage'] = (burst['actual'] if burst and burst_complete else None)

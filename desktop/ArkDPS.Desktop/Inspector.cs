@@ -202,9 +202,9 @@ public sealed class Inspector : Border
         body.Children.Add(Text(coverageNote,11,false,"Muted"));
 
         Section("被减伤率");
-        Pair("被减伤率",Mitigation(row));
-        var mitigationNote=MitigationNote(row,view);
-        if(mitigationNote.Length>0) body.Children.Add(Text(mitigationNote,10,false,"Muted",new Thickness(0,5,0,0)));
+        var mitigationReading=MitigationReading(row);
+        Pair(mitigationReading.Label,Percentage(mitigationReading.Fraction));
+        body.Children.Add(Text(mitigationReading.Explanation,10,false,"Muted",new Thickness(0,5,0,0)));
 
         Section(effective ? "有效伤害构成" : "伤害构成");
         var types=effective ? detail.Get("effective_damage_by_type") : row.Get("damage_by_type");
@@ -540,10 +540,9 @@ public sealed class Inspector : Border
                 : row.Get("damage").TryNumber(double.NaN)==0 ? "累计总伤为零，无法计算占比。"
                 : OverkillNote(row,view);
             overkill.Update(overflow,WithNote("过量伤害 ÷ 总伤害（含过量）。",overflowNote));
-            double reduction=row.Get("mitigation_rate").TryNumber(double.NaN)/100;
-            mitigation.Update(reduction,WithNote(
-                "1 − 公式后伤害 ÷ 公式前伤害。两项都取自护盾与生命值结算前的原生公式。",
-                double.IsFinite(reduction) ? "" : MitigationNote(row,view)));
+            var mitigationReading=MitigationReading(row);
+            mitigation.Caption=mitigationReading.Label;
+            mitigation.Update(mitigationReading.Fraction,mitigationReading.Explanation);
             string splitBasis=effective ? "技能期有效伤害 ÷ 已拆分的总有效伤害。" : "技能期伤害 ÷ 已拆分的总伤害。";
             skillShare.Caption=effective ? "技能期有效伤害占比" : "技能期伤害占比";
             skillShare.Update(splitKnown && splitTotal>0 ? skill/splitTotal : double.NaN,
@@ -758,18 +757,26 @@ public sealed class Inspector : Border
     }
     private static string OverkillRate(JsonElement row)=>Percentage(OverkillFraction(row));
 
-    private static string Mitigation(JsonElement row)
+    private static (double Fraction,string Label,string Explanation) MitigationReading(JsonElement row)
     {
-        var value=row.Get("mitigation_rate");
-        if(value.ValueKind!=JsonValueKind.Number) return "—";
-        return Percentage(value.GetDouble()/100);
-    }
-    private static string MitigationNote(JsonElement row,JsonElement view)
-    {
-        if(row.Get("mitigation_rate").ValueKind==JsonValueKind.Number) return "被减伤率 = 1 − 公式后伤害 ÷ 公式前伤害";
+        const string formula="1 − 公式后伤害 ÷ 公式前伤害。两项都取自护盾与生命值结算前的原生公式。";
+        double full=row.Get("mitigation_rate").TryNumber(double.NaN);
+        if(double.IsFinite(full)) return (full/100,"被减伤率",formula);
+
         string reason=row.Text("mitigation_unknown_reason");
-        if(reason.Length>0) return "被减伤未知："+reason;
-        return "被减伤未知：尚未采集公式前伤害；不推测、不补零。";
+        double observed=row.Get("observed_mitigation_rate").TryNumber(double.NaN);
+        double hits=row.Get("mitigation_matched_hits").TryNumber();
+        if(double.IsFinite(observed) && double.IsFinite(hits) && hits>0)
+        {
+            string coverage=$"仅统计已配对的 {Number(hits)} 击。";
+            double after=row.Get("observed_mitigation_after").TryNumber(double.NaN);
+            double total=row.Get("damage").TryNumber(double.NaN);
+            if(row.Bool("counter_snapshot_complete") && after>=0 && total>0 && after<=total)
+                coverage+=$"这些命中的公式后伤害占当前累计总伤的 {Percentage(after/total)}。";
+            if(reason.Length>0) coverage+="\n整局统计缺口："+reason;
+            return (observed/100,"已观测减伤率",formula+"\n"+coverage);
+        }
+        return (double.NaN,"被减伤率",formula+"\n"+(reason.Length>0 ? reason : "尚无同次命中的公式前后值。"));
     }
     private static string OverkillNote(JsonElement row,JsonElement view)
     {

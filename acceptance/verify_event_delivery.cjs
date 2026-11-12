@@ -222,7 +222,7 @@ function modifier(after,type=1,cancel=0,to=target,from=source){
   };
 }
 function apply(after,to=target,thread=7,type=1,from=source){
-  const scope={tid:thread,target:to,when:time(),mod:modifier(after,type,0,to,from)};
+  const scope={tid:thread,source:from.id,target:to,when:time(),mod:modifier(after,type,0,to,from)};
   captureMitigation(scope,from);
   return scope;
 }
@@ -273,6 +273,38 @@ assert.equal(ratio(apply(60),60),'null');
 assert.equal(formulaScopes.size,0);
 assert.equal(activeHooks.size,0);
 assert.equal(epoch,9); // the outer formula alone accounts for callback barriers
+
+const diagnostics=mitigationDiagnostics();
+assert.equal(diagnostics.formula_scopes,8);
+assert.equal(diagnostics.formula_candidates,8);
+assert.equal(diagnostics.formula_missing_pre,0);
+assert.equal(diagnostics.apply_missing_candidate,9);
+assert.equal(diagnostics.apply_ambiguous_candidate,1);
+assert.equal(diagnostics.apply_value_mismatch,1);
+assert.equal(diagnostics.apply_changed_at_leave,4);
+assert.equal(diagnostics.emitted,3);
+assert.equal(diagnostics.samples.length,2);
+const mismatch=diagnostics.samples[0];
+assert.equal(mismatch.source,'char_one');
+assert.equal(mismatch.formula_before,200);
+assert.equal(mismatch.formula_after,80);
+assert.equal(mismatch.modifier_amount,79);
+
+// An eligible calculation missing the native GetFinalAtk return records the
+// diagnostic but neither fabricates a candidate nor consumes any damage event.
+const finishWithoutPre=enter('outer',[target,source,flag(1),flag(1),attack]);
+finishWithoutPre(raw(58));
+assert.equal(mitigationDiagnostics().formula_missing_pre,1);
+assert.equal(mitigationDiagnostics().samples[2].formula_after,58);
+assert.equal(ratio(apply(58),58),'null');
+for(const reason of ['formula_missing_pre','apply_value_mismatch','apply_changed_at_leave']){
+  for(let index=0;index<10;index++)
+    noteMitigationMismatch(reason,'char_'+index,time(),{after:58},null);
+  assert.equal(mitigationDiagnostics().samples.filter(sample=>sample.reason===reason).length,
+               MITIGATION_SAMPLES_PER_REASON);
+}
+assert.equal(mitigationDiagnostics().samples.length,6);
+assert.equal(diagnostics.samples.length,2);
 
 for(let index=0;index<=FORMULA_PENDING_LIMIT;index++)
   calculate(100,60,pointer(String(index),'enemy_limit'));

@@ -93,12 +93,46 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
     return summary
 
 
+_OPTIONAL_FORMULA_METRICS = frozenset({
+    'mitigation_rate', 'mitigation_before', 'mitigation_after', 'mitigation_unknown_reason',
+    'observed_mitigation_rate', 'observed_mitigation_before', 'observed_mitigation_after',
+    'mitigation_matched_hits',
+})
+
+
+def _same_json(actual, recorded):
+    return json.dumps(actual, sort_keys=True) == json.dumps(recorded, sort_keys=True)
+
+
+def _same_statistics(actual, recorded):
+    if isinstance(actual, dict) and isinstance(recorded, dict):
+        rows, recorded_rows = actual.get('rows'), recorded.get('rows')
+        if isinstance(rows, dict) and isinstance(recorded_rows, dict):
+            # Older journals omit newly derived formula fields. Check every
+            # field the writer actually recorded, including formula values.
+            actual = dict(actual, rows={
+                owner: {key: value for key, value in row.items()
+                        if key not in _OPTIONAL_FORMULA_METRICS
+                        or key in recorded_rows.get(owner, ())}
+                for owner, row in rows.items()
+            })
+    return _same_json(actual, recorded)
+
+
+def _same_lifecycle_state(actual, recorded):
+    if 'statistics' in actual and 'statistics' in recorded:
+        return (_same_statistics(actual['statistics'], recorded['statistics'])
+                and _same_json({key: value for key, value in actual.items() if key != 'statistics'},
+                               {key: value for key, value in recorded.items() if key != 'statistics'}))
+    return _same_json(actual, recorded)
+
+
 def same_archive(actual, recorded):
     # Pre-history journals did not contain snapshot interval history. Keep
     # their existing evidence replayable; new journals verify the field too.
     if 'snapshot_intervals' not in recorded:
         actual = {key: value for key, value in actual.items() if key != 'snapshot_intervals'}
-    return json.dumps(actual, sort_keys=True) == json.dumps(recorded, sort_keys=True)
+    return _same_lifecycle_state(actual, recorded)
 
 
 def replay(path):
@@ -138,8 +172,7 @@ def replay(path):
         elif 'summary' in value:
             expected = value['summary']
             if (samples != expected['samples'] or archives != expected['archives'] or
-                    json.dumps(sessions.live(), sort_keys=True) !=
-                    json.dumps(expected['last_state'], sort_keys=True)):
+                    not _same_lifecycle_state(sessions.live(), expected['last_state'])):
                 raise ValueError('summary differs from replay')
             finished = True
     if sessions is None or pending or not finished:
@@ -159,9 +192,6 @@ def observation_from_json(raw):
 
 def replay_product(lines):
     """Verify the GUI/CLI journal, including event drains, publications and handoffs."""
-    def equal(left, right):
-        return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
-
     sessions = None
     pending = []
     samples = archives = 0
@@ -196,12 +226,12 @@ def replay_product(lines):
                 raise ValueError('archive differs from replayed lifecycle/events')
             archives += 1
         elif kind == 'published':
-            if sessions is None or failures or not equal(sessions.adapter.result(), data['statistics']):
+            if sessions is None or failures or not _same_statistics(sessions.adapter.result(), data['statistics']):
                 raise ValueError('published statistics differ from replay')
             if data['session'] != sessions.battle_id:
                 raise ValueError('published battle ID differs from lifecycle')
         elif kind == 'lifecycle_summary':
-            if sessions is None or not equal(sessions.live(), data):
+            if sessions is None or not _same_lifecycle_state(sessions.live(), data):
                 raise ValueError('summary differs from replay')
             finished = True
     if sessions is None or pending or not finished or failures:

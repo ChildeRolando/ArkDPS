@@ -429,6 +429,26 @@ function recordSourcelessEnemyBurst(scope,evidence,when) {
 let mitigationReady=false;
 const formulaScopes=new Map(),pendingFormulaDamage=new Map();
 const FORMULA_PENDING_LIMIT=256;
+// Cumulative observer counters. Each sample reason has its own small budget.
+const MITIGATION_SAMPLES_PER_REASON=2;
+const mitigationCounts={
+ formula_scopes:0,formula_candidates:0,formula_missing_pre:0,
+ apply_missing_candidate:0,apply_ambiguous_candidate:0,apply_value_mismatch:0,
+ apply_changed_at_leave:0,emitted:0,
+};
+const mitigationSamples=[];
+function noteMitigationMismatch(reason,source,when,formula,amount){
+ mitigationCounts[reason]++;
+ const sameReason=mitigationSamples.filter(sample=>sample.reason===reason);
+ if(sameReason.length>=MITIGATION_SAMPLES_PER_REASON
+    ||sameReason.some(sample=>sample.source===source))return;
+ mitigationSamples.push({reason,source,frame:when.frame,
+  formula_before:Number.isFinite(formula?.before)?formula.before:null,
+  formula_after:Number.isFinite(formula?.after)?formula.after:null,
+  modifier_amount:Number.isFinite(amount)?amount:null});
+}
+function mitigationDiagnostics(){return {...mitigationCounts,samples:mitigationSamples.slice()};}
+
 function sameFormulaHit(scope,attack){
  return scope&&(scope.attack.equals(attack)||scope.internalAttack?.equals(attack));
 }
@@ -442,19 +462,26 @@ function formulaBatch(thread,when){
  return batch.hits;
 }
 function rememberFormulaDamage(scope,raw,after){
+ mitigationCounts.formula_candidates++;
  const hits=formulaBatch(scope.tid,scope.when);
  const key=formulaDamageKey(scope.source,scope.target,scope.type);
  if(hits.has(key))hits.set(key,null); // multiple unmatched formula calls are ambiguous
  else if(hits.size<FORMULA_PENDING_LIMIT)
   hits.set(key,{raw,before:scope.before,after,source:scope.source,target:scope.target,type:scope.type});
 }
-function takeFormulaDamage(thread,when,source,target,type,raw){
- const hits=pendingFormulaDamage.get(thread);
- if(!hits||hits.frame!==when.frame||hits.game_time!==when.game_time)return null;
- const key=formulaDamageKey(source,target,type);
- const result=hits.hits.get(key);
+function takeFormulaDamage(scope,source,type,raw){
+ const hits=pendingFormulaDamage.get(scope.tid);
+ const when=scope.when,key=formulaDamageKey(source,scope.target,type);
+ const result=hits&&hits.frame===when.frame&&hits.game_time===when.game_time?hits.hits.get(key):undefined;
+ if(result===undefined){
+  if(targetKey(scope.target)?.startsWith('enemy_'))mitigationCounts.apply_missing_candidate++;
+  return null;
+ }
  hits.hits.delete(key); // mismatched or canceled settlement cannot leak to a later hit
- return result?.raw===raw?result:null;
+ if(result===null){mitigationCounts.apply_ambiguous_candidate++;return null;}
+ if(result.raw===raw)return result;
+ noteMitigationMismatch('apply_value_mismatch',scope.source,when,result,Number(raw)/4294967296);
+ return null;
 }
 function fixedBits(value){return BigInt.asIntN(64,BigInt(value.toString()));}
 function captureMitigation(scope,source){
@@ -462,14 +489,18 @@ function captureMitigation(scope,source){
  const type=scope.mod.add(0x68).readS32();
  if(type<1||type>3)return;
  const raw=fixedBits(scope.mod.add(0x30).readS64());
- scope.mitigation=takeFormulaDamage(scope.tid,scope.when,source,scope.target,type,raw);
+ scope.mitigation=takeFormulaDamage(scope,source,type,raw);
 }
 function mitigationEvidence(scope,type,amount){
  const result=scope.mitigation;
- if(!result||result.type!==type||result.after!==amount||
+ if(!result)return null;
+ if(result.type!==type||result.after!==amount||
     !result.source.equals(scope.mod.readPointer())||!result.target.equals(scope.mod.add(0x10).readPointer())||
-    result.raw!==fixedBits(scope.mod.add(0x30).readS64())||scope.mod.add(0x70).readS32()!==0)
+    result.raw!==fixedBits(scope.mod.add(0x30).readS64())||scope.mod.add(0x70).readS32()!==0){
+  noteMitigationMismatch('apply_changed_at_leave',scope.source,scope.when,result,amount);
   return null;
+ }
+ mitigationCounts.emitted++;
  return {mitigation_before:result.before,mitigation_after:result.after};
 }
 function installMitigationHooks(){
@@ -505,18 +536,25 @@ function installMitigationHooks(){
    formulaScopes.set(this.tid,null);
    this.entered=true;
    const target=args[0],source=args[1],attack=args[4];
-   if(source.isNull()||target.isNull()||attack.isNull()||!own(entityId(source))
-      ||!targetKey(target)?.startsWith('enemy_')||!(args[2].toInt32()||args[3].toInt32()))return;
-   this.formula={tid:this.tid,source,target,attack,when:time()};
+   if(source.isNull()||target.isNull()||attack.isNull()||!(args[2].toInt32()||args[3].toInt32()))return;
+   const sourceId=entityId(source);
+   if(!own(sourceId)||!targetKey(target)?.startsWith('enemy_'))return;
+   this.formula={tid:this.tid,source,sourceId,target,attack,when:time()};
+   mitigationCounts.formula_scopes++;
    formulaScopes.set(this.tid,this.formula);
   },function(result){
    const scope=this.formula;
-   if(!scope||scope.conflict||!Number.isFinite(scope.before)||scope.before<=0)return;
+   if(!scope)return;
    const end=time();
    if(scope.when.frame!==end.frame||scope.when.game_time!==end.game_time)return;
    const type=scope.attack.add(mitigationMethods.damageType).readS32(),raw=fixedBits(result);
    const after=Number(raw)/4294967296;
-   if(type===scope.type&&Number.isFinite(after)&&after>=0)rememberFormulaDamage(scope,raw,after);
+   if(type<1||type>3)return;
+   if(scope.conflict||type!==scope.type||!Number.isFinite(scope.before)||scope.before<=0){
+    noteMitigationMismatch('formula_missing_pre',scope.sourceId,scope.when,{after},null);
+    return;
+   }
+   if(Number.isFinite(after)&&after>=0)rememberFormulaDamage(scope,raw,after);
   },function(){
    if(!this.entered)return;
    if(this.previous)formulaScopes.set(this.tid,this.previous);
@@ -1144,7 +1182,8 @@ function eventQuality(frame){
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
   skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
   enemy_damage_ready:enemyDamageReady,enemy_damage_unknown:enemyDamageUnknown,
-  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,...enemyEntryQuality(frame)};
+  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
+  mitigation_diagnostics:mitigationDiagnostics(),...enemyEntryQuality(frame)};
 }
 function markEvents(){
  const current=time(true);
