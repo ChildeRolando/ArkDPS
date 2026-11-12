@@ -306,6 +306,7 @@ public partial class StatisticPanel : UserControl
         PanelFrame.SetResourceReference(Border.BackgroundProperty,loneTrail ? "Console" : "Card");
         TitleAccent.Visibility=loneTrail ? Visibility.Collapsed : Visibility.Visible;
         LoneTrailHudMark.Visibility=loneTrail ? Visibility.Visible : Visibility.Collapsed;
+        LoneTrailHudBackdrop.Visibility=LoneTrailHudChevrons.Visibility=LoneTrailHudMark.Visibility;
         TitleRegion.BorderThickness=loneTrail ? new Thickness(0,0,0,1) : new Thickness(0);
         if(loneTrail)
         {

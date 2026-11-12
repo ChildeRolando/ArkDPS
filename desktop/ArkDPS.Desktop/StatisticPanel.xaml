@@ -156,8 +156,24 @@
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
    <Border x:Name="TitleRegion">
+    <Grid>
+     <Border x:Name="LoneTrailHudBackdrop" Visibility="Collapsed" IsHitTestVisible="False">
+      <Border.Background>
+       <ImageBrush ImageSource="Assets/LoneTrail/orbital-header-banner.png" Stretch="UniformToFill"
+                   Viewbox="0.31,0.12,0.69,0.52"/>
+      </Border.Background>
+      <Border.OpacityMask>
+       <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+        <GradientStop Color="#00000000" Offset=".27"/><GradientStop Color="#92000000" Offset=".52"/>
+        <GradientStop Color="#D8000000" Offset=".73"/><GradientStop Color="#95000000" Offset=".86"/>
+        <GradientStop Color="#28000000" Offset="1"/>
+       </LinearGradientBrush>
+      </Border.OpacityMask>
+     </Border>
     <DockPanel x:Name="TitleBar" Margin="14,10,12,8">
      <StackPanel x:Name="ActionStack" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+      <Image x:Name="LoneTrailHudChevrons" Source="Assets/LoneTrail/chevrons-silver.png" Width="36" Height="20"
+             Opacity=".88" Margin="0,0,3,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
       <Button x:Name="HudClose" Click="CloseHud" Padding="6,1" MinWidth="32" Visibility="Collapsed" ToolTip="关闭 HUD" AutomationProperties.Name="关闭 HUD" Background="Transparent" BorderBrush="{DynamicResource Line}">
        <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Width="10" Height="10" Stretch="Fill" StrokeThickness="1.5"
              Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" IsHitTestVisible="False"/>
@@ -175,6 +191,7 @@
       <StackPanel x:Name="TitleText"><TextBlock x:Name="Heading" Style="{StaticResource CardTitle}" FontSize="18" VerticalAlignment="Center"/><TextBlock x:Name="PanelKind" Text="LIVE PANEL" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource Muted}" Margin="0,1,0,0"/></StackPanel>
      </StackPanel>
     </DockPanel>
+    </Grid>
    </Border>
 
    <WrapPanel x:Name="Selectors" Grid.Row="1" Margin="14,0,14,8">

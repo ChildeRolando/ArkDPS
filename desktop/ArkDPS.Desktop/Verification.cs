@@ -1088,10 +1088,15 @@ public partial class MainWindow
                     hudPanel.PanelFrame.BorderThickness == new Thickness() &&
                     titleRegion.ActualWidth >= originalHud.ActualWidth - 2,
                     "HUD does not fill its window or retains the extra frame");
+            bool loneTrail=theme=="lone-trail";
             Require(originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(2,2)) as DependencyObject) &&
+                    originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(titleRegion.ActualWidth*.68,
+                        titleRegion.ActualHeight/2)) as DependencyObject) &&
                     !originalHud.IsTitleDragSource(hudPanel.HudClose) &&
-                    (hudPanel.LoneTrailHudMark.Visibility == Visibility.Visible) == (theme == "lone-trail"),
-                    "HUD drag surface, close hit target, or skin marker did not render");
+                    hudPanel.LoneTrailHudMark.IsVisible==loneTrail && hudPanel.LoneTrailHudBackdrop.IsVisible==loneTrail &&
+                    hudPanel.LoneTrailHudChevrons.IsVisible==loneTrail &&
+                    !hudPanel.LoneTrailHudBackdrop.IsHitTestVisible && !hudPanel.LoneTrailHudChevrons.IsHitTestVisible,
+                    "HUD drag surface, close hit target, or orbital artwork did not render");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
             await Navigate("enemies");await Settle();
             Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
