@@ -17,7 +17,9 @@ def test_total_pool_replaces_the_matched_planned_instances_first_stage():
 
     assert total['planned_total_hp'] == 120000
     assert total['observed_total_hp'] == 100000
-    assert total['entered_total_hp'] == 160000
+    assert total['entered_total_hp'] == 100000
+    assert total['stage_total_hp_estimate'] == 160000
+    assert total['stage_total_hp_complete'] is True
     assert total['remaining_hp'] == 30000
     assert total['total_hp_complete'] is True
 
@@ -28,8 +30,10 @@ def test_phase_prefix_cannot_be_added_to_a_possibly_already_counted_stage():
     total = enemy_totals([boss], [row('boss', 60000, uid='9'), row('soldier', 5000)])
 
     assert total['observed_total_hp'] == 80000
-    assert total['entered_total_hp'] == 85000
+    assert total['entered_total_hp'] == 80000
+    assert total['stage_total_hp_estimate'] == 85000
     assert total['total_hp_complete'] is False
+    assert total['stage_total_hp_complete'] is False
     assert total['remaining_hp_complete'] is True
 
 
@@ -39,8 +43,10 @@ def test_ambiguous_plan_match_does_not_guess_by_enemy_type():
     plans = [row('boss', 60000, lifecycle='pending'), row('soldier', 5000, lifecycle='pending')]
     total = enemy_totals([boss], plans)
 
-    assert total['entered_total_hp'] == 125000
-    assert total['total_hp_complete'] is False
+    assert total['entered_total_hp'] == 120000
+    assert total['stage_total_hp_estimate'] == 125000
+    assert total['total_hp_complete'] is True
+    assert total['stage_total_hp_complete'] is False
 
 
 def test_known_planned_pool_does_not_make_event_only_current_hp_known():

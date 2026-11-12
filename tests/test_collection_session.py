@@ -89,6 +89,18 @@ def test_shared_entry_without_frida_keeps_shields_unknown():
     current.close()
 
 
+def test_enemy_page_shows_other_native_damage_separately_from_team_effective_damage():
+    current, collector, _ = session()
+    collector.read_enemies = lambda **kwargs: {'last_point': {'our_effective_damage': kwargs['our_damage']}}
+    sample = {'session': 'test', 'statistics': {
+        'rows': {'char_a': {'damage': 1200, 'effective_damage': 1100}},
+        'non_team_output': {'trap_011_ore': {'damage': 500.0, 'healing': 0.0}},
+    }}
+    current._attach_enemy(sample)
+    assert sample['enemy']['last_point']['our_effective_damage'] == 1100
+    assert sample['enemy']['non_team_native_damage'] == 500
+
+
 def test_default_entry_observes_after_certification_before_locating():
     calls = []
     current = CollectionSession('adb', 'serial', collector=Collector(calls),

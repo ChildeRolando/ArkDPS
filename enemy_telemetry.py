@@ -148,9 +148,10 @@ def _hp_pool(row, planned_hp=None):
     return max(hp for hp in (base, planned_hp, phase_hp) if hp is not None)
 
 
-def enemy_totals(rows, planned=None):
-    """Estimate the stage HP pool and independently total observed current HP."""
-    entered = [row for row in rows if row['lifecycle'] in ENTERED_LIFECYCLES]
+def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
+    """Total confirmed entrants and current HP, alongside the stage estimate."""
+    entered = [row for row in rows if row['lifecycle'] in ENTERED_LIFECYCLES
+               and not row.get('entry_inferred')]
     unknown_lifecycle_count = sum(row['alive'] is None for row in entered)
     observed_pool = [_hp_pool(row) for row in entered]
     observed_total = sum(hp for hp in observed_pool if hp is not None)
@@ -192,15 +193,16 @@ def enemy_totals(rows, planned=None):
                 adjusted_planned_total += max(0, hp - overlap)
     phases_complete = all(row.get('phase_from_birth') and row.get('phase_coverage_complete')
                           for row in phases)
+    total_complete = (entered_coverage_complete and bool(entered) and phases_complete
+                      and all(hp is not None for hp in observed_pool))
     if planned:
         missing_enemies = Counter(row['eid'] for row in entered) - Counter(row['eid'] for row in planned)
-        total_complete = (phases_complete and matched == len(phases)
-                          and not missing_enemies
-                          and all(hp is not None for hp in planned_pool)
+        stage_complete = (phases_complete and matched == len(phases)
+                          and not missing_enemies and all(hp is not None for hp in planned_pool)
                           and (observed_total <= adjusted_planned_total
                                or math.isclose(observed_total, adjusted_planned_total)))
     else:
-        total_complete = bool(entered) and phases_complete and all(hp is not None for hp in observed_pool)
+        stage_complete = False
     return {
         'entered_count': len(entered),
         'alive_count': sum(1 for row in entered if row['alive']),
@@ -212,8 +214,10 @@ def enemy_totals(rows, planned=None):
         'planned_unknown': [{'eid': row.get('eid'), 'name': row.get('name'),
                              'spawn_order': row.get('spawn_order')}
                             for row, hp in zip(planned, planned_hp) if hp is None],
-        'entered_total_hp': max(adjusted_planned_total, observed_total),
+        'entered_total_hp': observed_total,
         'observed_total_hp': observed_total,
+        'stage_total_hp_estimate': max(adjusted_planned_total, observed_total),
+        'stage_total_hp_complete': stage_complete,
         'remaining_hp': sum(max(0.0, hp) for hp in remaining if hp is not None),
         'total_hp_complete': total_complete,
         'remaining_hp_complete': remaining_complete,
@@ -230,7 +234,8 @@ class EnemyTimeline:
     def reset(self):
         self.points = []
 
-    def add(self, game_time, rows, our_effective_damage, planned=None, *, replace_current=False):
+    def add(self, game_time, rows, our_effective_damage, planned=None, *,
+            replace_current=False, entered_coverage_complete=True):
         if not isinstance(game_time, (int, float)) or isinstance(game_time, bool):
             return None
         if not math.isfinite(game_time):
@@ -242,7 +247,7 @@ class EnemyTimeline:
         if last_time is not None and (game_time < last_time
                                      or (game_time == last_time and not replace_current)):
             return None
-        totals = enemy_totals(rows, planned)
+        totals = enemy_totals(rows, planned, entered_coverage_complete=entered_coverage_complete)
         point = {
             'game_time': float(game_time),
             'entered_total_hp': totals['entered_total_hp'],
@@ -250,6 +255,8 @@ class EnemyTimeline:
             'planned_count': totals['planned_count'],
             'planned_total_hp': totals['planned_total_hp'],
             'planned_complete': totals['planned_complete'],
+            'stage_total_hp_estimate': totals['stage_total_hp_estimate'],
+            'stage_total_hp_complete': totals['stage_total_hp_complete'],
             'remaining_hp': totals['remaining_hp'],
             'our_effective_damage': float(our_effective_damage) if damage_known else None,
             'our_damage_known': damage_known,
@@ -515,13 +522,13 @@ class EnemyTelemetry:
 
     def _merged_rows(self, rows):
         if self._entry_events_complete is None:
-            return list(rows)
+            return [row for row in rows if not row['entry_inferred']]
         merged = []
         by_uid = {}
         for row in rows:
-            if row['entry_inferred'] and (self._entry_events_complete or self._entry_events):
-                # Scheduler's initial count only establishes a plan prefix.
-                # It cannot identify the same instances as the event stream.
+            if row['entry_inferred']:
+                # The scheduler's initial count establishes a plan prefix.
+                # It does not establish that any particular enemy entered.
                 continue
             uid = row['instance_uid']
             entry = self._entry_events.get(uid)
@@ -589,13 +596,21 @@ class EnemyTelemetry:
         self._status = status
         self.error = error
         current = self._rows_with_phases(self._rows)
-        planned = self._current_plan(current)
-        totals = enemy_totals(current, planned)
         stream_ready = self._stream_ready(frame)
+        if (self._stream_complete and frame is not None and self._snapshot_frame is not None
+                and frame < self._snapshot_frame):
+            # The seed is stored for later reconciliation. Only publish
+            # entrants already confirmed by an event at this watermark.
+            current = [row for row in current if row.get('spawn_time') is not None]
+        entered_coverage = (status == 'ready' and self._entry_events_complete is not False
+                            and (stream_ready if self._stream_complete is not None
+                                 else self._entry_events_complete is True))
+        planned = self._current_plan(current)
+        totals = enemy_totals(current, planned, entered_coverage_complete=entered_coverage)
         if self._stream_complete and not stream_ready:
             totals.update(remaining_hp_complete=False, hp_complete=False)
         if game_time is not None and (not self._stream_complete or stream_ready):
-            self._update_timeline(game_time, our_damage, current, planned)
+            self._update_timeline(game_time, our_damage, current, planned, entered_coverage)
         state = {
             'status': status,
             'error': error,
@@ -758,7 +773,7 @@ class EnemyTelemetry:
                           or row['spawn_kind'] == 'scheduled'], calibration=calibration)
         return 'ready', None
 
-    def _update_timeline(self, game_time, our_damage, rows, planned):
+    def _update_timeline(self, game_time, our_damage, rows, planned, entered_coverage):
         our_damage = _finite(our_damage, None)
         if self._damage_baseline is None and our_damage is not None:
             # Align the damage curve with the enemy-observation window. Native
@@ -768,7 +783,8 @@ class EnemyTelemetry:
         adjusted = (max(0.0, float(our_damage) - self._damage_baseline)
                     if self._damage_baseline is not None and our_damage is not None else None)
         self.timeline.add(game_time, rows, adjusted, planned,
-                          replace_current=self._stream_complete is True)
+                          replace_current=self._stream_complete is True,
+                          entered_coverage_complete=entered_coverage)
 
     def sample(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None,
                enemy_state=None, frame=None):

@@ -76,7 +76,9 @@ def test_between_sample_entry_seeds_actual_hp_and_updates_pending_plan():
     assert (new_row['hp'], new_row['max_hp'], new_row['alive']) == (31, 200, True)
     assert new_row['spawn_frame'] == 11 and new_row['atk'] == 23
     assert entered['totals']['planned_known_count'] == 2
+    assert initial['totals']['entered_total_hp'] == 100
     assert entered['totals']['entered_total_hp'] == 300
+    assert entered['last_point']['entered_total_hp'] == 300
     assert entered['totals']['remaining_hp'] == 106
     assert battle.polls == 1
 
@@ -122,6 +124,8 @@ def test_gap_reconciles_newer_native_hp_without_resurrecting_finished_uid():
     )
     assert earlier['enemy_state_complete'] is False
     assert [row['hp'] for row in earlier['rows']] == [0, 45]
+    assert earlier['totals']['total_hp_complete'] is False
+    assert earlier['last_point']['total_hp_complete'] is False
     battle.now = 3
     fallback = battle.sample(15, complete=False)
     assert [row['hp'] for row in fallback['rows']] == [0, 50]
@@ -133,12 +137,15 @@ def test_seed_newer_than_event_watermark_does_not_publish_mixed_frame_curve():
     battle = Battle((13, [enemy('10', hp=30)]))
     ahead = battle.sample(10)
     assert ahead['enemy_state_complete'] is False
+    assert ahead['totals']['entered_total_hp'] == 0
+    assert ahead['totals']['total_hp_complete'] is False
     assert ahead['totals']['remaining_hp_complete'] is False
     assert ahead['last_point'] is None
     late_event = battle.sample(11, event(1, 11, 'enemy_hp', hp_after=60))
-    assert late_event['rows'][0]['hp'] == 30
+    assert late_event['rows'] == []
     aligned = battle.sample(13, event(2, 13, 'enemy_hp', hp_after=20))
     assert aligned['enemy_state_complete'] is True
+    assert aligned['totals']['total_hp_complete'] is True
     assert aligned['last_point']['remaining_hp'] == 20
     assert battle.polls == 1
 
@@ -160,9 +167,10 @@ def test_state_events_do_not_admit_an_unconfirmed_enemy():
 def test_late_fake_death_corrects_newer_native_departure_until_reborn_event():
     battle = Battle((13, [enemy('10', hp=0, lifecycle='departed', alive=False)]))
     battle.sample(10)
-    waiting = battle.sample(11, event(1, 11, 'enemy_fake_death', hp_after=0))
+    battle.sample(11, event(1, 11, 'enemy_fake_death', hp_after=0))
+    waiting = battle.sample(13)
     assert waiting['rows'][0]['lifecycle'] == 'rebirthing'
-    reborn = battle.sample(12, event(2, 12, 'enemy_reborn', hp_after=60))
+    reborn = battle.sample(13, event(2, 12, 'enemy_reborn', hp_after=60))
     assert reborn['rows'][0]['lifecycle'] == 'active'
     aligned = battle.sample(13)
     assert aligned['last_point']['remaining_hp'] == 60

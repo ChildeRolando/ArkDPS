@@ -241,7 +241,8 @@ public sealed class EnemyChart : FrameworkElement
             dc.DrawText(label, new Point(left + width * i / 4 - label.Width / 2, top + height + 8));
         }
 
-        void Series(Func<EnemyPoint, double> value, Brush brush, double thickness, bool dashed = false)
+        void Series(Func<EnemyPoint, double> value, Brush brush, double thickness,
+                    bool dashed = false, bool step = false)
         {
             var pen = new Pen(brush, thickness)
             {
@@ -251,13 +252,22 @@ public sealed class EnemyChart : FrameworkElement
             };
             if (dashed) pen.DashStyle = new DashStyle(new double[] { 4, 4 }, 0);
             for (int i = 1; i < points.Count; i++)
-                dc.DrawLine(pen, Map(points[i - 1].GameTime, value(points[i - 1])),
-                            Map(points[i].GameTime, value(points[i])));
+            {
+                var from = Map(points[i - 1].GameTime, value(points[i - 1]));
+                var to = Map(points[i].GameTime, value(points[i]));
+                if (step && from.Y != to.Y)
+                {
+                    var change = new Point(to.X, from.Y);
+                    dc.DrawLine(pen, from, change);
+                    from = change;
+                }
+                dc.DrawLine(pen, from, to);
+            }
             var last = Map(points[^1].GameTime, value(points[^1]));
             dc.DrawEllipse(brush, null, last, thickness + 1.5, thickness + 1.5);
         }
 
-        Series(p => p.TotalHp, accent, 2.2);
+        Series(p => p.TotalHp, accent, 2.2, step: true);
         var damagePen = new Pen(good, 2.2)
         {
             LineJoin = PenLineJoin.Round,
@@ -341,8 +351,10 @@ public partial class MainWindow
             _ => "",
         };
         string hint = error.Length > 0 ? error
-            : entryHint + stateHint + " 总血量含已记录的重生阶段。"
+            : entryHint + stateHint + " 已入场总血量含已记录的重生阶段。"
                 + (totalComplete && remainingComplete ? "" : " ≥ 表示已知下限。");
+        if (enemy.Get("non_team_native_damage").TryNumber() > 0)
+            hint += " 其他来源原生伤害 " + Json.UiInt(enemy, "non_team_native_damage") + "。";
         double baseline = enemy.Get("damage_baseline").TryNumber(-1);
         if (baseline > 0)
             hint += " 我方有效伤害从敌情观测起点累计（起点 " +
@@ -356,7 +368,7 @@ public partial class MainWindow
             "stale" => "本帧敌人数据不完整，保留上一帧。",
             _ => "场上暂无已入场敌人。",
         };
-        EnemyChartLegendTotal.Text = "敌方总血量  " + (totalComplete ? totalHp : "≥ " + totalHp);
+        EnemyChartLegendTotal.Text = "已入场总血量  " + (totalComplete ? totalHp : "≥ " + totalHp);
         EnemyChartLegendDamage.Text = "我方有效伤害  " + EnemyOurDamage.Text;
         EnemyChartLegendRemaining.Text = "敌方剩余  " + (remainingComplete ? remaining : "≥ " + remaining);
     }

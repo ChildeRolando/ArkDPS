@@ -1,4 +1,5 @@
 """Shared GUI/CLI lifecycle; default event observation can degrade to snapshots."""
+import math
 import time
 from dataclasses import asdict
 
@@ -250,9 +251,13 @@ class CollectionSession:
                 self._enemy_payload = {
                     'status': 'unavailable', 'error': f'敌人遥测失败：{exc}',
                     'ready': False, 'rows': [], 'totals': {}, 'series': []}
-        sample['enemy'] = self._enemy_payload or {
+        enemy = self._enemy_payload or {
             'status': 'starting', 'error': None, 'ready': False,
             'rows': [], 'totals': {}, 'series': []}
+        other_counters = (stats.get('non_team_output') or {}).values()
+        other_damage = sum(amount for amount in (row.get('damage') for row in other_counters)
+                           if type(amount) in (int, float) and math.isfinite(amount) and amount > 0)
+        sample['enemy'] = dict(enemy, non_team_native_damage=other_damage) if other_damage else enemy
 
     def _drain_archives(self):
         archives = self.runtime.sessions.pop_archives()

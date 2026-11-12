@@ -64,7 +64,7 @@ def test_pending_hp_is_inferred_only_from_an_observed_same_type():
     assert by_id[3]['hp_known'] is False and by_id[3]['hp_inferred'] is False
 
 
-def test_planned_pool_counts_enemies_that_die_between_polls():
+def test_stage_estimate_includes_pending_plan_without_growing_entered_hp():
     snapshot = {'enemies': [
         enemy(roster_id=1, max_hp=100.0, hp=0.0, alive=False, lifecycle='departed'),
         enemy(roster_id=2, spawn_order=2, max_hp=500.0, hp=0.0, alive=False,
@@ -76,7 +76,8 @@ def test_planned_pool_counts_enemies_that_die_between_polls():
     assert totals['entered_count'] == 1
     assert totals['planned_count'] == 2
     assert totals['observed_total_hp'] == 100
-    assert totals['entered_total_hp'] == 600
+    assert totals['entered_total_hp'] == 100
+    assert totals['stage_total_hp_estimate'] == 600
     assert totals['hp_complete'] is True
 
 
@@ -94,7 +95,9 @@ def test_planned_pool_skips_unobserved_conditional_branches():
         clock=lambda: 1.0, bootstrap=lambda reader: True, poll_interval=0)
     state = telemetry.sample(game_time=1.0, our_damage=0)
     assert state['totals']['planned_count'] == 2
-    assert state['totals']['entered_total_hp'] == 200
+    assert state['totals']['entered_total_hp'] == 100
+    assert state['totals']['stage_total_hp_estimate'] == 200
+    assert state['totals']['total_hp_complete'] is False
     assert state['totals']['planned_complete'] is True
 
 
@@ -204,7 +207,8 @@ def test_events_do_not_double_count_the_schedulers_inferred_prefix():
     telemetry = EnemyTelemetry(SimpleNamespace(poll_fast=lambda: snapshot),
                                bootstrap=lambda reader: True, poll_interval=0)
     legacy = telemetry.sample(game_time=1.0, our_damage=0)
-    assert legacy['totals']['entered_count'] == 1
+    assert legacy['totals']['entered_count'] == 0
+    assert legacy['totals']['planned_count'] == 1
     state = telemetry.sample(game_time=2.0, our_damage=0, enemy_entry={
         'complete': True, 'start_frame': 10, 'events': [
             dict(instance_uid='31', eid='enemy_1', frame=13, game_time=1.3),

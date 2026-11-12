@@ -82,7 +82,7 @@ def seed(directory):
              spawn_frame=300, end_frame=None, end_reason=None,
              is_summon=False, position={'x': 6.0, 'y': 3.5}),
     ]
-    enemy = dict(status='ready', error=None, ready=True, rows=enemies,
+    enemy = dict(status='ready', error=None, ready=True, rows=enemies, non_team_native_damage=500,
                  totals=dict(entered_count=3, alive_count=2,
                              entered_total_hp=26000., remaining_hp=6200.,
                              hp_complete=True),

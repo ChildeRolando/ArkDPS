@@ -411,6 +411,8 @@ public partial class MainWindow
             Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
             Require(EnemyTotalHp.Text.Contains("26000"),"enemy total HP did not render");
             Require(EnemyOurDamage.Text.Contains("19800"),"cumulative damage line value did not render");
+            if (State.Get("enemy").Get("non_team_native_damage").TryNumber() > 0)
+                Require(EnemyStatusHint.Text.Contains("其他来源原生伤害 500"),"non-team damage basis did not render");
             Require(!EnemyEmpty.IsVisible,"enemy empty state shown with entered enemies");
             Screenshot.Window(this,Path.Combine(output,theme+"-enemies.png"));
             await Navigate("live");await Settle();
