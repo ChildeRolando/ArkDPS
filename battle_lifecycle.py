@@ -12,7 +12,8 @@ import math
 import uuid
 
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError
-from event_capture import LiveEventCapture, CaptureRetry
+from event_capture import LiveEventCapture, CaptureRetry, read_event_batch, acknowledge_event_batch
+from event_observer import ObserverReadRetry
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 
@@ -82,8 +83,8 @@ class BattleFeed:
                     raise StreamGap('observer stopped')
                 if mark.get('retry'):
                     raise CaptureRetry('observer clock advanced')
-            except CaptureRetry:
-                raise
+            except (CaptureRetry, ObserverReadRetry) as exc:
+                raise CaptureRetry(str(exc)) from exc
             except Exception as exc:
                 events = {'error': str(exc)}
         sample = collector.read()
@@ -98,7 +99,7 @@ class BattleFeed:
                 sequence = baseline_barrier(mark, sample, end_mark)
                 # Drain only after the lifecycle bracket below has succeeded.
                 events = dict(before=mark, after=end_mark, sequence=sequence)
-            except (CaptureRetry, BarrierBusy) as exc:
+            except (CaptureRetry, ObserverReadRetry, BarrierBusy) as exc:
                 raise CaptureRetry(str(exc)) from exc
             except Exception as exc:
                 events = {'error': str(exc)}
@@ -117,7 +118,9 @@ class BattleFeed:
             raise FrameMismatch('游戏时间无效')
         if events is not None and 'error' not in events:
             try:
-                events['drain'] = observer.drain()
+                events['drain'] = read_event_batch(observer, events['sequence'])
+            except CaptureRetry:
+                raise
             except Exception as exc:
                 events = {'error': str(exc)}
         return sample, roster, events
@@ -311,6 +314,13 @@ class BattleSessions:
         if self.adapter is not None and not self._archived:
             self.adapter.on_gap()
             self.state = 'frozen'
+        # A lifecycle read gap closes event coverage too. Keep the UI honest:
+        # without this, the status can still say recording while every derived
+        # metric is unknown.
+        if self.capture is not None and not self.capture.closed:
+            self.capture.close()
+        if self.event_status in ('ready', 'recording'):
+            self.event_status, self.event_error = 'gap', reason
 
     def _archive(self, reason):
         if self.adapter is None or self._archived:
@@ -491,7 +501,7 @@ class BattleRuntime:
 
     def _consume(self, observation):
         self.record(observation)
-        self.sessions.consume(observation)
+        return self.sessions.consume(observation)
 
     def poll(self, collector, observer=None, *, prepare_observer=None):
         """Prepare event recovery only after the feed confirms a new battle."""
@@ -511,7 +521,14 @@ class BattleRuntime:
                                   event_capability=deepcopy(collector.event_capability))
                     self._consume(replace(observation, sample=native, events=None))
                     observation = self.feed.acquire(collector, observer)
-            self._consume(observation)
+            consumed = self._consume(observation)
+            if consumed and observer is not None and self.sessions.event_status == 'recording':
+                evidence = observation.events or {}
+                stream = self.sessions.adapter.event_stream
+                if ('drain' in evidence and stream is not None
+                        and stream.sequence == evidence['sequence']
+                        and stream.frame == observation.sample['frame']):
+                    acknowledge_event_batch(observer, stream.sequence)
         except CaptureRetry:
             raise
         except (SampleUnavailable, RosterUnavailable, FrameMismatch, ReadFailure) as exc:

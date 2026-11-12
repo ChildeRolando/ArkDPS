@@ -30,7 +30,7 @@ def src(owner, *, damage=None, healing=None, shield=None, recent_damage=None,
 
 @pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
 @pytest.mark.parametrize('gap', [False, True])
-def test_statistics_recent_share_requires_full_common_window(category, gap):
+def test_statistics_recent_share_uses_only_rows_covering_the_expected_window(category, gap):
     stats = Statistics('window', 0)
     stats.register_source('a', 'A')
     stats.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
@@ -46,7 +46,12 @@ def test_statistics_recent_share_requires_full_common_window(category, gap):
     view = render_panel(recent(category), rows_from_statistics(stats.result()))
     assert not view.share_known
     assert view.share_reason
-    assert all(entry.share is None for entry in view.entries)
+    if gap:
+        assert view.share_scope == 'unavailable'
+        assert all(entry.share is None for entry in view.entries)
+    else:
+        assert view.share_scope == 'known'
+        assert {entry.owner_id: entry.share for entry in view.entries} == {'A': 1., 'B': None}
 
 
 def test_recent_damage_segments_use_recent_types_only():
@@ -81,11 +86,16 @@ def test_statistics_recent_share_recovers_when_full_window_observed():
 
 def test_recent_share_requires_matching_certified_windows_including_zero_rows():
     rows = [src('A', recent_damage=10), src('B', recent_damage=0, recent_window=(1, 5))]
-    assert not render_panel(recent(), rows).share_known
+    mismatched = render_panel(recent(), rows)
+    assert mismatched.share_scope == 'unavailable'
+    assert mismatched.denominator is None
+    assert mismatched.entries[0].share is None
     rows[1].recent_damage_window = None
-    assert not render_panel(recent(), rows).share_known
+    partial = render_panel(recent(), rows)
+    assert partial.share_scope == 'known'
+    assert partial.entries[0].share == 1.
     rows[1].recent_damage_window = (0, 5)
-    assert render_panel(recent(), rows).share_known
+    assert render_panel(recent(), rows).share_scope == 'team'
 
 
 def test_adapter_recent_types_and_absent_window_are_explicit():
@@ -182,22 +192,26 @@ def test_recent_zero_is_removed_and_reappears_with_output():
     assert [e.owner_id for e in render_panel(recent(), rows).entries] == ['A']
 
 
-def test_unknown_metric_is_hidden_and_share_is_not_local():
+def test_unknown_metric_is_hidden_and_share_is_scoped_to_known_values():
     rows = [src('A', damage=100), src('B', damage=None)]
     view = render_panel(total(), rows)
     assert [e.owner_id for e in view.entries] == ['A']
     assert view.share_known is False
-    assert view.entries[0].share is None
+    assert view.share_scope == 'known'
+    assert view.denominator == 100
+    assert view.entries[0].share == 1.
     assert view.share_reason
     # The input row is not deleted or zero-filled.
     assert rows[1].damage is None
 
 
-def test_caller_reported_incomplete_team_disables_shares():
+def test_caller_reported_incomplete_team_preserves_known_row_shares():
     rows = [src('A', damage=100), src('B', damage=100)]
     view = render_panel(total(), rows, team_complete=False)
     assert view.share_known is False
-    assert all(e.share is None for e in view.entries)
+    assert view.share_scope == 'known'
+    assert view.denominator == 200
+    assert all(e.share == .5 for e in view.entries)
 
 
 def test_incomplete_counter_is_flagged_and_blocks_shares():
@@ -205,6 +219,101 @@ def test_incomplete_counter_is_flagged_and_blocks_shares():
     view = render_panel(total(), rows)
     assert view.entries[1].incomplete is True
     assert view.share_known is False
+    assert view.share_scope == 'known'
+    assert view.entries[0].share == 1.
+    assert view.entries[1].share is None
+
+
+def test_effective_share_uses_certified_effective_values_without_changing_raw_share():
+    a, b, c = [src(owner, damage=damage, counter_complete=owner != 'C')
+               for owner, damage in [('A', 100), ('B', 50), ('C', 200)]]
+    a.effective_damage = 70
+    b.overkill = 10  # unverified on this row
+    c.effective_damage = 150  # finite, but its native counter is stale
+    raw = render_panel(total(), [a, b, c])
+    assert raw.denominator == 150
+    assert {e.owner_id: e.share for e in raw.entries} == {
+        'A': pytest.approx(2 / 3), 'B': pytest.approx(1 / 3), 'C': None,
+    }
+    effective = render_panel(PanelConfig(effective_only=True), [a, b, c])
+    assert effective.share_scope == 'known'
+    assert effective.denominator == 70
+    assert {e.owner_id: e.share for e in effective.entries} == {'A': 1., 'B': None, 'C': None}
+
+
+@pytest.mark.parametrize('ranking', [Ranking.RECENT, Ranking.DPS])
+def test_recent_effective_share_uses_window_overkill_for_each_row(ranking):
+    a = src('A', recent_damage=100)
+    b = src('B', recent_damage=60)
+    a.overkill_complete = True
+    a.recent_overkill = 100
+    view = render_panel(PanelConfig(ranking=ranking, effective_only=True,
+                                   rate_basis=RateBasis.RECENT_5S), [a, b])
+    entry, = view.entries
+    assert entry.value == view.denominator == 80
+    assert entry.share == 1.
+    assert view.share_scope == 'known'
+
+
+def test_dps_share_uses_only_rows_with_a_trusted_selected_rate():
+    a = src('A', damage=600, engagement_damage=40)
+    b = src('B', damage=300, engagement_damage=60, event_complete=False)
+    a.presence_seconds, a.presence_complete = 20, True
+    b.presence_seconds = 2
+    full_cycle = PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE)
+    view = render_panel(full_cycle, [a, b])
+    assert view.share_scope == 'known' and view.denominator == 30
+    assert {entry.owner_id: entry.share for entry in view.entries} == {'A': 1.}
+    engagement = PanelConfig(ranking=Ranking.DPS, rate_basis=RateBasis.ENGAGEMENT)
+    view = render_panel(engagement, [a, b], event=EventAvailability('recording'))
+    assert view.share_scope == 'known' and view.denominator == 40
+    assert {entry.owner_id: entry.share for entry in view.entries} == {'A': 1., 'B': None}
+    gap = render_panel(engagement, [a, b], event=EventAvailability('gap'))
+    assert gap.share_scope == 'unavailable'
+    assert gap.denominator is None
+    assert all(entry.share is None for entry in gap.entries)
+
+
+def test_unresolved_attribution_excludes_affected_rows_without_erasing_diagnostics():
+    stats = {
+        'totals_complete': False,
+        'unknown_sources': ['char_mystery'],
+        'mapping_conflicts': ['token_conflict'],
+        'rows': {
+            'A': {'damage': 100, 'counter_snapshot_complete': True},
+            'B': {'damage': 400, 'counter_snapshot_complete': True, 'sources': ['token_conflict']},
+        },
+    }
+    complete, reason, note = team_status(stats)
+    view = render_panel(total(), rows_from_statistics(stats), team_complete=complete,
+                        team_reason=reason, team_note=note)
+    assert view.share_scope == 'known'
+    assert view.denominator == 100
+    assert {e.owner_id: e.share for e in view.entries} == {'A': 1., 'B': None}
+    assert all(source in view.share_reason for source in ('char_mystery', 'token_conflict'))
+
+
+def test_missing_native_counter_does_not_erase_verified_shield_share():
+    stats = {
+        'totals_complete': False,
+        'missing_fields': ['A'],
+        'rows': {'A': {'counter_snapshot_complete': False,
+                       'event_coverage_complete': True, 'shield_absorbed': 10}},
+    }
+    complete, reason, note = team_status(stats)
+    view = render_panel(total(Category.SHIELD), rows_from_statistics(stats),
+                        team_complete=complete, team_reason=reason, team_note=note)
+    assert view.share_scope == 'known'
+    assert view.entries[0].share == 1.
+    assert '字段缺失统计来源' in view.share_reason
+
+
+def test_no_positive_certified_values_have_no_share_denominator():
+    view = render_panel(total(), [src('A', damage=0),
+                                  src('B', damage=100, counter_complete=False)])
+    assert view.share_scope == 'unavailable'
+    assert view.denominator is None
+    assert view.entries[0].share is None
 
 
 def test_healing_and_shield_categories_switch_metric():
@@ -558,3 +667,50 @@ def test_effective_only_panel_uses_effective_damage_and_type_segments():
     assert all('overkill_ratio' not in segment for segment in entry.segments)
     assert {segment['kind']: segment['value'] for segment in entry.segments} == {
         'physical': 500, 'arts': 300}
+
+
+def test_effective_composition_infers_a_single_observed_damage_type():
+    row = src('A', damage=1000, recent_damage=100)
+    row.effective_damage = 800
+    row.overkill = 200
+    row.damage_by_type = {'physical': 1000, 'arts': 0, 'elemental': 0, 'true': 0}
+    row.overkill_by_type = None
+    row.overkill_type_complete = False
+    view = render_panel(PanelConfig(effective_only=True), [row])
+    entry = view.entries[0]
+    assert entry.detail['effective_damage_by_type'] == {'physical': 800}
+    assert {segment['kind']: segment['value'] for segment in entry.segments} == {
+        'physical': 800}
+
+    row.damage_by_type = {'physical': 600, 'arts': 400}
+    mixed = render_panel(PanelConfig(effective_only=True), [row]).entries[0]
+    assert mixed.detail['effective_damage_by_type'] is None
+
+
+def test_skill_coverage_and_effective_skill_split_reach_entry_detail():
+    row = PanelSourceRow(
+        owner_id='A', name='A', damage=1000, effective_damage=600,
+        overkill=400, overkill_complete=True,
+        skill_damage=500, non_skill_damage=500,
+        skill_damage_effective=300, non_skill_damage_effective=300,
+        skill_split_complete=True, skill_split_effective_complete=True,
+        skill_active_seconds=5, presence_seconds=10, presence_complete=True,
+        skill_coverage_complete=True,
+        damage_by_type={'physical': 1000},
+        overkill_by_type={'physical': 400}, overkill_type_complete=True)
+    assert row.skill_coverage() == .5
+    view = render_panel(PanelConfig(panel_id='p', effective_only=True), [row],
+                        event=EventAvailability('recording'))
+    detail = view.entries[0].detail
+    assert detail['skill_damage_effective'] == 300
+    assert detail['non_skill_damage_effective'] == 300
+    assert detail['skill_coverage'] == .5
+    assert detail['skill_split_effective_complete'] is True
+    assert detail['effective_damage_by_type'] == {'physical': 600}
+
+
+def test_skill_window_longer_than_observed_presence_has_unknown_coverage():
+    row = PanelSourceRow(owner_id='A', name='A',
+                         skill_active_seconds=260.2, presence_seconds=16.97,
+                         presence_complete=True, skill_coverage_complete=True)
+    assert row.skill_coverage() is None

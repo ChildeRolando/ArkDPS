@@ -89,6 +89,18 @@ def test_shared_entry_without_frida_keeps_shields_unknown():
     current.close()
 
 
+def test_enemy_page_shows_other_native_damage_separately_from_team_effective_damage():
+    current, collector, _ = session()
+    collector.read_enemies = lambda **kwargs: {'last_point': {'our_effective_damage': kwargs['our_damage']}}
+    sample = {'session': 'test', 'statistics': {
+        'rows': {'char_a': {'damage': 1200, 'effective_damage': 1100}},
+        'non_team_output': {'trap_011_ore': {'damage': 500.0, 'healing': 0.0}},
+    }}
+    current._attach_enemy(sample)
+    assert sample['enemy']['last_point']['our_effective_damage'] == 1100
+    assert sample['enemy']['non_team_native_damage'] == 500
+
+
 def test_default_entry_observes_after_certification_before_locating():
     calls = []
     current = CollectionSession('adb', 'serial', collector=Collector(calls),
@@ -202,6 +214,26 @@ def test_live_gap_keeps_native_totals_and_freezes_event_coverage():
     row = sample['statistics']['rows']['char_a']
     assert row['damage'] == 120 and row['event_coverage_end'] == 0
     assert not row['event_coverage_complete']
+    current.close()
+
+
+def test_event_gap_keeps_presence_so_full_cycle_dps_survives():
+    current, collector, _ = session()
+    current.connect()
+    current.locate()
+    current.read()
+    current.observer.error = 'probe stopped'
+    collector.frame, collector.game_time, collector.damage = 2, 1, 120
+    sample = current.read()
+    assert sample['event_status'] == 'gap'
+    row = sample['statistics']['rows']['char_a']
+    assert row['presence_complete'] is True and row['presence_seconds'] == 1
+    collector.frame, collector.game_time, collector.damage = 4, 3, 150
+    sample = current.read()
+    row = sample['statistics']['rows']['char_a']
+    assert sample['event_status'] == 'gap'
+    assert row['damage'] == 150
+    assert row['presence_complete'] is True and row['presence_seconds'] == 3
     current.close()
 
 

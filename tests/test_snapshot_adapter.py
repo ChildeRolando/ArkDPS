@@ -107,6 +107,19 @@ def test_mid_battle_baseline_starts_short_window_immediately():
     assert update.game_time == 32.3
 
 
+def test_event_only_gap_keeps_presence_for_full_cycle_dps():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 0)], 0, 1),
+                   roster([CHAR_A], present=(1,), frame=1))
+    adapter.update(sample([row('char_a', 100)], 3, 3),
+                   roster([CHAR_A], present=(1,), frame=3))
+    before = adapter.result()['rows']['char_a']
+    assert before['presence_complete'] is True and before['presence_seconds'] == 3
+    adapter.on_event_gap()
+    after = adapter.result()['rows']['char_a']
+    assert after['presence_complete'] is True and after['presence_seconds'] == 3
+
+
 def test_full_cycle_presence_accumulates_only_while_present_and_gap_invalidates():
     adapter = BattleStatisticsAdapter()
     adapter.update(sample([row('char_a', 0), row('char_b', 0)], 0, 1),
@@ -618,3 +631,121 @@ def test_stage_trap_roster_token_is_non_team_and_does_not_block_events():
     assert result['non_team_output'] == {'trap_016_peon': {'damage': 0.0, 'healing': 0.0}}
     assert result['totals_complete'] is True
     adapter.start_events(session='battle-1', frame=1, sequence=0)
+
+
+def test_supplemental_hp_evidence_from_unmapped_source_keeps_events_open():
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a')], 0, 1), roster([CHAR_A], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
+                   source='enemy_1', kind='hp_damage', amount=10,
+                   target='char_a', hp_before=5, shield_absorbed=0)
+    a.accept_event(session='battle-1', sequence=2, frame=1, game_time=0,
+                   source='char_a', kind='damage', amount=5)
+    result = a.result()['rows']['char_a']
+    assert result['event_coverage_complete'] is True
+    assert result['observed_damage'] == 5
+
+
+def test_supplemental_hp_evidence_after_coverage_closed_is_dropped_quietly():
+    unknown_token = entry('token_otter', 9, token=True)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a', 100)], 0, 1), roster([CHAR_A], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.update(sample([row('char_a', 100)], 1, 2), roster([CHAR_A, unknown_token], frame=2))
+    assert a.event_stream.closed
+    a.accept_event(session='battle-1', sequence=1, frame=2, game_time=1,
+                   source='token_otter', kind='hp_damage', amount=10,
+                   target='enemy_1', hp_before=5, shield_absorbed=0)
+    result = a.result()['rows']['char_a']
+    assert result['event_coverage_complete'] is False
+    assert result['damage'] == 100
+
+
+@pytest.mark.parametrize('kind', ['skill_start', 'skill_end'])
+def test_skill_window_from_unmapped_source_marks_split_unknown_without_closing_events(kind):
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a')], 0, 1), roster([CHAR_A], frame=1))
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    a.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
+                   source='enemy_1', kind=kind, amount=1, skill_key='k')
+    a.accept_event(session='battle-1', sequence=2, frame=1, game_time=0,
+                   source='char_a', kind='damage', amount=5)
+    result = a.result()['rows']['char_a']
+    assert result['event_coverage_complete'] is True
+    assert result['skill_damage'] is None
+    assert result['skill_split_complete'] is False
+
+
+def test_stage_altar_skill_events_leave_squad_skill_split_intact():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a')], 0, 1), roster([CHAR_A], frame=1))
+    adapter.start_events(session='battle-1', frame=1, sequence=0)
+    events = [
+        ('trap_011_ore', 'skill_start', 1),
+        ('char_a', 'damage', 8),
+        ('char_a', 'skill_start', 1),
+        ('trap_011_ore', 'skill_end', 1),
+        ('char_a', 'damage', 12),
+        ('char_a', 'skill_end', 1),
+    ]
+    for sequence, (source, kind, amount) in enumerate(events, 1):
+        adapter.accept_event(session='battle-1', sequence=sequence, frame=1,
+                             game_time=0, source=source, kind=kind, amount=amount)
+    result = adapter.result()['rows']['char_a']
+    assert result['skill_damage'] == 12
+    assert result['non_skill_damage'] == 8
+    assert result['skill_window_count'] == 1
+    assert result['skill_split_complete'] is True
+    assert result['event_coverage_complete'] is True
+
+
+
+def test_undeployed_roster_character_finish_preserves_order_without_creating_counter_row():
+    aroma = entry('char_446_aroma', 2147483655)
+    team = roster([CHAR_A, aroma], present=(1,), frame=32)
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100)], 1, 32), team)
+    adapter.start_events(session='battle-1', frame=32, sequence=1272)
+    adapter.update(sample([row('char_a', 125)], 120, 3617), paired(team, 3617))
+    finish = dict(session='battle-1', sequence=1273, frame=3534, game_time=117,
+                  source=aroma.cid, kind='skill_end', amount=1, skill_reason=7)
+    adapter.accept_event(**finish)
+    adapter.accept_event(session='battle-1', sequence=1274, frame=3617, game_time=120,
+                         source='char_a', kind='damage', amount=25)
+    adapter.event_stream.watermark(session='battle-1', sequence=1274,
+                                   frame=3617, game_time=120)
+
+    result = adapter.result()
+    assert adapter.owner_map.lookup(aroma.cid) == aroma.cid
+    assert aroma.cid not in adapter.statistics.owners
+    assert aroma.cid not in result['rows']
+    assert result['totals_complete']
+    assert result['rows']['char_a']['observed_damage'] == 25
+    assert result['rows']['char_a']['skill_coverage_complete']
+
+    deployed = roster([CHAR_A, aroma], present=(1, aroma.unique_id), frame=3618)
+    adapter.update(sample([row('char_a', 125), row(aroma.cid, 0)], 121, 3618), deployed)
+    # A later registration cannot turn a replay of the same raw event into a conflict.
+    adapter.accept_event(**finish)
+    assert adapter.result()['rows'][aroma.cid]['counter_snapshot_complete']
+
+
+def test_registered_character_finish_closes_skill_without_hiding_a_missing_counter():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100), row('char_b', 50)], 0, 1), paired(BASE, 1))
+    adapter.start_events(session='battle-1', frame=1, sequence=0)
+    adapter.accept_event(session='battle-1', sequence=1, frame=1, game_time=0,
+                         source='char_b', kind='skill_start', amount=1)
+    adapter.update(sample([row('char_a', 100)], 1, 2), paired(BASE, 2))
+    adapter.accept_event(session='battle-1', sequence=2, frame=2, game_time=1,
+                         source='char_b', kind='skill_end', amount=1, skill_reason=7)
+    adapter.update(sample([row('char_a', 100)], 2, 3), paired(BASE, 3))
+
+    result = adapter.result()
+    assert not result['totals_complete']
+    assert not result['rows']['char_b']['counter_snapshot_complete']
+    assert result['rows']['char_b']['event_coverage_complete']
+    assert result['rows']['char_b']['skill_window_count'] == 1
+    assert result['rows']['char_b']['skill_active_seconds'] == 1
+    assert adapter.statistics.skill_windows['char_b'][0]['reason'] == 7

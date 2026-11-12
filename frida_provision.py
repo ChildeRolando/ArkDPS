@@ -41,6 +41,13 @@ def _adb(adb_path, serial, arguments, timeout=8):
                           capture_output=True, text=True, timeout=timeout)
 
 
+def keep_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE):
+    """Check an endpoint already bound to this connection, repairing it if needed."""
+    if adb_path and serial and endpoint_ready(remote):
+        return True, '事件端点已就绪'
+    return ensure_frida_endpoint(adb_path, serial, remote=remote)
+
+
 def ensure_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE,
                           device_port=DEFAULT_DEVICE_PORT,
                           server_dir=DEFAULT_SERVER_DIR,
@@ -57,8 +64,15 @@ def ensure_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE,
     if parts is None:
         return False, '事件端点格式无效：' + str(remote)
     forward = ['forward', f'tcp:{parts[1]}', f'tcp:{device_port}']
+
+    def bind_forward():
+        result = _adb(adb_path, serial, forward)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or '').strip()
+                               or 'adb forward 返回非零')
+
     try:
-        _adb(adb_path, serial, forward)
+        bind_forward()
     except Exception as exc:
         return False, '建立 ADB 转发失败：' + str(exc)
     if endpoint_ready(remote):
@@ -81,7 +95,7 @@ def ensure_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE,
             return False, '启动设备端 frida-server 失败：' + str(exc)
         time.sleep(2)
     try:
-        _adb(adb_path, serial, forward)
+        bind_forward()
     except Exception as exc:
         return False, '重建 ADB 转发失败：' + str(exc)
     if endpoint_ready(remote, timeout=2):

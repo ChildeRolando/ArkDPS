@@ -132,7 +132,13 @@ def load_enemy_db(tables_dir=None):
         here = os.path.dirname(os.path.abspath(__file__))
         tables_dir = os.path.join(here, '..', '..', 'data', 'tables')
     tables_dir = os.path.abspath(tables_dir)
-    path = find_handbook_bin(None if use_bundle else tables_dir)
+    try:
+        path = find_handbook_bin(None if use_bundle else tables_dir)
+    except Exception:
+        # A source checkout can carry the optional names catalog without the
+        # generated handbook table. Names are still useful; the table is not
+        # required for live enemy telemetry.
+        path = None
     json_path = catalog_path('enemy_names') if use_bundle else None
     json_path = json_path or _find_names_json(tables_dir)
     cache_key = fingerprint(path, json_path)

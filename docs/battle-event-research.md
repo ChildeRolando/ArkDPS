@@ -85,3 +85,10 @@ run7 的 `ready` 元数据实际解析到以下候选重载（只代表该次 AR
 - **P2：完整重演**：完整敌我动态属性、所有技能/状态、投射物、随机数与特殊模式日志；这可能支持更丰富仿真，但不是现有累计/DPS/HPS 正确性的前提。
 
 **结论：**目前没有证据表明公开项目提供可直接接入的全量逐击事件协议。最可行的方向是以已有产品采集为稳定底座，扩展经过版本门控的 Frida 运行时观察，并用公开静态表/公式与受控实战逐项交叉验证；连接中途建立的覆盖起点要明确，历史逐击记录不能假定可回填。
+
+
+## 已接入的新增取数（当前候选）
+
+- **敌情页**：复用 `vendor/ark-source/tools/enemy_health/EnemyReader` 的设备端只读轮询，并随包分发敌人图鉴头像图集与名称/编号目录。定位直接锚定 `Collector.locate_battle()` 已认证的唯一 `BattleController`，读取 Scheduler 的 `m_managedWaveEnemies` 与 UnitManager 敌人列表，再按 `roster_id` 合并已入场/已离场实例；不进行第二次全堆扫描。当前发出名称、`eid`、图鉴编号、HP/MaxHP、攻击/防御/法抗/移速/攻速、状态、入场/离场帧和位置。MaxHP 未读到时只发布下限，不补零。敌人图鉴立绘未随包分发，UI 使用编号/名称徽标。
+- **技能/非技能拆分与技能覆盖率**：`event_probe_android2791.js` 在 `Character` 上记录 `OnSkillStart`、`SwitchToSkillState`、`OnSkillCastSucceed`、`OnToggleSkillStart`、`OnSkillRetriggered` 为技能窗口开始，记录 `OnSkillFinish`、`SwitchOutFromSkillState`、`OnAfterSkill` 为窗口结束；技能身份从 `Character.m_skill -> BasicSkill.m_data -> SkillData.prefabKey/skillId/name` 读取。事件流按序列顺序携带 `skill_start/skill_end`，统计层按施放者窗口拆分伤害事件。钩子缺失、来源无法归属或事件覆盖结束时拆分与覆盖率保持未知；被动技能计入非技能；覆盖率为技能开启总时间 ÷ 在场时间，不以施放次数替代。
+- 上述两项均为补充展示：敌人遥测失败或技能钩子不可用不得关闭权威伤害/接敌事件流，也不得改变干员累计、排行或 DPS。

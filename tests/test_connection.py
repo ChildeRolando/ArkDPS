@@ -302,6 +302,16 @@ def test_collectable_gate_refuses_incompatible_version(adb_path):
     assert exc.value.diagnostics.version_status is conn.VersionStatus.INCOMPATIBLE
 
 
+def test_same_forward_left_by_previous_process_is_adopted():
+    fake = FakeAdb()
+    fake.forwards[('s', 27381)] = 27381
+    registry = conn.ForwardRegistry(fake)
+    registry.ensure('adb', 's')
+    assert fake.forwards == {('s', 27381): 27381}
+    registry.release('s')
+    assert fake.forwards == {}
+
+
 def test_foreign_forward_conflict_and_replacement_are_preserved():
     fake = FakeAdb()
     fake.forwards[('other', 27381)] = 1717

@@ -129,6 +129,12 @@ def decrypt_obscured_float(key: int, hidden: int) -> float:
 # ============================================================
 # Entity (战场实体基类)  [已实测验证]
 # ============================================================
+class BObjectFields:
+    # Torappu.Battle.BObject.<instanceUid>k__BackingField, uint32, verified
+    # against the Android ARM64 2.7.91 IL2CPP metadata.
+    INSTANCE_UID = 0x18
+
+
 class EntityFields:
     M_STATE_MACHINE = 0x38    # StateMachine*
     M_HP = 0x40               # FP 当前血量 [实测]

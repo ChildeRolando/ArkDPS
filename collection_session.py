@@ -1,4 +1,5 @@
 """Shared GUI/CLI lifecycle; default event observation can degrade to snapshots."""
+import math
 import time
 from dataclasses import asdict
 
@@ -24,6 +25,10 @@ class CollectionSession:
         self.audit = audit or (lambda *_args: None)
         self.event_status = 'unavailable'
         self.event_error = None
+        self._enemy_session = None
+        self._enemy_last_poll = float('-inf')
+        self._enemy_payload = None
+        self._enemy_event_data = {}
         self.runtime = None
         self.closed = False
         self._resources_closed = False
@@ -152,7 +157,7 @@ class CollectionSession:
             result = self.capture.adapter.result()
         stream = self.capture.adapter.event_stream
         if (stream is not None and stream.closed and self.capture.adapter.statistics.end_time is not None
-                and self.capture.adapter.statistics.event_coverage_end is None):
+                and not self.capture.adapter.statistics.event_coverage_broken):
             self.event_status = 'finished'
         elif stream is not None and stream.closed and self.event_status in ('ready', 'recording'):
             self.event_status = 'gap'
@@ -163,6 +168,7 @@ class CollectionSession:
                       snapshot_revision=result.get('snapshot_revision'),
                       event_watermark=({'sequence': stream.sequence, 'frame': stream.frame,
                                         'game_time': stream.game_time} if stream else None))
+        self._attach_enemy(sample)
         self.audit('published', sample)
         return sample
 
@@ -194,8 +200,64 @@ class CollectionSession:
         if (self.runtime.sessions.state == 'finalizing' and
                 sample['event_status'] == 'recording'):
             sample['event_status'] = self.event_status = 'finished'
+        self._attach_enemy(sample)
         self.audit('published', sample)
         return sample
+
+    def _attach_enemy(self, sample):
+        """Project committed enemy events alongside the independent damage total."""
+        session = sample.get('session')
+        if session is not None and session != self._enemy_session:
+            self._enemy_session = session
+            self._enemy_last_poll = float('-inf')
+            self._enemy_payload = None
+            self._enemy_event_data = {}
+            telemetry = getattr(self.collector, 'enemy_telemetry', None)
+            if telemetry is not None:
+                telemetry.reset()
+        stats = sample.get('statistics') or {}
+        rows = stats.get('rows') or {}
+        known_rows = [value for value in rows.values()
+                      if isinstance(value, dict)
+                      and isinstance(value.get('damage'), (int, float))]
+        effective = [value.get('effective_damage') for value in known_rows]
+        if not known_rows:
+            our_damage = 0.0
+        elif all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                 for value in effective):
+            our_damage = sum(effective)
+        else:
+            our_damage = None
+        read = getattr(self.collector, 'read_enemies', None)
+        if read is None:
+            sample['enemy'] = self._enemy_payload or {
+                'status': 'unavailable', 'error': '敌人遥测未接入', 'ready': False,
+                'rows': [], 'totals': {}, 'series': []}
+            return
+        now = time.monotonic()
+        poll_due = now - self._enemy_last_poll >= 1.0
+        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state')
+                      if key in stats}
+        state = event_data.get('enemy_state')
+        if poll_due or (state is not None and state['complete']) or event_data != self._enemy_event_data:
+            if poll_due:
+                self._enemy_last_poll = now
+            try:
+                context = {'frame': sample.get('frame')} if state is not None else {}
+                self._enemy_payload = read(game_time=sample.get('game_time'), our_damage=our_damage,
+                                            **event_data, **context)
+                self._enemy_event_data = event_data
+            except Exception as exc:
+                self._enemy_payload = {
+                    'status': 'unavailable', 'error': f'敌人遥测失败：{exc}',
+                    'ready': False, 'rows': [], 'totals': {}, 'series': []}
+        enemy = self._enemy_payload or {
+            'status': 'starting', 'error': None, 'ready': False,
+            'rows': [], 'totals': {}, 'series': []}
+        other_counters = (stats.get('non_team_output') or {}).values()
+        other_damage = sum(amount for amount in (row.get('damage') for row in other_counters)
+                           if type(amount) in (int, float) and math.isfinite(amount) and amount > 0)
+        sample['enemy'] = dict(enemy, non_team_native_damage=other_damage) if other_damage else enemy
 
     def _drain_archives(self):
         archives = self.runtime.sessions.pop_archives()

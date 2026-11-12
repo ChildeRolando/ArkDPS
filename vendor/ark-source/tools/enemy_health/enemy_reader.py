@@ -305,7 +305,7 @@ class _HeapSnapshot:
 
 
 class EnemyInfo:
-    __slots__ = ('addr', 'eid', 'name', 'code', 'hp', 'max_hp', 'atk', 'def_', 'res',
+    __slots__ = ('addr', 'instance_uid', 'eid', 'name', 'code', 'hp', 'max_hp', 'atk', 'def_', 'res',
                  'mspd', 'aspd', 'direction', 'finish', 'alive', 'id_ptr', 'attr_ptr',
                  'data_ptr',
                  'pos_x', 'pos_y', 'precise_pos_x', 'precise_pos_y',
@@ -327,6 +327,7 @@ class EnemyInfo:
 
     def __init__(self, addr):
         self.addr = addr
+        self.instance_uid = None
         self.policy_generation = 0
         self.source_frame = None
         self.field_states = {}
@@ -537,6 +538,10 @@ class EnemyReader:
         self._merge_lock = threading.Lock()  # 并行扫描合并锁
         # 准实时轮询 (常驻 TCP 通道)
         self._chan = None             # TcpChannel, 惰性打开
+        # Product collection shares this channel with authoritative counter
+        # reads; an enemy polling failure must not close the shared transport.
+        self.shared_channel = False
+        self.read_instance_uids = False
         self._detail_chan = None      # 详情独立通道，避免重读取阻塞主轮询
         self._detail_context = threading.local()
         self._fast_tick = 0
@@ -1168,7 +1173,8 @@ class EnemyReader:
             self._db[eid] = merged
             old = merged
         resolved_name = old.get('name') or eid
-        resolved_code = self._handbook_codes.get(eid, '') if self._collect('code') else ''
+        resolved_code = (self._handbook_codes.get(eid, '')
+                         or old.get('code', '') if self._collect('code') else '')
         for record in self._all_plan_records():
             if record.get('key') != eid:
                 continue
@@ -1937,7 +1943,7 @@ class EnemyReader:
         # 非零即应进入“已离场”，不能继续算作场上敌人。
         departing = {enemy.addr: enemy for enemy in live_enemies if not enemy.alive}
         live_enemies = [enemy for enemy in live_enemies if enemy.alive]
-        live_addrs = {enemy.addr for enemy in live_enemies}
+        live_by_addr = {enemy.addr: enemy for enemy in live_enemies}
 
         if not self._roster_initialized:
             prefix = min(max(0, int(spawned_count or 0)), len(self._spawn_plan))
@@ -1956,16 +1962,24 @@ class EnemyReader:
 
         # 先把上一帧存在、本帧消失的实例固化为已离场。
         for addr in list(self._addr_to_roster):
-            if addr in live_addrs:
+            roster_id = self._addr_to_roster[addr]
+            previous = self._roster_last.get(roster_id)
+            current = live_by_addr.get(addr)
+            previous_uid = getattr(previous, 'instance_uid', None)
+            current_uid = getattr(current, 'instance_uid', None)
+            if current is not None and (previous_uid is None or current_uid is None
+                                        or previous_uid == current_uid):
                 continue
-            roster_id = self._addr_to_roster.pop(addr)
+            self._addr_to_roster.pop(addr)
             departure = departing.get(addr)
+            departure_uid = getattr(departure, 'instance_uid', None)
+            if previous_uid is not None and departure_uid is not None and previous_uid != departure_uid:
+                departure = None
             # DEAD/REACH_EXIT 状态中实体通常还会在 UnitManager 保留
             # 一小段时间，但其 Transform、Buff、护盾和技能字段可能已在
             # 回收流程中被清零。不能用这个“死亡清理帧”覆盖上一帧
             # 完整存活快照。deepcopy 同时避免修改仍可能由 UI 消费的
             # 上一个双缓冲快照对象。
-            previous = self._roster_last.get(roster_id)
             source = previous or departure
             old = copy.deepcopy(source) if source is not None else None
             if old is not None:
@@ -2015,7 +2029,9 @@ class EnemyReader:
                     self._bind_plan_enemy(enemy, claim)
                     continue
                 enemy.roster_id = roster_id
-                enemy.spawn_order = self._roster_last[roster_id].spawn_order
+                previous = self._roster_last[roster_id]
+                enemy.spawn_order = previous.spawn_order
+                enemy.spawn_frame = previous.spawn_frame
                 enemy.lifecycle = 'active'
                 enemy.planned = False
                 self._roster_last[roster_id] = enemy
@@ -3062,7 +3078,7 @@ class EnemyReader:
         return info
 
     @staticmethod
-    def _parse_enemy_block(ep, blk, policy=None):
+    def _parse_enemy_block(ep, blk, policy=None, *, read_instance_uid=False):
         """解析 Enemy 主对象块；不跟随指针，供慢速与聚簇快读共用。"""
         info = EnemyInfo(ep)
         min_size = max(gs.EntityFields.BUFF_CONTAINER + 8,
@@ -3070,6 +3086,9 @@ class EnemyReader:
         if not blk or len(blk) < min_size:
             info.alive = False
             return info
+        if read_instance_uid:
+            uid = struct.unpack_from('<I', blk, gs.BObjectFields.INSTANCE_UID)[0]
+            info.instance_uid = str(uid)
         if policy is None or policy.enabled('enemy.hp'):
             info.hp = gs.fp_to_float(_u64(blk, gs.EntityFields.M_HP))
         if policy is None or policy.enabled('enemy.es'):
@@ -4612,7 +4631,8 @@ class EnemyReader:
             self._poll_state_log.emit(self.log,
                 (type(e).__name__, getattr(e, 'errno', None)),
                 f'[轮询] memsrv v5 异常 ({type(e).__name__}: {e})', scope=scope)
-            self.close()
+            if not self.shared_channel:
+                self.close()
             raise RuntimeError(f'memsrv v5 读取失败: {e}') from e
 
     @staticmethod
@@ -5606,8 +5626,9 @@ class EnemyReader:
                 if off + gs.EnemyFields.READ_SIZE > len(data):
                     continue
                 blk = data[off:off + gs.EnemyFields.READ_SIZE]
-                info = self._parse_enemy_block(ep, blk, self._capture_policy)
-                identity = (info.id_ptr, info.data_ptr)
+                info = self._parse_enemy_block(ep, blk, self._capture_policy,
+                                               read_instance_uid=self.read_instance_uids)
+                identity = (info.id_ptr, info.data_ptr, info.instance_uid)
                 previous_identity = self._identity_sources.get(ep)
                 if previous_identity is not None and previous_identity != identity:
                     self._names.pop(ep, None)

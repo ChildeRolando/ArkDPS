@@ -90,3 +90,101 @@ def test_lifecycle_envelope_uses_native_sources_and_preserves_raw_proofs(tmp_pat
     path.write_text('\n'.join(json.dumps(record) for record in records))
     with pytest.raises(ValueError, match='amount mismatch'):
         module.verify(tmp_path)
+
+
+def test_enemy_entries_reconcile_without_becoming_operator_damage(tmp_path):
+    records, path = evidence(tmp_path)
+    last = records[2]['data']
+    last['event_watermark']['sequence'] = 3
+    enemy = {'sequence': 3, 'frame': 2, 'game_time': 1, 'source': None,
+             'kind': 'enemy_enter', 'amount': 0, 'target': 'enemy_a',
+             'target_instance': '12', 'enemy_entry_attributes': {'max_hp': 300, 'def': 0}}
+    records[1]['data']['events'].extend([enemy, dict(enemy)])
+    last['statistics']['enemy_entry'] = {
+        'complete': True,
+        'start_frame': 1,
+        'events': [{'instance_uid': '12', 'eid': 'enemy_a', 'frame': 2, 'game_time': 1,
+                    'enemy_entry_attributes': {'max_hp': 300, 'def': 0}}],
+    }
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    result = module.verify(tmp_path)
+    assert result['enemy_entry_count'] == 1
+    assert result['enemy_entry_complete'] is True
+    assert result['shield_totals'] == {'char_cathy': 2}
+
+    records[1]['data']['events'][-1]['sequence'] = 4
+    last['event_watermark']['sequence'] = 4
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='enemy entry was emitted more than once'):
+        module.verify(tmp_path)
+
+    records[1]['data']['events'].pop()
+    last['event_watermark']['sequence'] = 3
+    last['statistics']['enemy_entry']['events'].clear()
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='published enemy entries differ'):
+        module.verify(tmp_path)
+
+
+def test_enemy_phases_reconcile_without_becoming_operator_damage(tmp_path):
+    records, path = evidence(tmp_path)
+    last = records[2]['data']
+    last['event_watermark']['sequence'] = 3
+    phase = {'sequence': 3, 'frame': 2, 'game_time': 1, 'source': None,
+             'kind': 'enemy_reborn', 'amount': 60_000, 'target': 'enemy_1506_patrt',
+             'target_instance': '12', 'hp_before': 0, 'hp_after': 60_000,
+             'phase_total_hp': 120_000, 'phase_count': 2, 'phase_from_birth': True}
+    records[1]['data']['events'].append(phase)
+    last['statistics']['enemy_phases'] = {
+        'complete': True,
+        'instances': {'12': {'eid': 'enemy_1506_patrt', 'frame': 2, 'game_time': 1,
+                             'phase_total_hp': 120_000, 'phase_count': 2,
+                             'phase_from_birth': True}},
+    }
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    result = module.verify(tmp_path)
+    assert result['enemy_phases'] == last['statistics']['enemy_phases']
+    assert result['shield_totals'] == {'char_cathy': 2}
+
+    phase['amount'] = 70_000
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='amount mismatch'):
+        module.verify(tmp_path)
+
+
+def test_enemy_hp_and_finish_reconcile_as_ordered_enemy_state(tmp_path):
+    records, path = evidence(tmp_path)
+    last = records[2]['data']
+    last['event_watermark']['sequence'] = 5
+    raw_events = records[1]['data']['events']
+    common = dict(frame=2, game_time=1, source=None, target='enemy_a', target_instance='12', amount=0)
+    raw_events.extend([
+        dict(common, sequence=3, kind='enemy_hp', hp_before=50, hp_after=50, enemy_max_hp=100),
+        dict(common, sequence=4, kind='enemy_fake_death', hp_after=0),
+        dict(common, sequence=5, kind='enemy_finish', hp_after=0, finish_reason=2),
+    ])
+    shared = dict(frame=2, game_time=1, eid='enemy_a', instance_uid='12', hp_after=0)
+    projected = [
+        dict(shared, sequence=3, kind='enemy_hp', hp_before=50, hp_after=50, enemy_max_hp=100),
+        dict(shared, sequence=4, kind='enemy_fake_death'),
+        dict(shared, sequence=5, kind='enemy_finish', finish_reason=2),
+    ]
+    last['statistics']['enemy_state'] = {'complete': True, 'start_frame': 1, 'events': projected}
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    result = module.verify(tmp_path)
+    assert result['enemy_state_complete'] and result['enemy_state_events'] == 3
+    assert result['shield_totals'] == {'char_cathy': 2}
+
+    projected[-1]['instance_uid'] = '13'
+    path.write_text('\n'.join(json.dumps(record) for record in records))
+    with pytest.raises(ValueError, match='published enemy state differs'):
+        module.verify(tmp_path)
+
+
+
+@pytest.mark.parametrize('value', [False, -10, 0, float('inf'), float('nan')])
+def test_verifier_rejects_invalid_enemy_max_hp(value):
+    event = dict(sequence=1, kind='enemy_hp', frame=2, game_time=1, source=None, amount=0,
+                 target='enemy_a', target_instance='12', hp_after=10, enemy_max_hp=value)
+    with pytest.raises(ValueError, match='invalid enemy max HP'):
+        module.enemy_state_event(event)

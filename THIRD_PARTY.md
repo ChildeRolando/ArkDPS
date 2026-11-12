@@ -36,6 +36,17 @@ Arknights / 上海鹰角网络科技有限公司，仅用于学习与交流；�
 `assets/portraits/manifest.json` 记录每张原始 PNG 的 SHA-256、源提交、图集坐标及图集摘要。
 重建需要 Pillow，当前 WPF 产品离线读取同一头像图集；未知干员使用姓名占位。
 
+## GUI 敌人图鉴
+
+`assets/enemy_portraits/normal.png` 和 `muted.png` 包含同一固定提交
+`62fe51e6cd7faa5c1698e05f8cf63ed61cf6a7ac` 的 1855 个敌人图鉴头像，来源为
+[yuanyan3060/ArknightsGameResource](https://github.com/yuanyan3060/ArknightsGameResource/tree/62fe51e6cd7faa5c1698e05f8cf63ed61cf6a7ac/enemy)；
+`assets/enemy_portraits/manifest.json` 记录每个 `enemy_*` 原始 PNG 的 SHA-256、图集坐标与摘要。
+构建脚本 `tools/build_enemy_portraits.py` 只下载图鉴 PNG，缩为 48×48 并打包原色/灰度图集。
+`vendor/ark-source/game_data/catalogs/enemy_names.json` 与 `enemy_handbook.json` 由同一提交的
+`gamedata/excel/enemy_handbook_table.json` 生成，提供名称、图鉴编号和描述；运行时只读本地目录。
+素材版权归 Arknights / 上海鹰角网络科技有限公司，仅用于学习与交流，不重新声明为本项目自有素材。
+
 ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff758505380322c0cf519fe` 的 `tools/stage_global_state/memory.py`，保留其有界精确只读实现；包入口精简为该子集的说明，不导入未随附的 Timeline 应用。`tools/enemy_health/battle_lifecycle.py` 的读取结果增加已读取的原生 `state` 字段，供产品区分初始化、运行和结束，并增加经过对象类型及字符串槽稳定性校验的可选 `LevelData.levelId` 元信息；其余单例与场景读守卫保留。未验证的胜负、演习和退出原因不推断。新增产品观察代次、队列交接及视图契约位于仓库根目录 `battle_lifecycle.py`，没有复制上游完整应用。
 
 ## 关卡名称目录（ARK-26）

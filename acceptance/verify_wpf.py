@@ -29,7 +29,15 @@ def seed(directory):
     for i, (owner, name) in enumerate(names):
         value = copy.deepcopy(row)
         damage = (12 - i) * 9123.4567
+        overkill = damage * .08
         value.update(name=name, damage=damage, healing=(i % 3) * 4567.89,
+            overkill_damage=overkill, effective_damage=damage - overkill,
+            skill_damage=damage * .42, non_skill_damage=damage * .58,
+            skill_damage_effective=(damage - overkill) * .42,
+            non_skill_damage_effective=(damage - overkill) * .58,
+            skill_split_complete=True, skill_split_effective_complete=True,
+            skill_seen=True, skill_active_seconds=4.2,
+            skill_coverage_complete=True, skill_split_reason=None,
             recent_damage=(12-i)*97.23, recent_healing=(i % 3)*103.12,
             present=i not in (3, 8), shield_absorbed=2334.56 if i == 2 else None,
             engagement_damage=(12-i)*123.45, engagement_healing=(i % 3)*215.43,
@@ -46,11 +54,46 @@ def seed(directory):
     history.save(archive)
     history.save(record(1, stage_id='Obt/Roguelike/RO6/level_rogue6_1-3',
                         practice=None, outcome='unknown'))
+    series = [
+        dict(game_time=0., entered_total_hp=18000., remaining_hp=18000.,
+             our_effective_damage=0., our_damage_known=True, entered_count=2, alive_count=2, hp_complete=True),
+        dict(game_time=6., entered_total_hp=26000., remaining_hp=14100.,
+             our_effective_damage=11900., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
+        dict(game_time=12., entered_total_hp=26000., remaining_hp=6200.,
+             our_effective_damage=18700., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
+    ]
+    enemies = [
+        dict(roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',
+             code='B1', hp=1200., max_hp=2400., hp_known=True, hp_ratio=.5,
+             atk=180., **{'def': 20.}, res=0., move_speed=.7, attack_speed=100.,
+             alive=True, lifecycle='active', state_id=1, state='移动',
+             spawn_frame=120, end_frame=None, end_reason=None,
+             is_summon=False, position={'x': 1.5, 'y': 2.5}),
+        dict(roster_id=2, spawn_order=2, eid='enemy_1048_hirman', name='碎岩者',
+             code='B2', hp=600., max_hp=9800., hp_known=True, hp_ratio=600./9800.,
+             atk=750., **{'def': 120.}, res=20., move_speed=.55, attack_speed=86.,
+             alive=False, lifecycle='departed', state_id=None, state='已离场',
+             spawn_frame=240, end_frame=330, end_reason='finish_7',
+             is_summon=False, position={'x': 3.25, 'y': 4.0}),
+        dict(roster_id=3, spawn_order=3, eid='enemy_1506_patrt', name='重装防御者',
+             code='B3', hp=5000., max_hp=13800., hp_known=True, hp_ratio=.36,
+             atk=320., **{'def': 400.}, res=0., move_speed=.45, attack_speed=100.,
+             alive=True, lifecycle='active', state_id=2, state='攻击',
+             spawn_frame=300, end_frame=None, end_reason=None,
+             is_summon=False, position={'x': 6.0, 'y': 3.5}),
+    ]
+    enemy = dict(status='ready', error=None, ready=True, rows=enemies, non_team_native_damage=500,
+                 totals=dict(entered_count=3, alive_count=2,
+                             entered_total_hp=26000., remaining_hp=6200.,
+                             departed_hp=600., departed_hp_count=1,
+                             hp_complete=True),
+                 series=series, last_point=series[-1])
     sample = dict(battle_id='synthetic-live', session='synthetic-live', frame=360,
         game_time=12., battle_metadata={'stage_id': 'Activities/ACT3D0/level_act3d0_08'},
         captured_monotonic=time.monotonic(), statistics_complete=True,
         event_status='failed', event_error='合成样本 · 未连接游戏',
-        statistics=original['statistics'], rows=[{'id':'legacy','damage':999999999}])
+        enemy=enemy, statistics=original['statistics'],
+        rows=[{'id':'legacy','damage':999999999}])
     fixture = directory / 'fixture.json'
     fixture.write_text(json.dumps(sample, ensure_ascii=False), encoding='utf-8')
     return fixture
@@ -94,6 +137,8 @@ def main():
         subprocess.run(command + ['--offline', '--state-dir', str(directory), '--fixture', str(fixture),
                         '--verify', str(target)], cwd=ROOT, timeout=120, check=True)
         receipt = json.loads((target/'receipt.json').read_text('utf-8'))
+        assert ('share scope reaches live, history, HUD, details and ranking PNG with legacy fallback'
+                in receipt['checks']), 'share scope UI checks did not run'
         if args.bundle:
             assert receipt['worker_runtime']['python'] == '3.12.10'
             assert Path(receipt['worker_runtime']['executable']).resolve() == (args.bundle/'python/python.exe').resolve()

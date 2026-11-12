@@ -32,12 +32,12 @@
       "size": 3844722
     },
     "catalogs/enemy_handbook.json": {
-      "sha256": "31e4447f3ee85542529d1ece0372f3af0c50b1473462efeea5f53c90f9427291",
-      "size": 1140894
+      "sha256": "43c708e3a058feb08e12156de7e76e685afe4897dd2da0d578e236adcd680028",
+      "size": 1946906
     },
     "catalogs/enemy_names.json": {
-      "sha256": "5ba4385f2e22287f5c3cea084d0b3402462b3995041684852e8cca2ff246374b",
-      "size": 454913
+      "sha256": "0cfbbde3917775ad521717ba058f3550f92783a4d004c82bda213665bedf477e",
+      "size": 504539
     },
     "catalogs/enemy_stats.json": {
       "sha256": "7eea126a01966b28d79eb96bb8814418229e72c3b07e9c910b9693ca3a5b2d0b",

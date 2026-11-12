@@ -48,6 +48,13 @@ public partial class MainWindow
         File.WriteAllText(HistoryPath(stateDirectory,battleId),
             ArchiveJson(stateDirectory,battleId,stage),new System.Text.UTF8Encoding(false));
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
+    private static bool HasText(DependencyObject root,string text)
+    {
+        if(root is TextBlock block && block.Text.Contains(text,StringComparison.Ordinal)) return true;
+        for(int i=0;i<System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);i++)
+            if(HasText(System.Windows.Media.VisualTreeHelper.GetChild(root,i),text)) return true;
+        return false;
+    }
     private async Task RunRateNoticeChecks(string id)
     {
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
@@ -63,6 +70,62 @@ public partial class MainWindow
             Require(entry.Text("rate").Length==0,"unavailable engagement exposed a numeric rate");
             Require(!entry.Text("rate_text").StartsWith("0"),"unavailable engagement rendered as zero");
         }
+    }
+    private void VerifyShareScope(string id,HudWindow hud)
+    {
+        const string knownLabel="已知数据内占比";
+        const string teamLabel="全队同口径占比";
+        const string reason="部分干员累计快照不完整";
+        const string note="已排除非队伍来源：场景装置";
+        var original=State.Clone();
+        var modified=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!.AsObject();
+        var live=modified["panels"]!.AsArray().First(panel=>
+            panel!["config"]!["panel_id"]!.GetValue<string>()==id)!.AsObject();
+        var history=modified["history_selected"]!["view"]!.AsObject();
+
+        void Apply(string? scope,bool teamKnown,string shareText)
+        {
+            foreach(var view in new[]{live,history})
+            {
+                if(scope==null)view.Remove("share_scope");else view["share_scope"]=scope;
+                view["share_known"]=teamKnown;
+                view["share_reason"]=teamKnown ? "" : reason;
+                view["share_note"]=note;
+                foreach(var entry in view["entries"]!.AsArray())entry!["share_display"]=shareText;
+            }
+            ApplyState(JsonSerializer.SerializeToElement(modified));
+        }
+
+        try
+        {
+            Apply("known",false,"42.5%");
+            var livePanel=Panels[id];
+            LiveInspector.Pin(livePanel.View.Get("entries").Items().First().Text("owner_id"),livePanel.View);
+            HistoryInspector.Pin(HistoryPanel.View.Get("entries").Items().First().Text("owner_id"),HistoryPanel.View);
+            foreach(var panel in new[]{livePanel,HistoryPanel})
+                Require(panel.Coverage.Text.Contains(knownLabel) && panel.Coverage.Text.Contains(reason) &&
+                        panel.Coverage.Text.Contains(note),"ranking lost known share scope or coverage details");
+            Require(hud.Panel.PanelKind.Visibility==Visibility.Visible && hud.Panel.PanelKind.Text==knownLabel &&
+                    Equals(hud.Panel.PanelKind.ToolTip,knownLabel+" · "+reason+" · "+note),
+                    "HUD did not identify the partial share denominator");
+            var row=(RowItem)livePanel.Rows.Items[0];
+            Require(row.Share=="42.5%" && row.Tooltip.Contains(knownLabel) && row.Tooltip.Contains(reason),
+                    "row share text or tooltip changed its coverage");
+            Require(HasText(LiveInspector,knownLabel) && HasText(HistoryInspector,knownLabel),
+                    "operator details lost the share denominator");
+            var screenshot=Screenshot.StatisticsDocument(State.Get("history_selected"),Theme.Key);
+            Require(HasText(screenshot,knownLabel) && HasText(screenshot,reason) && HasText(screenshot,note),
+                    "ranking screenshot lost the partial share explanation");
+
+            Apply(null,true,"50%");
+            Require(livePanel.Coverage.Text.Contains(teamLabel) && hud.Panel.PanelKind.Text==teamLabel &&
+                    HasText(HistoryInspector,teamLabel),"legacy complete share scope or history refresh was lost");
+            Require(row.Share=="50%" && row.Tooltip.Contains(teamLabel),"reused row retained an old share tooltip");
+            Apply(null,false,"—");
+            Require(HistoryPanel.Coverage.Text.Contains(reason) && hud.Panel.PanelKind.Text=="占比未知" &&
+                    row.Share=="—", "legacy unknown shares acquired a denominator");
+        }
+        finally { ApplyState(original); }
     }
     private static void Click(int x,int y)
     {
@@ -118,6 +181,35 @@ public partial class MainWindow
         finally{await partial.DisposeAsync();}
         Require(timedOut&&followupRejected,"partial response timeout allowed a later command or failed to reject it");
         checks.Add("partial JSONL timeout marks transport unusable, rejects follow-up, and closes via stdin EOF");
+        string alignedRoot=Path.Combine(output,"aligned-worker");Directory.CreateDirectory(alignedRoot);
+        File.WriteAllLines(Path.Combine(alignedRoot,"desktop_bridge.py"),new[]{
+            "import json,sys",
+            "def reply(c,kind,**body): return dict(version=1,id=c['id'],ok=True,kind=kind,**body)",
+            "def encode(value): return json.dumps(value,ensure_ascii=False,separators=(',',':')).encode('utf-8')+b'\\r\\n'",
+            "def send(data): sys.stdout.buffer.write(data); sys.stdout.buffer.flush()",
+            "label='敌情状态·等待 🐱 '",
+            "for line in sys.stdin:",
+            "    c=json.loads(line)",
+            "    if c['op']=='hello': send(encode(reply(c,'hello',result={'transport':'stdio-jsonl'}))); continue",
+            "    if c['op']=='quit': send(encode(reply(c,'bye'))); break",
+            "    text={'label':label,'padding':''}",
+            "    result=reply(c,'snapshot',state=text)",
+            "    remaining=c['size']-len(encode(result))",
+            "    copies,tail=divmod(remaining,len(label.encode('utf-8')))",
+            "    text['padding']=label*copies+'x'*tail",
+            "    data=encode(result)",
+            "    assert len(data)==c['size']",
+            "    send(data)"});
+        await using(var aligned=new BridgeClient(alignedRoot,App.Python,Array.Empty<string>()))
+        {
+            await aligned.ConnectAsync();
+            foreach(int size in new[]{4095,4096,4097,8192,114688})
+            {
+                var reply=await aligned.RequestAsync("snapshot",new(){["size"]=size},TimeSpan.FromSeconds(3));
+                Require(reply.Get("state").Text("label")=="敌情状态·等待 🐱 ","aligned UTF-8 worker response did not decode");
+            }
+        }
+        checks.Add("UTF-8 worker replies complete at the pipe buffer boundary while the worker awaits the next request");
         string errorRoot=Path.Combine(output,"error-reply-worker");Directory.CreateDirectory(errorRoot);
         File.WriteAllLines(Path.Combine(errorRoot,"desktop_bridge.py"),new[]{
             "import json,sys",
@@ -341,9 +433,39 @@ public partial class MainWindow
             await Command("history_config",new(){["config"]=new{category="damage",ranking="total",rate_basis="recent_5s"}});
         }
         var source=Panels[id].View.Get("source");string owner=source.EnumerateObject().First().Name;
+        var ownerRow=source.Get(owner);
+        Require(ownerRow.Get("skill_damage").ValueKind==JsonValueKind.Number &&
+                ownerRow.Get("non_skill_damage").ValueKind==JsonValueKind.Number,
+                "skill / non-skill split missing from rendered source rows");
+        checks.Add("skill / non-skill split reaches the operator detail source");
         activePanel=id;LiveInspector.Pin(owner,Panels[id].View);
+        await Navigate("live");await Settle();
+        // The right-hand inspector must consume the same effective/overkill
+        // switch as the panel, including composition, engagement DPS and the
+        // skill split. The synthetic rows carry both datasets.
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",
+            ranking="total",rate_basis="recent_5s",effective_only=true}});
+        await Settle();
+        Require(Panels[id].View.Get("config").Bool("effective_only"),"effective switch did not reach the panel view");
+        Require(HasText(LiveInspector,"技能覆盖率"),"inspector did not render skill coverage");
+        Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
+        Screenshot.Window(this,Path.Combine(output,"effective-inspector.png"));
+        LastUiError="";
+        Panels[id].EffectiveOnly.IsChecked=true;
+        Panels[id].EffectiveOnly.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        for(int wait=0;wait<40&&commands>0;wait++) await Task.Delay(50);
+        await Settle();
+        Require(LastUiError.Length==0,"effective click crashed the UI: "+LastUiError);
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",
+            ranking="total",rate_basis="recent_5s",effective_only=false}});
+        await Settle();
+        Require(HasText(LiveInspector,"技能伤害") &&
+                !HasText(LiveInspector,"技能有效伤害"),"inspector did not restore total skill split");
+        checks.Add("effective switch drives inspector composition, engagement rates and skill split");
         OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
         await Settle();
+        VerifyShareScope(id,originalHud);
+        checks.Add("share scope reaches live, history, HUD, details and ranking PNG with legacy fallback");
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
         Require(ranks==string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share"))),"rate changed ranking / bars / shares");
@@ -372,11 +494,22 @@ public partial class MainWindow
             await Navigate("live");await Settle();
             Require(ReferenceEquals(originalHud,Huds[id]) && Native.Handle(originalHud)==handleBeforeTheme,"theme recreated HUD");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
+            await Navigate("enemies");await Settle();
+            Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
+            Require(EnemyTotalHp.Text.Contains("26000"),"enemy total HP did not render");
+            Require(EnemyOurDamage.Text.Contains("18700"),"cumulative damage line value did not render");
+            Require(EnemyStatusHint.Text.Contains("离场时尚余 600 HP（1 个实例）"),
+                "HP remaining at enemy departure did not render");
+            if (State.Get("enemy").Get("non_team_native_damage").TryNumber() > 0)
+                Require(EnemyStatusHint.Text.Contains("其他来源原生伤害 500"),"non-team damage basis did not render");
+            Require(!EnemyEmpty.IsVisible,"enemy empty state shown with entered enemies");
+            Screenshot.Window(this,Path.Combine(output,theme+"-enemies.png"));
+            await Navigate("live");await Settle();
             Screenshot.Window(this,Path.Combine(output,theme+"-main.png"));Screenshot.Window(originalHud,Path.Combine(output,theme+"-hud.png"));
             var selected=State.Get("history_selected");
             if(selected.ValueKind==JsonValueKind.Object)
             {
-                await Navigate("history");HistoryInspector.Pin(selected.Get("view").Get("source").EnumerateObject().First().Name,selected.Get("view").Get("source"));await Settle();
+                await Navigate("history");HistoryInspector.Pin(selected.Get("view").Get("source").EnumerateObject().First().Name,selected.Get("view"));await Settle();
                 Screenshot.Window(this,Path.Combine(output,theme+"-history.png"));
                 File.WriteAllBytes(Path.Combine(output,theme+"-ranking.png"),Screenshot.Statistics(selected,theme));
                 string selectedId=selected.Text("battle_id");Search.Text="no-such-record";await Command("history_refresh");

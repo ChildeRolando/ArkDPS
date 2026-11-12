@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 
 from battle_history import BattleRecord
-from panel_model import (DIAGNOSTIC_LABELS, render_panel, rows_from_statistics,
+from panel_model import (DIAGNOSTIC_LABELS, EventAvailability, render_panel, rows_from_statistics,
                          team_status)
 from source_classification import classify_unmapped_source
 import stage_names
@@ -123,9 +123,11 @@ def record_status(record):
 
 
 def record_view(record, config):
-    complete, reason, note = record_status(record)
-    return render_panel(config, rows_from_statistics(record_statistics(record)),
-                        team_complete=complete, team_reason=reason, team_note=note)
+    stats = record_statistics(record)
+    complete, reason, note = team_status(stats)
+    return render_panel(config, rows_from_statistics(stats), team_complete=complete,
+                        team_reason=reason, team_note=note,
+                        event=EventAvailability(record.event_status, record.event_error, live=False))
 
 
 def record_complete(record):
