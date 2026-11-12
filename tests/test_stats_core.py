@@ -281,7 +281,7 @@ def test_friendly_self_damage_does_not_enter_engagement_dps():
 
 
 
-def test_hp_damage_events_provide_target_overkill():
+def test_incoming_hp_events_alone_do_not_prove_overkill():
     s = Statistics('hp', 0, event_coverage=True)
     s.register_source('a', 'A')
     s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
@@ -291,9 +291,9 @@ def test_hp_damage_events_provide_target_overkill():
     s.event('hp2', 1.5, 'a', 'hp_damage', 50, target='enemy_2',
             hp_before=100, shield_absorbed=0)
     row = s.result()['rows']['A']
-    assert row['overkill_damage'] == 50
-    assert row['overkill_coverage_complete'] is True
-    assert row['effective_damage'] == 950
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_complete'] is False
+    assert row['effective_damage'] is None
 
 
 def test_hp_damage_missing_hp_or_shield_stays_unknown():
@@ -547,7 +547,9 @@ def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_onc
     assert row['burst_added_settlement'] == 300
     assert row['damage'] == 1800
     assert row['overkill_damage'] == 400
-    assert row['overkill_damage_by_type'] == {'elemental': 400}
+    assert row['overkill_damage_by_type'] == {
+        'physical': 0, 'arts': 0, 'elemental': 400, 'true': 0,
+    }
     assert row['effective_damage'] == 1400
 
 
@@ -608,9 +610,10 @@ def test_clean_event_coverage_close_keeps_final_effective_and_skill_metrics():
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
     s.advance(1)
     s.event('start', .1, 'a', 'skill_start', 1, skill_key='k')
-    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1')
-    s.event('hp', .2, 'a', 'hp_damage', 50, target='enemy_1',
+    s.event('hp', .2, 'a', 'hp_damage', 200, target='enemy_1',
             hp_before=10, shield_absorbed=0, damage_type=1)
+    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1', hp_before=10,
+            hp_after=0, real_delta=-10, killed=True, shield_absorbed=0, damage_type=1)
     s.event('end', .3, 'a', 'skill_end', 1, skill_key='k')
     s.advance(1)
     s.snapshot(1, {'a': {'damage': 50, 'healing': 0}})
@@ -662,20 +665,52 @@ def test_skill_coverage_and_effective_split_use_per_event_overkill():
     assert row['skill_coverage_complete'] is True
 
 
-def test_hp_overkill_evidence_splits_effective_skill_damage():
+def test_settled_overkill_evidence_splits_effective_skill_damage():
     s = Statistics('skill-hp-effective', 0, event_coverage=True)
     s.register_source('a', 'A')
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
     s.advance(1)
     s.event('start', .1, 'a', 'skill_start', 1, skill_key='k')
-    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1')
-    s.event('hp', .2, 'a', 'hp_damage', 50, target='enemy_1',
+    s.event('hp', .2, 'a', 'hp_damage', 200, target='enemy_1',
             hp_before=10, shield_absorbed=0, damage_type=1)
+    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1', hp_before=10,
+            hp_after=0, real_delta=-10, killed=True, shield_absorbed=0, damage_type=1)
     s.event('end', .3, 'a', 'skill_end', 1, skill_key='k')
     s.advance(1)
     row = s.result()['rows']['A']
     assert row['skill_damage'] == 50
     assert row['skill_damage_effective'] == 10
     assert row['skill_split_effective_complete'] is True
-    assert row['overkill_damage_by_type'] == {'physical': 40}
+    assert row['overkill_damage_by_type'] == {
+        'physical': 40, 'arts': 0, 'elemental': 0, 'true': 0,
+    }
     assert row['overkill_type_complete'] is True
+
+
+
+def test_stage_reduction_uses_post_settlement_without_subtracting_incoming_excess():
+    s = Statistics('stage-reduction', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 2_750, 'healing': 0}})
+    s.event('skill', .1, 'a', 'skill_start', 1)
+    s.event('incoming1', .2, 'a', 'hp_damage', 6_400, target='enemy_1',
+            target_instance='one', hp_before=1_800, shield_absorbed=0, damage_type=1)
+    s.event('actual1', .2, 'a', 'damage', 1_600, target='enemy_1', target_instance='one',
+            hp_before=1_800, hp_after=200, real_delta=-1_600, killed=False,
+            shield_absorbed=0, damage_type=1)
+    s.event('incoming2', .3, 'a', 'hp_damage', 4_600, target='enemy_1',
+            target_instance='one', hp_before=200, shield_absorbed=0, damage_type=1)
+    s.event('actual2', .3, 'a', 'damage', 1_150, target='enemy_1', target_instance='one',
+            hp_before=200, hp_after=0, real_delta=-200, killed=True,
+            shield_absorbed=0, damage_type=1)
+    s.event('dead', .3, 'a', 'damage', 500, target='enemy_1', target_instance='one',
+            hp_before=0, hp_after=0, real_delta=0, killed=True, shield_absorbed=0)
+    s.event('immune', .4, 'a', 'damage', 700, target='enemy_2', target_instance='two',
+            hp_before=300, hp_after=300, real_delta=0, killed=False, cancel_reason=1)
+
+    row = s.result()['rows']['A']
+    assert row['damage'] == row['observed_damage'] == row['skill_damage'] == 2_750
+    assert row['overkill_damage'] == 950
+    assert row['effective_damage'] == row['skill_damage_effective'] == 1_800
+    assert row['overkill_damage_by_type']['physical'] == 950

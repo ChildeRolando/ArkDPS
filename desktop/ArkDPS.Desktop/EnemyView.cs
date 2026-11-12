@@ -493,6 +493,9 @@ public partial class MainWindow
                     && totals.Get("stage_total_hp_estimate").ValueKind==JsonValueKind.Number))
                 hints.Add("关卡预估血量（出怪计划） "+EnemyReading(totals,"stage_total_hp_estimate",
                     totals.Bool("stage_total_hp_complete"))+"。");
+            if(totals.Get("departed_hp").TryNumber()>0)
+                hints.Add("离场时尚余 "+totals.UiInt("departed_hp")+" HP（"
+                    +totals.UiInt("departed_hp_count")+" 个实例）。");
             if(shownEnemy.Get("non_team_native_damage").TryNumber()>0)
                 hints.Add("其他来源原生伤害 "+shownEnemy.UiInt("non_team_native_damage")+"。");
             if(shownEnemy.Get("damage_baseline").ValueKind==JsonValueKind.Number)

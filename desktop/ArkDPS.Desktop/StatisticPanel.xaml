@@ -166,7 +166,7 @@
      <TextBlock Grid.Column="2" Text="贡献" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="4,0,0,0"/>
      <TextBlock Grid.Column="3" Text="总量" Style="{StaticResource Caption}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,8,0"/>
      <TextBlock x:Name="RateHeading" Grid.Column="4" Text="DPS" Style="{StaticResource Caption}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,6,0"/>
-     <TextBlock Grid.Column="5" Text="占比" Style="{StaticResource Caption}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,12,0"/>
+     <TextBlock x:Name="ShareHeading" Grid.Column="5" Text="占比" Style="{StaticResource Caption}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,12,0"/>
     </Grid>
     <Grid x:Name="ReferenceTableHeader" Background="{DynamicResource ConsoleCard}" MinHeight="22" Margin="0,0,9,0" Visibility="Collapsed">
      <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="2*"/><ColumnDefinition Width="1.18*" MinWidth="61"/><ColumnDefinition Width="1.05*" MinWidth="52"/><ColumnDefinition Width="1.38*" MinWidth="78"/></Grid.ColumnDefinitions>

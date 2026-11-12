@@ -20,7 +20,7 @@ public sealed class Inspector : Border
     private ReferenceReport? referenceReport;
     private (string Owner, string Theme, string Row, string Entry, string Detail,
         string Rates, int Rank, bool Effective, string Metric, string Ranking,
-        string RateReason, string RateHint)? displayed;
+        string RateReason, string RateHint, string ShareDescription)? displayed;
     internal string? Owner => owner;
     public bool CompactReference
     {
@@ -76,29 +76,24 @@ public sealed class Inspector : Border
         var detail=view.Get("details_by_owner").Get(owner);
         if(detail.ValueKind!=JsonValueKind.Object) detail=entry.Get("detail");
         var rates=view.Get("rates").Get(owner);
+        var shareInfo=SharePresentation.From(view);
         string metric=view.Text("metric_label");
         string ranking=config.Text("ranking");
         string rateReason=view.Text("rate_reason"), rateHint=view.Text("rate_hint");
         var signature=(owner,Theme.Key,Raw(row),Raw(entry),Raw(detail),Raw(rates),
-            index,effective,metric,ranking,rateReason,rateHint);
+            index,effective,metric,ranking,rateReason,rateHint,shareInfo.Description);
         if(displayed==signature) return;
         displayed=signature;
 
         if(compactReference && Theme.Key=="lone-trail")
         {
-            ShowReference().Update(owner,row,view,entry,detail,rates,effective,ranking);
+            ShowReference().Update(owner,row,view,entry,detail,rates,effective,ranking,shareInfo);
             return;
         }
         UseFullReport();
 
         string rank=index<0 ? "—" : (index+1).ToString();
         string share=entry.ValueKind==JsonValueKind.Object ? entry.Text("share_display") : "—";
-        string shareLabel=ranking switch
-        {
-            "recent" => "近期贡献",
-            "dps" => "DPS 贡献",
-            _ => "本局贡献",
-        };
         string selected=index<0 ? "—" : entry.Text(ranking=="dps" ? "rate_display" : "display_value");
         body.Children.Clear();
 
@@ -126,9 +121,9 @@ public sealed class Inspector : Border
         copy.Children.Add(Text(row.Text("name"),18,true,"Ink"));
         identity.Children.Add(copy);Grid.SetColumn(identity,1);top.Children.Add(identity);
 
-        var shareStack=new StackPanel{HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Center};
+        var shareStack=new StackPanel{HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Center,ToolTip=shareInfo.Description};
         shareStack.Children.Add(Mono(share,20,true,"Accent"));
-        shareStack.Children.Add(Text(shareLabel,9,false,"Muted"));
+        shareStack.Children.Add(Text(shareInfo.Label,9,false,"Muted"));
         Grid.SetColumn(shareStack,2);top.Children.Add(shareStack);
         body.Children.Add(top);
 
@@ -203,7 +198,8 @@ public sealed class Inspector : Border
                 11, false, "Muted", new Thickness(0, 1, 0, 2)));
         var coverageNote=coverageKnown
             ? "覆盖率按技能开启时间占在场时间计算；被动技能计入非技能。"
-            : "技能覆盖率未知：在场时间或技能窗口证据不足。";
+            : splitReason.Length>0 ? "技能覆盖率未知："+splitReason
+                : "技能覆盖率未知：在场时间或技能窗口证据不足。";
         body.Children.Add(Text(coverageNote,11,false,"Muted"));
 
         Section("被减伤率");
@@ -477,7 +473,7 @@ public sealed class Inspector : Border
         }
 
         internal void Update(string owner,JsonElement row,JsonElement view,JsonElement entry,
-            JsonElement detail,JsonElement rates,bool effective,string ranking)
+            JsonElement detail,JsonElement rates,bool effective,string ranking,SharePresentation shareInfo)
         {
             string displayName=row.Text("name");
             name.Text=displayName.Length>0 ? displayName : owner;
@@ -495,6 +491,7 @@ public sealed class Inspector : Border
                 && double.IsFinite(splitTotal) && skill>=0 && ordinary>=0;
             double skillCoverage=detail.Number("skill_coverage",double.NaN);
             bool coverageKnown=detail.Bool("skill_coverage_complete") && skillCoverage is >= 0 and <= 1;
+            string reason=detail.Text("skill_split_reason");
             string share=entry.Text("share_display");
             double entryRate=entry.Number("rate",double.NaN);
             string rate=entry.Text("rate_state")=="value" && double.IsFinite(entryRate)
@@ -507,7 +504,7 @@ public sealed class Inspector : Border
             metricLabels[1].Text=category=="shield" ? "有效护盾"
                 : rateLabel=="全周期DPS" && category=="damage" ? "全周期 DPS"
                 : $"{(category=="healing" ? "HPS" : "DPS")}（{rateLabel}）";
-            metricLabels[2].Text=(ranking,category) switch
+            metricLabels[2].Text=view.Text("share_scope")=="known" ? shareInfo.Label : (ranking,category) switch
             {
                 ("dps","healing") => "HPS 占比",
                 ("dps",_) => "DPS 占比",
@@ -532,6 +529,14 @@ public sealed class Inspector : Border
                 metricLabels[index].ToolTip=metricLabels[index].Text;
                 metricValues[index].ToolTip=metricValues[index].Text;
             }
+            metricLabels[2].ToolTip=shareInfo.Description;
+            metricValues[2].ToolTip=shareInfo.Description;
+            if(!splitKnown && reason.Length>0)
+            {
+                metricValues[5].ToolTip=reason;
+                metricValues[6].ToolTip=reason;
+            }
+            if(!coverageKnown && reason.Length>0) metricValues[7].ToolTip=reason;
             if(rate=="—" && entry.Text("rate_text").Length>0)
                 metricValues[1].ToolTip=entry.Text("rate_text");
             SetComposition(effective,row,detail);
@@ -539,7 +544,6 @@ public sealed class Inspector : Border
             string damageRate=RateText(row,rates.Get("damage"),"engagement_damage",
                 effective ? detail : default,effective ? "effective_engagement_damage" : "");
             string healRate=RateText(row,rates.Get("healing"),"engagement_healing");
-            string reason=detail.Text("skill_split_reason");
             string sources=string.Join("、",row.Get("sources").Items().Select(source=>source.Text()));
             string skillLabel=effective ? "技能有效伤害" : "技能伤害";
             moreText.Text=string.Join("\n",new[]
@@ -547,9 +551,11 @@ public sealed class Inspector : Border
                 name.Text+" · "+(row.Bool("present") ? "在场" : row.Get("present").ValueKind==JsonValueKind.False ? "已离场" : "在场状态未知"),
                 "总伤 "+Number(row.Get("damage"))+"   有效 "+Effective(row)+"   过量 "+Number(row.Get("overkill_damage")),
                 "治疗 "+Number(row.Get("healing"))+"   有效护盾 "+Number(row.Get("shield_absorbed")),
+                shareInfo.Description,
                 skillLabel+" "+(splitKnown ? skill.ToString("N0",CultureInfo.InvariantCulture) : "—")
                     +"   非"+skillLabel+" "+(splitKnown ? ordinary.ToString("N0",CultureInfo.InvariantCulture) : "—"),
-                "技能覆盖率 "+metricValues[7].Text+"   技能开启秒 "+detail.Ui("skill_active_seconds"),
+                "技能覆盖率 "+metricValues[7].Text+"   技能开启秒 "
+                    +(detail.Bool("skill_coverage_complete") ? detail.Ui("skill_active_seconds") : "—"),
                 "接敌 DPS "+damageRate+"   接敌 HPS "+healRate,
                 "伤害活跃秒 "+row.Ui("active_damage")+"   治疗活跃秒 "+row.Ui("active_healing"),
                 OverkillNote(row,view),

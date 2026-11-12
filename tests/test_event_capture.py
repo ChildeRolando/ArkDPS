@@ -362,19 +362,21 @@ def test_probe_records_hp_evidence_only_after_onleave():
     assert leave.index('const end=time()') < leave.index('recordHpContext(')
 
 
-def test_probe_recovers_targetless_damage_from_same_frame_elemental_bar():
+def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
     js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
-    assert 'lastBarTarget' in js
-    assert 'fallback.frame===end.frame' in js
-    assert 'overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame)' in js
-    # The fallback is evidence, not a bypass: the Python core still verifies HP.
-    assert 'target_instance' in js
+    assert 'scopes[index].mod.equals(modifier)' in js
+    assert 'scope.source===this.source&&scope.when.frame===this.when.frame' in js
+    assert 'if(scope.targetHit)scope.targetHitAmbiguous=true' in js
+    assert 'overkillEvidence(this.mod,hit.target,hit.hpBefore,end.frame)' in js
+    assert 'settlement&&settlement.amount===amount' in js
+    assert 'if(this.tracksModifier)leaveModifier(this)' in js
+    assert 'lastBarTarget' not in js
     assert "record(this.source,'hp_damage'" in js
     # Target-side HP evidence only describes our own outgoing damage. Enemy
     # attacks on operators are not stream events; emitting them closed the
     # whole authoritative stream before this guard existed.
-    hp_guard = js[js.index("Unit.OnTakeDamage'&&this.source"):]
-    assert 'own(this.source)' in hp_guard[:80]
+    hp_guard = js[js.index("if(this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)"):]
+    assert hp_guard.index("record(this.source,'hp_damage'") < hp_guard.index('const hpAfter=targetHp(this.target)')
 
 
 def test_elemental_bar_and_sourceless_burst_reach_attribution():
@@ -511,3 +513,67 @@ def test_capture_accepts_rebirth_evidence_and_marks_an_unknown_phase_prefix():
                             'phase_from_birth': True}},
     }
     assert result['rows']['char_a']['event_coverage_complete']
+
+
+@pytest.mark.parametrize('prefab_key', ['skchr_angel2_3', 'prefab_alias'])
+def test_ammo_cast_completion_leaves_only_that_skill_window_unknown(prefab_key):
+    class TeamCollector(Collector):
+        def read(self):
+            sample = super().read()
+            sample['rows'].append({
+                'id': 'char_1041_angel2', 'damage': 15, 'healing': 0,
+                'physical': 15, 'arts': 0, 'true': 0, 'elemental': 0,
+            })
+            return sample
+
+        def read_roster(self):
+            original = super().read_roster()
+            angel = CharacterEntry(cid='char_1041_angel2', unique_id=2, is_token=False,
+                                   is_predefined=False, host_key=None, host_uid=None,
+                                   player_side=0)
+            return RosterSnapshot(frame=self.frame, entries=(*original.entries, angel),
+                                  present_unique_ids=frozenset({1, 2}), present_known=True)
+
+    collector = TeamCollector()
+    observer = Observer(collector)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+
+    def skill(sequence, frame, source, kind, method, key, reason=None, skill_id=None):
+        return {**event(sequence, frame=frame, game_time=frame - 1, amount=1),
+                'source': source, 'kind': kind, 'skill_key': key, 'skill_id': skill_id,
+                'skill_reason': reason, 'proof': {'method': method}}
+
+    observer.events = [
+        skill(1, 2, 'char_a', 'skill_start', 'Character.SwitchToSkillState', 'regular'),
+        skill(2, 2, 'char_1041_angel2', 'skill_start', 'Character.SwitchToSkillState',
+              'skchr_angel2_3'),
+        event(3, frame=2, game_time=1, amount=10),
+        skill(4, 3, 'char_a', 'skill_end', 'Character.OnAfterSkill', 'regular', 1),
+        skill(5, 3, 'char_1041_angel2', 'skill_end', 'Character.OnAfterSkill',
+              prefab_key, 1, 'skchr_angel2_3'),
+        skill(6, 3, 'char_1041_angel2', 'skill_end', 'Character.OnAfterSkill',
+              prefab_key, 1, 'skchr_angel2_3'),
+        {**event(7, frame=4, game_time=3, amount=15), 'source': 'char_1041_angel2'},
+        event(8, frame=4, game_time=3, amount=5),
+    ]
+    collector.frame, collector.game_time, collector.damage = 4, 3, 115
+    observer.sequence = observer.epoch = len(observer.events)
+    rows = capture.sample()['rows']
+    ammo = rows['char_1041_angel2']
+    assert ammo['event_coverage_complete']
+    assert ammo['counter_snapshot_complete']
+    assert ammo['damage'] == 15
+    assert ammo['observed_damage'] == 15
+    assert ammo['skill_window_count'] == 1
+    assert ammo['skill_active_seconds'] is None
+    assert ammo['skill_damage'] is None and ammo['non_skill_damage'] is None
+    assert ammo['skill_damage_effective'] is None and ammo['non_skill_damage_effective'] is None
+    assert not ammo['skill_coverage_complete']
+    assert not ammo['skill_split_complete']
+    assert '弹药技能' in ammo['skill_split_reason']
+    regular = rows['char_a']
+    assert regular['skill_coverage_complete'] and regular['skill_split_complete']
+    assert regular['skill_active_seconds'] == 1
+    assert regular['skill_damage'] == 10 and regular['non_skill_damage'] == 5
+    assert capture.adapter.event_stream.sequence == 8

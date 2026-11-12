@@ -28,7 +28,8 @@ from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
                         resolve_configured)
 from event_capture import CaptureRetry
-from frida_provision import ensure_frida_endpoint
+from event_observer import ObserverStatus
+from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement
 from metrics import observation_age
 from panel_model import (EventAvailability, PanelConfig, detail_rates,
@@ -205,7 +206,7 @@ class DesktopState:
         if self.lifecycle in ('ended', 'finalizing', 'frozen'):
             return self.lifecycle, {'ended': '战斗结束', 'finalizing': '等待结算确认', 'frozen': '战局冻结'}[self.lifecycle]
         if observation_age(self.last) > 2:
-            return 'stale', '数据已过期 · 请重新定位'
+            return 'stale', '数据已过期 · 等待下一次可靠采样 · 保留最后有效记录'
         if time.monotonic() - self.last_progress > .8:
             return 'paused', '暂停 / 等待战斗推进'
         if self.event_status in ('gap', 'failed', 'unavailable'):
@@ -409,6 +410,9 @@ class CollectionWorker:
                 try:
                     usable = False
                     current_config, current_enabled, current_target = None, False, None
+                    endpoint_bound = False
+                    retries = 0
+                    last_retry_audit = float('-inf')
                     while not self.stop.is_set():
                         try:
                             config, enabled = self.requests.get_nowait()
@@ -417,6 +421,9 @@ class CollectionWorker:
                         if config is not None:
                             current_config, current_enabled = config, enabled
                             usable = False
+                            endpoint_bound = False
+                            retries = 0
+                            last_retry_audit = float('-inf')
                             self.last_connect_attempt = time.monotonic()
                             self.events.put(('scanning', True))
                             if self.release():
@@ -427,6 +434,8 @@ class CollectionWorker:
                                     if enabled:
                                         ok, detail = ensure_frida_endpoint(target.adb_path, target.serial,
                                                                            remote=self.endpoint)
+                                        endpoint_bound = ok
+                                        self.last_endpoint_check = time.monotonic()
                                         audit('frida_endpoint', {'ok': ok, 'detail': detail})
                                         if not ok:
                                             self.events.put(('warning', '事件端点：' + detail))
@@ -449,27 +458,53 @@ class CollectionWorker:
                                     self.release()
                             self.events.put(('scanning', False))
                         if usable and self.session is not None:
+                            started = time.monotonic()
                             try:
                                 sample = self.session.read()
                                 runtime = self.session.runtime
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
                                     self.events.put(('sample', sample))
-                            except CaptureRetry:
-                                self.events.put(('lifecycle', self.session.runtime.sessions.state))
+                            except CaptureRetry as exc:
+                                lifecycle = self.session.runtime.sessions.state
+                                self.events.put(('lifecycle', lifecycle))
+                                if lifecycle == 'playing':
+                                    retries += 1
+                                    now = time.monotonic()
+                                    if now - last_retry_audit >= 5:
+                                        reason = str(exc).partition('\n')[0].strip()
+                                        if reason.startswith('observer ') and ' request failed:' in reason:
+                                            reason = reason.partition(':')[0]
+                                        audit('capture_retry', {
+                                            'reason': reason[:200], 'count': retries,
+                                            'duration_ms': round((now - started) * 1000, 1),
+                                            'monotonic': now})
+                                        retries = 0
+                                        last_retry_audit = now
                             except BattleChanged as exc:
                                 self.events.put(('error', str(exc)))
+                                usable = False
+                                self.last_connect_attempt = time.monotonic()
                                 self.request(current_config, current_enabled)
                             except Exception as exc:
                                 self.events.put(('error', str(exc)))
                                 usable = False
                         if (usable and current_enabled and current_target is not None
                                 and time.monotonic() - self.last_endpoint_check >= 5):
-                            self.last_endpoint_check = time.monotonic()
-                            ok, detail = ensure_frida_endpoint(current_target.adb_path,
-                                                               current_target.serial,
-                                                               remote=self.endpoint)
-                            audit('frida_keepalive', {'ok': ok, 'detail': detail})
+                            started = time.monotonic()
+                            observer = self.session.observer
+                            # ADB may still accept TCP while the device-side route is
+                            # stale. Only a live attached observer permits the fast path.
+                            observer_ready = observer is not None and observer.status == ObserverStatus.READY
+                            check = keep_frida_endpoint if endpoint_bound and observer_ready else ensure_frida_endpoint
+                            ok, detail = check(current_target.adb_path, current_target.serial,
+                                               remote=self.endpoint)
+                            endpoint_bound = ok
+                            finished = time.monotonic()
+                            self.last_endpoint_check = finished
+                            audit('frida_keepalive', {'ok': ok, 'detail': detail,
+                                  'duration_ms': round((finished - started) * 1000, 1),
+                                  'monotonic': finished})
                             if not ok:
                                 self.events.put(('warning', '事件端点保活：' + detail))
                         if (not usable and current_config is not None

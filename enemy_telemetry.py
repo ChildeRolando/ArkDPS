@@ -130,6 +130,11 @@ def _max_hp(row):
     return _finite(row.get('max_hp'), None) if row['hp_known'] else None
 
 
+def _same_hp(left, right):
+    return left is not None and right is not None and math.isclose(
+        left, right, rel_tol=1e-9, abs_tol=1e-6)
+
+
 def _phase_capacity(row):
     return max((value for value in (_max_hp(row), row.get('phase_max_hp'),
                                     row.get('phase_max_hp_lower_bound')) if value is not None),
@@ -221,6 +226,8 @@ def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
     remaining = [_finite(row.get('hp'), None) for row in entered if row['alive']]
     remaining_complete = (bool(entered) and not unknown_lifecycle_count
                           and all(hp is not None for hp in remaining))
+    departed_hp = [hp for row in entered if row['lifecycle'] == 'departed'
+                   and (hp := _finite(row.get('hp_at_finish'))) > 0]
     planned = list(planned or ())
     planned_hp = [_max_hp(row) for row in planned]
     planned_known = [hp for hp in planned_hp if hp is not None]
@@ -284,6 +291,8 @@ def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
         'stage_total_hp_estimate': max(adjusted_planned_total, observed_total),
         'stage_total_hp_complete': stage_complete,
         'remaining_hp': sum(max(0.0, hp) for hp in remaining if hp is not None),
+        'departed_hp': sum(departed_hp),
+        'departed_hp_count': len(departed_hp),
         'total_hp_complete': total_complete,
         'remaining_hp_complete': remaining_complete,
         'hp_complete': total_complete and remaining_complete,
@@ -470,6 +479,7 @@ class EnemyTelemetry:
         self._seeded = False
         self._row_frames = {}
         self._event_frames = {}
+        self._spawn_hp_evidence = {}
         self._pending_events = defaultdict(list)
         self._finished = set()
         self._phase_calibration = set()
@@ -508,6 +518,28 @@ class EnemyTelemetry:
             hp_ratio=None, hp_inferred=False, entry_inferred=False,
         )
 
+    def _settle_spawn_max_hp(self, row, event, key, hp, max_hp):
+        birth = self._spawn_hp_evidence.get(key)
+        if birth is None:
+            return row
+        birth_frame, birth_hp = birth
+        before = _finite(event.get('hp_before'), None)
+        if (not self._stream_complete or not birth_frame <= event['frame'] <= birth_frame + 1
+                or not _same_hp(row['hp'], before)):
+            self._spawn_hp_evidence.pop(key)
+            return row
+        old_max = _max_hp(row)
+        if (max_hp is not None and old_max is not None and max_hp < old_max
+                and _same_hp(before, old_max) and _same_hp(hp, max_hp)
+                and _same_hp(_phase_capacity(row), old_max)):
+            # An attribute refresh immediately after a full-HP birth can
+            # clamp HP to the final initial maximum without taking damage.
+            return dict(row, max_hp=max_hp, phase_initial_max_hp=max_hp, phase_max_hp=max_hp,
+                        birth_hp_adjustment=max_hp - birth_hp)
+        if hp < before:
+            self._spawn_hp_evidence.pop(key)
+        return row
+
     def _apply_event(self, row, event, key):
         kind, frame = event['kind'], event['frame']
         if kind == 'enemy_enter':
@@ -526,24 +558,31 @@ class EnemyTelemetry:
             row = dict(row, lifecycle='active', alive=True, state_id=None, state='在场',
                        end_frame=None, end_reason=None, finish_reason=None, hp=hp)
             if kind == 'enemy_reborn':
+                self._spawn_hp_evidence.pop(key, None)
                 row = _next_hp_phase(row)
                 self._phase_calibration.add(key)
+            elif (key not in self._event_frames and self._stream_complete
+                  and _same_hp(_finite(event.get('hp_after'), None), _max_hp(row))):
+                self._spawn_hp_evidence[key] = (frame, hp)
         elif kind == 'enemy_fake_death':
+            self._spawn_hp_evidence.pop(key, None)
             row = dict(row, lifecycle='rebirthing', alive=True, state_id=8,
                        state='等待重生', end_frame=None, end_reason=None, finish_reason=None, hp=hp)
         elif kind == 'enemy_finish':
+            self._spawn_hp_evidence.pop(key, None)
             reason = event.get('finish_reason')
             end_reason, state_id, state = _FINISH_STATES.get(
                 reason, (f'finish_{reason}', None, '已离场'))
             row = dict(row, lifecycle='departed', alive=False, state_id=state_id, state=state,
                        end_frame=frame, end_reason=end_reason,
-                       finish_reason=reason, hp=hp)
+                       finish_reason=reason, hp=hp, hp_at_finish=hp)
             self._finished.add(key)
             self._phase_calibration.discard(key)
         elif kind == 'enemy_hp' and hp is not None:
             max_hp = _finite(event.get('enemy_max_hp'), None)
             if max_hp is not None and max_hp <= 0:
                 max_hp = None
+            row = self._settle_spawn_max_hp(row, event, key, hp, max_hp)
             old_floor = row.get('max_hp_lower_bound')
             row = _observe_max_hp(dict(row, hp=hp), hp, max_hp,
                                   seed='initial_phase_hp_expansion' in row)
@@ -564,6 +603,7 @@ class EnemyTelemetry:
         complete = bool(observation and observation['complete'])
         if self._stream_complete and not complete:
             self._seeded = False
+            self._spawn_hp_evidence.clear()
         if observation is None:
             if self._stream_complete is not None:
                 self._stream_complete = False
@@ -572,6 +612,7 @@ class EnemyTelemetry:
         if self._stream_start_frame != start_frame:
             self._seeded = False
             self._last_sequence = -1
+            self._spawn_hp_evidence.clear()
         self._stream_complete = complete
         self._stream_start_frame = start_frame
         events = observation['events']
@@ -635,8 +676,13 @@ class EnemyTelemetry:
             for index, row in enumerate(current):
                 phase = phases.get(row['instance_uid'])
                 if phase and row['eid'] == phase['eid']:
+                    phase_hp = phase['phase_total_hp']
+                    if phase['phase_from_birth']:
+                        # The probe's phase sum includes HP at the Born callback,
+                        # before a verified initial clamp can settle that value.
+                        phase_hp += row.get('birth_hp_adjustment', 0)
                     current[index] = dict(
-                        row, phase_total_hp=phase['phase_total_hp'],
+                        row, phase_total_hp=phase_hp,
                         phase_count=phase['phase_count'],
                         phase_from_birth=phase['phase_from_birth'],
                         phase_coverage_complete=self._phase_data['complete'],

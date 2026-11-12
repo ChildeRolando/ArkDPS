@@ -165,11 +165,27 @@ function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).
 function targetHp(p){if(!p||p.isNull())return null;const value=fp(p.add(0x40));return Number.isFinite(value)&&value>=0&&value<1e9?value:null;}
 function targetKey(p){if(!p||p.isNull())return null;try{const id=str(p.add(0x148).readPointer());return id||null;}catch(e){return null;}}
 const shieldByFrame=new Map();
-// Some elemental-bar modifiers expose a null target on the following damage
-// callback. Keep the most recent bar target for the same source/frame so the
-// damage event can still offer verifiable target/HP evidence. The Python core
-// re-checks HP consistency; a stale or mismatched fallback remains unknown.
-const lastBarTarget=new Map();
+// Modifier& is borrowed only during the same-thread ApplyModifier invocation.
+// The pointer may be reused later, so retain no target evidence after return.
+const activeModifiers=new Map();
+function damageModifier(thread,modifier){
+ const scopes=activeModifiers.get(thread)||[];
+ for(let index=scopes.length-1;index>=0;index--){
+  if(scopes[index].mod.equals(modifier))return scopes[index];
+ }
+ return null;
+}
+function enterModifier(scope){
+ const scopes=activeModifiers.get(scope.tid)||[];
+ scopes.push(scope);activeModifiers.set(scope.tid,scopes);scope.tracksModifier=true;
+}
+function leaveModifier(scope){
+ const scopes=activeModifiers.get(scope.tid);
+ if(!scopes)return;
+ const index=scopes.lastIndexOf(scope);
+ if(index!==-1)scopes.splice(index,1);
+ if(!scopes.length)activeModifiers.delete(scope.tid);
+}
 // Absorption observed in a frame but not verifiable for a target cannot prove
 // that a lethal hit's excess was not absorbed, so its overkill stays unknown.
 const shieldUnknownByFrame=new Map();
@@ -692,6 +708,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
+     this.modifierScope=damageModifier(this.tid,this.mod);
      return;
     }
     if(this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
@@ -707,13 +724,20 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
+     if(this.name==='Unit.OnTakeDamage'&&this.source){
+      const scope=damageModifier(this.tid,this.mod);
+      if(scope&&scope.source===this.source&&scope.when.frame===this.when.frame){
+       if(scope.targetHit)scope.targetHitAmbiguous=true;
+       else scope.targetHit={target:this.target,hpBefore:this.hpBefore};
+      }
+     }
      return;
     }
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
      try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
-     if(!this.source||!own(this.source))this.foreign=true;
+     if(this.source&&own(this.source))enterModifier(this);
      return;
     }
     const s=stacks.get(this.tid)||[];if(!s.length){shieldUnknown=true;markShieldUnknown(this.when.frame,null);this.ignore=true;return;}
@@ -756,9 +780,19 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
       try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()});}catch(e){fatal=String(e);}
      }
      const hpAfter=targetHp(this.target);
+     const scope=this.modifierScope;
+     if(this.name==='Entity.OnAfterOutputDamage'&&scope&&scope.targetHit
+        &&!scope.targetHitAmbiguous&&scope.source===this.source
+        &&scope.when.frame===end.frame&&scope.targetHit.target.equals(this.target)){
+      if(scope.outputSeen)scope.outputAmbiguous=true;
+      scope.outputSeen=true;
+      const settled=overkillEvidence(this.mod,this.target,scope.targetHit.hpBefore,end.frame);
+      if(settled&&Number.isFinite(this.amount)&&!scope.outputAmbiguous)
+       scope.settlement={amount:this.amount,evidence:settled,method:this.name};
+     }
      recordHpContext({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
       source:this.source||null,target:targetKey(this.target)||this.target.toString(),
-      target_instance:this.target.toString(),amount:this.amount,
+      target_instance:this.target.toString(),modifier_instance:this.mod.toString(),amount:this.amount,
       real_delta:this.real,hp_before:this.hpBefore,hp_after:hpAfter,
       killed:hpAfter!==null&&hpAfter<=1e-6,
       target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32(),
@@ -771,8 +805,6 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      const owned=this.source&&own(this.source);
      const amount=fp(this.mod.add(0x30));
      if(owned&&type===0&&targetType===5){
-      if(this.target&&!this.target.isNull())
-       lastBarTarget.set(this.source,{frame:end.frame,target:this.target,hp_before:this.hpBefore,instance});
       try{record(this.source,'elemental_bar',amount,end,{method:this.name,type,target:targetType},{target_instance:instance});}catch(e){fatal=String(e);}
       return;
      }
@@ -788,36 +820,30 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      if(targetType!==0)return;
      if(![1,2,3,4].includes(type)){unknownSources.add(this.source);engagementUnknownSources.add(this.source);return;}
      const kind=type===4?'healing':'damage';
-     let damageTarget=this.target, damageHpBefore=this.hpBefore, damageInstance=instance;
-     let fallbackUsed=false, fallbackInfo=null, evidence=null;
-     if(kind==='damage'){
-      evidence=overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame);
-      // Some periodic/area modifiers expose a non-null pointer that is not a
-      // readable HP target. If the original evidence fails, retry with the
-      // same-frame elemental-bar target as a candidate; the HP check still
-      // decides whether it is valid.
-      const fallback=lastBarTarget.get(this.source);
-      fallbackInfo=fallback||null;
-      if(!evidence&&fallback&&fallback.frame===end.frame){
-       const alternative=overkillEvidence(this.mod,fallback.target,fallback.hp_before,end.frame);
-       if(alternative){
-        damageTarget=fallback.target;damageHpBefore=fallback.hp_before;damageInstance=fallback.instance;
-        evidence=alternative;fallbackUsed=true;
-       }
-      }
-      if(!evidence&&damageTarget&&!damageTarget.isNull()){
-       evidence=nonlethalEvidence(damageTarget);
-      }
-     }
-     if(evidence&&damageInstance) evidence.target_instance=damageInstance;
+     let damageInstance=instance,evidence=null;
      const proof={method:this.name,type,target:targetType};
-     if(kind==='damage'&&(!evidence||fallbackUsed||!damageInstance)){
-      proof.target_recovered=fallbackUsed;
-      proof.fallback_frame=fallbackInfo?fallbackInfo.frame:null;
-      proof.raw_target_null=!this.target||this.target.isNull();
-      proof.raw_target_instance=instance;
-      proof.fallback_hp_before=fallbackInfo?fallbackInfo.hp_before:null;
-      proof.evidence_recovered=!!evidence;
+     if(kind==='damage'){
+      const hit=this.targetHitAmbiguous||this.outputAmbiguous?null:this.targetHit;
+      const settlement=hit&&this.settlement;
+      // Prefer the settled callback for this exact Modifier& and target. A
+      // different hit or same-frame elemental bar cannot supply its HP.
+      if(settlement&&settlement.amount===amount){
+       evidence=settlement.evidence;
+       damageInstance=hit.target.toString();
+       proof.evidence_method=settlement.method;
+      }else if(hit){
+       evidence=overkillEvidence(this.mod,hit.target,hit.hpBefore,end.frame);
+       damageInstance=hit.target.toString();
+      }else{
+       evidence=overkillEvidence(this.mod,this.target,this.hpBefore,end.frame);
+      }
+      if(!evidence){
+       const target=hit?hit.target:this.target;
+       if(target&&!target.isNull())evidence=nonlethalEvidence(target);
+      }
+      if(evidence&&damageInstance)evidence.target_instance=damageInstance;
+      if(evidence&&evidence.real_delta===0&&evidence.hp_before===evidence.hp_after
+         &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1))return;
      }
      try{record(this.source,kind,amount,end,proof,evidence);}catch(e){fatal=String(e);}
     }else{
@@ -830,7 +856,10 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.skillStart||this.skillEnd){skillUnknown=true;}
     else if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}}
     else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);}
-   }finally{if(this.started){active--;const left=(activeHooks.get(this.name)||1)-1;if(left>0)activeHooks.set(this.name,left);else activeHooks.delete(this.name);}}
+   }finally{
+    if(this.tracksModifier)leaveModifier(this);
+    if(this.started){active--;const left=(activeHooks.get(this.name)||1)-1;if(left>0)activeHooks.set(this.name,left);else activeHooks.delete(this.name);}
+   }
   }
  }));
 }

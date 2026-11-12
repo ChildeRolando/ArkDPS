@@ -216,6 +216,10 @@ class LiveEventCapture:
                 if self.initial_drain and event['sequence'] <= self.baseline_sequence:
                     continue
                 payload = {k: v for k, v in event.items() if k != 'proof'}
+                proof = event.get('proof')
+                if (payload.get('kind') in ('skill_start', 'skill_end')
+                        and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
+                    payload['skill_method'] = proof['method']
                 self.adapter.accept_event(session=sample['session'], refresh_result=False, **payload)
             self.initial_drain = False
             if any(event.get('sequence', -1) <= sequence for event in self.pending):

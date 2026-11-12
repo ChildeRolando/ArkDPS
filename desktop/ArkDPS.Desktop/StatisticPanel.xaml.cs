@@ -14,6 +14,29 @@ using System.Windows.Media.Imaging;
 
 namespace ArkDPS.Desktop;
 
+internal readonly record struct SharePresentation(string Label, string Details, bool Available)
+{
+    public string Description => Join(Label, Details);
+
+    public static SharePresentation From(JsonElement view)
+    {
+        string scope=view.Text("share_scope");
+        if(scope!="team" && scope!="known" && scope!="unavailable")
+            scope=view.Bool("share_known") ? "team" : "unavailable";
+        string label=scope switch
+        {
+            "team"=>"全队同口径占比",
+            "known"=>"已知数据内占比",
+            _=>"占比未知"
+        };
+        string reason=scope=="team" ? "" : view.Text("share_reason");
+        return new(label,Join(reason,view.Text("share_note")),scope!="unavailable");
+    }
+
+    private static string Join(string first,string second) =>
+        first.Length==0 ? second : second.Length==0 ? first : first+" · "+second;
+}
+
 public sealed class RowItem : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -34,6 +57,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Rate => Entry.Text("rate_text");
     public string Share => Entry.Text("share_display");
     public double SharePercent => Math.Clamp(Entry.Number("share"),0,1)*100;
+    internal SharePresentation ShareInfo { get; set; }=new("占比","",false);
     public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
     public string BarTooltip
     {
@@ -49,7 +73,12 @@ public sealed class RowItem : INotifyPropertyChanged
                 +"过量 "+over;
         }
     }
-    public string Tooltip => Name + Environment.NewLine + "排行原值 " + Json.UiText(Entry.Text("exact_value")) + Environment.NewLine + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate") + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "") + Environment.NewLine + "占比 " + Entry.Text("share_display") + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage");
+    public string Tooltip => Name + Environment.NewLine + "排行原值 " + Json.UiText(Entry.Text("exact_value"))
+        + Environment.NewLine + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate")
+        + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "")
+        + Environment.NewLine + ShareInfo.Label + " " + Share
+        + (ShareInfo.Details.Length>0 ? Environment.NewLine + ShareInfo.Details : "")
+        + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage");
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
@@ -277,6 +306,7 @@ public partial class StatisticPanel : UserControl
     {
         view=value; updating=true;
         var config=value.Get("config");
+        var share=SharePresentation.From(value);
         var title=value.Text("title");
         if(IsHud)
         {
@@ -288,8 +318,11 @@ public partial class StatisticPanel : UserControl
             };
         }
         Heading.Text=title;
-        PanelKind.Text=IsHud ? "HUD PANEL" : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
-        PanelKind.Visibility=IsHud||referenceStyle ? Visibility.Collapsed : Visibility.Visible;
+        var knownShare=value.Text("share_scope")=="known";
+        PanelKind.Text=IsHud ? share.Label : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
+        PanelKind.Visibility=referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
+        PanelKind.ToolTip=IsHud ? share.Description : null;
+        Heading.ToolTip=IsHud ? share.Description : null;
         HudClose.Visibility=IsHud ? Visibility.Visible : Visibility.Collapsed;
         Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : referenceStyle ? "ReferenceRow" : "FullRow");
         TableHeader.Visibility=IsHud||referenceStyle ? Visibility.Collapsed : Visibility.Visible;
@@ -329,30 +362,35 @@ public partial class StatisticPanel : UserControl
         OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
             ? Visibility.Visible : Visibility.Collapsed;
-        var note=value.Text("share_note");
-        var shareNote=value.Bool("share_known")
-            ? referenceStyle ? "" : "全队同口径占比 · 点击干员固定明细"
-            : value.Text("share_reason");
-        Coverage.Text=shareNote.Length>0&&note.Length>0 ? shareNote+" · "+note : shareNote+note;
+        ShareHeading.ToolTip=share.Description;
         if(referenceStyle)
         {
-            Coverage.ToolTip=Coverage.Text;
+            Coverage.ToolTip=share.Description;
             var total=value.Get("total");
-            if(total.ValueKind==JsonValueKind.Number)
-                Coverage.Text=(value.Bool("share_known") ? "∑  全队合计   " : "∑  榜单合计   ")+Json.UiText(total.GetRawText());
+            var totalLabel=value.Bool("share_known") ? "∑  全队合计   " : "∑  榜单合计   ";
+            Coverage.Text=total.ValueKind==JsonValueKind.Number ? totalLabel+Json.UiText(total.GetRawText()) : "";
+            if(!value.Bool("share_known"))
+                Coverage.Text=Coverage.Text.Length>0 ? share.Label+" · "+Coverage.Text : share.Description;
         }
-        else Coverage.ToolTip=null;
+        else
+        {
+            Coverage.ToolTip=null;
+            Coverage.Text=share.Description+(share.Available ? " · 点击干员固定明细" : "");
+        }
         if(IsHud){Plot.MinHeight=56;Rows.MinHeight=30;Rows.MaxHeight=double.PositiveInfinity;}
         Coverage.Visibility=IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
-        if(IsHud) Coverage.Text="跟随源面板 · "+value.Text("metric_label");
         var incoming=value.Get("entries").Items().ToArray();
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
         foreach(var old in items.Where(x=>!ids.Contains(x.Id)).ToArray()) items.Remove(old);
         var map=items.ToDictionary(x=>x.Id);
         foreach(var entry in incoming)
         {
-            if(map.TryGetValue(entry.Text("owner_id"),out var item)) item.Entry=entry;
-            else items.Add(new RowItem{Entry=entry,Compact=IsHud});
+            if(map.TryGetValue(entry.Text("owner_id"),out var item))
+            {
+                item.ShareInfo=share;
+                item.Entry=entry;
+            }
+            else items.Add(new RowItem{Entry=entry,Compact=IsHud,ShareInfo=share});
         }
         if(!hold)
             for(int i=0;i<incoming.Length;i++)
