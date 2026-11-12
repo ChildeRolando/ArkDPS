@@ -26,7 +26,7 @@ public sealed class Inspector : Border
         get => compactReference;
         set
         {
-            if(compactReference==value) return;
+            if(compactReference==value && (!value || referenceReport?.Skin==Theme.Key)) return;
             compactReference=value;
             displayed=null;
             Empty();
@@ -45,7 +45,7 @@ public sealed class Inspector : Border
     internal void Empty()
     {
         displayed=null;
-        if(compactReference && Theme.Key=="lone-trail")
+        if(compactReference)
         {
             ShowReference().Reset();
             return;
@@ -84,7 +84,7 @@ public sealed class Inspector : Border
         if(displayed==signature) return;
         displayed=signature;
 
-        if(compactReference && Theme.Key=="lone-trail")
+        if(compactReference)
         {
             ShowReference().Update(owner,row,view,entry,detail,effective,ranking,shareInfo);
             return;
@@ -260,13 +260,13 @@ public sealed class Inspector : Border
 
     private ReferenceReport ShowReference()
     {
-        if(referenceReport!=null && ReferenceEquals(Child,referenceReport)) return referenceReport;
-        referenceReport??=new ReferenceReport();
+        if(referenceReport is { } existing && existing.Skin==Theme.Key && ReferenceEquals(Child,existing)) return existing;
+        if(referenceReport?.Skin!=Theme.Key) referenceReport=new ReferenceReport();
         Background=Brushes.Transparent;
         BorderThickness=new Thickness(0);
         Padding=new Thickness(0);
         Child=referenceReport;
-        return referenceReport;
+        return referenceReport!;
     }
 
     private void UseFullReport()
@@ -287,13 +287,21 @@ public sealed class Inspector : Border
         private static readonly Brush Cyan=Theme.Brush("#58C7E5");
         private static readonly Brush DarkFace=new LinearGradientBrush(
             Color.FromRgb(24,33,41),Color.FromRgb(38,46,54),90);
-        private static readonly (string Key,string Label,Brush Color)[] DamageTypes=
+        private static readonly (string Key,string Label,string Token,Brush Color)[] DamageTypes=
         {
-            ("physical","物理",Accent),
-            ("arts","法术",Cyan),
-            ("elemental","元素",Theme.Brush("#B68CF4")),
-            ("true","真实",Theme.Brush("#B4C1D0")),
+            ("physical","物理","Physical",Accent),
+            ("arts","法术","Arts",Cyan),
+            ("elemental","元素","Elemental",Theme.Brush("#B68CF4")),
+            ("true","真实","True",Theme.Brush("#B4C1D0")),
         };
+        private static Brush MetricInk => Theme.IsPeople ? Theme.Resource("Ink") : DarkInk;
+        private static Brush MetricMuted => Theme.IsPeople ? Theme.Resource("Muted") : MutedInk;
+        private static Brush MetricDivider => Theme.IsPeople ? Theme.Resource("Line") : Divider;
+        private static Brush ChartInk => Theme.IsPeople ? Theme.Resource("ConsoleInk") : DarkInk;
+        private static Brush ChartMuted => Theme.IsPeople ? Theme.Resource("ConsoleMuted") : MutedInk;
+        private static Brush ChartDivider => Theme.IsPeople ? Theme.Resource("ConsoleLine") : Divider;
+        private static Brush DamageColor(int index) => Theme.IsPeople
+            ? Theme.Resource(DamageTypes[index].Token) : DamageTypes[index].Color;
         private static readonly string[] DefaultLabels={"总伤","DPS（近 5 秒）","伤害占比","技能覆盖率","站场总时间"};
         private static readonly string[] MetricIcons=
         {
@@ -304,20 +312,24 @@ public sealed class Inspector : Border
             "M 6,1 A 5,5 0 1 1 5.9,1 M 6,3 V 6 L 8,7",
         };
         private readonly Image portrait=new(){Stretch=Stretch.UniformToFill};
-        private readonly TextBlock initial=Label("",21,DarkInk,true);
+        internal string Skin { get; } = Theme.Key;
+        private readonly TextBlock initial=Label("",21,MetricInk,true);
         private readonly Border avatar;
         private readonly TextBlock[] metricLabels=new TextBlock[DefaultLabels.Length];
         private readonly TextBlock[] metricValues=new TextBlock[DefaultLabels.Length];
         private readonly Border[] metricFields=new Border[DefaultLabels.Length];
-        private readonly RatioField overkill=new("伤害溢出率",Accent,"Overkill");
-        private readonly RatioField mitigation=new("被减伤率",Theme.Brush("#A7BBCF"),"Mitigation");
-        private readonly RatioField skillShare=new("技能期伤害占比",Cyan,"SkillShare");
+        private readonly RatioField overkill=new("伤害溢出率",
+            Theme.IsPeople ? Theme.Resource("Accent") : Accent,"Overkill");
+        private readonly RatioField mitigation=new("被减伤率",
+            Theme.IsPeople ? Theme.Resource("Muted") : Theme.Brush("#A7BBCF"),"Mitigation");
+        private readonly RatioField skillShare=new("技能期伤害占比",
+            Theme.IsPeople ? Theme.Resource("Shield") : Cyan,"SkillShare");
         private readonly DockPanel[] typeFields=new DockPanel[DamageTypes.Length];
         private readonly TextBlock[] typeValues=new TextBlock[DamageTypes.Length];
-        private readonly TextBlock compositionTitle=Label("伤害属性构成",15,DarkInk,true);
-        private readonly TextBlock ringTitle=Label("总伤",14,DarkInk,true);
-        private readonly TextBlock ringValue=Label("—",17,DarkInk,true);
-        private readonly Ring ring=new(14,DamageTypes.Select(item=>item.Color).ToArray());
+        private readonly TextBlock compositionTitle=Label("伤害属性构成",15,ChartInk,true);
+        private readonly TextBlock ringTitle=Label("总伤",14,ChartInk,true);
+        private readonly TextBlock ringValue=Label("—",17,ChartInk,true);
+        private readonly Ring ring=new(14,ChartDivider,Enumerable.Range(0,DamageTypes.Length).Select(DamageColor).ToArray());
         private readonly Border compositionField;
 
         internal ReferenceReport()
@@ -335,13 +347,13 @@ public sealed class Inspector : Border
             readings.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
             readings.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
 
-            var portraitCanvas=new Grid{Background=DarkFace,ClipToBounds=true};
+            var portraitCanvas=new Grid{Background=Theme.IsPeople ? Theme.Resource("Inset") : DarkFace,ClipToBounds=true};
             initial.HorizontalAlignment=HorizontalAlignment.Center;
             initial.VerticalAlignment=VerticalAlignment.Center;
             portraitCanvas.Children.Add(initial);
             portraitCanvas.Children.Add(portrait);
             avatar=new Border{Child=portraitCanvas,Width=46,Height=46,VerticalAlignment=VerticalAlignment.Center,
-                Margin=new Thickness(0,0,8,0),BorderBrush=Divider,BorderThickness=new Thickness(1)};
+                Margin=new Thickness(0,0,8,0),BorderBrush=MetricDivider,BorderThickness=new Thickness(1)};
             AutomationProperties.SetAutomationId(avatar,"CompactOperatorPortrait");
             Grid.SetRowSpan(avatar,primaryMetricCount);
             readings.Children.Add(avatar);
@@ -350,9 +362,9 @@ public sealed class Inspector : Border
             {
                 readings.RowDefinitions.Add(new RowDefinition{MinHeight=23});
                 var row=new DockPanel();
-                var key=metricLabels[index]=Label(DefaultLabels[index],14,MutedInk);
+                var key=metricLabels[index]=Label(DefaultLabels[index],14,MetricMuted);
                 key.TextTrimming=TextTrimming.CharacterEllipsis;
-                var value=metricValues[index]=Label("—",14,DarkInk,true);
+                var value=metricValues[index]=Label("—",14,MetricInk,true);
                 value.Margin=new Thickness(6,0,0,0);
                 value.SetResourceReference(TextBlock.FontFamilyProperty,"DataFont");
                 value.TextTrimming=TextTrimming.CharacterEllipsis;
@@ -361,14 +373,14 @@ public sealed class Inspector : Border
                 row.Children.Add(value);
                 var icon=new System.Windows.Shapes.Path
                 {
-                    Data=Geometry.Parse(MetricIcons[index]),Stroke=DarkInk,StrokeThickness=1.2,
+                    Data=Geometry.Parse(MetricIcons[index]),Stroke=MetricInk,StrokeThickness=1.2,
                     Stretch=Stretch.Uniform,Width=12,Height=12,VerticalAlignment=VerticalAlignment.Center,
                     Margin=new Thickness(0,0,6,0),IsHitTestVisible=false,
                 };
                 DockPanel.SetDock(icon,Dock.Left);
                 row.Children.Add(icon);
                 row.Children.Add(key);
-                var cell=metricFields[index]=new Border{Child=row,Background=Brushes.Transparent,BorderBrush=Divider,
+                var cell=metricFields[index]=new Border{Child=row,Background=Brushes.Transparent,BorderBrush=MetricDivider,
                     BorderThickness=new Thickness(0,0,0,index==metricLabels.Length-1 ? 0 : 1)};
                 AutomationProperties.SetAutomationId(cell,$"CompactOperatorMetric{index}");
                 Grid.SetRow(cell,index);
@@ -385,11 +397,12 @@ public sealed class Inspector : Border
             statsBody.Children.Add(readings);
             statsBody.Children.Add(new Border
             {
-                Child=ratios,BorderBrush=Divider,BorderThickness=new Thickness(0,1,0,0),
+                Child=ratios,BorderBrush=MetricDivider,BorderThickness=new Thickness(0,1,0,0),
                 Margin=new Thickness(0,4,0,0),
             });
 
-            var statsPanel=PanelFrame(Module(Label("主要数据",15,DarkInk,true),statsBody),new Thickness(0,0,3,0));
+            var statsPanel=PanelFrame(Module(Label("主要数据",15,MetricInk,true),statsBody,MetricDivider),
+                new Thickness(0,0,3,0),Theme.IsPeople ? Theme.Resource("Card") : DarkFace,MetricDivider);
             AutomationProperties.SetAutomationId(statsPanel,"CompactOperatorStats");
             modules.Children.Add(statsPanel);
 
@@ -410,20 +423,21 @@ public sealed class Inspector : Border
             {
                 var line=typeFields[index]=new DockPanel{MinHeight=25,Background=Brushes.Transparent};
                 var item=DamageTypes[index];
-                var value=typeValues[index]=Label("—",13,DarkInk);
+                var value=typeValues[index]=Label("—",13,ChartInk);
                 value.SetResourceReference(TextBlock.FontFamilyProperty,"DataFont");
                 value.Margin=new Thickness(9,0,0,0);
                 value.MinWidth=33;
                 value.TextAlignment=TextAlignment.Right;
                 DockPanel.SetDock(value,Dock.Right);line.Children.Add(value);
-                var swatch=new Border{Width=10,Height=10,Background=item.Color,CornerRadius=new CornerRadius(1),
+                var swatch=new Border{Width=10,Height=10,Background=DamageColor(index),CornerRadius=new CornerRadius(1),
                     VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,5,0)};
                 DockPanel.SetDock(swatch,Dock.Left);line.Children.Add(swatch);
-                line.Children.Add(Label(item.Label,13,MutedInk));
+                line.Children.Add(Label(item.Label,13,ChartMuted));
                 legend.Children.Add(line);
             }
             Grid.SetColumn(legend,1);chart.Children.Add(legend);
-            var chartPanel=compositionField=PanelFrame(Module(compositionTitle,chart),new Thickness(3,0,0,0));
+            var chartPanel=compositionField=PanelFrame(Module(compositionTitle,chart,ChartDivider),
+                new Thickness(3,0,0,0),Theme.IsPeople ? Theme.Resource("Console") : DarkFace,ChartDivider);
             AutomationProperties.SetAutomationId(chartPanel,"CompactOperatorComposition");
             Grid.SetColumn(chartPanel,1);
             modules.Children.Add(chartPanel);
@@ -446,20 +460,22 @@ public sealed class Inspector : Border
             Reset();
         }
 
-        private static DockPanel Module(TextBlock title,UIElement content)
+        private static DockPanel Module(TextBlock title,UIElement content,Brush divider)
         {
             var module=new DockPanel{Margin=new Thickness(8,3,8,4)};
-            var heading=new Border{Child=title,Height=26,BorderBrush=Divider,BorderThickness=new Thickness(0,0,0,1)};
+            var heading=new Border{Child=title,Height=26,BorderBrush=divider,BorderThickness=new Thickness(0,0,0,1)};
+            if(Theme.IsPeople)
+                title.SetResourceReference(TextBlock.FontFamilyProperty,"HeadingFont");
             DockPanel.SetDock(heading,Dock.Top);
             module.Children.Add(heading);
             module.Children.Add(content);
             return module;
         }
 
-        private static Border PanelFrame(UIElement content,Thickness margin)=>new()
+        private static Border PanelFrame(UIElement content,Thickness margin,Brush face,Brush divider)=>new()
         {
-            Child=content,Background=DarkFace,BorderBrush=Divider,BorderThickness=new Thickness(2),
-            CornerRadius=new CornerRadius(5),Margin=margin
+            Child=content,Background=face,BorderBrush=divider,BorderThickness=new Thickness(Theme.IsPeople ? 1 : 2),
+            CornerRadius=new CornerRadius(Theme.IsPeople ? 1 : 5),Margin=margin
         };
 
         private static TextBlock Label(string text,double size,Brush brush,bool bold=false)=>new()
@@ -622,12 +638,12 @@ public sealed class Inspector : Border
         {
             private readonly TextBlock title;
             internal string Caption { get=>title.Text; set=>title.Text=value; }
-            private readonly TextBlock value=Label("—",15,DarkInk,true);
+            private readonly TextBlock value=Label("—",15,MetricInk,true);
             private readonly Ring ring;
 
             internal RatioField(string label,Brush color,string automationSuffix)
             {
-                ring=new Ring(4,color);
+                ring=new Ring(4,MetricDivider,color);
                 Background=Brushes.Transparent;
                 Padding=new Thickness(2,5,2,4);
                 var dial=new Grid{Width=50,Height=50,HorizontalAlignment=HorizontalAlignment.Center};
@@ -638,7 +654,7 @@ public sealed class Inspector : Border
                     Margin=new Thickness(7)});
                 var content=new StackPanel();
                 content.Children.Add(dial);
-                title=Label(label,12,MutedInk,true);
+                title=Label(label,12,MetricMuted,true);
                 title.Margin=new Thickness(0,2,0,0);
                 title.TextWrapping=TextWrapping.Wrap;
                 title.TextAlignment=TextAlignment.Center;
@@ -655,7 +671,7 @@ public sealed class Inspector : Border
             }
         }
 
-        private sealed class Ring(double thickness,params Brush[] colors) : FrameworkElement
+        private sealed class Ring(double thickness,Brush track,params Brush[] colors) : FrameworkElement
         {
             private double[] values=new double[colors.Length];
             private double total;
@@ -683,7 +699,7 @@ public sealed class Inspector : Border
                 double radius=Math.Min(ActualWidth,ActualHeight)/2-thickness/2-2;
                 if(radius<=0) return;
                 var center=new Point(ActualWidth/2,ActualHeight/2);
-                context.DrawEllipse(null,new Pen(Divider,thickness),center,radius,radius);
+                context.DrawEllipse(null,new Pen(track,thickness),center,radius,radius);
                 if(total<=0 || !double.IsFinite(total)) return;
                 double angle=-Math.PI/2;
                 Point At(double direction)=>new(center.X+radius*Math.Cos(direction),center.Y+radius*Math.Sin(direction));

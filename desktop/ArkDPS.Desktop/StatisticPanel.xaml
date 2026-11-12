@@ -10,17 +10,16 @@
      <Grid>
       <ContentPresenter/>
       <Border x:Name="mark" Width="3" HorizontalAlignment="Left" Background="Transparent" IsHitTestVisible="False"/>
-      <Border x:Name="focusOutline" BorderBrush="{DynamicResource Focus}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <Border x:Name="focusOutline" BorderBrush="{DynamicResource FocusOnDark}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"/>
      </Grid>
     </Border>
     <ControlTemplate.Triggers>
      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="row" Property="Background" Value="{DynamicResource ConsoleCard}"/></Trigger>
+     <DataTrigger Binding="{Binding Rank}" Value="1"><Setter TargetName="mark" Property="Background" Value="{DynamicResource ReferenceRankLeader}"/></DataTrigger>
      <Trigger Property="IsSelected" Value="True">
-      <Setter TargetName="row" Property="Background">
-       <Setter.Value><LinearGradientBrush StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#885020" Offset="0"/><GradientStop Color="#473119" Offset="0.56"/><GradientStop Color="#29251E" Offset="1"/></LinearGradientBrush></Setter.Value>
-      </Setter>
-      <Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource Accent}"/>
-      <Setter TargetName="mark" Property="Background" Value="{DynamicResource Accent}"/>
+      <Setter TargetName="row" Property="Background" Value="{DynamicResource ReferenceRankSelection}"/>
+      <Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource ReferenceRankSelectionEdge}"/>
+      <Setter TargetName="mark" Property="Background" Value="{DynamicResource ReferenceRankSelectionEdge}"/>
      </Trigger>
      <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="focusOutline" Property="Visibility" Value="Visible"/></Trigger>
     </ControlTemplate.Triggers>
@@ -33,6 +32,15 @@
    <Setter Property="FontSize" Value="11"/>
    <Setter Property="Padding" Value="7,1"/>
    <Setter Property="Margin" Value="0,0,2,0"/>
+   <Style.Triggers>
+    <Trigger Property="IsMouseOver" Value="True">
+     <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+    </Trigger>
+    <Trigger Property="IsKeyboardFocused" Value="True">
+     <Setter Property="Background" Value="{DynamicResource Inset}"/>
+     <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+    </Trigger>
+   </Style.Triggers>
   </Style>
   <Style x:Key="ReferenceNumberCell" TargetType="TextBlock" BasedOn="{StaticResource Mono}">
    <Setter Property="Foreground" Value="{DynamicResource ConsoleInk}"/>
@@ -56,7 +64,7 @@
      </Border>
      <TextBlock x:Name="ReferenceOperatorName" Grid.Column="1" Text="{Binding Name}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" Margin="5,0,0,0" TextTrimming="CharacterEllipsis"/>
     </Grid>
-    <local:ContributionBar x:Name="ReferenceOperatorContribution" Grid.Column="2" Data="{Binding Entry}" Height="9" VerticalAlignment="Center" Margin="4,0,4,0"/>
+    <local:ContributionBar x:Name="ReferenceOperatorContribution" Grid.Column="2" Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="9" VerticalAlignment="Center" Margin="4,0,4,0"/>
     <TextBlock Grid.Column="3" Text="{Binding Total}" Style="{StaticResource ReferenceNumberCell}"/>
     <TextBlock Grid.Column="4" Text="{Binding Rate}" Style="{StaticResource ReferenceNumberCell}"/>
     <TextBlock Grid.Column="5" Text="{Binding Share}" Style="{StaticResource ReferenceNumberCell}"/>
@@ -76,7 +84,7 @@
      </StackPanel>
     </StackPanel>
     <Border Grid.Column="2" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="4,0,10,0">
-     <local:ContributionBar Data="{Binding Entry}" Height="7" VerticalAlignment="Center"/>
+     <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="7" VerticalAlignment="Center"/>
     </Border>
     <TextBlock Grid.Column="3" Text="{Binding Total}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DataFont}" FontSize="13" HorizontalAlignment="Right" VerticalAlignment="Center"/>
     <TextBlock Grid.Column="4" Text="{Binding Rate}" Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
@@ -112,7 +120,9 @@
      <ColumnDefinition Width="{DynamicResource HudProfileRateWidth}"/>
      <ColumnDefinition Width="{DynamicResource HudProfileShareWidth}"/>
     </Grid.ColumnDefinitions>
-    <TextBlock Text="{Binding Rank}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" TextAlignment="Center"/>
+    <Border x:Name="HudRankBadge" Margin="2,1,2,1" Background="Transparent">
+     <TextBlock Text="{Binding Rank}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" TextAlignment="Center"/>
+    </Border>
     <Viewbox Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" StretchDirection="DownOnly">
      <Border Width="{DynamicResource HudProfilePortraitSize}" Height="{DynamicResource HudProfilePortraitSize}" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNumberFont}" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
@@ -120,12 +130,15 @@
     </Viewbox>
     <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNameFont}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="{DynamicResource HudProfileNameGap}"/>
     <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="{DynamicResource HudProfileBarGap}">
-     <local:ContributionBar Data="{Binding Entry}" Height="8" VerticalAlignment="Center"/>
+     <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="8" VerticalAlignment="Center"/>
     </Border>
     <TextBlock x:Name="HudOperatorTotal" Grid.Column="4" Text="{Binding Total}" Style="{StaticResource HudNumber}"/>
     <TextBlock Grid.Column="5" Text="{Binding Rate}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" Margin="{DynamicResource HudProfileValueGap}"/>
     <TextBlock Grid.Column="6" Text="{Binding Share}" Style="{StaticResource HudNumber}" Margin="{DynamicResource HudProfileValueGap}"/>
    </Grid>
+   <DataTemplate.Triggers>
+    <DataTrigger Binding="{Binding Rank}" Value="1"><Setter TargetName="HudRankBadge" Property="Background" Value="{DynamicResource ReferenceRankLeader}"/></DataTrigger>
+   </DataTemplate.Triggers>
   </DataTemplate>
   <Style x:Key="EffectiveSwitch" TargetType="ToggleButton">
    <Setter Property="Width" Value="150"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Hand"/>
@@ -170,6 +183,9 @@
        </LinearGradientBrush>
       </Border.OpacityMask>
      </Border>
+     <Image x:Name="PeopleHudArtwork" Source="Assets/People/Components/banner-light.png"
+            Height="{Binding ActualHeight, ElementName=TitleRegion}" HorizontalAlignment="Right" Margin="0,0,65,0"
+            Opacity=".48" Visibility="Collapsed" IsHitTestVisible="False"/>
     <DockPanel x:Name="TitleBar" Margin="14,10,12,8">
      <StackPanel x:Name="ActionStack" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
       <Image x:Name="LoneTrailHudChevrons" Source="Assets/LoneTrail/chevrons-silver.png" Width="36" Height="20"
@@ -263,7 +279,7 @@
    <TextBlock x:Name="Coverage" Grid.Row="5" Foreground="{DynamicResource Muted}" FontSize="10" Margin="14,8,14,9" TextWrapping="Wrap"/>
    <WrapPanel x:Name="HudControls" Grid.Row="6" Margin="14,0,14,10" Visibility="Collapsed">
     <Button x:Name="LockButton" Content="锁定 HUD" Click="ToggleLock" Padding="10,5"/>
-    <TextBlock Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0,8,0" FontSize="11"/>
+    <TextBlock x:Name="HudOpacityLabel" Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0,8,0" FontSize="11"/>
     <Slider x:Name="Alpha" Minimum="0.7" Maximum="1" Value="0.9" Width="90" TickFrequency="0.01" ValueChanged="OpacityChanged" VerticalAlignment="Center" AutomationProperties.Name="HUD 透明度"/>
    </WrapPanel>
   </Grid>

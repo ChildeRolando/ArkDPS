@@ -3,24 +3,20 @@
  UseLayoutRounding="True" SnapsToDevicePixels="True">
  <WindowChrome.WindowChrome><WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/></WindowChrome.WindowChrome>
  <Window.Resources>
-  <LinearGradientBrush x:Key="ResearchAlloy" StartPoint="0,0" EndPoint="0,1">
-   <GradientStop Color="#F4F5F6" Offset="0"/><GradientStop Color="#D6DADE" Offset=".19"/>
-   <GradientStop Color="#F2F4F6" Offset=".65"/><GradientStop Color="#ADB6C0" Offset="1"/>
-  </LinearGradientBrush>
   <Style x:Key="ResearchFrame" TargetType="HeaderedContentControl">
    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
    <Setter Property="VerticalContentAlignment" Value="Stretch"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="HeaderedContentControl">
     <Grid>
-     <Border CornerRadius="6" BorderThickness="1" BorderBrush="#83909B" Background="{StaticResource ResearchAlloy}" Padding="5,2,5,5">
+     <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource FrameEdge}" Background="{DynamicResource FrameSurface}" Padding="5,2,5,5">
       <Grid>
        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
        <DockPanel x:Name="FrameTitle" Height="29" LastChildFill="True" Margin="8,0,7,0">
-        <Path DockPanel.Dock="Left" Fill="#F47F19" Data="M 6 0 L 22 0 L 15 17 L 0 17 Z" Width="22" Height="17" Margin="0,0,8,0" VerticalAlignment="Center"/>
-        <Path DockPanel.Dock="Right" Fill="#283540" Data="M 8 0 L 14 0 L 6 14 L 0 14 Z M 17 0 L 23 0 L 15 14 L 9 14 Z M 26 0 L 32 0 L 24 14 L 18 14 Z" Width="32" Height="14" Margin="6,0,0,0" VerticalAlignment="Center"/>
-        <ContentPresenter ContentSource="Header" TextElement.Foreground="#0E1A27" TextElement.FontSize="14" TextElement.FontWeight="Bold" VerticalAlignment="Center"/>
+        <Path DockPanel.Dock="Left" Fill="{DynamicResource FrameAccent}" Data="M 6 0 L 22 0 L 15 17 L 0 17 Z" Width="22" Height="17" Margin="0,0,8,0" VerticalAlignment="Center"/>
+        <Image DockPanel.Dock="Right" Source="{DynamicResource FrameSlashes}" Width="32" Height="14" Margin="6,0,0,0" VerticalAlignment="Center"/>
+        <ContentPresenter ContentSource="Header" TextElement.Foreground="{DynamicResource FrameInk}" TextElement.FontSize="14" TextElement.FontWeight="Bold" VerticalAlignment="Center"/>
        </DockPanel>
-       <Border Grid.Row="1" Background="{DynamicResource Card}" BorderBrush="#667480" BorderThickness="1" CornerRadius="4" Padding="{TemplateBinding Padding}">
+       <Border Grid.Row="1" Background="{DynamicResource Card}" BorderBrush="{DynamicResource FrameInnerEdge}" BorderThickness="1" CornerRadius="4" Padding="{TemplateBinding Padding}">
         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
        </Border>
       </Grid>
@@ -38,46 +34,57 @@
   <Style x:Key="ResearchNav" TargetType="Button" BasedOn="{StaticResource NavButton}">
    <Setter Property="MinHeight" Value="54"/><Setter Property="Margin" Value="0,0,0,5"/><Setter Property="Padding" Value="15,6"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-    <Border x:Name="NavEdge" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}">
-     <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
-    </Border>
+    <Grid>
+     <Border x:Name="NavEdge" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}">
+      <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+     </Border>
+     <Border x:Name="NavFocus" CornerRadius="3" BorderThickness="2" Margin="3" IsHitTestVisible="False"/>
+    </Grid>
     <ControlTemplate.Triggers>
-     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="NavEdge" Property="BorderBrush" Value="{DynamicResource Focus}"/><Setter TargetName="NavEdge" Property="BorderThickness" Value="2"/></Trigger>
-     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="NavEdge" Property="BorderBrush" Value="#D2D9E0"/><Setter TargetName="NavEdge" Property="BorderThickness" Value="1"/></Trigger>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="NavEdge" Property="BorderBrush" Value="{DynamicResource SidebarMuted}"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter TargetName="NavEdge" Property="Opacity" Value=".78"/></Trigger>
+     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="NavFocus" Property="BorderBrush" Value="{DynamicResource FocusOnDark}"/></Trigger>
      <Trigger Property="IsEnabled" Value="False"><Setter TargetName="NavEdge" Property="Opacity" Value=".52"/></Trigger>
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
+  <DataTemplate x:Key="SkinItemLabel">
+   <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+  </DataTemplate>
   <Style x:Key="SidebarSkin" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
    <Setter Property="MinHeight" Value="49"/><Setter Property="Padding" Value="8,24,17,4"/><Setter Property="Margin" Value="0"/>
    <Setter Property="Background" Value="{DynamicResource Sidebar}"/><Setter Property="Foreground" Value="{DynamicResource SidebarInk}"/>
    <Setter Property="BorderBrush" Value="{DynamicResource SidebarLine}"/><Setter Property="FontSize" Value="13"/>
    <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Cursor" Value="Hand"/>
    <Style.Triggers>
-    <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
-    <Trigger Property="IsDropDownOpen" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
+    <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource FocusOnDark}"/></Trigger>
+    <Trigger Property="IsDropDownOpen" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource FocusOnDark}"/></Trigger>
    </Style.Triggers>
   </Style>
   <Style x:Key="ChromeButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
    <Setter Property="Width" Value="29"/><Setter Property="MinHeight" Value="30"/><Setter Property="Padding" Value="5,4"/><Setter Property="Margin" Value="0"/>
-   <Setter Property="Background" Value="#222C35"/><Setter Property="Foreground" Value="#F2F6FA"/><Setter Property="BorderBrush" Value="#576571"/>
+   <Setter Property="Background" Value="{DynamicResource ChromeButtonSurface}"/><Setter Property="Foreground" Value="{DynamicResource ChromeInk}"/><Setter Property="BorderBrush" Value="{DynamicResource ChromeButtonEdge}"/>
+   <Style.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource ChromeButtonHover}"/></Trigger>
+   </Style.Triggers>
   </Style>
   <Style x:Key="ResearchMetric" TargetType="Border">
-   <Setter Property="Background" Value="#202932"/><Setter Property="BorderBrush" Value="#4C5966"/>
+   <Setter Property="Background" Value="{DynamicResource MetricSurface}"/><Setter Property="BorderBrush" Value="{DynamicResource MetricEdge}"/>
    <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="5"/><Setter Property="Padding" Value="11,6"/>
    <Setter Property="Margin" Value="4,0"/>
   </Style>
   <Style x:Key="ResearchMetricLabel" TargetType="TextBlock">
-   <Setter Property="Foreground" Value="#EDF3F7"/><Setter Property="FontWeight" Value="Bold"/><Setter Property="FontSize" Value="13"/>
+   <Setter Property="Foreground" Value="{DynamicResource MetricInk}"/><Setter Property="FontWeight" Value="Bold"/><Setter Property="FontSize" Value="13"/>
   </Style>
   <Style x:Key="ResearchReadout" TargetType="TextBlock" BasedOn="{StaticResource Readout}">
-   <Setter Property="Foreground" Value="#F6F8FA"/><Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/><Setter Property="FontSize" Value="27"/>
+   <Setter Property="Foreground" Value="{DynamicResource MetricInk}"/><Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/><Setter Property="FontSize" Value="27"/>
   </Style>
  </Window.Resources>
  <Border x:Name="WindowSurface" Background="{DynamicResource Bg}">
  <Grid x:Name="ContentRoot">
   <Grid.RowDefinitions><RowDefinition Height="36"/><RowDefinition Height="*"/></Grid.RowDefinitions>
   <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavigationColumn" Width="208"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+  <Border Grid.ColumnSpan="2" Grid.RowSpan="2" Background="{DynamicResource ShellBackdrop}" IsHitTestVisible="False"/>
   <Grid x:Name="HeaderArtwork" Grid.ColumnSpan="2" Grid.RowSpan="2" Height="108" VerticalAlignment="Top" IsHitTestVisible="False">
    <Image Source="Assets/LoneTrail/orbital-header-banner.png" Stretch="UniformToFill" VerticalAlignment="Center" ClipToBounds="True"/>
    <Grid.OpacityMask><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#FFFFFFFF" Offset=".55"/><GradientStop Color="#00FFFFFF" Offset="1"/></LinearGradientBrush></Grid.OpacityMask>
@@ -85,60 +92,57 @@
 
   <Grid x:Name="TitleBar" Grid.ColumnSpan="2" Background="Transparent" MouseLeftButtonDown="DragTitleBar">
    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <Grid x:Name="BrandBadge" Width="202" Margin="5,3,0,3" Background="#EA1A242C">
+   <Grid x:Name="BrandBadge" Width="202" Margin="5,3,0,3" Background="{DynamicResource ChromeBrandSurface}">
     <StackPanel x:Name="BrandMark" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
      <Image Source="Assets/LoneTrail/arkdps-icon.png" Width="34" Height="24" Margin="0,0,5,0"/>
      <TextBlock Text="ArkDPS" Foreground="#F3F5F7" FontSize="23" FontWeight="Bold" VerticalAlignment="Center"/>
     </StackPanel>
     <Image x:Name="CompactBrandMark" Source="Assets/LoneTrail/arkdps-icon.png" Width="34" HorizontalAlignment="Center" Stretch="Uniform" Visibility="Collapsed"/>
-    <TextBlock x:Name="BrandText" Text="ArkDPS" Foreground="#F4F7FA" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+    <Image x:Name="PeopleBrandMark" Source="{DynamicResource PeopleMasthead}" Width="132" Height="30" Stretch="Uniform" Visibility="Collapsed"/>
+    <Image x:Name="PeopleCompactBrandMark" Source="{DynamicResource PeopleEmblem}" Width="38" Height="27" Stretch="Uniform" Visibility="Collapsed"/>
    </Grid>
-   <StackPanel Grid.Column="1" x:Name="ChromeDescription" Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left" Background="#CF202930" Margin="5,0,0,0">
-    <TextBlock Text="COMBAT DPS ANALYSIS SYSTEM" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="#F6F8FA" Margin="9,1,12,0"/>
-    <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="#BFC9D1" Margin="9,0,12,1"/>
+   <StackPanel Grid.Column="1" x:Name="ChromeDescription" Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left" Background="{DynamicResource ChromeDescriptionSurface}" Margin="5,0,0,0">
+    <TextBlock x:Name="SystemTitle" Text="COMBAT DPS ANALYSIS SYSTEM" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="{DynamicResource ChromeInk}" Margin="9,1,12,0"/>
+    <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="9,0,12,1"/>
    </StackPanel>
-   <StackPanel x:Name="ChromeControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Background="#DF202930" Margin="4,0,8,0">
+   <StackPanel x:Name="ChromeControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Background="{DynamicResource ChromeControlsSurface}" Margin="4,0,8,0">
     <StackPanel x:Name="ChromeLab" Margin="4,0,13,0" VerticalAlignment="Center">
-     <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="#F2F5F7"/>
-     <TextBlock Text="ORCU / DPS LAB" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="#CBD5DF" Margin="0,2,0,0"/>
+     <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="{DynamicResource ChromeInk}"/>
+     <TextBlock Text="ORCU / DPS LAB" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="0,2,0,0"/>
     </StackPanel>
-    <Button Click="MinimizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最小化"><Path Data="M 0 5 H 10" Stroke="#F5F8FA" StrokeThickness="1.2"/></Button>
-    <Button Click="ToggleMaximizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最大化或还原"><Path Data="M 0 0 H 9 V 9 H 0 Z" Stroke="#F5F8FA" StrokeThickness="1.2"/></Button>
-    <Button Click="QuitClick" Style="{StaticResource ChromeButton}" AutomationProperties.Name="退出 ArkDPS"><Path Data="M 0 0 L 9 9 M 9 0 L 0 9" Stroke="#F5F8FA" StrokeThickness="1.2"/></Button>
+    <Button Click="MinimizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最小化"><Path Data="M 0 5 H 10" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
+    <Button Click="ToggleMaximizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最大化或还原"><Path Data="M 0 0 H 9 V 9 H 0 Z" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
+    <Button Click="QuitClick" Style="{StaticResource ChromeButton}" AutomationProperties.Name="退出 ArkDPS"><Path Data="M 0 0 L 9 9 M 9 0 L 0 9" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
    </StackPanel>
   </Grid>
 
-  <Border Grid.Row="1" Background="{DynamicResource Sidebar}" BorderBrush="#586775" BorderThickness="0,1,1,1" Margin="7,0,0,7" ClipToBounds="True">
+  <Border Grid.Row="1" Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource ShellSidebarEdge}" BorderThickness="0,1,1,1" Margin="7,0,0,7" ClipToBounds="True">
    <Grid>
-    <Image x:Name="SidebarArtwork" Source="Assets/LoneTrail/sidebar-orbital-detail.png" Stretch="UniformToFill" Opacity=".94" IsHitTestVisible="False"/>
-    <Border Background="#4516202B" IsHitTestVisible="False"/>
+    <Border Background="{DynamicResource ShellSidebarArtwork}" IsHitTestVisible="False"/>
+    <Border Background="{DynamicResource ShellSidebarShade}" IsHitTestVisible="False"/>
     <DockPanel>
      <StackPanel x:Name="SidebarNavigation" DockPanel.Dock="Top" Margin="3,8,3,0">
      <Button x:Name="LiveNav" Tag="live" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="实时战况" AutomationProperties.Name="实时战况">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-       <Image x:Name="LiveNavAsset" Source="Assets/LoneTrail/realtime.png" Width="25" Height="24" Stretch="Uniform"/>
-       <Path x:Name="LiveNavVector" Width="22" Height="22" Data="M 1 15 L 5 15 L 5 10 L 1 10 Z M 7 15 L 11 15 L 11 6 L 7 6 Z M 13 15 L 17 15 L 17 2 L 13 2 Z" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
+       <Image x:Name="LiveNavAsset" Source="{DynamicResource ShellLiveNavIcon}" Width="25" Height="24" Stretch="Uniform"/>
        <TextBlock x:Name="LiveNavLabel" Text="实时战况" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
      <Button x:Name="EnemyNav" Tag="enemies" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="敌情" AutomationProperties.Name="敌情">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-       <Image x:Name="EnemyNavAsset" Source="Assets/LoneTrail/enemy.png" Width="25" Height="24" Stretch="Uniform"/>
-       <Path x:Name="EnemyNavVector" Width="22" Height="22" Data="M 1 9 Q 9 -1 17 9 Q 9 19 1 9 Z M 12 9 A 3 3 0 1 1 6 9 A 3 3 0 1 1 12 9" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
+       <Image x:Name="EnemyNavAsset" Source="{DynamicResource ShellEnemyNavIcon}" Width="25" Height="24" Stretch="Uniform"/>
        <TextBlock x:Name="EnemyNavLabel" Text="敌情" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
      <Button x:Name="HistoryNav" Tag="history" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="历史战绩" AutomationProperties.Name="历史战绩">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-       <Image x:Name="HistoryNavAsset" Source="Assets/LoneTrail/history.png" Width="25" Height="24" Stretch="Uniform"/>
-       <Path x:Name="HistoryNavVector" Width="22" Height="22" Data="M 9 2 A 7 7 0 1 1 2 9 M 2 3 L 2 9 L 8 9 M 9 5 L 9 9 L 13 11" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
+       <Image x:Name="HistoryNavAsset" Source="{DynamicResource ShellHistoryNavIcon}" Width="25" Height="24" Stretch="Uniform"/>
        <TextBlock x:Name="HistoryNavLabel" Text="历史战绩" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
      <Button x:Name="SettingsNav" Tag="settings" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="设置" AutomationProperties.Name="设置">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-       <Image x:Name="SettingsNavAsset" Source="Assets/LoneTrail/connection.png" Width="25" Height="24" Stretch="Uniform"/>
-       <Path x:Name="SettingsNavVector" Width="22" Height="22" Data="M 2 4 H 16 M 2 9 H 16 M 2 14 H 16 M 6 2 V 6 M 12 7 V 11 M 8 12 V 16" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
+       <Image x:Name="SettingsNavAsset" Source="{DynamicResource ShellSettingsNavIcon}" Width="25" Height="24" Stretch="Uniform"/>
        <TextBlock x:Name="SettingsNavLabel" Text="设置" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
@@ -148,11 +152,12 @@
      <StackPanel x:Name="SidebarFooter" DockPanel.Dock="Bottom" Margin="3,0,3,10">
       <TextBlock x:Name="SideLab" Text="ORCU" Foreground="#DCE5ED" FontSize="21" FontWeight="Bold" Margin="8,0,0,2"/>
       <TextBlock x:Name="SideLabName" Text="ORBITAL COMBAT&#x0a;RESEARCH UNIT" Foreground="#DCE5ED" FontSize="11" FontFamily="{DynamicResource DataFont}" Margin="8,0,0,10"/>
+      <Image x:Name="PeoplePennant" Source="{DynamicResource PeoplePennantArtwork}" Width="34" Height="43"
+             HorizontalAlignment="Left" Margin="8,0,0,7" IsHitTestVisible="False" Visibility="Collapsed"/>
       <Grid>
        <ComboBox x:Name="Skin" SelectionChanged="SkinChanged" Style="{StaticResource SidebarSkin}" AutomationProperties.Name="皮肤" ToolTip="切换皮肤">
-        <ComboBoxItem Content="孤星" Tag="lone-trail"/><ComboBoxItem Content="危机合约" Tag="contingency-contract"/>
-        <ComboBoxItem Content="巴别塔" Tag="babel"/><ComboBoxItem Content="长夜临光" Tag="near-light"/>
-        <ComboBoxItem Content="叙拉古人" Tag="il-siracusano"/><ComboBoxItem Content="原始界面" Tag="original"/>
+        <ComboBoxItem Content="孤星" Tag="lone-trail" ContentTemplate="{StaticResource SkinItemLabel}"/>
+        <ComboBoxItem Content="人们，我们。" Tag="people" ContentTemplate="{StaticResource SkinItemLabel}"/>
        </ComboBox>
        <TextBlock x:Name="SkinLabel" Text="皮肤" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource SidebarMuted}"
                   VerticalAlignment="Top" Margin="8,6,17,0" IsHitTestVisible="False"/>
@@ -167,10 +172,12 @@
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
    <DockPanel x:Name="SubpageHeader" Visibility="Collapsed" Grid.Row="0" Margin="12,13,12,8">
     <Button Content="重新定位" DockPanel.Dock="Right" Click="Rescan" Padding="11,7" VerticalAlignment="Center"/>
-    <StackPanel>
-     <TextBlock x:Name="PageTitle" Style="{StaticResource PageTitle}" Foreground="{DynamicResource HeroInk}" FontSize="25" Text="实时战况"/>
-     <TextBlock x:Name="PageSubtitle" Foreground="{DynamicResource HeroMuted}" FontSize="12"/>
-    </StackPanel>
+    <Border HorizontalAlignment="Left" Background="{DynamicResource SubpageHeadingSurface}" Padding="{DynamicResource SubpageHeadingPadding}">
+     <StackPanel>
+      <TextBlock x:Name="PageTitle" Style="{StaticResource PageTitle}" Foreground="{DynamicResource HeroInk}" FontSize="25" Text="实时战况"/>
+      <TextBlock x:Name="PageSubtitle" Foreground="{DynamicResource HeroMuted}" FontSize="12"/>
+     </StackPanel>
+    </Border>
    </DockPanel>
    <Grid Grid.Row="1">
     <ScrollViewer x:Name="LivePage" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"
@@ -180,8 +187,8 @@
       <HeaderedContentControl Style="{StaticResource ResearchFrame}" Padding="22,7,14,5" Margin="0,0,0,5" MinHeight="304">
        <HeaderedContentControl.Header>
         <DockPanel>
-         <TextBlock x:Name="Status" DockPanel.Dock="Right" Foreground="#40505F" FontSize="11" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="236" VerticalAlignment="Center"/>
-         <TextBlock Text="实时DPS / LIVE DPS" FontSize="15" FontWeight="Bold" Foreground="#111C26" TextTrimming="CharacterEllipsis"/>
+         <TextBlock x:Name="Status" DockPanel.Dock="Right" Foreground="{DynamicResource FrameMuted}" FontSize="11" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="236" VerticalAlignment="Center"/>
+         <TextBlock Text="实时DPS / LIVE DPS" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FrameInk}" TextTrimming="CharacterEllipsis"/>
         </DockPanel>
        </HeaderedContentControl.Header>
        <Grid>
@@ -189,12 +196,12 @@
         <Grid x:Name="OverviewGrid">
          <Grid.ColumnDefinitions><ColumnDefinition x:Name="OverviewTrendColumn" Width="1.69*"/><ColumnDefinition x:Name="OverviewStatsColumn" Width="4*"/></Grid.ColumnDefinitions>
          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-         <Border x:Name="CurrentMetric" Style="{StaticResource ResearchMetric}" BorderBrush="#FF861D" BorderThickness="2" Padding="15,6,10,6">
+         <Border x:Name="CurrentMetric" Style="{StaticResource ResearchMetric}" BorderBrush="{DynamicResource MetricHighlight}" BorderThickness="2" Padding="15,6,10,6">
           <StackPanel>
            <TextBlock Text="当前团队DPS" Style="{StaticResource ResearchMetricLabel}"/>
            <DockPanel>
-            <Path DockPanel.Dock="Left" Data="M 0 11 H 7 L 10 5 L 14 17 L 19 0 L 23 13 L 26 7 L 29 11 H 36" Stroke="#6BD8EB" StrokeThickness="2" VerticalAlignment="Center" Margin="0,2,9,0"/>
-            <TextBlock Text="DPS" Foreground="#D4DFE8" FontSize="15" DockPanel.Dock="Right" VerticalAlignment="Bottom" Margin="4,0,0,5"/>
+            <Path DockPanel.Dock="Left" Data="M 0 11 H 7 L 10 5 L 14 17 L 19 0 L 23 13 L 26 7 L 29 11 H 36" Stroke="{DynamicResource MetricSignal}" StrokeThickness="2" VerticalAlignment="Center" Margin="0,2,9,0"/>
+            <TextBlock Text="DPS" Foreground="{DynamicResource MetricMuted}" FontSize="15" DockPanel.Dock="Right" VerticalAlignment="Bottom" Margin="4,0,0,5"/>
             <TextBlock x:Name="CurrentDps" Text="—" Style="{StaticResource ResearchReadout}" FontSize="39"/>
            </DockPanel>
           </StackPanel>

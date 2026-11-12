@@ -58,6 +58,31 @@ def test_version_one_panel_collection_is_migrated(tmp_path):
     assert json.loads(path.read_text(encoding='utf-8'))['version'] == ls.LAYOUT_VERSION
 
 
+@pytest.mark.parametrize('theme', [
+    'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original',
+    'unknown', None, {'id': 'people'},
+])
+def test_unavailable_theme_falls_back_without_discarding_layout(tmp_path, theme):
+    store = ls.LayoutStore(tmp_path / 'layout.json')
+    expected = ls.Layout(
+        panels=(panel('saved', category=Category.HEALING),),
+        huds=(ls.HudPlacement('saved', 10, 20, 400, 300, opacity=0.83, locked=True),),
+        gui=ls.GuiGeometry(50, 60, 1200, 800),
+        event_observation=False,
+        number_units='chinese',
+        hud_styles=(('saved', ls.HudStyle(name_font=21.5, width=700)),),
+    )
+    store.path.write_text(json.dumps(dict(expected.to_dict(), theme=theme)), encoding='utf-8')
+
+    loaded = store.load()
+    assert loaded.ok and loaded.backup is None and '孤星' in loaded.warning
+    assert loaded.layout == expected and loaded.layout.theme == 'lone-trail'
+
+    store.save(loaded.layout)
+    reloaded = store.load()
+    assert reloaded.ok and not reloaded.warning and reloaded.layout == expected
+
+
 def test_bare_panel_document_without_version_is_accepted_as_legacy(tmp_path):
     path = tmp_path / 'layout.json'
     path.write_text(json.dumps({'panels': [panel('a').to_dict()]}), encoding='utf-8')

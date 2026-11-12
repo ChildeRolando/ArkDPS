@@ -148,7 +148,7 @@ public partial class MainWindow : Window
         if(state.Number("protocol")!=BridgeClient.Version) throw new IOException("不支持的统计消息版本");
         lastResponse=System.Diagnostics.Stopwatch.GetTimestamp();responseStale=false;
         applying=true;State=state;
-        var layout=state.Get("layout");string theme=layout.Text("theme");
+        var layout=state.Get("layout");string theme=Theme.Normalize(layout.Text("theme"));
         string units = layout.Text("number_units") == "chinese" ? "chinese" : "western";
         bool unitsChanged = Json.NumberUnits != units;
         Json.NumberUnits = units;
@@ -184,7 +184,6 @@ public partial class MainWindow : Window
         int elapsed = double.IsFinite(time) ? (int)Math.Clamp(Math.Round(time, MidpointRounding.AwayFromZero), 0, int.MaxValue) : 0;
         Clock.Text = double.IsFinite(time) && time >= 0 ? $"{elapsed / 60:00}:{elapsed % 60:00}" : "—";
         Footer.Text=state.Text("connection_text");
-        if(App.BridgeArguments.Contains("--offline")) ModeLabel.Text="离线验收 · 合成数据 · 不访问游戏";
         var views=state.Get("panels").Items().ToArray();var ids=views.Select(v=>v.Get("config").Text("panel_id")).ToHashSet();
         bool panelLayoutChanged = !ids.SetEquals(Panels.Keys);
         foreach(string id in Panels.Keys.Where(x=>!ids.Contains(x)).ToArray())
@@ -282,10 +281,10 @@ public partial class MainWindow : Window
         bool narrowOverview = width < 920;
         NavigationColumn.Width = new GridLength(narrow ? 92 : 208);
         BrandBadge.Width = narrow ? 87 : 202;
-        ChromeLab.Visibility = width < 940 ? Visibility.Collapsed : Visibility.Visible;
+        if (narrow) Skin.Padding = new Thickness(8, 24, 27, 4);
+        else Skin.ClearValue(Control.PaddingProperty);
         ChromeDescription.Visibility = width < 740 ? Visibility.Collapsed : Visibility.Visible;
-        SideLab.Visibility = SideLabName.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
-        ApplyThemeArtwork();
+        ArrangeThemeArtwork(narrow);
         foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (SettingsNav, SettingsNavLabel) })
         {
             button.HorizontalContentAlignment = narrow ? HorizontalAlignment.Center : HorizontalAlignment.Left;
@@ -316,11 +315,10 @@ public partial class MainWindow : Window
         LiveDetail.Margin = narrow ? new Thickness(0, 5, 0, 0) : new Thickness(0);
         RankingScroll.MaxHeight = scrollLive ? 390 : double.PositiveInfinity;
         LiveDetailScroll.MaxHeight = scrollLive ? 440 : double.PositiveInfinity;
-        LiveInspector.CompactReference = Theme.Key == "lone-trail";
         foreach (var panel in Panels.Values)
         {
             panel.Width = double.NaN;
-            panel.SetReferenceStyle(Theme.Key == "lone-trail" && wide);
+            panel.SetReferenceStyle(wide);
         }
         FitLivePanels();
         ArrangeHistory();
@@ -363,17 +361,34 @@ public partial class MainWindow : Window
     }
     private void ApplyThemeArtwork()
     {
-        bool lone = Theme.Key == "lone-trail";
-        bool narrow = ContentRoot.ActualWidth is > 0 and < 1100;
-        BrandMark.Visibility = lone && !narrow ? Visibility.Visible : Visibility.Collapsed;
-        CompactBrandMark.Visibility = lone && narrow ? Visibility.Visible : Visibility.Collapsed;
-        BrandText.Visibility = lone ? Visibility.Collapsed : Visibility.Visible;
-        HeaderArtwork.Visibility = SidebarArtwork.Visibility = lone ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var (asset, vector) in new[] { (LiveNavAsset, LiveNavVector), (HistoryNavAsset, HistoryNavVector), (EnemyNavAsset, EnemyNavVector), (SettingsNavAsset, SettingsNavVector) })
+        bool people = Theme.IsPeople;
+        string palette = people ? "People" : "LoneTrail";
+        var shell = new ResourceDictionary
         {
-            asset.Visibility = lone ? Visibility.Visible : Visibility.Collapsed;
-            vector.Visibility = lone ? Visibility.Collapsed : Visibility.Visible;
-        }
+            Source = new Uri($"pack://application:,,,/Themes/MainWindow.{palette}.xaml")
+        };
+        Resources.MergedDictionaries.Clear();
+        Resources.MergedDictionaries.Add(shell);
+        Skin.Resources["Focus"] = Theme.Resource("FocusOnDark");
+        HeaderArtwork.Visibility = people ? Visibility.Collapsed : Visibility.Visible;
+        PeoplePennant.Visibility = people ? Visibility.Visible : Visibility.Collapsed;
+        bool offline = App.BridgeArguments.Contains("--offline");
+        SystemTitle.Text = people ? "人们，我们。" : "COMBAT DPS ANALYSIS SYSTEM";
+        SystemTitle.SetResourceReference(TextBlock.FontFamilyProperty, people ? "HeadingFont" : "DataFont");
+        ModeLabel.Visibility = offline || !people ? Visibility.Visible : Visibility.Collapsed;
+        ModeLabel.Text = offline ? "离线验收 · 合成数据 · 不访问游戏" : "ARKDPS / ORBITAL CONSOLE";
+        ArrangeThemeArtwork(ContentRoot.ActualWidth is > 0 and < 1100);
+    }
+
+    private void ArrangeThemeArtwork(bool narrow)
+    {
+        bool people = Theme.IsPeople;
+        BrandMark.Visibility = !people && !narrow ? Visibility.Visible : Visibility.Collapsed;
+        CompactBrandMark.Visibility = !people && narrow ? Visibility.Visible : Visibility.Collapsed;
+        PeopleBrandMark.Visibility = people && !narrow ? Visibility.Visible : Visibility.Collapsed;
+        PeopleCompactBrandMark.Visibility = people && narrow ? Visibility.Visible : Visibility.Collapsed;
+        ChromeLab.Visibility = !people && ContentRoot.ActualWidth >= 940 ? Visibility.Visible : Visibility.Collapsed;
+        SideLab.Visibility = SideLabName.Visibility = !people && !narrow ? Visibility.Visible : Visibility.Collapsed;
     }
     private void ResetLiveInspector()
     {
@@ -490,11 +505,9 @@ public partial class MainWindow : Window
         foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(EnemyNav,"enemies"),(SettingsNav,"settings")})
         {
             bool active=tag==page;
-            button.Background = active && Theme.Key == "lone-trail"
-                ? new LinearGradientBrush(Color.FromRgb(95, 55, 27), Color.FromRgb(170, 87, 27), 90)
-                : active ? Theme.Resource("SidebarActive") : Theme.Resource("Sidebar");
+            button.SetResourceReference(Control.BackgroundProperty, active ? "ShellNavActive" : "Sidebar");
             button.Foreground=active?Theme.Resource("SidebarInk"):Theme.Resource("SidebarMuted");
-            button.BorderBrush=active?Theme.Resource("Accent"):Theme.Resource("SidebarLine");
+            button.SetResourceReference(Control.BorderBrushProperty, active ? "ShellNavSelectedEdge" : "SidebarLine");
             button.BorderThickness=active?new Thickness(2):new Thickness(1);
         }
     }

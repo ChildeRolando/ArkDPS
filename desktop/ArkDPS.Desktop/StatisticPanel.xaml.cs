@@ -56,6 +56,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Total => Entry.Text("display_value");
     public string Rate => Entry.Text("rate_text");
     public string Share => Entry.Text("share_display");
+    public string MetricCategory { get; internal set; } = "";
     internal SharePresentation ShareInfo { get; set; }=new("占比","",false);
     public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
     public string BarTooltip
@@ -132,6 +133,14 @@ public sealed class ContributionBar : FrameworkElement
     }
     public static readonly DependencyProperty DataProperty=DependencyProperty.Register(nameof(Data),typeof(JsonElement),typeof(ContributionBar),new FrameworkPropertyMetadata(default(JsonElement),FrameworkPropertyMetadataOptions.AffectsRender));
     public JsonElement Data { get => (JsonElement)GetValue(DataProperty); set => SetValue(DataProperty,value); }
+    public static readonly DependencyProperty MetricCategoryProperty = DependencyProperty.Register(
+        nameof(MetricCategory), typeof(string), typeof(ContributionBar),
+        new FrameworkPropertyMetadata("", FrameworkPropertyMetadataOptions.AffectsRender));
+    public string MetricCategory
+    {
+        get => (string)GetValue(MetricCategoryProperty);
+        set => SetValue(MetricCategoryProperty, value);
+    }
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
@@ -141,7 +150,13 @@ public sealed class ContributionBar : FrameworkElement
         if (segments.Length==0)
         {
             var color=Data.Text("bar_color");
-            dc.DrawRoundedRectangle(color.Length>0 ? Theme.Brush(color) : Theme.Resource("Accent"),null,new Rect(0,0,width,ActualHeight),1,1); return;
+            var fill = Theme.IsPeople ? Theme.Resource(MetricCategory switch
+            {
+                "healing" => "Heal",
+                "shield" => "Shield",
+                _ => "Accent",
+            }) : color.Length > 0 ? Theme.Brush(color) : Theme.Resource("Accent");
+            dc.DrawRoundedRectangle(fill,null,new Rect(0,0,width,ActualHeight),1,1); return;
         }
         foreach(var segment in segments)
         {
@@ -307,7 +322,8 @@ public partial class StatisticPanel : UserControl
         TitleAccent.Visibility=loneTrail ? Visibility.Collapsed : Visibility.Visible;
         LoneTrailHudMark.Visibility=loneTrail ? Visibility.Visible : Visibility.Collapsed;
         LoneTrailHudBackdrop.Visibility=LoneTrailHudChevrons.Visibility=LoneTrailHudMark.Visibility;
-        TitleRegion.BorderThickness=loneTrail ? new Thickness(0,0,0,1) : new Thickness(0);
+        PeopleHudArtwork.Visibility=Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+        TitleRegion.BorderThickness=new Thickness(0,0,0,1);
         if(loneTrail)
         {
             PanelFrame.CornerRadius=new CornerRadius(0);
@@ -319,8 +335,8 @@ public partial class StatisticPanel : UserControl
         else
         {
             PanelFrame.SetResourceReference(Border.CornerRadiusProperty,"CardRadius");
-            TitleRegion.Background=Brushes.Transparent;
-            TitleRegion.ClearValue(Border.BorderBrushProperty);
+            TitleRegion.SetResourceReference(Border.BackgroundProperty,"Inset");
+            TitleRegion.SetResourceReference(Border.BorderBrushProperty,"Line");
             HudClose.ClearValue(StyleProperty);
             HudClose.SetResourceReference(Control.BorderBrushProperty,"Line");
         }
@@ -345,6 +361,7 @@ public partial class StatisticPanel : UserControl
         Coverage.FontSize=enable ? 12 : 10;
         Coverage.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Empty.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
+        HudOpacityLabel.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Plot.MinHeight=enable ? 0 : 120;
         Rows.MinHeight=enable ? 74 : 80;
         Rows.MaxHeight=enable ? ReferenceRowsDefaultHeight : 520;
@@ -539,9 +556,10 @@ public partial class StatisticPanel : UserControl
             if(map.TryGetValue(entry.Text("owner_id"),out var item))
             {
                 item.ShareInfo=share;
+                item.MetricCategory=category;
                 item.Entry=entry;
             }
-            else items.Add(new RowItem{Entry=entry,Compact=IsHud,ShareInfo=share});
+            else items.Add(new RowItem{Entry=entry,Compact=IsHud,ShareInfo=share,MetricCategory=category});
         }
         if(!hold)
             for(int i=0;i<incoming.Length;i++)

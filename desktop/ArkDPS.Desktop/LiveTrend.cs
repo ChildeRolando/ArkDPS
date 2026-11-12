@@ -157,16 +157,34 @@ public sealed class LiveTrendView : Border
         "#FFD672", "#69ADFF", "#FF9A9C", "#B9E07B", "#D9A2F5", "#91CDD0",
         "#FFBDAB", "#ACB6FF", "#F9AD71", "#B6DBED",
     };
-    private static readonly Brush[] SeriesBrushes = SeriesColors.Select(ColorBrush).ToArray();
-    private static readonly Brush[] AreaBrushes = SeriesBrushes.Select(AreaBrush).ToArray();
-    private static readonly Brush ChartWell = ColorBrush("#171F27");
+    private static readonly string[] PeopleSeriesColors =
+    {
+        "#EF9686", "#E1C9A0", "#9DB8C4", "#C7A6C8", "#C2B275", "#A5BE9B",
+        "#F0B274", "#BBACED", "#DCA8AD", "#B2CBB4", "#C6C2B8", "#97CDD0",
+        "#F1BDAC", "#A4B5DB", "#D6AA81", "#D3C6D9",
+    };
+    private static readonly Brush[] LoneSeries = SeriesColors.Select(ColorBrush).ToArray();
+    private static readonly Brush[] PeopleSeries = PeopleSeriesColors.Select(ColorBrush).ToArray();
+    private static readonly Brush[] LoneAreas = LoneSeries.Select(AreaBrush).ToArray();
+    private static readonly Brush[] PeopleAreas = PeopleSeries.Select(AreaBrush).ToArray();
+    private static Brush[] SeriesBrushes => Theme.IsPeople ? PeopleSeries : LoneSeries;
+    private static Brush[] AreaBrushes => Theme.IsPeople ? PeopleAreas : LoneAreas;
+    private static readonly Brush LoneChartWell = ColorBrush("#171F27");
     private static readonly Brush HeaderAccent = ColorBrush("#F48729");
     private static readonly Brush Subdivision = ColorBrush("#263039");
-    private static readonly Brush MajorGrid = ColorBrush("#37424D");
-    private static readonly Brush AxisInk = ColorBrush("#CBD7E3");
-    private static readonly Brush OtherBrush = ColorBrush("#8797A7");
+    private static readonly Brush LoneMajorGrid = ColorBrush("#37424D");
+    private static readonly Brush LoneAxisInk = ColorBrush("#CBD7E3");
+    private static readonly Brush LoneOtherBrush = ColorBrush("#8797A7");
+    private static readonly Brush PeopleMajorGrid = ColorBrush("#514642");
+    private static readonly Brush PeopleSubdivision = ColorBrush("#3C3331");
+    private static readonly Brush PeopleOtherBrush = ColorBrush("#9D9187");
+    private static Brush ChartWell => Theme.IsPeople ? Theme.Resource("Console") : LoneChartWell;
+    private static Brush MajorGrid => Theme.IsPeople ? PeopleMajorGrid : LoneMajorGrid;
+    private static Brush AxisInk => Theme.IsPeople ? Theme.Resource("ConsoleMuted") : LoneAxisInk;
+    private static Brush OtherBrush => Theme.IsPeople ? PeopleOtherBrush : LoneOtherBrush;
 
     private readonly ChartSurface chart;
+    private readonly DockPanel header = new() { Margin = new Thickness(0, 0, 0, 3) };
     private readonly TextBlock heading = new();
     private readonly TextBlock readout = new();
     private readonly Border marker = new() { Width = 8, Height = 12, Margin = new Thickness(8, 0, 8, 0),
@@ -177,7 +195,7 @@ public sealed class LiveTrendView : Border
     private string? owner;
     private string displayedBattle = "";
     private double? cursor;
-    private bool IsReferenceCompact => Theme.Key == "lone-trail" && Kind == LiveTrendKind.Compact;
+    private bool IsReferenceCompact => Kind == LiveTrendKind.Compact;
 
     public LiveTrendView()
     {
@@ -250,7 +268,6 @@ public sealed class LiveTrendView : Border
         }
         AutomationProperties.SetHelpText(chart, "方向键查看相邻采样点，Home 和 End 跳到首尾，Escape 清除选择。");
 
-        var header = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 3) };
         DockPanel.SetDock(marker, Dock.Left);
         header.Children.Add(marker);
         header.Children.Add(heading);
@@ -267,11 +284,17 @@ public sealed class LiveTrendView : Border
     private void ApplyAppearance()
     {
         bool reference = IsReferenceCompact;
+        bool paper = reference && Theme.IsPeople;
         heading.Text = Kind == LiveTrendKind.Operator ? "干员近 5 秒 DPS 趋势"
-            : reference ? "实时 DPS 趋势 / LIVE OUTPUT (STACKED)" : "近 60 游戏秒 · 全队 DPS";
+            : paper ? "实时 DPS 趋势" : "实时 DPS 趋势 / LIVE OUTPUT (STACKED)";
         AutomationProperties.SetName(chart, heading.Text);
-        chart.Height = Kind == LiveTrendKind.Operator ? 108 : reference ? 138 : 52;
+        chart.Height = reference ? 138 : 108;
         marker.Visibility = reference ? Visibility.Visible : Visibility.Collapsed;
+        marker.Background = paper ? Theme.Resource("Accent") : HeaderAccent;
+        header.Background = paper ? Theme.Resource("Inset") : Brushes.Transparent;
+        header.MinHeight = paper ? 25 : 0;
+        heading.SetResourceReference(TextBlock.ForegroundProperty, paper ? "Ink" : "ConsoleInk");
+        heading.SetResourceReference(TextBlock.FontFamilyProperty, paper ? "HeadingFont" : "InterfaceFont");
         heading.FontSize = reference ? 13 : 14;
         heading.VerticalAlignment = VerticalAlignment.Center;
         if (reference) Background = ChartWell;
@@ -547,7 +570,6 @@ public sealed class LiveTrendView : Border
             if (IsKeyboardFocused)
                 dc.DrawRectangle(null, new Pen(signal, 1), new Rect(.5, .5, ActualWidth - 1, ActualHeight - 1));
             if (points.Length == 0) return;
-            bool bareCompact = view.Kind == LiveTrendKind.Compact && !reference;
             var selected = view.SelectedOperators().ToArray();
             bool stack = reference && selected.Length > 0;
             var layers = selected.Reverse().ToArray();
@@ -558,7 +580,7 @@ public sealed class LiveTrendView : Border
             var values = points.Select(view.Value).ToArray();
             double ceiling = Math.Max(4, stack
                 ? heights.Max(rates => rates.Sum(rate => rate.GetValueOrDefault())) : values.Max() ?? 0);
-            int ticks = bareCompact ? 2 : 4;
+            int ticks = 4;
             if (reference) (ceiling, ticks) = ReferenceRange(Math.Max(5, ceiling));
             minTime = points[0].Time;
             maxTime = Math.Max(minTime + 1, points[^1].Time);
@@ -568,10 +590,10 @@ public sealed class LiveTrendView : Border
             var numberFont=Theme.Typeface("DataFont",FontWeights.Normal);
             FormattedText Label(string label) => new(label, CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight, numberFont, 10, muted, dpi);
-            double left = bareCompact ? 3 : Math.Min(ActualWidth * .35, Math.Max(49, Label(Json.CompactAmount(ceiling)).Width + 10));
+            double left = Math.Min(ActualWidth * .35, Math.Max(49, Label(Json.CompactAmount(ceiling)).Width + 10));
             double top = reference ? 17 : 7;
             plot = new Rect(left, top, Math.Max(1, ActualWidth - left - 13 - donutWidth),
-                Math.Max(1, ActualHeight - top - (bareCompact ? 5 : 20)));
+                Math.Max(1, ActualHeight - top - 20));
             double X(double time) => plot.Left + (time - minTime) / (maxTime - minTime) * plot.Width;
             double Y(double value) => plot.Bottom - value / ceiling * plot.Height;
             Point Map(int index, double value) => new(X(points[index].Time), Y(value));
@@ -586,7 +608,7 @@ public sealed class LiveTrendView : Border
             int timeTicks = Math.Min(preferredTicks, Math.Max(1, (int)Math.Floor(maxTime - minTime)));
             if (reference)
             {
-                var subgrid = new Pen(Subdivision, 1);
+                var subgrid = new Pen(Theme.IsPeople ? PeopleSubdivision : Subdivision, 1);
                 for (int i = 1; i < timeTicks * 4; i++)
                 {
                     double x = plot.Left + plot.Width * i / (timeTicks * 4);
@@ -604,19 +626,15 @@ public sealed class LiveTrendView : Border
             {
                 double y = plot.Top + plot.Height * i / ticks;
                 dc.DrawLine(gridPen, new Point(plot.Left, y), new Point(plot.Right, y));
-                if (bareCompact) continue;
                 double axisValue = ceiling * (ticks - i) / ticks;
                 var label = Label(Json.CompactAmount(axisValue));
                 dc.DrawText(label, new Point(Math.Max(0, plot.Left - label.Width - 6), y - label.Height / 2));
             }
-            if (!bareCompact)
+            for (int i = 0; i <= timeTicks; i++)
             {
-                for (int i = 0; i <= timeTicks; i++)
-                {
-                    double time = minTime + (maxTime - minTime) * i / timeTicks;
-                    var label = Label(TimeLabel(time));
-                    dc.DrawText(label, new Point(Math.Min(plot.Right + 10 - label.Width, X(time) - label.Width / 2), plot.Bottom + 5));
-                }
+                double time = minTime + (maxTime - minTime) * i / timeTicks;
+                var label = Label(TimeLabel(time));
+                dc.DrawText(label, new Point(Math.Min(plot.Right + 10 - label.Width, X(time) - label.Width / 2), plot.Bottom + 5));
             }
 
             if (reference)

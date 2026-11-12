@@ -1,0 +1,45 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <LinearGradientBrush x:Key="FrameSurface" StartPoint="0,0" EndPoint="0,1">
+  <GradientStop Color="#F4F5F6" Offset="0"/><GradientStop Color="#D6DADE" Offset=".19"/>
+  <GradientStop Color="#F2F4F6" Offset=".65"/><GradientStop Color="#ADB6C0" Offset="1"/>
+ </LinearGradientBrush>
+ <SolidColorBrush x:Key="FrameEdge" Color="#83909B"/>
+ <SolidColorBrush x:Key="FrameInnerEdge" Color="#667480"/>
+ <SolidColorBrush x:Key="FrameInk" Color="#0E1A27"/>
+ <SolidColorBrush x:Key="FrameMuted" Color="#40505F"/>
+ <SolidColorBrush x:Key="FrameAccent" Color="#F47F19"/>
+ <DrawingImage x:Key="FrameSlashes">
+  <DrawingImage.Drawing>
+   <GeometryDrawing Brush="#283540" Geometry="M 8 0 L 14 0 L 6 14 L 0 14 Z M 17 0 L 23 0 L 15 14 L 9 14 Z M 26 0 L 32 0 L 24 14 L 18 14 Z"/>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <SolidColorBrush x:Key="MetricSurface" Color="#202932"/>
+ <SolidColorBrush x:Key="MetricEdge" Color="#4C5966"/>
+ <SolidColorBrush x:Key="MetricInk" Color="#F6F8FA"/>
+ <SolidColorBrush x:Key="MetricMuted" Color="#D4DFE8"/>
+ <SolidColorBrush x:Key="MetricHighlight" Color="#FF861D"/>
+ <SolidColorBrush x:Key="MetricSignal" Color="#6BD8EB"/>
+ <SolidColorBrush x:Key="ChromeBrandSurface" Color="#EA1A242C"/>
+ <SolidColorBrush x:Key="ChromeDescriptionSurface" Color="#CF202930"/>
+ <SolidColorBrush x:Key="ChromeControlsSurface" Color="#DF202930"/>
+ <SolidColorBrush x:Key="ChromeButtonSurface" Color="#222C35"/>
+ <SolidColorBrush x:Key="ChromeButtonHover" Color="#31414F"/>
+ <SolidColorBrush x:Key="ChromeButtonEdge" Color="#576571"/>
+ <SolidColorBrush x:Key="ChromeInk" Color="#F2F6FA"/>
+ <SolidColorBrush x:Key="ChromeMuted" Color="#BFC9D1"/>
+ <SolidColorBrush x:Key="ShellBackdrop" Color="Transparent"/>
+ <SolidColorBrush x:Key="SubpageHeadingSurface" Color="Transparent"/>
+ <Thickness x:Key="SubpageHeadingPadding">0</Thickness>
+ <SolidColorBrush x:Key="ShellSidebarEdge" Color="#586775"/>
+ <ImageBrush x:Key="ShellSidebarArtwork" ImageSource="/Assets/LoneTrail/sidebar-orbital-detail.png" Stretch="UniformToFill" Opacity=".94"/>
+ <SolidColorBrush x:Key="ShellSidebarShade" Color="#4516202B"/>
+ <LinearGradientBrush x:Key="ShellNavActive" StartPoint="0,0" EndPoint="0,1">
+  <GradientStop Color="#5F371B" Offset="0"/><GradientStop Color="#AA571B" Offset="1"/>
+ </LinearGradientBrush>
+ <SolidColorBrush x:Key="ShellNavSelectedEdge" Color="#FF982F"/>
+ <BitmapImage x:Key="ShellLiveNavIcon" UriSource="/Assets/LoneTrail/realtime.png"/>
+ <BitmapImage x:Key="ShellEnemyNavIcon" UriSource="/Assets/LoneTrail/enemy.png"/>
+ <BitmapImage x:Key="ShellHistoryNavIcon" UriSource="/Assets/LoneTrail/history.png"/>
+ <BitmapImage x:Key="ShellSettingsNavIcon" UriSource="/Assets/LoneTrail/connection.png"/>
+</ResourceDictionary>

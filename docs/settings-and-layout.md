@@ -23,7 +23,7 @@
 }
 ```
 
-- 版本 3 增加全局 `theme`：`lone-trail`（默认孤星）或 `original`（原始界面）。未知皮肤值回退孤星并显示诊断，不丢弃有效面板或 HUD。
+- 版本 3 保存全局皮肤 `theme`，支持 `lone-trail`（默认孤星）和 `people`（人们，我们。）。已下架或未知的皮肤值会回退孤星并显示提示，有效面板、HUD 和其他布局设置继续读取。下次保存时写入当前皮肤。
 - 可选的 `hud_styles` 按源面板 ID 保存字体大小、窗口及列宽、行高、头像大小和间距。尺寸使用设备无关像素。关闭 HUD 后样式继续保留，重置或删除源面板时移除对应样式。旧布局使用默认样式。
 - 版本 1 是早期仅含 `panels` 的文档（无 GUI/HUD、事件观测默认开启）；版本 2 保留 GUI/HUD 与事件观测偏好。两者读取时迁移为版本 3，缺省皮肤为孤星，下次保存原子写回版本 3。
 - 无 `version` 但含 `panels` 的文档按版本 1 接受。未知或更高版本不静默覆盖：原文件移动为 `layout.json.corrupt-<时间戳>`，本次使用默认布局并显示诊断。
@@ -118,4 +118,4 @@ python acceptance/verify_wpf.py --output runtime/wpf-settings-layout
 
 ### 全局皮肤（ARK-19）
 
-主窗口右上选择皮肤即时应用到实时、历史、设置、HUD 和统计 PNG。只更新展示，不重建采集、窗口或面板，不变更固定干员、悬停次序、所选历史副本和 HUD 几何/透明度/锁定。PNG 在保存对话框前冻结皮肤；JSON 不增加主题字段。实现与文字对比度回归见 `tests/test_ui_theme.py`；双皮肤窗口、Win32 测试窗口点击路由、托盘原生回调、独立子进程重启证据由 `python acceptance/verify_ui_themes.py` 生成。该脚本明确不认证 MuMu 游戏收到点击或物理托盘图标双击。
+在左侧导航栏选择皮肤，即时应用到实时战况、敌情、历史、设置和 HUD。统计 PNG 使用打开保存对话框时选定的皮肤。文字对比度由 `tests/test_wpf_contract.py` 检查，主题切换、HUD 状态和进程重启恢复由 `python acceptance/verify_wpf.py` 验证。

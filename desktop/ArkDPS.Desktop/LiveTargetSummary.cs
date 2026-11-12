@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 
 namespace ArkDPS.Desktop;
@@ -227,10 +228,21 @@ public sealed class LiveTargetSummary : Border
     {
         private static readonly Geometry UnlockedGlyph = Geometry.Parse("M 3,7 L 3,4 C 3,0 9,0 9,4 M 1,7 L 11,7 L 11,14 L 1,14 Z M 6,10 L 6,12");
         private static readonly Geometry LockedGlyph = Geometry.Parse("M 3,7 L 3,4 C 3,0 9,0 9,4 L 9,7 M 1,7 L 11,7 L 11,14 L 1,14 Z M 6,10 L 6,12");
+        private static readonly Lazy<ImageSource> PeoplePortraitTrim = new(() => new BitmapImage(
+            new Uri("pack://application:,,,/Assets/People/Components/frame-a-red.png")));
         private readonly TextBlock name = Label(17, "ConsoleInk", bold: true);
         private readonly TextBlock identity = Label(12, "ConsoleMuted");
         private readonly TextBlock badge = Label(28, "ConsoleMuted", bold: true);
         private readonly Image portrait = new() { Stretch = Stretch.Uniform, Margin = new Thickness(1) };
+        private readonly Image portraitTrim = new()
+        {
+            Stretch = Stretch.Uniform, Height = 93, Visibility = Visibility.Collapsed, IsHitTestVisible = false,
+        };
+        private readonly Border headerMark = new()
+        {
+            Width = 3, Height = 25, Margin = new Thickness(0, 0, 7, 0),
+            VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
+        };
         private readonly TextBlock health;
         private readonly TextBlock attack;
         private readonly TextBlock defense;
@@ -270,6 +282,9 @@ public sealed class LiveTargetSummary : Border
             targetLock.Unchecked += (_, _) => lockChanged(this);
             DockPanel.SetDock(targetLock, Dock.Right);
             header.Children.Add(targetLock);
+            headerMark.SetResourceReference(BackgroundProperty, "Signal");
+            DockPanel.SetDock(headerMark, Dock.Left);
+            header.Children.Add(headerMark);
             var heading = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             heading.Children.Add(name);
             heading.Children.Add(identity);
@@ -285,6 +300,7 @@ public sealed class LiveTargetSummary : Border
             var art = new Grid();
             art.Children.Add(badge);
             art.Children.Add(portrait);
+            art.Children.Add(portraitTrim);
             var frame = new Border { Child = art, Height = 100, BorderThickness = new Thickness(1) };
             frame.SetResourceReference(BackgroundProperty, "ConsoleCard");
             frame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
@@ -324,6 +340,8 @@ public sealed class LiveTargetSummary : Border
             next.IsEnabled = canNext;
             targetLock.IsEnabled = Current is { Uid.Length: > 0 };
             if (Visibility == Visibility.Collapsed) return;
+            portraitTrim.Visibility = headerMark.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+            if (Theme.IsPeople) portraitTrim.Source ??= PeoplePortraitTrim.Value;
             lockIcon.Data = Pinned ? LockedGlyph : UnlockedGlyph;
             string lockLabel = Pinned ? "解锁当前敌人" : "锁定当前敌人";
             targetLock.ToolTip = lockLabel;

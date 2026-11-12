@@ -29,7 +29,8 @@ from panel_model import DEFAULT_NUMBER_UNITS, NUMBER_UNITS, PanelConfig
 
 ROOT = Path(__file__).resolve().parent
 LAYOUT_VERSION = 3
-THEMES = ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original')
+DEFAULT_THEME = 'lone-trail'
+THEMES = (DEFAULT_THEME, 'people')
 DEFAULT_GUI = (960, 700)
 DEFAULT_GUI_MINIMUM = (440, 500)
 DEFAULT_HUD_MINIMUM = (350, 230)
@@ -175,7 +176,7 @@ class Layout:
     huds: tuple[HudPlacement, ...] = ()
     gui: GuiGeometry | None = None
     event_observation: bool = True
-    theme: str = 'lone-trail'
+    theme: str = DEFAULT_THEME
     number_units: str = DEFAULT_NUMBER_UNITS
     hud_styles: tuple[tuple[str, HudStyle], ...] = ()
 
@@ -331,10 +332,10 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
             warnings.append(f'GUI 窗口几何无效，已使用默认位置：{exc}')
     huds = _parse_huds(raw.get('huds'), panels, warnings)
     hud_styles = _parse_hud_styles(raw.get('hud_styles'), panels, warnings)
-    theme = raw.get('theme', 'lone-trail')
+    theme = raw.get('theme', DEFAULT_THEME)
     if theme not in THEMES:
-        warnings.append('皮肤设置无效，已使用孤星')
-        theme = 'lone-trail'
+        warnings.append('已保存的皮肤不可用，已切换为孤星')
+        theme = DEFAULT_THEME
     number_units = raw.get('number_units', DEFAULT_NUMBER_UNITS)
     if not isinstance(number_units, str) or number_units not in NUMBER_UNITS:
         warnings.append('数值单位设置无效，已使用 K / M')

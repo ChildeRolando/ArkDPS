@@ -4,9 +4,11 @@ import importlib.util
 from pathlib import Path
 import re
 import zipfile
+from xml.etree import ElementTree
 
 import pytest
 from desktop_launcher import worker_python
+from layout_store import THEMES
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('package_windows', ROOT/'tools/package_windows.py')
@@ -83,15 +85,19 @@ def contrast(a, b):
 
 def test_actual_wpf_theme_text_pairs_have_aa_contrast():
     source = (ROOT/'desktop/ArkDPS.Desktop/App.xaml.cs').read_text('utf-8')
-    palettes = re.findall(r'\["Bg"\].*?\["Radius"\]="[0-9]+"', source, re.S)
-    assert len(palettes) == 6
-    for raw in palettes:
-        colors = dict(re.findall(r'\["([A-Za-z]+)"\]="(#[0-9A-F]+)"', raw))
+    keys = dict(re.findall(r'const string (\w+)\s*=\s*"([a-z-]+)";', source))
+    palettes = re.findall(r'\[(\w+)\]\s*=\s*new\(\)\s*\{\s*(\["Bg"\].*?)\s*\}', source, re.S)
+    assert sorted(keys[key] for key, _ in palettes) == sorted(THEMES)
+    for key, raw in palettes:
+        colors = dict(re.findall(r'\["([A-Za-z]+)"\]\s*=\s*"(#[0-9A-F]+)"', raw))
         for foreground, background in [('Ink','Bg'), ('Ink','Card'), ('Muted','Card'),
                 ('Muted','Inset'), ('ConsoleInk','Console'), ('ConsoleMuted','Console'),
                 ('ConsoleInk','ConsoleCard'), ('ConsoleMuted','ConsoleCard'), ('AccentText','Card'), ('AccentInk','Accent'),
-                ('HeroInk','Hero'), ('HeroMuted','Hero'), ('HeroStatusInk','HeroCard')]:
-            assert contrast(colors[foreground], colors[background]) >= 4.5, (foreground, background, colors)
+                ('SidebarInk','Sidebar'), ('SidebarMuted','Sidebar'), ('SidebarInk','SidebarActive'),
+                ('HeroInk','Hero'), ('HeroMuted','Hero'), ('HeroStatusInk','HeroCard'),
+                ('HeroCardInk','HeroCard'), ('HeroCardMuted','HeroCard')]:
+            ratio = contrast(colors[foreground], colors[background])
+            assert ratio >= 4.5, (keys[key], foreground, background, ratio)
 
 
 def test_hud_has_single_title_row_close_and_rich_rows():
@@ -107,10 +113,13 @@ def test_hud_has_single_title_row_close_and_rich_rows():
     assert '溢出伤害率' in (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
 
 
-def test_wpf_ships_all_six_demo_skins():
-    source = (ROOT/'desktop/ArkDPS.Desktop/App.xaml.cs').read_text('utf-8')
-    for key in ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original'):
-        assert f'["{key}"]=new()' in source, key
+def test_wpf_picker_and_worker_offer_lone_trail_and_people():
+    xaml = ElementTree.parse(ROOT/'desktop/ArkDPS.Desktop/MainWindow.xaml')
+    wpf = '{http://schemas.microsoft.com/winfx/2006/xaml/presentation}'
+    name = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
+    picker = next(combo for combo in xaml.iter(wpf + 'ComboBox') if combo.get(name) == 'Skin')
+    assert tuple(item.get('Tag') for item in picker.findall(wpf + 'ComboBoxItem')) == THEMES
+    assert THEMES == ('lone-trail', 'people')
 
 
 def test_inspector_uses_mitigation_rate_not_penetration_efficiency():

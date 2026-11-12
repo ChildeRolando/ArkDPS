@@ -124,7 +124,7 @@ public partial class MainWindow
     }
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
     {
-        await Command("theme", new() { ["theme"] = "lone-trail" });
+        await Command("theme", new() { ["theme"] = Theme.LoneTrail });
         foreach (var (token,family) in new[] { ("DisplayFont","Barlow Semi Condensed"),("DataFont","IBM Plex Mono") })
         {
             Require(Theme.Typeface(token,FontWeights.SemiBold).TryGetGlyphTypeface(out var glyph) &&
@@ -353,10 +353,40 @@ public partial class MainWindow
         Require(HistoryList.ActualHeight >= 58, $"minimum history viewport too short ({HistoryList.ActualHeight:F1} DIPs)");
         Screenshot.Window(this, Path.Combine(output, "lone-trail-history-minimum.png"));
         await Navigate("live");
+        fixture["layout"]!["theme"] = Theme.People;
+        for (int second = 17; second <= 26; second++)
+        {
+            fixture["game_time"] = second;
+            analysis["game_time"] = second;
+            SetIllustrativeRates(second == 26 ? 7630 : 6400 + second % 6 * 410);
+            ApplyFixture(fixture);
+        }
+        var peopleRanking = Panels.Values.First();
+        peopleRanking.Rows.SelectedIndex = 0;
+        peopleRanking.PinRequested?.Invoke(peopleRanking.View.Get("entries").Items().First().Text("owner_id"));
+        Require(trendModel.Points.Count > 1 && trendModel.Points[^1].Team == 7630,
+            "People dashboard did not plot the same live sample series");
+        foreach (var (width, height) in new[] { (1380, 900), (560, 540) })
+        {
+            Width = width; Height = height;
+            await Settle();
+            Require(Theme.IsPeople && (Skin.SelectedItem as ComboBoxItem)?.Tag as string == Theme.People,
+                "People theme and picker are out of sync");
+            Require(Math.Abs(ActualWidth - width) < 2 && Math.Abs(ActualHeight - height) < 2 &&
+                Grid.GetColumnSpan(EnemySummary) == (width >= 1320 ? 1 : 3) &&
+                Grid.GetColumn(LiveDetail) == (width < 1100 ? 1 : 2),
+                "People dashboard did not reflow at its compact breakpoint");
+            Require(CurrentDps.Text == "7,630" && !HasVisibleScrollbar(this),
+                "People dashboard lost its live rate or showed a scrollbar");
+            if (width >= 1320)
+                Require(Panels.Values.First().ReferenceFooter.IsVisible, "People did not use the full ranking layout");
+            Screenshot.Window(this, Path.Combine(output, $"people-live-{width}x{height}-dip.png"));
+        }
+        checks.Add("People uses the live ranking layout and reflows at minimum width");
         Width = savedWidth; Height = savedHeight;
         await Settle();
         ApplyState(initial);
-        await Command("theme", new() { ["theme"] = "original" });
+        await Command("theme", new() { ["theme"] = Theme.People });
         checks.Add("compact portrait, three parallel ratio rings and field formula tooltips, themed enemy cards, five Lone Trail layouts and physical maximized bounds");
     }
     private void VerifyCompactPortraitLayout()
@@ -1076,7 +1106,9 @@ public partial class MainWindow
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="recent_5s"}});
         string placementBeforeTheme=JsonSerializer.Serialize(originalHud.Placement());
         IntPtr handleBeforeTheme=Native.Handle(originalHud);
-        foreach(string theme in new[]{"lone-trail","contingency-contract","babel","near-light","il-siracusano","original"})
+        Require(Skin.Items.OfType<ComboBoxItem>().Select(item => item.Tag).SequenceEqual(Theme.Keys),
+            "the theme picker did not offer the two supported themes");
+        foreach(string theme in Theme.Keys)
         {
             await Command("theme",new(){["theme"]=theme});await Settle();
             await Navigate("live");await Settle();
@@ -1088,15 +1120,17 @@ public partial class MainWindow
                     hudPanel.PanelFrame.BorderThickness == new Thickness() &&
                     titleRegion.ActualWidth >= originalHud.ActualWidth - 2,
                     "HUD does not fill its window or retains the extra frame");
-            bool loneTrail=theme=="lone-trail";
+            bool loneTrail=theme==Theme.LoneTrail;
             Require(originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(2,2)) as DependencyObject) &&
                     originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(titleRegion.ActualWidth*.68,
                         titleRegion.ActualHeight/2)) as DependencyObject) &&
                     !originalHud.IsTitleDragSource(hudPanel.HudClose) &&
                     hudPanel.LoneTrailHudMark.IsVisible==loneTrail && hudPanel.LoneTrailHudBackdrop.IsVisible==loneTrail &&
                     hudPanel.LoneTrailHudChevrons.IsVisible==loneTrail &&
-                    !hudPanel.LoneTrailHudBackdrop.IsHitTestVisible && !hudPanel.LoneTrailHudChevrons.IsHitTestVisible,
-                    "HUD drag surface, close hit target, or orbital artwork did not render");
+                    !hudPanel.LoneTrailHudBackdrop.IsHitTestVisible && !hudPanel.LoneTrailHudChevrons.IsHitTestVisible &&
+                    hudPanel.PeopleHudArtwork.IsVisible==!loneTrail &&
+                    (!Theme.IsPeople || hudPanel.PeopleHudArtwork.Source!=null) && !hudPanel.PeopleHudArtwork.IsHitTestVisible,
+                    "HUD drag surface, close hit target, or theme artwork did not render");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
             await Navigate("enemies");await Settle();
             Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
@@ -1213,9 +1247,9 @@ public partial class MainWindow
             }
         }
         checks.Add(trayEvidence);
-        await Command("theme",new(){["theme"]="original"});originalHud.SetOpacity(.83);originalHud.SetLocked(true);await SavePlacement();
+        await Command("theme",new(){["theme"]=Theme.People});originalHud.SetOpacity(.83);originalHud.SetLocked(true);await SavePlacement();
         var disk=JsonDocument.Parse(File.ReadAllText(Path.Combine(App.BridgeArguments[App.BridgeArguments.IndexOf("--state-dir")+1],"layout.json")));
-        Require(disk.RootElement.Text("theme")=="original","theme persistence");checks.Add("shared v3 layout saved: original theme / locked HUD / 83% opacity / physical geometry");
+        Require(disk.RootElement.Text("theme")==Theme.People,"theme persistence");checks.Add("shared v3 layout saved: People theme / locked HUD / 83% opacity / physical geometry");
         File.WriteAllText(Path.Combine(output,"receipt.json"),JsonSerializer.Serialize(new{stack="C# / .NET 10 / WPF",transport="parent-child stdio JSON Lines",dotnet=Environment.Version.ToString(),protocol=BridgeClient.Version,offline=true,worker_runtime=bridge?.Hello,checks,restored_layout=restoredLayout,layout=State.Get("layout"),limitations=new[]{"Synthetic data only; no MuMu / game input acceptance",trayEvidence}},new JsonSerializerOptions{WriteIndented=true}));
         await Quit();
     }
