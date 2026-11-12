@@ -285,6 +285,10 @@ public partial class MainWindow
                 bottomRight.X <= workArea.Right+1 && bottomRight.Y <= workArea.Bottom+1 &&
                 panelBottom.Y <= workArea.Bottom+1,
                 $"maximized frame runs outside monitor work area: {topLeft} to {bottomRight}, {workArea}");
+        Require(SidebarNavigation.Children.IndexOf(EnemyNav) == SidebarNavigation.Children.IndexOf(LiveNav)+1 &&
+                DockPanel.GetDock(SidebarFooter) == Dock.Bottom &&
+                SkinLabel.IsVisible && SkinLabel.Text == "皮肤" &&
+                !HasText(SidebarFooter, "解锁 HUD"), "sidebar navigation or skin control placement is wrong");
         Require(TitleBar.ActualHeight <= 38 &&
                 TitleBar.ActualHeight-ChromeControls.ActualHeight is >= 2 and <= 10,
                 "window controls do not have a compact title bar");

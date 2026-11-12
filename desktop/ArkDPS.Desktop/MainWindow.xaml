@@ -48,6 +48,16 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
+  <Style x:Key="SidebarSkin" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+   <Setter Property="MinHeight" Value="49"/><Setter Property="Padding" Value="8,24,17,4"/><Setter Property="Margin" Value="0"/>
+   <Setter Property="Background" Value="{DynamicResource Sidebar}"/><Setter Property="Foreground" Value="{DynamicResource SidebarInk}"/>
+   <Setter Property="BorderBrush" Value="{DynamicResource SidebarLine}"/><Setter Property="FontSize" Value="13"/>
+   <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Cursor" Value="Hand"/>
+   <Style.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
+    <Trigger Property="IsDropDownOpen" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
+   </Style.Triggers>
+  </Style>
   <Style x:Key="ChromeButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
    <Setter Property="Width" Value="29"/><Setter Property="MinHeight" Value="30"/><Setter Property="Padding" Value="5,4"/><Setter Property="Margin" Value="0"/>
    <Setter Property="Background" Value="#222C35"/><Setter Property="Foreground" Value="#F2F6FA"/><Setter Property="BorderBrush" Value="#576571"/>
@@ -103,12 +113,19 @@
     <Image x:Name="SidebarArtwork" Source="Assets/LoneTrail/sidebar-orbital-detail.png" Stretch="UniformToFill" Opacity=".94" IsHitTestVisible="False"/>
     <Border Background="#4516202B" IsHitTestVisible="False"/>
     <DockPanel>
-     <StackPanel DockPanel.Dock="Top" Margin="3,8,3,0">
+     <StackPanel x:Name="SidebarNavigation" DockPanel.Dock="Top" Margin="3,8,3,0">
      <Button x:Name="LiveNav" Tag="live" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="实时战况" AutomationProperties.Name="实时战况">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
        <Image x:Name="LiveNavAsset" Source="Assets/LoneTrail/realtime.png" Width="25" Height="24" Stretch="Uniform"/>
        <Path x:Name="LiveNavVector" Width="22" Height="22" Data="M 1 15 L 5 15 L 5 10 L 1 10 Z M 7 15 L 11 15 L 11 6 L 7 6 Z M 13 15 L 17 15 L 17 2 L 13 2 Z" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
        <TextBlock x:Name="LiveNavLabel" Text="实时战况" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
+      </StackPanel>
+     </Button>
+     <Button x:Name="EnemyNav" Tag="enemies" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="敌情" AutomationProperties.Name="敌情">
+      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+       <Image x:Name="EnemyNavAsset" Source="Assets/LoneTrail/enemy.png" Width="25" Height="24" Stretch="Uniform"/>
+       <Path x:Name="EnemyNavVector" Width="22" Height="22" Data="M 1 9 Q 9 -1 17 9 Q 9 19 1 9 Z M 12 9 A 3 3 0 1 1 6 9 A 3 3 0 1 1 12 9" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
+       <TextBlock x:Name="EnemyNavLabel" Text="敌情" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
      <Button x:Name="HistoryNav" Tag="history" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="历史战绩" AutomationProperties.Name="历史战绩">
@@ -125,25 +142,21 @@
        <TextBlock x:Name="SettingsNavLabel" Text="设置" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
-      <Border Background="#8AA0B0" Height="1" Margin="9,8,9,15"/>
-      <ComboBox x:Name="Skin" SelectionChanged="SkinChanged" AutomationProperties.Name="全局皮肤" Background="#DDE3EA" Foreground="#0F1B26" BorderBrush="#9DA9B2" Margin="10,0,10,0">
-       <ComboBoxItem Content="孤星" Tag="lone-trail"/><ComboBoxItem Content="危机合约" Tag="contingency-contract"/>
-       <ComboBoxItem Content="巴别塔" Tag="babel"/><ComboBoxItem Content="长夜临光" Tag="near-light"/>
-       <ComboBoxItem Content="叙拉古人" Tag="il-siracusano"/><ComboBoxItem Content="原始界面" Tag="original"/>
-      </ComboBox>
-     <Button x:Name="EnemyNav" Tag="enemies" Click="Navigate" Style="{StaticResource ResearchNav}" MinHeight="35" Margin="10,5,10,0" ToolTip="敌情" AutomationProperties.Name="敌情">
-      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-       <Image x:Name="EnemyNavAsset" Source="Assets/LoneTrail/enemy.png" Width="25" Height="24" Stretch="Uniform"/>
-       <Path x:Name="EnemyNavVector" Width="22" Height="22" Data="M 1 9 Q 9 -1 17 9 Q 9 19 1 9 Z M 12 9 A 3 3 0 1 1 6 9 A 3 3 0 1 1 12 9" Stretch="Uniform" Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Visibility="Collapsed"/>
-       <TextBlock x:Name="EnemyNavLabel" Text="敌情" FontSize="13" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
-      </StackPanel>
-     </Button>
+
 
      </StackPanel>
-     <StackPanel DockPanel.Dock="Bottom" Margin="11,0,9,10">
-      <TextBlock x:Name="SideLab" Text="ORCU" Foreground="#DCE5ED" FontSize="21" FontWeight="Bold" Margin="0,0,0,2"/>
-      <TextBlock x:Name="SideLabName" Text="ORBITAL COMBAT&#x0a;RESEARCH UNIT" Foreground="#DCE5ED" FontSize="11" FontFamily="Cascadia Mono, Consolas" Margin="0,0,0,10"/>
-      <Button Content="解锁 HUD" Click="UnlockAll" Background="#DA192735" Foreground="#F6F7FA" BorderBrush="#71818D" Padding="6,4" FontSize="11" Margin="0,0,0,4"/>
+     <StackPanel x:Name="SidebarFooter" DockPanel.Dock="Bottom" Margin="3,0,3,10">
+      <TextBlock x:Name="SideLab" Text="ORCU" Foreground="#DCE5ED" FontSize="21" FontWeight="Bold" Margin="8,0,0,2"/>
+      <TextBlock x:Name="SideLabName" Text="ORBITAL COMBAT&#x0a;RESEARCH UNIT" Foreground="#DCE5ED" FontSize="11" FontFamily="Cascadia Mono, Consolas" Margin="8,0,0,10"/>
+      <Grid>
+       <ComboBox x:Name="Skin" SelectionChanged="SkinChanged" Style="{StaticResource SidebarSkin}" AutomationProperties.Name="皮肤" ToolTip="切换皮肤">
+        <ComboBoxItem Content="孤星" Tag="lone-trail"/><ComboBoxItem Content="危机合约" Tag="contingency-contract"/>
+        <ComboBoxItem Content="巴别塔" Tag="babel"/><ComboBoxItem Content="长夜临光" Tag="near-light"/>
+        <ComboBoxItem Content="叙拉古人" Tag="il-siracusano"/><ComboBoxItem Content="原始界面" Tag="original"/>
+       </ComboBox>
+       <TextBlock x:Name="SkinLabel" Text="皮肤" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource SidebarMuted}"
+                  VerticalAlignment="Top" Margin="8,6,17,0" IsHitTestVisible="False"/>
+      </Grid>
      </StackPanel>
      <Border/>
     </DockPanel>
