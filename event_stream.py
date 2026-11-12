@@ -86,6 +86,7 @@ class EventStream:
                killed=None, target_type=None, damage_type=None,
                cancel_reason=None, shield_absorbed=None, target_instance=None,
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
+               skill_method=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
                enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None):
         if self.closed:
@@ -93,7 +94,7 @@ class EventStream:
         payload = (session, frame, game_time, source, kind, amount,
                    target, real_delta, hp_before, hp_after, killed,
                    target_type, damage_type, cancel_reason, shield_absorbed,
-                   target_instance, skill_key, skill_id, skill_name, skill_reason,
+                   target_instance, skill_key, skill_id, skill_name, skill_reason, skill_method,
                    phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
                    finish_reason, enemy_max_hp)
         if session != self.session or not self._nonnegative_int(sequence):
@@ -126,7 +127,8 @@ class EventStream:
                     damage_type=damage_type, cancel_reason=cancel_reason,
                     shield_absorbed=shield_absorbed, target_instance=target_instance,
                     skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
-                    skill_reason=skill_reason, verified_skill_end_owner=verified_skill_end_owner)
+                    skill_reason=skill_reason, skill_method=skill_method,
+                    verified_skill_end_owner=verified_skill_end_owner)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':
