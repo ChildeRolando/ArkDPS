@@ -96,7 +96,15 @@ class FridaEventObserver:
             if frida.__version__ != '17.26.1':
                 raise RuntimeError('Frida 17.26.1 is required')
             device = frida.get_device_manager().add_remote_device(self.remote)
-            self.session = device.attach(self.collector.core.mc.pid, realm='emulated')
+            try:
+                self.session = device.attach(self.collector.core.mc.pid, realm='emulated')
+            except frida.NotSupportedError as exc:
+                if str(exc).strip().casefold() != 'process is not using emulation':
+                    raise
+                raise RuntimeError(
+                    'Frida 服务无法加载 ARM64 事件探针（process is not using emulation）。'
+                    '请重启设备端 Frida 服务后重新定位。'
+                ) from exc
             self.session.on('detached', self._detached)
             source = Path(__file__).with_name('event_probe_android2791.js').read_text(encoding='utf-8')
             self.script = self.session.create_script(source)

@@ -9,6 +9,7 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, replace
 import math
+import time
 import uuid
 
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError
@@ -70,8 +71,7 @@ class BattleFeed:
         self.terminal = False
         return self._emit('end', sample, roster, reason=reason)
 
-    def _read_pair(self, collector, before, observer=None):
-        collector.bind_battle(before['battle'][0])
+    def _read_marked_snapshot(self, collector, observer):
         events = None
         mark = None
         if observer is not None:
@@ -88,8 +88,15 @@ class BattleFeed:
             except Exception as exc:
                 events = {'error': str(exc)}
         sample = collector.read()
-        if hasattr(collector, 'event_capability'):
-            sample['event_capability'] = deepcopy(collector.event_capability)
+        if mark is not None and events is None:
+            try:
+                # Skip the roster transaction when the guarded counters already
+                # crossed the opening mark. The closing mark is still required.
+                baseline_barrier(mark, sample, mark)
+            except BarrierBusy:
+                raise
+            except StreamGap as exc:
+                events = {'error': str(exc)}
         roster = collector.read_roster()
         if mark is not None and events is None:
             try:
@@ -97,12 +104,29 @@ class BattleFeed:
                 if end_mark.get('retry'):
                     raise CaptureRetry('observer clock advanced')
                 sequence = baseline_barrier(mark, sample, end_mark)
-                # Drain only after the lifecycle bracket below has succeeded.
                 events = dict(before=mark, after=end_mark, sequence=sequence)
-            except (CaptureRetry, ObserverReadRetry, BarrierBusy) as exc:
+            except BarrierBusy:
+                raise
+            except (CaptureRetry, ObserverReadRetry) as exc:
                 raise CaptureRetry(str(exc)) from exc
             except Exception as exc:
                 events = {'error': str(exc)}
+        return sample, roster, events
+
+    def _read_pair(self, collector, before, observer=None):
+        collector.bind_battle(before['battle'][0])
+        # A busy frame is normal at 2x speed. Retry within the original
+        # lifecycle bracket before paying for another process lookup and poll.
+        deadline = time.monotonic() + .04
+        for attempt in range(3):
+            try:
+                sample, roster, events = self._read_marked_snapshot(collector, observer)
+                break
+            except BarrierBusy as exc:
+                if attempt == 2 or time.monotonic() >= deadline:
+                    raise CaptureRetry(str(exc)) from exc
+        if hasattr(collector, 'event_capability'):
+            sample['event_capability'] = deepcopy(collector.event_capability)
         after = collector.read_lifecycle()
         self.current_lifecycle = after
         if before != after or sample['frame'] != roster.frame:
@@ -263,6 +287,7 @@ class BattleSessions:
                 raise StreamGap('event observation barrier was altered')
             self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'])
             self.event_status = 'recording'
+            return True
         except Exception as exc:
             self.capture.close()
             self.event_status, self.event_error = 'gap', str(exc)
@@ -314,17 +339,22 @@ class BattleSessions:
         if self.adapter is not None and not self._archived:
             self.adapter.on_gap()
             self.state = 'frozen'
-        # A lifecycle read gap closes event coverage too. Keep the UI honest:
-        # without this, the status can still say recording while every derived
-        # metric is unknown.
+        self._close_event_gap(reason)
+
+    def _close_event_gap(self, reason):
         if self.capture is not None and not self.capture.closed:
             self.capture.close()
         if self.event_status in ('ready', 'recording'):
             self.event_status, self.event_error = 'gap', reason
 
+    def _close_unverified_event_end(self):
+        if self.event_status == 'recording':
+            self._close_event_gap('未取得最终事件水位')
+
     def _archive(self, reason):
         if self.adapter is None or self._archived:
             return
+        self._close_unverified_event_end()
         self.adapter.finish()
         self._archives.append(deepcopy(dict(
             battle_id=self.battle_id, generation=self.generation,
@@ -346,14 +376,17 @@ class BattleSessions:
         final_adapter = deepcopy(self.adapter)
         self.capture = deepcopy(self.capture)
         self.capture.adapter = final_adapter
+        final_events = False
         try:
             # Accept the last verified event watermark before freezing time.
             # Later same-frame revisions change native counters only.
-            if final_adapter.statistics.end_time is None and observation.events:
-                final_adapter.update(observation.sample, observation.roster)
-                self.adapter = final_adapter
-                self.capture.adapter = final_adapter
-                self._events(observation)
+            if final_adapter.statistics.end_time is None:
+                if observation.events:
+                    final_adapter.update(observation.sample, observation.roster)
+                    self.adapter = final_adapter
+                    final_events = self._events(observation)
+                if not final_events:
+                    self._close_unverified_event_end()
             final_adapter.update(observation.sample, observation.roster, terminal=True)
         except (AdapterError, ValueError) as exc:
             self.adapter, self.capture = previous_adapter, previous_capture
@@ -361,6 +394,8 @@ class BattleSessions:
             self._terminal_gap(str(exc))
         else:
             self.adapter = final_adapter
+            if final_events:
+                self.event_status = 'finished'
             if self.capture is not None:
                 self.capture.adapter = self.adapter
             self.latest_sample = deepcopy(observation.sample)
@@ -373,9 +408,7 @@ class BattleSessions:
         # reliable terminal pair or confirmed departure supplies the boundary.
         self.adapter.on_gap()
         self._snapshot_open = False
-        self.capture.close()
-        if self.event_status == 'recording':
-            self.event_status, self.event_error = 'gap', reason
+        self._close_event_gap(reason)
         self.metadata['final_sample_error'] = reason
 
     def _merge_terminal_metadata(self, observation):
@@ -438,14 +471,15 @@ class BattleSessions:
         elif observation.kind == 'end':
             if observation.generation != self.generation:
                 return False
-            if self.adapter is not None and self.adapter.statistics.end_time is None:
-                # A vanished/finished battle is a boundary, not a read gap:
-                # keep the last complete counters as final totals.
-                self.adapter.on_end()
             if not self._archived and observation.reason == 'finished':
                 self._merge_terminal_metadata(observation)
             if observation.sample is not None and not self._archived:
                 self._terminal_update(observation)
+            if self.adapter is not None and self.adapter.statistics.end_time is None:
+                # Keep the last guarded native totals when the battle has
+                # already left, and close event coverage at its last watermark.
+                self._close_unverified_event_end()
+                self.adapter.on_end()
             self._archive(observation.reason)
             self.connection = 'disconnected' if observation.reason == 'process_changed' else 'connected'
         elif observation.kind == 'gap':
@@ -522,7 +556,7 @@ class BattleRuntime:
                     self._consume(replace(observation, sample=native, events=None))
                     observation = self.feed.acquire(collector, observer)
             consumed = self._consume(observation)
-            if consumed and observer is not None and self.sessions.event_status == 'recording':
+            if consumed and observer is not None and self.sessions.event_status in ('recording', 'finished'):
                 evidence = observation.events or {}
                 stream = self.sessions.adapter.event_stream
                 if ('drain' in evidence and stream is not None

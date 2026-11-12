@@ -39,20 +39,24 @@ public partial class MainWindow : Window
     private bool initialized,applying,polling,quitting,historyUpdating,historyHidden;
     private object? normalGeometry;
     private bool closingRequested;
+    private DispatcherOperation? workAreaLayout;
     private long lastResponse=System.Diagnostics.Stopwatch.GetTimestamp();
     private bool responseStale;
     private int commands;
     private string activePanel="",lastBattle="",historyBattle="",historySignature="";
     private string route="live";
+    private sealed record HudLayoutTargetItem(string Id,string Label);
     internal string LastUiError="";
     public MainWindow()
     {
         Theme.Apply(Theme.Key);
         InitializeComponent();
         CompactTrend.Bind(trendModel);
-        BattleTrend.Bind(trendModel);
         OperatorTrend.Bind(trendModel);
-        TargetSummary.OpenEnemies += async () => await Navigate("enemies");
+        RankingScroll.SizeChanged += (_, _) => FitLivePanels();
+        PanelHost.SizeChanged += (_, _) => FitLivePanels();
+        LiveDetailScroll.SizeChanged += (_, _) => FitLivePanels();
+        LiveInspector.SizeChanged += (_, _) => FitLivePanels();
         ApplyThemeArtwork();
         SetNavState("live");
         HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;HistoryPanel.RateActionRequested=HandleRateAction;
@@ -61,7 +65,10 @@ public partial class MainWindow : Window
         poll.Tick+=async(_,_)=>await Poll();
         save.Tick+=async(_,_)=>{save.Stop();await SavePlacement();};
         Loaded+=async(_,_)=>await Start();
-        LocationChanged+=(_,_)=>ScheduleSave();
+        ContentRoot.SizeChanged += (_, _) => ArrangePanels();
+        StateChanged += (_, _) => QueueWorkAreaLayout();
+        DpiChanged += (_, _) => QueueWorkAreaLayout();
+        LocationChanged += (_, _) => { QueueWorkAreaLayout(); ScheduleSave(); };
     }
     private async Task Start()
     {
@@ -142,14 +149,21 @@ public partial class MainWindow : Window
         lastResponse=System.Diagnostics.Stopwatch.GetTimestamp();responseStale=false;
         applying=true;State=state;
         var layout=state.Get("layout");string theme=layout.Text("theme");
+        string units = layout.Text("number_units") == "chinese" ? "chinese" : "western";
+        bool unitsChanged = Json.NumberUnits != units;
+        Json.NumberUnits = units;
+        NumberUnits.SelectedIndex = units == "chinese" ? 1 : 0;
+        if (unitsChanged) EnemyChart.RefreshNumberUnits();
         bool changed=Theme.Key!=theme;
         if(changed)
         {
             Theme.Apply(theme);
             ApplyThemeArtwork();
             SetNavState(route);
+        }
+        if (changed || unitsChanged)
+        {
             CompactTrend.RefreshTheme();
-            BattleTrend.RefreshTheme();
             OperatorTrend.RefreshTheme();
         }
         Skin.SelectedIndex=Theme.IndexOf(theme);
@@ -159,14 +173,16 @@ public partial class MainWindow : Window
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
         var analysis = state.Get("live_analysis");
         var totals=state.Get("totals");
-        CurrentDps.Text = RateText(analysis.Get("team_recent_dps"));
-        AverageDps.Text = RateText(analysis.Get("team_average_dps"));
-        PeakDps.Text = RateText(analysis.Get("observed_peak_dps"));
-        TotalDamage.Text = TotalText(analysis.ValueKind == JsonValueKind.Object
+        CurrentDps.Text = OverviewNumber(analysis.Get("team_recent_dps"));
+        AverageDps.Text = OverviewNumber(analysis.Get("team_average_dps"));
+        PeakDps.Text = OverviewNumber(analysis.Get("observed_peak_dps"));
+        TotalDamage.Text = OverviewNumber(analysis.ValueKind == JsonValueKind.Object
             ? analysis.Get("team_total_damage") : totals.Get("damage"));
         Status.ToolTip = string.Join(" · ", new[] { Stage.Text, EventStatus.Text, ErrorText.Text }.Where(text => text.Length > 0));
         trendModel.Apply(state);
-        var seconds=state.Get("game_time");double t=seconds.TryNumber();Clock.Text=seconds.ValueKind==JsonValueKind.Number ? $"{(int)t/60:00}:{t%60:00.00}" : "—";
+        double time = state.Get("game_time").TryNumber(double.NaN);
+        int elapsed = double.IsFinite(time) ? (int)Math.Clamp(Math.Round(time, MidpointRounding.AwayFromZero), 0, int.MaxValue) : 0;
+        Clock.Text = double.IsFinite(time) && time >= 0 ? $"{elapsed / 60:00}:{elapsed % 60:00}" : "—";
         Footer.Text=state.Text("connection_text");
         if(App.BridgeArguments.Contains("--offline")) ModeLabel.Text="离线验收 · 合成数据 · 不访问游戏";
         var views=state.Get("panels").Items().ToArray();var ids=views.Select(v=>v.Get("config").Text("panel_id")).ToHashSet();
@@ -199,6 +215,7 @@ public partial class MainWindow : Window
             else panel.HudState(false,false,.9);
             if(activePanel==id) LiveInspector.Update(view);
         }
+        RefreshHudLayoutTargets(views);
         if(!initialized)
         {
             Native.Restore(this,layout.Get("gui"));
@@ -229,16 +246,44 @@ public partial class MainWindow : Window
         AdbPath.Text=config.Text("adb_path");Serial.Text=config.Text("serial");EventsEnabled.IsChecked=State.Get("layout").Bool("event_observation");
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events" or "--frida-remote") ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。" : "多实例不会自动选择任意目标；请选择检测结果。";
     }
-    private void OnResize(object sender,SizeChangedEventArgs e){ArrangePanels();ScheduleSave();}
+    private void OnResize(object sender, SizeChangedEventArgs e)
+    {
+        QueueWorkAreaLayout();
+        ScheduleSave();
+    }
+    private void QueueWorkAreaLayout()
+    {
+        if (WindowSurface == null || workAreaLayout?.Status == DispatcherOperationStatus.Pending) return;
+        workAreaLayout = Dispatcher.InvokeAsync(() =>
+        {
+            var insets = new Thickness();
+            if (WindowState == WindowState.Maximized && PresentationSource.FromVisual(WindowSurface) != null)
+            {
+                // WindowChrome can extend the client past the taskbar. Measure the overlap in the
+                // same coordinate system as the content, including the current monitor's DPI.
+                var work = Forms.Screen.FromHandle(Native.Handle(this)).WorkingArea;
+                var topLeft = WindowSurface.PointFromScreen(new Point(work.Left, work.Top));
+                var bottomRight = WindowSurface.PointFromScreen(new Point(work.Right, work.Bottom));
+                insets = new Thickness(
+                    Math.Max(0, topLeft.X), Math.Max(0, topLeft.Y),
+                    Math.Max(0, WindowSurface.ActualWidth - bottomRight.X),
+                    Math.Max(0, WindowSurface.ActualHeight - bottomRight.Y));
+            }
+            ContentRoot.Margin = insets;
+        }, DispatcherPriority.Loaded);
+    }
     private void ArrangePanels()
     {
-        if (PanelHost == null || HistoryDetailHost == null || !double.IsFinite(ActualWidth)) return;
-        bool narrow = ActualWidth < 1100;
-        bool wide = ActualWidth >= 1320;
-        bool narrowOverview = ActualWidth < 920;
+        if (PanelHost == null || HistoryDetailHost == null || ContentRoot.ActualWidth <= 0) return;
+        double width = ContentRoot.ActualWidth;
+        bool narrow = width < 1100;
+        bool wide = width >= 1320;
+        bool scrollLive = narrow || ContentRoot.ActualHeight < (wide ? 640 : 960);
+        bool narrowOverview = width < 920;
         NavigationColumn.Width = new GridLength(narrow ? 92 : 208);
-        ChromeLab.Visibility = ActualWidth < 940 ? Visibility.Collapsed : Visibility.Visible;
-        ChromeDescription.Visibility = ActualWidth < 740 ? Visibility.Collapsed : Visibility.Visible;
+        BrandBadge.Width = narrow ? 87 : 202;
+        ChromeLab.Visibility = width < 940 ? Visibility.Collapsed : Visibility.Visible;
+        ChromeDescription.Visibility = width < 740 ? Visibility.Collapsed : Visibility.Visible;
         SideLab.Visibility = SideLabName.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         ApplyThemeArtwork();
         foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (SettingsNav, SettingsNavLabel) })
@@ -249,14 +294,18 @@ public partial class MainWindow : Window
         OverviewStatsColumn.Width = narrowOverview ? new GridLength(0) : new GridLength(4.15, GridUnitType.Star);
         Grid.SetColumn(MetricCards, narrowOverview ? 0 : 1);
         Grid.SetRow(MetricCards, narrowOverview ? 1 : 0);
-        MetricCards.Columns = ActualWidth < 710 ? 2 : 4;
+        MetricCards.Columns = width < 710 ? 2 : 4;
         CurrentMetric.Margin = new Thickness(4, 0, 4, narrowOverview ? 4 : 0);
 
         EnemySummaryColumn.Width = wide ? new GridLength(22, GridUnitType.Star) : new GridLength(0);
         RankingColumn.Width = new GridLength(41, GridUnitType.Star);
         DetailColumn.Width = wide ? new GridLength(37, GridUnitType.Star) : new GridLength(narrow ? 0 : 340);
+        LivePage.VerticalScrollBarVisibility = scrollLive ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Disabled;
+        LiveBodyFirstRow.Height = wide && !scrollLive ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        LiveBodySecondRow.Height = wide ? new GridLength(0) : scrollLive
+            ? GridLength.Auto : new GridLength(1, GridUnitType.Star);
+        LiveBodyThirdRow.Height = narrow ? GridLength.Auto : new GridLength(0);
         Grid.SetColumnSpan(EnemySummary, wide ? 1 : 3);
-        Grid.SetRowSpan(EnemySummary, wide ? 2 : 1);
         EnemySummary.Margin = wide ? new Thickness(0, 0, 5, 0) : new Thickness(0, 0, 0, 5);
         Grid.SetRow(RankingFrame, wide ? 0 : 1);
         Grid.SetColumnSpan(RankingFrame, narrow ? 2 : 1);
@@ -265,28 +314,34 @@ public partial class MainWindow : Window
         Grid.SetColumnSpan(LiveDetail, narrow ? 2 : 1);
         Grid.SetRow(LiveDetail, wide ? 0 : narrow ? 2 : 1);
         LiveDetail.Margin = narrow ? new Thickness(0, 5, 0, 0) : new Thickness(0);
-        Grid.SetRow(TimelineFrame, wide ? 1 : narrow ? 3 : 2);
-        Grid.SetColumn(TimelineFrame, wide ? 1 : 0);
-        Grid.SetColumnSpan(TimelineFrame, wide ? 2 : 3);
-        RankingScroll.MaxHeight = wide ? 260 : 390;
-        LiveDetailScroll.MaxHeight = wide ? 283 : 440;
-        LiveInspector.CompactReference = Theme.Key == "lone-trail" && wide;
+        RankingScroll.MaxHeight = scrollLive ? 390 : double.PositiveInfinity;
+        LiveDetailScroll.MaxHeight = scrollLive ? 440 : double.PositiveInfinity;
+        LiveInspector.CompactReference = Theme.Key == "lone-trail";
         foreach (var panel in Panels.Values)
         {
             panel.Width = double.NaN;
             panel.SetReferenceStyle(Theme.Key == "lone-trail" && wide);
         }
+        FitLivePanels();
         ArrangeHistory();
         ArrangeEnemyPage();
-        bool stackedSettings = ActualWidth < 1000;
+        bool stackedSettings = width < 1000;
         SettingsRightColumn.Width = stackedSettings ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
         Grid.SetColumn(ConnectionEventForm, stackedSettings ? 0 : 1);
-        Grid.SetRow(ConnectionEventForm, stackedSettings ? 1 : 0);
+        Grid.SetRow(ConnectionEventForm, stackedSettings ? 2 : 1);
         ConnectionForm.Margin = new Thickness(0, 0, stackedSettings ? 0 : 12, 12);
+    }
+    private void FitLivePanels()
+    {
+        bool fill = LivePage.VerticalScrollBarVisibility == ScrollBarVisibility.Disabled;
+        double panelHeight = fill ? RankingScroll.ActualHeight / Math.Max(1,Panels.Count) : 0;
+        foreach (var panel in Panels.Values) panel.FitRankingRows(panelHeight);
+        double trendHeight = fill ? LiveDetailScroll.ActualHeight - LiveInspector.ActualHeight - OperatorTrend.Margin.Top : 0;
+        OperatorTrend.FitOperatorChart(trendHeight);
     }
     private void ArrangeHistory()
     {
-        bool stacked = ActualWidth < 850;
+        bool stacked = ContentRoot.ActualWidth < 850;
         HistoryListColumn.Width = new GridLength(historyHidden || stacked ? 0 : 285);
         HistoryListRow.Height = new GridLength(!historyHidden && stacked ? 198 : 0);
         Grid.SetRow(HistoryListBorder, stacked ? 0 : 1);
@@ -296,9 +351,9 @@ public partial class MainWindow : Window
     }
     private void ArrangeEnemyPage()
     {
-        bool stacked = ActualWidth < 920;
-        EnemyMetrics.Columns = ActualWidth < 730 ? 2 : 4;
-        EnemyPageScroll.VerticalScrollBarVisibility = stacked ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;
+        bool stacked = ContentRoot.ActualWidth < 920;
+        EnemyMetrics.Columns = ContentRoot.ActualWidth < 730 ? 2 : 4;
+        EnemyPageScroll.VerticalScrollBarVisibility = stacked ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Disabled;
         EnemyChartColumn.Width = stacked ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
         EnemyRosterRow.Height = stacked ? new GridLength(300) : new GridLength(1, GridUnitType.Star);
         EnemyChartRow.Height = new GridLength(stacked ? 312 : 0);
@@ -309,7 +364,7 @@ public partial class MainWindow : Window
     private void ApplyThemeArtwork()
     {
         bool lone = Theme.Key == "lone-trail";
-        bool narrow = ActualWidth is > 0 and < 1100;
+        bool narrow = ContentRoot.ActualWidth is > 0 and < 1100;
         BrandMark.Visibility = lone && !narrow ? Visibility.Visible : Visibility.Collapsed;
         CompactBrandMark.Visibility = lone && narrow ? Visibility.Visible : Visibility.Collapsed;
         BrandText.Visibility = lone ? Visibility.Collapsed : Visibility.Visible;
@@ -328,7 +383,7 @@ public partial class MainWindow : Window
     }
     private void UpdateEnemySummary()
     {
-        TargetSummary.Update(State, EnemyEntered.Text, EnemyTotalHp.Text, EnemyRemaining.Text, EnemyStatusText.Text, shownEnemy);
+        TargetSummary.Update(State.Text("battle_id"), shownEnemy, EnemyStatusText.Text);
     }
     private void ScheduleSave(){if(initialized && !applying && !quitting){if(IsVisible && WindowState==WindowState.Normal)normalGeometry=Native.Geometry(this);save.Stop();save.Start();}}
     internal async Task SavePlacement()
@@ -344,10 +399,54 @@ public partial class MainWindow : Window
         var hud=new HudWindow(id,ShowGui);hud.Panel.RateActionRequested=HandleRateAction;Huds.Add(id,hud);
         hud.PlacementChanged+=()=>{SyncHudControls(id);ScheduleSave();};
         hud.ClosedByUser+=()=>{Huds.Remove(id);SyncHudControls(id);if(!closingRequested && Huds.Count==0 && (!IsVisible || WindowState==WindowState.Minimized))ShowGui();ScheduleSave();};
+        if(ReadHudLayout(id) is { } profile) hud.ApplyHudLayout(profile);
+        hud.Update(Panels[id].View,Status.Text+" · "+EventStatus.Text);
         hud.Show();
-        if(placement.ValueKind==JsonValueKind.Object){Native.Restore(hud,placement);hud.SetOpacity(placement.Number("opacity",.9));hud.SetLocked(placement.Bool("locked"));}
-        hud.Update(Panels[id].View,Status.Text+" · "+EventStatus.Text);SyncHudControls(id);ScheduleSave();
+        if(placement.ValueKind==JsonValueKind.Object) hud.RestorePlacement(placement);
+        SyncHudControls(id);
+        ScheduleSave();
     }
+    private HudLayout? ReadHudLayout(string panelId)
+    {
+        var profile=State.Get("layout").Get("hud_styles").Get(panelId);
+        return profile.ValueKind==JsonValueKind.Object ? HudLayout.FromJson(profile) : null;
+    }
+
+    private void RefreshHudLayoutTargets(JsonElement[] views)
+    {
+        var choices=views.Select((view,index)=>new HudLayoutTargetItem(
+            view.Get("config").Text("panel_id"),$"{index+1}. {view.Text("title")}")).ToArray();
+        if(HudLayoutTarget.ItemsSource is HudLayoutTargetItem[] old && old.SequenceEqual(choices)) return;
+        string? selected=(HudLayoutTarget.SelectedItem as HudLayoutTargetItem)?.Id;
+        HudLayoutTarget.ItemsSource=choices;
+        HudLayoutTarget.SelectedItem=choices.FirstOrDefault(item=>item.Id==selected) ?? choices.FirstOrDefault();
+        EditHudLayoutButton.IsEnabled=choices.Length>0;
+    }
+
+    private void EditHudLayoutClick(object sender,RoutedEventArgs e)
+    {
+        if(HudLayoutTarget.SelectedItem is not HudLayoutTargetItem item ||
+           !Panels.TryGetValue(item.Id,out var panel)) return;
+        var initial=ReadHudLayout(item.Id) ?? HudLayout.Default;
+        if(Huds.TryGetValue(item.Id,out var hud) && hud.ActualWidth>0)
+            initial=initial with {Width=Math.Clamp(hud.ActualWidth,240,2000)};
+        var editor=new HudLayoutEditor(item.Label,panel.View,initial,style=>SaveHudLayout(item.Id,style)){Owner=this};
+        editor.ShowDialog();
+    }
+
+    internal async Task<bool> SaveHudLayout(string panelId,HudLayout? layout)
+    {
+        if(bridge==null || closingRequested || !Panels.ContainsKey(panelId)) return false;
+        await Command("hud_style",new(){["panel_id"]=panelId,["style"]=layout});
+        if(ReadHudLayout(panelId)!=layout || !Panels.ContainsKey(panelId)) return false;
+        if(Huds.TryGetValue(panelId,out var hud))
+        {
+            hud.ApplyHudLayout(layout ?? HudLayout.Default);
+            ScheduleSave();
+        }
+        return true;
+    }
+
     private void CloseHud(string id)
     {
         if(!Huds.Remove(id,out var hud))return;hud.SuppressClose=true;hud.Close();
@@ -377,8 +476,8 @@ public partial class MainWindow : Window
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         bool live=page=="live";
         SubpageHeader.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
-        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","settings"=>"连接设置",_=>"实时战况"};
-        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","settings"=>"MuMu 连接与事件观测",_=>"团队输出与干员详情"};
+        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","settings"=>"设置",_=>"实时战况"};
+        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","settings"=>"显示与 MuMu 连接",_=>"团队输出与干员详情"};
         SetNavState(page);
         AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         ArrangePanels();
@@ -399,17 +498,9 @@ public partial class MainWindow : Window
             button.BorderThickness=active?new Thickness(2):new Thickness(1);
         }
     }
-    private static string TotalText(JsonElement value)
-    {
-        if(value.ValueKind!=JsonValueKind.Number) return "—";
-        double number=value.GetDouble();
-        if(!double.IsFinite(number)) return "—";
-        if(number>=1_000_000) return (number/1_000_000).ToString("0.00",System.Globalization.CultureInfo.InvariantCulture)+"M";
-        return number.ToString("N0",System.Globalization.CultureInfo.InvariantCulture);
-    }
-    private static string RateText(JsonElement value) =>
+    private static string OverviewNumber(JsonElement value) =>
         value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
-            ? number.ToString("#,##0.#", System.Globalization.CultureInfo.InvariantCulture) : "—";
+            ? Math.Round(number, MidpointRounding.AwayFromZero).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "—";
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
     private void MinimizeWindow(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void ToggleMaximizeWindow(object sender, RoutedEventArgs e) =>
@@ -434,6 +525,11 @@ public partial class MainWindow : Window
     {
         if(applying || !initialized || Skin.SelectedItem is not ComboBoxItem item)return;
         await Command("theme",new(){["theme"]=item.Tag});
+    }
+    private async void NumberUnitsChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (applying || !initialized || NumberUnits.SelectedItem is not ComboBoxItem item) return;
+        await Command("number_units", new() { ["number_units"] = item.Tag });
     }
     private void UpdateHistory()
     {

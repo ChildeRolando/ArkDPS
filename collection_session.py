@@ -197,15 +197,12 @@ class CollectionSession:
             sample.update(event_status=self.event_status, event_error=self.event_error)
         else:
             self.event_status, self.event_error = status, sample['event_error']
-        if (self.runtime.sessions.state == 'finalizing' and
-                sample['event_status'] == 'recording'):
-            sample['event_status'] = self.event_status = 'finished'
         self._attach_enemy(sample)
         self.audit('published', sample)
         return sample
 
     def _attach_enemy(self, sample):
-        """Project committed enemy events alongside the independent damage total."""
+        """Project enemy lifecycle and HP damage at the same committed watermark."""
         session = sample.get('session')
         if session is not None and session != self._enemy_session:
             self._enemy_session = session
@@ -236,7 +233,7 @@ class CollectionSession:
             return
         now = time.monotonic()
         poll_due = now - self._enemy_last_poll >= 1.0
-        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state')
+        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state', 'enemy_damage')
                       if key in stats}
         state = event_data.get('enemy_state')
         if poll_due or (state is not None and state['complete']) or event_data != self._enemy_event_data:

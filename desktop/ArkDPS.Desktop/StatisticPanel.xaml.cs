@@ -56,7 +56,6 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Total => Entry.Text("display_value");
     public string Rate => Entry.Text("rate_text");
     public string Share => Entry.Text("share_display");
-    public double SharePercent => Math.Clamp(Entry.Number("share"),0,1)*100;
     internal SharePresentation ShareInfo { get; set; }=new("占比","",false);
     public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
     public string BarTooltip
@@ -203,10 +202,129 @@ public partial class StatisticPanel : UserControl
     private JsonElement view;
     private bool updating, hold;
     private bool referenceStyle;
+    private bool? loneTrailHudSkin;
+    private HudLayout? hudLayout;
+    private double hudViewportLimit=double.PositiveInfinity;
+    private const double ReferenceRowsDefaultHeight=185;
+    public const double HudRowHeight=HudLayout.DefaultRowHeight;
+    internal const int HudVisibleRows=5;
     internal bool IsHistory, IsHud;
     public string PanelId => view.Get("config").Text("panel_id");
     internal JsonElement View => view;
     public StatisticPanel() { InitializeComponent(); Rows.ItemsSource=items; }
+
+    internal void ConfigureHud(Action? close=null)
+    {
+        if(IsHud) return;
+        SetReferenceStyle(false);
+        IsHud=true;
+        CloseRequested=close;
+        MinWidth=0;
+        PanelFrame.Margin=new Thickness(0);
+        PanelFrame.BorderThickness=new Thickness(0);
+        LegendRow.Visibility=Visibility.Collapsed;
+        TitleRegion.ClipToBounds=true;
+        TitleText.Orientation=Orientation.Horizontal;
+        Heading.SetResourceReference(TextBlock.FontFamilyProperty,"InterfaceFont");
+        PanelKind.SetResourceReference(TextBlock.FontFamilyProperty,"InterfaceFont");
+        PanelKind.VerticalAlignment=VerticalAlignment.Center;
+        HudClose.MinWidth=44;
+        HudClose.MinHeight=20;
+        HudClose.Margin=new Thickness(0);
+        TitleAccent.Height=23;
+        LoneTrailHudMark.Height=23;
+        LoneTrailHudMark.Width=14;
+        Plot.MinHeight=0;
+        Rows.Padding=new Thickness(0);
+        Rows.ItemContainerStyle=(Style)FindResource("HudRankedRow");
+        Rows.Template=(ControlTemplate)FindResource("HudRowsTemplate");
+        Empty.MaxWidth=440;
+        Empty.Margin=new Thickness(0);
+        ApplyHudLayout(HudLayout.Default);
+        ApplyHudSkin();
+    }
+
+    internal void ApplyHudLayout(HudLayout layout)
+    {
+        if(hudLayout==layout) return;
+        hudLayout=layout;
+        TitleRegion.Height=layout.TitleHeight;
+        TitleBar.Margin=new Thickness(layout.Padding+6,2,layout.Padding,2);
+        Heading.FontSize=layout.TitleFont;
+        PanelKind.FontSize=Math.Max(6,layout.NumberFont-1);
+        PanelKind.Margin=new Thickness(layout.ColumnGap+14,0,0,0);
+        HudClose.MinHeight=Math.Max(16,layout.TitleHeight-4);
+        Empty.FontSize=layout.NumberFont;
+        Set("HudProfileRowHeight",layout.RowHeight);
+        Set("HudProfileRowGap",new Thickness(0,0,0,layout.RowGap));
+        Set("HudProfileRowPadding",new Thickness(0,0,2*layout.Padding,0));
+        Set("HudProfileNameGap",new Thickness(layout.ColumnGap,0,layout.ColumnGap,0));
+        Set("HudProfileBarGap",new Thickness(layout.ColumnGap/2,0,layout.ColumnGap*1.5,0));
+        Set("HudProfileValueGap",new Thickness(layout.ColumnGap,0,0,0));
+        Set("HudProfileNameFont",layout.NameFont);
+        Set("HudProfileNumberFont",layout.NumberFont);
+        Set("HudProfilePortraitSize",layout.PortraitSize);
+        SetColumn("HudProfileRankWidth",layout.RankWidth);
+        SetColumn("HudProfilePortraitWidth",layout.PortraitWidth);
+        SetColumn("HudProfileNameWidth",layout.NameWidth);
+        SetColumn("HudProfileBarWidth",layout.BarWidth);
+        SetColumn("HudProfileTotalWidth",layout.TotalWidth);
+        SetColumn("HudProfileRateWidth",layout.RateWidth);
+        SetColumn("HudProfileShareWidth",layout.ShareWidth);
+        ResizeHudRows(items.Count);
+
+        void SetColumn(string key,double width) =>
+            Set(key,width==0 ? new GridLength(0) : new GridLength(width,GridUnitType.Star));
+        void Set(string key,object value)
+        {
+            if(!Equals(Resources[key],value)) Resources[key]=value;
+        }
+    }
+
+    internal void LimitHudViewport(double limit)
+    {
+        limit=Math.Max(0,limit);
+        if(hudViewportLimit==limit) return;
+        hudViewportLimit=limit;
+        ResizeHudRows(items.Count);
+    }
+
+    private void ResizeHudRows(int count)
+    {
+        var layout=hudLayout??HudLayout.Default;
+        Rows.MinHeight=Math.Min(layout.RowPitch,hudViewportLimit);
+        Rows.MaxHeight=Math.Min(layout.RowPitch*HudVisibleRows,hudViewportLimit);
+        Rows.Height=layout.RowPitch*Math.Clamp(count,1,HudVisibleRows);
+    }
+
+    private void ApplyHudSkin()
+    {
+        bool loneTrail=Theme.Key=="lone-trail";
+        if(loneTrailHudSkin==loneTrail) return;
+        loneTrailHudSkin=loneTrail;
+
+        PanelFrame.SetResourceReference(Border.BackgroundProperty,loneTrail ? "Console" : "Card");
+        TitleAccent.Visibility=loneTrail ? Visibility.Collapsed : Visibility.Visible;
+        LoneTrailHudMark.Visibility=loneTrail ? Visibility.Visible : Visibility.Collapsed;
+        LoneTrailHudBackdrop.Visibility=LoneTrailHudChevrons.Visibility=LoneTrailHudMark.Visibility;
+        TitleRegion.BorderThickness=loneTrail ? new Thickness(0,0,0,1) : new Thickness(0);
+        if(loneTrail)
+        {
+            PanelFrame.CornerRadius=new CornerRadius(0);
+            TitleRegion.SetResourceReference(Border.BackgroundProperty,"ConsoleCard");
+            TitleRegion.SetResourceReference(Border.BorderBrushProperty,"ConsoleLine");
+            HudClose.SetResourceReference(StyleProperty,"Quiet");
+            HudClose.BorderBrush=Brushes.Transparent;
+        }
+        else
+        {
+            PanelFrame.SetResourceReference(Border.CornerRadiusProperty,"CardRadius");
+            TitleRegion.Background=Brushes.Transparent;
+            TitleRegion.ClearValue(Border.BorderBrushProperty);
+            HudClose.ClearValue(StyleProperty);
+            HudClose.SetResourceReference(Control.BorderBrushProperty,"Line");
+        }
+    }
 
     internal void SetReferenceStyle(bool enable)
     {
@@ -217,26 +335,25 @@ public partial class StatisticPanel : UserControl
         PanelFrame.SetResourceReference(Border.BackgroundProperty,enable ? "Console" : "Card");
         PanelFrame.Margin=enable ? new Thickness(0) : new Thickness(0,0,12,14);
         PanelTitle.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
-        TitleBar.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
+        TitleRegion.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
         TitleBar.Margin=enable ? new Thickness(5,3,5,2) : new Thickness(14,10,12,8);
         Selectors.Margin=enable ? new Thickness(5,0,5,4) : new Thickness(14,0,14,8);
         RateNoticePanel.Margin=enable ? new Thickness(5,0,5,3) : new Thickness(14,0,14,8);
         RateNoticePanel.Padding=enable ? new Thickness(5,2,5,2) : new Thickness(10,7,10,7);
         HudControls.Margin=enable ? new Thickness(5,2,5,4) : new Thickness(14,0,14,10);
-        Coverage.Margin=enable ? new Thickness(5,3,5,4) : new Thickness(14,8,14,9);
-        Coverage.TextWrapping=enable ? TextWrapping.NoWrap : TextWrapping.Wrap;
-        Coverage.TextTrimming=enable ? TextTrimming.CharacterEllipsis : TextTrimming.None;
+        Coverage.Margin=enable ? new Thickness(5,2,5,3) : new Thickness(14,8,14,9);
+        Coverage.FontSize=enable ? 12 : 10;
         Coverage.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Empty.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Plot.MinHeight=enable ? 0 : 120;
-        Rows.MinHeight=enable ? 56 : 80;
-        Rows.MaxHeight=enable ? 168 : 520;
+        Rows.MinHeight=enable ? 74 : 80;
+        Rows.MaxHeight=enable ? ReferenceRowsDefaultHeight : 520;
         Rows.ItemContainerStyle=(Style)FindResource(enable ? "ReferenceRankedRow" : "RankedRow");
         LegendRow.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
         Grid.SetRow(Plot,enable ? 0 : 4);
         Grid.SetRow(Coverage,enable ? 1 : 5);
         Grid.SetRow(Selectors,enable ? 2 : 1);
-        Grid.SetRow(TitleBar,enable ? 3 : 0);
+        Grid.SetRow(TitleRegion,enable ? 3 : 0);
         Grid.SetRow(RateNoticePanel,enable ? 4 : 2);
         Grid.SetRow(LegendRow,enable ? 5 : 3);
         var panelGrid=(Grid)PanelFrame.Child;
@@ -266,20 +383,42 @@ public partial class StatisticPanel : UserControl
         {
             if(enable)
             {
-                button.MinHeight=22;
-                button.FontSize=11;
-                button.Padding=new Thickness(7,1,7,1);
+                button.SetResourceReference(StyleProperty,"ReferencePanelAction");
+                button.ClearValue(FontSizeProperty);
+                button.ClearValue(PaddingProperty);
+                button.ClearValue(BackgroundProperty);
             }
             else
             {
-                button.ClearValue(MinHeightProperty);
-                if(button==OpenHudButton||button==DuplicateButton||button==DeleteButton) button.FontSize=13;
-                else button.ClearValue(FontSizeProperty);
+                button.ClearValue(StyleProperty);
+                if(button==OpenHudButton||button==DuplicateButton||button==DeleteButton)
+                {
+                    button.FontSize=13;
+                    button.SetResourceReference(BackgroundProperty,"Inset");
+                }
+                if(button==RateAction) button.SetResourceReference(BackgroundProperty,"Card");
                 button.Padding=button==RateAction ? new Thickness(9,4,9,4)
                     : button==OpenHudButton||button==LockButton ? new Thickness(10,5,10,5) : new Thickness(9,5,9,5);
             }
         }
         if(view.ValueKind==JsonValueKind.Object) Update(view,DeleteButton.IsEnabled);
+    }
+
+    private void ReferenceScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if(!referenceStyle || e.OriginalSource is not ScrollViewer viewer) return;
+        // Keep the fixed header and footer on the same content width as the scrolling rows.
+        var gutter = new Thickness(0,0,Math.Max(0,viewer.ActualWidth-viewer.ViewportWidth),0);
+        ReferenceTableHeader.Margin=gutter;
+        ReferenceFooter.Margin=gutter;
+    }
+
+    internal void FitRankingRows(double availableHeight)
+    {
+        if (!referenceStyle) return;
+        double chrome = Math.Max(0, ActualHeight - Rows.ActualHeight);
+        double rowLimit = Math.Clamp(availableHeight - chrome, ReferenceRowsDefaultHeight, 520);
+        if (Math.Abs(Rows.MaxHeight - rowLimit) >= 1) Rows.MaxHeight = rowLimit;
     }
 
     private static void StyleSelector(ComboBox combo, StackPanel field, TextBlock label,
@@ -310,6 +449,7 @@ public partial class StatisticPanel : UserControl
         var title=value.Text("title");
         if(IsHud)
         {
+            ApplyHudSkin();
             title=config.Text("category") switch
             {
                 "healing"=>"总治疗",
@@ -323,7 +463,7 @@ public partial class StatisticPanel : UserControl
         PanelKind.Visibility=referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
         PanelKind.ToolTip=IsHud ? share.Description : null;
         Heading.ToolTip=IsHud ? share.Description : null;
-        HudClose.Visibility=IsHud ? Visibility.Visible : Visibility.Collapsed;
+        HudClose.Visibility=IsHud && CloseRequested!=null ? Visibility.Visible : Visibility.Collapsed;
         Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : referenceStyle ? "ReferenceRow" : "FullRow");
         TableHeader.Visibility=IsHud||referenceStyle ? Visibility.Collapsed : Visibility.Visible;
         ReferenceTableHeader.Visibility=referenceStyle ? Visibility.Visible : Visibility.Collapsed;
@@ -333,7 +473,6 @@ public partial class StatisticPanel : UserControl
         Ranking.IsEnabled=category!="shield";
         ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
         ((ComboBoxItem)Ranking.Items[1]).Content=category=="shield" ? "近期" : "DPS";
-        Rate.ToolTip=config.Text("rate_basis")=="full_cycle" ? "全周期 DPS = 总伤 / 在场时间（自本次观测起）" : null;
         Rate.IsEnabled=config.Text("category")!="shield";
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
@@ -341,7 +480,8 @@ public partial class StatisticPanel : UserControl
         // The engagement column depends on event observation. Never leave it as a
         // silently blank column: show the reason and a retry/settings entry while
         // still allowing a switch back to the five-second window.
-        var isEngagement=config.Text("category")!="shield" && config.Text("rate_basis")=="engagement";
+        var rateBasis=config.Text("rate_basis");
+        var isEngagement=category!="shield" && rateBasis=="engagement";
         var reason=value.Text("rate_reason");
         var action=isEngagement ? value.Text("rate_action") : "";
         RateNotice.Text=reason;
@@ -349,11 +489,13 @@ public partial class StatisticPanel : UserControl
         RateNoticePanel.Visibility=RateNotice.Visibility;
         RateAction.Content=value.Text("rate_action_label");
         RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        RateHeading.Text=category switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
         Rate.ToolTip=isEngagement && reason.Length>0 ? reason
-            : referenceStyle ? "选择 DPS 算法" : null;
-        RateHeading.Text=config.Text("category") switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
+            : rateBasis=="full_cycle" ? "全周期速率 = 累计量 / 在场时间（自本次观测起）"
+            : referenceStyle && category!="shield" ? "选择"+RateHeading.Text+"算法" : null;
         ReferenceRateHeading.Text=RateHeading.Text;
-        ReferenceTotalHeading.Text=category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
+        ReferenceTotalHeading.Text=config.Text("ranking")=="recent" ? "近期"
+            : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
         Actions.Visibility=IsHistory||IsHud ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         DeleteButton.IsEnabled=canDelete;
@@ -362,24 +504,33 @@ public partial class StatisticPanel : UserControl
         OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
             ? Visibility.Visible : Visibility.Collapsed;
-        ShareHeading.ToolTip=share.Description;
-        if(referenceStyle)
-        {
-            Coverage.ToolTip=share.Description;
-            var total=value.Get("total");
-            var totalLabel=value.Bool("share_known") ? "∑  全队合计   " : "∑  榜单合计   ";
-            Coverage.Text=total.ValueKind==JsonValueKind.Number ? totalLabel+Json.UiText(total.GetRawText()) : "";
-            if(!value.Bool("share_known"))
-                Coverage.Text=Coverage.Text.Length>0 ? share.Label+" · "+Coverage.Text : share.Description;
-        }
-        else
-        {
-            Coverage.ToolTip=null;
-            Coverage.Text=share.Description+(share.Available ? " · 点击干员固定明细" : "");
-        }
-        if(IsHud){Plot.MinHeight=56;Rows.MinHeight=30;Rows.MaxHeight=double.PositiveInfinity;}
-        Coverage.Visibility=IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
         var incoming=value.Get("entries").Items().ToArray();
+        if(IsHud) ResizeHudRows(incoming.Length);
+        ShareHeading.ToolTip=share.Description;
+        ReferenceShareHeading.ToolTip=share.Description;
+        var hasFooterTotal=value.Get("footer_total").ValueKind==JsonValueKind.Number;
+        var hasFooterRate=value.Get("footer_rate").ValueKind==JsonValueKind.Number;
+        var showFooter=referenceStyle && (incoming.Length>0 || hasFooterTotal || hasFooterRate);
+        ReferenceFooter.Visibility=showFooter ? Visibility.Visible : Visibility.Collapsed;
+        if(showFooter)
+        {
+            var totalComplete=value.Bool("footer_total_complete");
+            var rateComplete=value.Bool("footer_rate_complete");
+            ReferenceFooterLabel.Text=totalComplete && (!hasFooterRate || rateComplete) ? "全队合计" : "已知合计";
+            ReferenceFooterTotal.Text=value.Text("footer_total_display");
+            ReferenceFooterTotal.ToolTip=hasFooterTotal
+                ? (totalComplete ? "全队" : "已知干员")+ReferenceTotalHeading.Text+" "+value.Ui("footer_total")
+                : null;
+            ReferenceFooterRate.Text=value.Text("footer_rate_display");
+            ReferenceFooterRate.ToolTip=hasFooterRate
+                ? (rateComplete ? "全队" : "已知")+"干员"+value.Text("rate_label")+"之和 "+value.Ui("footer_rate")+"/s"
+                : rateBasis=="engagement" && reason.Length>0 ? reason : null;
+        }
+        Coverage.ToolTip=referenceStyle ? share.Description : null;
+        Coverage.Text=referenceStyle
+            ? showFooter && !value.Bool("share_known") ? share.Label : ""
+            : share.Description+(share.Available ? " · 点击干员固定明细" : "");
+        Coverage.Visibility=IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
         foreach(var old in items.Where(x=>!ids.Contains(x.Id)).ToArray()) items.Remove(old);
         var map=items.ToDictionary(x=>x.Id);

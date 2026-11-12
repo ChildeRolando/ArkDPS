@@ -1,314 +1,424 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace ArkDPS.Desktop;
 
 public sealed class LiveTargetSummary : Border
 {
-    private static readonly Brush Metal = Theme.Brush("#E2E6E9");
-    private static readonly Brush DarkInk = Theme.Brush("#15212C");
-    private static readonly Brush Etching = Theme.Brush("#A9B3BC");
-    private readonly List<TextBlock> shellLabels = new();
-    private readonly List<Border> dividers = new();
-    private readonly TextBlock name = new();
-    private readonly TextBlock identity = new();
-    private readonly TextBlock badge = new();
-    private readonly Image portrait = new();
-    private readonly TextBlock health;
-    private readonly TextBlock defense;
-    private readonly TextBlock resistance;
-    private readonly TextBlock stage;
-    private readonly TextBlock duration;
-    private readonly TextBlock enteredCount;
-    private readonly TextBlock enteredHp;
-    private readonly TextBlock remainingHp;
-    private readonly TextBlock damage;
-    private readonly TextBlock teamDps;
-    private readonly TextBlock healing;
-    private readonly TextBlock shield;
-    private readonly OrbitDiagram diagram = new();
-    private string lastSkin = "";
+    private const int CardCount = 3;
+    private readonly TargetCard[] cards;
+    private readonly ScrollViewer cardScroll;
+    private readonly Dictionary<string, Target> departedByType = new(StringComparer.Ordinal);
+    private Target[] queue = Array.Empty<Target>();
     private string battle = "";
-    private string targetUid = "";
-    private string targetRoster = "";
-
-    internal event Action? OpenEnemies;
+    private string status = "";
 
     public LiveTargetSummary()
     {
-        SetResourceReference(BorderBrushProperty, "Edge");
-        BorderThickness = new Thickness(1);
+        SetResourceReference(BackgroundProperty, "Card");
         Padding = new Thickness(6);
         SnapsToDevicePixels = true;
-        var content = new Grid();
-        for (int index = 0; index < 4; index++)
-            content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        Child = content;
-
-        var open = new Button { Content = "敌情 ›", Padding = new Thickness(6, 1, 6, 1),
-            MinHeight = 0, MinWidth = 0, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-        AutomationProperties.SetName(open, "打开敌情");
-        open.Click += (_, _) => OpenEnemies?.Invoke();
-        var targetCommand = new DockPanel { LastChildFill = false };
-        DockPanel.SetDock(open, Dock.Right);
-        targetCommand.Children.Add(open);
-        Place(content, targetCommand, 0);
-
-        var target = new Grid();
-        target.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(98) });
-        target.ColumnDefinitions.Add(new ColumnDefinition());
-        var targetSurface = new Border { Child = target, Padding = new Thickness(7),
-            Margin = new Thickness(0, 3, 0, 4), BorderThickness = new Thickness(1) };
-        targetSurface.SetResourceReference(BackgroundProperty, "Console");
-        targetSurface.SetResourceReference(BorderBrushProperty, "ConsoleLine");
-        Place(content, targetSurface, 1);
-
-        var art = new Grid();
-        portrait.Stretch = Stretch.Uniform;
-        portrait.Margin = new Thickness(4);
-        badge.FontSize = 23;
-        badge.FontWeight = FontWeights.SemiBold;
-        badge.HorizontalAlignment = HorizontalAlignment.Center;
-        badge.VerticalAlignment = VerticalAlignment.Center;
-        badge.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleMuted");
-        art.Children.Add(badge);
-        art.Children.Add(portrait);
-        var portraitFrame = new Border { Child = art, Height = 91, VerticalAlignment = VerticalAlignment.Center,
-            BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 7, 0) };
-        portraitFrame.SetResourceReference(BackgroundProperty, "ConsoleCard");
-        portraitFrame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
-        target.Children.Add(portraitFrame);
-
-        var stats = new StackPanel();
-        Grid.SetColumn(stats, 1);
-        target.Children.Add(stats);
-        name.FontSize = 13;
-        name.FontWeight = FontWeights.Bold;
-        name.TextTrimming = TextTrimming.CharacterEllipsis;
-        name.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleInk");
-        stats.Children.Add(name);
-        identity.FontSize = 10;
-        identity.FontFamily = new FontFamily("Cascadia Mono, Consolas");
-        identity.TextTrimming = TextTrimming.CharacterEllipsis;
-        identity.Margin = new Thickness(0, 0, 0, 3);
-        identity.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleMuted");
-        stats.Children.Add(identity);
-        health = Reading(stats, "HP", dark: true);
-        defense = Reading(stats, "DEF", dark: true);
-        resistance = Reading(stats, "RES", dark: true);
-
-        Place(content, Header("作战信息", "ANALYSIS SESSION"), 2);
-        var mission = new StackPanel { Margin = new Thickness(3, 2, 3, 0) };
-        Place(content, mission, 3);
-        stage = Reading(mission, "关卡");
-        duration = Reading(mission, "作战时长");
-        enteredCount = Reading(mission, "已入场敌人");
-        enteredHp = Reading(mission, "已入场总 HP");
-        remainingHp = Reading(mission, "敌方剩余 HP");
-        damage = Reading(mission, "总伤");
-        teamDps = Reading(mission, "当前团队 DPS");
-        healing = Reading(mission, "总治疗");
-        shield = Reading(mission, "有效护盾");
-        diagram.MinHeight = 74;
-        diagram.Margin = new Thickness(2, 4, 2, 0);
-        Place(content, diagram, 4);
-        Update(default, "—", "—", "—", "");
+        var stack = new StackPanel();
+        cardScroll = new ScrollViewer
+        {
+            Content = stack, MaxHeight = 540, CanContentScroll = true, Focusable = true,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        AutomationProperties.SetName(cardScroll, "敌方卡片");
+        cardScroll.SizeChanged += (_, args) =>
+        {
+            if (args.NewSize.Height < args.PreviousSize.Height || args.NewSize.Width < args.PreviousSize.Width)
+                cardScroll.ScrollToTop();
+        };
+        Child = cardScroll;
+        cards = Enumerable.Range(1, CardCount).Select(slot => new TargetCard(slot, Page, LockChanged)).ToArray();
+        foreach (var card in cards) stack.Children.Add(card);
+        Update("", default, "");
     }
 
-    internal void Update(JsonElement state, string entered, string total, string remaining, string status,
-        JsonElement displayedEnemy = default)
+    internal void Update(string battleId, JsonElement enemy, string enemyStatus)
     {
-        ApplyPalette();
-        var id = state.Text("battle_id");
-        if (battle != id)
+        status = enemyStatus;
+        bool newBattle = battle != battleId;
+        if (newBattle)
         {
-            battle = id;
-            targetUid = "";
-            targetRoster = "";
+            battle = battleId;
+            departedByType.Clear();
+            foreach (var card in cards) card.Reset();
         }
 
-        var enemy = displayedEnemy.ValueKind == JsonValueKind.Object ? displayedEnemy : state.Get("enemy");
-        var rows = enemy.Get("rows").Items().ToArray();
-        var row = rows.FirstOrDefault(MatchesTarget);
-        if (row.ValueKind != JsonValueKind.Object || row.Text("lifecycle") == "departed")
+        var observed = enemy.Get("rows").Items().Select(Target.Read).OfType<Target>()
+            .DistinctBy(target => target.Key).ToDictionary(target => target.Key, StringComparer.Ordinal);
+        foreach (var target in observed.Values.Where(target => target.Departed))
         {
-            var active = rows.Where(candidate => candidate.Bool("alive")
-                || candidate.Text("lifecycle") is "active" or "rebirthing")
-                .OrderByDescending(candidate => candidate.Number("max_hp", 0)).FirstOrDefault();
-            if (active.ValueKind == JsonValueKind.Object) row = active;
-            else if (row.ValueKind != JsonValueKind.Object) row = rows.FirstOrDefault();
-        }
-
-        if (row.ValueKind == JsonValueKind.Object)
-        {
-            targetUid = EnemyItem.InstanceUid(row);
-            targetRoster = EnemyItem.RosterIdentity(row);
-            var target = new EnemyItem(row, targetUid, targetRoster);
-            Show(name, target.Name);
-            var code = row.Text("code");
-            Show(identity, code.Length == 0 ? target.Eid : code + " · " + target.Eid);
-            Show(badge, target.Portrait is null ? target.Badge : "");
-            if (portrait.Source != target.Portrait) portrait.Source = target.Portrait;
-            portrait.ToolTip = target.Tooltip;
-            Show(health, target.HpText);
-            Show(defense, Json.UiInt(row, "def"));
-            Show(resistance, Json.UiInt(row, "res"));
-        }
-        else
-        {
-            Show(name, "等待敌方数据");
-            Show(identity, status.Length > 0 ? status : "—");
-            Show(badge, "—");
-            portrait.Source = null;
-            portrait.ToolTip = null;
-            Show(health, "—");
-            Show(defense, "—");
-            Show(resistance, "—");
-        }
-
-        Show(stage, state.Text("stage") is { Length: > 0 } label ? label : "—");
-        double seconds = state.Number("game_time", double.NaN);
-        Show(duration, double.IsFinite(seconds) && seconds >= 0
-            ? $"{Math.Floor(seconds / 60):00}:{seconds % 60:00.0}" : "—");
-        Show(enteredCount, entered);
-        Show(enteredHp, total);
-        Show(remainingHp, remaining);
-        var analysis = state.Get("live_analysis");
-        Show(damage, Json.UiInt(analysis, "team_total_damage"));
-        Show(teamDps, Json.Ui(analysis, "team_recent_dps"));
-        var totals = state.Get("totals");
-        Show(healing, Json.UiInt(totals, "healing"));
-        Show(shield, Json.UiInt(totals, "shield_absorbed"));
-    }
-
-    private bool MatchesTarget(JsonElement row)
-    {
-        string uid = EnemyItem.InstanceUid(row);
-        return targetUid.Length > 0 && uid.Length > 0
-            ? uid == targetUid
-            : targetRoster.Length > 0 && EnemyItem.RosterIdentity(row) == targetRoster;
-    }
-
-    private void ApplyPalette()
-    {
-        if (lastSkin == Theme.Key) return;
-        lastSkin = Theme.Key;
-        bool metal = lastSkin == "lone-trail";
-        if (metal) Background = Metal;
-        else SetResourceReference(BackgroundProperty, "Card");
-        foreach (var label in shellLabels)
-            if (metal) label.Foreground = DarkInk;
-            else label.SetResourceReference(TextBlock.ForegroundProperty, "Ink");
-        foreach (var divider in dividers)
-            if (metal) divider.BorderBrush = Etching;
-            else divider.SetResourceReference(BorderBrushProperty, "Line");
-        diagram.Visibility = metal ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private Border Header(string chinese, string english, Button? action = null)
-    {
-        var dock = new DockPanel();
-        if (action is not null)
-        {
-            DockPanel.SetDock(action, Dock.Right);
-            dock.Children.Add(action);
-        }
-        var marker = new Border { Width = 9, Height = 13, Margin = new Thickness(2, 0, 7, 0),
-            LayoutTransform = new SkewTransform(-20, 0) };
-        marker.SetResourceReference(BackgroundProperty, "Accent");
-        dock.Children.Add(marker);
-        var title = new TextBlock { Text = $"{chinese} / {english}", FontSize = 12,
-            FontWeight = FontWeights.Bold, TextTrimming = TextTrimming.CharacterEllipsis,
-            VerticalAlignment = VerticalAlignment.Center, MinHeight = 19 };
-        shellLabels.Add(title);
-        dock.Children.Add(title);
-        var header = new Border { Child = dock, Padding = new Thickness(2, 2, 2, 1),
-            BorderThickness = new Thickness(0, 0, 0, 1) };
-        dividers.Add(header);
-        return header;
-    }
-
-    private TextBlock Reading(Panel host, string caption, bool dark = false)
-    {
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition());
-        var label = new TextBlock { Text = caption, FontSize = 11, Margin = new Thickness(0, 0, 5, 0) };
-        var value = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold,
-            TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
-        if (dark)
-        {
-            label.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleMuted");
-            value.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleInk");
-        }
-        else
-        {
-            shellLabels.Add(label);
-            shellLabels.Add(value);
-        }
-        grid.Children.Add(label);
-        Grid.SetColumn(value, 1);
-        grid.Children.Add(value);
-        var row = new Border { Child = grid, BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(0, 1, 0, 1) };
-        if (dark) row.SetResourceReference(BorderBrushProperty, "ConsoleLine");
-        else dividers.Add(row);
-        host.Children.Add(row);
-        return value;
-    }
-
-    private static void Show(TextBlock element, string value)
-    {
-        if (element.Text == value) return;
-        element.Text = value;
-        element.ToolTip = value;
-    }
-
-    private static void Place(Grid grid, UIElement element, int row)
-    {
-        Grid.SetRow(element, row);
-        grid.Children.Add(element);
-    }
-
-    private sealed class OrbitDiagram : FrameworkElement
-    {
-        private static readonly Pen Guide = new(Theme.Brush("#7D8995"), 0.75);
-        private static readonly Pen Orbit = new(Theme.Brush("#607181"), 1);
-        private static readonly Brush Planet = Theme.Brush("#AAB5C0");
-        private static readonly Brush Accent = Theme.Brush("#FF982F");
-
-        protected override void OnRender(DrawingContext dc)
-        {
-            base.OnRender(dc);
-            if (ActualWidth <= 20 || ActualHeight <= 20) return;
-            double width = ActualWidth;
-            double height = Math.Min(ActualHeight, width * .68);
-            var center = new Point(width * .48, height * .5);
-            double radius = height * .16;
-            for (int x = 1; x <= 5; x++)
-            for (int y = 1; y <= 3; y++)
+            if (!departedByType.TryGetValue(target.Eid, out var previous) ||
+                target.EndFrame >= previous.EndFrame)
             {
-                var point = new Point(width * x / 6, height * y / 4);
-                dc.DrawLine(Guide, new Point(point.X - 3, point.Y), new Point(point.X + 3, point.Y));
-                dc.DrawLine(Guide, new Point(point.X, point.Y - 3), new Point(point.X, point.Y + 3));
+                bool sameInstance = previous is not null && previous.Key == target.Key;
+                var row = sameInstance ? KeepReadings(target.Row, previous!.Row) : target.Row;
+                if (!sameInstance || !JsonElement.DeepEquals(row, previous!.Row))
+                    departedByType[target.Eid] = target with { Row = row.Clone() };
             }
-            dc.DrawEllipse(Planet, Guide, center, radius, radius);
-            foreach (double angle in new[] { -24d, 13d, -8d })
+        }
+
+        var live = observed.Values.Where(target => target.Live)
+            .OrderByDescending(target => target.Row.Number("hp", double.NegativeInfinity))
+            .ThenBy(target => target.Key, StringComparer.Ordinal).ToArray();
+        var representatives = live.DistinctBy(target => target.Eid).ToArray();
+        var representativeKeys = representatives.Select(target => target.Key).ToHashSet(StringComparer.Ordinal);
+        queue = representatives.Concat(live.Where(target => !representativeKeys.Contains(target.Key)))
+            .Concat(departedByType.Values.OrderByDescending(target => target.EndFrame)
+                .ThenBy(target => target.Eid, StringComparer.Ordinal))
+            .DistinctBy(target => target.Key).ToArray();
+        RefreshSelections(observed);
+        if (newBattle) cardScroll.ScrollToTop();
+    }
+
+    private void RefreshSelections(IReadOnlyDictionary<string, Target>? observed = null)
+    {
+        var assigned = new HashSet<string>(StringComparer.Ordinal);
+        var types = new HashSet<string>(StringComparer.Ordinal);
+        var slots = new Target?[cards.Length];
+        var byKey = queue.ToDictionary(target => target.Key, StringComparer.Ordinal);
+
+        void Assign(int index, Target target)
+        {
+            slots[index] = target;
+            assigned.Add(target.Key);
+            types.Add(target.Eid);
+        }
+
+        for (int index = 0; index < cards.Length; index++)
+        {
+            var card = cards[index];
+            if (!card.Pinned || card.Current is not { } selected) continue;
+            if (observed is not null)
             {
-                dc.PushTransform(new RotateTransform(angle, center.X, center.Y));
-                dc.DrawEllipse(null, Orbit, center, width * .43, height * (.20 + Math.Abs(angle) / 125));
-                dc.Pop();
+                if (observed.TryGetValue(selected.Key, out var update))
+                {
+                    if (!selected.Departed || update.Departed)
+                        selected = update with { Row = KeepReadings(update.Row, selected.Row) };
+                    card.LastObservation = false;
+                }
+                else card.LastObservation = !selected.Departed;
             }
-            dc.DrawRectangle(Accent, null, new Rect(width * .75, height * .18, 5, 5));
-            dc.DrawRectangle(Accent, null, new Rect(width * .26, height * .75, 4, 4));
+            Assign(index, selected);
+        }
+        for (int index = 0; index < cards.Length; index++)
+        {
+            var card = cards[index];
+            if (slots[index] is not null || !card.Manual || card.Current is not { } selected) continue;
+            if (byKey.TryGetValue(selected.Key, out var update) && !assigned.Contains(update.Key)
+                && (!selected.Live || update.Live))
+                Assign(index, update);
+        }
+        for (int index = 0; index < cards.Length; index++)
+        {
+            var card = cards[index];
+            if (slots[index] is not null || card.Current is not { } selected) continue;
+            if (byKey.TryGetValue(selected.Key, out var update) && update.Live
+                && !assigned.Contains(update.Key) && !types.Contains(update.Eid))
+                Assign(index, update);
+        }
+        for (int index = 0; index < cards.Length; index++)
+        {
+            var card = cards[index];
+            if (slots[index] is null)
+            {
+                var remaining = queue.Where(target => !assigned.Contains(target.Key));
+                var choice = remaining.FirstOrDefault(target => !types.Contains(target.Eid))
+                    ?? remaining.FirstOrDefault();
+                if (choice is not null) Assign(index, choice);
+            }
+            if (!card.Pinned) card.LastObservation = false;
+            if (slots[index]?.Key != card.Current?.Key) card.Manual = false;
+            card.Current = slots[index];
+        }
+        RenderCards();
+    }
+
+    private void LockChanged(TargetCard card)
+    {
+        if (card.Current is null) return;
+        if (card.Pinned) RenderCards();
+        else RefreshSelections();
+    }
+
+    private Target? Adjacent(TargetCard card, int direction)
+    {
+        if (card.Pinned || card.Current is not { } current) return null;
+        int index = Array.FindIndex(queue, target => target.Key == current.Key);
+        if (index < 0) return null;
+        for (int next = index + direction; next >= 0 && next < queue.Length; next += direction)
+        {
+            var target = queue[next];
+            if (!cards.Any(other => other != card && other.Current?.Key == target.Key))
+                return target;
+        }
+        return null;
+    }
+
+    private void Page(TargetCard card, int direction)
+    {
+        if (Adjacent(card, direction) is not { } target) return;
+        card.Current = target;
+        card.Manual = true;
+        RenderCards();
+    }
+
+    private void RenderCards()
+    {
+        bool haveTarget = cards.Any(card => card.Current is not null);
+        foreach (var card in cards)
+        {
+            card.Render(Adjacent(card, -1) is not null, Adjacent(card, 1) is not null,
+                !haveTarget && card == cards[0], status);
+        }
+    }
+
+    private static JsonElement KeepReadings(JsonElement row, JsonElement previous)
+    {
+        var missing = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var key in new[] { "atk", "def", "res", "hp" })
+        {
+            if (row.Get(key).ValueKind != JsonValueKind.Number && previous.Get(key).ValueKind == JsonValueKind.Number)
+                missing[key] = previous.Get(key);
+        }
+        if (!row.Bool("hp_known") && previous.Bool("hp_known") && previous.Number("max_hp") > 0 &&
+            row.Get("max_hp_lower_bound").ValueKind != JsonValueKind.Number)
+        {
+            missing["max_hp"] = previous.Get("max_hp");
+            missing["hp_known"] = previous.Get("hp_known");
+        }
+        if (missing.Count == 0) return row;
+        missing["uses_last_readings"] = JsonSerializer.SerializeToElement(true);
+        foreach (var property in row.EnumerateObject()) missing.TryAdd(property.Name, property.Value);
+        return JsonSerializer.SerializeToElement(missing);
+    }
+
+    private sealed record Target(string Key, string Uid, string Eid, JsonElement Row)
+    {
+        internal bool Live => Row.Bool("alive") && Row.Text("lifecycle") is "active" or "rebirthing";
+        internal bool Departed => Row.Text("lifecycle") == "departed";
+        internal double EndFrame => Row.Number("end_frame", Row.Number("spawn_frame", -1));
+
+        internal static Target? Read(JsonElement row)
+        {
+            string eid = row.Text("eid");
+            if (eid.Length == 0 || row.Bool("entry_inferred")) return null;
+            string uid = EnemyItem.InstanceUid(row);
+            if (uid.Length > 0) return new($"uid:{uid}/{eid}", uid, eid, row);
+            string roster = EnemyItem.RosterIdentity(row);
+            return roster.Length > 0 ? new($"roster:{roster}", "", eid, row) : null;
+        }
+    }
+
+    private sealed class TargetCard : Border
+    {
+        private static readonly Geometry UnlockedGlyph = Geometry.Parse("M 3,7 L 3,4 C 3,0 9,0 9,4 M 1,7 L 11,7 L 11,14 L 1,14 Z M 6,10 L 6,12");
+        private static readonly Geometry LockedGlyph = Geometry.Parse("M 3,7 L 3,4 C 3,0 9,0 9,4 L 9,7 M 1,7 L 11,7 L 11,14 L 1,14 Z M 6,10 L 6,12");
+        private readonly TextBlock name = Label(17, "ConsoleInk", bold: true);
+        private readonly TextBlock identity = Label(12, "ConsoleMuted");
+        private readonly TextBlock badge = Label(28, "ConsoleMuted", bold: true);
+        private readonly Image portrait = new() { Stretch = Stretch.Uniform, Margin = new Thickness(1) };
+        private readonly TextBlock health;
+        private readonly TextBlock attack;
+        private readonly TextBlock defense;
+        private readonly TextBlock resistance;
+        private readonly ToggleButton targetLock;
+        private readonly Path lockIcon;
+        private readonly Button previous;
+        private readonly Button next;
+
+        internal Target? Current { get; set; }
+        internal bool Manual { get; set; }
+        internal bool LastObservation { get; set; }
+        internal bool Pinned => targetLock.IsChecked == true;
+
+        internal TargetCard(int slot, Action<TargetCard, int> page, Action<TargetCard> lockChanged)
+        {
+            SetResourceReference(BackgroundProperty, "Console");
+            SetResourceReference(BorderBrushProperty, "ConsoleLine");
+            BorderThickness = new Thickness(1);
+            Padding = new Thickness(8, 4, 8, 5);
+            Margin = new Thickness(0, 0, 0, 4);
+            AutomationProperties.SetAutomationId(this, $"LiveEnemyCard{slot}");
+            string suffix = slot == 1 ? "" : slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            var card = new StackPanel();
+            Child = card;
+            var header = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+            card.Children.Add(header);
+            targetLock = new ToggleButton { Width = 32, Height = 30, MinHeight = 0,
+                Padding = new Thickness(0), Margin = new Thickness(4, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Top };
+            lockIcon = Icon(UnlockedGlyph);
+            lockIcon.SetBinding(Shape.StrokeProperty, new Binding(nameof(Control.Foreground)) { Source = targetLock });
+            targetLock.Content = lockIcon;
+            AutomationProperties.SetAutomationId(targetLock, "LockLiveEnemy" + suffix);
+            targetLock.Checked += (_, _) => lockChanged(this);
+            targetLock.Unchecked += (_, _) => lockChanged(this);
+            DockPanel.SetDock(targetLock, Dock.Right);
+            header.Children.Add(targetLock);
+            var heading = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            heading.Children.Add(name);
+            heading.Children.Add(identity);
+            header.Children.Add(heading);
+
+            var body = new Grid();
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) });
+            body.ColumnDefinitions.Add(new ColumnDefinition());
+            card.Children.Add(body);
+
+            badge.HorizontalAlignment = HorizontalAlignment.Center;
+            badge.VerticalAlignment = VerticalAlignment.Center;
+            var art = new Grid();
+            art.Children.Add(badge);
+            art.Children.Add(portrait);
+            var frame = new Border { Child = art, Height = 100, BorderThickness = new Thickness(1) };
+            frame.SetResourceReference(BackgroundProperty, "ConsoleCard");
+            frame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
+            SizeChanged += (_, args) =>
+            {
+                if (args.WidthChanged) frame.Height = args.NewSize.Width < 230 ? 94 : 100;
+            };
+            var overlay = new Grid { Margin = new Thickness(0, 0, 8, 0) };
+            overlay.Children.Add(frame);
+            previous = Arrow(true, suffix, () => page(this, -1));
+            next = Arrow(false, suffix, () => page(this, 1));
+            overlay.Children.Add(previous);
+            overlay.Children.Add(next);
+            body.Children.Add(overlay);
+
+            var stats = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(stats, 1);
+            body.Children.Add(stats);
+            health = Reading(stats, "HP");
+            attack = Reading(stats, "ATK");
+            defense = Reading(stats, "DEF");
+            resistance = Reading(stats, "RES");
+        }
+
+        internal void Reset()
+        {
+            Current = null;
+            Manual = LastObservation = false;
+            targetLock.IsChecked = false;
+        }
+
+        internal void Render(bool canPrevious, bool canNext, bool showEmpty, string status)
+        {
+            Visibility = Current is not null || showEmpty ? Visibility.Visible : Visibility.Collapsed;
+            previous.Visibility = next.Visibility = canPrevious || canNext ? Visibility.Visible : Visibility.Collapsed;
+            previous.IsEnabled = canPrevious;
+            next.IsEnabled = canNext;
+            targetLock.IsEnabled = Current is { Uid.Length: > 0 };
+            if (Visibility == Visibility.Collapsed) return;
+            lockIcon.Data = Pinned ? LockedGlyph : UnlockedGlyph;
+            string lockLabel = Pinned ? "解锁当前敌人" : "锁定当前敌人";
+            targetLock.ToolTip = lockLabel;
+            AutomationProperties.SetName(targetLock, lockLabel);
+            if (Current is { } current)
+            {
+                var row = current.Row;
+                var target = new EnemyItem(row, current.Uid, EnemyItem.RosterIdentity(row));
+                Show(name, target.Name);
+                var code = row.Text("code");
+                string lifecycle = LastObservation ? "最后观测 · 状态未知" : target.Status;
+                Show(identity, code.Length == 0 ? lifecycle : code + " · " + lifecycle);
+                identity.ToolTip = row.Bool("uses_last_readings")
+                    ? target.Tooltip + "\n部分读数保留最后一次观测值"
+                    : target.Tooltip;
+                Show(badge, target.Portrait is null ? target.Badge : "");
+                portrait.Source = target.Portrait;
+                portrait.ToolTip = target.Tooltip;
+                Show(health, target.HpText);
+                Show(attack, Json.UiInt(row, "atk"));
+                Show(defense, Json.UiInt(row, "def"));
+                Show(resistance, Json.UiInt(row, "res"));
+            }
+            else
+            {
+                Show(name, "等待敌方数据");
+                Show(identity, status.Length > 0 ? status : "—");
+                Show(badge, "—");
+                portrait.Source = null;
+                portrait.ToolTip = null;
+                Show(health, "—");
+                Show(attack, "—");
+                Show(defense, "—");
+                Show(resistance, "—");
+            }
+        }
+
+        private static Path Icon(Geometry geometry) => new()
+        {
+            Data = geometry, StrokeThickness = 1.7, StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round, IsHitTestVisible = false,
+        };
+
+        private static Button Arrow(bool previous, string suffix, Action page)
+        {
+            var label = previous ? "上一名敌人" : "下一名敌人";
+            var icon = Icon(Geometry.Parse(previous ? "M 7,1 L 2,6 L 7,11" : "M 2,1 L 7,6 L 2,11"));
+            icon.SetResourceReference(Shape.StrokeProperty, "Ink");
+            var arrow = new Button
+            {
+                Content = icon, Width = 24, Height = 34, Padding = new Thickness(0),
+                HorizontalAlignment = previous ? HorizontalAlignment.Left : HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = previous ? new Thickness(-5, 0, 0, 0) : new Thickness(0, 0, -5, 0),
+                ToolTip = label,
+            };
+            AutomationProperties.SetName(arrow, label);
+            AutomationProperties.SetAutomationId(arrow, (previous ? "PreviousLiveEnemy" : "NextLiveEnemy") + suffix);
+            arrow.Click += (_, _) => page();
+            return arrow;
+        }
+
+        private static TextBlock Label(double size, string color, bool bold = false)
+        {
+            var label = new TextBlock { FontSize = size, TextTrimming = TextTrimming.CharacterEllipsis,
+                FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal };
+            label.SetResourceReference(TextBlock.ForegroundProperty, color);
+            return label;
+        }
+
+        private static TextBlock Reading(Panel host, string caption)
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            var label = Label(12, "ConsoleMuted");
+            label.Text = caption;
+            label.Margin = new Thickness(0, 0, 4, 0);
+            var value = Label(12, "ConsoleInk", bold: true);
+            value.TextAlignment = TextAlignment.Right;
+            grid.Children.Add(label);
+            Grid.SetColumn(value, 1);
+            grid.Children.Add(value);
+            var row = new Border { Child = grid, BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(0, 2, 0, 2) };
+            row.SetResourceReference(BorderBrushProperty, "ConsoleLine");
+            host.Children.Add(row);
+            return value;
+        }
+
+        private static void Show(TextBlock element, string value)
+        {
+            if (element.Text == value) return;
+            element.Text = value;
+            element.ToolTip = value;
         }
     }
 }

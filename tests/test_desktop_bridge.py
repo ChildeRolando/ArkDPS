@@ -231,6 +231,127 @@ def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp
         cmd(state, 'panel_delete', panel_id='default')
 
 
+def test_hud_styles_are_per_panel_and_survive_closing_and_restarting(tmp_path):
+    state = DesktopState(tmp_path)
+    cmd(state, 'panel_duplicate', panel_id='default')
+    second = state.layout.panels[-1].panel_id
+    assert state.snapshot()['layout']['hud_styles'] == {}
+
+    cmd(state, 'hud_style', panel_id='default',
+        style={'name_font': 21.5, 'name_width': 168, 'column_gap': 9, 'bar_width': 0})
+    cmd(state, 'hud_style', panel_id=second, style={'width': 700, 'row_gap': 4})
+    profiles = state.snapshot()['layout']['hud_styles']
+    assert profiles['default']['name_font'] == 21.5
+    assert profiles['default']['name_width'] == 168
+    assert profiles['default']['column_gap'] == 9
+    assert profiles['default']['bar_width'] == 0
+    assert profiles['default']['width'] == 568
+    assert profiles[second]['name_font'] == 20
+    assert profiles[second]['width'] == 700
+
+    gui = dict(x=50, y=60, width=1200, height=800)
+    hud = dict(panel_id=second, x=-700, y=30, width=830, height=480, opacity=.83, locked=True)
+    cmd(state, 'placement', gui=gui, huds=[hud])
+    assert state.snapshot()['layout']['huds'] == [hud]
+    cmd(state, 'placement', gui=gui, huds=[])
+    state = DesktopState(tmp_path)
+    assert state.snapshot()['layout']['hud_styles'] == profiles
+    assert state.snapshot()['layout']['huds'] == []
+
+    cmd(state, 'hud_style', panel_id='default', style=None)
+    assert state.snapshot()['layout']['hud_styles'] == {second: profiles[second]}
+    cmd(state, 'panel_delete', panel_id=second)
+    assert DesktopState(tmp_path).snapshot()['layout']['hud_styles'] == {}
+    with pytest.raises(ValueError, match='源面板'):
+        cmd(state, 'hud_style', panel_id=second, style={'width': 700})
+
+
+@pytest.mark.parametrize('style', [
+    {'number_font': True}, {'title_font': float('nan')}, {'width': float('inf')},
+    {'row_height': 0}, {'column_gap': -1}, {'share_width': 601}, {'unknown': 18}, [],
+])
+def test_bad_hud_style_command_preserves_saved_profile(tmp_path, style):
+    state = DesktopState(tmp_path)
+    cmd(state, 'hud_style', panel_id='default', style={'number_font': 19})
+    before = state.layout
+    original = state.store.path.read_bytes()
+
+    with pytest.raises(ValueError, match='HUD 样式'):
+        cmd(state, 'hud_style', panel_id='default', style=style)
+
+    assert state.layout == before
+    assert state.store.path.read_bytes() == original
+
+
+def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_path):
+    state = DesktopState(tmp_path)
+    data = sample()
+    archived = record().to_dict()
+    values = dict(damage=1_234_567.89, recent_damage=23_456.78,
+                  engagement_damage=20_000., damage_by_type={'physical': 1_234_567.89})
+    data['statistics']['rows']['a'].update(values)
+    archived['statistics']['rows']['a'].update(values, recent_damage_window=[7., 12.])
+    state.history.save(BattleRecord.from_dict(archived))
+    state.refresh_history()
+    original_sample = copy.deepcopy(data)
+    state.accept('sample', data)
+    before = copy.deepcopy(state.snapshot())
+    original_export = tmp_path / 'western.json'
+    cmd(state, 'export', format='json', path=str(original_export),
+        record=before['history_selected']['record'])
+
+    cmd(state, 'number_units', number_units='chinese')
+
+    after = state.snapshot()
+    assert before['layout']['number_units'] == 'western'
+    assert after['layout']['number_units'] == 'chinese'
+    assert data == original_sample
+    assert after['live_analysis'] == before['live_analysis']
+    assert after['totals'] == before['totals']
+    assert after['history_selected']['record'] == before['history_selected']['record']
+    for old, new in [(before['panels'][0], after['panels'][0]),
+                     (before['history_selected']['view'], after['history_selected']['view'])]:
+        assert [entry['owner_id'] for entry in new['entries']] == [entry['owner_id'] for entry in old['entries']]
+        assert new['source'] == old['source']
+        assert new['footer_total'] == old['footer_total']
+        assert new['footer_rate'] == old['footer_rate']
+        assert old['footer_total_display'] == '1.2M'
+        assert new['footer_total_display'] == '123.5万'
+        assert old['footer_rate_display'] == '23.5K/s'
+        assert new['footer_rate_display'] == '2.3万/s'
+        original, reformatted = old['entries'][0], new['entries'][0]
+        for key in ('value', 'exact_value', 'rate', 'share', 'bar_ratio', 'segments'):
+            assert reformatted[key] == original[key]
+        assert original['display_value'] == '1.2M'
+        assert reformatted['display_value'] == '123.5万'
+        assert original['rate_text'] == '23.5K/s'
+        assert reformatted['rate_text'] == '2.3万/s'
+        assert old['rates']['a']['damage']['text'] == '20K/s'
+        assert new['rates']['a']['damage']['text'] == '2万/s'
+
+    new_export = tmp_path / 'chinese.json'
+    cmd(state, 'export', format='json', path=str(new_export),
+        record=after['history_selected']['record'])
+    assert new_export.read_bytes() == original_export.read_bytes()
+    restarted = DesktopState(tmp_path)
+    assert restarted.layout.number_units == 'chinese'
+    assert restarted.snapshot()['history_selected']['view']['entries'][0]['display_value'] == '123.5万'
+
+
+def test_number_units_defaults_for_older_layout_and_rejects_invalid_setting(tmp_path):
+    original = DesktopState(tmp_path).layout.to_dict()
+    del original['number_units']
+    path = tmp_path / 'layout.json'
+    path.write_text(json.dumps(original), encoding='utf-8')
+
+    state = DesktopState(tmp_path)
+    assert state.snapshot()['layout']['number_units'] == 'western'
+    with pytest.raises(ValueError, match='未知数值单位'):
+        cmd(state, 'number_units', number_units=['invalid'])
+    assert state.layout.number_units == 'western'
+    assert json.loads(path.read_text(encoding='utf-8')) == original
+
+
 def test_history_selection_is_immutable_across_refresh_eviction_and_new_battle(tmp_path):
     state = DesktopState(tmp_path)
     first = record(1)

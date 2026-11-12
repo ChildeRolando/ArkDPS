@@ -52,9 +52,86 @@ public partial class MainWindow
         using var document = JsonDocument.Parse(state.ToJsonString());
         ApplyState(document.RootElement.Clone());
     }
+    private void VerifyEnemyPaging(System.Text.Json.Nodes.JsonNode fixture)
+    {
+        FrameworkElement Find(string id) => FindAutomationElement(TargetSummary, id)
+            ?? throw new InvalidOperationException("missing enemy control: " + id);
+
+        var state=fixture.DeepClone();
+        var rows=System.Text.Json.Nodes.JsonNode.Parse("""
+            [
+              {"instance_uid":"101","eid":"enemy_a","name":"首位敌人","lifecycle":"active","alive":true,"hp":900,"max_hp":1000,"atk":173},
+              {"instance_uid":"102","eid":"enemy_a","name":"同型敌人","lifecycle":"active","alive":true,"hp":800,"max_hp":1200,"atk":214},
+              {"instance_uid":"103","eid":"enemy_b","name":"次型敌人","lifecycle":"active","alive":true,"hp":600},
+              {"instance_uid":"104","eid":"enemy_c","name":"第三型敌人","lifecycle":"active","alive":true,"hp":300},
+              {"instance_uid":"105","eid":"enemy_d","name":"已离场敌人","lifecycle":"departed","alive":false,"hp":0,"max_hp":9000},
+              {"instance_uid":"106","eid":"enemy_e","name":"推断敌人","lifecycle":"active","alive":true,"hp":10000,"entry_inferred":true}
+            ]
+            """)!.AsArray();
+        state["enemy"]!["rows"]=rows;
+
+        void Publish(string battle = "synthetic-enemy-paging") =>
+            TargetSummary.Update(battle, JsonSerializer.SerializeToElement(state["enemy"]), "");
+
+        try
+        {
+            Publish();
+            var first = Find("LiveEnemyCard1");
+            var second = Find("LiveEnemyCard2");
+            var third = Find("LiveEnemyCard3");
+            var previous = (Button)Find("PreviousLiveEnemy");
+            var next = (Button)Find("NextLiveEnemy");
+            var pin = (System.Windows.Controls.Primitives.ToggleButton)Find("LockLiveEnemy");
+            Require(System.Windows.Automation.AutomationProperties.GetName(previous)=="上一名敌人" &&
+                    System.Windows.Automation.AutomationProperties.GetName(next)=="下一名敌人",
+                    "enemy paging arrows lack accessible names");
+            Require(HasText(first,"首位敌人") && HasText(first,"173") &&
+                    HasText(second,"次型敌人") && HasText(third,"第三型敌人") &&
+                    !HasText(TargetSummary,"推断敌人") && !previous.IsEnabled && next.IsEnabled,
+                    "cards did not prefer distinct confirmed live types or render attack");
+            next.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Require(HasText(first,"同型敌人") && HasText(first,"214") && HasText(second,"次型敌人"),
+                    "right arrow did not skip instances already shown on other cards");
+            pin.IsChecked = true;
+            rows[1]!["hp"]=230;
+            Publish();
+            Require(HasText(first,"同型敌人") && HasText(first,"230") && !next.IsEnabled && !previous.IsEnabled,
+                    "locked card did not follow the exact instance after HP reorder");
+            rows[1]!["alive"]=false;
+            rows[1]!["lifecycle"]="departed";
+            rows[1]!["hp"]=0;
+            rows[1]!["atk"]=null;
+            Publish();
+            Require(pin.IsChecked == true && HasText(first,"同型敌人") && HasText(first,"214"),
+                    "locked card lost the departed instance or last confirmed attributes");
+            foreach(int index in new[] { 0, 2, 3 })
+            {
+                rows[index]!["alive"]=false;
+                rows[index]!["lifecycle"]="departed";
+            }
+            Publish();
+            pin.IsChecked = false;
+            Require(HasText(TargetSummary,"已离场敌人") || next.IsEnabled || previous.IsEnabled,
+                    "departed types disappeared from the cards and queue");
+            pin.IsChecked = true;
+            Publish("synthetic-enemy-paging-next");
+            Require(pin.IsChecked == false, "enemy lock carried over to a new battle");
+        }
+        finally
+        {
+            UpdateEnemySummary();
+        }
+    }
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
     {
         await Command("theme", new() { ["theme"] = "lone-trail" });
+        foreach (var (token,family) in new[] { ("DisplayFont","Barlow Semi Condensed"),("DataFont","IBM Plex Mono") })
+        {
+            Require(Theme.Typeface(token,FontWeights.SemiBold).TryGetGlyphTypeface(out var glyph) &&
+                    glyph.FamilyNames.Values.Contains(family) &&
+                    glyph.FontUri.AbsoluteUri.Contains("/Assets/Fonts/",StringComparison.OrdinalIgnoreCase),
+                    "Lone Trail did not load the packaged "+family+" font");
+        }
         await Navigate("live");
         var initial = State.Clone();
         var fixture = System.Text.Json.Nodes.JsonNode.Parse(initial.GetRawText())!;
@@ -95,11 +172,23 @@ public partial class MainWindow
             fixture["game_time"] = second;
             analysis["game_time"] = second;
             SetIllustrativeRates(6800 + (second % 5) * 380);
+            if (second == 22) analysis["team_recent_dps"] = null;
             ApplyFixture(fixture);
         }
         Require(trendModel.Points.Count > 1 && trendModel.Points[^1].Team == 7940,
             "advancing worker values did not reach live trend");
-        Require(CurrentDps.Text == "7,940" && AverageDps.Text == "59,302.5", "certified team DPS not rendered");
+        Require(CurrentDps.Text == "7,940" && AverageDps.Text == "59,303", "overview did not round DPS");
+        Require(trendModel.Points.Any(point => point.Time == 22 && !point.Team.HasValue),
+            "an unavailable sample was converted to a measured zero");
+        var gapDrawing = new System.Windows.Media.DrawingGroup();
+        using (var drawing = gapDrawing.Open())
+            ChartLine.DrawGap(drawing, new System.Windows.Media.Pen(System.Windows.Media.Brushes.White, 1),
+                new Point(4, 5), new Point(18, 8), 30);
+        Require(gapDrawing.Children.OfType<System.Windows.Media.GeometryDrawing>().Any(item =>
+            item.Geometry is System.Windows.Media.LineGeometry line &&
+            line.StartPoint == new Point(4,30) && line.EndPoint == new Point(18,30)),
+            "a sampling gap did not connect the trace to the baseline");
+        VerifyEnemyPaging(fixture);
         fixture["status"] = "paused";
         analysis["game_time"] = 24;
         ApplyFixture(fixture);
@@ -112,6 +201,12 @@ public partial class MainWindow
         ApplyFixture(fixture);
         Require(trendModel.Points[^1].StartsSegment && trendModel.Points[^1].Team == 0,
             "recovery lost the gap or the reliable zero");
+        fixture["game_time"] = 59.5;
+        analysis["team_total_damage"] = 1234567.5;
+        ApplyFixture(fixture);
+        Require(Clock.Text == "01:00" && TotalDamage.Text == "1,234,568",
+            "overview time or damage did not round to a whole number");
+        analysis["team_total_damage"] = 711630;
 
         await Navigate("enemies");
         EnemyList.SelectedIndex = 0;
@@ -147,17 +242,71 @@ public partial class MainWindow
             ranked.Rows.SelectedIndex = 0;
             ranked.PinRequested?.Invoke(ranked.View.Get("entries").Items().First().Text("owner_id"));
         }
+        var liveView=fixture["panels"]!.AsArray()[0]!;
+        string pinnedOwner=liveView["entries"]!.AsArray()[0]!["owner_id"]!.GetValue<string>();
+        var pinnedRow=liveView["source"]![pinnedOwner]!;
+        Require(HasText(FindOperatorRatio("Mitigation"),"—"),"unavailable mitigation rendered as zero");
+        pinnedRow["observed_mitigation_rate"]=58.4695;
+        pinnedRow["observed_mitigation_after"]=7660.38;
+        pinnedRow["mitigation_matched_hits"]=27;
+        pinnedRow["mitigation_unknown_reason"]="部分伤害缺少同次命中的公式前后值";
+        ApplyFixture(fixture);
+        var observedMitigation=FindOperatorRatio("Mitigation");
+        Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观测减伤率") &&
+                observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
+                observedTip.Text.Contains("已配对的 27 击"),
+                "partial mitigation did not expose its measured value and sample scope");
+        pinnedRow["mitigation_rate"]=0;
+        ApplyFixture(fixture);
+        Require(HasText(FindOperatorRatio("Mitigation"),"0%") &&
+                HasText(FindOperatorRatio("Mitigation"),"被减伤率") &&
+                !HasText(FindOperatorRatio("Mitigation"),"已观测减伤率"),
+                "complete zero mitigation did not take precedence over the observed subset");
+        pinnedRow["mitigation_rate"]=18.34;
+        var pinnedDetail=liveView["details_by_owner"]![pinnedOwner]!;
+        var savedCoverage=pinnedDetail["skill_coverage"]?.DeepClone();
+        pinnedDetail["skill_coverage"]=0.0036;
+        ApplyFixture(fixture);
+        var coverageField=FindAutomationElement(LiveInspector,"CompactOperatorMetric3")
+            ?? throw new InvalidOperationException("missing skill coverage field");
+        Require(HasText(coverageField,"<1%"),
+            "short confirmed skill duration rendered as zero coverage");
+        pinnedDetail["skill_coverage"]=0;
+        ApplyFixture(fixture);
+        Require(HasText(coverageField,"0%"),"confirmed zero skill coverage was lost");
+        pinnedDetail["skill_coverage"]=savedCoverage;
+        ApplyFixture(fixture);
         double savedWidth = Width, savedHeight = Height;
-        foreach (var (width, height) in new[] { (1920, 1080), (1672, 941), (1380, 900), (560, 540) })
+        foreach (var (width, height) in new[] { (1920, 1080), (1672, 941), (1380, 900), (1200, 820), (560, 540) })
         {
             Width = width; Height = height;
             await Settle();
             Require(Math.Abs(ActualWidth - width) < 2 && Math.Abs(ActualHeight - height) < 2,
-                "test window did not reach requested DIP size");
+                $"test window did not reach {width}x{height} DIP: {ActualWidth}x{ActualHeight}, {WindowState}, DPI {System.Windows.Media.VisualTreeHelper.GetDpi(this)}");
             Require(Grid.GetColumnSpan(EnemySummary) == (width >= 1320 ? 1 : 3) &&
                 Grid.GetColumn(LiveDetail) == (width < 1100 ? 1 : 2) &&
                 (LiveNavLabel.Visibility == Visibility.Collapsed) == (width < 1100),
                 "live dashboard breakpoint did not reflow the expected surfaces");
+            if (width >= 1320)
+            {
+                Require(LivePage.ScrollableHeight < 1 &&
+                    Math.Abs(LiveBody.TranslatePoint(new Point(0,LiveBody.ActualHeight),LivePage).Y - LivePage.ActualHeight) < 6,
+                    "dashboard body did not fill the available window height");
+                var panel = Panels.Values.First();
+                Require(panel.ReferenceFooter.IsVisible && panel.ReferenceFooterTotal.Text==panel.View.Text("footer_total_display") &&
+                    panel.ReferenceFooterRate.Text==panel.View.Text("footer_rate_display") &&
+                    Grid.GetColumn(panel.ReferenceFooterTotal)==3 && Grid.GetColumn(panel.ReferenceFooterRate)==4,
+                    "team total or DPS did not render in its ranking column");
+            }
+            Require(!HasVisibleScrollbar(this), $"visible scrollbar at {width}x{height} DIPs");
+            if (width >= 1200)
+            {
+                VerifyCompactPortraitLayout();
+                VerifyCompactRatioLayout();
+            }
+            Require(ReferenceEquals(TargetSummary.Background,Theme.Resource("Card")) &&
+                    TargetSummary.Child is ScrollViewer && !HasText(TargetSummary,"敌情 ›"),
+                    "enemy summary retained a separate background or duplicate navigation");
             Screenshot.Window(this, Path.Combine(output, $"lone-trail-live-{width}x{height}-dip.png"));
             if (width == 1380)
             {
@@ -167,19 +316,40 @@ public partial class MainWindow
         }
         await Navigate("enemies");
         await Settle();
-        Require(EnemyPageScroll.ScrollableHeight > 0 && EnemyChartHost.ActualHeight >= 300,
+        Require(EnemyPageScroll.ScrollableHeight > 0 && EnemyChartHost.ActualHeight >= 300 &&
+                !HasVisibleScrollbar(this),
             "minimum window does not scroll to the full enemy chart");
         Screenshot.Window(this, Path.Combine(output, "lone-trail-enemies-minimum.png"));
         await Navigate("live");
         Width = savedWidth; Height = savedHeight;
         await Settle();
-        LivePage.ScrollToEnd();
+        WindowState = WindowState.Maximized;
         await Settle();
-        Screenshot.Window(this, Path.Combine(output, "lone-trail-timeline.png"));
-        LivePage.ScrollToTop();
+        var workArea = System.Windows.Forms.Screen.FromHandle(Native.Handle(this)).WorkingArea;
+        var topLeft = ContentRoot.PointToScreen(new Point());
+        var bottomRight = ContentRoot.PointToScreen(new Point(ContentRoot.ActualWidth, ContentRoot.ActualHeight));
+        var panelBottom = LiveBody.PointToScreen(new Point(0, LiveBody.ActualHeight));
+        Require(topLeft.X >= workArea.Left-1 && topLeft.Y >= workArea.Top-1 &&
+                bottomRight.X <= workArea.Right+1 && bottomRight.Y <= workArea.Bottom+1 &&
+                panelBottom.Y <= workArea.Bottom+1,
+                $"maximized frame runs outside monitor work area: {topLeft} to {bottomRight}, {workArea}");
+        Require(SidebarNavigation.Children.IndexOf(EnemyNav) == SidebarNavigation.Children.IndexOf(LiveNav)+1 &&
+                DockPanel.GetDock(SidebarFooter) == Dock.Bottom &&
+                SkinLabel.IsVisible && SkinLabel.Text == "皮肤" &&
+                !HasText(SidebarFooter, "解锁 HUD"), "sidebar navigation or skin control placement is wrong");
+        Require(TitleBar.ActualHeight <= 38 &&
+                TitleBar.ActualHeight-ChromeControls.ActualHeight is >= 2 and <= 10,
+                "window controls do not have a compact title bar");
+        Screenshot.Window(this, Path.Combine(output, "lone-trail-live-maximized.png"));
+        if (ContentRoot.ActualWidth >= 1320 && ContentRoot.ActualHeight >= 640)
+            Require(LivePage.ScrollableHeight < 1 &&
+                Math.Abs(LiveBody.TranslatePoint(new Point(0,LiveBody.ActualHeight),LivePage).Y - LivePage.ActualHeight) < 6,
+                "maximized dashboard left unused space below the panels");
+        WindowState = WindowState.Normal;
         Width = 560; Height = 540;
         await Navigate("history");
         await Settle();
+        Require(ContentRoot.Margin == new Thickness(), "restored window kept maximized insets");
         Require(HistoryList.ActualHeight >= 58, $"minimum history viewport too short ({HistoryList.ActualHeight:F1} DIPs)");
         Screenshot.Window(this, Path.Combine(output, "lone-trail-history-minimum.png"));
         await Navigate("live");
@@ -187,9 +357,85 @@ public partial class MainWindow
         await Settle();
         ApplyState(initial);
         await Command("theme", new() { ["theme"] = "original" });
-        checks.Add("certified DPS, pause/recovery/known zero, enemy transform MaxHP lower-bound/confirmed with retained selection, and four Lone Trail DIP layouts");
+        checks.Add("compact portrait, three parallel ratio rings and field formula tooltips, themed enemy cards, five Lone Trail layouts and physical maximized bounds");
     }
+    private void VerifyCompactPortraitLayout()
+    {
+        var avatar = FindAutomationElement(LiveInspector,"CompactOperatorPortrait")
+            ?? throw new InvalidOperationException("compact detail portrait missing");
+        var rows = Enumerable.Range(0,4).Select(index =>
+            FindAutomationElement(LiveInspector,"CompactOperatorMetric"+index)
+            ?? throw new InvalidOperationException("compact detail metric missing")).ToArray();
+        var avatarPosition=avatar.TranslatePoint(new Point(),LiveInspector);
+        var positions=rows.Select(row=>row.TranslatePoint(new Point(),LiveInspector)).ToArray();
+        Require(avatar.ActualWidth==46 && avatar.ActualHeight==46 && HasText(LiveInspector,"1,167") &&
+            positions.Take(3).All(point=>point.X>=avatarPosition.X+avatar.ActualWidth) &&
+            avatarPosition.Y>=positions[0].Y-1 &&
+            avatarPosition.Y+avatar.ActualHeight<=positions[2].Y+rows[2].ActualHeight+1 &&
+            positions[3].X<positions[0].X,
+            $"portrait or metrics misaligned at {ActualWidth} DIPs: avatar {avatarPosition} {avatar.ActualWidth}x{avatar.ActualHeight}, " +
+            $"rows {string.Join(" / ",positions)}, DPS available {HasText(LiveInspector,"1,167")}");
+    }
+    private FrameworkElement FindOperatorRatio(string suffix) =>
+        FindAutomationElement(LiveInspector,"CompactOperatorRatio"+suffix)
+        ?? throw new InvalidOperationException("missing operator ratio "+suffix);
+
+    private void VerifyCompactRatioLayout()
+    {
+        var ratios=new[] { FindOperatorRatio("Overkill"), FindOperatorRatio("Mitigation"), FindOperatorRatio("SkillShare") };
+        var values=new[] { "8%", "18%", "42%" };
+        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 结算伤害 ÷ 公式前伤害", "技能期伤害 ÷ 已拆分的总伤害" };
+        var positions=ratios.Select(field=>field.TranslatePoint(new Point(),LiveInspector)).ToArray();
+        var stats=FindAutomationElement(LiveInspector,"CompactOperatorStats")
+            ?? throw new InvalidOperationException("main data card missing");
+        var presence=FindAutomationElement(stats,"CompactOperatorMetric4")
+            ?? throw new InvalidOperationException("presence row missing");
+        double presenceBottom=presence.TranslatePoint(new Point(0,presence.ActualHeight),LiveInspector).Y;
+        Require(FindAutomationElement(stats,"CompactOperatorRatios") is not null && positions[0].Y>=presenceBottom,
+                "ratio rings are not inside the main data card below on-field time");
+        Require(positions.All(position=>Math.Abs(position.Y-positions[0].Y)<1) &&
+                positions[0].X<positions[1].X && positions[1].X<positions[2].X &&
+                ratios.All(field=>field.ActualWidth>=62 && field.ActualHeight>=58),
+                "the three ratio rings did not fit side by side");
+        for(int index=0;index<ratios.Length;index++)
+        {
+            Require(HasText(ratios[index],values[index]) &&
+                    ratios[index].ToolTip is ToolTip {Content:TextBlock description} &&
+                    description.Text.Contains(formulas[index],StringComparison.Ordinal) &&
+                    ToolTipService.GetShowsToolTipOnKeyboardFocus(ratios[index])==true,
+                    "ratio did not display its value or expose its formula");
+        }
+        for(int index=0;index<5;index++)
+        {
+            var field=FindAutomationElement(LiveInspector,"CompactOperatorMetric"+index);
+            Require(field?.ToolTip is ToolTip {Content:TextBlock description} &&
+                    description.Text.Contains('\n'),"operator field does not explain its calculation");
+        }
+        Require(!HasText(LiveInspector,"阿米娅") && !HasText(LiveInspector,"非技能伤害占比") &&
+                FindAutomationElement(LiveInspector,"CompactOperatorDetails")==null,
+                "compact inspector still displays the removed title, row or details button");
+    }
+
+    private static FrameworkElement? FindAutomationElement(DependencyObject root,string id) =>
+        FindVisual<FrameworkElement>(root,element=>System.Windows.Automation.AutomationProperties.GetAutomationId(element)==id);
+
+    private static T? FindVisual<T>(DependencyObject root,Func<T,bool> match) where T : DependencyObject
+    {
+        if(root is T visual && match(visual)) return visual;
+        for(int index=0;index<System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);index++)
+            if(FindVisual(System.Windows.Media.VisualTreeHelper.GetChild(root,index),match) is { } found) return found;
+        return null;
+    }
+
     private static async Task Settle()=>await System.Windows.Application.Current.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task;
+    private static bool HasVisibleScrollbar(DependencyObject root)
+    {
+        if (root is System.Windows.Controls.Primitives.ScrollBar { IsVisible: true } bar &&
+            bar.ActualWidth > 0 && bar.ActualHeight > 0) return true;
+        for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+            if (HasVisibleScrollbar(System.Windows.Media.VisualTreeHelper.GetChild(root, index))) return true;
+        return false;
+    }
     private static bool HasText(DependencyObject root,string text)
     {
         if(root is TextBlock block && block.Text.Contains(text,StringComparison.Ordinal)) return true;
@@ -213,6 +459,148 @@ public partial class MainWindow
             Require(!entry.Text("rate_text").StartsWith("0"),"unavailable engagement rendered as zero");
         }
     }
+    private async Task VerifyHudLayoutEditor(string sourceId,string output)
+    {
+        var existing=Panels.Keys.ToHashSet();
+        await Command("panel_duplicate",new(){["panel_id"]=sourceId});
+        string id=Panels.Keys.Single(key=>!existing.Contains(key));
+        OpenHud(id);
+        HudWindow hud=Huds[id];
+        try { await VerifyHudLayoutEditorPanel(id,hud,output); }
+        finally
+        {
+            CloseHud(id);
+            await Command("panel_delete",new(){["panel_id"]=id});
+            await Navigate("live");
+        }
+    }
+
+    private async Task VerifyHudLayoutEditorPanel(string id,HudWindow hud,string output)
+    {
+        await Navigate("settings");
+        Require(EditHudLayoutButton.IsEnabled && HudLayoutTarget.Items.Count==Panels.Count,
+                "settings cannot select a source HUD panel");
+        var empty=JsonSerializer.SerializeToElement(new { config=Panels[id].View.Get("config"), entries=Array.Empty<object>() });
+        var sampleEditor=new HudLayoutEditor("示例验收",empty,HudLayout.Default,_=>Task.FromResult(false)){Owner=this};
+        sampleEditor.Show();
+        try
+        {
+            await Settle();
+            Require(sampleEditor.PreviewLabel.Text=="示例预览" &&
+                    FindVisual<StatisticPanel>(sampleEditor,_=>true)?.Rows.Items.Count==5,
+                    "HUD editor did not supply a labeled preview outside battle");
+        }
+        finally { sampleEditor.Close(); }
+        var completion=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var editor=new HudLayoutEditor("HUD 布局验收",Panels[id].View,HudLayout.Default,async style=>
+        {
+            bool saved=await SaveHudLayout(id,style);
+            completion.TrySetResult(saved);
+            return saved;
+        }){Owner=this};
+        editor.Show();
+        try
+        {
+            await Settle();
+            TextBox Field(string key) => (TextBox)(FindAutomationElement(editor,"HudLayout"+key)
+                ?? throw new InvalidOperationException("HUD layout field missing: "+key));
+            var width=Field("Width");
+            width.Text="2200";
+            Require(!editor.SaveButton.IsEnabled && editor.StatusText.Text.Contains("HUD 宽度"),
+                    "HUD layout editor accepted a width outside its range");
+            width.Text="640";
+            Field("NameFont").Text="23";
+            Field("NameWidth").Text="160";
+            Field("RowGap").Text="5";
+            Field("ColumnGap").Text="7";
+            Field("BarWidth").Text="0";
+            await Settle();
+            var preview=FindVisual<StatisticPanel>(editor,_=>true)
+                ?? throw new InvalidOperationException("HUD layout preview missing");
+            var previewName=FindVisual<TextBlock>(preview,element=>element.Name=="HudOperatorName");
+            var previewRow=FindVisual<Grid>(preview,element=>element.Name=="HudOperatorRow");
+            Require(editor.SaveButton.IsEnabled && editor.PreviewSurface.Width==640 && previewName?.FontSize==23 &&
+                    previewRow?.ColumnDefinitions[3].ActualWidth==0 && hud.LayoutProfile==HudLayout.Default,
+                    "HUD draft did not update only the preview or hide a zero-width column");
+            Require(!HasVisibleScrollbar(editor),"HUD layout editor displayed a scrollbar");
+            Screenshot.Window(editor,Path.Combine(output,"hud-layout-editor.png"));
+            editor.SaveButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Require(await completion.Task.WaitAsync(TimeSpan.FromSeconds(10)),"HUD layout save did not succeed");
+            await Settle();
+            var saved=ReadHudLayout(id);
+            Require(saved is { Width:640, NameFont:23, NameWidth:160, RowGap:5, ColumnGap:7, BarWidth:0 } &&
+                    hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-640)<2,
+                    "HUD layout did not persist or apply to the open HUD");
+            CloseHud(id);
+            OpenHud(id);
+            hud=Huds[id];
+            await Settle();
+            Require(hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-640)<2,
+                    "reopened HUD lost its saved style");
+            Require(await SaveHudLayout(id,null),"HUD layout reset did not succeed");
+            await Settle();
+            Require(ReadHudLayout(id)==null && hud.LayoutProfile==HudLayout.Default &&
+                    Math.Abs(hud.ActualWidth-HudLayout.Default.Width)<2,
+                    "HUD layout reset did not restore default rendering");
+        }
+        finally
+        {
+            if(editor.IsVisible) editor.Close();
+        }
+    }
+
+    private async Task VerifyHudRows(HudWindow hud,string output)
+    {
+        var original=hud.Panel.View.Clone();
+        var fixture=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
+        var entries=fixture["entries"]!.AsArray().ToArray();
+        var heights=new Dictionary<int,double>();
+        bool pollingEnabled=poll.IsEnabled;
+        poll.Stop();
+        try
+        {
+            foreach(int count in new[] { 1,4,5,6 })
+            {
+                fixture["entries"]=new System.Text.Json.Nodes.JsonArray(entries.Take(count)
+                    .Select(entry=>entry!.DeepClone()).ToArray());
+                hud.Update(JsonSerializer.SerializeToElement(fixture),"");
+                await Settle();
+                heights[count]=hud.ActualHeight;
+                var bounds=Native.Bounds(hud);
+                var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
+                Require(bounds[0]>=work.Left && bounds[1]>=work.Top &&
+                        bounds[0]+bounds[2]<=work.Right+1 && bounds[1]+bounds[3]<=work.Bottom+1,
+                        "auto-sized HUD went outside its monitor work area");
+                if(count is 1 or 5) Screenshot.Window(hud,Path.Combine(output,$"{Theme.Key}-hud-{count}-rows.png"));
+            }
+            Require(Math.Abs(heights[4]-heights[1]-3*StatisticPanel.HudRowHeight)<2 &&
+                    Math.Abs(heights[5]-heights[4]-StatisticPanel.HudRowHeight)<2 &&
+                    Math.Abs(heights[6]-heights[5])<2,
+                    $"HUD height did not fit one through five rows: {string.Join(", ",heights.Values)}");
+            var rows=hud.Panel.Rows;
+            var row=FindVisual<Grid>(rows,element=>element.Name=="HudOperatorRow");
+            var name=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorName");
+            var amount=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorTotal");
+            Require(row?.ColumnDefinitions[2].ActualWidth>=134 && name?.FontSize==20 &&
+                    amount?.FontSize==18 && hud.Panel.Heading.FontSize==28 &&
+                    hud.Panel.TitleRegion.ActualHeight<=44 && hud.ActualWidth<=575,
+                    "HUD compact dimensions or readable type did not fit");
+            var scroll=FindVisual<ScrollViewer>(rows,_=>true);
+            Require(scroll is { ScrollableHeight: > 0 } && !HasVisibleScrollbar(hud),
+                    "HUD cannot show extra rows without a scrollbar");
+            rows.ScrollIntoView(rows.Items[^1]);
+            await Settle();
+            Require(scroll!.VerticalOffset>0,"sixth HUD row cannot be brought into view");
+            scroll.ScrollToTop();
+        }
+        finally
+        {
+            hud.Update(original,"");
+            await Settle();
+            if(pollingEnabled) poll.Start();
+        }
+    }
+
     private void VerifyShareScope(string id,HudWindow hud)
     {
         const string knownLabel="已知数据内占比";
@@ -286,10 +674,38 @@ public partial class MainWindow
         var input=new[]{new Input{Mouse=new MouseInput{Flags=2}},new Input{Mouse=new MouseInput{Flags=4}}};
         Require(SendInput(2,input,Marshal.SizeOf<Input>())==2,"SendInput failed");
     }
+    private static async Task WaitForClick(Func<bool> delivered)
+    {
+        long deadline=Environment.TickCount64+1000;
+        while(!delivered() && Environment.TickCount64<deadline) await Task.Delay(25);
+    }
+
     internal async Task Verify(string output)
     {
         Directory.CreateDirectory(output);poll.Stop();save.Stop();
         var checks=new List<string>();
+        // Check the initial worker reply before any later fixture or layout changes.
+        var restoredLayout=State.Get("layout").Clone();
+        await Settle();
+        foreach(var placement in restoredLayout.Get("huds").Items())
+        {
+            Require(Huds.TryGetValue(placement.Text("panel_id"),out var hud) && hud is not null,
+                    "saved HUD was not opened");
+            Require(hud!.Locked==placement.Bool("locked"),"HUD lock restore");
+            Require(Math.Abs(hud.Opacity-placement.Number("opacity"))<.001,"HUD alpha restore");
+            var actual=Native.Bounds(hud);
+            var dpi=System.Windows.Media.VisualTreeHelper.GetDpi(hud);
+            var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
+            double width=Math.Clamp(placement.Number("width"),hud.MinWidth*dpi.DpiScaleX,work.Width);
+            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height)*dpi.DpiScaleY);
+            double x=Math.Clamp(placement.Number("x"),work.Left,Math.Max(work.Left,work.Right-width));
+            double y=Math.Clamp(placement.Number("y"),work.Top,Math.Max(work.Top,work.Bottom-height));
+            Require(Math.Abs(actual[0]-x)<=2 && Math.Abs(actual[1]-y)<=2,
+                    $"HUD restored outside expected position: ({actual[0]}, {actual[1]}) expected ({x}, {y})");
+            Require(Math.Abs(actual[2]-width)<=2 && Math.Abs(actual[3]-height)<=2,
+                    $"HUD did not restore width and fit its current rows: {actual[2]}x{actual[3]} expected {width}x{height}");
+            checks.Add("saved HUD position, width, lock and opacity restored with current-row height");
+        }
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",
@@ -556,18 +972,6 @@ public partial class MainWindow
             await Poll();
             Search.Text="";await Settle();
         }
-        // The wrapper runs this candidate again against the saved directory.
-        var restoredLayout=State.Get("layout").Clone();
-        if(Huds.Count>0)
-        {
-            var placement=restoredLayout.Get("huds").Items().First();var hud=Huds[placement.Text("panel_id")];
-            Require(hud.Locked==placement.Bool("locked"),"HUD lock restore");
-            Require(Math.Abs(hud.Opacity-placement.Number("opacity"))<.001,"HUD alpha restore");
-            var actual=Native.Bounds(hud);
-            Require(Math.Abs(actual[0]-placement.Number("x"))<=2 && Math.Abs(actual[1]-placement.Number("y"))<=2,"HUD physical position restore");
-            Require(Math.Abs(actual[2]-placement.Number("width"))<=2 && Math.Abs(actual[3]-placement.Number("height"))<=2,"HUD physical size restore");
-            checks.Add("saved HUD physical geometry / lock / opacity restored on process launch");
-        }
         if(Panels.Count==1)
         {
             await Command("panel_add");string second=Panels.Keys.Last();
@@ -601,7 +1005,15 @@ public partial class MainWindow
         await Settle();
         Require(Panels[id].View.Get("config").Bool("effective_only"),"effective switch did not reach the panel view");
         Require(HasText(LiveInspector,"技能覆盖率"),"inspector did not render skill coverage");
-        Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
+        if (LiveInspector.CompactReference)
+        {
+            var skillRing=FindOperatorRatio("SkillShare");
+            Require(HasText(skillRing,"技能期有效伤害占比") && HasText(skillRing,"37%") &&
+                    skillRing.ToolTip is ToolTip {Content:TextBlock skillTip} &&
+                    skillTip.Text.Contains("技能期有效伤害 ÷",StringComparison.Ordinal),
+                    "skill-period ring did not switch to effective data");
+        }
+        else Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
         Screenshot.Window(this,Path.Combine(output,"effective-inspector.png"));
         LastUiError="";
         Panels[id].EffectiveOnly.IsChecked=true;
@@ -612,8 +1024,15 @@ public partial class MainWindow
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",
             ranking="total",rate_basis="recent_5s",effective_only=false}});
         await Settle();
-        Require(HasText(LiveInspector,"技能伤害") &&
-                !HasText(LiveInspector,"技能有效伤害"),"inspector did not restore total skill split");
+        if (LiveInspector.CompactReference)
+        {
+            var skillRing=FindOperatorRatio("SkillShare");
+            Require(HasText(skillRing,"技能期伤害占比") && HasText(skillRing,"42%") &&
+                    !HasText(skillRing,"技能期有效伤害占比"),
+                    "skill-period ring did not restore total damage");
+        }
+        else Require(HasText(LiveInspector,"技能伤害") && !HasText(LiveInspector,"技能有效伤害"),
+                "inspector did not restore total skill split");
         var priorView = Panels[id].View;
         var unranked = System.Text.Json.Nodes.JsonNode.Parse(priorView.GetRawText())!;
         var rankedRows = unranked["entries"]!.AsArray();
@@ -625,9 +1044,15 @@ public partial class MainWindow
             "pinned operator lost detail after leaving the ranking");
         LiveInspector.Update(priorView);
         checks.Add("effective switch drives inspector composition, engagement rates and skill split");
-        OpenHud(id);var originalHud=Huds[id];originalHud.SetLocked(false);originalHud.SetOpacity(.83);
+        OpenHud(id);
+        var originalHud=Huds[id];
+        await VerifyHudLayoutEditor(id,output);
+        originalHud.SetLocked(false);originalHud.SetOpacity(.83);
+        checks.Add("HUD layout editor previews fonts and columns, validates inputs, saves and restores profiles");
         await Settle();
         VerifyShareScope(id,originalHud);
+        await VerifyHudRows(originalHud,output);
+        checks.Add("HUD typography, one/four/five rows auto-fit, sixth row scroll and monitor work area");
         checks.Add("share scope reaches live, history, HUD, details and ranking PNG with legacy fallback");
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
@@ -656,13 +1081,33 @@ public partial class MainWindow
             await Command("theme",new(){["theme"]=theme});await Settle();
             await Navigate("live");await Settle();
             Require(ReferenceEquals(originalHud,Huds[id]) && Native.Handle(originalHud)==handleBeforeTheme,"theme recreated HUD");
+            Require(!HasVisibleScrollbar(originalHud), "HUD displayed a scrollbar");
+            var hudPanel = originalHud.Panel;
+            var titleRegion = hudPanel.TitleRegion;
+            Require(hudPanel.PanelFrame.Margin == new Thickness() &&
+                    hudPanel.PanelFrame.BorderThickness == new Thickness() &&
+                    titleRegion.ActualWidth >= originalHud.ActualWidth - 2,
+                    "HUD does not fill its window or retains the extra frame");
+            bool loneTrail=theme=="lone-trail";
+            Require(originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(2,2)) as DependencyObject) &&
+                    originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(titleRegion.ActualWidth*.68,
+                        titleRegion.ActualHeight/2)) as DependencyObject) &&
+                    !originalHud.IsTitleDragSource(hudPanel.HudClose) &&
+                    hudPanel.LoneTrailHudMark.IsVisible==loneTrail && hudPanel.LoneTrailHudBackdrop.IsVisible==loneTrail &&
+                    hudPanel.LoneTrailHudChevrons.IsVisible==loneTrail &&
+                    !hudPanel.LoneTrailHudBackdrop.IsHitTestVisible && !hudPanel.LoneTrailHudChevrons.IsHitTestVisible,
+                    "HUD drag surface, close hit target, or orbital artwork did not render");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
             await Navigate("enemies");await Settle();
             Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
             Require(EnemyTotalHp.Text.Contains("26000"),"enemy total HP did not render");
-            Require(EnemyOurDamage.Text.Contains("18700"),"cumulative damage line value did not render");
+            Require(EnemyOurDamageLabel.Text=="我方对敌扣血" && EnemyOurDamage.Text=="≥ 18700" &&
+                !EnemyChart.Points[^1].DamageComplete,"scoped damage lower bound did not render");
             Require(EnemyStatusHint.Text.Contains("离场时尚余 600 HP（1 个实例）"),
                 "HP remaining at enemy departure did not render");
+            Require(EnemyStatusHint.Text.Contains("已观测敌方回血 400 HP") &&
+                EnemyStatusHint.Text.Contains("含回血累计可承受量 ≥ 26400 HP"),
+                "enemy recovery and damage capacity did not render");
             if (State.Get("enemy").Get("non_team_native_damage").TryNumber() > 0)
                 Require(EnemyStatusHint.Text.Contains("其他来源原生伤害 500"),"non-team damage basis did not render");
             Require(!EnemyEmpty.IsVisible,"enemy empty state shown with entered enemies");
@@ -682,10 +1127,26 @@ public partial class MainWindow
                 Require(State.Get("history_selected").Text("battle_id")==selectedId,"filter/refresh replaced selected history");Search.Text="";
                 checks.Add(theme+" frozen selected history survives search and refresh");
             }
-            await Navigate("settings");await Settle();Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));await Navigate("live");
+            await Navigate("settings");await Settle();
+            Require(!HasVisibleScrollbar(this), "settings displayed a scrollbar");
+            Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));await Navigate("live");
             checks.Add(theme+" theme switch keeps HUD HWND, values and source");
         }
-        await VerifyLoneTrailLayout(output, checks);
+        await Navigate("settings");
+        await Command("number_units", new() { ["number_units"] = "chinese" });
+        Require(NumberUnits.SelectedIndex == 1 && Json.CompactAmount(1_000_000) == "100万" &&
+                Json.CompactAmount(120_000_000) == "1.2亿" &&
+                Panels[id].View.Get("entries").Items().Any(row => row.Text("display_value").Contains("万")) &&
+                originalHud.Panel.View.Get("entries").GetRawText() == Panels[id].View.Get("entries").GetRawText(),
+                "Chinese display units did not reach the settings, chart formatter, live panel and HUD");
+        Screenshot.Window(this, Path.Combine(output, "number-units-settings.png"));
+        await Command("number_units", new() { ["number_units"] = "western" });
+        Require(NumberUnits.SelectedIndex == 0 && Json.CompactAmount(1150) == "1.2K" &&
+                Json.CompactAmount(1_000_000) == "1M" &&
+                Panels[id].View.Get("entries").Items().Any(row => row.Text("display_value").Contains("K")),
+                "western display units did not restore without restarting");
+        checks.Add("global number units switch updates live ranking, chart labels and existing HUD");
+        await VerifyLoneTrailLayout(output,checks);
         await SavePlacement();string normal=State.Get("layout").Get("gui").GetRawText();
         WindowState=WindowState.Minimized;await Settle();await SavePlacement();
         Require(State.Get("layout").Get("gui").GetRawText()==normal,"minimized HWND overwrote normal GUI rectangle");ShowGui();await Settle();
@@ -706,20 +1167,26 @@ public partial class MainWindow
         checks.Add("closing HUD leaves source; source deletion closes only linked HUD");
         originalHud.SetLocked(false);var bounds=Native.Bounds(originalHud);
         int hudClicks=0,underClicks=0;
-        var under=new Window{Title="ArkDPS private click underlay — NOT MuMu",Width=originalHud.Width+30,Height=originalHud.Height+30,Left=originalHud.Left,Top=originalHud.Top,Topmost=true,Background=System.Windows.Media.Brushes.DarkSlateGray};
+        var under=new Window{Title="ArkDPS private click underlay — NOT MuMu",Width=originalHud.ActualWidth+30,Height=originalHud.ActualHeight+30,Left=originalHud.Left,Top=originalHud.Top,Topmost=true,Background=System.Windows.Media.Brushes.DarkSlateGray};
         under.PreviewMouseDown+=(_,_)=>underClicks++;
         originalHud.PreviewMouseDown+=(_,_)=>hudClicks++;
         GetCursorPos(out var pointer);
         try
         {
             originalHud.Topmost=false;under.Show();under.Activate();originalHud.Topmost=true;originalHud.Activate();await Settle();
-            bounds=Native.Bounds(originalHud);int x=bounds[0]+90,y=bounds[1]+130;
+            bounds=Native.Bounds(originalHud);int x=bounds[0]+90,y=bounds[1]+Math.Min(130,bounds[3]-14);
             Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(originalHud),"unlocked HUD does not own test point");
-            Click(x,y);await Task.Delay(150);Require(hudClicks>0 && underClicks==0,"unlocked HUD input route");
+            Click(x,y);await WaitForClick(()=>hudClicks>0 || underClicks>0);
+            Require(hudClicks==1 && underClicks==0,"unlocked HUD input route");
             originalHud.SetLocked(true);await Settle();
             Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(under),"locked HUD point is not private underlay; no click sent");
-            Click(x,y);await Task.Delay(150);Require(underClicks==1,"locked HUD did not pass input to private underlay");
-            originalHud.SetLocked(false);await Settle();Click(x,y);await Task.Delay(150);Require(hudClicks>=2,"unlocked input not restored");
+            Click(x,y);await WaitForClick(()=>underClicks>0 || hudClicks>1);
+            Require(underClicks==1 && hudClicks==1,"locked HUD did not pass input to private underlay");
+            originalHud.SetLocked(false);await Settle();
+            Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(originalHud),
+                "unlocked HUD did not reclaim the private test point");
+            Click(x,y);await WaitForClick(()=>hudClicks>1 || underClicks>1);
+            Require(hudClicks==2 && underClicks==1,"unlocked input not restored");
             checks.Add("Win32 SendInput: HUD -> private underlay -> HUD (NOT game certification)");
         }
         finally{under.Close();SetCursorPos(pointer.X,pointer.Y);}

@@ -368,12 +368,28 @@ internal static class Theme
             ["Radius"]="12",
         },
     };
+    private static readonly Uri FontBase=new("pack://application:,,,/");
+    private static readonly FontFamily LoneTrailInterface=new(FontBase,
+        "./Assets/Fonts/#Barlow Semi Condensed, Microsoft YaHei UI, Segoe UI");
+    private static readonly FontFamily LoneTrailData=new(FontBase,
+        "./Assets/Fonts/#IBM Plex Mono, Microsoft YaHei UI, Consolas");
+    private static readonly FontFamily StandardInterface=new("Segoe UI Variable Text, Microsoft YaHei UI");
+    private static readonly FontFamily StandardHeading=new("Segoe UI Variable Display, Microsoft YaHei UI");
+    private static readonly FontFamily StandardDisplay=new("Bahnschrift, Segoe UI");
+    private static readonly FontFamily StandardData=new("Cascadia Mono, Consolas");
+
     public static void Apply(string key)
     {
         if(!Skins.TryGetValue(key,out var colors)){key="lone-trail";colors=Skins[key];}
         Key=key;
         foreach(var pair in colors)
             if(pair.Key!="Radius") System.Windows.Application.Current.Resources[pair.Key]=Brush(pair.Value);
+        var resources=System.Windows.Application.Current.Resources;
+        bool loneTrail=key=="lone-trail";
+        resources["InterfaceFont"]=loneTrail ? LoneTrailInterface : StandardInterface;
+        resources["HeadingFont"]=loneTrail ? LoneTrailInterface : StandardHeading;
+        resources["DisplayFont"]=loneTrail ? LoneTrailInterface : StandardDisplay;
+        resources["DataFont"]=loneTrail ? LoneTrailData : StandardData;
         System.Windows.Application.Current.Resources["DataHighlight"]=Brush(key=="lone-trail" ? "#61DFFF" : colors["Ink"]);
         int radius=int.Parse(colors["Radius"]);
         System.Windows.Application.Current.Resources["CardRadius"]=new CornerRadius(radius);
@@ -398,5 +414,8 @@ internal static class Theme
     {
         var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); brush.Freeze(); return brush;
     }
+    internal static Typeface Typeface(string key,FontWeight weight) =>
+        new((FontFamily)System.Windows.Application.Current.Resources[key],FontStyles.Normal,weight,FontStretches.Normal);
+
     public static Brush Resource(string name) => (Brush)System.Windows.Application.Current.Resources[name];
 }

@@ -15,7 +15,7 @@ using System.Windows.Media.Imaging;
 namespace ArkDPS.Desktop;
 
 internal sealed record EnemyPoint(double GameTime, double? TotalHp, bool TotalComplete,
-    double? RemainingHp, bool RemainingComplete, double? Damage, bool BreakBefore);
+    double? RemainingHp, bool RemainingComplete, double? Damage, bool DamageComplete, bool BreakBefore);
 
 public sealed class EnemyItem : INotifyPropertyChanged
 {
@@ -210,6 +210,7 @@ public sealed class EnemyChart : FrameworkElement
     private IReadOnlyList<EnemyPoint> points = Array.Empty<EnemyPoint>();
     private double? cursorTime;
     internal IReadOnlyList<EnemyPoint> Points => points;
+    internal string DamageLabel { get; set; } = "我方有效伤害";
 
     public EnemyChart()
     {
@@ -231,6 +232,12 @@ public sealed class EnemyChart : FrameworkElement
         InvalidateVisual();
     }
 
+    internal void RefreshNumberUnits()
+    {
+        UpdateReadout();
+        InvalidateVisual();
+    }
+
     private int CursorIndex() => cursorTime is not double time || points.Count==0
         ? -1 : Enumerable.Range(0,points.Count).MinBy(i=>Math.Abs(points[i].GameTime-time));
 
@@ -242,13 +249,13 @@ public sealed class EnemyChart : FrameworkElement
         AutomationProperties.SetHelpText(this,readout);
     }
 
-    private static string Describe(EnemyPoint point) => Time(point.GameTime)
+    private string Describe(EnemyPoint point) => Time(point.GameTime)
         + "\n已入场总血量 " + Reading(point.TotalHp,point.TotalComplete)
         + "\n敌方剩余 " + Reading(point.RemainingHp,point.RemainingComplete)
-        + "\n我方有效伤害 " + Reading(point.Damage,true);
+        + "\n" + DamageLabel + " " + Reading(point.Damage,point.DamageComplete);
 
     private static string Reading(double? value,bool complete) =>
-        value is double number ? (complete ? "" : "≥ ")+Compact(number) : "—";
+        value is double number ? (complete ? "" : "≥ ")+Json.CompactAmount(number) : "—";
 
     private void SelectPoint(int index)
     {
@@ -293,13 +300,6 @@ public sealed class EnemyChart : FrameworkElement
         InvalidateVisual();
     }
 
-    private static string Compact(double value)
-    {
-        if (!double.IsFinite(value)) return "—";
-        if (Math.Abs(value) >= 10000) return (value / 10000).ToString("0.#", CultureInfo.InvariantCulture) + "万";
-        return Math.Round(value, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture);
-    }
-
     private static string Time(double seconds)
     {
         int total = (int)Math.Max(0, seconds);
@@ -314,12 +314,12 @@ public sealed class EnemyChart : FrameworkElement
         var muted = Theme.Resource("Muted");
         var line = Theme.Resource("Line");
         double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        var typeface = new Typeface("Cascadia Mono, Consolas");
+        var typeface = Theme.Typeface("DataFont",FontWeights.Normal);
         dc.DrawRectangle(Brushes.Transparent,null,new Rect(RenderSize));
-        if (!points.Any(point=>point.TotalHp.HasValue || point.RemainingHp.HasValue || point.Damage.HasValue))
+        if (points.Count == 0)
         {
             var empty = new FormattedText("等待可靠的血量或伤害样本", CultureInfo.CurrentUICulture,
-                FlowDirection.LeftToRight, new Typeface("Microsoft YaHei UI"), 12, muted, dpi);
+                FlowDirection.LeftToRight, Theme.Typeface("InterfaceFont",FontWeights.Normal), 12, muted, dpi);
             dc.DrawText(empty, new Point(Math.Max(8, (ActualWidth - empty.Width) / 2),
                                          Math.Max(8, (ActualHeight - empty.Height) / 2)));
             return;
@@ -342,7 +342,7 @@ public sealed class EnemyChart : FrameworkElement
         {
             double y = top + height * i / 4;
             dc.DrawLine(gridPen, new Point(left, y), new Point(left + width, y));
-            var label = new FormattedText(Compact(maxY * (4 - i) / 4), CultureInfo.CurrentUICulture,
+            var label = new FormattedText(Json.CompactAmount(maxY * (4 - i) / 4), CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight, typeface, 10, muted, dpi);
             dc.DrawText(label, new Point(left - label.Width - 8, y - label.Height / 2));
         }
@@ -369,12 +369,17 @@ public sealed class EnemyChart : FrameworkElement
             {
                 var prior=points[i-1];
                 var current=points[i];
-                if(current.BreakBefore || value(prior) is not double fromValue
-                    || value(current) is not double toValue) continue;
-                var from=Map(prior.GameTime,fromValue);
-                var to=Map(current.GameTime,toValue);
-                var pen=complete(prior) && complete(current) ? exact : partial;
-                if (step && from.Y != to.Y)
+                double? fromValue=value(prior),toValue=value(current);
+                var from=Map(prior.GameTime,fromValue.GetValueOrDefault());
+                var to=Map(current.GameTime,toValue.GetValueOrDefault());
+                if(current.BreakBefore)
+                {
+                    ChartLine.DrawGap(dc,partial,from,to,top+height);
+                    continue;
+                }
+                bool hasBothValues=fromValue.HasValue && toValue.HasValue;
+                var pen=hasBothValues && complete(prior) && complete(current) ? exact : partial;
+                if (step && hasBothValues && from.Y != to.Y)
                 {
                     var change = new Point(to.X, from.Y);
                     dc.DrawLine(pen, from, change);
@@ -382,17 +387,16 @@ public sealed class EnemyChart : FrameworkElement
                 }
                 dc.DrawLine(pen, from, to);
             }
-            var last=points.LastOrDefault(point=>value(point).HasValue);
-            if(last!=null && value(last) is double lastValue)
-            {
-                double radius=thickness+1;
-                dc.DrawEllipse(complete(last) ? brush : null,complete(last) ? null : exact,
-                    Map(last.GameTime,lastValue),radius,radius);
-            }
+            var last=points[^1];
+            var lastValue=value(last);
+            bool finalKnown=lastValue.HasValue && complete(last);
+            double radius=thickness+1;
+            dc.DrawEllipse(finalKnown ? brush : null,finalKnown ? null : exact,
+                Map(last.GameTime,lastValue.GetValueOrDefault()),radius,radius);
         }
 
         Series(point=>point.TotalHp,point=>point.TotalComplete,accent,2.2,step:true);
-        Series(point=>point.Damage,_=>true,good,2.2);
+        Series(point=>point.Damage,point=>point.DamageComplete,good,2.2);
         Series(point=>point.RemainingHp,point=>point.RemainingComplete,muted,1.4,alternate:true);
         int cursor=CursorIndex();
         if(cursor>=0)
@@ -435,6 +439,7 @@ public partial class MainWindow
         if(ready || (shownEnemy.ValueKind==JsonValueKind.Undefined && status=="ready" && battleId.Length>0))
         {
             shownEnemy=enemy;
+            EnemyChart.DamageLabel=enemy.Text("damage_scope")=="entered" ? "我方对敌扣血" : "我方有效伤害";
             UpdateEnemyRows(enemy.Get("rows"));
             UpdateEnemyChart(enemy.Get("series"));
         }
@@ -446,14 +451,17 @@ public partial class MainWindow
         bool totalComplete=EnemyComplete(totals,"total_hp_complete");
         bool remainingComplete=EnemyComplete(totals,"remaining_hp_complete");
         var last=shownEnemy.Get("last_point");
+        bool scopedDamage=shownEnemy.Text("damage_scope")=="entered";
+        bool damageComplete=last.Get("our_damage_complete").ValueKind!=JsonValueKind.False;
         var entryCoverage=shownEnemy.Get("entry_events_complete").ValueKind;
         bool entryComplete=entryCoverage==JsonValueKind.True
             && shownEnemy.Get("enemy_state_complete").ValueKind!=JsonValueKind.False;
         EnemyEntered.Text=EnemyReading(totals,"entered_count",entryComplete);
         EnemyTotalHp.Text=EnemyReading(totals,"entered_total_hp",totalComplete);
         EnemyRemaining.Text=EnemyReading(totals,"remaining_hp",remainingComplete);
+        EnemyOurDamageLabel.Text=scopedDamage ? "我方对敌扣血" : "我方有效伤害";
         EnemyOurDamage.Text=last.Bool("our_damage_known")
-            ? EnemyReading(last,"our_effective_damage",true) : "—";
+            ? EnemyReading(last,"our_effective_damage",damageComplete) : "—";
 
         string enemyStatus=status switch
         {
@@ -487,7 +495,8 @@ public partial class MainWindow
         if(hasReading)
         {
             hints.Add(entryHint+"已入场总血量含已记录的重生阶段。");
-            if(!totalComplete || !remainingComplete) hints.Add("≥ 表示已知下限，曲线用点线标记。");
+            if(!totalComplete || !remainingComplete || (last.Bool("our_damage_known") && !damageComplete))
+                hints.Add("≥ 表示已知下限，曲线用点线标记。");
             if(totals.Number("planned_count")>0
                 || (totals.Get("planned_count").ValueKind==JsonValueKind.Undefined
                     && totals.Get("stage_total_hp_estimate").ValueKind==JsonValueKind.Number))
@@ -496,9 +505,16 @@ public partial class MainWindow
             if(totals.Get("departed_hp").TryNumber()>0)
                 hints.Add("离场时尚余 "+totals.UiInt("departed_hp")+" HP（"
                     +totals.UiInt("departed_hp_count")+" 个实例）。");
+            if(totals.Get("recovered_hp").TryNumber()>0)
+            {
+                hints.Add("已观测敌方回血 "+totals.UiInt("recovered_hp")+" HP。");
+                hints.Add("含回血累计可承受量 "+EnemyReading(totals,"damage_capacity_with_recovery",false)+" HP。");
+            }
             if(shownEnemy.Get("non_team_native_damage").TryNumber()>0)
                 hints.Add("其他来源原生伤害 "+shownEnemy.UiInt("non_team_native_damage")+"。");
-            if(shownEnemy.Get("damage_baseline").ValueKind==JsonValueKind.Number)
+            if(scopedDamage)
+                hints.Add("我方对敌扣血按已入场实例统计，从事件采集起点累计。");
+            else if(shownEnemy.Get("damage_baseline").ValueKind==JsonValueKind.Number)
                 hints.Add("我方有效伤害从敌情观测起点累计（起点 "+shownEnemy.UiInt("damage_baseline")+"）。");
         }
         EnemyStatusHint.Text=string.Join("\n",hints);
@@ -512,7 +528,7 @@ public partial class MainWindow
             _ => "等待可靠的敌情数据。",
         };
         EnemyChartLegendTotal.Text = "已入场总血量  " + EnemyTotalHp.Text;
-        EnemyChartLegendDamage.Text = "我方有效伤害  " + EnemyOurDamage.Text;
+        EnemyChartLegendDamage.Text = EnemyOurDamageLabel.Text + "  " + EnemyOurDamage.Text;
         EnemyChartLegendRemaining.Text = "敌方剩余  " + EnemyRemaining.Text;
     }
 
@@ -570,10 +586,12 @@ public partial class MainWindow
             if(enemyGaps.Any(gap=>time>gap.Start && time<gap.End)) continue;
             bool totalComplete=EnemyComplete(sample,"total_hp_complete");
             bool remainingComplete=EnemyComplete(sample,"remaining_hp_complete");
+            bool damageComplete=sample.Get("our_damage_complete").ValueKind!=JsonValueKind.False;
             bool breaks=next.Count>0 && enemyGaps.Any(gap=>next[^1].GameTime<=gap.Start && time>=gap.End);
             next.Add(new EnemyPoint(time,EnemyNumber(sample,"entered_total_hp",totalComplete),totalComplete,
                 EnemyNumber(sample,"remaining_hp",remainingComplete),remainingComplete,
-                sample.Bool("our_damage_known") ? EnemyNumber(sample,"our_effective_damage") : null,breaks));
+                sample.Bool("our_damage_known") ? EnemyNumber(sample,"our_effective_damage",damageComplete) : null,
+                damageComplete,breaks));
         }
         EnemyChart.SetData(next);
     }

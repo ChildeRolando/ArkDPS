@@ -4,9 +4,14 @@
  <UserControl.Resources>
   <Style x:Key="ReferenceRankedRow" TargetType="ListBoxItem">
    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+   <Setter Property="Cursor" Value="Hand"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
     <Border x:Name="row" Background="{DynamicResource Console}" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="0,0,0,1">
-     <Grid><ContentPresenter/><Border x:Name="mark" Width="3" HorizontalAlignment="Left" Background="Transparent" IsHitTestVisible="False"/></Grid>
+     <Grid>
+      <ContentPresenter/>
+      <Border x:Name="mark" Width="3" HorizontalAlignment="Left" Background="Transparent" IsHitTestVisible="False"/>
+      <Border x:Name="focusOutline" BorderBrush="{DynamicResource Focus}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"/>
+     </Grid>
     </Border>
     <ControlTemplate.Triggers>
      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="row" Property="Background" Value="{DynamicResource ConsoleCard}"/></Trigger>
@@ -17,42 +22,50 @@
       <Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource Accent}"/>
       <Setter TargetName="mark" Property="Background" Value="{DynamicResource Accent}"/>
      </Trigger>
-     <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource Focus}"/><Setter TargetName="row" Property="BorderThickness" Value="1"/></Trigger>
+     <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="focusOutline" Property="Visibility" Value="Visible"/></Trigger>
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <Style x:Key="ReferenceShare" TargetType="ProgressBar">
-   <Setter Property="Background" Value="{DynamicResource Track}"/>
-   <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
-   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ProgressBar">
-    <Grid><Border x:Name="PART_Track" Background="{TemplateBinding Background}" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1"/>
-     <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left"/></Grid>
-   </ControlTemplate></Setter.Value></Setter>
+  <Style x:Key="ReferencePanelAction" TargetType="Button" BasedOn="{StaticResource Quiet}">
+   <Setter Property="Foreground" Value="{DynamicResource ConsoleInk}"/>
+   <Setter Property="MinHeight" Value="24"/>
+   <Setter Property="MinWidth" Value="36"/>
+   <Setter Property="FontSize" Value="11"/>
+   <Setter Property="Padding" Value="7,1"/>
+   <Setter Property="Margin" Value="0,0,2,0"/>
+  </Style>
+  <Style x:Key="ReferenceNumberCell" TargetType="TextBlock" BasedOn="{StaticResource Mono}">
+   <Setter Property="Foreground" Value="{DynamicResource ConsoleInk}"/>
+   <Setter Property="FontSize" Value="14"/>
+   <Setter Property="TextAlignment" Value="Right"/>
+   <Setter Property="VerticalAlignment" Value="Center"/>
+   <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+   <Setter Property="Margin" Value="0,0,4,0"/>
   </Style>
   <DataTemplate x:Key="ReferenceRow" DataType="{x:Type local:RowItem}">
-   <Grid Height="27" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
-    <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="2*"/><ColumnDefinition Width="1.18*" MinWidth="61"/><ColumnDefinition Width="1.05*" MinWidth="52"/><ColumnDefinition Width="1.38*" MinWidth="78"/></Grid.ColumnDefinitions>
-    <TextBlock Text="{Binding Rank}" Foreground="{DynamicResource ConsoleInk}" FontFamily="Cascadia Mono, Consolas" FontSize="12" VerticalAlignment="Center" TextAlignment="Center"/>
+   <Grid x:Name="ReferenceOperatorRow" Height="36" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
+    <Grid.ColumnDefinitions>
+     <ColumnDefinition Width="28"/><ColumnDefinition Width="1.55*" MinWidth="134"/><ColumnDefinition Width="*" MinWidth="30"/>
+     <ColumnDefinition Width="74"/><ColumnDefinition Width="66"/><ColumnDefinition Width="56"/>
+    </Grid.ColumnDefinitions>
+    <TextBlock Text="{Binding Rank}" Foreground="{DynamicResource ConsoleInk}" FontFamily="{DynamicResource DataFont}" FontSize="14" VerticalAlignment="Center" TextAlignment="Center"/>
     <Grid Grid.Column="1" Margin="1,0,5,0">
-     <Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition/></Grid.ColumnDefinitions>
-     <Border Width="22" Height="22" HorizontalAlignment="Left" Background="{DynamicResource ConsoleCard}" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1" ClipToBounds="True">
-      <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource ConsoleInk}" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="32"/><ColumnDefinition/></Grid.ColumnDefinitions>
+     <Border x:Name="ReferenceOperatorPortrait" Width="30" Height="30" HorizontalAlignment="Left" Background="{DynamicResource ConsoleCard}" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1" ClipToBounds="True">
+      <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
      </Border>
-     <TextBlock Grid.Column="1" Text="{Binding Name}" Foreground="{DynamicResource ConsoleInk}" FontSize="12" VerticalAlignment="Center" Margin="4,0,0,0" TextTrimming="CharacterEllipsis"/>
+     <TextBlock x:Name="ReferenceOperatorName" Grid.Column="1" Text="{Binding Name}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" Margin="5,0,0,0" TextTrimming="CharacterEllipsis"/>
     </Grid>
-    <TextBlock Grid.Column="2" Text="{Binding Total}" Foreground="{DynamicResource ConsoleInk}" FontFamily="Cascadia Mono, Consolas" FontSize="12" TextAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"/>
-    <TextBlock Grid.Column="3" Text="{Binding Rate}" Foreground="{DynamicResource ConsoleInk}" FontFamily="Cascadia Mono, Consolas" FontSize="12" TextAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0" TextTrimming="CharacterEllipsis"/>
-    <Grid Grid.Column="4" Margin="4,0,7,0">
-     <Grid.ColumnDefinitions><ColumnDefinition Width="46"/><ColumnDefinition/></Grid.ColumnDefinitions>
-     <TextBlock Text="{Binding Share}" Foreground="{DynamicResource ConsoleInk}" FontFamily="Cascadia Mono, Consolas" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"/>
-     <ProgressBar Grid.Column="1" Value="{Binding SharePercent,Mode=OneWay}" Height="7" VerticalAlignment="Center" Style="{StaticResource ReferenceShare}" Focusable="False"/>
-    </Grid>
+    <local:ContributionBar x:Name="ReferenceOperatorContribution" Grid.Column="2" Data="{Binding Entry}" Height="9" VerticalAlignment="Center" Margin="4,0,4,0"/>
+    <TextBlock Grid.Column="3" Text="{Binding Total}" Style="{StaticResource ReferenceNumberCell}"/>
+    <TextBlock Grid.Column="4" Text="{Binding Rate}" Style="{StaticResource ReferenceNumberCell}"/>
+    <TextBlock Grid.Column="5" Text="{Binding Share}" Style="{StaticResource ReferenceNumberCell}"/>
    </Grid>
   </DataTemplate>
   <DataTemplate x:Key="FullRow" DataType="{x:Type local:RowItem}">
    <Grid MinHeight="51" Margin="0,0,6,0" ToolTip="{Binding Tooltip}">
     <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="128"/><ColumnDefinition Width="*"/><ColumnDefinition Width="64"/><ColumnDefinition Width="56"/><ColumnDefinition Width="48"/></Grid.ColumnDefinitions>
-    <TextBlock Text="{Binding Rank}" Foreground="{DynamicResource Muted}" FontFamily="Cascadia Mono, Consolas" FontSize="12" VerticalAlignment="Center" TextAlignment="Center"/>
+    <TextBlock Text="{Binding Rank}" Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="12" VerticalAlignment="Center" TextAlignment="Center"/>
     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
      <Border Width="28" Height="28" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Accent}" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
@@ -65,25 +78,53 @@
     <Border Grid.Column="2" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="4,0,10,0">
      <local:ContributionBar Data="{Binding Entry}" Height="7" VerticalAlignment="Center"/>
     </Border>
-    <TextBlock Grid.Column="3" Text="{Binding Total}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="13" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-    <TextBlock Grid.Column="4" Text="{Binding Rate}" Foreground="{DynamicResource Muted}" FontFamily="Cascadia Mono, Consolas" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-    <TextBlock Grid.Column="5" Text="{Binding Share}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+    <TextBlock Grid.Column="3" Text="{Binding Total}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DataFont}" FontSize="13" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+    <TextBlock Grid.Column="4" Text="{Binding Rate}" Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+    <TextBlock Grid.Column="5" Text="{Binding Share}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DataFont}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
    </Grid>
   </DataTemplate>
+  <ControlTemplate x:Key="HudRowsTemplate" TargetType="ListBox">
+   <ScrollViewer x:Name="HudRowsViewport" Focusable="False" CanContentScroll="True"
+                 VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
+    <ItemsPresenter/>
+   </ScrollViewer>
+  </ControlTemplate>
+  <Style x:Key="HudRankedRow" TargetType="ListBoxItem" BasedOn="{StaticResource RankedRow}">
+   <Setter Property="Height" Value="{DynamicResource HudProfileRowHeight}"/>
+   <Setter Property="Margin" Value="{DynamicResource HudProfileRowGap}"/>
+  </Style>
+  <Style x:Key="HudNumber" TargetType="TextBlock">
+   <Setter Property="FontFamily" Value="{DynamicResource DataFont}"/>
+   <Setter Property="FontSize" Value="{DynamicResource HudProfileNumberFont}"/>
+   <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+   <Setter Property="TextAlignment" Value="Right"/>
+   <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+   <Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
   <DataTemplate x:Key="HudRow" DataType="{x:Type local:RowItem}">
-   <Grid MinHeight="32" Margin="0,0,10,0" ToolTip="{Binding Tooltip}">
-    <Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition Width="26"/><ColumnDefinition Width="62"/><ColumnDefinition Width="*"/><ColumnDefinition Width="46"/><ColumnDefinition Width="44"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
-    <TextBlock Text="{Binding Rank}" Foreground="{DynamicResource Muted}" FontFamily="Cascadia Mono, Consolas" FontSize="11" VerticalAlignment="Center" TextAlignment="Center"/>
-    <Border Grid.Column="1" Width="24" Height="24" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
-     <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
+   <Grid x:Name="HudOperatorRow" Margin="{DynamicResource HudProfileRowPadding}" ClipToBounds="True" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
+    <Grid.ColumnDefinitions>
+     <ColumnDefinition Width="{DynamicResource HudProfileRankWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfilePortraitWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileNameWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileBarWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileTotalWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileRateWidth}"/>
+     <ColumnDefinition Width="{DynamicResource HudProfileShareWidth}"/>
+    </Grid.ColumnDefinitions>
+    <TextBlock Text="{Binding Rank}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" TextAlignment="Center"/>
+    <Viewbox Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" StretchDirection="DownOnly">
+     <Border Width="{DynamicResource HudProfilePortraitSize}" Height="{DynamicResource HudProfilePortraitSize}" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
+      <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNumberFont}" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
+     </Border>
+    </Viewbox>
+    <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNameFont}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="{DynamicResource HudProfileNameGap}"/>
+    <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="{DynamicResource HudProfileBarGap}">
+     <local:ContributionBar Data="{Binding Entry}" Height="8" VerticalAlignment="Center"/>
     </Border>
-    <TextBlock Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontSize="12" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" VerticalAlignment="Center" Margin="4,0,4,0"/>
-    <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="2,0,6,0">
-     <local:ContributionBar Data="{Binding Entry}" Height="5" VerticalAlignment="Center"/>
-    </Border>
-    <TextBlock Grid.Column="4" Text="{Binding Total}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-    <TextBlock Grid.Column="5" Text="{Binding Rate}" Foreground="{DynamicResource Muted}" FontFamily="Cascadia Mono, Consolas" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"/>
-    <TextBlock Grid.Column="6" Text="{Binding Share}" Foreground="{DynamicResource Ink}" FontFamily="Cascadia Mono, Consolas" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+    <TextBlock x:Name="HudOperatorTotal" Grid.Column="4" Text="{Binding Total}" Style="{StaticResource HudNumber}"/>
+    <TextBlock Grid.Column="5" Text="{Binding Rate}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" Margin="{DynamicResource HudProfileValueGap}"/>
+    <TextBlock Grid.Column="6" Text="{Binding Share}" Style="{StaticResource HudNumber}" Margin="{DynamicResource HudProfileValueGap}"/>
    </Grid>
   </DataTemplate>
   <Style x:Key="EffectiveSwitch" TargetType="ToggleButton">
@@ -114,20 +155,44 @@
   <Grid>
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
-   <DockPanel x:Name="TitleBar" Margin="14,10,12,8">
-    <StackPanel x:Name="ActionStack" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-     <Button x:Name="HudClose" Content="×" Click="CloseHud" Padding="6,1" FontSize="19" MinWidth="28" Visibility="Collapsed" ToolTip="关闭 HUD" Background="Transparent" BorderBrush="{DynamicResource Line}"/>
-     <WrapPanel x:Name="Actions" VerticalAlignment="Center">
-      <Button x:Name="OpenHudButton" Content="HUD" Click="OpenHud" ToolTip="从本面板打开单屏 HUD" Padding="10,5" FontSize="13" Background="{DynamicResource Inset}"/>
-      <Button x:Name="DuplicateButton" Content="复制" Click="Duplicate" Padding="9,5" FontSize="13" Background="{DynamicResource Inset}"/>
-      <Button x:Name="DeleteButton" Content="删除" Click="Delete" Padding="9,5" FontSize="13" Background="{DynamicResource Inset}"/>
-     </WrapPanel>
-    </StackPanel>
-    <StackPanel x:Name="PanelTitle" Orientation="Horizontal" VerticalAlignment="Center">
-     <Border Width="3" Height="18" Background="{DynamicResource Accent}" CornerRadius="1" Margin="0,0,8,0"/>
-     <StackPanel><TextBlock x:Name="Heading" Style="{StaticResource CardTitle}" FontSize="18" VerticalAlignment="Center"/><TextBlock x:Name="PanelKind" Text="LIVE PANEL" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="{DynamicResource Muted}" Margin="0,1,0,0"/></StackPanel>
-    </StackPanel>
-   </DockPanel>
+   <Border x:Name="TitleRegion">
+    <Grid>
+     <Border x:Name="LoneTrailHudBackdrop" Visibility="Collapsed" IsHitTestVisible="False">
+      <Border.Background>
+       <ImageBrush ImageSource="Assets/LoneTrail/orbital-header-banner.png" Stretch="UniformToFill"
+                   Viewbox="0.31,0.12,0.69,0.52"/>
+      </Border.Background>
+      <Border.OpacityMask>
+       <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+        <GradientStop Color="#00000000" Offset=".27"/><GradientStop Color="#92000000" Offset=".52"/>
+        <GradientStop Color="#D8000000" Offset=".73"/><GradientStop Color="#95000000" Offset=".86"/>
+        <GradientStop Color="#28000000" Offset="1"/>
+       </LinearGradientBrush>
+      </Border.OpacityMask>
+     </Border>
+    <DockPanel x:Name="TitleBar" Margin="14,10,12,8">
+     <StackPanel x:Name="ActionStack" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+      <Image x:Name="LoneTrailHudChevrons" Source="Assets/LoneTrail/chevrons-silver.png" Width="36" Height="20"
+             Opacity=".88" Margin="0,0,3,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <Button x:Name="HudClose" Click="CloseHud" Padding="6,1" MinWidth="32" Visibility="Collapsed" ToolTip="关闭 HUD" AutomationProperties.Name="关闭 HUD" Background="Transparent" BorderBrush="{DynamicResource Line}">
+       <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Width="10" Height="10" Stretch="Fill" StrokeThickness="1.5"
+             Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" IsHitTestVisible="False"/>
+      </Button>
+      <WrapPanel x:Name="Actions" VerticalAlignment="Center">
+       <Button x:Name="OpenHudButton" Content="HUD" AutomationProperties.Name="打开 HUD" Click="OpenHud" ToolTip="从本面板打开单屏 HUD" Padding="10,5" FontSize="13" Background="{DynamicResource Inset}"/>
+       <Button x:Name="DuplicateButton" Content="复制" AutomationProperties.Name="复制统计面板" Click="Duplicate" Padding="9,5" FontSize="13" Background="{DynamicResource Inset}"/>
+       <Button x:Name="DeleteButton" Content="删除" AutomationProperties.Name="删除统计面板" Click="Delete" Padding="9,5" FontSize="13" Background="{DynamicResource Inset}"/>
+      </WrapPanel>
+     </StackPanel>
+     <StackPanel x:Name="PanelTitle" Orientation="Horizontal" VerticalAlignment="Center">
+      <Border x:Name="TitleAccent" Width="3" Height="18" Background="{DynamicResource Accent}" CornerRadius="1" Margin="0,0,8,0"/>
+      <Path x:Name="LoneTrailHudMark" Data="M 5,0 L 12,0 L 7,18 L 0,18 Z" Width="11" Height="18" Stretch="Fill"
+            Fill="{DynamicResource Accent}" Margin="0,0,7,0" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <StackPanel x:Name="TitleText"><TextBlock x:Name="Heading" Style="{StaticResource CardTitle}" FontSize="18" VerticalAlignment="Center"/><TextBlock x:Name="PanelKind" Text="LIVE PANEL" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource Muted}" Margin="0,1,0,0"/></StackPanel>
+     </StackPanel>
+    </DockPanel>
+    </Grid>
+   </Border>
 
    <WrapPanel x:Name="Selectors" Grid.Row="1" Margin="14,0,14,8">
     <StackPanel x:Name="CategoryField" Margin="0,0,8,0"><TextBlock x:Name="CategoryLabel" Text="统计类别" Style="{StaticResource FieldLabel}"/><ComboBox x:Name="Category" Width="88" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="统计类别">
@@ -158,7 +223,7 @@
    </DockPanel>
 
    <Grid x:Name="Plot" Grid.Row="4" MinHeight="120">
-    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <Grid x:Name="TableHeader" Background="{DynamicResource Inset}" MinHeight="28" Margin="0,0,9,0">
      <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="128"/><ColumnDefinition Width="*"/><ColumnDefinition Width="64"/><ColumnDefinition Width="56"/><ColumnDefinition Width="48"/></Grid.ColumnDefinitions>
      <TextBlock Text="#" Style="{StaticResource Caption}" VerticalAlignment="Center" TextAlignment="Center"/>
@@ -168,16 +233,31 @@
      <TextBlock x:Name="RateHeading" Grid.Column="4" Text="DPS" Style="{StaticResource Caption}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,6,0"/>
      <TextBlock x:Name="ShareHeading" Grid.Column="5" Text="占比" Style="{StaticResource Caption}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,12,0"/>
     </Grid>
-    <Grid x:Name="ReferenceTableHeader" Background="{DynamicResource ConsoleCard}" MinHeight="22" Margin="0,0,9,0" Visibility="Collapsed">
-     <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="2*"/><ColumnDefinition Width="1.18*" MinWidth="61"/><ColumnDefinition Width="1.05*" MinWidth="52"/><ColumnDefinition Width="1.38*" MinWidth="78"/></Grid.ColumnDefinitions>
-     <TextBlock Text="#" Foreground="{DynamicResource ConsoleInk}" FontSize="11" TextAlignment="Center" VerticalAlignment="Center"/>
-     <TextBlock Grid.Column="1" Text="干员" Foreground="{DynamicResource ConsoleInk}" FontSize="11" VerticalAlignment="Center" Margin="3,0,0,0"/>
-     <TextBlock x:Name="ReferenceTotalHeading" Grid.Column="2" Text="总伤" Foreground="{DynamicResource ConsoleInk}" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"/>
-     <TextBlock x:Name="ReferenceRateHeading" Grid.Column="3" Text="DPS" Foreground="{DynamicResource ConsoleInk}" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"/>
-     <TextBlock Grid.Column="4" Text="贡献占比" Foreground="{DynamicResource ConsoleInk}" FontSize="11" VerticalAlignment="Center" Margin="4,0,0,0"/>
+    <Grid x:Name="ReferenceTableHeader" Background="{DynamicResource ConsoleCard}" MinHeight="29" Visibility="Collapsed">
+     <Grid.ColumnDefinitions>
+     <ColumnDefinition Width="28"/><ColumnDefinition Width="1.55*" MinWidth="134"/><ColumnDefinition Width="*" MinWidth="30"/>
+     <ColumnDefinition Width="74"/><ColumnDefinition Width="66"/><ColumnDefinition Width="56"/>
+    </Grid.ColumnDefinitions>
+     <TextBlock Text="#" Foreground="{DynamicResource ConsoleInk}" FontSize="13" FontWeight="SemiBold" TextAlignment="Center" VerticalAlignment="Center"/>
+     <TextBlock Grid.Column="1" Text="干员" Foreground="{DynamicResource ConsoleInk}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" Margin="3,0,0,0"/>
+     <TextBlock x:Name="ReferenceContributionHeading" Grid.Column="2" Text="贡献" Foreground="{DynamicResource ConsoleInk}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" Margin="4,0,0,0"/>
+     <TextBlock x:Name="ReferenceTotalHeading" Grid.Column="3" Text="总伤" Style="{StaticResource ReferenceNumberCell}" FontSize="13" FontWeight="SemiBold"/>
+     <TextBlock x:Name="ReferenceRateHeading" Grid.Column="4" Text="DPS" Style="{StaticResource ReferenceNumberCell}" FontSize="13" FontWeight="SemiBold"/>
+     <TextBlock x:Name="ReferenceShareHeading" Grid.Column="5" Text="占比" Style="{StaticResource ReferenceNumberCell}" FontSize="13" FontWeight="SemiBold"/>
     </Grid>
-    <ListBox x:Name="Rows" Grid.Row="1" ItemContainerStyle="{StaticResource RankedRow}" SelectionChanged="RowSelected" MouseEnter="HoldOrder" MouseLeave="ReleaseOrder" MaxHeight="520" MinHeight="80" KeyboardNavigation.DirectionalNavigation="Contained"/>
+    <ListBox x:Name="Rows" Grid.Row="1" ItemContainerStyle="{StaticResource RankedRow}" ScrollViewer.ScrollChanged="ReferenceScrollChanged" SelectionChanged="RowSelected" MouseEnter="HoldOrder" MouseLeave="ReleaseOrder" MaxHeight="520" MinHeight="80" KeyboardNavigation.DirectionalNavigation="Contained"/>
     <TextBlock x:Name="Empty" Grid.Row="1" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="280" TextAlignment="Center" FontSize="13" Margin="14"/>
+    <Grid x:Name="ReferenceFooter" Grid.Row="2" Background="{DynamicResource ConsoleCard}" MinHeight="31" Visibility="Collapsed">
+    <Grid.ColumnDefinitions>
+     <ColumnDefinition Width="28"/><ColumnDefinition Width="1.55*" MinWidth="134"/><ColumnDefinition Width="*" MinWidth="30"/>
+     <ColumnDefinition Width="74"/><ColumnDefinition Width="66"/><ColumnDefinition Width="56"/>
+    </Grid.ColumnDefinitions>
+     <Border Grid.ColumnSpan="6" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="0,1,0,0" IsHitTestVisible="False"/>
+     <TextBlock Text="∑" Foreground="{DynamicResource ConsoleMuted}" FontSize="14" VerticalAlignment="Center" TextAlignment="Center"/>
+     <TextBlock x:Name="ReferenceFooterLabel" Grid.Column="1" Grid.ColumnSpan="2" Foreground="{DynamicResource ConsoleInk}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="3,0,0,0"/>
+     <TextBlock x:Name="ReferenceFooterTotal" Grid.Column="3" Style="{StaticResource ReferenceNumberCell}" FontWeight="SemiBold"/>
+     <TextBlock x:Name="ReferenceFooterRate" Grid.Column="4" Style="{StaticResource ReferenceNumberCell}" FontWeight="SemiBold"/>
+    </Grid>
    </Grid>
 
    <TextBlock x:Name="Coverage" Grid.Row="5" Foreground="{DynamicResource Muted}" FontSize="10" Margin="14,8,14,9" TextWrapping="Wrap"/>

@@ -11,5 +11,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/LoneTrail/*.png" />
+    <Resource Include="Assets/Fonts/*.ttf" />
+    <None Update="Assets/Fonts/*-OFL.txt" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
