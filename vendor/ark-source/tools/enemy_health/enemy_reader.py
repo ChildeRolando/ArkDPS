@@ -5767,9 +5767,6 @@ class EnemyReader:
                                historical=info.lifecycle == 'departed')
         snap['on_field_count'] = sum(enemy.alive for enemy in enemies)
         snap['planned_count'] = self.planned_count
-        # Scheduler's generated count is the only authoritative source for
-        # enemies that spawned and died between polls (gate-blocked kills).
-        snap['spawned_count'] = spawned_count
 
         snap['ok'] = True
         snap['frame_ms'] = round((time.time() - t0) * 1000, 1)

@@ -52,17 +52,11 @@ public sealed class EnemyItem
             : name[..Math.Min(1, name.Length)];
         bool alive = row.Bool("alive");
         string lifecycle = row.Text("lifecycle");
-        bool observed = row.Get("observed").ValueKind != JsonValueKind.False;
-        string status = !observed ? "未观测" : lifecycle == "departed" ? "已离场" : alive ? "存活" : "状态未知";
+        string status = lifecycle == "departed" ? "已离场" : alive ? "存活" : "状态未知";
         bool hpKnown = row.Bool("hp_known");
-        var currentFlag = row.Get("hp_current_known");
-        bool hpCurrentKnown = currentFlag.ValueKind == JsonValueKind.True ||
-                              currentFlag.ValueKind == JsonValueKind.Undefined && hpKnown;
-        bool hpInferred = row.Bool("hp_inferred");
-        string hpText = hpCurrentKnown && hpKnown
+        string hpText = hpKnown
             ? $"{Int(row.Get("hp"))} / {Int(row.Get("max_hp"))}"
-            : hpKnown ? (hpInferred ? $"MaxHP 推断 {Int(row.Get("max_hp"))}" : "HP 未观测")
-                      : "HP 未知";
+            : "HP 未知";
         string attrs = $"攻击 {Int(row.Get("atk"))}  ·  防御 {Int(row.Get("def"))}  ·  法抗 {Int(row.Get("res"))}" +
                        $"  ·  移速 {row.Get("move_speed").TryNumber():0.##}  ·  攻速 {Int(row.Get("attack_speed"))}";
         string detail = string.Join("\n", new[]
@@ -79,7 +73,7 @@ public sealed class EnemyItem
             Badge = badge, Name = name, Code = code, Eid = eid,
             State = row.Text("state"), Status = status,
             HpText = hpText, AttrsText = attrs, Tooltip = detail,
-            HpPercent = hpCurrentKnown ? Math.Clamp(row.Get("hp_ratio").TryNumber() * 100, 0, 100) : 0,
+            HpPercent = hpKnown ? Math.Clamp(row.Get("hp_ratio").TryNumber() * 100, 0, 100) : 0,
             Opacity = alive ? 1 : .56,
             Portrait = EnemyPortraits.Get(eid, !alive),
         };
@@ -299,11 +293,8 @@ public partial class MainWindow
         }).ToArray());
         var error = enemy.Text("error");
         string hint = error.Length > 0 ? error
-            : complete ? "已入场计数来自调度器已生成数量；漏采实例只显示同类型 MaxHP，当前 HP 标为未观测。总血量按关卡出怪计划与同类型实例的 MaxHP 统计。"
+            : complete ? "已入场列表只含观测到的实例；总血量按关卡出怪计划与同类型实例的 MaxHP 统计，漏采实例按同类型推断。"
             : "关卡计划中仍有未观测到的敌种，总血量以 ≥ 表示下限。";
-        int inferredCount = (int)totals.Get("inferred_count").TryNumber();
-        if (inferredCount > 0)
-            hint += $" 其中 {inferredCount} 个漏采实例的 MaxHP 按同关卡同类型已观测值推断，不使用官方全局数值。";
         double baseline = enemy.Get("damage_baseline").TryNumber(-1);
         if (baseline > 0)
             hint += " 我方有效伤害从敌情观测起点累计（起点 " +
