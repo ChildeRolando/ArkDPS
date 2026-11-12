@@ -135,6 +135,18 @@ public partial class MainWindow
         await Navigate("live");
         var initial = State.Clone();
         var fixture = System.Text.Json.Nodes.JsonNode.Parse(initial.GetRawText())!;
+        var lobby = fixture.DeepClone();
+        lobby["status"] = "waiting";
+        lobby["status_text"] = "等待战斗数据";
+        lobby["event_status"] = null;
+        lobby["observer_status"] = "ready";
+        ApplyFixture(lobby);
+        Require(Status.Text == "观测中·等待进入战斗" && StatusLight.Fill == StatusGreen,
+            "an attached observer did not show a green waiting status before the battle");
+        lobby["observer_status"] = "failed";
+        ApplyFixture(lobby);
+        Require(Status.Text == "观测中断·等待进入战斗" && StatusLight.Fill == StatusRed,
+            "a failed lobby observer left the green status on");
         var analysis = fixture["live_analysis"] ?? new System.Text.Json.Nodes.JsonObject
         {
             ["segment"] = 0,
@@ -254,6 +266,7 @@ public partial class MainWindow
         var observedMitigation=FindOperatorRatio("Mitigation");
         Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观测减伤率") &&
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
+                observedTip.Text.Contains("经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害") &&
                 observedTip.Text.Contains("已配对的 27 击"),
                 "partial mitigation did not expose its measured value and sample scope");
         pinnedRow["observed_mitigation_rate"]=-11.32;
@@ -487,7 +500,8 @@ public partial class MainWindow
     {
         var ratios=new[] { FindOperatorRatio("Overkill"), FindOperatorRatio("Mitigation"), FindOperatorRatio("SkillShare") };
         var values=new[] { "8%", "18%", "42%" };
-        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 结算伤害 ÷ 公式前伤害", "技能期伤害 ÷ 已拆分的总伤害" };
+        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害",
+            "技能期伤害 ÷ 已拆分的总伤害" };
         var positions=ratios.Select(field=>field.TranslatePoint(new Point(),LiveInspector)).ToArray();
         var stats=FindAutomationElement(LiveInspector,"CompactOperatorStats")
             ?? throw new InvalidOperationException("main data card missing");
@@ -839,9 +853,16 @@ public partial class MainWindow
             if(item.Text("battle_id").StartsWith("ark-23-"))continue;
             string label=item.Get("labels").Items().First().Text();
             Require(!label.Contains('/'),"history stage label leaked the native levelId");
-            Require(item.Text("stage_detail").Contains('/'),"history stage detail lost the raw levelId");
+            var display=new HistoryItem{Data=item};
+            Require(!display.StageDescription.Contains("原始关卡 ID"),"history tooltip leaked the native levelId");
+            Require(display.Summary==$"{item.Text("outcome")} · {item.Text("duration")}" &&
+                    !display.Summary.Contains("最后可靠游戏时刻"),"history row leaked practice or timing metadata");
+            Require(DateTime.TryParseExact(display.Date,"yyyy-MM-dd HH:mm",System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,out _),"history timestamp was not displayed to the minute");
         }
-        checks.Add("live and history stage labels resolved from native levelId; raw id kept in detail");
+        Require(!HistorySummary.Text.Contains("原始关卡 ID") && !HistorySummary.Text.Contains("最后观察") &&
+                !HistorySummary.Text.Contains("最后可靠游戏时刻"),"history detail leaked raw stage or observation labels");
+        checks.Add("history rows and details use readable stage names, minute timestamps and a compact summary");
         string partialRoot=Path.Combine(output,"partial-worker");Directory.CreateDirectory(partialRoot);
         File.WriteAllLines(Path.Combine(partialRoot,"desktop_bridge.py"),new[]{
             "import json,sys",
@@ -1006,7 +1027,8 @@ public partial class MainWindow
         Require(inheritedElapsed<3000,"inherited stderr pipe delayed exit by "+inheritedElapsed+"ms");
         checks.Add("exit follows the worker process, not EOF on a pipe held by a surviving grandchild");
         commands++;lastResponse=System.Diagnostics.Stopwatch.GetTimestamp()-3*System.Diagnostics.Stopwatch.Frequency;
-        await Poll();Require(Status.Text.Contains("worker 响应"),"stalled worker left a live status");commands--;
+        await Poll();Require(Status.Text.Contains("worker 响应") && StatusLight.Fill == StatusRed,
+            "stalled worker left a live status");commands--;
         checks.Add("UI freshness deadline marks stalled worker responses stale without zeroing data");
         await Command("snapshot");
         string id=Panels.Keys.First();
@@ -1167,9 +1189,11 @@ public partial class MainWindow
         await VerifyHudRows(originalHud,output);
         checks.Add("HUD typography, one/four/five rows auto-fit, sixth row scroll and monitor work area");
         checks.Add("share scope reaches live, history, HUD, details and ranking PNG with legacy fallback");
+        Require(originalHud.Panel.Heading.Text=="溢出总伤·近5秒DPS","HUD title lost the initial rank and rate basis");
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
         Require(ranks==string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share"))),"rate changed ranking / bars / shares");
+        Require(originalHud.Panel.Heading.Text=="溢出总伤·接敌DPS","open HUD missed the new rate basis");
         checks.Add("rate basis does not change ranks, bars or shares");
         // 事件不可用时，接敌列必须给出原因与恢复入口，不能显示为空白或 0。
         await RunRateNoticeChecks(id);
@@ -1185,7 +1209,11 @@ public partial class MainWindow
         var dpsEntries=Panels[id].View.Get("entries").Items().ToArray();
         Require(dpsEntries.Length>0 && dpsEntries.All(e=>e.Text("rate_state")=="value"),"DPS ranking does not use the selected algorithm");
         Require(dpsEntries.Zip(dpsEntries.Skip(1)).All(pair=>pair.First.Number("value")>=pair.Second.Number("value")),"DPS ranking is not sorted by rate");
+        Require(originalHud.Panel.Heading.Text=="溢出总伤·按全周期DPS","open HUD missed the DPS sorting basis");
         checks.Add("DPS ranking follows the selected full-cycle algorithm");
+        await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="recent_5s",effective_only=true}});
+        Require(originalHud.Panel.Heading.Text=="有效伤害·近5秒DPS","open HUD missed the effective damage selection");
+        checks.Add("open HUD title follows the damage selection, ranking basis and DPS window");
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="recent_5s"}});
         string placementBeforeTheme=JsonSerializer.Serialize(originalHud.Placement());
         IntPtr handleBeforeTheme=Native.Handle(originalHud);
@@ -1217,7 +1245,8 @@ public partial class MainWindow
                     hudPanel.PeopleHudArtwork.IsVisible==Theme.IsPeople &&
                     (!Theme.IsPeople || hudPanel.PeopleHudArtwork.Source!=null) && !hudPanel.PeopleHudArtwork.IsHitTestVisible &&
                     hudPanel.BabelHudMark.IsVisible==Theme.IsBabel && hudPanel.BabelHudRule.IsVisible==Theme.IsBabel &&
-                    (!Theme.IsBabel || hudPanel.BabelHudMark.Source!=null) &&
+                    (!Theme.IsBabel || hudPanel.BabelHudMark.Data!=null &&
+                        Equals(titleRegion.Background,Theme.Resource("Console")) && hudPanel.PanelFrame.CornerRadius==new CornerRadius(0)) &&
                     !hudPanel.BabelHudMark.IsHitTestVisible && !hudPanel.BabelHudRule.IsHitTestVisible,
                     "HUD drag surface, close hit target, or theme artwork did not render");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");

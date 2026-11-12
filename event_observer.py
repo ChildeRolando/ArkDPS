@@ -103,7 +103,7 @@ class FridaEventObserver:
                     raise
                 raise RuntimeError(
                     'Frida 服务无法加载 ARM64 事件探针（process is not using emulation）。'
-                    '请重启设备端 Frida 服务后重新定位。'
+                    '请重启设备端 Frida 服务后重连观测者。'
                 ) from exc
             self.session.on('detached', self._detached)
             source = Path(__file__).with_name('event_probe_android2791.js').read_text(encoding='utf-8')

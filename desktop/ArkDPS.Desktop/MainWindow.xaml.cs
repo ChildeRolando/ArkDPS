@@ -18,17 +18,22 @@ internal sealed class HistoryItem
 {
     public JsonElement Data {get;init;}
     public string Id=>Data.Text("battle_id");
-    private string[] Labels=>Data.Get("labels").Items().Select(x=>x.Text()).ToArray();
-    public string Stage=>Labels.ElementAtOrDefault(0)??"关卡未知";
-    public string StageDetail=>Data.Text("stage_detail");
-    public string Summary=>string.Join(" · ",Labels.Skip(1).Take(3));
-    public string Date=>Labels.LastOrDefault()??"";
+    public string Stage=>Data.Text("stage");
+    public string StageDescription=>Data.Text("stage_description");
+    public string Outcome=>Data.Text("outcome");
+    public string Practice=>Data.Get("labels").Items().ElementAtOrDefault(1).Text();
+    public string Summary=>string.Join(" · ",Outcome,Data.Text("duration"));
+    public string Date=>Data.Text("date");
 }
 
 public partial class MainWindow : Window
 {
     private BridgeClient? bridge;
     private const string EmptyHistoryText="暂无可读战绩；完成对局归档后自动出现。";
+    private static readonly Brush StatusGreen=Theme.Brush("#348447");
+    private static readonly Brush StatusRed=Theme.Brush("#C84F49");
+    private static readonly Brush StatusAmber=Theme.Brush("#A46A16");
+    private static readonly Brush StatusGray=Theme.Brush("#777B80");
     private readonly DispatcherTimer poll=new(){Interval=TimeSpan.FromMilliseconds(200)};
     private readonly DispatcherTimer save=new(){Interval=TimeSpan.FromMilliseconds(600)};
     private readonly LiveTrendModel trendModel = new();
@@ -96,7 +101,8 @@ public partial class MainWindow : Window
     {
         if(initialized && !responseStale && System.Diagnostics.Stopwatch.GetElapsedTime(lastResponse)>TimeSpan.FromSeconds(2))
         {
-            responseStale=true;Status.Text="数据已过期 · 等待 worker 响应 · 保留最后有效记录";
+            responseStale=true;
+            UpdateLiveStatus("stale","数据已过期 · 等待 worker 响应 · 保留最后有效记录");
             trendModel.Interrupt();
             UpdateEnemies(State.Get("enemy"), State.Text("battle_id"), "stale");
             UpdateEnemySummary();
@@ -136,7 +142,8 @@ public partial class MainWindow : Window
     }
     private void Lost(string message)
     {
-        poll.Stop();Status.Text="采集进程断开 · 数值为最后有效记录";ErrorText.Text=message;
+        poll.Stop();ErrorText.Text=message;
+        UpdateLiveStatus("disconnected","采集进程断开 · 数值为最后有效记录");
         trendModel.Interrupt();
         UpdateEnemies(State.Get("enemy"), State.Text("battle_id"), "disconnected");
         UpdateEnemySummary();
@@ -167,7 +174,7 @@ public partial class MainWindow : Window
             OperatorTrend.RefreshTheme();
         }
         Skin.SelectedIndex=Theme.IndexOf(theme);
-        Status.Text=state.Text("status_text");EventStatus.Text=state.Text("event_text");
+        EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         Stage.Text=state.Text("stage").Length>0 ? state.Text("stage") : "关卡未知";
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
@@ -178,7 +185,7 @@ public partial class MainWindow : Window
         PeakDps.Text = OverviewNumber(analysis.Get("observed_peak_dps"));
         TotalDamage.Text = OverviewNumber(analysis.ValueKind == JsonValueKind.Object
             ? analysis.Get("team_total_damage") : totals.Get("damage"));
-        Status.ToolTip = string.Join(" · ", new[] { Stage.Text, EventStatus.Text, ErrorText.Text }.Where(text => text.Length > 0));
+        UpdateLiveStatus(state.Text("status"),state.Text("status_text"));
         trendModel.Apply(state);
         double time = state.Get("game_time").TryNumber(double.NaN);
         int elapsed = double.IsFinite(time) ? (int)Math.Clamp(Math.Round(time, MidpointRounding.AwayFromZero), 0, int.MaxValue) : 0;
@@ -233,6 +240,36 @@ public partial class MainWindow : Window
         UpdateEnemies(enemy, battle, state.Text("status"));
         UpdateEnemySummary();
         if(changed){InvalidateVisualTree(this);foreach(var hud in Huds.Values)InvalidateVisualTree(hud);}
+    }
+    private void UpdateLiveStatus(string status,string workerLabel)
+    {
+        string observer=State.Text("observer_status");
+        string coverage=State.Text("event_status");
+        bool disabled=observer=="disabled" || (observer.Length==0 &&
+            State.Get("layout").Get("event_observation").ValueKind==JsonValueKind.False);
+        string phase=status switch
+        {
+            "waiting" => "等待进入战斗",
+            "degraded" => "快照统计",
+            _ => workerLabel,
+        };
+        (string label,Brush light) = status switch
+        {
+            "stale" or "disconnected" => (workerLabel,StatusRed),
+            "locating" => (disabled ? workerLabel : "正在连接观测者",StatusAmber),
+            _ when disabled => ($"观测已关闭·{phase}",StatusGray),
+            _ when (observer is "failed" or "incompatible" or "stopped") ||
+                   ((status is "waiting" or "live" or "degraded") && (coverage is "failed" or "gap"))
+                => ($"观测中断·{phase}",StatusRed),
+            _ when status!="degraded" && (observer=="ready" || coverage=="recording")
+                => ($"观测中·{phase}",StatusGreen),
+            "waiting" => ("等待连接观测者",StatusAmber),
+            _ => ($"等待观测·{phase}",StatusAmber),
+        };
+        Status.Text=label;
+        StatusLight.Fill=light;
+        StatusBadge.ToolTip=string.Join(" · ",new[] { label,Stage.Text,EventStatus.Text,ErrorText.Text }
+            .Where(text=>text.Length>0));
     }
     private static void InvalidateVisualTree(DependencyObject obj)
     {
@@ -642,8 +679,9 @@ public partial class MainWindow : Window
             return;
         }
         if(historyBattle!=selected.Text("battle_id")){historyBattle=selected.Text("battle_id");HistoryInspector.Reset();HistoryPanel.ClearSelection();}
-        HistorySummary.Text="历史 · "+string.Join(" · ",selected.Get("labels").Items().Select(x=>x.Text()))+"\n"+
-            selected.Text("stage_detail")+"\n所选副本独立于实时战斗；实时 HUD 继续跟随新局。";
+        var item=new HistoryItem{Data=selected};
+        HistorySummary.Text=string.Join(" · ","历史",item.Stage,item.Summary,item.Date)+"\n"+
+            item.StageDescription+"\n查看战绩时，实时 HUD 仍跟随当前战斗。";
         var view = selected.Get("view");
         HistoryPanel.Update(view);
         HistoryInspector.Update(view);
@@ -654,12 +692,9 @@ public partial class MainWindow : Window
         historyUpdating=true;
         string query=Search.Text.Trim();string outcome=(Outcome.SelectedItem as ComboBoxItem)?.Content.ToString()??"全部结果";
         string practice=(Practice.SelectedItem as ComboBoxItem)?.Content.ToString()??"全部模式";
-        var values=State.Get("history").Items().Where(x=>
-        {
-            var labels=x.Get("labels").Items().Select(y=>y.Text()).ToArray();
-            return (query.Length==0 || x.Text("search").Contains(query,StringComparison.OrdinalIgnoreCase)) &&
-                (outcome=="全部结果" || labels.ElementAtOrDefault(2)==outcome) && (practice=="全部模式" || labels.ElementAtOrDefault(1)==practice);
-        }).Select(x=>new HistoryItem{Data=x}).ToArray();
+        var values=State.Get("history").Items().Select(data=>new HistoryItem{Data=data}).Where(item=>
+            (query.Length==0 || item.Data.Text("search").Contains(query,StringComparison.OrdinalIgnoreCase)) &&
+            (outcome=="全部结果" || item.Outcome==outcome) && (practice=="全部模式" || item.Practice==practice)).ToArray();
         HistoryList.ItemsSource=values;string selected=State.Get("history_selected").Text("battle_id");
         HistoryList.SelectedItem=values.FirstOrDefault(x=>x.Id==selected);historyUpdating=false;
     }

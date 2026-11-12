@@ -243,10 +243,13 @@ public partial class StatisticPanel : UserControl
         PanelFrame.BorderThickness=new Thickness(0);
         LegendRow.Visibility=Visibility.Collapsed;
         TitleRegion.ClipToBounds=true;
-        TitleText.Orientation=Orientation.Horizontal;
         Heading.SetResourceReference(TextBlock.FontFamilyProperty,"InterfaceFont");
+        Heading.TextTrimming=TextTrimming.CharacterEllipsis;
         PanelKind.SetResourceReference(TextBlock.FontFamilyProperty,"InterfaceFont");
         PanelKind.VerticalAlignment=VerticalAlignment.Center;
+        PanelKind.TextTrimming=TextTrimming.CharacterEllipsis;
+        Grid.SetRow(PanelKind,0);
+        Grid.SetColumn(PanelKind,1);
         HudClose.MinWidth=44;
         HudClose.MinHeight=20;
         HudClose.Margin=new Thickness(0);
@@ -330,34 +333,20 @@ public partial class StatisticPanel : UserControl
         PeopleHudArtwork.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
         BabelHudMark.Visibility = BabelHudRule.Visibility = babel ? Visibility.Visible : Visibility.Collapsed;
         TitleRegion.BorderThickness = new Thickness(0, 0, 0, 1);
+        TitleRegion.SetResourceReference(Border.BackgroundProperty, loneTrail ? "ConsoleCard" : babel ? "Console" : "Inset");
+        TitleRegion.SetResourceReference(Border.BorderBrushProperty, loneTrail ? "ConsoleLine" : "Line");
         HudClose.Background = Brushes.Transparent;
-        if (babel)
-        {
-            Heading.SetResourceReference(TextBlock.ForegroundProperty, "BabelPaperInk");
-            HudClose.SetResourceReference(Control.ForegroundProperty, "BabelPaperInk");
-            HudClose.Resources["Focus"] = Theme.Resource("BabelPaperAccent");
-        }
-        else
-        {
-            Heading.ClearValue(TextBlock.ForegroundProperty);
-            HudClose.ClearValue(Control.ForegroundProperty);
-            HudClose.Resources.Remove("Focus");
-        }
-        if(loneTrail)
+        if(loneTrail || babel)
         {
             PanelFrame.CornerRadius=new CornerRadius(0);
-            TitleRegion.SetResourceReference(Border.BackgroundProperty,"ConsoleCard");
-            TitleRegion.SetResourceReference(Border.BorderBrushProperty,"ConsoleLine");
             HudClose.SetResourceReference(StyleProperty,"Quiet");
             HudClose.BorderBrush=Brushes.Transparent;
         }
         else
         {
             PanelFrame.SetResourceReference(Border.CornerRadiusProperty,"CardRadius");
-            TitleRegion.SetResourceReference(Border.BackgroundProperty, babel ? "BabelPaper" : "Inset");
-            TitleRegion.SetResourceReference(Border.BorderBrushProperty, babel ? "BabelPaperRule" : "Line");
             HudClose.ClearValue(StyleProperty);
-            HudClose.SetResourceReference(Control.BorderBrushProperty, babel ? "BabelPaperRule" : "Line");
+            HudClose.SetResourceReference(Control.BorderBrushProperty,"Line");
         }
     }
 
@@ -459,18 +448,8 @@ public partial class StatisticPanel : UserControl
         view=value; updating=true;
         var config=value.Get("config");
         var share=SharePresentation.From(value);
-        var title=value.Text("title");
-        if(IsHud)
-        {
-            ApplyHudSkin();
-            title=config.Text("category") switch
-            {
-                "healing"=>"总治疗",
-                "shield"=>"总护盾",
-                _=>"总伤"
-            };
-        }
-        Heading.Text=title;
+        if(IsHud) ApplyHudSkin();
+        Heading.Text=IsHud ? HudTitle(config) : value.Text("title");
         var knownShare=value.Text("share_scope")=="known";
         PanelKind.Text=IsHud ? share.Label : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
         PanelKind.Visibility=referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
@@ -575,6 +554,30 @@ public partial class StatisticPanel : UserControl
         Empty.Text=value.Text("empty_text"); Empty.Visibility=items.Count==0 ? Visibility.Visible : Visibility.Collapsed;
         updating=false;
     }
+
+    private static string HudTitle(JsonElement config)
+    {
+        string category=config.Text("category"), ranking=config.Text("ranking");
+        bool recent=ranking=="recent";
+        string metric=category switch
+        {
+            "shield"=>"有效护盾",
+            "healing"=>recent ? "治疗" : "总治疗",
+            _ when config.Bool("effective_only")=>"有效伤害",
+            _=>"溢出总伤",
+        };
+        if(recent) metric="近5秒"+metric;
+        if(category=="shield") return metric;
+
+        string window=config.Text("rate_basis") switch
+        {
+            "engagement"=>"接敌",
+            "full_cycle"=>"全周期",
+            _=>"近5秒",
+        };
+        return metric+"·"+(ranking=="dps" ? "按" : "")+window+(category=="healing" ? "HPS" : "DPS");
+    }
+
     private static void Select(ComboBox box,string tag)
     {
         foreach(ComboBoxItem item in box.Items) if((string)item.Tag==tag) {box.SelectedItem=item;return;}

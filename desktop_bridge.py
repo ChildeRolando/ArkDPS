@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from battle_history import BattleHistory, BattleRecord
 from battle_lifecycle import BattleRuntime
-from battle_share import (json_bytes, record_labels, record_stage, record_statistics,
+from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from collector import BattleChanged, ROOT
@@ -46,6 +46,9 @@ def event_label(status, error=None):
               'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观测',
               'gap': '事件中断 · 伤害/治疗快照继续',
               'failed': '事件不可用 · 使用伤害/治疗快照',
+              'incompatible': '观测者与游戏版本不兼容 · 使用伤害/治疗快照',
+              'stopped': '观测者已停止 · 使用伤害/治疗快照',
+              'disabled': '事件已关闭 · 使用伤害/治疗快照',
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
               'finished': '事件观测结束 · 保留已覆盖区间'}
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
@@ -102,6 +105,7 @@ class DesktopState:
         self.connection_text = '等待定位本局'
         self.diagnostic = None
         self.event_status = self.event_error = self.lifecycle = None
+        self.observer_status = self.observer_error = None
         self.scanning = False
         self.history_notice = ''
         self.refresh_history()
@@ -137,6 +141,8 @@ class DesktopState:
             self.diagnostic = value
         elif kind == 'event':
             self.event_status, self.event_error = value
+        elif kind == 'observer':
+            self.observer_status, self.observer_error = value
         elif kind == 'lifecycle':
             self.lifecycle = value
         elif kind == 'history':
@@ -147,6 +153,7 @@ class DesktopState:
             self.scanning = value
             if value:
                 self.error = ''
+                self.observer_status = self.observer_error = None
                 self.analysis_interrupted = True
 
     def update_live_analysis(self, sample):
@@ -239,21 +246,16 @@ class DesktopState:
         status, label = self.status()
         history = []
         for record in self.records.values():
-            labels = record_labels(record)
-            stage = record_stage(record)
+            item = record_display(record)
             names = ' '.join(row.get('name', '') for row in record.statistics['rows'].values())
             # Readable labels and the native id both match, so old records stay searchable.
-            search = ' '.join(labels) + ' ' + names + ' ' + (stage.raw or '')
-            history.append(dict(battle_id=record.battle_id, labels=labels,
-                                stage=stage.label, stage_detail=stage.detail,
-                                search=search.casefold()))
+            item['search'] = ' '.join((*item['labels'], item['date'], names, item['stage_raw'] or '')).casefold()
+            history.append(item)
         selected = None
         if self.selected:
-            selected_stage = record_stage(self.selected)
             selected_stats = record_statistics(self.selected)
             selected = dict(
-                battle_id=self.selected.battle_id, labels=record_labels(self.selected),
-                stage=selected_stage.label, stage_detail=selected_stage.detail,
+                record_display(self.selected),
                 view=self.view(self.history_config, selected_stats, None,
                                EventAvailability(status=self.selected.event_status,
                                                  error=self.selected.event_error, live=False)),
@@ -262,12 +264,16 @@ class DesktopState:
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         live_event = EventAvailability(status=sample.get('event_status', self.event_status),
                                        error=sample.get('event_error', self.event_error), live=True)
+        event_status, event_error = self.event_status, self.event_error
+        if event_status is None or self.observer_status in ('disabled', 'failed', 'incompatible', 'stopped'):
+            event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     totals=team_totals(stats),
                     status=status, status_text=label, error=self.error,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
-                    event_text=event_label(self.event_status, self.event_error),
+                    observer_status=self.observer_status, event_status=self.event_status,
+                    event_text=event_label(event_status, event_error),
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
                     stage=live_stage.label if has_live_stage else None,
@@ -399,7 +405,7 @@ class CollectionWorker:
         try:
             self.session.close()
         except Exception as exc:
-            self.cleanup_error = '旧采集会话清理失败；修复后重新定位：' + str(exc)
+            self.cleanup_error = f'旧采集会话清理失败（{exc}）。请解决问题后重连观测者。'
             self.events.put(('error', self.cleanup_error))
             return False
         if self.session.cleanup_errors:
@@ -426,6 +432,7 @@ class CollectionWorker:
                 try:
                     usable = False
                     current_config, current_enabled, current_target = None, False, None
+                    last_observer_state = None
                     endpoint_bound = False
                     retries = 0
                     last_retry_audit = float('-inf')
@@ -437,6 +444,7 @@ class CollectionWorker:
                         if config is not None:
                             current_config, current_enabled = config, enabled
                             usable = False
+                            last_observer_state = None
                             endpoint_bound = False
                             retries = 0
                             last_retry_audit = float('-inf')
@@ -474,6 +482,15 @@ class CollectionWorker:
                                     self.release()
                             self.events.put(('scanning', False))
                         if usable and self.session is not None:
+                            # Attachment can be confirmed in the lobby, before any battle sample.
+                            observer_state = ('disabled', None)
+                            if current_enabled:
+                                observer = self.session.observer
+                                observer_state = ((observer.status, observer.error) if observer is not None
+                                                  else ('failed', self.session.event_error))
+                            if observer_state != last_observer_state:
+                                last_observer_state = observer_state
+                                self.events.put(('observer', observer_state))
                             started = time.monotonic()
                             try:
                                 sample = self.session.read()

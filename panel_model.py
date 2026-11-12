@@ -94,22 +94,22 @@ def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, s
     if event.live:
         if event.status == 'failed':
             reason = f'接敌数据不可用：事件观测未连接{detail}'
-            hint = ('接敌 DPS/HPS 与活跃时间需要事件观测；可重试事件观测，'
+            hint = ('接敌 DPS/HPS 与活跃时间需要事件观测。可以重连观测者，'
                     '或打开连接设置检查 Frida 端点。')
-            action, label = 'retry', '重试事件观测'
+            action, label = 'retry', '重连观测者'
         elif event.status == 'gap':
             reason = f'接敌数据已中断：仅保留已覆盖区间{detail}'
-            hint = '未覆盖区间保持未知且不补零；重试事件观测后新覆盖数据会自动显示。'
-            action, label = 'retry', '重试事件观测'
+            hint = '未覆盖区间保持未知且不补零。重连观测者后会显示新覆盖的数据。'
+            action, label = 'retry', '重连观测者'
         elif event.status == 'incompatible':
             reason = '接敌数据不可用：事件观测与当前游戏版本不兼容'
-            hint = '请更新支持的游戏版本或检查连接设置后再重新定位。'
+            hint = '请检查游戏版本与连接设置，再重连观测者。'
             action, label = 'settings', '打开连接设置'
         elif event.status in ('unavailable', 'stopped'):
             reason = ('接敌数据不可用：事件观测已关闭'
                       if event.status == 'unavailable'
                       else '接敌数据不可用：事件观测已停止')
-            hint = '在连接设置中开启事件观测并重新定位后，接敌数据会自动恢复。'
+            hint = '在连接设置中启用观测者，再点击「应用设置并重连」。'
             action, label = 'settings', '打开连接设置'
         elif event.status is None:
             reason = '接敌数据尚未可用：等待事件能力诊断'

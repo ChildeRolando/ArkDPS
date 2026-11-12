@@ -612,7 +612,7 @@ def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_pa
             self.serial = serial
             self.reads = 0
             self.collector = SimpleNamespace(diagnostics=resolve(SimpleNamespace(serial=serial)).diagnostics)
-            self.observer = SimpleNamespace(status='ready')
+            self.observer = SimpleNamespace(status='ready', error=None)
 
         def enable_lifecycle(self, runtime):
             self.runtime = runtime
@@ -630,6 +630,7 @@ def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_pa
             if self.serial == first.serial:
                 if self.reads == 2:
                     self.observer.status = 'failed'
+                    self.observer.error = 'observer detached'
                     raise CaptureRetry('observer mark request failed: raw diagnostic detail')
                 raise CaptureRetry('baseline crossed an event or game frame')
             if checks.count(('bind', second.serial)) > 2:
@@ -652,6 +653,16 @@ def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_pa
                       ('bind', 'serial-b'), ('bind', 'serial-b'), ('bind', 'serial-b'),
                       ('keep', 'serial-b')]
     assert worker.requests.empty()
+    observer_states = []
+    while not worker.events.empty():
+        kind, value = worker.events.get_nowait()
+        if kind == 'observer':
+            state.accept(kind, value)
+            snapshot = state.snapshot()
+            if snapshot['observer_status'] == 'failed':
+                assert 'observer detached' in snapshot['event_text']
+            observer_states.append((snapshot['status'], snapshot['observer_status']))
+    assert observer_states[:3] == [('waiting', 'ready'), ('waiting', 'failed'), ('waiting', 'ready')]
     path, = (tmp_path/'runtime'/'captures').glob('wpf-*.jsonl')
     journal = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
     assert [item['data']['duration_ms'] for item in journal if item['kind'] == 'frida_keepalive'] == [0, 0, 0, 0]

@@ -1,4 +1,5 @@
 """Read-only sharing of a validated BattleRecord, never a live sample."""
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -15,13 +16,29 @@ OUTCOMES = {'victory': '胜利', 'defeat': '失败', 'abandoned': '退出', 'unk
 
 
 def record_labels(record):
+    return record_display(record)['labels']
+
+
+def record_display(record):
+    """Metadata for the history browser and the share header."""
     data = record.to_dict()
     metadata = data['metadata']
+    stage = stage_names.resolve(metadata['stage_id'])
     practice = {True: '演习', False: '正式', None: '演习状态未知'}[metadata['practice']]
+    outcome = OUTCOMES[metadata['outcome']]
+    duration = f'{data["duration"]:.1f} 秒'
     date = data['observed_at'] or data['recorded_at']
     date_label = '最后观察' if data['observed_at'] else '记录时间（观察时间未知）'
-    return (stage_names.resolve(metadata['stage_id']).label, practice, OUTCOMES[metadata['outcome']],
-            f'{data["duration"]:.1f} 秒（最后可靠游戏时刻）', f'{date_label} {date}')
+    observed_date = datetime.fromisoformat(date)
+    try:
+        observed_date = observed_date.astimezone()
+    except (ValueError, OverflowError, OSError):
+        # Older valid archives can predate the operating system's time zone table.
+        pass
+    return dict(battle_id=record.battle_id, stage=stage.label, stage_description=stage.description,
+                stage_detail=stage.detail, stage_raw=stage.raw, outcome=outcome, duration=duration,
+                date=f'{observed_date:%Y-%m-%d %H:%M}', labels=(stage.label, practice, outcome,
+                    f'{duration}（最后可靠游戏时刻）', f'{date_label} {date}'))
 
 
 def record_stage(record):

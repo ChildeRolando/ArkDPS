@@ -779,7 +779,7 @@ public sealed class Inspector : Border
 
     private static (double Fraction,string Label,string Explanation) MitigationReading(JsonElement row)
     {
-        const string formula="1 − 结算伤害 ÷ 公式前伤害。结算伤害取自同一击在护盾吸收和实扣前的来伤，包含后续伤害修正。";
+        const string formula="1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害。\n观测值使用同一击的原始伤害与护盾吸收前的结算伤害。结算伤害包含其他伤害修正。";
         const string negativeNote="\n结算伤害高于公式前伤害时，比例为负。当前观测记录两端数值，无法确定差额来自哪项修正。";
         double full=row.Get("mitigation_rate").TryNumber(double.NaN);
         if(double.IsFinite(full)) return (full/100,"被减伤率",full<0 ? formula+negativeNote : formula);
