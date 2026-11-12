@@ -130,22 +130,85 @@ def _max_hp(row):
     return _finite(row.get('max_hp'), None) if row['hp_known'] else None
 
 
+def _phase_capacity(row):
+    return max((value for value in (_max_hp(row), row.get('phase_max_hp'),
+                                    row.get('phase_max_hp_lower_bound')) if value is not None),
+               default=None)
+
+
+def _phase_expansion(row):
+    initial = row.get('phase_initial_max_hp')
+    capacity = _phase_capacity(row)
+    return max(0, capacity - initial) if initial is not None and capacity is not None else 0
+
+
+def _phase_capacity_is_partial(row):
+    return row.get('phase_max_hp_lower_bound') is not None
+
+
+def _observe_max_hp(row, hp, observed_max_hp=None, *, seed=False):
+    """Keep native MaxHP distinct from the historical floor proved by current HP."""
+    current_max = _max_hp(row)
+    initial = row.get('phase_initial_max_hp', current_max)
+    if initial is None and seed and row.get('phase_max_hp') is None:
+        initial = observed_max_hp
+    peak = max(row.get('phase_max_hp') or 0, current_max or 0, observed_max_hp or 0)
+    phase_floor = row.get('phase_max_hp_lower_bound') or 0
+    current_floor = row.get('max_hp_lower_bound') or 0
+    if observed_max_hp is not None:
+        row = dict(row, max_hp=observed_max_hp, hp_known=True)
+        current_max = observed_max_hp
+        current_floor = 0
+    if hp is not None and current_max is not None and hp > current_max:
+        current_floor = max(current_floor, hp)
+        phase_floor = max(phase_floor, hp)
+    return dict(row, phase_initial_max_hp=initial, phase_max_hp=peak or None,
+                phase_max_hp_lower_bound=phase_floor if phase_floor > peak else None,
+                max_hp_lower_bound=current_floor or None)
+
+
+def _next_hp_phase(row):
+    expansion = _phase_expansion(row)
+    earlier_capacity = max((value for value in (_phase_capacity(row),
+                                                row.get('earlier_phase_capacity'))
+                            if value is not None), default=None)
+    return dict(
+        row, max_hp=None, hp_known=False, phase_initial_max_hp=None,
+        phase_max_hp=None, phase_max_hp_lower_bound=None, max_hp_lower_bound=None,
+        earlier_phase_capacity=earlier_capacity,
+        completed_phase_hp_expansion=row.get('completed_phase_hp_expansion', 0) + expansion,
+        initial_phase_hp_expansion=row.get('initial_phase_hp_expansion', expansion),
+        prior_phase_capacity_partial=(row.get('prior_phase_capacity_partial', False)
+                                      or _phase_capacity_is_partial(row)),
+    )
+
+
+def _current_hp_ratio(row):
+    if row.get('max_hp_lower_bound') is not None:
+        return None
+    return _hp_ratio(row['hp'], row['max_hp'])
+
+
 def _phase_key(row):
     uid = row.get('instance_uid')
     return (uid, row['eid']) if uid is not None else None
 
 
 def _hp_pool(row, planned_hp=None):
-    base = _max_hp(row)
+    base = _phase_capacity(row)
     phase_hp = _finite(row.get('phase_total_hp'), None)
     if phase_hp is None:
-        return base
+        return max((hp for hp in (base, row.get('earlier_phase_capacity')) if hp is not None),
+                   default=None)
+    expansion = row.get('completed_phase_hp_expansion', 0) + _phase_expansion(row)
     if row.get('phase_from_birth'):
-        return phase_hp
+        return phase_hp + expansion
     # Without the first stage, the observed max HP might already be from a
     # counted stage. Either observation gives a lower bound, but summing them
     # could count the same stage twice.
-    return max(hp for hp in (base, planned_hp, phase_hp) if hp is not None)
+    covered_expansion = expansion - row.get('initial_phase_hp_expansion', 0)
+    return max(hp for hp in (base, planned_hp, row.get('earlier_phase_capacity'),
+                              phase_hp + max(0, covered_expansion)) if hp is not None)
 
 
 def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
@@ -193,11 +256,13 @@ def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
                 adjusted_planned_total += max(0, hp - overlap)
     phases_complete = all(row.get('phase_from_birth') and row.get('phase_coverage_complete')
                           for row in phases)
+    capacity_complete = not any(_phase_capacity_is_partial(row)
+                                or row.get('prior_phase_capacity_partial') for row in entered)
     total_complete = (entered_coverage_complete and bool(entered) and phases_complete
-                      and all(hp is not None for hp in observed_pool))
+                      and capacity_complete and all(hp is not None for hp in observed_pool))
     if planned:
         missing_enemies = Counter(row['eid'] for row in entered) - Counter(row['eid'] for row in planned)
-        stage_complete = (phases_complete and matched == len(phases)
+        stage_complete = (phases_complete and capacity_complete and matched == len(phases)
                           and not missing_enemies and all(hp is not None for hp in planned_pool)
                           and (observed_total <= adjusted_planned_total
                                or math.isclose(observed_total, adjusted_planned_total)))
@@ -422,8 +487,10 @@ class EnemyTelemetry:
         attributes = entry.get('enemy_entry_attributes')
         if not attributes:
             return row
-        fallback = {name: value for name, value in attributes.items() if row.get(name) is None}
-        if not row['hp_known'] and 'max_hp' in attributes:
+        fallback = {name: value for name, value in attributes.items()
+                    if name != 'max_hp' and row.get(name) is None}
+        if (not row['hp_known'] and 'max_hp' in attributes
+                and 'initial_phase_hp_expansion' not in row):
             max_hp = attributes['max_hp']
             hp = row['hp']
             fallback.update(max_hp=max_hp, hp_known=True, hp_ratio=_hp_ratio(hp, max_hp))
@@ -459,6 +526,7 @@ class EnemyTelemetry:
             row = dict(row, lifecycle='active', alive=True, state_id=None, state='在场',
                        end_frame=None, end_reason=None, finish_reason=None, hp=hp)
             if kind == 'enemy_reborn':
+                row = _next_hp_phase(row)
                 self._phase_calibration.add(key)
         elif kind == 'enemy_fake_death':
             row = dict(row, lifecycle='rebirthing', alive=True, state_id=8,
@@ -473,10 +541,19 @@ class EnemyTelemetry:
             self._finished.add(key)
             self._phase_calibration.discard(key)
         elif kind == 'enemy_hp' and hp is not None:
-            row = dict(row, hp=hp)
+            max_hp = _finite(event.get('enemy_max_hp'), None)
+            if max_hp is not None and max_hp <= 0:
+                max_hp = None
+            old_floor = row.get('max_hp_lower_bound')
+            row = _observe_max_hp(dict(row, hp=hp), hp, max_hp,
+                                  seed='initial_phase_hp_expansion' in row)
+            if row.get('max_hp_lower_bound') is not None and row['max_hp_lower_bound'] != old_floor:
+                self._phase_calibration.add(key)
+            elif max_hp is not None:
+                self._phase_calibration.discard(key)
         self._row_frames[key] = frame if fake_departure else max(frame, self._row_frames.get(key, -1))
         self._event_frames[key] = frame
-        return dict(row, hp_ratio=_hp_ratio(row['hp'], row['max_hp']))
+        return dict(row, hp_ratio=_current_hp_ratio(row))
 
     def _apply_pending(self, row, key):
         for event in self._pending_events.pop(key, ()):
@@ -573,7 +650,7 @@ class EnemyTelemetry:
         by_eid = defaultdict(set)
         for row in rows:
             # A later phase's max HP does not estimate the initial stage.
-            hp = _max_hp(row)
+            hp = row.get('phase_initial_max_hp', _max_hp(row))
             if hp is not None and row.get('phase_count', 0) <= 1:
                 key = _phase_key(row)
                 if key is not None:
@@ -658,9 +735,9 @@ class EnemyTelemetry:
         elif (current['hp'] is None and current['lifecycle'] == observed['lifecycle']
               and current['alive'] == observed['alive']):
             merged['hp'] = observed['hp']
-        if observed['hp_known'] and (not older or not current['hp_known']):
-            merged.update(max_hp=observed['max_hp'], hp_known=True)
-        merged['hp_ratio'] = _hp_ratio(merged['hp'], merged['max_hp'])
+        if observed['hp_known'] and not older:
+            merged = _observe_max_hp(merged, observed['hp'], observed['max_hp'], seed=True)
+        merged['hp_ratio'] = _current_hp_ratio(merged)
         return merged
 
     def _reconcile_snapshot(self, rows, frame, *, calibration):

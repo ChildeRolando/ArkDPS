@@ -73,7 +73,7 @@ try{
   expectFields(found.Enemy,{'m_currentTile':0x360});
   expectFields(found.BObject,{'<instanceUid>k__BackingField':0x18,
    '<borned>k__BackingField':0x25,'<isDisappeared>k__BackingField':0x26});
-  enemyEntryConfig={enemy:found.Enemy,
+  enemyEntryConfig={enemy:found.Enemy,bObject:found.BObject,
    assignable:api('il2cpp_class_is_assignable_from','bool',['pointer','pointer']),
    layer:uniqueMethod(found.Enemy,'_UpdatePlayerSideAndMapLayer',0),
    born:uniqueMethod(found.BObject,'Born',0),
@@ -95,6 +95,12 @@ try{
     hp:uniqueMethod(found.Entity,'SetHpInternal',4),
     directHp:uniqueMethod(found.Entity,'SetHpInternalDirectly',1)};
   }catch(e){cfg.enemyStateError=String(e);}
+  if(enemyStateMethods){
+   try{enemyStateMethods.attributes=uniqueMethod(found.Entity,'OnAttributeDirty',2);}
+   catch(e){cfg.enemyMaxHpError=String(e);}
+   try{enemyStateMethods.trapFinish=uniqueMethod(found.Entity,'OnFinish',1);}
+   catch(e){cfg.stageObjectFinishError=String(e);}
+  }
  }
  for(const [owner,k] of Object.entries(found)){
   if(['Modifier','BattleController'].includes(owner)||enemyClasses.has(owner))continue;
@@ -125,6 +131,7 @@ const awaitingEnemyTile=new Map(),enemyClassCache=new Map();
 let enemyPhaseReady=false,enemyPhaseUnknown=false;
 const enemyHealthPhases=new Map(),pendingEnemyRebirth=new Map();
 let enemyStateReady=false,enemyStateUnknown=false;
+let enemyMaxHpReady=false;
 const enemyHpWrites=new Map();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
@@ -278,6 +285,10 @@ function isEnemy(object) {
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
 }
+function stageTrapId(object) {
+ const id=targetKey(object);
+ return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,object.readPointer())?id:null;
+}
 function beginEnemyHook(label) {
  epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
 }
@@ -300,24 +311,40 @@ function omitPendingHpWrite(enemy) {
  const write=enemyHpWrites.get(enemy.toString());
  if(write)write.superseded=true;
 }
+const MAX_HP_ATTRIBUTE=0;
+function enemyCachedAttributes(enemy) {
+ const attributes=enemy.add(0xb0).readPointer();
+ if(attributes.isNull())return null;
+ const cached=attributes.add(0x68).readPointer();
+ if(cached.isNull())return null;
+ const count=cached.add(0x18).readU32();
+ return count&&count<=64?{cached,count}:null;
+}
+function enemyAttribute(data,index) {
+ if(index>=data.count)return null;
+ const slot=data.cached.add(0x20+index*0x28);
+ if(slot.add(0x10).readU8()!==1)return null;
+ const key=BigInt(slot.readU64().toString()),hidden=BigInt(slot.add(8).readU64().toString());
+ const value=Number(BigInt.asIntN(64,hidden^key))/4294967296;
+ return Math.abs(value)<1e10&&(index!==MAX_HP_ATTRIBUTE||value>0)?value:null;
+}
+function enemyMaxHp(enemy) {
+ if(!enemyAttributesReady)return null;
+ try{
+  const data=enemyCachedAttributes(enemy);
+  return data?enemyAttribute(data,MAX_HP_ATTRIBUTE):null;
+ }catch(e){return null;}
+}
 function enemyEntryAttributes(enemy) {
  if(!enemyAttributesReady)return null;
  const result={};
  try{
-  const attributes=enemy.add(0xb0).readPointer();
-  if(attributes.isNull())return null;
-  const cached=attributes.add(0x68).readPointer();
-  if(cached.isNull())return null;
-  const count=cached.add(0x18).readU32();
-  if(!count||count>64)return null;
+  const data=enemyCachedAttributes(enemy);
+  if(!data)return null;
   // AttributeType slots in the verified ARM64 ObscuredFP[] layout.
-  for(const [name,index] of [['max_hp',0],['atk',1],['def',2],['res',3],['move_speed',6],['attack_speed',7]]){
-   if(index>=count)continue;
-   const slot=cached.add(0x20+index*0x28);
-   if(slot.add(0x10).readU8()!==1)continue;
-   const key=BigInt(slot.readU64().toString()),hidden=BigInt(slot.add(8).readU64().toString());
-   const value=Number(BigInt.asIntN(64,hidden^key))/4294967296;
-   if(Math.abs(value)<1e10&&(name!=='max_hp'||value>0))result[name]=value;
+  for(const [name,index] of [['max_hp',MAX_HP_ATTRIBUTE],['atk',1],['def',2],['res',3],['move_speed',6],['attack_speed',7]]){
+   const value=enemyAttribute(data,index);
+   if(value!==null)result[name]=value;
   }
  }catch(e){/* Keep any fields that were read successfully. */}
  return Object.keys(result).length?result:null;
@@ -484,45 +511,69 @@ function installEnemyStateHooks() {
  if(!enemyEntryReady||!enemyStateMethods)return;
  const installed=[];
  try{
-  for(const [label,address] of [['Entity.SetHpInternal',enemyStateMethods.hp],
-    ['Entity.SetHpInternalDirectly',enemyStateMethods.directHp]]){
-   installed.push(Interceptor.attach(address,{
+  const writes=[['Entity.SetHpInternal',enemyStateMethods.hp],
+   ['Entity.SetHpInternalDirectly',enemyStateMethods.directHp]];
+  if(enemyStateMethods.attributes)writes.push(['Entity.OnAttributeDirty',enemyStateMethods.attributes]);
+  for(const [label,address] of writes){
+   const attributeChange=label==='Entity.OnAttributeDirty';
+   const callbacks={
     onEnter(args){
-     if(stopped||fatal)return;
+     if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
+     let enemyTarget=true;
      try{
       const enemy=args[0],key=enemy.toString();
-      // Only the outer setter for this object reports the net change. HP
-      // initialization before Born is captured by enemy_enter instead.
-      if(enemy.isNull()||enemyHpWrites.has(key)||!isEnemy(enemy)||!enemy.add(0x25).readU8())return;
+      if(enemy.isNull())return;
+      const existing=enemyHpWrites.get(key);
+      if(existing){
+       if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null)
+        existing.maxHpBefore=fixedArg(args[2]);
+       return;
+      }
+      enemyTarget=isEnemy(enemy);
+      // Before Born, enemy HP initialization is covered by enemy_enter.
+      // Stage traps never create an entry; the host admits them via snapshot.
+      if(enemyTarget&&!enemy.add(0x25).readU8())return;
+      if(!enemyTarget&&(attributeChange||!stageTrapId(enemy)))return;
       const when=time(),uid=enemy.add(0x18).readU32();
       refreshEnemyEntryFrame(when.frame);
       if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
       const evidence=enemyIdentity(enemy,uid),hpBefore=targetHp(enemy);
       if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
-      this.write={enemy,key,uid,when,evidence,hpBefore,superseded:false};
+      const maxHpBefore=attributeChange?fixedArg(args[2]):null;
+      this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,superseded:false};
       enemyHpWrites.set(key,this.write);
       beginEnemyHook(label);
-     }catch(e){enemyStateUnknown=true;}
+     }catch(e){if(enemyTarget)enemyStateUnknown=true;}
     },
     onLeave(){
      const write=this.write;
      if(!write)return;
      try{
-      const {enemy,key,uid,when,evidence,hpBefore,superseded}=write;
+      const {enemy,key,uid,when,evidence,hpBefore,maxHpBefore,superseded}=write;
       if(enemyHpWrites.get(key)!==write)return;
       enemyHpWrites.delete(key);
       if(stopped||fatal||superseded)return;
       const end=time();
       if(end.frame!==when.frame||end.game_time!==when.game_time||enemy.add(0x18).readU32()!==uid)
-       throw new Error('enemy HP setter changed identity or crossed a frame');
+       throw new Error('enemy HP callback changed identity or crossed a frame');
       const hp=targetHp(enemy);
-      if(hp===null)throw new Error('enemy HP unreadable after setter');
-      if(hp!==hpBefore)record(null,'enemy_hp',0,end,{method:label},
-       {...evidence,hp_before:hpBefore,hp_after:hp});
-     }catch(e){enemyStateUnknown=true;}
+      if(hp===null)throw new Error('enemy HP unreadable after callback');
+      if(hp===hpBefore&&maxHpBefore===null)return;
+      const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
+      if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
+      if(maxHp!==null)evidence.enemy_max_hp=maxHp;
+      record(null,'enemy_hp',0,end,{method:label},{...evidence,hp_before:hpBefore,hp_after:hp});
+     }catch(e){if(write.enemyTarget)enemyStateUnknown=true;}
      finally{endEnemyHook(label);}
     }
-   }));
+   };
+   try{
+    installed.push(Interceptor.attach(address,callbacks));
+    if(attributeChange)enemyMaxHpReady=enemyAttributesReady;
+   }catch(e){
+    if(!attributeChange)throw e;
+    cfg.enemyMaxHpError=String(e);
+   }
   }
   const label='Enemy.OnFinish';
   installed.push(Interceptor.attach(enemyStateMethods.finish,{
@@ -558,10 +609,37 @@ function installEnemyStateHooks() {
     if(this.started)endEnemyHook(label);
    }
   }));
+  if(enemyStateMethods.trapFinish){
+   const label='Entity.OnFinish';
+   try{
+    installed.push(Interceptor.attach(enemyStateMethods.trapFinish,{
+     onEnter(args){
+      if(stopped||fatal)return;
+      try{
+       const trap=args[0];
+       if(trap.isNull()||isEnemy(trap)||!stageTrapId(trap))return;
+       const uid=trap.add(0x18).readU32(),reason=args[1].toInt32();
+       if(!reason||trap.add(0x158).readS32()!==reason)return;
+       const when=time();
+       refreshEnemyEntryFrame(when.frame);
+       const evidence={...enemyIdentity(trap,uid),finish_reason:reason};
+       includeEnemyHp(evidence,trap);
+       omitPendingHpWrite(trap);
+       this.started=true;beginEnemyHook(label);
+       record(null,'enemy_finish',0,when,{method:label},evidence);
+      }catch(e){/* Optional stage-object evidence is independent of enemy coverage. */}
+     },
+     onLeave(){
+      if(this.started)endEnemyHook(label);
+     }
+    }));
+   }catch(e){cfg.stageObjectFinishError=String(e);}
+  }
   hooks.push(...installed);
   enemyStateReady=true;
  }catch(e){
   for(const hook of installed)hook.detach();
+  enemyMaxHpReady=false;
   cfg.enemyStateError=String(e);
  }
 }
@@ -766,7 +844,9 @@ function enemyEntryQuality(frame){
   enemy_phase_ready:enemyPhaseReady,enemy_phase_unknown:enemyPhaseUnknown,
   enemy_state_ready:enemyStateReady&&enemyPhaseReady,
   enemy_state_unknown:enemyStateUnknown||enemyPhaseUnknown||enemyEntryUnknown,
-  enemy_state_error:enemyStateError};
+  enemy_state_error:enemyStateError,
+  enemy_max_hp_ready:enemyMaxHpReady,enemy_max_hp_error:cfg.enemyMaxHpError||null,
+  stage_object_finish_error:cfg.stageObjectFinishError||null};
 }
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
@@ -807,4 +887,6 @@ send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  skill_finish_error:cfg.skillFinishError||null,
  enemy_entry_ready:enemyEntryReady,enemy_entry_error:cfg.enemyEntryError||null,
  enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null,
- enemy_state_ready:enemyStateReady&&enemyPhaseReady,enemy_state_error:enemyStateError});
+ enemy_state_ready:enemyStateReady&&enemyPhaseReady,enemy_state_error:enemyStateError,
+ enemy_max_hp_ready:enemyMaxHpReady,enemy_max_hp_error:cfg.enemyMaxHpError||null,
+ stage_object_finish_error:cfg.stageObjectFinishError||null});

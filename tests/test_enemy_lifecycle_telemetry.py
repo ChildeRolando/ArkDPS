@@ -175,3 +175,118 @@ def test_late_fake_death_corrects_newer_native_departure_until_reborn_event():
     aligned = battle.sample(13)
     assert aligned['last_point']['remaining_hp'] == 60
     assert battle.polls == 1
+
+
+def test_six_rogue_transforms_expand_each_same_instance_once():
+    eid = 'enemy_10081_mpplai'
+    initial_hp, transformed_hp = 4062.499850988388, 8124.999701976776
+    battle = Battle((10, [
+        enemy(str(uid), eid=eid, hp=initial_hp, max_hp=initial_hp if uid != 10 else 0,
+              roster_id=uid)
+        for uid in (10, 11, 12)
+    ]))
+    battle.sample(10)
+    started = battle.sample(11, *[
+        event(uid - 12, 11, 'enemy_enter', uid=str(uid), eid=eid, hp_after=initial_hp,
+              enemy_entry_attributes={'max_hp': initial_hp})
+        for uid in (13, 14, 15)
+    ])
+    assert started['totals']['entered_count'] == 6
+    assert started['totals']['entered_total_hp'] == initial_hp * 5
+    for uid in (10, 11, 12, 13, 14, 15):
+        frame = uid + 20
+        transformed = battle.sample(
+            frame, event(uid - 6, frame, 'enemy_hp', uid=str(uid), eid=eid,
+                         hp_before=initial_hp, hp_after=transformed_hp,
+                         enemy_max_hp=transformed_hp),
+        )
+        row = next(row for row in transformed['rows'] if row['instance_uid'] == str(uid))
+        assert row['max_hp'] == row['hp'] == transformed_hp
+    assert transformed['totals']['entered_count'] == 6
+    assert transformed['totals']['entered_total_hp'] == transformed_hp * 6
+    assert transformed['last_point']['entered_total_hp'] == transformed_hp * 6
+    assert transformed['totals']['total_hp_complete'] is True
+    assert battle.polls == 1
+
+
+def test_heal_within_known_max_and_returning_to_old_max_do_not_add_to_the_pool():
+    battle = Battle((10, [enemy('10', hp=20)]))
+    battle.sample(10)
+    healed = battle.sample(11, event(1, 11, 'enemy_hp', hp_before=20, hp_after=100))
+    assert healed['totals']['entered_total_hp'] == 100
+    increased = battle.sample(12, event(2, 12, 'enemy_hp', hp_before=100, hp_after=100,
+                                         enemy_max_hp=150))
+    assert increased['rows'][0]['max_hp'] == increased['totals']['entered_total_hp'] == 150
+    reduced = battle.sample(13, event(3, 13, 'enemy_hp', hp_before=100, hp_after=100,
+                                       enemy_max_hp=100))
+    assert reduced['rows'][0]['max_hp'] == 100
+    assert reduced['totals']['entered_total_hp'] == 150
+    unverified = battle.sample(14, event(4, 14, 'enemy_hp', hp_before=100, hp_after=120))
+    assert unverified['rows'][0]['max_hp_lower_bound'] == 120
+    assert unverified['rows'][0]['hp_ratio'] is None
+    assert unverified['totals']['entered_total_hp'] == 150
+    assert unverified['totals']['total_hp_complete'] is True
+    restored = battle.sample(15, event(5, 15, 'enemy_hp', hp_before=120, hp_after=150,
+                                        enemy_max_hp=150))
+    assert restored['totals']['entered_total_hp'] == 150
+
+
+def test_legacy_hp_above_known_max_is_a_lower_bound_until_native_confirmation():
+    battle = Battle((10, [enemy('10', hp=90)]))
+    battle.sample(10)
+    exceeded = battle.sample(11, event(1, 11, 'enemy_hp', hp_before=90, hp_after=130))
+    row, = exceeded['rows']
+    assert (row['hp'], row['max_hp'], row['max_hp_lower_bound']) == (130, 100, 130)
+    assert row['hp_ratio'] is None
+    assert exceeded['totals']['entered_total_hp'] == 130
+    assert exceeded['totals']['total_hp_complete'] is False
+    assert exceeded['last_point']['total_hp_complete'] is False
+    confirmed = battle.sample(12, event(2, 12, 'enemy_hp', hp_before=130, hp_after=120,
+                                        enemy_max_hp=150))
+    assert confirmed['rows'][0]['max_hp'] == 150
+    assert confirmed['rows'][0]['max_hp_lower_bound'] is None
+    assert confirmed['totals']['entered_total_hp'] == 150
+    assert confirmed['totals']['total_hp_complete'] is True
+
+
+def test_reborn_hp_is_a_new_stage_baseline_and_only_form_expansion_adds_more():
+    battle = Battle((10, [enemy('10', hp=60000, max_hp=60000)]))
+    battle.sample(10)
+    battle.sample(11, event(1, 11, 'enemy_hp', hp_before=60000, hp_after=65000,
+                            enemy_max_hp=65000))
+    battle.sample(12, event(2, 12, 'enemy_fake_death', hp_after=0))
+    phases = {'complete': True, 'instances': {'10': {
+        'eid': 'enemy_a', 'phase_total_hp': 120000, 'phase_count': 2, 'phase_from_birth': True,
+    }}}
+    reborn = battle.sample(13, event(3, 13, 'enemy_reborn', hp_after=60000), phases=phases)
+    assert reborn['totals']['entered_total_hp'] == 125000
+    second = battle.sample(14, event(4, 14, 'enemy_hp', hp_before=60000, hp_after=60000,
+                                     enemy_max_hp=60000))
+    assert second['rows'][0]['max_hp'] == 60000
+    assert second['totals']['entered_total_hp'] == 125000
+    expanded = battle.sample(15, event(5, 15, 'enemy_hp', hp_before=60000, hp_after=63000,
+                                       enemy_max_hp=63000))
+    assert expanded['totals']['entered_total_hp'] == 128000
+    assert expanded['totals']['entered_count'] == 1
+    assert expanded['totals']['total_hp_complete'] is True
+
+
+def test_confirmed_stage_object_uses_uid_for_hp_and_finish_without_admitting_another():
+    eid = 'trap_322_shrbox'
+    battle = Battle((10, [enemy('10', eid=eid, hp=6250, max_hp=6250)]))
+    battle.sample(10)
+    damaged = battle.sample(
+        11, event(1, 11, 'enemy_hp', eid=eid, hp_before=6250, hp_after=300),
+        event(2, 11, 'enemy_hp', uid='20', eid=eid, hp_before=6250, hp_after=400),
+    )
+    assert damaged['totals']['entered_count'] == 1
+    assert damaged['totals']['remaining_hp'] == 300
+    finished = battle.sample(
+        12, event(3, 12, 'enemy_hp', eid=eid, hp_before=300, hp_after=0),
+        event(4, 12, 'enemy_finish', eid=eid, hp_after=0, finish_reason=2),
+        event(5, 12, 'enemy_finish', uid='20', eid=eid, hp_after=0, finish_reason=2),
+    )
+    row, = finished['rows']
+    assert (row['instance_uid'], row['hp'], row['lifecycle']) == ('10', 0, 'departed')
+    assert finished['totals']['entered_count'] == 1
+    assert finished['totals']['remaining_hp'] == 0

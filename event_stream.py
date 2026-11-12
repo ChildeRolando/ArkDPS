@@ -86,7 +86,7 @@ class EventStream:
                cancel_reason=None, shield_absorbed=None, target_instance=None,
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
-               enemy_entry_attributes=None, finish_reason=None):
+               enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
@@ -94,7 +94,7 @@ class EventStream:
                    target_type, damage_type, cancel_reason, shield_absorbed,
                    target_instance, skill_key, skill_id, skill_name, skill_reason,
                    phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
-                   finish_reason)
+                   finish_reason, enemy_max_hp)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -143,7 +143,7 @@ class EventStream:
                         sequence, kind, frame, game_time, source, amount, target, target_instance,
                         hp_before=hp_before, hp_after=hp_after, phase_total_hp=phase_total_hp,
                         phase_count=phase_count, phase_from_birth=phase_from_birth,
-                        finish_reason=finish_reason)
+                        finish_reason=finish_reason, enemy_max_hp=enemy_max_hp)
                 except (ValueError, TypeError, OverflowError):
                     self.statistics.mark_enemy_state_unknown()
         self.sequence = sequence

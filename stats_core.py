@@ -201,7 +201,7 @@ class Statistics:
     def record_enemy_state(self, sequence, kind, frame, game_time, source, amount,
                            eid, instance_uid, *, hp_before=None, hp_after=None,
                            phase_total_hp=None, phase_count=None, phase_from_birth=None,
-                           finish_reason=None):
+                           finish_reason=None, enemy_max_hp=None):
         if self.enemy_state_start_frame is None:
             return
         if (kind not in ENEMY_STATE_KINDS
@@ -215,6 +215,10 @@ class Statistics:
                 for value in (hp_before, hp_after))
                 or (kind == 'enemy_hp' and hp_after is None)):
             raise ValueError('invalid enemy state HP')
+        if enemy_max_hp is not None and (
+                kind != 'enemy_hp' or not self._optional_number(enemy_max_hp)
+                or enemy_max_hp <= 0):
+            raise ValueError('invalid enemy max HP')
         if kind == 'enemy_finish':
             if (type(finish_reason) is not int or finish_reason == 0
                     or not -(1 << 31) <= finish_reason < (1 << 31)):
@@ -228,6 +232,8 @@ class Statistics:
             event['hp_before'] = hp_before
         if hp_after is not None:
             event['hp_after'] = hp_after
+        if enemy_max_hp is not None:
+            event['enemy_max_hp'] = enemy_max_hp
         if kind == 'enemy_enter':
             attributes = self.enemy_entries[instance_uid].get('enemy_entry_attributes')
             if attributes:
