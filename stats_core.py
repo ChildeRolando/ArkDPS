@@ -76,6 +76,7 @@ class Statistics:
         self.non_skill_observed = {}
         self.skill_seen = set()
         self.skill_unknown = False
+        self.skill_incomplete = {}
         self.enemy_entry_start_frame = None
         self.enemy_entry_incomplete = False
         self.enemy_entries = {}
@@ -513,7 +514,7 @@ class Statistics:
               killed=None, target_type=None, damage_type=None,
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-              verified_skill_end_owner=None):
+              verified_skill_end_owner=None, skill_method=None):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
         Duplicate IDs with identical payload are ignored; conflicts are rejected.
@@ -558,7 +559,7 @@ class Statistics:
                     target_type, damage_type, cancel_reason, shield_absorbed)
         if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
             raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
-        payload = (game_time, source, kind, amount, evidence, target_instance, owner)
+        payload = (game_time, source, kind, amount, evidence, target_instance, owner, skill_method)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
@@ -620,7 +621,14 @@ class Statistics:
                 if owner not in self.skill_active:
                     self.skill_active[owner] = {
                         'start': game_time, 'key': skill_key, 'id': skill_id,
-                        'name': skill_name, 'method': target_instance}
+                        'name': skill_name, 'method': skill_method or target_instance}
+            elif (source == 'char_1041_angel2'
+                  and 'skchr_angel2_3' in (skill_key, skill_id)
+                  and skill_method == 'Character.OnAfterSkill'
+                  and type(skill_reason) is int and skill_reason == 1):
+                # This finishes the cast action. The damage effect remains
+                # active, and these callbacks do not prove when the ammo ran out.
+                self.skill_incomplete[owner] = '未观测到弹药技能的实际结束'
             else:
                 window = self.skill_active.pop(owner, None)
                 if window is not None:
@@ -835,7 +843,8 @@ class Statistics:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
                 row['effective_damage'] = None
-            skill_known = coverage_complete and not self.skill_unknown
+            skill_known = (coverage_complete and not self.skill_unknown
+                           and owner not in self.skill_incomplete)
             skill_value = self.skill_observed.get(owner, 0.0)
             non_skill_value = self.non_skill_observed.get(owner, 0.0)
             expected = row.get('observed_damage')
@@ -847,7 +856,7 @@ class Statistics:
             if not skill_known:
                 reason = ('事件观测未建立' if not self.event_coverage else
                           '事件覆盖已结束' if not coverage_complete else
-                          '技能事件覆盖不完整')
+                          self.skill_incomplete.get(owner, '技能事件覆盖不完整'))
             elif not covers_total:
                 reason = '技能窗口未覆盖全部伤害事件'
             else:
@@ -868,8 +877,8 @@ class Statistics:
                                          + (1 if owner in self.skill_active else 0))
             row['skill_active_seconds'] = (
                 self._skill_active_seconds(owner)
-                if self.event_coverage else None)
-            row['skill_coverage_complete'] = coverage_complete and not self.skill_unknown
+                if self.event_coverage and owner not in self.skill_incomplete else None)
+            row['skill_coverage_complete'] = skill_known
             row['skill_split_complete'] = skill_known and covers_total
             row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason
