@@ -125,6 +125,35 @@ public partial class MainWindow
         finally{await partial.DisposeAsync();}
         Require(timedOut&&followupRejected,"partial response timeout allowed a later command or failed to reject it");
         checks.Add("partial JSONL timeout marks transport unusable, rejects follow-up, and closes via stdin EOF");
+        string alignedRoot=Path.Combine(output,"aligned-worker");Directory.CreateDirectory(alignedRoot);
+        File.WriteAllLines(Path.Combine(alignedRoot,"desktop_bridge.py"),new[]{
+            "import json,sys",
+            "def reply(c,kind,**body): return dict(version=1,id=c['id'],ok=True,kind=kind,**body)",
+            "def encode(value): return json.dumps(value,ensure_ascii=False,separators=(',',':')).encode('utf-8')+b'\\r\\n'",
+            "def send(data): sys.stdout.buffer.write(data); sys.stdout.buffer.flush()",
+            "label='敌情状态·等待 🐱 '",
+            "for line in sys.stdin:",
+            "    c=json.loads(line)",
+            "    if c['op']=='hello': send(encode(reply(c,'hello',result={'transport':'stdio-jsonl'}))); continue",
+            "    if c['op']=='quit': send(encode(reply(c,'bye'))); break",
+            "    text={'label':label,'padding':''}",
+            "    result=reply(c,'snapshot',state=text)",
+            "    remaining=c['size']-len(encode(result))",
+            "    copies,tail=divmod(remaining,len(label.encode('utf-8')))",
+            "    text['padding']=label*copies+'x'*tail",
+            "    data=encode(result)",
+            "    assert len(data)==c['size']",
+            "    send(data)"});
+        await using(var aligned=new BridgeClient(alignedRoot,App.Python,Array.Empty<string>()))
+        {
+            await aligned.ConnectAsync();
+            foreach(int size in new[]{4095,4096,4097,8192,114688})
+            {
+                var reply=await aligned.RequestAsync("snapshot",new(){["size"]=size},TimeSpan.FromSeconds(3));
+                Require(reply.Get("state").Text("label")=="敌情状态·等待 🐱 ","aligned UTF-8 worker response did not decode");
+            }
+        }
+        checks.Add("UTF-8 worker replies complete at the pipe buffer boundary while the worker awaits the next request");
         string errorRoot=Path.Combine(output,"error-reply-worker");Directory.CreateDirectory(errorRoot);
         File.WriteAllLines(Path.Combine(errorRoot,"desktop_bridge.py"),new[]{
             "import json,sys",
