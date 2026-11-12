@@ -22,12 +22,13 @@ const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
 const cfg={methods:[]};let clock;let skillF=null;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;
-function uniqueMethod(klass,name,argCount) {
+function uniqueMethod(klass,name,argCount,verify=()=>true) {
  const methods=klass.add(0x98).readPointer(),count=klass.add(0x120).readU16(),matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
  for(let i=0;i<count;i++){
   const method=methods.add(i*8).readPointer();
-  if(method.add(0x20).readPointer().equals(klass)&&method.add(0x18).readPointer().readCString()===name&&parameterCount(method)===argCount)
+  if(method.add(0x20).readPointer().equals(klass)&&method.add(0x18).readPointer().readCString()===name&&
+     parameterCount(method)===argCount&&verify(method))
    matches.push(method.readPointer());
  }
  if(matches.length!==1||matches[0].isNull()||Process.findModuleByAddress(matches[0])?.name!==il.name)
@@ -86,6 +87,31 @@ function resolveMitigationMethods(formula,entity,modifier){
  const final=signature(attack,'GetFinalAtk',0,false,()=>true);
  return {outer:outer.address,internal:internal.address,final:final.address,damageType};
 }
+function resolveDistanceDamageMethod(node,modifier){
+ if(!node)throw new Error('DamageByDistance missing');
+ const declaring=api('il2cpp_class_get_declaring_type','pointer',['pointer'])(node);
+ if(declaring.isNull()||className(declaring)!=='Nodes')throw new Error('unsupported DamageByDistance owner');
+ const param=api('il2cpp_method_get_param','pointer',['pointer','uint']);
+ const typeName=api('il2cpp_type_get_name','pointer',['pointer']);
+ const result=api('il2cpp_method_get_return_type','pointer',['pointer']);
+ const flags=api('il2cpp_method_get_flags','uint',['pointer','pointer']);
+ const classFrom=api('il2cpp_class_from_type','pointer',['pointer']);
+ const isValue=api('il2cpp_class_is_valuetype','bool',['pointer']);
+ const valueSize=api('il2cpp_class_value_size','int',['pointer','pointer']);
+ const scratch=Memory.alloc(4);
+ const signature=['Torappu.Blackboard','Torappu.Battle.Action.ActionNode.SourceType','Torappu.Battle.Context.Snapshot&'];
+ const method=uniqueMethod(node,'Execute',3,m=>{
+  if((flags(m,scratch)&0x10)||typeName(result(m)).readCString()!=='System.Boolean'||
+     !signature.every((type,index)=>typeName(param(m,index)).readCString()===type))return false;
+  const snapshot=classFrom(param(m,2));
+  if(snapshot.isNull()||!isValue(snapshot)||valueSize(snapshot,scratch)<24)return false;
+  expectFields(snapshot,{target:0x18,buff:0x20});
+  return true;
+ });
+ expectFields(node,{_damageType:0x20});
+ expectFields(modifier,{'<originAtk>k__BackingField':0x90,'<originValue>k__BackingField':0x98});
+ return method;
+}
 try{
  const size=Memory.alloc(8), assemblies=api('il2cpp_domain_get_assemblies','pointer',['pointer','pointer'])(domain,size);
  const imageOf=api('il2cpp_assembly_get_image','pointer',['pointer']), imageName=api('il2cpp_image_get_name','pointer',['pointer']);
@@ -96,11 +122,11 @@ try{
  const wanted=new Set(['Entity','Unit','Buff','BuffContainer','BlockDamage','Modifier','BattleController',
   'Character','BasicSkill','SkillData']);const found={};
  const enemyClasses=new Set(['Enemy','BObject','Attributes']);
- const optionalClasses=new Set([...enemyClasses,'BattleFormula']);
+ const optionalClasses=new Set([...enemyClasses,'BattleFormula','DamageByDistance']);
  for(let i=0,n=classCount(im);i<n;i++){
   const k=classAt(im,i),name=className(k);if(!wanted.has(name)&&!optionalClasses.has(name))continue;
   const ns=k.add(0x18).readPointer().readCString();
-  const expectedNs=(['BuffContainer','BlockDamage'].includes(name)?'':
+  const expectedNs=(['BuffContainer','BlockDamage','DamageByDistance'].includes(name)?'':
     (name==='SkillData'?'Torappu':'Torappu.Battle'));
   if(ns!==expectedNs)continue;
   if(name in found){
@@ -116,6 +142,10 @@ try{
  expectFields(found.BattleController,{'s_fixedFrameCnt':0x14,'s_fixedPlayTime':0x18});
  try{mitigationMethods=resolveMitigationMethods(found.BattleFormula,found.Entity,found.Modifier);}
  catch(e){cfg.mitigationError=String(e);}
+ if(mitigationMethods){
+  try{mitigationMethods.distance=resolveDistanceDamageMethod(found.DamageByDistance,found.Modifier);}
+  catch(e){cfg.mitigationDistanceError=String(e);}
+ }
  const CF=fieldOffsets(found.Character,['m_skill']);
  const BF=fieldOffsets(found.BasicSkill,['m_owner','m_data']);
  const SF=fieldOffsets(found.SkillData,['prefabKey','skillId','name']);
@@ -432,8 +462,8 @@ function recordSourcelessEnemyBurst(scope,evidence,when) {
  }catch(e){enemyDamageUnknown=true;}
 }
 // One optional observation joins the existing ApplyModifier damage event.
-let mitigationReady=false;
-const formulaScopes=new Map(),pendingFormulaDamage=new Map();
+let mitigationReady=false,mitigationDistanceReady=false;
+const formulaScopes=new Map(),pendingFormulaDamage=new Map(),distanceDamageScopes=new Map();
 const FORMULA_PENDING_LIMIT=256;
 // Cumulative observer counters. Each sample reason has its own small budget.
 const MITIGATION_SAMPLES_PER_REASON=2;
@@ -441,6 +471,7 @@ const mitigationCounts={
  formula_scopes:0,formula_candidates:0,formula_missing_pre:0,
  apply_missing_candidate:0,apply_ambiguous_candidate:0,apply_value_mismatch:0,
  apply_changed_at_leave:0,emitted:0,emitted_after_adjustment:0,
+ distance_scopes:0,distance_emitted:0,
 };
 const mitigationSamples=[];
 function noteMitigationDiagnostic(reason,source,when,formula,amount){
@@ -453,10 +484,16 @@ function noteMitigationDiagnostic(reason,source,when,formula,amount){
   formula_after:Number.isFinite(formula?.after)?formula.after:null,
   modifier_amount:Number.isFinite(amount)?amount:null});
 }
-function mitigationDiagnostics(){return {...mitigationCounts,samples:mitigationSamples.slice()};}
+function mitigationDiagnostics(){return {...mitigationCounts,distance_ready:mitigationDistanceReady,
+ distance_error:cfg.mitigationDistanceError||null,samples:mitigationSamples.slice()};}
 
 function sameFormulaHit(scope,attack){
  return scope&&(scope.attack.equals(attack)||scope.internalAttack?.equals(attack));
+}
+function sameMitigationTime(a,b){return a.frame===b.frame&&a.game_time===b.game_time;}
+function distanceDamageScope(thread,when,target){
+ const distance=distanceDamageScopes.get(thread);
+ return distance&&distance.target.equals(target)&&sameMitigationTime(distance.when,when)?distance:null;
 }
 function formulaDamageKey(source,target,type){return [source,target,type].join('/');}
 function formulaBatch(thread,when){
@@ -469,23 +506,34 @@ function formulaBatch(thread,when){
 }
 function rememberFormulaDamage(scope,raw,after){
  mitigationCounts.formula_candidates++;
+ const candidate={raw,before:scope.before,after,source:scope.source,target:scope.target,type:scope.type};
+ if(scope.distance){
+  // A source-less formula is only transferable within this native invocation.
+  scope.distance.hit=scope.distance.hit===undefined?{...candidate,beforeRaw:scope.beforeRaw}:null;
+  return;
+ }
  const hits=formulaBatch(scope.tid,scope.when);
  const key=formulaDamageKey(scope.source,scope.target,scope.type);
  if(hits.has(key))hits.set(key,null); // multiple unmatched formula calls are ambiguous
- else if(hits.size<FORMULA_PENDING_LIMIT)
-  hits.set(key,{raw,before:scope.before,after,source:scope.source,target:scope.target,type:scope.type});
+ else if(hits.size<FORMULA_PENDING_LIMIT)hits.set(key,candidate);
 }
 function takeFormulaDamage(scope,source,type,raw){
  const hits=pendingFormulaDamage.get(scope.tid);
  const when=scope.when,key=formulaDamageKey(source,scope.target,type);
- const result=hits&&hits.frame===when.frame&&hits.game_time===when.game_time?hits.hits.get(key):undefined;
+ const ordinary=hits&&sameMitigationTime(hits,when)?hits.hits.get(key):undefined;
+ const distance=distanceDamageScope(scope.tid,when,scope.target);
+ const scoped=distance?.type===type&&distance.source.equals(source)?distance.hit:undefined;
+ if(ordinary!==undefined)hits.hits.delete(key);
+ if(scoped!==undefined)distance.hit=undefined;
+ const result=scoped===undefined?ordinary:ordinary===undefined?scoped:null;
  if(result===undefined){
   if(targetKey(scope.target)?.startsWith('enemy_'))mitigationCounts.apply_missing_candidate++;
   return null;
  }
- hits.hits.delete(key); // mismatched or canceled settlement cannot leak to a later hit
  if(result===null){mitigationCounts.apply_ambiguous_candidate++;return null;}
- if(result.raw===raw)return result;
+ if(result.raw===raw&&(result.beforeRaw===undefined||
+    result.beforeRaw===fixedBits(scope.mod.add(0x80).readS64())&&raw===fixedBits(scope.mod.add(0x88).readS64())))
+  return result;
  noteMitigationDiagnostic('apply_value_mismatch',scope.source,when,result,Number(raw)/4294967296);
  return null;
 }
@@ -513,6 +561,7 @@ function mitigationEvidence(scope,type,amount){
  if(result.after!==amount)
   noteMitigationDiagnostic('emitted_after_adjustment',scope.source,scope.when,result,amount);
  mitigationCounts.emitted++;
+ if(result.beforeRaw!==undefined)mitigationCounts.distance_emitted++;
  return {mitigation_before:result.before,mitigation_after:amount};
 }
 function installMitigationHooks(){
@@ -547,21 +596,31 @@ function installMitigationHooks(){
    this.previous=formulaScopes.get(this.tid);
    formulaScopes.set(this.tid,null);
    this.entered=true;
-   const target=args[0],source=args[1],attack=args[4];
-   if(source.isNull()||target.isNull()||attack.isNull()||!(args[2].toInt32()||args[3].toInt32()))return;
+   const target=args[0],attack=args[4];
+   if(target.isNull()||attack.isNull()||!(args[2].toInt32()||args[3].toInt32()))return;
+   let source=args[1],distance=null,when;
+   if(source.isNull()){
+    if((args[2].toInt32()&0xff)!==1||(args[3].toInt32()&0xff)!==0)return;
+    when=time();
+    distance=distanceDamageScope(this.tid,when,target);
+    if(!distance||distance.type!==attack.add(mitigationMethods.damageType).readS32())return;
+    source=distance.source;
+   }
    const sourceId=entityId(source);
    if(!own(sourceId)||!targetKey(target)?.startsWith('enemy_'))return;
-   this.formula={tid:this.tid,source,sourceId,target,attack,when:time()};
+   this.formula={tid:this.tid,source,sourceId,target,attack,when:when||time(),distance};
    mitigationCounts.formula_scopes++;
    formulaScopes.set(this.tid,this.formula);
   },function(result){
    const scope=this.formula;
    if(!scope)return;
    const end=time();
-   if(scope.when.frame!==end.frame||scope.when.game_time!==end.game_time)return;
+   if(!sameMitigationTime(scope.when,end))return;
    const type=scope.attack.add(mitigationMethods.damageType).readS32(),raw=fixedBits(result);
    const after=Number(raw)/4294967296;
    if(type<1||type>3)return;
+   if(scope.distance&&(distanceDamageScopes.get(this.tid)!==scope.distance||scope.distance.type!==type))return;
+   if(scope.distance&&raw===0n&&scope.beforeRaw===0n)return; // stationary distance tick
    if(scope.conflict||type!==scope.type||!Number.isFinite(scope.before)||scope.before<=0){
     noteMitigationDiagnostic('formula_missing_pre',scope.sourceId,scope.when,{after},null);
     return;
@@ -593,11 +652,36 @@ function installMitigationHooks(){
   },function(result){
    const scope=this.scope;
    if(!scope||this.type<1||this.type>3)return;
-   const before=fixedArg(result);
-   if(scope.before!==undefined&&(scope.before!==before||scope.type!==this.type))scope.conflict=true;
+   const beforeRaw=scope.distance?fixedBits(result):null;
+   const before=beforeRaw===null?fixedArg(result):Number(beforeRaw)/4294967296;
+   if(scope.before!==undefined&&(scope.before!==before||scope.type!==this.type||scope.beforeRaw!==beforeRaw))
+    scope.conflict=true;
    scope.before=before;
+   scope.beforeRaw=beforeRaw;
    scope.type=this.type;
   });
+  if(mitigationMethods.distance){
+   try{
+    observe(mitigationMethods.distance,'DamageByDistance.Execute',function(args){
+     this.previousDistance=distanceDamageScopes.get(this.tid);
+     distanceDamageScopes.set(this.tid,null); // nested actions cannot borrow the outer emitter
+     this.enteredDistance=true;
+     const snapshot=args[3];
+     if(args[2].toInt32()!==1||snapshot.isNull())return; // ActionNode.SourceType.FROM_BUFF
+     const buffPointer=snapshot.add(0x10).readPointer(),target=snapshot.add(0x8).readPointer();
+     if(buffPointer.isNull()||target.isNull()||!targetKey(target)?.startsWith('enemy_'))return;
+     const source=buffPointer.add(0x18).readPointer(),type=args[0].add(0x20).readS32();
+     if(source.isNull()||!own(entityId(source))||type!==2)return;
+     distanceDamageScopes.set(this.tid,{source,target,type,when:time()});
+     mitigationCounts.distance_scopes++;
+    },function(){},function(){
+     if(!this.enteredDistance)return;
+     if(this.previousDistance)distanceDamageScopes.set(this.tid,this.previousDistance);
+     else distanceDamageScopes.delete(this.tid);
+    },true);
+    mitigationDistanceReady=true;
+   }catch(e){cfg.mitigationDistanceError=String(e);}
+  }
   hooks.push(...attached);
   mitigationReady=true;
  }catch(e){
@@ -1230,6 +1314,7 @@ receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  skill_finish_error:cfg.skillFinishError||null,
  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
+ mitigation_distance_ready:mitigationDistanceReady,mitigation_distance_error:cfg.mitigationDistanceError||null,
  enemy_entry_ready:enemyEntryReady,enemy_entry_error:cfg.enemyEntryError||null,
  enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null,
  enemy_state_ready:enemyStateReady&&enemyPhaseReady,enemy_state_error:enemyStateError,

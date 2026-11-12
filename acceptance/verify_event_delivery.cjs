@@ -172,7 +172,7 @@ assert.equal(nonlethalSettlement(target,17,-17,17),null);
 vm.runInNewContext(`
 const hooks=[],activeHooks=new Map(),registered=new Map(),cfg={};
 let active=0,epoch=0,frame=30,gameTime=1;
-const mitigationMethods={outer:'outer',internal:'internal',final:'final',damageType:0};
+const mitigationMethods={outer:'outer',internal:'internal',final:'final',distance:'distance',damageType:0};
 const Interceptor={attach(address,hook){
   registered.set(address,hook);
   return {detach(){registered.delete(address);}};
@@ -183,10 +183,11 @@ const entityId=pointer=>pointer.id;
 const own=id=>id.startsWith('char_');
 const fixedArg=value=>Number(BigInt(value.toString()))/4294967296;
 ${between('const activeModifiers=new Map();', 'function markShieldUnknown(')}
-${between('let mitigationReady=false;', 'function includeEnemyHp(')}
+${between('// One optional observation joins the existing ApplyModifier damage event.', 'function includeEnemyHp(')}
 installMitigationHooks();
 assert.equal(mitigationReady,true);
-assert.equal(hooks.length,3);
+assert.equal(mitigationDistanceReady,true);
+assert.equal(hooks.length,4);
 
 const raw=value=>BigInt(Math.round(value*4294967296));
 function pointer(address,id='',type=1){
@@ -204,13 +205,15 @@ function enter(address,args,threadId=7){
   hook.onEnter.call(context,args);
   return result=>hook.onLeave.call(context,result);
 }
-function calculate(before,after,to=target,actionFlags=[1,1]){
-  const finish=enter('outer',[to,source,...actionFlags.map(flag),attack]);
-  assert.equal(active,1);
-  const finishInner=enter('internal',[copy,raw(0),raw(0),to]);
-  const finishPre=enter('final',[copy]);
+function calculate(before,after,to=target,actionFlags=[1,1],from=source,thread=7,type=1){
+  const initiallyActive=active;
+  const info=type===1?attack:pointer('0x303','',type), internalCopy=type===1?copy:pointer('0x404','',type);
+  const finish=enter('outer',[to,from,...actionFlags.map(flag),info],thread);
+  assert.equal(active,initiallyActive+1);
+  const finishInner=enter('internal',[internalCopy,raw(0),raw(0),to],thread);
+  const finishPre=enter('final',[internalCopy],thread);
   finishPre(raw(before));finishInner(raw(after));finish(raw(after));
-  assert.equal(active,0);
+  assert.equal(active,initiallyActive);
 }
 function modifier(after,type=1,cancel=0,to=target,from=source){
   const fields={after,type,cancel,to,from};
@@ -220,7 +223,7 @@ function modifier(after,type=1,cancel=0,to=target,from=source){
     readPointer:()=>fields.from,
     add:offset=>({
       readS32:()=>({0x60:0,0x68:fields.type,0x70:fields.cancel})[offset],
-      readS64:()=>raw(fields.after),
+      readS64:()=>raw(({0x30:fields.after,0x80:fields.originAtk,0x88:fields.originValue})[offset]),
       readPointer:()=>fields.to,
     }),
   };
@@ -345,6 +348,86 @@ for(let index=0;index<=FORMULA_PENDING_LIMIT;index++)
 assert.equal(pendingFormulaDamage.get(7).hits.size,FORMULA_PENDING_LIMIT);
 assert.equal(ratio(apply(60,pointer(String(FORMULA_PENDING_LIMIT),'enemy_limit')),60),'null');
 assert.equal(ratio(apply(60,pointer('0','enemy_limit')),60),'{"mitigation_before":100,"mitigation_after":60}');
+
+const nullEntity={isNull:()=>true};
+const gladiia=pointer('0x501','char_474_glady');
+const foreign=pointer('0x502','char_two');
+const distanceNode={add(offset){assert.equal(offset,0x20);return {readS32:()=>2};}};
+function beginDistance(to=target,from=gladiia,sourceType=1){
+  const buff={isNull:()=>false,add(offset){assert.equal(offset,0x18);return {readPointer:()=>from};}};
+  const snapshot={isNull:()=>false,add(offset){return {readPointer:()=>({0x8:to,0x10:buff})[offset]};}};
+  return enter('distance',[distanceNode,null,flag(sourceType),snapshot]);
+}
+const units=bits=>Number(bits)/4294967296;
+function calculateDistance(before,after,to=target,thread=7,flags=[1,0],type=2){
+  calculate(before,after,to,flags,nullEntity,thread,type);
+}
+function applyDistance(before,after,to=target,thread=7,from=gladiia,originValue=after){
+  const mod=modifier(after,2,0,to,from);
+  Object.assign(mod.fields,{originAtk:before,originValue});
+  return openModifier(mod,thread);
+}
+
+// CE-5, source-null formula inside glady_e_rupture's DamageByDistance.Execute.
+const distancePre=units(1707964825600n),distancePost=units(853982393712n);
+let endDistance=beginDistance();
+calculateDistance(distancePre,distancePost);
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),
+  JSON.stringify({mitigation_before:distancePre,mitigation_after:distancePost}));
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+endDistance();
+
+// This real hit's modifier received a further +30% before HP settlement.
+const secondPre=units(525398835200n),secondPost=units(262699411728n),secondFinal=units(341509222719n);
+endDistance=beginDistance();
+calculateDistance(secondPre,secondPost);
+const adjustedDistance=applyDistance(secondPre,secondPost);
+adjustedDistance.mod.fields.after=secondFinal;
+assert.equal(ratio(adjustedDistance,secondFinal,2),
+  JSON.stringify({mitigation_before:secondPre,mitigation_after:secondFinal}));
+endDistance();
+
+calculateDistance(distancePre,distancePost);
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+endDistance=beginDistance();
+calculateDistance(distancePre,distancePost);
+endDistance();
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+
+endDistance=beginDistance();
+calculateDistance(distancePre,distancePost,other);
+calculateDistance(distancePre,distancePost,target,8);
+calculateDistance(distancePre,distancePost,target,7,[1,1]);
+calculateDistance(distancePre,distancePost,target,7,[1,0],1);
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+calculateDistance(distancePre,distancePost);
+assert.equal(ratio(applyDistance(distancePre,distancePost,target,7,foreign),distancePost,2),'null');
+assert.equal(ratio(applyDistance(distancePre,distancePost,other),distancePost,2),'null');
+assert.equal(ratio(applyDistance(distancePre,distancePost,target,8),distancePost,2),'null');
+assert.equal(ratio(applyDistance(distancePre,distancePost,target,7,gladiia,0),distancePost,2),'null');
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+calculateDistance(distancePre,distancePost);
+assert.equal(ratio(applyDistance(distancePre+1,distancePost),distancePost,2),'null');
+calculateDistance(distancePre,distancePost);
+assert.equal(ratio(applyDistance(distancePre,distancePost+1),distancePost+1,2),'null');
+calculateDistance(distancePre,distancePost);
+calculateDistance(distancePre,distancePost);
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+calculateDistance(distancePre,distancePost);
+frame++;
+gameTime+=1/30;
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+endDistance();
+
+endDistance=beginDistance();
+const endNestedDistance=beginDistance(target,gladiia,0);
+calculateDistance(distancePre,distancePost);
+endNestedDistance();
+assert.equal(ratio(applyDistance(distancePre,distancePost),distancePost,2),'null');
+endDistance();
+assert.equal(distanceDamageScopes.size,0);
+assert.equal(activeHooks.size,0);
+assert.equal(mitigationDiagnostics().distance_emitted,2);
 `, {assert}, {filename: 'product-mitigation-delivery'});
 
 console.log('PASS_EVENT_DELIVERY');
