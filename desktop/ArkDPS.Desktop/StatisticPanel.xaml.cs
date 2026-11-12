@@ -56,6 +56,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Total => Entry.Text("display_value");
     public string Rate => Entry.Text("rate_text");
     public string Share => Entry.Text("share_display");
+    public string MetricCategory { get; internal set; } = "";
     internal SharePresentation ShareInfo { get; set; }=new("占比","",false);
     public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
     public string BarTooltip
@@ -132,16 +133,34 @@ public sealed class ContributionBar : FrameworkElement
     }
     public static readonly DependencyProperty DataProperty=DependencyProperty.Register(nameof(Data),typeof(JsonElement),typeof(ContributionBar),new FrameworkPropertyMetadata(default(JsonElement),FrameworkPropertyMetadataOptions.AffectsRender));
     public JsonElement Data { get => (JsonElement)GetValue(DataProperty); set => SetValue(DataProperty,value); }
+    public static readonly DependencyProperty MetricCategoryProperty = DependencyProperty.Register(
+        nameof(MetricCategory), typeof(string), typeof(ContributionBar),
+        new FrameworkPropertyMetadata("", FrameworkPropertyMetadataOptions.AffectsRender));
+    public string MetricCategory
+    {
+        get => (string)GetValue(MetricCategoryProperty);
+        set => SetValue(MetricCategoryProperty, value);
+    }
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
-        dc.DrawRoundedRectangle(Theme.Resource("Track"),null,new Rect(0,0,ActualWidth,ActualHeight),1,1);
+        double height=Theme.IsBabel ? Math.Min(5,ActualHeight) : ActualHeight;
+        double top=(ActualHeight-height)/2;
+        double radius=Theme.IsBabel ? 0 : 1;
+        var track=Theme.Resource("ContributionTrack");
+        dc.DrawRoundedRectangle(track,null,new Rect(0,top,ActualWidth,height),radius,radius);
         double width=ActualWidth*Math.Clamp(Data.Number("bar_ratio"),0,1), x=0;
         var segments=Data.Get("segments").Items().ToArray();
         if (segments.Length==0)
         {
             var color=Data.Text("bar_color");
-            dc.DrawRoundedRectangle(color.Length>0 ? Theme.Brush(color) : Theme.Resource("Accent"),null,new Rect(0,0,width,ActualHeight),1,1); return;
+            var fill = Theme.IsPeople || Theme.IsBabel ? Theme.Resource(MetricCategory switch
+            {
+                "healing" => "Heal",
+                "shield" => "Shield",
+                _ => Theme.IsBabel ? "Physical" : "Accent",
+            }) : color.Length > 0 ? Theme.Brush(color) : Theme.Resource("Accent");
+            dc.DrawRoundedRectangle(fill,null,new Rect(0,top,width,height),radius,radius); return;
         }
         foreach(var segment in segments)
         {
@@ -149,23 +168,23 @@ public sealed class ContributionBar : FrameworkElement
             if(size>0)
             {
                 double body=size;
-                dc.DrawRectangle(SegmentBrush(segment),null,new Rect(x,0,body,ActualHeight));
+                dc.DrawRectangle(SegmentBrush(segment),null,new Rect(x,top,body,height));
                 if(segment.TryGetProperty("overkill_ratio",out var mark) && mark.ValueKind==JsonValueKind.Number)
                 {
                     double ratio=Math.Clamp(mark.GetDouble(),0,1), overkill=body*ratio;
                     if(overkill>0)
                     {
                         double start=x+body-overkill;
-                        dc.DrawRectangle(OverkillHatch,null,new Rect(start,0,overkill,ActualHeight));
+                        dc.DrawRectangle(OverkillHatch,null,new Rect(start,top,overkill,height));
                         var pen=new Pen(Theme.Resource("Signal"),1){DashStyle=DashStyles.Dash};
                         pen.Freeze();
-                        dc.DrawLine(pen,new Point(start,0),new Point(start,ActualHeight));
+                        dc.DrawLine(pen,new Point(start,top),new Point(start,top+height));
                     }
                 }
             }
             x+=size;
         }
-        if (x<width) dc.DrawRectangle(Theme.Resource("Track"),null,new Rect(x,0,width-x,ActualHeight));
+        if (x<width) dc.DrawRectangle(track,null,new Rect(x,top,width-x,height));
     }
     private static Brush SegmentBrush(JsonElement segment) => segment.Text("kind") switch
     {
@@ -201,8 +220,8 @@ public partial class StatisticPanel : UserControl
     private readonly ObservableCollection<RowItem> items=new();
     private JsonElement view;
     private bool updating, hold;
-    private bool referenceStyle;
-    private bool? loneTrailHudSkin;
+    private bool referenceStyle, liveToolbar;
+    private string? appliedHudSkin;
     private HudLayout? hudLayout;
     private double hudViewportLimit=double.PositiveInfinity;
     private const double ReferenceRowsDefaultHeight=185;
@@ -216,8 +235,8 @@ public partial class StatisticPanel : UserControl
     internal void ConfigureHud(Action? close=null)
     {
         if(IsHud) return;
-        SetReferenceStyle(false);
         IsHud=true;
+        SetReferenceStyle(false);
         CloseRequested=close;
         MinWidth=0;
         PanelFrame.Margin=new Thickness(0);
@@ -299,15 +318,31 @@ public partial class StatisticPanel : UserControl
 
     private void ApplyHudSkin()
     {
-        bool loneTrail=Theme.Key=="lone-trail";
-        if(loneTrailHudSkin==loneTrail) return;
-        loneTrailHudSkin=loneTrail;
+        if (appliedHudSkin == Theme.Key) return;
+        appliedHudSkin = Theme.Key;
+        bool loneTrail = Theme.Key == Theme.LoneTrail;
+        bool babel = Theme.IsBabel;
 
-        PanelFrame.SetResourceReference(Border.BackgroundProperty,loneTrail ? "Console" : "Card");
-        TitleAccent.Visibility=loneTrail ? Visibility.Collapsed : Visibility.Visible;
-        LoneTrailHudMark.Visibility=loneTrail ? Visibility.Visible : Visibility.Collapsed;
-        LoneTrailHudBackdrop.Visibility=LoneTrailHudChevrons.Visibility=LoneTrailHudMark.Visibility;
-        TitleRegion.BorderThickness=loneTrail ? new Thickness(0,0,0,1) : new Thickness(0);
+        PanelFrame.SetResourceReference(Border.BackgroundProperty, loneTrail ? "Console" : "Card");
+        TitleAccent.Visibility = loneTrail || babel ? Visibility.Collapsed : Visibility.Visible;
+        LoneTrailHudMark.Visibility = loneTrail ? Visibility.Visible : Visibility.Collapsed;
+        LoneTrailHudBackdrop.Visibility = LoneTrailHudChevrons.Visibility = LoneTrailHudMark.Visibility;
+        PeopleHudArtwork.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+        BabelHudMark.Visibility = BabelHudRule.Visibility = babel ? Visibility.Visible : Visibility.Collapsed;
+        TitleRegion.BorderThickness = new Thickness(0, 0, 0, 1);
+        HudClose.Background = Brushes.Transparent;
+        if (babel)
+        {
+            Heading.SetResourceReference(TextBlock.ForegroundProperty, "BabelPaperInk");
+            HudClose.SetResourceReference(Control.ForegroundProperty, "BabelPaperInk");
+            HudClose.Resources["Focus"] = Theme.Resource("BabelPaperAccent");
+        }
+        else
+        {
+            Heading.ClearValue(TextBlock.ForegroundProperty);
+            HudClose.ClearValue(Control.ForegroundProperty);
+            HudClose.Resources.Remove("Focus");
+        }
         if(loneTrail)
         {
             PanelFrame.CornerRadius=new CornerRadius(0);
@@ -319,18 +354,20 @@ public partial class StatisticPanel : UserControl
         else
         {
             PanelFrame.SetResourceReference(Border.CornerRadiusProperty,"CardRadius");
-            TitleRegion.Background=Brushes.Transparent;
-            TitleRegion.ClearValue(Border.BorderBrushProperty);
+            TitleRegion.SetResourceReference(Border.BackgroundProperty, babel ? "BabelPaper" : "Inset");
+            TitleRegion.SetResourceReference(Border.BorderBrushProperty, babel ? "BabelPaperRule" : "Line");
             HudClose.ClearValue(StyleProperty);
-            HudClose.SetResourceReference(Control.BorderBrushProperty,"Line");
+            HudClose.SetResourceReference(Control.BorderBrushProperty, babel ? "BabelPaperRule" : "Line");
         }
     }
 
     internal void SetReferenceStyle(bool enable)
     {
-        enable=enable&&!IsHistory&&!IsHud;
-        if(referenceStyle==enable) return;
+        bool showLiveToolbar=!IsHistory&&!IsHud;
+        enable=enable&&showLiveToolbar;
+        if(referenceStyle==enable && liveToolbar==showLiveToolbar) return;
         referenceStyle=enable;
+        liveToolbar=showLiveToolbar;
         MinWidth=enable ? 0 : 400;
         PanelFrame.SetResourceReference(Border.BackgroundProperty,enable ? "Console" : "Card");
         PanelFrame.Margin=enable ? new Thickness(0) : new Thickness(0,0,12,14);
@@ -345,41 +382,18 @@ public partial class StatisticPanel : UserControl
         Coverage.FontSize=enable ? 12 : 10;
         Coverage.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Empty.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
+        HudOpacityLabel.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Plot.MinHeight=enable ? 0 : 120;
         Rows.MinHeight=enable ? 74 : 80;
         Rows.MaxHeight=enable ? ReferenceRowsDefaultHeight : 520;
         Rows.ItemContainerStyle=(Style)FindResource(enable ? "ReferenceRankedRow" : "RankedRow");
         LegendRow.Visibility=enable ? Visibility.Collapsed : Visibility.Visible;
-        Grid.SetRow(Plot,enable ? 0 : 4);
-        Grid.SetRow(Coverage,enable ? 1 : 5);
-        Grid.SetRow(Selectors,enable ? 2 : 1);
-        Grid.SetRow(TitleRegion,enable ? 3 : 0);
-        Grid.SetRow(RateNoticePanel,enable ? 4 : 2);
-        Grid.SetRow(LegendRow,enable ? 5 : 3);
-        var panelGrid=(Grid)PanelFrame.Child;
-        panelGrid.RowDefinitions[0].Height=enable ? new GridLength(1,GridUnitType.Star) : GridLength.Auto;
-        panelGrid.RowDefinitions[4].Height=enable ? GridLength.Auto : new GridLength(1,GridUnitType.Star);
-        if(enable)
-        {
-            LegendRow.Children.Remove(EffectiveOnly);
-            Selectors.Children.Add(EffectiveOnly);
-            ActionStack.Children.Remove(Actions);
-            Selectors.Children.Add(Actions);
-        }
-        else
-        {
-            Selectors.Children.Remove(EffectiveOnly);
-            LegendRow.Children.Insert(0,EffectiveOnly);
-            Selectors.Children.Remove(Actions);
-            ActionStack.Children.Add(Actions);
-        }
-        Actions.Margin=enable ? new Thickness(5,0,0,0) : new Thickness(0);
-        EffectiveOnly.Margin=enable ? new Thickness(3,0,0,0) : new Thickness(10,0,0,0);
-        EffectiveOnly.Height=enable ? 24 : 28;
-        StyleSelector(Category,CategoryField,CategoryLabel,enable,74,88);
-        StyleSelector(Ranking,RankingField,RankingLabel,enable,68,96);
-        StyleSelector(Rate,RateField,RateLabel,enable,90,104);
-        foreach(var button in new[]{OpenHudButton,DuplicateButton,DeleteButton,RateAction,LockButton})
+        foreach(var label in new[]{CategoryLabel,RankingLabel,RateLabel})
+            label.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
+        StyleSelector(Category,CategoryField,CategoryLabel,liveToolbar,72,88);
+        StyleSelector(Ranking,RankingField,RankingLabel,liveToolbar,64,96);
+        StyleSelector(Rate,RateField,RateLabel,liveToolbar,68,104);
+        foreach(var button in new[]{RateAction,LockButton})
         {
             if(enable)
             {
@@ -391,14 +405,9 @@ public partial class StatisticPanel : UserControl
             else
             {
                 button.ClearValue(StyleProperty);
-                if(button==OpenHudButton||button==DuplicateButton||button==DeleteButton)
-                {
-                    button.FontSize=13;
-                    button.SetResourceReference(BackgroundProperty,"Inset");
-                }
                 if(button==RateAction) button.SetResourceReference(BackgroundProperty,"Card");
                 button.Padding=button==RateAction ? new Thickness(9,4,9,4)
-                    : button==OpenHudButton||button==LockButton ? new Thickness(10,5,10,5) : new Thickness(9,5,9,5);
+                    : new Thickness(10,5,10,5);
             }
         }
         if(view.ValueKind==JsonValueKind.Object) Update(view,DeleteButton.IsEnabled);
@@ -427,18 +436,22 @@ public partial class StatisticPanel : UserControl
         combo.Width=compact ? compactWidth : standardWidth;
         if(compact)
         {
-            combo.MinHeight=24;
+            combo.Height=combo.MinHeight=24;
             combo.FontSize=11;
             combo.Margin=new Thickness(0);
+            combo.Padding=new Thickness(6,4,22,4);
+            label.Margin=new Thickness(0,0,0,2);
         }
         else
         {
+            combo.ClearValue(HeightProperty);
             combo.ClearValue(MinHeightProperty);
             combo.ClearValue(FontSizeProperty);
             combo.ClearValue(MarginProperty);
+            combo.ClearValue(PaddingProperty);
+            label.ClearValue(MarginProperty);
         }
-        field.Margin=new Thickness(0,0,compact ? 4 : 8,0);
-        label.Visibility=compact ? Visibility.Collapsed : Visibility.Visible;
+        field.Margin=compact ? new Thickness(0,0,3,3) : new Thickness(0,0,8,0);
     }
 
     internal void Update(JsonElement value, bool canDelete=true)
@@ -490,9 +503,16 @@ public partial class StatisticPanel : UserControl
         RateAction.Content=value.Text("rate_action_label");
         RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
         RateHeading.Text=category switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
+        RankingLabel.ToolTip=category=="shield"
+            ? "护盾按实际吸收总量排序。"
+            : "按累计量或每秒速率，从高到低排序。";
+        RateLabel.Text=category=="healing" ? "HPS 口径" : "DPS 口径";
+        RateLabel.ToolTip=category=="shield"
+            ? "护盾只统计实际吸收总量。"
+            : "近 5 秒看最近输出，接敌按交战活跃时间，全周期按在场时间。";
         Rate.ToolTip=isEngagement && reason.Length>0 ? reason
             : rateBasis=="full_cycle" ? "全周期速率 = 累计量 / 在场时间（自本次观测起）"
-            : referenceStyle && category!="shield" ? "选择"+RateHeading.Text+"算法" : null;
+            : RateLabel.ToolTip;
         ReferenceRateHeading.Text=RateHeading.Text;
         ReferenceTotalHeading.Text=config.Text("ranking")=="recent" ? "近期"
             : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
@@ -500,6 +520,7 @@ public partial class StatisticPanel : UserControl
         Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
         DeleteButton.IsEnabled=canDelete;
         Legend.Visibility=!IsHud && !referenceStyle && config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
+        LegendRow.Visibility=IsHud || referenceStyle || liveToolbar && category!="damage" ? Visibility.Collapsed : Visibility.Visible;
         LegendRow.MinHeight=IsHud ? 0 : 28;
         OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
@@ -539,9 +560,10 @@ public partial class StatisticPanel : UserControl
             if(map.TryGetValue(entry.Text("owner_id"),out var item))
             {
                 item.ShareInfo=share;
+                item.MetricCategory=category;
                 item.Entry=entry;
             }
-            else items.Add(new RowItem{Entry=entry,Compact=IsHud,ShareInfo=share});
+            else items.Add(new RowItem{Entry=entry,Compact=IsHud,ShareInfo=share,MetricCategory=category});
         }
         if(!hold)
             for(int i=0;i<incoming.Length;i++)

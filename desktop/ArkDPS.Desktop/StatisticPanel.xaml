@@ -10,17 +10,16 @@
      <Grid>
       <ContentPresenter/>
       <Border x:Name="mark" Width="3" HorizontalAlignment="Left" Background="Transparent" IsHitTestVisible="False"/>
-      <Border x:Name="focusOutline" BorderBrush="{DynamicResource Focus}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <Border x:Name="focusOutline" BorderBrush="{DynamicResource FocusOnDark}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"/>
      </Grid>
     </Border>
     <ControlTemplate.Triggers>
      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="row" Property="Background" Value="{DynamicResource ConsoleCard}"/></Trigger>
+     <DataTrigger Binding="{Binding Rank}" Value="1"><Setter TargetName="mark" Property="Background" Value="{DynamicResource ReferenceRankLeader}"/></DataTrigger>
      <Trigger Property="IsSelected" Value="True">
-      <Setter TargetName="row" Property="Background">
-       <Setter.Value><LinearGradientBrush StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#885020" Offset="0"/><GradientStop Color="#473119" Offset="0.56"/><GradientStop Color="#29251E" Offset="1"/></LinearGradientBrush></Setter.Value>
-      </Setter>
-      <Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource Accent}"/>
-      <Setter TargetName="mark" Property="Background" Value="{DynamicResource Accent}"/>
+      <Setter TargetName="row" Property="Background" Value="{DynamicResource ReferenceRankSelection}"/>
+      <Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource ReferenceRankSelectionEdge}"/>
+      <Setter TargetName="mark" Property="Background" Value="{DynamicResource ReferenceRankSelectionEdge}"/>
      </Trigger>
      <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="focusOutline" Property="Visibility" Value="Visible"/></Trigger>
     </ControlTemplate.Triggers>
@@ -33,6 +32,15 @@
    <Setter Property="FontSize" Value="11"/>
    <Setter Property="Padding" Value="7,1"/>
    <Setter Property="Margin" Value="0,0,2,0"/>
+   <Style.Triggers>
+    <Trigger Property="IsMouseOver" Value="True">
+     <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+    </Trigger>
+    <Trigger Property="IsKeyboardFocused" Value="True">
+     <Setter Property="Background" Value="{DynamicResource Inset}"/>
+     <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+    </Trigger>
+   </Style.Triggers>
   </Style>
   <Style x:Key="ReferenceNumberCell" TargetType="TextBlock" BasedOn="{StaticResource Mono}">
    <Setter Property="Foreground" Value="{DynamicResource ConsoleInk}"/>
@@ -56,7 +64,7 @@
      </Border>
      <TextBlock x:Name="ReferenceOperatorName" Grid.Column="1" Text="{Binding Name}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" Margin="5,0,0,0" TextTrimming="CharacterEllipsis"/>
     </Grid>
-    <local:ContributionBar x:Name="ReferenceOperatorContribution" Grid.Column="2" Data="{Binding Entry}" Height="9" VerticalAlignment="Center" Margin="4,0,4,0"/>
+    <local:ContributionBar x:Name="ReferenceOperatorContribution" Grid.Column="2" Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="9" VerticalAlignment="Center" Margin="4,0,4,0"/>
     <TextBlock Grid.Column="3" Text="{Binding Total}" Style="{StaticResource ReferenceNumberCell}"/>
     <TextBlock Grid.Column="4" Text="{Binding Rate}" Style="{StaticResource ReferenceNumberCell}"/>
     <TextBlock Grid.Column="5" Text="{Binding Share}" Style="{StaticResource ReferenceNumberCell}"/>
@@ -76,7 +84,7 @@
      </StackPanel>
     </StackPanel>
     <Border Grid.Column="2" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="4,0,10,0">
-     <local:ContributionBar Data="{Binding Entry}" Height="7" VerticalAlignment="Center"/>
+     <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="7" VerticalAlignment="Center"/>
     </Border>
     <TextBlock Grid.Column="3" Text="{Binding Total}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DataFont}" FontSize="13" HorizontalAlignment="Right" VerticalAlignment="Center"/>
     <TextBlock Grid.Column="4" Text="{Binding Rate}" Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
@@ -112,7 +120,9 @@
      <ColumnDefinition Width="{DynamicResource HudProfileRateWidth}"/>
      <ColumnDefinition Width="{DynamicResource HudProfileShareWidth}"/>
     </Grid.ColumnDefinitions>
-    <TextBlock Text="{Binding Rank}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" TextAlignment="Center"/>
+    <Border x:Name="HudRankBadge" Margin="2,1,2,1" Background="Transparent">
+     <TextBlock Text="{Binding Rank}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" TextAlignment="Center"/>
+    </Border>
     <Viewbox Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" StretchDirection="DownOnly">
      <Border Width="{DynamicResource HudProfilePortraitSize}" Height="{DynamicResource HudProfilePortraitSize}" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNumberFont}" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
@@ -120,29 +130,37 @@
     </Viewbox>
     <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNameFont}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="{DynamicResource HudProfileNameGap}"/>
     <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="{DynamicResource HudProfileBarGap}">
-     <local:ContributionBar Data="{Binding Entry}" Height="8" VerticalAlignment="Center"/>
+     <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="8" VerticalAlignment="Center"/>
     </Border>
     <TextBlock x:Name="HudOperatorTotal" Grid.Column="4" Text="{Binding Total}" Style="{StaticResource HudNumber}"/>
     <TextBlock Grid.Column="5" Text="{Binding Rate}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" Margin="{DynamicResource HudProfileValueGap}"/>
     <TextBlock Grid.Column="6" Text="{Binding Share}" Style="{StaticResource HudNumber}" Margin="{DynamicResource HudProfileValueGap}"/>
    </Grid>
+   <DataTemplate.Triggers>
+    <DataTrigger Binding="{Binding Rank}" Value="1"><Setter TargetName="HudRankBadge" Property="Background" Value="{DynamicResource ReferenceRankLeader}"/></DataTrigger>
+   </DataTemplate.Triggers>
   </DataTemplate>
+  <Style x:Key="RankingToolbarAction" TargetType="Button" BasedOn="{StaticResource ReferencePanelAction}">
+   <Setter Property="MinWidth" Value="34"/>
+   <Setter Property="Padding" Value="5,1"/>
+   <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+   <Setter Property="Background" Value="{DynamicResource Inset}"/>
+   <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+  </Style>
   <Style x:Key="EffectiveSwitch" TargetType="ToggleButton">
-   <Setter Property="Width" Value="150"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Hand"/>
+   <Setter Property="Width" Value="110"/><Setter Property="Height" Value="28"/><Setter Property="Cursor" Value="Hand"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
     <Border x:Name="track" Background="{DynamicResource Inset}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="{DynamicResource ControlRadius}" Padding="2">
      <Grid>
-      <Border x:Name="thumb" Width="71" CornerRadius="{DynamicResource ControlRadius}" Background="{DynamicResource Accent}" HorizontalAlignment="Right"/>
-      <Grid>
-       <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-       <TextBlock x:Name="effective" Text="有效伤害" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Muted}"/>
-       <TextBlock x:Name="overflow" Grid.Column="1" Text="溢出总伤" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource AccentInk}"/>
-      </Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+      <Border x:Name="thumb" Grid.Column="1" CornerRadius="{DynamicResource ControlRadius}" Background="{DynamicResource Accent}"/>
+      <TextBlock x:Name="effective" Text="有效伤害" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Muted}"/>
+      <TextBlock x:Name="overflow" Grid.Column="1" Text="溢出总伤" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource AccentInk}"/>
      </Grid>
     </Border>
     <ControlTemplate.Triggers>
      <Trigger Property="IsChecked" Value="True">
-      <Setter TargetName="thumb" Property="HorizontalAlignment" Value="Left"/>
+      <Setter TargetName="thumb" Property="Grid.Column" Value="0"/>
       <Setter TargetName="effective" Property="Foreground" Value="{DynamicResource AccentInk}"/>
       <Setter TargetName="overflow" Property="Foreground" Value="{DynamicResource Muted}"/>
      </Trigger>
@@ -170,24 +188,27 @@
        </LinearGradientBrush>
       </Border.OpacityMask>
      </Border>
+     <Image x:Name="PeopleHudArtwork" Source="Assets/People/Components/banner-light.png"
+            Height="{Binding ActualHeight, ElementName=TitleRegion}" HorizontalAlignment="Right" Margin="0,0,65,0"
+            Opacity=".48" Visibility="Collapsed" IsHitTestVisible="False"/>
     <DockPanel x:Name="TitleBar" Margin="14,10,12,8">
-     <StackPanel x:Name="ActionStack" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
       <Image x:Name="LoneTrailHudChevrons" Source="Assets/LoneTrail/chevrons-silver.png" Width="36" Height="20"
              Opacity=".88" Margin="0,0,3,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <Path x:Name="BabelHudRule" Data="M 0,7 H 90 M 0,0 V 7 M 15,4 V 7 M 30,2 V 7 M 45,4 V 7 M 60,2 V 7 M 75,4 V 7 M 90,0 V 7"
+            Width="90" Height="8" Stretch="Uniform" Stroke="{DynamicResource BabelPaperMuted}" StrokeThickness=".8"
+            Margin="0,0,14,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
       <Button x:Name="HudClose" Click="CloseHud" Padding="6,1" MinWidth="32" Visibility="Collapsed" ToolTip="关闭 HUD" AutomationProperties.Name="关闭 HUD" Background="Transparent" BorderBrush="{DynamicResource Line}">
        <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Width="10" Height="10" Stretch="Fill" StrokeThickness="1.5"
              Stroke="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" IsHitTestVisible="False"/>
       </Button>
-      <WrapPanel x:Name="Actions" VerticalAlignment="Center">
-       <Button x:Name="OpenHudButton" Content="HUD" AutomationProperties.Name="打开 HUD" Click="OpenHud" ToolTip="从本面板打开单屏 HUD" Padding="10,5" FontSize="13" Background="{DynamicResource Inset}"/>
-       <Button x:Name="DuplicateButton" Content="复制" AutomationProperties.Name="复制统计面板" Click="Duplicate" Padding="9,5" FontSize="13" Background="{DynamicResource Inset}"/>
-       <Button x:Name="DeleteButton" Content="删除" AutomationProperties.Name="删除统计面板" Click="Delete" Padding="9,5" FontSize="13" Background="{DynamicResource Inset}"/>
-      </WrapPanel>
      </StackPanel>
      <StackPanel x:Name="PanelTitle" Orientation="Horizontal" VerticalAlignment="Center">
       <Border x:Name="TitleAccent" Width="3" Height="18" Background="{DynamicResource Accent}" CornerRadius="1" Margin="0,0,8,0"/>
       <Path x:Name="LoneTrailHudMark" Data="M 5,0 L 12,0 L 7,18 L 0,18 Z" Width="11" Height="18" Stretch="Fill"
             Fill="{DynamicResource Accent}" Margin="0,0,7,0" Visibility="Collapsed" IsHitTestVisible="False"/>
+      <Image x:Name="BabelHudMark" Source="Assets/Babel/Components/tower-emblem.png" Width="25" Height="25" Stretch="Uniform"
+             Margin="0,0,6,0" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
       <StackPanel x:Name="TitleText"><TextBlock x:Name="Heading" Style="{StaticResource CardTitle}" FontSize="18" VerticalAlignment="Center"/><TextBlock x:Name="PanelKind" Text="LIVE PANEL" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource Muted}" Margin="0,1,0,0"/></StackPanel>
      </StackPanel>
     </DockPanel>
@@ -195,15 +216,22 @@
    </Border>
 
    <WrapPanel x:Name="Selectors" Grid.Row="1" Margin="14,0,14,8">
-    <StackPanel x:Name="CategoryField" Margin="0,0,8,0"><TextBlock x:Name="CategoryLabel" Text="统计类别" Style="{StaticResource FieldLabel}"/><ComboBox x:Name="Category" Width="88" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="统计类别">
+    <StackPanel x:Name="CategoryField" Margin="0,0,8,0"><TextBlock x:Name="CategoryLabel" Text="统计内容" Style="{StaticResource FieldLabel}" ToolTip="选择伤害、治疗或实际吸收的护盾量。"/><ComboBox x:Name="Category" Width="88" SelectionChanged="ConfigurationChanged" AutomationProperties.LabeledBy="{Binding ElementName=CategoryLabel}" AutomationProperties.HelpText="{Binding ToolTip, ElementName=CategoryLabel}" ToolTip="{Binding ToolTip, ElementName=CategoryLabel}">
      <ComboBoxItem Content="伤害" Tag="damage"/><ComboBoxItem Content="治疗" Tag="healing"/><ComboBoxItem Content="有效护盾" Tag="shield"/>
     </ComboBox></StackPanel>
-    <StackPanel x:Name="RankingField" Margin="0,0,8,0"><TextBlock x:Name="RankingLabel" Text="排行依据" Style="{StaticResource FieldLabel}"/><ComboBox x:Name="Ranking" Width="96" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="排行口径">
+    <StackPanel x:Name="RankingField" Margin="0,0,8,0"><TextBlock x:Name="RankingLabel" Text="排名依据" Style="{StaticResource FieldLabel}" ToolTip="按累计量或每秒速率，从高到低排序。"/><ComboBox x:Name="Ranking" Width="96" SelectionChanged="ConfigurationChanged" AutomationProperties.LabeledBy="{Binding ElementName=RankingLabel}" AutomationProperties.HelpText="{Binding ToolTip, ElementName=RankingLabel}" ToolTip="{Binding ToolTip, ElementName=RankingLabel}" ToolTipService.ShowOnDisabled="True">
      <ComboBoxItem Content="总伤" Tag="total"/><ComboBoxItem Content="DPS" Tag="dps"/>
     </ComboBox></StackPanel>
-    <StackPanel x:Name="RateField" Margin="0,0,8,0"><TextBlock x:Name="RateLabel" Text="DPS算法" Style="{StaticResource FieldLabel}"/><ComboBox x:Name="Rate" Width="104" SelectionChanged="ConfigurationChanged" AutomationProperties.Name="DPS算法">
-     <ComboBoxItem Content="近 5 秒" Tag="recent_5s"/><ComboBoxItem Content="接敌" Tag="engagement"/><ComboBoxItem Content="全周期DPS" Tag="full_cycle"/>
+    <StackPanel x:Name="RateField" Margin="0,0,8,0"><TextBlock x:Name="RateLabel" Text="DPS 口径" Style="{StaticResource FieldLabel}"/><ComboBox x:Name="Rate" Width="104" SelectionChanged="ConfigurationChanged" AutomationProperties.LabeledBy="{Binding ElementName=RateLabel}" AutomationProperties.HelpText="{Binding ToolTip, ElementName=RateLabel}" ToolTipService.ShowOnDisabled="True">
+     <ComboBoxItem Content="近 5 秒" Tag="recent_5s"/><ComboBoxItem Content="接敌" Tag="engagement"/><ComboBoxItem Content="全周期" Tag="full_cycle"/>
     </ComboBox></StackPanel>
+    <ToggleButton x:Name="EffectiveOnly" Click="EffectiveChanged" Style="{StaticResource EffectiveSwitch}" Height="24"
+                  VerticalAlignment="Bottom" Margin="0,0,4,3" AutomationProperties.Name="有效伤害 / 溢出总伤"/>
+    <StackPanel x:Name="Actions" Orientation="Horizontal" VerticalAlignment="Bottom" Margin="0,0,0,3">
+     <Button x:Name="OpenHudButton" Content="HUD" AutomationProperties.Name="打开 HUD" Click="OpenHud" ToolTip="从本面板打开单屏 HUD" Style="{StaticResource RankingToolbarAction}"/>
+     <Button x:Name="DuplicateButton" Content="复制" AutomationProperties.Name="复制统计面板" Click="Duplicate" Style="{StaticResource RankingToolbarAction}"/>
+     <Button x:Name="DeleteButton" Content="删除" AutomationProperties.Name="删除统计面板" Click="Delete" Style="{StaticResource RankingToolbarAction}"/>
+    </StackPanel>
    </WrapPanel>
 
    <Border x:Name="RateNoticePanel" Grid.Row="2" Visibility="Collapsed" Margin="14,0,14,8" Background="{DynamicResource Inset}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="{DynamicResource ControlRadius}" Padding="10,7">
@@ -212,7 +240,6 @@
    </Border>
 
    <DockPanel x:Name="LegendRow" Grid.Row="3" Margin="14,0,14,6" MinHeight="28">
-    <ToggleButton x:Name="EffectiveOnly" Click="EffectiveChanged" Style="{StaticResource EffectiveSwitch}" DockPanel.Dock="Right" Margin="10,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="有效伤害 / 溢出总伤"/>
     <WrapPanel x:Name="Legend" MinHeight="24">
     <Border Background="{DynamicResource Physical}" CornerRadius="1" Width="8" Height="8" Margin="0,0,4,0"/><TextBlock Text="物理" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,11,0"/>
     <Border Background="{DynamicResource Arts}" CornerRadius="1" Width="8" Height="8" Margin="0,0,4,0"/><TextBlock Text="法术" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,0,11,0"/>
@@ -263,7 +290,7 @@
    <TextBlock x:Name="Coverage" Grid.Row="5" Foreground="{DynamicResource Muted}" FontSize="10" Margin="14,8,14,9" TextWrapping="Wrap"/>
    <WrapPanel x:Name="HudControls" Grid.Row="6" Margin="14,0,14,10" Visibility="Collapsed">
     <Button x:Name="LockButton" Content="锁定 HUD" Click="ToggleLock" Padding="10,5"/>
-    <TextBlock Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0,8,0" FontSize="11"/>
+    <TextBlock x:Name="HudOpacityLabel" Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0,8,0" FontSize="11"/>
     <Slider x:Name="Alpha" Minimum="0.7" Maximum="1" Value="0.9" Width="90" TickFrequency="0.01" ValueChanged="OpacityChanged" VerticalAlignment="Center" AutomationProperties.Name="HUD 透明度"/>
    </WrapPanel>
   </Grid>

@@ -1,0 +1,163 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <SolidColorBrush x:Key="FrameInk" Color="#F4EFEA"/>
+ <SolidColorBrush x:Key="FrameMuted" Color="#C3B8B5"/>
+ <SolidColorBrush x:Key="MetricInk" Color="#F4EFEA"/>
+ <SolidColorBrush x:Key="MetricHighlight" Color="#D04A55"/>
+ <SolidColorBrush x:Key="ChromeBrandSurface" Color="Transparent"/>
+ <SolidColorBrush x:Key="ChromeDescriptionSurface" Color="Transparent"/>
+ <SolidColorBrush x:Key="ChromeControlsSurface" Color="Transparent"/>
+ <SolidColorBrush x:Key="ChromeButtonSurface" Color="#19161A"/>
+ <SolidColorBrush x:Key="ChromeButtonHover" Color="#372D32"/>
+ <SolidColorBrush x:Key="ChromeButtonEdge" Color="#55474F"/>
+ <SolidColorBrush x:Key="ChromeInk" Color="#F4EFEA"/>
+ <SolidColorBrush x:Key="ChromeMuted" Color="#C3B8B5"/>
+ <SolidColorBrush x:Key="BabelTitlebarBackground" Color="#171418"/>
+ <SolidColorBrush x:Key="BabelTitlebarEdge" Color="#483940"/>
+ <SolidColorBrush x:Key="ShellBackdrop" Color="Transparent"/>
+ <SolidColorBrush x:Key="SubpageHeadingSurface" Color="Transparent"/>
+ <Thickness x:Key="SubpageHeadingPadding">8,0,14,6</Thickness>
+ <SolidColorBrush x:Key="ShellSidebarEdge" Color="#41363D"/>
+ <SolidColorBrush x:Key="ShellSidebarShade" Color="Transparent"/>
+ <DrawingBrush x:Key="ShellSidebarArtwork" AlignmentY="Bottom" Stretch="UniformToFill"
+               Viewbox="0,0,170,540" ViewboxUnits="Absolute">
+  <DrawingBrush.Drawing>
+   <DrawingGroup>
+    <GeometryDrawing Brush="Transparent" Geometry="M 0,0 H 170 V 540 H 0 Z"/>
+    <GeometryDrawing Brush="#123E333C" Geometry="M 0,540 L 170,378 L 170,540 Z"/>
+    <GeometryDrawing Brush="#174E3E48" Geometry="M 0,390 L 170,504 L 0,540 Z"/>
+    <GeometryDrawing Geometry="M 0,540 L 170,378 M 0,390 L 170,504 M 30,540 L 170,492 M 0,469 L 112,439">
+     <GeometryDrawing.Pen><Pen Brush="#3AC1A7B2" Thickness=".9"/></GeometryDrawing.Pen>
+    </GeometryDrawing>
+   </DrawingGroup>
+  </DrawingBrush.Drawing>
+ </DrawingBrush>
+ <SolidColorBrush x:Key="ShellNavActive" Color="#292127"/>
+ <SolidColorBrush x:Key="BabelNavHover" Color="#342830"/>
+ <SolidColorBrush x:Key="ShellNavSelectedEdge" Color="#D04A55"/>
+ <Pen x:Key="BabelNavGlyphPen" Brush="#E4DADD" Thickness="1.55"
+      StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+ <GeometryDrawing x:Key="BabelNavGlyphBounds" Brush="Transparent" Geometry="M 0,0 H 24 V 24 H 0 Z"/>
+ <DrawingImage x:Key="ShellLiveNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="BabelNavGlyphBounds"/>
+    <GeometryDrawing Pen="{StaticResource BabelNavGlyphPen}"
+                     Geometry="M 3,12 H 7 L 10,6 L 13,17 L 16,10 L 18,12 H 21 M 4,19 H 20"/>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <DrawingImage x:Key="ShellEnemyNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="BabelNavGlyphBounds"/>
+    <GeometryDrawing Pen="{StaticResource BabelNavGlyphPen}"
+                     Geometry="M 12,3 L 21,12 L 12,21 L 3,12 Z M 12,8 V 16 M 8,12 H 16"/>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <DrawingImage x:Key="ShellHistoryNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="BabelNavGlyphBounds"/>
+    <GeometryDrawing Pen="{StaticResource BabelNavGlyphPen}"
+                     Geometry="M 8,3 H 19 V 18 M 5,6 H 16 V 21 H 5 Z M 8,10 H 13 M 8,14 H 13 M 8,18 H 11"/>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <DrawingImage x:Key="ShellSettingsNavIcon">
+  <DrawingImage.Drawing>
+   <DrawingGroup>
+    <StaticResource ResourceKey="BabelNavGlyphBounds"/>
+    <GeometryDrawing Pen="{StaticResource BabelNavGlyphPen}"
+                     Geometry="M 4,6 H 9 M 13,6 H 20 M 4,12 H 13 M 17,12 H 20 M 4,18 H 7 M 11,18 H 20 M 11,3 V 9 M 15,9 V 15 M 9,15 V 21"/>
+   </DrawingGroup>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <BitmapImage x:Key="BabelMasthead" UriSource="/Assets/Babel/arkdps-banner.png"/>
+ <BitmapImage x:Key="BabelEmblem" UriSource="/Assets/Babel/arkdps-mark.png"/>
+ <BitmapImage x:Key="BabelTowerBadge" UriSource="/Assets/Babel/tower-badge.png"/>
+ <BitmapImage x:Key="BabelMastheadArt" UriSource="/Assets/Babel/fractured-masthead.jpg"/>
+ <LinearGradientBrush x:Key="BabelMastheadVeil" StartPoint="0,0" EndPoint="1,0">
+  <GradientStop Color="#45EDE8E4" Offset="0"/>
+  <GradientStop Color="#86EDE8E4" Offset=".5"/>
+  <GradientStop Color="#38EDE8E4" Offset=".61"/>
+  <GradientStop Color="#00EDE8E4" Offset=".75"/>
+ </LinearGradientBrush>
+
+ <LinearGradientBrush x:Key="BabelMastheadVeilCompact" StartPoint="0,0" EndPoint="1,0">
+  <GradientStop Color="#22EDE8E4" Offset="0"/>
+  <GradientStop Color="#7BEDE8E4" Offset=".56"/>
+  <GradientStop Color="#A6EDE8E4" Offset=".72"/>
+  <GradientStop Color="#BDEDE8E4" Offset=".82"/>
+  <GradientStop Color="#36EDE8E4" Offset=".9"/>
+  <GradientStop Color="#00EDE8E4" Offset="1"/>
+ </LinearGradientBrush>
+
+ <Style x:Key="BabelCurrentMetric" TargetType="Border">
+  <Setter Property="Background" Value="Transparent"/>
+  <Setter Property="VerticalAlignment" Value="Center"/>
+  <Setter Property="Padding" Value="12,4,12,4"/>
+  <Setter Property="MaxWidth" Value="382"/>
+  <Setter Property="HorizontalAlignment" Value="Left"/>
+ </Style>
+ <Style x:Key="BabelSecondaryMetric" TargetType="Border">
+  <Setter Property="Background" Value="Transparent"/>
+  <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+  <Setter Property="BorderThickness" Value="1,1,0,0"/>
+  <Setter Property="Padding" Value="16,7,8,8"/>
+ </Style>
+ <Style x:Key="BabelResearchFrame" TargetType="HeaderedContentControl">
+  <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+  <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+  <Setter Property="Template"><Setter.Value>
+   <ControlTemplate TargetType="HeaderedContentControl">
+    <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0">
+     <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Border x:Name="Heading" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+       <DockPanel Height="30" Margin="10,0,10,0">
+        <Path DockPanel.Dock="Left" Data="M 0,3 L 3,0 L 6,3 L 3,6 Z" Fill="{DynamicResource Accent}"
+              Width="6" Height="6" Stretch="Fill" Margin="0,0,8,0" VerticalAlignment="Center"
+              IsHitTestVisible="False"/>
+        <ContentPresenter ContentSource="Header" TextElement.Foreground="{DynamicResource FrameInk}"
+                          TextElement.FontFamily="{DynamicResource HeadingFont}"
+                          TextElement.FontSize="14" TextElement.FontWeight="SemiBold" VerticalAlignment="Center"/>
+       </DockPanel>
+      </Border>
+      <Border Grid.Row="1" Padding="{TemplateBinding Padding}">
+       <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                         VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+      </Border>
+     </Grid>
+    </Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="Header" Value="{x:Null}"><Setter TargetName="Heading" Property="Visibility" Value="Collapsed"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate>
+  </Setter.Value></Setter>
+ </Style>
+ <Style x:Key="BabelResearchNav" TargetType="Button">
+  <Setter Property="MinHeight" Value="44"/>
+  <Setter Property="Margin" Value="0,0,0,2"/>
+  <Setter Property="Padding" Value="12,6"/>
+  <Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Template"><Setter.Value>
+   <ControlTemplate TargetType="Button">
+    <Grid>
+     <Border x:Name="Plate" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+             BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+      <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+     </Border>
+     <Border x:Name="FocusRing" BorderThickness="2" Margin="3" IsHitTestVisible="False"/>
+    </Grid>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Plate" Property="Background" Value="{DynamicResource BabelNavHover}"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter TargetName="Plate" Property="Opacity" Value=".76"/></Trigger>
+     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="FocusRing" Property="BorderBrush" Value="{DynamicResource FocusOnDark}"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Plate" Property="Opacity" Value=".52"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate>
+  </Setter.Value></Setter>
+ </Style>
+</ResourceDictionary>

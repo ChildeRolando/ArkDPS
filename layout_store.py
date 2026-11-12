@@ -29,7 +29,8 @@ from panel_model import DEFAULT_NUMBER_UNITS, NUMBER_UNITS, PanelConfig
 
 ROOT = Path(__file__).resolve().parent
 LAYOUT_VERSION = 3
-THEMES = ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original')
+DEFAULT_THEME = 'lone-trail'
+THEMES = (DEFAULT_THEME, 'people', 'babel')
 DEFAULT_GUI = (960, 700)
 DEFAULT_GUI_MINIMUM = (440, 500)
 DEFAULT_HUD_MINIMUM = (350, 230)
@@ -100,22 +101,22 @@ class HudPlacement:
 class HudStyle:
     """User-adjustable HUD dimensions in device-independent pixels."""
 
-    title_font: float = 28
-    name_font: float = 20
-    number_font: float = 18
-    width: float = 568
+    title_font: float = 20
+    name_font: float = 15
+    number_font: float = 15
+    width: float = 484
     row_height: float = 46
     title_height: float = 44
-    portrait_size: float = 36
-    rank_width: float = 36
-    portrait_width: float = 44
-    name_width: float = 140
-    bar_width: float = 42
-    total_width: float = 94
-    rate_width: float = 104
-    share_width: float = 76
-    row_gap: float = 0
-    column_gap: float = 4
+    portrait_size: float = 38
+    rank_width: float = 28
+    portrait_width: float = 52
+    name_width: float = 92
+    bar_width: float = 158
+    total_width: float = 78
+    rate_width: float = 76
+    share_width: float = 68
+    row_gap: float = 1
+    column_gap: float = 2
     padding: float = 4
 
     def __post_init__(self):
@@ -175,7 +176,7 @@ class Layout:
     huds: tuple[HudPlacement, ...] = ()
     gui: GuiGeometry | None = None
     event_observation: bool = True
-    theme: str = 'lone-trail'
+    theme: str = DEFAULT_THEME
     number_units: str = DEFAULT_NUMBER_UNITS
     hud_styles: tuple[tuple[str, HudStyle], ...] = ()
 
@@ -331,10 +332,10 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
             warnings.append(f'GUI 窗口几何无效，已使用默认位置：{exc}')
     huds = _parse_huds(raw.get('huds'), panels, warnings)
     hud_styles = _parse_hud_styles(raw.get('hud_styles'), panels, warnings)
-    theme = raw.get('theme', 'lone-trail')
+    theme = raw.get('theme', DEFAULT_THEME)
     if theme not in THEMES:
-        warnings.append('皮肤设置无效，已使用孤星')
-        theme = 'lone-trail'
+        warnings.append('已保存的皮肤不可用，已切换为孤星')
+        theme = DEFAULT_THEME
     number_units = raw.get('number_units', DEFAULT_NUMBER_UNITS)
     if not isinstance(number_units, str) or number_units not in NUMBER_UNITS:
         warnings.append('数值单位设置无效，已使用 K / M')

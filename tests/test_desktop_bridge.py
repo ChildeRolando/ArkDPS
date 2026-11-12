@@ -208,7 +208,8 @@ def test_rate_does_not_change_ranks_bars_shares_and_shield_rejects_engagement(tm
         cmd(state, 'panel_update', config=dict(config, category='shield'))
 
 
-def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp_path):
+@pytest.mark.parametrize('theme', ['people', 'babel'])
+def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp_path, theme):
     state = DesktopState(tmp_path)
     state.accept('sample', sample())
     state.history.save(record())
@@ -219,11 +220,14 @@ def test_theme_and_panel_management_persist_without_touching_live_or_history(tmp
     assert second != 'default'
     hud = dict(panel_id=second, x=10, y=20, width=410, height=430, opacity=.83, locked=True)
     cmd(state, 'placement', gui=dict(x=50, y=60, width=1200, height=800), huds=[hud])
-    cmd(state, 'theme', theme='original')
+    cmd(state, 'theme', theme=theme)
+    assert state.snapshot()['layout']['theme'] == theme
     assert state.last is last and state.selected is selected
     assert state.layout.huds[0].to_dict() == hud
     restarted = DesktopState(tmp_path)
     assert restarted.layout == state.layout
+    cmd(state, 'theme', theme='lone-trail')
+    assert DesktopState(tmp_path).layout.theme == 'lone-trail'
     cmd(state, 'panel_delete', panel_id=second)
     assert not state.layout.huds
     assert state.last is last
@@ -241,13 +245,14 @@ def test_hud_styles_are_per_panel_and_survive_closing_and_restarting(tmp_path):
         style={'name_font': 21.5, 'name_width': 168, 'column_gap': 9, 'bar_width': 0})
     cmd(state, 'hud_style', panel_id=second, style={'width': 700, 'row_gap': 4})
     profiles = state.snapshot()['layout']['hud_styles']
-    assert profiles['default']['name_font'] == 21.5
-    assert profiles['default']['name_width'] == 168
-    assert profiles['default']['column_gap'] == 9
-    assert profiles['default']['bar_width'] == 0
-    assert profiles['default']['width'] == 568
-    assert profiles[second]['name_font'] == 20
-    assert profiles[second]['width'] == 700
+    default_style = dict(title_font=20, name_font=15, number_font=15, width=484,
+                         row_height=46, title_height=44, portrait_size=38,
+                         rank_width=28, portrait_width=52, name_width=92, bar_width=158,
+                         total_width=78, rate_width=76, share_width=68,
+                         row_gap=1, column_gap=2, padding=4)
+    assert profiles['default'] == dict(default_style, name_font=21.5, name_width=168,
+                                       column_gap=9, bar_width=0)
+    assert profiles[second] == dict(default_style, width=700, row_gap=4)
 
     gui = dict(x=50, y=60, width=1200, height=800)
     hud = dict(panel_id=second, x=-700, y=30, width=830, height=480, opacity=.83, locked=True)
@@ -376,8 +381,17 @@ def test_incompatible_protocol_refuses_before_state_mutation(tmp_path, version):
     state = DesktopState(tmp_path)
     # JSON bool must not be accepted as an integer protocol version.
     with pytest.raises(ValueError, match='版本'):
-        state.command(dict(version=version, op='theme', theme='original'))
+        state.command(dict(version=version, op='theme', theme='people'))
     assert state.layout.theme == 'lone-trail'
+
+
+def test_theme_command_rejects_retired_skin_without_overwriting_saved_choice(tmp_path):
+    state = DesktopState(tmp_path)
+    cmd(state, 'theme', theme='people')
+    with pytest.raises(ValueError, match='未知皮肤'):
+        cmd(state, 'theme', theme='original')
+    assert state.layout.theme == 'people'
+    assert DesktopState(tmp_path).layout.theme == 'people'
 
 
 def test_json_lines_handshake_state_error_and_clean_exit(tmp_path):
@@ -440,7 +454,7 @@ def test_failed_layout_write_does_not_publish_candidate(tmp_path):
     state = DesktopState(tmp_path)
     with patch.object(state.store, 'save', side_effect=OSError('disk full')):
         with pytest.raises(OSError):
-            cmd(state, 'theme', theme='original')
+            cmd(state, 'theme', theme='people')
     assert state.layout.theme == 'lone-trail'
 
 
@@ -500,7 +514,7 @@ def test_layout_v1_migrates_into_same_v3_owner(tmp_path):
     (tmp_path / 'layout.json').write_text(json.dumps(raw), encoding='utf-8')
     state = DesktopState(tmp_path)
     assert state.layout.panels[0].panel_id == 'old'
-    cmd(state, 'theme', theme='original')
+    cmd(state, 'theme', theme='people')
     assert json.loads((tmp_path/'layout.json').read_text())['version'] == 3
 
 

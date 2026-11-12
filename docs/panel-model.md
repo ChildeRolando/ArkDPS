@@ -1,6 +1,6 @@
 # GUI/HUD 共用面板模型与排序口径
 
-当前 WPF 展示采用 demo 的导航栏/飞行记录头图/三张总览卡/表格面板/HUD 与干员详情右栏，并内置孤星、危机合约、巴别塔、长夜临光、叙拉古人、原始界面六套皮肤；所有皮肤共用同一数据模型，只替换颜色、圆角与强调色。干员详情中的「被减伤率」使用 `mitigation_rate`（百分比）；没有公式前伤害证据时保持未知并显示“—”，不以过量或护盾替代。
+当前 WPF 提供侧栏导航、实时总览、排行、HUD 和干员详情。「孤星」「人们，我们。」和「巴别塔」共用布局与数据模型，各有主题图稿和样式。干员详情中的「被减伤率」使用 `mitigation_rate`（百分比）；没有公式前伤害证据时保持未知并显示“—”，不以过量或护盾替代。
 
 当前 WPF 展示通过 `desktop_bridge.py` 只读消费 `panel_model.py`，C# 不重算排行/柱长/占比；运行与验收见 [桌面运行时](desktop-runtime.md)。产品 UI 只有 WPF：Tk 实现（`gui_panel.py`、`hud.py`、`gui_history.py`、`ui_theme.py`）已归档封存到 `archive/legacy-tk`，见 [ADR 0005](adr/0005-seal-legacy-tk.md)。下文 ARK-9/10/12/19 章节是 Tk 时代的实现与验收记录，只作追溯，不代表 WPF 的实机验收已完成。
 
@@ -189,7 +189,7 @@ ARK-10 交付评审时，宿主会话已补齐同候选默认原生点击 `PASS`
 
 `ui_theme.py` 只拥有展示；`panel_model.py`、BattleRecord、统计与采集链路未改动。速率切换不改变排行/贡献条/占比分母；主题切换不重新调用排序、不清除 pin/hover、不重建 canvas 行或 native HUD。主题选择在现有布局中持久化，契约见[设置与布局](settings-and-layout.md)。
 
-WPF 侧由 `desktop/ArkDPS.Desktop/App.xaml.cs` 与 `Verification.cs` 覆盖双主题、HUD 几何锁定不变、
+WPF 侧由 `desktop/ArkDPS.Desktop/App.xaml.cs` 与 `Verification.cs` 覆盖主题切换、HUD 几何锁定不变、
 筛选/换局历史隔离与文字对比度；`tests/test_wpf_contract.py` 固定对比度下限。原 `tests/test_ui_theme.py`
 与 `acceptance/verify_ui_themes.py` 已随 Tk 归档封存，其窗口/托盘测量不再可运行。**离线回执不是实际游戏
 收到点击的证据，也不等于物理托盘图标双击验收。**

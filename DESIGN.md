@@ -4,7 +4,7 @@ Operate surface: Windows C# / .NET 10 / WPF. The Lone Trail v1.0 materials guide
 
 ## Composition and skins
 
-The common WPF templates and dynamic brush resources support six palettes. Default 孤星 uses a dark slate workspace, metallic edges, orange selection and cyan team DPS. Its embedded brand, navigation artwork and unlettered orbital images come from the supplied materials. 危机合约, 巴别塔, 长夜临光, 叙拉古人 and 原始界面 are native alternates.
+The common WPF templates and dynamic brush resources support three skins. Default 孤星 uses a dark slate workspace, metallic edges, orange selection and cyan team DPS. 人们，我们。 (People, A People) uses red accents, warm paper, dark steel and city artwork. 巴别塔 (Babel) pairs an ivory fractured-tower masthead with charcoal records, fine battle-time ticks and restrained crimson selection.
 
 The sidebar opens the full enemy page. The live summary uses the shared dark panel surface. Battle and instance identity preserve selection across HP, transformation and rebirth updates. Current HP, current form MaxHP, recorded phase capacity and the separate stage estimate retain their own evidence. A known lower bound uses ≥ and leaves the HP ratio blank. Enemy chart points distinguish exact HP, lower bounds and gaps. Effective damage starts at the enemy observation baseline, with other native sources listed separately.
 
@@ -16,13 +16,13 @@ Skin changes update dynamic resources in place, without recreating windows or st
 
 ## Typography, data and interaction
 
-Cards use skin-specific radii (3–12 DIP), fine borders and flat surfaces. Microsoft YaHei UI carries Chinese labels. Lone Trail uses bundled Barlow Semi Condensed for Latin labels and large readouts and IBM Plex Mono for aligned data. Ranking rows reuse keyed models. Hover holds row order while values update, and leaving restores the Python model's exact ranking. Keyboard navigation selects and pins rows. Full names remain available on hover.
+Cards use fine borders and skin-specific corner radii. Microsoft YaHei UI carries Chinese labels. Lone Trail uses bundled Barlow Semi Condensed for Latin labels and large readouts and IBM Plex Mono for aligned data. People, A People uses a serif heading style and aligned data figures. Ranking rows reuse keyed models. Hover holds row order while values update, and leaving restores the Python model's exact ranking. Keyboard navigation selects and pins rows. Full names remain available on hover.
 
 Panel columns, tooltips, HUD and PNG use at most one decimal place (`0.#`). The operator detail inspector rounds every numeric value to a whole number and omits zero-valued rows. It shows effective damage, overkill damage and overkill rate separately, never the old "damage · includes overkill" wording, and does not repeat burst damage/overkill as separate rows because they are folded into the effective/overkill totals. Unknown remains an em dash, never zero; waiting, paused, stale, degraded and disconnected states have text, not just color.
 
 Offline portraits retain their gray variant for retired operators and a name-badge fallback for unknown IDs. The pin survives disappearance from the recent ranking and clears at new battle identity. Damage bar length and share always follow the selected ranking basis, independent of the rate column. PNG renders all ranked rows without list virtualization or viewport clipping; export freezes the selected record/configuration/skin before the native save dialog. JSON remains the unchanged BattleRecord contract.
 
-V1 damage identity colors remain physical red `#e5484d`, arts blue `#3d8bfd`, elemental purple `#9b5cf6`, true white `#ffffff`. They are inherited semantics, not a claim of a colorblind-safe palette. Text legends, direct component names and exact-value reports supply a non-color reading path. Healing uses green, shields blue-gray; no hue is reassigned by rank. Thin segmented bars have surface gaps and exact-value hover content. Body/control contrast is checked against both actual palettes.
+Each skin assigns a distinct color to physical, arts, elemental and true damage. Text legends, direct component names and exact-value reports identify each component. Healing uses green and shields use blue-gray. Thin segmented bars have surface gaps and exact-value hover content. Body and control contrast is checked against both palettes.
 
 ## HUD and recovery
 

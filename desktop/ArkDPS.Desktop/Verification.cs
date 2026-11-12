@@ -124,7 +124,7 @@ public partial class MainWindow
     }
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
     {
-        await Command("theme", new() { ["theme"] = "lone-trail" });
+        await Command("theme", new() { ["theme"] = Theme.LoneTrail });
         foreach (var (token,family) in new[] { ("DisplayFont","Barlow Semi Condensed"),("DataFont","IBM Plex Mono") })
         {
             Require(Theme.Typeface(token,FontWeights.SemiBold).TryGetGlyphTypeface(out var glyph) &&
@@ -256,6 +256,13 @@ public partial class MainWindow
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
                 observedTip.Text.Contains("已配对的 27 击"),
                 "partial mitigation did not expose its measured value and sample scope");
+        pinnedRow["observed_mitigation_rate"]=-11.32;
+        ApplyFixture(fixture);
+        Require(HasText(observedMitigation,"-11%") && HasText(observedMitigation,"已观测减伤率") &&
+                observedMitigation.ToolTip is ToolTip {Content:TextBlock negativeTip} &&
+                negativeTip.Text.Contains("无法确定差额来自哪项修正") &&
+                negativeTip.Text.Contains("已配对的 27 击"),
+                "negative observed mitigation did not retain its sign, uncertainty and sample scope");
         pinnedRow["mitigation_rate"]=0;
         ApplyFixture(fixture);
         Require(HasText(FindOperatorRatio("Mitigation"),"0%") &&
@@ -299,14 +306,16 @@ public partial class MainWindow
                     "team total or DPS did not render in its ranking column");
             }
             Require(!HasVisibleScrollbar(this), $"visible scrollbar at {width}x{height} DIPs");
+            VerifyLiveRankingToolbar(Panels.Values.First(),width>=1380);
             if (width >= 1200)
             {
                 VerifyCompactPortraitLayout();
                 VerifyCompactRatioLayout();
             }
             Require(ReferenceEquals(TargetSummary.Background,Theme.Resource("Card")) &&
-                    TargetSummary.Child is ScrollViewer && !HasText(TargetSummary,"敌情 ›"),
-                    "enemy summary retained a separate background or duplicate navigation");
+                    TargetSummary.Child is ScrollViewer { VerticalAlignment: VerticalAlignment.Top } &&
+                    !HasText(TargetSummary,"敌情 ›"),
+                    "enemy cards are misaligned or show a separate background or duplicate navigation");
             Screenshot.Window(this, Path.Combine(output, $"lone-trail-live-{width}x{height}-dip.png"));
             if (width == 1380)
             {
@@ -353,12 +362,106 @@ public partial class MainWindow
         Require(HistoryList.ActualHeight >= 58, $"minimum history viewport too short ({HistoryList.ActualHeight:F1} DIPs)");
         Screenshot.Window(this, Path.Combine(output, "lone-trail-history-minimum.png"));
         await Navigate("live");
+        fixture["layout"]!["theme"] = Theme.People;
+        for (int second = 17; second <= 26; second++)
+        {
+            fixture["game_time"] = second;
+            analysis["game_time"] = second;
+            SetIllustrativeRates(second == 26 ? 7630 : 6400 + second % 6 * 410);
+            ApplyFixture(fixture);
+        }
+        var ranking = Panels.Values.First();
+        ranking.Rows.SelectedIndex = 0;
+        ranking.PinRequested?.Invoke(ranking.View.Get("entries").Items().First().Text("owner_id"));
+        foreach (string theme in new[] { Theme.People, Theme.Babel })
+        {
+            fixture["layout"]!["theme"] = theme;
+            ApplyFixture(fixture);
+            Require(trendModel.Points.Count > 1 && trendModel.Points[^1].Team == 7630,
+                $"{theme} dashboard did not plot the same live sample series");
+            foreach (var (width, height) in new[] { (1380, 900), (560, 540) })
+            {
+                Width = width; Height = height;
+                await Settle();
+                Require(Theme.Key == theme && (Skin.SelectedItem as ComboBoxItem)?.Tag as string == theme,
+                    $"{theme} and the picker are out of sync");
+                if (theme == Theme.People)
+                    Require(!SystemTitle.IsVisible &&
+                        new[] {LiveNavAsset, EnemyNavAsset, HistoryNavAsset, SettingsNavAsset}
+                            .Select(icon => icon.Source).OfType<System.Windows.Media.DrawingImage>().Distinct().Count() == 4,
+                        "People retained the title text or did not use distinct navigation symbols");
+                else
+                {
+                    var mark = width >= 1100 ? BabelBrandMark : BabelCompactBrandMark;
+                    Require(mark.IsVisible && mark.Source is not null && BabelSidebarMark.Source is not null &&
+                        BabelMastheadSurface.IsVisible && BabelMastheadArtwork.Source is not null &&
+                        BabelMastheadTitle.Text == "BABEL" && BabelMastheadTitle.IsVisible &&
+                        !BabelMastheadArtwork.IsHitTestVisible &&
+                        new[] { LiveNavAsset, EnemyNavAsset, HistoryNavAsset, SettingsNavAsset }
+                            .Select(icon => icon.Source).OfType<System.Windows.Media.ImageSource>().Distinct().Count() == 4,
+                        "Babel shell artwork did not load at the requested width");
+                    if (width < 1100)
+                        Require(Skin.ActualHeight <= 54, "Babel skin name wrapped in the compact picker");
+                }
+                Require(Math.Abs(ActualWidth - width) < 2 && Math.Abs(ActualHeight - height) < 2 &&
+                    Grid.GetColumnSpan(EnemySummary) == (width >= 1320 ? 1 : 3) &&
+                    Grid.GetColumn(LiveDetail) == (width < 1100 ? 1 : 2),
+                    $"{theme} dashboard did not reflow at its compact breakpoint");
+                Require(CurrentDps.Text == "7,630" && !HasVisibleScrollbar(this),
+                    $"{theme} dashboard lost its live rate or showed a scrollbar");
+                VerifyLiveRankingToolbar(ranking, width >= 1380);
+                if (width >= 1320)
+                {
+                    Require(ranking.ReferenceFooter.IsVisible, $"{theme} did not use the full ranking layout");
+                    VerifyCompactPortraitLayout();
+                    VerifyCompactRatioLayout();
+                }
+                Screenshot.Window(this, Path.Combine(output, $"{theme}-live-{width}x{height}-dip.png"));
+                if (theme == Theme.Babel && width < 1100)
+                {
+                    analysis["team_recent_dps"] = 123456789;
+                    ApplyFixture(fixture);
+                    await Settle();
+                    var text = new System.Windows.Media.FormattedText(CurrentDps.Text,
+                        System.Globalization.CultureInfo.CurrentUICulture, CurrentDps.FlowDirection,
+                        new System.Windows.Media.Typeface(CurrentDps.FontFamily, CurrentDps.FontStyle,
+                            CurrentDps.FontWeight, CurrentDps.FontStretch),
+                        CurrentDps.FontSize, System.Windows.Media.Brushes.Black,
+                        System.Windows.Media.VisualTreeHelper.GetDpi(CurrentDps).PixelsPerDip);
+                    Require(CurrentDps.Text == "123,456,789" && text.Width <= CurrentDps.ActualWidth + 1,
+                        "Babel's compact masthead clipped a nine-digit live DPS readout");
+                    analysis["team_recent_dps"] = 7630;
+                    ApplyFixture(fixture);
+                }
+            }
+            checks.Add($"{theme} uses the live ranking layout and reflows at minimum width");
+        }
         Width = savedWidth; Height = savedHeight;
         await Settle();
         ApplyState(initial);
-        await Command("theme", new() { ["theme"] = "original" });
+        await Command("theme", new() { ["theme"] = Theme.People });
         checks.Add("compact portrait, three parallel ratio rings and field formula tooltips, themed enemy cards, five Lone Trail layouts and physical maximized bounds");
     }
+    private static void VerifyLiveRankingToolbar(StatisticPanel panel,bool singleRow)
+    {
+        var toolbar=panel.Selectors;
+        var tableHeader=panel.ReferenceTableHeader.IsVisible ? panel.ReferenceTableHeader : panel.TableHeader;
+        var toolbarBottom=toolbar.TranslatePoint(new Point(0,toolbar.ActualHeight),panel).Y;
+        Require(toolbarBottom<=tableHeader.TranslatePoint(new Point(),panel).Y &&
+                new[] {panel.Category, panel.Ranking, panel.Rate}.All(selector=>
+                    selector.IsVisible && selector.ActualWidth<=80 && selector.ActualHeight==24 &&
+                    selector.ToolTip is string {Length:>0}) &&
+                panel.CategoryLabel.IsVisible && panel.RankingLabel.IsVisible && panel.RateLabel.IsVisible,
+                "live ranking filters do not fit above the table with their guidance");
+        if(singleRow)
+        {
+            double baseline=panel.Category.TranslatePoint(new Point(0,panel.Category.ActualHeight),toolbar).Y;
+            Require(new FrameworkElement[] {panel.Ranking,panel.Rate,panel.OpenHudButton,panel.DuplicateButton,panel.DeleteButton}
+                    .All(control=>Math.Abs(control.TranslatePoint(new Point(0,control.ActualHeight),toolbar).Y-baseline)<2),
+                    "live ranking controls do not share a baseline at desktop width");
+        }
+    }
+
     private void VerifyCompactPortraitLayout()
     {
         var avatar = FindAutomationElement(LiveInspector,"CompactOperatorPortrait")
@@ -551,6 +654,13 @@ public partial class MainWindow
 
     private async Task VerifyHudRows(HudWindow hud,string output)
     {
+        var style=hud.LayoutProfile;
+        Require(style is {
+            TitleFont:20, NameFont:15, NumberFont:15, Width:484,
+            RowHeight:46, TitleHeight:44, PortraitSize:38,
+            RankWidth:28, PortraitWidth:52, NameWidth:92, BarWidth:158,
+            TotalWidth:78, RateWidth:76, ShareWidth:68, RowGap:1, ColumnGap:2, Padding:4
+        }, "fresh HUD did not use the shipped layout profile");
         var original=hud.Panel.View.Clone();
         var fixture=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
         var entries=fixture["entries"]!.AsArray().ToArray();
@@ -573,17 +683,20 @@ public partial class MainWindow
                         "auto-sized HUD went outside its monitor work area");
                 if(count is 1 or 5) Screenshot.Window(hud,Path.Combine(output,$"{Theme.Key}-hud-{count}-rows.png"));
             }
-            Require(Math.Abs(heights[4]-heights[1]-3*StatisticPanel.HudRowHeight)<2 &&
-                    Math.Abs(heights[5]-heights[4]-StatisticPanel.HudRowHeight)<2 &&
+            Require(Math.Abs(heights[4]-heights[1]-3*style.RowPitch)<2 &&
+                    Math.Abs(heights[5]-heights[4]-style.RowPitch)<2 &&
                     Math.Abs(heights[6]-heights[5])<2,
                     $"HUD height did not fit one through five rows: {string.Join(", ",heights.Values)}");
             var rows=hud.Panel.Rows;
             var row=FindVisual<Grid>(rows,element=>element.Name=="HudOperatorRow");
             var name=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorName");
             var amount=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorTotal");
-            Require(row?.ColumnDefinitions[2].ActualWidth>=134 && name?.FontSize==20 &&
-                    amount?.FontSize==18 && hud.Panel.Heading.FontSize==28 &&
-                    hud.Panel.TitleRegion.ActualHeight<=44 && hud.ActualWidth<=575,
+            Require(row is not null && row.ColumnDefinitions[2].Width.Value==style.NameWidth &&
+                    row.ColumnDefinitions[3].Width.Value==style.BarWidth &&
+                    name?.FontSize==style.NameFont && amount?.FontSize==style.NumberFont &&
+                    hud.Panel.Heading.FontSize==style.TitleFont &&
+                    Math.Abs(hud.Panel.TitleRegion.ActualHeight-style.TitleHeight)<2 &&
+                    Math.Abs(hud.ActualWidth-style.Width)<2,
                     "HUD compact dimensions or readable type did not fit");
             var scroll=FindVisual<ScrollViewer>(rows,_=>true);
             Require(scroll is { ScrollableHeight: > 0 } && !HasVisibleScrollbar(hud),
@@ -1076,27 +1189,37 @@ public partial class MainWindow
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="recent_5s"}});
         string placementBeforeTheme=JsonSerializer.Serialize(originalHud.Placement());
         IntPtr handleBeforeTheme=Native.Handle(originalHud);
-        foreach(string theme in new[]{"lone-trail","contingency-contract","babel","near-light","il-siracusano","original"})
+        Require(Skin.Items.OfType<ComboBoxItem>().Select(item => item.Tag).SequenceEqual(Theme.Keys),
+            "the theme picker did not match the supported themes");
+        foreach(string theme in Theme.Keys)
         {
             await Command("theme",new(){["theme"]=theme});await Settle();
             await Navigate("live");await Settle();
             Require(ReferenceEquals(originalHud,Huds[id]) && Native.Handle(originalHud)==handleBeforeTheme,"theme recreated HUD");
             Require(!HasVisibleScrollbar(originalHud), "HUD displayed a scrollbar");
             var hudPanel = originalHud.Panel;
+            Require(Theme.Key==theme && (Skin.SelectedItem as ComboBoxItem)?.Tag as string==theme &&
+                hudPanel.View.Get("entries").GetRawText()==Panels[id].View.Get("entries").GetRawText(),
+                "theme switch did not reach the picker and linked HUD");
             var titleRegion = hudPanel.TitleRegion;
             Require(hudPanel.PanelFrame.Margin == new Thickness() &&
                     hudPanel.PanelFrame.BorderThickness == new Thickness() &&
                     titleRegion.ActualWidth >= originalHud.ActualWidth - 2,
                     "HUD does not fill its window or retains the extra frame");
-            bool loneTrail=theme=="lone-trail";
+            bool loneTrail=theme==Theme.LoneTrail;
             Require(originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(2,2)) as DependencyObject) &&
                     originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(titleRegion.ActualWidth*.68,
                         titleRegion.ActualHeight/2)) as DependencyObject) &&
                     !originalHud.IsTitleDragSource(hudPanel.HudClose) &&
                     hudPanel.LoneTrailHudMark.IsVisible==loneTrail && hudPanel.LoneTrailHudBackdrop.IsVisible==loneTrail &&
                     hudPanel.LoneTrailHudChevrons.IsVisible==loneTrail &&
-                    !hudPanel.LoneTrailHudBackdrop.IsHitTestVisible && !hudPanel.LoneTrailHudChevrons.IsHitTestVisible,
-                    "HUD drag surface, close hit target, or orbital artwork did not render");
+                    !hudPanel.LoneTrailHudBackdrop.IsHitTestVisible && !hudPanel.LoneTrailHudChevrons.IsHitTestVisible &&
+                    hudPanel.PeopleHudArtwork.IsVisible==Theme.IsPeople &&
+                    (!Theme.IsPeople || hudPanel.PeopleHudArtwork.Source!=null) && !hudPanel.PeopleHudArtwork.IsHitTestVisible &&
+                    hudPanel.BabelHudMark.IsVisible==Theme.IsBabel && hudPanel.BabelHudRule.IsVisible==Theme.IsBabel &&
+                    (!Theme.IsBabel || hudPanel.BabelHudMark.Source!=null) &&
+                    !hudPanel.BabelHudMark.IsHitTestVisible && !hudPanel.BabelHudRule.IsHitTestVisible,
+                    "HUD drag surface, close hit target, or theme artwork did not render");
             Require(JsonSerializer.Serialize(originalHud.Placement())==placementBeforeTheme,"theme changed HUD placement / opacity / lock");
             await Navigate("enemies");await Settle();
             Require(EnemyList.Items.Count==3,"enemy list did not render entered enemies");
@@ -1213,9 +1336,9 @@ public partial class MainWindow
             }
         }
         checks.Add(trayEvidence);
-        await Command("theme",new(){["theme"]="original"});originalHud.SetOpacity(.83);originalHud.SetLocked(true);await SavePlacement();
+        await Command("theme",new(){["theme"]=Theme.Babel});originalHud.SetOpacity(.83);originalHud.SetLocked(true);await SavePlacement();
         var disk=JsonDocument.Parse(File.ReadAllText(Path.Combine(App.BridgeArguments[App.BridgeArguments.IndexOf("--state-dir")+1],"layout.json")));
-        Require(disk.RootElement.Text("theme")=="original","theme persistence");checks.Add("shared v3 layout saved: original theme / locked HUD / 83% opacity / physical geometry");
+        Require(disk.RootElement.Text("theme")==Theme.Babel,"theme persistence");checks.Add("shared v3 layout saved: Babel theme / locked HUD / 83% opacity / physical geometry");
         File.WriteAllText(Path.Combine(output,"receipt.json"),JsonSerializer.Serialize(new{stack="C# / .NET 10 / WPF",transport="parent-child stdio JSON Lines",dotnet=Environment.Version.ToString(),protocol=BridgeClient.Version,offline=true,worker_runtime=bridge?.Hello,checks,restored_layout=restoredLayout,layout=State.Get("layout"),limitations=new[]{"Synthetic data only; no MuMu / game input acceptance",trayEvidence}},new JsonSerializerOptions{WriteIndented=true}));
         await Quit();
     }

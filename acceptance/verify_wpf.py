@@ -121,9 +121,10 @@ def main():
     import tempfile
     directory = Path(tempfile.mkdtemp(prefix='state-', dir=output))
     fixture = seed(directory)
-    if args.migrate_v1:
-        (directory/'layout.json').write_text(json.dumps(dict(version=1, panels=[dict(panel_id='default',
-            category='damage', ranking='total', rate_basis='recent_5s')])), encoding='utf-8')
+    panel = dict(panel_id='default', category='damage', ranking='total', rate_basis='recent_5s')
+    legacy_layout = dict(version=1, panels=[panel]) if args.migrate_v1 else dict(
+        version=3, panels=[panel], theme='original')
+    (directory/'layout.json').write_text(json.dumps(legacy_layout), encoding='utf-8')
     executable = (args.bundle.resolve()/'ArkDPS.Desktop.exe') if args.bundle else ROOT/'desktop/ArkDPS.Desktop/bin/Release/net10.0-windows/ArkDPS.Desktop.exe'
     # Reject a mismatched worker before accepting any snapshots.
     if not args.bundle:
@@ -153,9 +154,12 @@ def main():
         receipts.append(receipt)
     import struct
     for phase in ('first-launch', 'restart'):
-        for theme in ('lone-trail', 'original'):
+        for theme in ('lone-trail', 'people', 'babel'):
             width, height = struct.unpack('>II', (output/phase/(theme+'-ranking.png')).read_bytes()[16:24])
             assert width == 900 and height > 900, 'full ranking export clipped to visible viewport'
+    assert not list(directory.glob('layout.json.corrupt-*')), 'valid legacy layout was quarantined'
+    assert receipts[0]['restored_layout']['theme'] == 'lone-trail', 'legacy theme did not fall back to Lone Trail'
+    assert receipts[1]['restored_layout']['theme'] == 'babel', 'Babel did not survive a restart'
     assert receipts[1]['restored_layout'] == receipts[0]['layout'], 'fresh process did not read exact saved layout'
     files = {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in output.rglob('*.png')}

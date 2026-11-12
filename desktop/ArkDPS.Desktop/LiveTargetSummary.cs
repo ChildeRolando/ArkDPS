@@ -31,6 +31,7 @@ public sealed class LiveTargetSummary : Border
         cardScroll = new ScrollViewer
         {
             Content = stack, MaxHeight = 540, CanContentScroll = true, Focusable = true,
+            VerticalAlignment = VerticalAlignment.Top,
             VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
@@ -230,7 +231,14 @@ public sealed class LiveTargetSummary : Border
         private readonly TextBlock name = Label(17, "ConsoleInk", bold: true);
         private readonly TextBlock identity = Label(12, "ConsoleMuted");
         private readonly TextBlock badge = Label(28, "ConsoleMuted", bold: true);
-        private readonly Image portrait = new() { Stretch = Stretch.Uniform, Margin = new Thickness(1) };
+        private readonly Image portrait = new() { Stretch = Stretch.Uniform };
+        private readonly Border portraitFrame;
+        private string? renderedSkin;
+        private readonly Border headerMark = new()
+        {
+            Width = 3, Height = 25, Margin = new Thickness(0, 0, 7, 0),
+            VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
+        };
         private readonly TextBlock health;
         private readonly TextBlock attack;
         private readonly TextBlock defense;
@@ -270,6 +278,9 @@ public sealed class LiveTargetSummary : Border
             targetLock.Unchecked += (_, _) => lockChanged(this);
             DockPanel.SetDock(targetLock, Dock.Right);
             header.Children.Add(targetLock);
+            headerMark.SetResourceReference(BackgroundProperty, "Signal");
+            DockPanel.SetDock(headerMark, Dock.Left);
+            header.Children.Add(headerMark);
             var heading = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             heading.Children.Add(name);
             heading.Children.Add(identity);
@@ -285,15 +296,20 @@ public sealed class LiveTargetSummary : Border
             var art = new Grid();
             art.Children.Add(badge);
             art.Children.Add(portrait);
-            var frame = new Border { Child = art, Height = 100, BorderThickness = new Thickness(1) };
-            frame.SetResourceReference(BackgroundProperty, "ConsoleCard");
-            frame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
+            portraitFrame = new Border
+            {
+                Child = art, Height = 100, HorizontalAlignment = HorizontalAlignment.Center,
+                BorderThickness = new Thickness(1),
+            };
+            portraitFrame.SetBinding(WidthProperty, new Binding(nameof(Height)) { Source = portraitFrame });
+            portraitFrame.SetResourceReference(BackgroundProperty, "ConsoleCard");
+            portraitFrame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
             SizeChanged += (_, args) =>
             {
-                if (args.WidthChanged) frame.Height = args.NewSize.Width < 230 ? 94 : 100;
+                if (args.WidthChanged) portraitFrame.Height = args.NewSize.Width < 230 ? 94 : 100;
             };
             var overlay = new Grid { Margin = new Thickness(0, 0, 8, 0) };
-            overlay.Children.Add(frame);
+            overlay.Children.Add(portraitFrame);
             previous = Arrow(true, suffix, () => page(this, -1));
             next = Arrow(false, suffix, () => page(this, 1));
             overlay.Children.Add(previous);
@@ -324,6 +340,14 @@ public sealed class LiveTargetSummary : Border
             next.IsEnabled = canNext;
             targetLock.IsEnabled = Current is { Uid.Length: > 0 };
             if (Visibility == Visibility.Collapsed) return;
+            if (renderedSkin != Theme.Key)
+            {
+                renderedSkin = Theme.Key;
+                headerMark.Visibility = Theme.IsPeople ? Visibility.Visible : Visibility.Collapsed;
+                BorderThickness = Theme.IsBabel ? new Thickness(0, 0, 0, 1) : new Thickness(1);
+                portraitFrame.BorderThickness = new Thickness(Theme.IsPeople ? 2 : 1);
+                portraitFrame.SetResourceReference(BorderBrushProperty, Theme.IsPeople ? "MetricHighlight" : "ConsoleLine");
+            }
             lockIcon.Data = Pinned ? LockedGlyph : UnlockedGlyph;
             string lockLabel = Pinned ? "解锁当前敌人" : "锁定当前敌人";
             targetLock.ToolTip = lockLabel;
