@@ -362,19 +362,21 @@ def test_probe_records_hp_evidence_only_after_onleave():
     assert leave.index('const end=time()') < leave.index('recordHpContext(')
 
 
-def test_probe_recovers_targetless_damage_from_same_frame_elemental_bar():
+def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
     js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
-    assert 'lastBarTarget' in js
-    assert 'fallback.frame===end.frame' in js
-    assert 'overkillEvidence(this.mod,damageTarget,damageHpBefore,end.frame)' in js
-    # The fallback is evidence, not a bypass: the Python core still verifies HP.
-    assert 'target_instance' in js
+    assert 'scopes[index].mod.equals(modifier)' in js
+    assert 'scope.source===this.source&&scope.when.frame===this.when.frame' in js
+    assert 'if(scope.targetHit)scope.targetHitAmbiguous=true' in js
+    assert 'overkillEvidence(this.mod,hit.target,hit.hpBefore,end.frame)' in js
+    assert 'settlement&&settlement.amount===amount' in js
+    assert 'if(this.tracksModifier)leaveModifier(this)' in js
+    assert 'lastBarTarget' not in js
     assert "record(this.source,'hp_damage'" in js
     # Target-side HP evidence only describes our own outgoing damage. Enemy
     # attacks on operators are not stream events; emitting them closed the
     # whole authoritative stream before this guard existed.
-    hp_guard = js[js.index("Unit.OnTakeDamage'&&this.source"):]
-    assert 'own(this.source)' in hp_guard[:80]
+    hp_guard = js[js.index("if(this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)"):]
+    assert hp_guard.index("record(this.source,'hp_damage'") < hp_guard.index('const hpAfter=targetHp(this.target)')
 
 
 def test_elemental_bar_and_sourceless_burst_reach_attribution():

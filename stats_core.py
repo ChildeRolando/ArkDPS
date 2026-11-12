@@ -43,13 +43,11 @@ class Statistics:
         self.overkill = {}
         self.overkill_events = deque()
         self.overkill_incomplete = set()
-        # Target-side HP events are an independent, authoritative overkill
-        # source: amount minus observed shield absorption minus HP before.
-        self.hp_overkill = {}
-        self.hp_overkill_incomplete = set()
-        self.hp_overkill_by_type = {}
-        self.hp_overkill_type_incomplete = set()
-        self.hp_seen = set()
+        # Unit.OnTakeDamage is an incoming value before later settlement.
+        # Track sources that only have incoming evidence without calling it
+        # a confirmed settlement or treating the missing output as zero.
+        self.incoming_damage_sources = set()
+        self.settled_damage_sources = set()
         self.overkill_reason = {}
         # Elemental bar damage is not HP damage; only its source matters.
         self.last_elemental = {}
@@ -88,12 +86,8 @@ class Statistics:
         self.enemy_state_events = []
         self.enemy_state_identities = {}
         # Per-event overkill is split by the same skill window as its damage.
-        # HP evidence is kept separately because it overrides the ApplyModifier
-        # overkill total for owners that produced target-side evidence.
         self.skill_overkill = {}
         self.non_skill_overkill = {}
-        self.hp_skill_overkill = {}
-        self.hp_non_skill_overkill = {}
 
     @staticmethod
     def _time(value):
@@ -597,8 +591,7 @@ class Statistics:
                 return
             entry = self.burst.setdefault(attributed, {
                 'actual': 0.0, 'overkill': 0.0, 'settlement': 0.0, 'count': 0,
-                'added_settlement': 0.0, 'added_overkill': 0.0,
-                'added_skill_overkill': 0.0, 'added_non_skill_overkill': 0.0,
+                'added_settlement': 0.0,
             })
             burst_overkill = max(0.0, amount - actual)
             entry['actual'] += actual
@@ -607,13 +600,9 @@ class Statistics:
             entry['count'] += 1
             # The client already includes explicitly sourced burst settlement
             # in that source's native counter. Only attributed sourceless
-            # settlement needs adding to native totals and target-side evidence.
+            # settlement needs adding to native totals.
             if source is None:
                 entry['added_settlement'] += amount
-                entry['added_overkill'] += burst_overkill
-                window = ('added_skill_overkill' if attributed in self.skill_active
-                          else 'added_non_skill_overkill')
-                entry[window] += burst_overkill
             bucket = (self.skill_observed if attributed in self.skill_active
                       else self.non_skill_observed)
             bucket[attributed] = bucket.get(attributed, 0.0) + amount
@@ -639,7 +628,21 @@ class Statistics:
                     window['reason'] = skill_reason
                     self.skill_windows.setdefault(owner, []).append(window)
             return
+        if kind == 'hp_damage':
+            friendly = (isinstance(target, str)
+                        and target.startswith(('char_', 'token_')))
+            if amount > 0 and not friendly and damage_type != 5:
+                self.incoming_damage_sources.add(source)
+            return
         if kind == 'damage':
+            self.settled_damage_sources.add(source)
+            # A modifier can still return its nominal amount for a target
+            # already at zero HP or for a cancelled hit. These verified zero
+            # settlements are absent from the source's native output counter.
+            if (real_delta == 0 and self._optional_number(hp_before)
+                    and hp_before == hp_after
+                    and (hp_before == 0 and killed is True or cancel_reason == 1)):
+                return
             known, overkill, reason = self._overkill(
                 amount, target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
@@ -670,38 +673,6 @@ class Statistics:
                 bucket = (self.skill_observed if owner in self.skill_active
                           else self.non_skill_observed)
                 bucket[owner] = bucket.get(owner, 0.0) + amount
-        if kind == 'hp_damage':
-            if not isinstance(target, str) or not target:
-                self.hp_seen.add(owner)
-                self.hp_overkill_incomplete.add(owner)
-                return
-            # Friendly/self damage is not outgoing HP damage for DPS/overkill.
-            if target.startswith('char_') or target.startswith('token_'):
-                return
-            self.hp_seen.add(owner)
-            tolerance = max(0.01, amount * 1e-6)
-            if not self._optional_number(hp_before) or hp_before < 0:
-                self.hp_overkill_incomplete.add(owner)
-                return
-            if amount <= hp_before + tolerance:
-                overkill = 0.0
-            else:
-                if not self._optional_number(shield_absorbed) or shield_absorbed < 0:
-                    self.hp_overkill_incomplete.add(owner)
-                    return
-                overkill = max(0.0, amount - shield_absorbed - hp_before)
-            self.hp_overkill[owner] = self.hp_overkill.get(owner, 0.0) + overkill
-            if overkill > 0:
-                bucket = (self.hp_skill_overkill if owner in self.skill_active
-                          else self.hp_non_skill_overkill)
-                bucket[owner] = bucket.get(owner, 0.0) + overkill
-                type_key = NATIVE_DAMAGE_TYPES.get(damage_type)
-                if type_key is None:
-                    self.hp_overkill_type_incomplete.add(owner)
-                else:
-                    per_type = self.hp_overkill_by_type.setdefault(owner, {})
-                    per_type[type_key] = per_type.get(type_key, 0.0) + overkill
-            return
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
         elif kind in ('damage', 'healing') and amount > 0:
@@ -763,8 +734,12 @@ class Statistics:
             complete = all(s in self.sources and self.sources[s]['totals_valid'] and
                            self.sources[s]['totals_time'] == self.now for s in registered)
             coverage_complete = bool(self.event_coverage) and not self.event_coverage_broken
+            missing_settlement = any(source in self.incoming_damage_sources
+                                     and source not in self.settled_damage_sources
+                                     for source in registered)
             overkill_known = (coverage_complete
                               and not self.all_overkill_unknown
+                              and not missing_settlement
                               and owner not in self.overkill_incomplete)
             overkill_type_known = overkill_known and owner not in self.overkill_type_incomplete
             if overkill_known:
@@ -775,6 +750,8 @@ class Statistics:
                 overkill_unknown_reason = '事件覆盖已结束'
             elif self.all_overkill_unknown:
                 overkill_unknown_reason = '存在未归属的伤害事件'
+            elif missing_settlement:
+                overkill_unknown_reason = '仅观察到结算前的目标来伤'
             else:
                 overkill_unknown_reason = self.overkill_reason.get(owner, '伤害证据不足')
             # Engagement keeps its observed interval after coverage closes;
@@ -854,27 +831,6 @@ class Statistics:
                     types = row['overkill_damage_by_type']
                     if types is not None:
                         types['elemental'] = types.get('elemental', 0.0) + covered_burst['overkill']
-            if owner in self.hp_seen:
-                hp_known = bool(self.event_coverage) and owner not in self.hp_overkill_incomplete
-                if hp_known:
-                    row['overkill_damage'] = self.hp_overkill.get(owner, 0.0)
-                    added_overkill = covered_burst['added_overkill'] if covered_burst else 0.0
-                    row['overkill_damage'] += added_overkill
-                    row['overkill_coverage_complete'] = True
-                    row['overkill_unknown_reason'] = None
-                    if owner in self.hp_overkill_type_incomplete:
-                        row['overkill_damage_by_type'] = None
-                        row['overkill_type_complete'] = False
-                    else:
-                        types = dict(self.hp_overkill_by_type.get(owner, {}))
-                        if added_overkill:
-                            types['elemental'] = types.get('elemental', 0.0) + added_overkill
-                        row['overkill_damage_by_type'] = types
-                        row['overkill_type_complete'] = True
-                else:
-                    row['overkill_damage'] = None
-                    row['overkill_coverage_complete'] = False
-                    row['overkill_unknown_reason'] = '目标掉血证据不完整'
             if row['damage'] is not None and row['overkill_damage'] is not None:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:
@@ -896,23 +852,9 @@ class Statistics:
                 reason = '技能窗口未覆盖全部伤害事件'
             else:
                 reason = None
-            hp_overkill_known = owner in self.hp_seen and owner not in self.hp_overkill_incomplete
-            apply_overkill_known = overkill_known
-            if hp_overkill_known:
-                split_skill_overkill = self.hp_skill_overkill.get(owner, 0.0)
-                split_non_skill_overkill = self.hp_non_skill_overkill.get(owner, 0.0)
-                if covered_burst:
-                    split_skill_overkill += covered_burst['added_skill_overkill']
-                    split_non_skill_overkill += covered_burst['added_non_skill_overkill']
-                split_overkill_known = True
-            elif apply_overkill_known:
-                split_skill_overkill = self.skill_overkill.get(owner, 0.0)
-                split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
-                split_overkill_known = True
-            else:
-                split_skill_overkill = split_non_skill_overkill = None
-                split_overkill_known = False
-            effective_split_known = skill_known and covers_total and split_overkill_known
+            split_skill_overkill = self.skill_overkill.get(owner, 0.0)
+            split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
+            effective_split_known = skill_known and covers_total and overkill_known
             row['skill_damage'] = skill_value if skill_known else None
             row['non_skill_damage'] = non_skill_value if skill_known else None
             row['skill_damage_effective'] = (
