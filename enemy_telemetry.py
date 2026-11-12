@@ -37,16 +37,32 @@ def _text(value):
     return value if isinstance(value, str) else ''
 
 
-def enemy_rows(snapshot, *, include_pending=False):
-    """Serializable enemy rows; pending plan entries are opt-in."""
+def enemy_rows(snapshot, *, include_pending=False, include_unobserved=False):
+    """Serializable enemy rows; pending plan entries are opt-in.
+
+    ``spawned_count`` is the scheduler's authoritative number of generated
+    enemies. A gate-blocked enemy can spawn and die between polls; its plan
+    record is then marked as entered with unknown current HP instead of being
+    silently dropped from the count.
+    """
     allowed = ENTERED_LIFECYCLES + (('pending',) if include_pending else ())
+    spawned_count = snapshot.get('spawned_count')
     rows = []
     for enemy in snapshot.get('enemies') or ():
         lifecycle = _text(getattr(enemy, 'lifecycle', 'active')) or 'active'
+        spawn_order = getattr(enemy, 'spawn_order', None)
+        spawn_kind = _text(getattr(enemy, 'spawn_kind', '')) or 'scheduled'
+        unobserved = (lifecycle == 'pending' and include_unobserved
+                      and spawn_kind == 'scheduled'
+                      and isinstance(spawn_order, int) and not isinstance(spawn_order, bool)
+                      and isinstance(spawned_count, int) and not isinstance(spawned_count, bool)
+                      and 0 < spawn_order <= spawned_count)
+        if unobserved:
+            lifecycle = 'departed'
         if lifecycle not in allowed:
             continue
         max_hp = _finite(getattr(enemy, 'max_hp', 0.0))
-        hp = _finite(getattr(enemy, 'hp', 0.0))
+        hp = None if unobserved else _finite(getattr(enemy, 'hp', 0.0))
         state_id = getattr(enemy, 'state_id', None)
         if not isinstance(state_id, int):
             state_id = None
@@ -59,39 +75,46 @@ def enemy_rows(snapshot, *, include_pending=False):
             'hp': hp,
             'max_hp': max_hp,
             'hp_known': max_hp > 0,
-            'hp_ratio': min(1.0, max(0.0, hp / max_hp)) if max_hp > 0 else None,
+            'hp_current_known': hp is not None,
+            'hp_ratio': (min(1.0, max(0.0, hp / max_hp))
+                         if hp is not None and max_hp > 0 else None),
             'atk': _finite(getattr(enemy, 'atk', 0.0)),
             'def': _finite(getattr(enemy, 'def_', 0.0)),
             'res': _finite(getattr(enemy, 'res', 0.0)),
             'move_speed': _finite(getattr(enemy, 'mspd', 0.0)),
             'attack_speed': _finite(getattr(enemy, 'aspd', 0.0)),
-            'alive': bool(getattr(enemy, 'alive', False)),
+            'alive': False if unobserved else bool(getattr(enemy, 'alive', False)),
             'lifecycle': lifecycle,
-            'state_id': state_id,
-            'state': ENEMY_STATE_NAMES.get(state_id, f'未知({state_id})') if state_id is not None else '未知',
+            'observed': not unobserved,
+            'state_id': None if unobserved else state_id,
+            'state': ('未观测' if unobserved else
+                      ENEMY_STATE_NAMES.get(state_id, f'未知({state_id})')
+                      if state_id is not None else '未知'),
             'spawn_frame': getattr(enemy, 'spawn_frame', None),
             'end_frame': getattr(enemy, 'end_frame', None),
-            'end_reason': getattr(enemy, 'end_reason', None),
+            'end_reason': 'unobserved' if unobserved else getattr(enemy, 'end_reason', None),
             'is_summon': bool(getattr(enemy, 'is_summon', False)),
             'planned': bool(getattr(enemy, 'planned', False)),
-            'spawn_kind': _text(getattr(enemy, 'spawn_kind', '')) or 'scheduled',
+            'spawn_kind': spawn_kind,
             'hp_inferred': False,
             'position': {
                 'x': _finite(getattr(enemy, 'pos_x', 0.0)),
                 'y': _finite(getattr(enemy, 'pos_y', 0.0)),
             },
         })
-    if include_pending:
+    if include_pending or include_unobserved:
         # A planned enemy that died between polls has no live attributes. The
-        # same enemy type's observed MaxHP is still a valid denominator; never
-        # invent a value for a type that was never observed.
+        # same enemy type's observed MaxHP is still a valid denominator: it was
+        # read from this battle's Attributes.cachedData and therefore includes
+        # any stage-specific override. No handbook or global MaxHP is used; a
+        # type never observed in this battle stays unknown.
         observed_hp = {}
         for row in rows:
             if row['lifecycle'] in ENTERED_LIFECYCLES and row['hp_known']:
                 observed_hp[row['eid']] = max(observed_hp.get(row['eid'], 0.0),
                                              row['max_hp'])
         for row in rows:
-            if (not row['hp_known'] and row['lifecycle'] == 'pending'
+            if (not row['hp_known'] and (row['lifecycle'] == 'pending' or not row['observed'])
                     and row['eid'] in observed_hp):
                 row['max_hp'] = observed_hp[row['eid']]
                 row['hp_known'] = True
@@ -127,7 +150,10 @@ def enemy_totals(rows, planned=None):
         'entered_total_hp': (sum(row['max_hp'] for row in planned_known)
                              if plan_complete else observed_total),
         'observed_total_hp': observed_total,
-        'remaining_hp': sum(max(0.0, row['hp']) for row in known if row['alive']),
+        'inferred_count': sum(1 for row in known if row.get('hp_inferred')),
+        'planned_inferred_count': sum(1 for row in planned_known if row.get('hp_inferred')),
+        'remaining_hp': sum(max(0.0, row['hp']) for row in known
+                            if row['alive'] and row['hp'] is not None),
         'hp_complete': (plan_complete if planned else
                         (len(known) == len(entered) and bool(entered))),
     }
@@ -285,6 +311,7 @@ class EnemyTelemetry:
         self._status = 'starting'
         self._rows = []
         self._planned_rows = []
+        self._spawned_count = None
         self._damage_baseline = None
 
     def reset(self):
@@ -296,6 +323,7 @@ class EnemyTelemetry:
         self._status = 'starting'
         self._rows = []
         self._planned_rows = []
+        self._spawned_count = None
         self._damage_baseline = None
 
     def _state(self, status, *, rows=None, error=None):
@@ -310,6 +338,7 @@ class EnemyTelemetry:
             'ready': self.ready,
             'rows': current,
             'totals': enemy_totals(current, self._planned_rows),
+            'spawned_count': self._spawned_count,
             'damage_baseline': self._damage_baseline,
             'series': self.timeline.series(),
             'last_point': self.timeline.last,
@@ -353,7 +382,8 @@ class EnemyTelemetry:
         if not snapshot or not snapshot.get('ok'):
             message = (snapshot or {}).get('msg') or '敌人快照不完整'
             return self._state('stale', error=message)
-        rows = enemy_rows(snapshot)
+        self._spawned_count = snapshot.get('spawned_count')
+        rows = enemy_rows(snapshot, include_unobserved=True)
         planned = enemy_rows(snapshot, include_pending=True)
         # Conditional branches only count once observed; scheduled waves form
         # the deterministic stage HP pool even when a poll misses a short life.

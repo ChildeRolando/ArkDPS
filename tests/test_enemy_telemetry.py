@@ -49,6 +49,30 @@ def test_totals_only_sum_entered_enemies_and_alive_remaining():
     assert totals['hp_complete'] is True
 
 
+def test_spawned_count_keeps_enemies_killed_between_polls_in_scope():
+    snapshot = {'spawned_count': 3, 'enemies': [
+        enemy(roster_id=1, spawn_order=1, eid='enemy_a', max_hp=100.0, hp=90.0),
+        enemy(roster_id=2, spawn_order=2, eid='enemy_a', max_hp=0.0, hp=0.0,
+              lifecycle='pending', alive=False),
+        enemy(roster_id=3, spawn_order=3, eid='enemy_b', max_hp=0.0, hp=0.0,
+              lifecycle='pending', alive=False),
+        enemy(roster_id=4, spawn_order=4, eid='enemy_b', max_hp=0.0, hp=0.0,
+              lifecycle='pending', alive=False),
+        enemy(roster_id=5, spawn_order=5, eid='enemy_c', max_hp=0.0, hp=0.0,
+              lifecycle='pending', alive=False, spawn_kind='conditional'),
+    ]}
+    rows = enemy_rows(snapshot, include_unobserved=True)
+    assert [row['spawn_order'] for row in rows] == [1, 2, 3]
+    unobserved = [row for row in rows if not row['observed']]
+    assert len(unobserved) == 2
+    assert all(row['lifecycle'] == 'departed' and row['hp'] is None
+               and row['hp_current_known'] is False for row in unobserved)
+    assert next(row for row in rows if row['spawn_order'] == 2)['max_hp'] == 100.0
+    totals = enemy_totals(rows, enemy_rows(snapshot, include_pending=True))
+    assert totals['entered_count'] == 3
+    assert totals['remaining_hp'] == 90.0
+
+
 def test_pending_hp_is_inferred_only_from_an_observed_same_type():
     snapshot = {'enemies': [
         enemy(roster_id=1, eid='enemy_a', max_hp=200.0, hp=150.0),
