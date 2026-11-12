@@ -440,6 +440,7 @@ public partial class MainWindow
         var fixture=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
         var entries=fixture["entries"]!.AsArray().ToArray();
         var heights=new Dictionary<int,double>();
+        bool pollingEnabled=poll.IsEnabled;
         poll.Stop();
         try
         {
@@ -466,8 +467,9 @@ public partial class MainWindow
             var name=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorName");
             var amount=FindVisual<TextBlock>(rows,element=>element.Name=="HudOperatorTotal");
             Require(row?.ColumnDefinitions[2].ActualWidth>=134 && name?.FontSize==20 &&
-                    amount?.FontSize==18 && hud.Panel.Heading.FontSize==28,
-                    "HUD operator name column or type did not reach its larger size");
+                    amount?.FontSize==18 && hud.Panel.Heading.FontSize==28 &&
+                    hud.Panel.TitleRegion.ActualHeight<=44 && hud.ActualWidth<=575,
+                    "HUD compact dimensions or readable type did not fit");
             var scroll=FindVisual<ScrollViewer>(rows,_=>true);
             Require(scroll is { ScrollableHeight: > 0 } && !HasVisibleScrollbar(hud),
                     "HUD cannot show extra rows without a scrollbar");
@@ -480,7 +482,7 @@ public partial class MainWindow
         {
             hud.Update(original,"");
             await Settle();
-            poll.Start();
+            if(pollingEnabled) poll.Start();
         }
     }
 
@@ -561,6 +563,28 @@ public partial class MainWindow
     {
         Directory.CreateDirectory(output);poll.Stop();save.Stop();
         var checks=new List<string>();
+        // Check the initial worker reply before any later fixture or layout changes.
+        var restoredLayout=State.Get("layout").Clone();
+        await Settle();
+        foreach(var placement in restoredLayout.Get("huds").Items())
+        {
+            Require(Huds.TryGetValue(placement.Text("panel_id"),out var hud) && hud is not null,
+                    "saved HUD was not opened");
+            Require(hud!.Locked==placement.Bool("locked"),"HUD lock restore");
+            Require(Math.Abs(hud.Opacity-placement.Number("opacity"))<.001,"HUD alpha restore");
+            var actual=Native.Bounds(hud);
+            var dpi=System.Windows.Media.VisualTreeHelper.GetDpi(hud);
+            var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
+            double width=Math.Clamp(placement.Number("width"),hud.MinWidth*dpi.DpiScaleX,work.Width);
+            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height)*dpi.DpiScaleY);
+            double x=Math.Clamp(placement.Number("x"),work.Left,Math.Max(work.Left,work.Right-width));
+            double y=Math.Clamp(placement.Number("y"),work.Top,Math.Max(work.Top,work.Bottom-height));
+            Require(Math.Abs(actual[0]-x)<=2 && Math.Abs(actual[1]-y)<=2,
+                    $"HUD restored outside expected position: ({actual[0]}, {actual[1]}) expected ({x}, {y})");
+            Require(Math.Abs(actual[2]-width)<=2 && Math.Abs(actual[3]-height)<=2,
+                    $"HUD did not restore width and fit its current rows: {actual[2]}x{actual[3]} expected {width}x{height}");
+            checks.Add("saved HUD position, width, lock and opacity restored with current-row height");
+        }
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",
@@ -827,18 +851,6 @@ public partial class MainWindow
             await Poll();
             Search.Text="";await Settle();
         }
-        // The wrapper runs this candidate again against the saved directory.
-        var restoredLayout=State.Get("layout").Clone();
-        if(Huds.Count>0)
-        {
-            var placement=restoredLayout.Get("huds").Items().First();var hud=Huds[placement.Text("panel_id")];
-            Require(hud.Locked==placement.Bool("locked"),"HUD lock restore");
-            Require(Math.Abs(hud.Opacity-placement.Number("opacity"))<.001,"HUD alpha restore");
-            var actual=Native.Bounds(hud);
-            Require(Math.Abs(actual[0]-placement.Number("x"))<=2 && Math.Abs(actual[1]-placement.Number("y"))<=2,"HUD physical position restore");
-            Require(Math.Abs(actual[2]-placement.Number("width"))<=2 && Math.Abs(actual[3]-placement.Number("height"))<=2,"HUD physical size restore");
-            checks.Add("saved HUD physical geometry / lock / opacity restored on process launch");
-        }
         if(Panels.Count==1)
         {
             await Command("panel_add");string second=Panels.Keys.Last();
@@ -1004,9 +1016,7 @@ public partial class MainWindow
                 Panels[id].View.Get("entries").Items().Any(row => row.Text("display_value").Contains("K")),
                 "western display units did not restore without restarting");
         checks.Add("global number units switch updates live ranking, chart labels and existing HUD");
-        poll.Stop();
-        try { await VerifyLoneTrailLayout(output,checks); }
-        finally { poll.Start(); }
+        await VerifyLoneTrailLayout(output,checks);
         await SavePlacement();string normal=State.Get("layout").Get("gui").GetRawText();
         WindowState=WindowState.Minimized;await Settle();await SavePlacement();
         Require(State.Get("layout").Get("gui").GetRawText()==normal,"minimized HWND overwrote normal GUI rectangle");ShowGui();await Settle();

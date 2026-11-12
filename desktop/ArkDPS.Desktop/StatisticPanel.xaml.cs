@@ -203,7 +203,7 @@ public partial class StatisticPanel : UserControl
     private bool updating, hold;
     private bool referenceStyle;
     private const double ReferenceRowsDefaultHeight=185;
-    public const double HudRowHeight=54;
+    public const double HudRowHeight=46;
     internal const int HudVisibleRows=5;
     internal bool IsHistory, IsHud;
     public string PanelId => view.Get("config").Text("panel_id");

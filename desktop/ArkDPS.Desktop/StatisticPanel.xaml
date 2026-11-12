@@ -101,18 +101,18 @@
    <Setter Property="VerticalAlignment" Value="Center"/>
   </Style>
   <DataTemplate x:Key="HudRow" DataType="{x:Type local:RowItem}">
-   <Grid x:Name="HudOperatorRow" Margin="0,0,12,0" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
+   <Grid x:Name="HudOperatorRow" Margin="0,0,8,0" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
     <Grid.ColumnDefinitions>
-     <ColumnDefinition Width="48*"/><ColumnDefinition Width="52*"/><ColumnDefinition Width="138*"/>
-     <ColumnDefinition Width="40*"/><ColumnDefinition Width="108*"/><ColumnDefinition Width="124*"/><ColumnDefinition Width="90*"/>
+     <ColumnDefinition Width="36*"/><ColumnDefinition Width="44*"/><ColumnDefinition Width="140*"/>
+     <ColumnDefinition Width="42*"/><ColumnDefinition Width="94*"/><ColumnDefinition Width="104*"/><ColumnDefinition Width="76*"/>
     </Grid.ColumnDefinitions>
     <TextBlock Text="{Binding Rank}" Style="{StaticResource HudNumber}" Foreground="{DynamicResource Muted}" TextAlignment="Center"/>
     <Viewbox Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" StretchDirection="DownOnly">
-     <Border Width="40" Height="40" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
+     <Border Width="36" Height="36" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
      </Border>
     </Viewbox>
-    <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="5,0"/>
+    <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0"/>
     <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="2,0,6,0">
      <local:ContributionBar Data="{Binding Entry}" Height="8" VerticalAlignment="Center"/>
     </Border>
