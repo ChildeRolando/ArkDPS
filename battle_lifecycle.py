@@ -13,7 +13,8 @@ import time
 import uuid
 
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
-from event_capture import LiveEventCapture, CaptureRetry, read_event_batch, acknowledge_event_batch
+from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
+                           acknowledge_event_batch, read_terminal_mark)
 from event_observer import ObserverReadRetry
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
@@ -38,6 +39,19 @@ class MappingRetry(CaptureRetry):
     def __init__(self, reason, observation):
         super().__init__(reason)
         self.observation = observation
+
+
+def _terminal_boundary(observer):
+    if observer is None:
+        return None
+    try:
+        mark = read_terminal_mark(observer)
+    except Exception:
+        return None  # Departure remains certain even if the observer is unavailable.
+    if not isinstance(mark, dict) or mark.get('error') or mark.get('stopped'):
+        return None
+    boundary = mark.get('terminal_boundary')
+    return {'terminal_boundary': boundary} if isinstance(boundary, dict) else None
 
 
 class BattleFeed:
@@ -78,16 +92,17 @@ class BattleFeed:
         self.current_lifecycle = None
         return self._emit('gap', reason=reason)
 
-    def _end(self, reason, sample=None, roster=None):
+    def _end(self, reason, sample=None, roster=None, *, observer=None):
         if self.identity is None:
             return self._emit('waiting', reason=reason)
+        events = _terminal_boundary(observer) if not self.terminal else None
         self.retired, self.retired_clock = self.identity, self.clock
         self.retired_session = self.native_session
         self.retired_stage = self.stage
         self.identity = self.clock = self.native_session = None
         self.stage = None
         self.terminal = False
-        return self._emit('end', sample, roster, reason=reason)
+        return self._emit('end', sample, roster, reason=reason, events=events)
 
     def _read_marked_snapshot(self, collector, observer):
         events = None
@@ -187,7 +202,7 @@ class BattleFeed:
         stage_changed = bool(stage and self.stage and stage != self.stage)
         battle = before['battle']
         if battle is None:
-            observation = self._end('battle_absent')
+            observation = self._end('battle_absent', observer=observer)
             self.retired = self.retired_clock = None
             self.retired_session = None
             return observation
@@ -198,9 +213,9 @@ class BattleFeed:
         if before.get('state') == 3 or exiting:
             if self.generation == preparing_generation:
                 return self._end('finished')
-            # A singleton replacement may be observed only after it finished.
-            # It cannot provide a result for the previously observed battle.
-            if self.identity == identity and not stage_changed and before.get('state') == 3 and not exiting:
+            # A finished controller can still supply guarded counters while the
+            # scene is exiting. A replacement cannot settle the old battle.
+            if self.identity == identity and not stage_changed and before.get('state') == 3:
                 from collector import SampleUnavailable, ProcessChanged
                 from roster import RosterUnavailable
                 from tools.stage_global_state.memory import ReadFailure
@@ -211,7 +226,6 @@ class BattleFeed:
                     raise
                 except (SampleUnavailable, RosterUnavailable, AdapterError, ReadFailure):
                     self.current_lifecycle = before
-                    self.terminal = True
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
                     events = self._drain(observer, events)
@@ -220,7 +234,9 @@ class BattleFeed:
                     self.terminal = True
                     self.clock = sample['game_time']
                     return self._emit('terminal', sample, roster, events=events)
-            return self._end('finished' if self.identity == identity and not stage_changed else 'replaced')
+            if self.identity == identity and not stage_changed:
+                return self._end('finished', observer=observer)
+            return self._end('replaced')
         if not before['ready'] or before['transiting']:
             if before.get('state') in (0, 1):
                 observation = self._end('battle_initializing')
@@ -237,7 +253,7 @@ class BattleFeed:
                     and exit_metadata.get('outcome') == 'abandoned'
                     and exit_metadata.get('evidence')
                     and exit_metadata.get('stage_id', self.stage) == self.stage):
-                return self._end('finished')
+                return self._end('finished', observer=observer)
             raise
         now = sample['game_time']
         if (self.terminal and not stage_changed and identity == self.identity and
@@ -298,6 +314,7 @@ class BattleSessions:
         self.event_error = None
         self.snapshot_intervals = []
         self._snapshot_open = False
+        self._last_event_mark = None
 
     def _snapshot_accepted(self):
         now = self.adapter.last_game_time
@@ -321,6 +338,7 @@ class BattleSessions:
             if sequence != evidence['sequence']:
                 raise StreamGap('event observation barrier was altered')
             self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'])
+            self._last_event_mark = evidence['after']
             self.event_status = 'recording'
             return True
         except Exception as exc:
@@ -386,6 +404,38 @@ class BattleSessions:
         if self.event_status == 'recording':
             self._close_event_gap('未取得最终事件水位')
 
+    def _finish_at_verified_watermark(self, observation):
+        boundary = (observation.events or {}).get('terminal_boundary')
+        if (self.event_status != 'recording' or self._last_event_mark is None or
+                not isinstance(boundary, dict) or self.latest_sample is None):
+            return False
+        stream = self.adapter.event_stream
+        if stream is None or stream.closed or self.adapter.statistics.end_time is not None:
+            return False
+        try:
+            controller, native = self.latest_sample['battle_identity']
+            session_controller, stats, level = map(int, self.latest_sample['native_session'].rsplit(':', 3)[-3:])
+            if session_controller != controller:
+                return False
+            for key, expected in (('controller', controller), ('native', native),
+                                  ('stats', stats), ('level', level)):
+                if expected <= 0 or int(boundary[key], 16) != expected:
+                    return False
+            if int(boundary['logger'], 16) <= 0:
+                return False
+            mark = self._last_event_mark
+            if (baseline_barrier(mark, self.latest_sample, boundary) != stream.sequence or
+                    stream.frame != boundary['frame'] or stream.game_time != boundary['game_time']):
+                return False
+        except (KeyError, ValueError, TypeError):
+            return False
+        # The final callback reached the same point already consumed together
+        # with native counters and roster. An advanced boundary needs a new pair.
+        self.adapter.statistics.invalidate_rates()
+        self.adapter.finish()
+        self.event_status, self.event_error = 'finished', None
+        return True
+
     def _archive(self, reason):
         if self.adapter is None or self._archived:
             return
@@ -402,7 +452,9 @@ class BattleSessions:
 
     def _terminal_update(self, observation):
         if observation.sample is None:
-            self._terminal_gap(observation.reason)
+            # A short read during settlement did not consume or lose any
+            # events. Keep the queue open for the next guarded read.
+            self.metadata['final_sample_error'] = observation.reason
             return
         if observation.sample['session'] != self.battle_id:
             raise ValueError('final sample does not belong to the live battle')
@@ -491,6 +543,7 @@ class BattleSessions:
                 self.battle_id = observation.sample['session']
                 self._archived = False
                 self._terminal_seen = False
+                self._last_event_mark = None
                 self.metadata = self._metadata(observation.sample)
                 self.snapshot_intervals = []
                 self._snapshot_open = False
@@ -524,7 +577,8 @@ class BattleSessions:
                     self._merge_terminal_metadata(observation)
                 if observation.sample is not None and not self._archived:
                     self._terminal_update(observation)
-                if self.adapter is not None and self.adapter.statistics.end_time is None:
+                if (self.adapter is not None and self.adapter.statistics.end_time is None and
+                        not self._finish_at_verified_watermark(observation)):
                     # Preserve native totals and close events at their last watermark.
                     self._close_unverified_event_end()
                     self.adapter.on_end()

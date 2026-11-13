@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -54,7 +55,9 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Name => Entry.Text("name");
     public string Initial => Name.Length > 0 ? Name[..1] : "?";
     public string Total => Entry.Text("display_value");
+    public string CumulativeTotal => Entry.Text("cumulative_display_value") is { Length: >0 } total ? total : Total;
     public string Rate => Entry.Text("rate_text");
+    public string CompactRate => Rate.Length > 0 ? Rate : "—";
     public string Share => Entry.Text("share_display");
     public string MetricCategory { get; internal set; } = "";
     internal SharePresentation ShareInfo { get; set; }=new("占比","",false);
@@ -71,6 +74,25 @@ public sealed class RowItem : INotifyPropertyChanged
                 +"元素 "+Value("elemental")+Environment.NewLine
                 +"真实 "+Value("true")+Environment.NewLine
                 +"过量 "+over;
+        }
+    }
+    public string RankedBarTooltip
+    {
+        get
+        {
+            string value = Json.UiText(Entry.Text("exact_value"));
+            return MetricCategory switch
+            {
+                "healing" => "治疗排行原值 " + value,
+                "shield" => "护盾吸收排行原值 " + value,
+                _ => string.Join(Environment.NewLine, Entry.Get("segments").Items().Select(segment =>
+                    (segment.Text("kind") switch
+                    {
+                        "physical" => "物理", "arts" => "法术", "elemental" => "元素", "true" => "真实", _ => "其他",
+                    }) + " " + segment.Ui("value")
+                       + (segment.Get("overkill").ValueKind == JsonValueKind.Number ? "（过量 " + segment.Ui("overkill") + "）" : ""))
+                    .Prepend("伤害排行原值 " + value)),
+            };
         }
     }
     public string Tooltip => Name + Environment.NewLine + "排行原值 " + Json.UiText(Entry.Text("exact_value"))
@@ -221,7 +243,7 @@ public partial class StatisticPanel : UserControl
     private bool updating, hold;
     private bool configurationAvailable=true;
     private bool deleteAvailable;
-    private bool referenceStyle, liveToolbar;
+    private bool referenceStyle, liveToolbar, sideRanking;
     private string? appliedHudSkin;
     private HudLayout? hudLayout;
     private double hudViewportLimit=double.PositiveInfinity;
@@ -232,6 +254,49 @@ public partial class StatisticPanel : UserControl
     public string PanelId => view.Get("config").Text("panel_id");
     internal JsonElement View => view;
     public StatisticPanel() { InitializeComponent(); Rows.ItemsSource=items; }
+
+    internal static bool IsBossScope(JsonElement config) =>
+        config.Text("category")=="damage" && config.Bool("boss_only");
+
+    internal void ConfigureSideRanking()
+    {
+        sideRanking = true;
+        MinWidth = Plot.MinHeight = Rows.MinHeight = 0;
+        Rows.MaxHeight = double.PositiveInfinity;
+        Rows.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+        VirtualizingPanel.SetVirtualizationMode(Rows, VirtualizationMode.Recycling);
+        Rows.ItemContainerStyle = (Style)FindResource("SideRankedRow");
+        AutomationProperties.SetAutomationId(Rows, "SideDpsRanking");
+        AutomationProperties.SetName(Rows, "干员排行");
+        PanelFrame.Margin = new Thickness(0);
+        PanelFrame.SetResourceReference(Border.BackgroundProperty, "Console");
+        PanelFrame.SetResourceReference(Border.BorderBrushProperty, "ConsoleLine");
+        TitleRegion.SetResourceReference(Border.BackgroundProperty, "ConsoleCard");
+        Heading.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleInk");
+        Heading.FontSize = 15;
+        Heading.TextWrapping = TextWrapping.NoWrap;
+        Heading.TextTrimming = TextTrimming.CharacterEllipsis;
+        TitleBar.Margin = new Thickness(8, 6, 8, 5);
+        RateNoticePanel.Margin = new Thickness(5, 0, 5, 4);
+        RateNoticePanel.Padding = new Thickness(5, 3, 5, 3);
+        LegendRow.Margin = new Thickness(8, 0, 8, 0);
+        foreach (var label in Legend.Children.OfType<TextBlock>())
+            label.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleMuted");
+        Empty.Margin = new Thickness(8, 4, 8, 4);
+        Empty.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleMuted");
+        Update(default);
+    }
+
+    internal void RestoreSideSelection(string? owner, bool scrollToTop)
+    {
+        if (scrollToTop && items.Count > 0) Rows.ScrollIntoView(items[0]);
+        if (owner is null || Rows.SelectedItem is not null) return;
+        var row = items.FirstOrDefault(item => item.Id == owner);
+        if (row is null) return;
+        updating = true;
+        Rows.SelectedItem = row;
+        updating = false;
+    }
 
     internal void ConfigureHud(Action? close=null)
     {
@@ -399,11 +464,12 @@ public partial class StatisticPanel : UserControl
 
     private void ReferenceScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if(!referenceStyle || e.OriginalSource is not ScrollViewer viewer) return;
+        if(!(referenceStyle || sideRanking) || e.OriginalSource is not ScrollViewer viewer) return;
         // Keep the fixed header and footer on the same content width as the scrolling rows.
         var gutter = new Thickness(0,0,Math.Max(0,viewer.ActualWidth-viewer.ViewportWidth),0);
         ReferenceTableHeader.Margin=gutter;
         ReferenceFooter.Margin=gutter;
+        if(sideRanking) SideHeader.Margin=gutter;
     }
 
     internal void FitRankingRows(double availableHeight)
@@ -443,16 +509,22 @@ public partial class StatisticPanel : UserControl
         view=value; updating=true;
         var config=value.Get("config");
         var share=SharePresentation.From(value);
+        bool bossScope=IsBossScope(config);
+        bool bossUnavailable=bossScope && !value.Bool("boss_damage_available");
+        string bossReason=bossScope ? value.Text("boss_damage_reason") : "";
+        if(bossUnavailable && bossReason.Length==0) bossReason="首领伤害数据不可用。";
         if(IsHud) ApplyHudSkin();
         Heading.Text=IsHud ? HudTitle(config) : value.Text("title");
         var knownShare=value.Text("share_scope")=="known";
         PanelKind.Text=IsHud ? share.Label : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
-        PanelKind.Visibility=referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
+        PanelKind.Visibility=sideRanking||referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
         PanelKind.ToolTip=IsHud ? share.Description : null;
-        Heading.ToolTip=IsHud ? share.Description : null;
+        Heading.ToolTip=!IsHud ? null : bossScope
+            ? string.Join("\n",new[]{Heading.Text,bossReason,share.Description}.Where(text=>text.Length>0))
+            : share.Description;
         HudClose.Visibility=IsHud && CloseRequested!=null ? Visibility.Visible : Visibility.Collapsed;
-        Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : referenceStyle ? "ReferenceRow" : "FullRow");
-        TableHeader.Visibility=IsHud||referenceStyle ? Visibility.Collapsed : Visibility.Visible;
+        Rows.ItemTemplate=(DataTemplate)FindResource(sideRanking ? "SideRow" : IsHud ? "HudRow" : referenceStyle ? "ReferenceRow" : "FullRow");
+        TableHeader.Visibility=sideRanking||IsHud||referenceStyle ? Visibility.Collapsed : Visibility.Visible;
         ReferenceTableHeader.Visibility=referenceStyle ? Visibility.Visible : Visibility.Collapsed;
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         var category=config.Text("category");
@@ -462,18 +534,22 @@ public partial class StatisticPanel : UserControl
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
             ? Visibility.Visible : Visibility.Collapsed;
+        BossOnly.IsChecked=config.Bool("boss_only");
+        BossOnly.Visibility=!IsHud && category=="damage" ? Visibility.Visible : Visibility.Collapsed;
         // The engagement column depends on event observation. Never leave it as a
         // silently blank column: show the reason and a retry/settings entry while
         // still allowing a switch back to the five-second window.
         var rateBasis=config.Text("rate_basis");
         var isEngagement=category!="shield" && rateBasis=="engagement";
         var reason=value.Text("rate_reason");
-        var action=isEngagement ? value.Text("rate_action") : "";
-        RateNotice.Text=reason;
-        RateNotice.Visibility=isEngagement && reason.Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        var action=isEngagement && !bossUnavailable ? value.Text("rate_action") : "";
+        RateNotice.Text=string.Join(" · ",new[]{IsHud && bossUnavailable ? "" : bossReason,
+            isEngagement && !bossUnavailable ? reason : ""}
+            .Where(text=>text.Length>0).Distinct());
+        RateNotice.Visibility=RateNotice.Text.Length>0 ? Visibility.Visible : Visibility.Collapsed;
         RateNoticePanel.Visibility=RateNotice.Visibility;
         RateAction.Content=value.Text("rate_action_label");
-        RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        RateAction.Visibility=!sideRanking && isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
         RateHeading.Text=category switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
         RankingLabel.ToolTip=category=="shield"
             ? "护盾按实际吸收总量排序。"
@@ -488,13 +564,14 @@ public partial class StatisticPanel : UserControl
         ReferenceRateHeading.Text=RateHeading.Text;
         ReferenceTotalHeading.Text=config.Text("ranking")=="recent" ? "近期"
             : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
+        if(sideRanking) UpdateSideHeadings(config,category,value.Text("title"));
         Actions.Visibility=IsHistory||IsHud ? Visibility.Collapsed : Visibility.Visible;
-        Selectors.Visibility=IsHud ? Visibility.Collapsed : Visibility.Visible;
+        Selectors.Visibility=sideRanking||IsHud ? Visibility.Collapsed : Visibility.Visible;
         deleteAvailable=canDelete;
         SetConfigurationAvailable(configurationAvailable);
-        Legend.Visibility=!IsHud && !referenceStyle && config.Text("category")=="damage" ? Visibility.Visible : Visibility.Collapsed;
-        LegendRow.Visibility=IsHud || referenceStyle || liveToolbar && category!="damage" ? Visibility.Collapsed : Visibility.Visible;
-        LegendRow.MinHeight=IsHud ? 0 : 28;
+        Legend.Visibility=!IsHud && !referenceStyle && category=="damage" ? Visibility.Visible : Visibility.Collapsed;
+        LegendRow.Visibility=IsHud || referenceStyle || (sideRanking || liveToolbar) && category!="damage" ? Visibility.Collapsed : Visibility.Visible;
+        LegendRow.MinHeight=sideRanking||IsHud ? 0 : 28;
         OverkillLegend.Visibility=value.Get("entries").Items().Any(entry=>entry.Get("segments").Items().Any(segment=>
             segment.TryGetProperty("overkill_ratio",out var mark)&&mark.ValueKind==JsonValueKind.Number&&mark.GetDouble()>0))
             ? Visibility.Visible : Visibility.Collapsed;
@@ -524,7 +601,7 @@ public partial class StatisticPanel : UserControl
         Coverage.Text=referenceStyle
             ? showFooter && !value.Bool("share_known") ? share.Label : ""
             : share.Description+(share.Available ? " · 点击干员固定明细" : "");
-        Coverage.Visibility=IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
+        Coverage.Visibility=sideRanking||IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
         foreach(var old in items.Where(x=>!ids.Contains(x.Id)).ToArray()) items.Remove(old);
         var map=items.ToDictionary(x=>x.Id);
@@ -545,8 +622,34 @@ public partial class StatisticPanel : UserControl
                 if(index!=i) items.Move(index,i);
             }
         for(int i=0;i<items.Count;i++) items[i].SetRank(i+1);
-        Empty.Text=value.Text("empty_text"); Empty.Visibility=items.Count==0 ? Visibility.Visible : Visibility.Collapsed;
+        Empty.Text=bossUnavailable ? bossReason
+            : sideRanking && value.ValueKind!=JsonValueKind.Object ? "等待战斗数据" : value.Text("empty_text");
+        Empty.Visibility=items.Count==0 && (!bossUnavailable || IsHud) ? Visibility.Visible : Visibility.Collapsed;
         updating=false;
+    }
+
+    private void UpdateSideHeadings(JsonElement config,string category,string title)
+    {
+        string rate = category == "healing" ? "HPS" : "DPS";
+        string basis = config.Text("rate_basis") switch
+        {
+            "recent_5s" => "近 5 秒", "engagement" => "接敌", "full_cycle" => "全周期", _ => "",
+        };
+        string total = category switch
+        {
+            "healing" => "总治疗", "shield" => "总护盾", _ when config.Bool("effective_only") => "有效伤害", _ => "总伤",
+        };
+        string rank = config.Text("ranking") switch
+        {
+            "dps" => rate, "recent" => "近期量", _ => total,
+        };
+        string scope = IsBossScope(config) ? "仅首领 · " : "";
+        Heading.Text = title.Length == 0 ? "干员排行" : scope + "按" + rank + "排行" + (category == "shield" ? "" : " · " + basis + " " + rate);
+        Heading.ToolTip = title.Length == 0 ? null : title;
+        SideHeader.Visibility = Visibility.Visible;
+        SideTotalHeading.Text = total;
+        SideRateHeading.Text = category == "shield" ? "—" : rate;
+        SideRateHeading.ToolTip = category == "shield" ? "护盾按实际吸收量统计。" : basis + " " + rate;
     }
 
     private static string HudTitle(JsonElement config)
@@ -561,6 +664,7 @@ public partial class StatisticPanel : UserControl
             _=>"溢出总伤",
         };
         if(recent) metric="近5秒"+metric;
+        if(IsBossScope(config)) metric="仅首领·"+metric;
         if(category=="shield") return metric;
 
         string window=config.Text("rate_basis") switch
@@ -585,7 +689,8 @@ public partial class StatisticPanel : UserControl
         ["category"]=((ComboBoxItem)Category.SelectedItem).Tag,
         ["ranking"]=((ComboBoxItem)Ranking.SelectedItem).Tag,
         ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag,
-        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0
+        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0,
+        ["boss_only"]=BossOnly.IsChecked==true
     };
     internal void SetConfigurationAvailable(bool available)
     {
@@ -602,19 +707,18 @@ public partial class StatisticPanel : UserControl
                 Select(Ranking,config.Text("ranking"));
                 Select(Rate,config.Text("rate_basis"));
                 EffectiveOnly.IsChecked=config.Bool("effective_only");
+                BossOnly.IsChecked=config.Bool("boss_only");
             }
             finally{updating=false;}
         }
-        Category.IsEnabled=EffectiveOnly.IsEnabled=DuplicateButton.IsEnabled=available;
+        Category.IsEnabled=EffectiveOnly.IsEnabled=BossOnly.IsEnabled=DuplicateButton.IsEnabled=available;
         Ranking.IsEnabled=Rate.IsEnabled=available && hasRate;
         DeleteButton.IsEnabled=available && deleteAvailable;
     }
-    private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e)
-    {
-        if(updating || !configurationAvailable || Command==null || Category.SelectedItem==null || Ranking.SelectedItem==null || Rate.SelectedItem==null) return;
-        await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
-    }
-    private async void EffectiveChanged(object sender,RoutedEventArgs e)
+    private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e) => await CommitConfiguration();
+    private async void EffectiveChanged(object sender,RoutedEventArgs e) => await CommitConfiguration();
+    private async void FilterChanged(object sender,RoutedEventArgs e) => await CommitConfiguration();
+    private async Task CommitConfiguration()
     {
         if(updating||!configurationAvailable||Command==null||Category.SelectedItem==null||Ranking.SelectedItem==null||Rate.SelectedItem==null) return;
         await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});

@@ -47,6 +47,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer poll=new(){Interval=TimeSpan.FromMilliseconds(200)};
     private readonly DispatcherTimer save=new(){Interval=TimeSpan.FromMilliseconds(600)};
     private readonly LiveTrendModel trendModel = new();
+    private readonly LiveTrendModel bossTrendModel = new();
+    private readonly LiveTrendModel bossEffectiveTrendModel = new();
     internal readonly Dictionary<string,StatisticPanel> Panels=new();
     internal readonly Dictionary<string,HudWindow> Huds=new();
     internal JsonElement State;
@@ -95,7 +97,8 @@ public partial class MainWindow : Window
         ContentRoot.SizeChanged += (_, _) => ArrangePanels();
         StateChanged += (_, _) => QueueWorkAreaLayout();
         DpiChanged += (_, _) => QueueWorkAreaLayout();
-        LocationChanged += (_, _) => { QueueWorkAreaLayout(); ScheduleSave(); };
+        LocationChanged += (_, _) => { if(!sideMode) { QueueWorkAreaLayout(); ScheduleSave(); } };
+        SideAttachmentTimer.Tick += (_, _) => UpdateSidePlacement();
     }
     private async Task Start()
     {
@@ -185,6 +188,8 @@ public partial class MainWindow : Window
         responseStale=true;
         UpdateLiveStatus(status,label);
         trendModel.Interrupt();
+        bossTrendModel.Interrupt();
+        bossEffectiveTrendModel.Interrupt();
         UpdateEnemies(State.Get("enemy"),DisplayedBattleId,
             ShowingPreviousBattle ? "previous" : status=="reconnecting" ? "disconnected" : status);
         UpdateEnemySummary();
@@ -269,6 +274,7 @@ public partial class MainWindow : Window
             foreach(var placement in layout.Get("huds").Items()) OpenHud(placement.Text("panel_id"),placement);
             InitializeSettings();initialized=true;normalGeometry=Native.Geometry(this);
             LivePage.ScrollToTop();
+            if (layout.Bool("side_mode")) SetSideMode(true);
             panelLayoutChanged = true;
         }
         UpdateHistory();
@@ -289,8 +295,11 @@ public partial class MainWindow : Window
             // samples. Keep the existing rows, pins, and chart points intact.
             UpdateLiveStatus(state.Text("status"),state.Text("status_text"));
             if(appearanceChanged)
+            {
                 foreach(var (id,panel) in Panels)
                     UpdateLivePanel(id,panel,panel.View,Panels.Count>1);
+                if (sideMode) RefreshSideRanking();
+            }
             RefreshLiveAvailability();
             return false;
         }
@@ -306,6 +315,8 @@ public partial class MainWindow : Window
             ? analysis.Get("team_total_damage") : totals.Get("damage"));
         UpdateLiveStatus(state.Text("status"),state.Text("status_text"));
         trendModel.Apply(state);
+        bossTrendModel.Apply(state,state.Get("boss_live_analysis"));
+        bossEffectiveTrendModel.Apply(state,state.Get("boss_effective_live_analysis"));
         double time = state.Get("game_time").TryNumber(double.NaN);
         int elapsed = double.IsFinite(time) ? (int)Math.Clamp(Math.Round(time, MidpointRounding.AwayFromZero), 0, int.MaxValue) : 0;
         Clock.Text = double.IsFinite(time) && time >= 0 ? $"{elapsed / 60:00}:{elapsed % 60:00}" : "—";
@@ -328,13 +339,13 @@ public partial class MainWindow : Window
                 {
                     activePanel = id;
                     LiveInspector.Pin(owner, Panels[id].View);
-                    OperatorTrend.SetOwner(owner);
-                    OperatorTrend.Visibility = Visibility.Visible;
+                    UpdateOperatorTrend(Panels[id].View);
                 };
                 Panels.Add(id,panel);PanelHost.Children.Add(panel);
             }
             UpdateLivePanel(id,panel,view,views.Length>1);
         }
+        if (sideMode) RefreshSideRanking();
         RefreshHudLayoutTargets(views);
         RefreshHudFooter();
         RefreshLiveAvailability();
@@ -367,7 +378,30 @@ public partial class MainWindow : Window
         panel.Update(view,canDelete);
         if(Huds.TryGetValue(id,out var hud))
             hud.Update(view,Status.Text+" · "+EventStatus.Text);
-        if(activePanel==id) LiveInspector.Update(view);
+        if(activePanel==id)
+        {
+            LiveInspector.Update(view);
+            UpdateOperatorTrend(view);
+        }
+    }
+    private void UpdateOperatorTrend(JsonElement view)
+    {
+        var config=view.Get("config");
+        var owner=LiveInspector.Owner;
+        if(!StatisticPanel.IsBossScope(config))
+        {
+            OperatorTrend.Bind(trendModel);
+            OperatorTrend.SetOperatorScope("");
+            OperatorTrend.SetOwner(owner);
+            return;
+        }
+        bool effective=config.Bool("effective_only");
+        var model=effective ? bossEffectiveTrendModel : bossTrendModel;
+        OperatorTrend.Bind(model);
+        OperatorTrend.SetOperatorScope(effective ? "首领有效伤害" : "首领伤害");
+        bool hasPoints=view.Bool("boss_damage_available") && owner!=null &&
+            model.Points.Any(point=>point.Operators.TryGetValue(owner,out var rate) && rate.HasValue);
+        OperatorTrend.SetOwner(hasPoints ? owner : null);
     }
     private void RefreshLiveAvailability()
     {
@@ -423,6 +457,7 @@ public partial class MainWindow : Window
     }
     private void OnResize(object sender, SizeChangedEventArgs e)
     {
+        if(sideMode) return;
         QueueWorkAreaLayout();
         ScheduleSave();
     }
@@ -449,7 +484,7 @@ public partial class MainWindow : Window
     }
     private void ArrangePanels()
     {
-        if (PanelHost == null || HistoryDetailHost == null || ContentRoot.ActualWidth <= 0) return;
+        if (sideMode || PanelHost == null || HistoryDetailHost == null || ContentRoot.ActualWidth <= 0) return;
         double width = ContentRoot.ActualWidth;
         bool narrow = width < 1100;
         bool wide = width >= 1320;
@@ -609,7 +644,7 @@ public partial class MainWindow : Window
         LiveOverviewFrame.Padding = babel ? new Thickness(8, 2, 8, 5) : new Thickness(22, 7, 14, 5);
         LiveOverviewFrame.MinHeight = babel ? 0 : 304;
         LiveFrameTitle.Text = babel ? "实时战况" : "实时DPS / LIVE DPS";
-        EnemySummary.Header = babel ? "敌方单位" : "敌方单位 / ENEMY UNIT";
+        EnemySummary.Header = sideMode || babel ? "敌方单位" : "敌方单位 / ENEMY UNIT";
         RankingFrame.Header = babel ? "干员 DPS 排行" : "干员DPS排行 / OPERATOR DPS RANKING";
         LiveDetail.Header = babel ? "干员详情" : "干员详情 / OPERATOR DETAIL";
         if (babel)
@@ -648,12 +683,24 @@ public partial class MainWindow : Window
     {
         TargetSummary.Update(DisplayedBattleId,shownEnemy,EnemyStatusText.Text);
     }
-    private void ScheduleSave(){if(initialized && !applying && !quitting && !closingRequested){if(IsVisible && WindowState==WindowState.Normal)normalGeometry=Native.Geometry(this);save.Stop();save.Start();}}
+    private void ScheduleSave()
+    {
+        if (!initialized || applying || quitting || closingRequested) return;
+        RememberNormalGeometry();
+        save.Stop();
+        save.Start();
+    }
+    private void RememberNormalGeometry()
+    {
+        if (!sideMode && IsVisible && WindowState == WindowState.Normal)
+            normalGeometry = Native.Geometry(this);
+    }
     internal async Task SavePlacement()
     {
         if(!initialized || bridge==null) return;
-        if(IsVisible && WindowState==WindowState.Normal)normalGeometry=Native.Geometry(this);
-        await Command("placement",new(){["gui"]=normalGeometry??Native.Geometry(this),["huds"]=Huds.Values.Select(h=>h.Placement()).ToArray()});
+        RememberNormalGeometry();
+        await Command("placement",new(){["gui"]=normalGeometry??Native.Geometry(this),
+            ["huds"]=Huds.Values.Select(h=>h.Placement()).ToArray(),["side_mode"]=sideMode});
     }
     internal void OpenHud(string id,JsonElement placement=default)
     {
@@ -844,7 +891,14 @@ public partial class MainWindow : Window
     private async void HandleRateAction(string action)
     {
         if(action=="retry"){ShowGui();await Navigate("live");await ReconnectObserver();}
-        else if(action=="settings"){ShowGui();await Navigate("settings");}
+        else if(action=="settings")
+        {
+            ShowGui();
+            bool restoreFullPanel = sideMode;
+            SetSideMode(false);
+            await Navigate("settings");
+            if (restoreFullPanel) await SavePlacement();
+        }
     }
     private async void Rescan(object sender,RoutedEventArgs e)=>await ReconnectObserver();
     private Task ReconnectObserver()
@@ -1134,7 +1188,7 @@ public partial class MainWindow : Window
         }
         catch(Exception ex){tray?.Dispose();tray=null;Footer.Text="托盘不可用；关闭时保留任务栏恢复入口。"+ex.Message;}
     }
-    internal void ShowGui(){if(closingRequested || quitting)return;Show();WindowState=WindowState.Normal;Activate();}
+    internal void ShowGui(){if(closingRequested || quitting)return;Show();WindowState=WindowState.Normal;UpdateSidePlacement();Activate();}
     private void OnClosing(object? sender,CancelEventArgs e)
     {
         if(quitting)return;e.Cancel=true;ScheduleSave();
@@ -1145,7 +1199,7 @@ public partial class MainWindow : Window
     {
         if(quitting || closingRequested)return;closingRequested=true;
         recoveryCancellation.Cancel();
-        poll.Stop();save.Stop();
+        poll.Stop();save.Stop();SideAttachmentTimer.Stop();
         // Exit must never depend on a healthy worker or on a dialog. Every step is
         // bounded and failures are logged; the window closes even if cleanup stalls.
         try

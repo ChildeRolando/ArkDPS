@@ -30,6 +30,12 @@ def acknowledge_event_batch(observer, sequence):
         observer.commit_events(sequence)
 
 
+def read_terminal_mark(observer):
+    if hasattr(observer, 'read_terminal_mark'):
+        return observer.read_terminal_mark()
+    return observer.mark()
+
+
 class LiveEventCapture:
     def __init__(self, collector, observer=None, audit=None):
         self.collector = collector
@@ -170,6 +176,9 @@ class LiveEventCapture:
             statistics.mark_skill_unknown()
         if payload.get('mitigation_ready') is False or payload.get('mitigation_unknown'):
             statistics.mark_mitigation_unknown()
+        if 'boss_damage_ready' in payload or statistics.boss_damage is not None:
+            statistics.observe_boss_damage(complete=payload.get('boss_damage_ready') is True
+                                           and not payload.get('boss_damage_unknown'))
         if 'enemy_entry_ready' in payload or 'enemy_entry_unknown' in payload:
             statistics.observe_enemy_entry(
                 self.adapter.event_stream.baseline_frame,

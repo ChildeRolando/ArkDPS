@@ -6,8 +6,8 @@ from pathlib import Path
 import tempfile
 
 from battle_history import BattleRecord
-from panel_model import (DIAGNOSTIC_LABELS, EventAvailability, render_panel, rows_from_statistics,
-                         team_status)
+from panel_model import (DIAGNOSTIC_LABELS, EventAvailability, panel_statistics, render_panel,
+                         rows_from_statistics, team_status)
 from source_classification import classify_unmapped_source
 import stage_names
 
@@ -140,8 +140,12 @@ def record_status(record):
 
 
 def record_view(record, config):
-    stats = record_statistics(record)
+    stats = panel_statistics(config, record_statistics(record), history=True)
     complete, reason, note = team_status(stats)
+    if config.boss_scope:
+        reason = stats['boss_damage_reason'] or reason
+        complete = complete and stats['boss_damage_available']
+        note = ''
     return render_panel(config, rows_from_statistics(stats), team_complete=complete,
                         team_reason=reason, team_note=note,
                         event=EventAvailability(record.event_status, record.event_error, live=False))

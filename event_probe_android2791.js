@@ -22,6 +22,7 @@ const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
 const cfg={methods:[]};let clock;let skillF=null;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;
+let terminalMethods=null;
 function uniqueMethod(klass,name,argCount) {
  const methods=klass.add(0x98).readPointer(),count=klass.add(0x120).readU16(),matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
@@ -141,6 +142,12 @@ try{
  skillF={charSkill:CF.m_skill,owner:BF.m_owner,data:BF.m_data,
   prefab:SF.prefabKey,id:SF.skillId,name:SF.name};
  clock=found.BattleController.add(0xb8).readPointer().add(0x14);
+ try{
+  expectFields(found.BattleController,{'m_logger':0xd8,'m_levelData':0x158});
+  terminalMethods={controller:found.BattleController,
+   destroy:uniqueMethod(found.BattleController,'OnDestroy',0),
+   state:uniqueMethod(found.BattleController,'set_state',1)};
+ }catch(e){cfg.terminalError=String(e);}
  // Init and movement share the layer update, but Init can find a tile before
  // Born completes. Observe both transitions and emit once both are true.
  try{
@@ -216,6 +223,7 @@ const unknownSources=new Set();
 const engagementUnknownSources=new Set();
 let shieldUnknown=false;
 let damageUnknown=false;
+let bossDamageUnknown=false;
 let engagementUnknown=false;
 let skillUnknown=false;
 // Recoverable unattributable callbacks are counted, not escalated globally.
@@ -269,6 +277,31 @@ function leaveModifier(scope){
  const index=scopes.lastIndexOf(scope);
  if(index!==-1)scopes.splice(index,1);
  if(!scopes.length)activeModifiers.delete(scope.tid);
+}
+function recordElementalBar(scope,when,amount){
+ if(scope.elementalBarRecorded)return;
+ const target=scope.elementalBarTarget;
+ if(!target)return;
+ record(scope.source,'elemental_bar',amount,when,{method:scope.name,type:0,target:5},
+  {target_instance:target.pointer.toString()});
+ scope.elementalBarRecorded=true;
+}
+function recordTriggeringElementalBar(burst,when){
+ const target=burst.target;
+ if(!target||target.isNull())return;
+ const uid=target.add(0x18).readU32();
+ if(!uid)return;
+ const candidates=(activeModifiers.get(burst.tid)||[]).filter(scope=>
+  scope.elementalBarTarget?.uid===uid&&scope.elementalBarTarget.pointer.equals(target)&&
+  sameMitigationTime(scope.when,when));
+ if(candidates.length!==1)return;
+ const bar=candidates[0];
+ if(bar.mitigationModifierReused||bar.mod.add(0x60).readS32()!==5||
+    bar.mod.add(0x68).readS32()!==0||
+    !bar.mod.add(0x10).readPointer().equals(target)||entityId(bar.mod.readPointer())!==bar.source)return;
+ // A full bar can invoke the HP settlement before its own ApplyModifier
+ // returns. Publish the verified triggering bar first, once per invocation.
+ recordElementalBar(bar,when,fp(bar.mod.add(0x30)));
 }
 // Absorption observed in a frame but not verifiable for a target cannot prove
 // that a lethal hit's excess was not absorbed, so its overkill stays unknown.
@@ -384,6 +417,7 @@ function refreshEnemyEntryFrame(frame) {
   enemyPhaseUnknown=false;
   enemyHpWrites.clear();
   enemyStateUnknown=false;
+  bossDamageUnknown=false;
  }
  enemyEntryFrame=frame;
 }
@@ -513,7 +547,8 @@ function formulaBatch(thread,when,create=false){
  let batch=pendingFormulaDamage.get(thread);
  if(!batch||!sameMitigationTime(batch,when)){
   if(!create)return null;
-  batch={...when,hits:new Map(),unowned:new Map(),factories:new Map()};
+  batch={...when,hits:new Map(),unowned:new Map(),factories:new Map(),
+   postFormulaAttacks:new Map(),postFormulaHits:new Map()};
   pendingFormulaDamage.set(thread,batch);
  }
  return batch;
@@ -541,7 +576,8 @@ function consumeFormula(hits,key){
 function verifiedFactoryModifier(result,modifier){
  return !modifier.isNull()&&result.source.equals(modifier.readPointer())&&
   result.target.equals(modifier.add(0x10).readPointer())&&
-  result.sourceUid===result.source.add(0x18).readU32()&&result.targetUid===result.target.add(0x18).readU32()&&
+  result.sourceUid===(result.source.isNull()?0:result.source.add(0x18).readU32())&&
+  result.targetUid===result.target.add(0x18).readU32()&&
   result.raw===fixedBits(modifier.add(0x30).readS64())&&modifier.add(0x60).readS32()===0&&
   result.type===modifier.add(0x68).readS32()&&result.beforeRaw===fixedBits(modifier.add(0x80).readS64())&&
   result.originValue===fixedBits(modifier.add(0x88).readS64());
@@ -549,8 +585,9 @@ function verifiedFactoryModifier(result,modifier){
 function takeFormulaDamage(scope,source,type,raw){
  const batch=formulaBatch(scope.tid,scope.when);
  const when=scope.when,key=formulaDamageKey(source,scope.target,type);
- // Consume both slots on the first settlement, even if the hit is rejected.
+ // Consume pending evidence on the first settlement, even if it is rejected.
  const ordinary=consumeFormula(batch?.hits,key),factory=consumeFormula(batch?.factories,key);
+ batch?.postFormulaHits.delete(key);
  if(ordinary?.raw===raw)return ordinary;
  if(factory?.raw===raw&&verifiedFactoryModifier(factory,scope.mod))return factory;
  if(ordinary===undefined&&factory===undefined){
@@ -562,11 +599,12 @@ function takeFormulaDamage(scope,source,type,raw){
  return null;
 }
 function fixedBits(value){return BigInt.asIntN(64,BigInt(value.toString()));}
+function mitigationDamageType(type){return type===1||type===2||type===3||type===5;}
 function captureMitigation(scope,source){
  if(!mitigationReady||!scope.target||scope.target.isNull()||source.equals(scope.target)||
     !mitigationTargetId(scope.target)||scope.mod.add(0x60).readS32()!==0)return;
  const type=scope.mod.add(0x68).readS32();
- if(type<1||type>3)return;
+ if(!mitigationDamageType(type)||(source.isNull()&&type!==5))return;
  const raw=fixedBits(scope.mod.add(0x30).readS64());
  scope.mitigation=takeFormulaDamage(scope,source,type,raw);
 }
@@ -597,6 +635,7 @@ function beginDamageFormula(invocation,target,source,attack,eligible,nested){
  invocation.previous=previous;
  invocation.entered=true;
  formulaScopes.set(invocation.tid,null);
+ pendingFormulaDamage.get(invocation.tid)?.postFormulaAttacks.delete(attack.toString());
  if(!eligible||target.isNull()||attack.isNull()||source.equals(target)||!mitigationTargetId(target))return;
  let sourceId=null,targetUid=null;
  if(source.isNull()){
@@ -617,13 +656,29 @@ function finishDamageFormula(result){
  if(!scope||!sameMitigationTime(scope.when,time()))return;
  const type=scope.attack.add(mitigationMethods.damageType).readS32(),raw=fixedBits(result);
  const after=Number(raw)/4294967296;
- if(type<1||type>3)return;
+ if(!mitigationDamageType(type)||!Number.isFinite(after)||after<0)return;
  if(scope.source.isNull()&&raw===0n&&scope.beforeRaw===0n)return;
- if(scope.conflict||type!==scope.type||!Number.isFinite(scope.before)||scope.before<=0){
-  if(scope.sourceId)noteMitigationDiagnostic('formula_missing_pre',scope.sourceId,scope.when,{after},null);
+ // Type 5 HP settlements use the final GetFinalAtk result carried by the
+ // damage factory. CalculateElementDamage also serves elemental buildup,
+ // which is a separate event and must never supply this pair.
+ if(type===5||scope.conflict||type!==scope.type||!Number.isFinite(scope.before)||scope.before<=0){
+  if(scope.sourceId&&type!==5)
+   noteMitigationDiagnostic('formula_missing_pre',scope.sourceId,scope.when,{after},null);
+  // Some producers call GetFinalAtk on the original AttackInfo only after
+  // the outer formula returns. Its nested calculations can change type.
+  // Keep the final type and return value for the subsequent factory call.
+  if(mitigationFactoryReady&&!this.previous&&(scope.sourceId||type===5)){
+   const sourceUid=scope.source.isNull()?0:scope.source.add(0x18).readU32();
+   const targetUid=scope.target.add(0x18).readU32();
+   if((sourceUid||scope.source.isNull())&&targetUid){
+    const batch=formulaBatch(scope.tid,scope.when,true);
+    rememberUnique(batch.postFormulaAttacks,scope.attack.toString(),
+     {raw,after,source:scope.source,target:scope.target,sourceUid,targetUid,type});
+   }
+  }
   return;
  }
- if(Number.isFinite(after)&&after>=0)rememberFormulaDamage(scope,raw,after);
+ rememberFormulaDamage(scope,raw,after);
 }
 function restoreDamageFormula(){
  if(!this.entered)return;
@@ -635,27 +690,34 @@ function enterDamageFactory(args,index){
  activeDamageFactories.add(this.tid);
  this.enteredFactory=true;
  const when=time(),batch=formulaBatch(this.tid,when);
- if(!batch?.unowned.size)return;
+ if(!batch||(batch.unowned.size===0&&batch.postFormulaHits.size===0))return;
  const type=args[index].toInt32(),target=args[index+3];
- if(type<1||type>3||target.isNull()||!mitigationTargetId(target))return;
+ if(!mitigationDamageType(type)||target.isNull()||!mitigationTargetId(target))return;
  const targetUid=target.add(0x18).readU32();
  if(!targetUid)return;
  const raw=fixedBits(args[0]),originValue=index===2?fixedBits(args[1]):raw;
  const beforeRaw=fixedBits(args[index+5]);
  const source=args[index+2],unowned=batch.unowned;
- const formula=consumeFormula(unowned,unownedFormulaKey(target,targetUid,type,raw)+beforeRaw);
+ const unownedFormula=consumeFormula(unowned,unownedFormulaKey(target,targetUid,type,raw)+beforeRaw);
  if(originValue!==raw){
   // The eight-argument factory carries an independent reference amount.
   // A matching source-null calculation belongs to that reference slot.
   const reference=unownedFormulaKey(target,targetUid,type,originValue);
   for(const key of unowned.keys())if(key.startsWith(reference))unowned.delete(key);
  }
- if(formula===null){mitigationCounts.factory_ambiguous++;return;}
- if(!formula||source.isNull()||source.equals(target)||!own(entityId(source)))return;
+ if(unownedFormula===null){mitigationCounts.factory_ambiguous++;return;}
+ if(source.equals(target)||(source.isNull()?type!==5:!own(entityId(source))))return;
  const key=formulaDamageKey(source,target,type);
- if(batch.hits.get(key)?.raw===raw)return; // prefer the directly attributed calculation
- const sourceUid=source.add(0x18).readU32(),storage=this.context.x8;
- if(!sourceUid||!storage||storage.isNull())return;
+ const postFormula=consumeFormula(batch.postFormulaHits,key);
+ const ordinary=batch.hits.get(key);
+ if(ordinary?.raw===raw)return; // prefer the directly attributed calculation
+ const sourceUid=source.isNull()?0:source.add(0x18).readU32(),storage=this.context.x8;
+ if((!sourceUid&&!source.isNull())||!storage||storage.isNull())return;
+ const matchesPost=postFormula?.raw===raw&&postFormula.beforeRaw===beforeRaw&&
+  postFormula.sourceUid===sourceUid&&postFormula.targetUid===targetUid;
+ if(!unownedFormula&&postFormula===null){mitigationCounts.factory_ambiguous++;return;}
+ const formula=unownedFormula||(matchesPost&&ordinary===undefined?postFormula:null);
+ if(!formula)return;
  this.factory={batch,when,key,storage,result:{...formula,source,sourceUid,targetUid,originValue}};
 }
 function finishDamageFactory(){
@@ -722,8 +784,24 @@ function installMitigationHooks(){
    if(sameFormulaHit(scope,args[0])){
     this.scope=scope;
     this.type=args[0].add(mitigationMethods.damageType).readS32();
+   }else if(!formulaScopes.has(this.tid)){
+    const batch=pendingFormulaDamage.get(this.tid);
+    if(!batch?.postFormulaAttacks.size||!sameMitigationTime(batch,time()))return;
+    const candidate=consumeFormula(batch.postFormulaAttacks,args[0].toString());
+    if(candidate&&candidate.type===args[0].add(mitigationMethods.damageType).readS32()){
+     this.postFormula=candidate;
+     this.postFormulaBatch=batch;
+    }
    }
   },function(result){
+   if(this.postFormula){
+    const candidate=this.postFormula,batch=this.postFormulaBatch;
+    const beforeRaw=fixedBits(result);
+    if(beforeRaw<=0n||!sameMitigationTime(batch,time()))return;
+    const key=formulaDamageKey(candidate.source,candidate.target,candidate.type);
+    rememberUnique(batch.postFormulaHits,key,{...candidate,beforeRaw,before:Number(beforeRaw)/4294967296});
+    return;
+   }
    const scope=this.scope;
    if(!scope||this.type<1||this.type>3)return;
    const beforeRaw=fixedBits(result);
@@ -1186,9 +1264,16 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
        if(this.mod.add(0x68).readS32()===5)this.burstTarget=enemyDamageIdentity(this.target);
       }catch(e){/* An unverified target only affects an actual settlement. */}
      }
-     if(this.source&&own(this.source)){
+     if((this.source&&own(this.source))||
+        (this.nativeSourceNull&&this.mod.add(0x68).readS32()===5)){
       enterModifier(this);
       try{captureMitigation(this,this.mod.readPointer());}catch(e){/* Existing damage remains observable. */}
+      if(this.source&&this.target&&!this.target.isNull()&&this.mod.add(0x60).readS32()===5&&
+         this.mod.add(0x68).readS32()===0){
+       this.elementalBarTarget={pointer:this.target,uid:null};
+       try{this.elementalBarTarget.uid=this.target.add(0x18).readU32();}
+       catch(e){/* The normal bar record still has its target pointer. */}
+      }
      }
      return;
     }
@@ -1259,18 +1344,28 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      const owned=this.source&&own(this.source);
      const amount=fp(this.mod.add(0x30));
      if(owned&&type===0&&targetType===5){
-      try{record(this.source,'elemental_bar',amount,end,{method:this.name,type,target:targetType},{target_instance:instance});}catch(e){fatal=String(e);}
+      try{recordElementalBar(this,end,amount);}catch(e){fatal=String(e);}
       return;
      }
      if(type===5){
+      if(targetType!==0||(!owned&&!this.nativeSourceNull)||!mitigationTargetId(this.target))return;
       const evidence=overkillEvidence(this.mod,this.target,this.hpBefore,end.frame);
+      if(this.nativeSourceNull&&evidence?.cancel_reason===0){
+       try{recordTriggeringElementalBar(this,end);}catch(e){/* Unverified parent; keep the settlement. */}
+      }
       recordSourcelessEnemyBurst(this,evidence,end);
       if(evidence&&instance){
        evidence.target_instance=instance;
        try{
+        const reduction=mitigationEvidence(this,type,amount);
+        if(reduction)Object.assign(evidence,reduction);
+       }catch(e){/* Missing formula evidence affects only mitigation. */}
+       try{
         const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence);
         noteUnpairedDamage(this,event,type);
        }catch(e){fatal=String(e);}
+      }else if((!this.source||owned)&&amount>0&&fp(this.mod.add(0x48))!==0){
+       bossDamageUnknown=true;
       }
       return;
      }
@@ -1299,7 +1394,9 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
        const target=hit?hit.target:this.target;
        if(target&&!target.isNull())evidence=nonlethalEvidence(target);
       }
-      if(evidence&&damageInstance)evidence.target_instance=damageInstance;
+      const damageTarget=hit?hit.target:this.target;
+      evidence={target:targetKey(damageTarget),target_instance:damageInstance,
+       target_type:targetType,damage_type:type,...evidence};
       if(evidence&&evidence.real_delta===0&&evidence.hp_before===evidence.hp_after
          &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1))return;
       try{
@@ -1332,6 +1429,58 @@ installEnemyEntryHooks();
 installEnemyPhaseHook();
 installEnemyStateHooks();
 installMitigationHooks();
+let terminalBoundary=null,terminalGeneration=0;
+function terminalIdentity(controller,controllerClass){
+ if(controller.isNull()||!controller.readPointer().equals(controllerClass))return null;
+ // Use the same two ownership references as the guarded native snapshot.
+ const native=controller.add(0x10).readPointer(),logger=controller.add(0xd8).readPointer();
+ const level=controller.add(0x158).readPointer();
+ if(native.isNull()||logger.isNull()||level.isNull()
+    ||!native.add(0x28).readPointer().equals(controller)
+    ||className(logger.readPointer())!=='BattleLogger'
+    ||!logger.add(0x18).readPointer().equals(controller)
+    ||className(level.readPointer())!=='LevelData')return null;
+ const stats=logger.add(0x30).readPointer();
+ if(stats.isNull()||className(stats.readPointer())!=='BattleStats')return null;
+ return {controller:controller.toString(),native:native.toString(),logger:logger.toString(),
+  stats:stats.toString(),level:level.toString()};
+}
+function currentTerminalBoundary(candidate=terminalBoundary){
+ return candidate&&!active&&!fatal&&!stopped&&candidate.sequence===sequence
+  &&candidate.epoch===epoch?candidate:null;
+}
+function installTerminalHooks(){
+ if(!terminalMethods)return;
+ try{
+  hooks.push(Interceptor.attach(terminalMethods.state,{
+   onEnter(args){
+    const state=args[1].toInt32();
+    if(state===1||state===2){terminalGeneration++;terminalBoundary=null;}
+   }
+  }));
+  hooks.push(Interceptor.attach(terminalMethods.destroy,{
+   onEnter(args){
+    this.generation=++terminalGeneration;
+    terminalBoundary=null;
+    if(active||fatal||stopped)return;
+    try{
+     const identity=terminalIdentity(args[0],terminalMethods.controller),stamp=time(true);
+     if(identity&&stamp)this.boundary={...identity,...stamp,sequence,epoch,active};
+    }catch(e){/* A partially destroyed object cannot certify an endpoint. */}
+   },
+   onLeave(){
+    if(!this.boundary||this.generation!==terminalGeneration)return;
+    const candidate=currentTerminalBoundary(this.boundary);
+    if(!candidate)return;
+    try{
+     const stamp=time(true);
+     if(stamp?.frame===candidate.frame&&stamp.game_time===candidate.game_time)terminalBoundary=candidate;
+    }catch(e){/* The clock disappeared during teardown. */}
+   }
+  }));
+ }catch(e){cfg.terminalError=String(e);}
+}
+installTerminalHooks();
 const enemyStateError=cfg.enemyStateError||cfg.enemyPhaseError||cfg.enemyEntryError||null;
 function enemyEntryQuality(frame){
  if(enemyEntryReady&&frame!==undefined)refreshEnemyEntryFrame(frame);
@@ -1345,6 +1494,7 @@ function enemyEntryQuality(frame){
 }
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
+  boss_damage_ready:true,boss_damage_unknown:bossDamageUnknown,
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
   skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
   enemy_damage_ready:enemyDamageReady,enemy_damage_unknown:enemyDamageUnknown,
@@ -1352,10 +1502,13 @@ function eventQuality(frame){
   mitigation_diagnostics:mitigationDiagnostics(),...enemyEntryQuality(frame)};
 }
 function markEvents(){
- const current=time(true);
- const quality=eventQuality(current?.frame);
-  if (current === null) return {retry:true,error:fatal,stopped,...quality};
-  return {...current,sequence,epoch,active,active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
+ const terminal_boundary=currentTerminalBoundary();
+ let current;
+ try{current=time(true);}
+ catch(e){if(!terminal_boundary)throw e;current=null;}
+ const quality={...eventQuality(current?.frame),terminal_boundary};
+ if(current===null)return {retry:true,error:fatal,stopped,...quality};
+ return {...current,sequence,epoch,active,active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
 }
 function receiveEventRequest(){
  // Frida recv is one-shot. Rearm before dispatch; a late reply can be safely
@@ -1386,6 +1539,7 @@ send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
  mitigation_no_event_ready:mitigationNoEventReady,mitigation_no_event_error:cfg.mitigationNoEventError||null,
  mitigation_factory_ready:mitigationFactoryReady,mitigation_factory_error:cfg.mitigationFactoryError||null,
+ terminal_error:cfg.terminalError||null,
  enemy_entry_ready:enemyEntryReady,enemy_entry_error:cfg.enemyEntryError||null,
  enemy_phase_ready:enemyPhaseReady,enemy_phase_error:cfg.enemyPhaseError||null,
  enemy_state_ready:enemyStateReady&&enemyPhaseReady,enemy_state_error:enemyStateError,

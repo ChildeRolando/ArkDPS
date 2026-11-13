@@ -182,12 +182,15 @@ class Layout:
     theme: str = DEFAULT_THEME
     number_units: str = DEFAULT_NUMBER_UNITS
     hud_styles: tuple[tuple[str, HudStyle], ...] = ()
+    side_mode: bool = False
 
     def __post_init__(self):
         if self.theme not in THEMES:
             raise ValueError('未知皮肤')
         if not isinstance(self.number_units, str) or self.number_units not in NUMBER_UNITS:
             raise ValueError('未知数值单位')
+        if not isinstance(self.side_mode, bool):
+            raise ValueError('侧边模式必须是布尔值')
         if not self.panels:
             raise ValueError('至少需要一个面板')
         ids = [panel.panel_id for panel in self.panels]
@@ -204,6 +207,7 @@ class Layout:
         return {'version': LAYOUT_VERSION, 'theme': self.theme,
                 'event_observation': bool(self.event_observation),
                 'number_units': self.number_units,
+                'side_mode': self.side_mode,
                 'gui': self.gui.to_dict() if self.gui else None,
                 'panels': [panel.to_dict() for panel in self.panels],
                 'huds': [hud.to_dict() for hud in self.huds],
@@ -343,9 +347,14 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     if not isinstance(number_units, str) or number_units not in NUMBER_UNITS:
         warnings.append('数值单位设置无效，已使用 K / M')
         number_units = DEFAULT_NUMBER_UNITS
+    side_mode = raw.get('side_mode', False)
+    if not isinstance(side_mode, bool):
+        warnings.append('侧边模式设置无效，已使用完整主面板')
+        side_mode = False
     return Layout(panels=panels, huds=huds, gui=gui,
                   event_observation=event, theme=theme,
-                  number_units=number_units, hud_styles=hud_styles), warnings, migrated_from
+                  number_units=number_units, hud_styles=hud_styles,
+                  side_mode=side_mode), warnings, migrated_from
 
 
 class LayoutStore:

@@ -175,27 +175,37 @@ class PanelConfig:
     rate_basis: RateBasis = RateBasis.RECENT_5S
     title: str | None = None
     effective_only: bool = False
+    boss_only: bool = False
 
     def __post_init__(self):
         if not self.panel_id:
             raise ValueError('panel_id is required')
+        if type(self.boss_only) is not bool:
+            raise ValueError('boss_only 必须是布尔值')
         if self.category is Category.SHIELD and self.rate_basis is not RateBasis.RECENT_5S:
             raise ValueError('护盾不使用接敌或全周期速率')
         if self.category is Category.SHIELD and self.ranking is Ranking.DPS:
             raise ValueError('护盾不使用 DPS 排行')
 
     @property
+    def boss_scope(self) -> bool:
+        return self.boss_only and self.category is Category.DAMAGE
+
+    @property
     def display_title(self) -> str:
         if self.title:
             return self.title
-        if self.effective_only and self.category is Category.DAMAGE:
-            return '有效伤害 · ' + ranking_label(self.category, self.ranking)
-        return f'{CATEGORY_LABELS[self.category]} · {ranking_label(self.category, self.ranking)}'
+        category = ('有效伤害' if self.effective_only and self.category is Category.DAMAGE
+                    else CATEGORY_LABELS[self.category])
+        if self.boss_scope:
+            category = '仅首领 · ' + category
+        return f'{category} · {ranking_label(self.category, self.ranking)}'
 
     def to_dict(self) -> dict:
         return {'panel_id': self.panel_id, 'category': self.category.value,
                 'ranking': self.ranking.value, 'rate_basis': self.rate_basis.value,
-                'title': self.title, 'effective_only': self.effective_only}
+                'title': self.title, 'effective_only': self.effective_only,
+                'boss_only': self.boss_only}
 
     @classmethod
     def from_dict(cls, raw: object) -> 'PanelConfig':
@@ -216,7 +226,7 @@ class PanelConfig:
         return cls(panel_id=str(raw.get('panel_id') or 'default'),
                    category=category, ranking=ranking,
                    rate_basis=rate_basis, title=title,
-                   effective_only=effective_only)
+                   effective_only=effective_only, boss_only=raw.get('boss_only', False))
 
 
 @dataclass(frozen=True)
@@ -403,6 +413,40 @@ class PanelSourceRow:
                 Category.SHIELD: self.recent_shield_window}[category]
 
 
+def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = False) -> Mapping:
+    """Select the panel's target scope before rendering or building details."""
+    if not config.boss_scope:
+        return result
+    available = result.get('boss_damage_available') is True
+    reason = result.get('boss_damage_reason') or ''
+    if not available and not reason:
+        reason = ('这局战绩未记录首领伤害' if history else
+                  '首领伤害尚无可靠数据，需要事件观察与目标身份')
+    rows = {}
+    for owner, row in (result.get('rows') or {}).items():
+        scoped = row.get('boss_damage')
+        if not available or not isinstance(scoped, Mapping):
+            scoped = {}
+        # These values describe the operator, independent of whom they hit.
+        identity = {key: row[key] for key in (
+            'name', 'present', 'sources', 'presence_seconds', 'presence_complete',
+            'skill_active_seconds', 'skill_coverage_complete', 'skill_window_count',
+            'skill_seen') if key in row}
+        rows[owner] = {
+            **scoped, **identity,
+            'counter_snapshot_complete': scoped.get('counter_snapshot_complete') is True,
+            'event_coverage_complete': scoped.get('event_coverage_complete') is True,
+        }
+        if scoped.get('overkill_coverage_complete') is not True:
+            # The legacy effective-damage fallback subtracts any present
+            # overkill value; boss-only requires coverage of the same scope.
+            rows[owner]['overkill_damage'] = None
+    return {
+        **result, 'rows': rows, 'boss_damage_available': available, 'boss_damage_reason': reason,
+        'totals_complete': available and all(row['counter_snapshot_complete'] for row in rows.values()),
+    }
+
+
 def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
     """Convert an adapter/Statistics result into panel rows without inventing data."""
     rows: list[PanelSourceRow] = []
@@ -491,6 +535,7 @@ class PanelEntry:
     # Complete display text for the rate column: '123/s', '无接敌' or '—'.
     rate_text: str = ''
     rate_note: str = ''
+    cumulative_display_value: str = '—'
 
 
 @dataclass
@@ -616,8 +661,9 @@ def _valid_window(window) -> bool:
             and 0 < window[1] - window[0] <= 5)
 
 
-def live_damage_rates(statistics: Mapping, game_time: float) -> tuple[float | None, list[dict]]:
-    """Publish certified raw damage rates independently of rank or display mode."""
+def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool = False
+                      ) -> tuple[float | None, list[dict]]:
+    """Publish certified damage rates independently of the active panel."""
     operators = []
     windows = []
     for owner, row in sorted((statistics.get('rows') or {}).items()):
@@ -626,6 +672,12 @@ def live_damage_rates(statistics: Mapping, game_time: float) -> tuple[float | No
         certified = (row.get('counter_snapshot_complete') is True
                      and _valid_window(window) and 0 <= window[0] < window[1] == game_time
                      and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
+        if certified and effective:
+            excess = row.get('recent_overkill_damage')
+            certified = (row.get('overkill_coverage_complete') is True
+                         and _finite(excess) and not isinstance(excess, bool) and excess >= 0)
+            if certified:
+                rate = max(0.0, rate - excess / (window[1] - window[0]))
         operators.append(dict(owner_id=owner, name=row.get('name') or owner,
                               recent_dps=rate if certified else None))
         if certified:
@@ -873,7 +925,10 @@ def render_panel(config: PanelConfig,
         row_by_owner[row.owner_id] = row
         rates[row.owner_id] = rate_info(row)
         rate, state, _, _ = rates[row.owner_id]
-        if _finite(value):
+        if config.boss_scope and engagement_ranking and state == 'no_engagement':
+            values[row.owner_id] = 0.0
+            complete[row.owner_id] = metric_complete(row, ranking_basis)
+        elif _finite(value):
             values[row.owner_id] = float(value)
             complete[row.owner_id] = metric_complete(row, ranking_basis, recent=ranking is Ranking.RECENT)
 
@@ -929,6 +984,8 @@ def render_panel(config: PanelConfig,
                     if ranking is Ranking.DPS else
                     '有效伤害 · ' + ranking_label(category, ranking) if effective else
                     CATEGORY_LABELS[category] + ' · ' + ranking_label(category, ranking))
+    if config.boss_scope:
+        metric_label = '仅首领 · ' + metric_label
 
     details = {owner: _owner_detail(row, effective=effective, rate_reason=rate_reason)
                for owner, row in row_by_owner.items()}
@@ -942,19 +999,22 @@ def render_panel(config: PanelConfig,
             else ((), False))
         share = value / denominator if denominator is not None and owner in known_values else None
         rate, rate_state, rate_text, rate_note = rates[owner]
-        shown = total_value(row) if ranking is Ranking.DPS else value
+        cumulative = value if ranking is Ranking.TOTAL else total_value(row)
+        cumulative_display = format_compact(cumulative, number_units)
+        shown = format_compact(value, number_units) if ranking is Ranking.RECENT else cumulative_display
         entries.append(PanelEntry(
             owner_id=owner, name=row.name, value=value,
             bar_ratio=(value / max_value) if max_value > 0 else 0.0,
             share=share, share_display=format_percent(share),
-            display_value=format_compact(shown, number_units) if _finite(shown) else '—',
+            display_value=shown,
             exact_value=f'{value!r}',
             rate=rate, rate_display=format_compact(rate, number_units), rate_label=rate_label,
             present=row.present, portrait_muted=row.present is False,
             incomplete=not complete.get(owner, False),
             segments=segments, segments_complete=segments_complete,
             detail=details[owner],
-            rate_state=rate_state, rate_text=rate_text, rate_note=rate_note))
+            rate_state=rate_state, rate_text=rate_text, rate_note=rate_note,
+            cumulative_display_value=cumulative_display))
     entries.sort(key=lambda e: (-e.value, e.name, e.owner_id))
     return PanelView(config=config, title=config.display_title, entries=entries,
                      total=sum(displayed.values()), denominator=denominator,

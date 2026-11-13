@@ -52,6 +52,205 @@ public partial class MainWindow
     private static void WriteArchive(string stateDirectory,string battleId,string stage)=>
         File.WriteAllText(HistoryPath(stateDirectory,battleId),
             ArchiveJson(stateDirectory,battleId,stage),new System.Text.UTF8Encoding(false));
+
+    private async Task VerifySideMode(HudWindow hud, string output)
+    {
+        await Navigate("live");
+        await Settle();
+        Native.Restore(this, JsonSerializer.SerializeToElement(Native.Geometry(this)));
+        await Settle();
+        string normalGeometryBefore = JsonSerializer.Serialize(Native.Geometry(this));
+        ToggleButton? enemyPin = null;
+        var originalPanels = State.Get("layout").Get("panels").Items().ToArray();
+        string firstId = originalPanels[0].Text("panel_id");
+        string? addedSideTestPanel = null;
+        var sourceConfig = new { panel_id = firstId, category = "damage", ranking = "total", rate_basis = "full_cycle" };
+
+        var fixture = new Window
+        {
+            Title = "ArkDPS side mode fixture",
+            ResizeMode = ResizeMode.NoResize,
+            WindowStyle = WindowStyle.None,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        var work = System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea;
+        var originalPlayer = new System.Drawing.Rectangle(work.Left + 32, work.Top + 20,
+            Math.Min(600, work.Width / 2), Math.Min(680, work.Height - 58));
+        try
+        {
+            await Command("panel_update", new() { ["config"] = sourceConfig });
+            if (originalPanels.Length == 1)
+            {
+                await Command("panel_add");
+                addedSideTestPanel = State.Get("layout").Get("panels").Items().Last().Text("panel_id");
+            }
+            string secondId = addedSideTestPanel ?? originalPanels[1].Text("panel_id");
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = secondId, category = "healing", ranking = "dps", rate_basis = "recent_5s"
+            }});
+            await Settle();
+            var hudHandle = Native.Handle(hud);
+            long hudStyle = Native.ExStyle(hud);
+            double hudOpacity = hud.Opacity;
+            var hudBounds = Native.Bounds(hud);
+
+            fixture.Show();
+            Native.Place(fixture, originalPlayer);
+            await Settle();
+            SideAttachment.FixtureWindow = Native.Handle(fixture);
+            SetSideMode(true);
+            await SavePlacement();
+            await Settle();
+            var expected = SideAttachment.GetPlacement(default, Native.Handle(this), SideWidth);
+            var current = Native.Bounds(this);
+            Require(expected.State == EmulatorPlacementState.Attached && expected.Bounds is { } rectangle &&
+                    current.SequenceEqual(new[] { rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height }) &&
+                    current[0] == originalPlayer.Right && current[1] == originalPlayer.Top &&
+                    current[3] == originalPlayer.Height, "side window did not align with the emulator fixture");
+            Require(State.Get("layout").Bool("side_mode") &&
+                    JsonElement.DeepEquals(State.Get("layout").Get("gui"), JsonSerializer.SerializeToElement(normalGeometry)) &&
+                    !ContentRoot.IsVisible && SideRoot.IsVisible, "side mode did not preserve the full layout geometry");
+
+            Require(Panels[secondId].View.Get("config").Text("category") == "healing" &&
+                    Panels[secondId].View.Get("entries").Items().Any(),
+                    "alternate source panel must have data and a different category");
+            await VerifySideRanking(Panels[firstId].View, "总伤", "全周期 DPS", expectedSegments: 4);
+            Screenshot.Window(this, Path.Combine(output, "side-friendly.png"));
+
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = firstId, category = "damage", ranking = "recent", rate_basis = "recent_5s"
+            }});
+            var recent = Panels[firstId].View;
+            var recentEntry = recent.Get("entries").Items().First();
+            Require(recentEntry.Text("cumulative_display_value") != recentEntry.Text("display_value"),
+                    "the recent-sort fixture must distinguish cumulative damage from the ranking value");
+            await VerifySideRanking(recent, "总伤", "近 5 秒 DPS", expectedSegments: 1);
+
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle", effective_only = true
+            }});
+            await VerifySideRanking(Panels[firstId].View, "有效伤害", "全周期 DPS", expectedSegments: 4);
+
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle",
+                effective_only = true, boss_only = true
+            }});
+            await Settle();
+            var scoped = Panels[firstId].View;
+            var sideRanking = FindVisual<StatisticPanel>(SideFriendly, _ => true);
+            Require(sideRanking is not null && StatisticPanel.IsBossScope(sideRanking.View.Get("config")) &&
+                    sideRanking.View.Get("config").Bool("effective_only") &&
+                    sideRanking.Heading.Text.Contains("仅首领") &&
+                    !sideRanking.View.Bool("boss_damage_available") &&
+                    sideRanking.View.Get("entries").Items().Count() == 0 &&
+                    sideRanking.RateNotice.IsVisible && sideRanking.RateNotice.Text == scoped.Text("boss_damage_reason"),
+                    "side ranking lost the first panel's boss scope or used all-target fallback");
+
+            await Command("panel_update", new() { ["config"] = sourceConfig });
+            await Settle();
+
+            SideTabs.SelectedIndex = 1;
+            await Settle();
+            Require(ReferenceEquals(SideEnemyHost.Content, EnemySummary) && TargetSummary.IsVisible &&
+                    HasText(TargetSummary, "源石虫") && HasText(TargetSummary, "180"),
+                    "side enemy tab lost the existing enemy unit card");
+            enemyPin = (ToggleButton?)FindAutomationElement(TargetSummary, "LockLiveEnemy");
+            Require(enemyPin is not null, "side enemy tab lost the original enemy pin control");
+            enemyPin!.IsChecked = true;
+            Screenshot.Window(this, Path.Combine(output, "side-enemy.png"));
+
+            var moved = new System.Drawing.Rectangle(originalPlayer.X + 60, originalPlayer.Y + 18,
+                originalPlayer.Width - 24, originalPlayer.Height - 32);
+            Native.Place(fixture, moved);
+            UpdateSidePlacement();
+            await Settle();
+            current = Native.Bounds(this);
+            Require(current[0] == moved.Right && current[1] == moved.Top && current[3] == moved.Height,
+                    "side window did not follow the fixture move and resize");
+            fixture.WindowState = WindowState.Minimized;
+            await Settle();
+            UpdateSidePlacement();
+            Require(SideAttachmentStatus.Text == "MuMu 已最小化" && current.SequenceEqual(Native.Bounds(this)),
+                    "minimized fixture displaced the side panel");
+            fixture.WindowState = WindowState.Normal;
+            await Settle();
+            UpdateSidePlacement();
+            Require(SideAttachmentStatus.Visibility == Visibility.Collapsed, "side panel did not reattach after restore");
+            var shortPlayer = new System.Drawing.Rectangle(moved.X, moved.Y, moved.Width, Math.Min(moved.Height, 260));
+            Native.Place(fixture, shortPlayer);
+            UpdateSidePlacement();
+            await Settle();
+            Require(TargetSummary.Child is ScrollViewer { ScrollableHeight: > 0 },
+                    "short side enemy tab did not scroll to its lower unit cards");
+            Require(Huds.TryGetValue(hud.PanelId, out var sameHud) && sameHud == hud &&
+                    hudHandle == Native.Handle(hud) && hudStyle == Native.ExStyle(hud) &&
+                    hudOpacity == hud.Opacity && hudBounds.SequenceEqual(Native.Bounds(hud)),
+                    "changing main window mode changed a running HUD");
+        }
+        finally
+        {
+            SetSideMode(false);
+            SideAttachment.FixtureWindow = 0;
+            fixture.Close();
+            await Command("panel_update", new() { ["config"] = originalPanels[0] });
+            if (addedSideTestPanel is not null)
+                await Command("panel_delete", new() { ["panel_id"] = addedSideTestPanel });
+            else if (originalPanels.Length > 1)
+                await Command("panel_update", new() { ["config"] = originalPanels[1] });
+            await SavePlacement();
+            await Settle();
+        }
+        Require(!State.Get("layout").Bool("side_mode") && LiveBody.Children.Contains(EnemySummary) &&
+                normalGeometryBefore == JsonSerializer.Serialize(Native.Geometry(this)) && enemyPin?.IsChecked == true,
+                "returning to full mode did not restore the regular window");
+        enemyPin!.IsChecked = false;
+    }
+
+    private async Task VerifySideRanking(JsonElement source, string expectedMetric, string expectedRateLabel, int expectedSegments)
+    {
+        var sourcePanel = FindVisual<StatisticPanel>(SideFriendly, _ => true);
+        var ranking = sourcePanel is null ? null : FindAutomationElement(sourcePanel, "SideDpsRanking") as ListBox;
+        Require(ranking is { Items.Count: > 1 }, "side mode does not reuse the live statistic panel");
+        var expectedEntries = source.Get("entries").Items().ToArray();
+        Require(ranking!.Items.Cast<RowItem>().Select(row => row.Id)
+            .SequenceEqual(expectedEntries.Select(entry => entry.Text("owner_id"))),
+            "side ranking did not follow the first live panel's order and owners");
+        ranking.SelectedIndex = 0;
+        ranking.ScrollIntoView(ranking.SelectedItem);
+        await Settle();
+        var expected = expectedEntries[0];
+        string name = expected.Text("name");
+        var primary = FindAutomationElement(SideFriendly, "CompactOperatorStats");
+        var totalMetric = primary is null ? null : FindAutomationElement(primary, "CompactOperatorMetric0");
+        var rateMetric = primary is null ? null : FindAutomationElement(primary, "CompactOperatorMetric1");
+        Require(primary is not null && HasText(primary, name + " · 主要数据") &&
+                totalMetric is not null && HasText(totalMetric, expectedMetric) &&
+                rateMetric is not null && HasText(rateMetric, expectedRateLabel) &&
+                FindAutomationElement(SideFriendly, "CompactOperatorComposition") is null &&
+                FindVisual<LiveTrendView>(SideFriendly, _ => true) is null,
+                "side details did not use the selected operator's primary data card");
+        var container = (ListBoxItem)ranking.ItemContainerGenerator.ContainerFromIndex(0);
+        Require(FindVisual<TextBlock>(container, text => text.IsVisible && (text.Text == name || text.Text == "1")) is null &&
+                System.Windows.Automation.AutomationProperties.GetName(container) == name,
+                "side ranking displays rank or name, or hides name from accessibility");
+        var total = FindAutomationElement(container, "SideRankingTotal") as TextBlock;
+        var rate = FindAutomationElement(container, "SideRankingRate") as TextBlock;
+        Require(total is { IsVisible: true } && total.Text == expected.Text("cumulative_display_value") &&
+                rate is { IsVisible: true } && rate.Text == expected.Text("rate_text") && total.Text != rate.Text,
+                "side ranking lost separate cumulative output and selected rate values");
+        var bar = FindAutomationElement(container, "SideRankingContribution") as ContributionBar;
+        Require(bar is { IsVisible: true, ActualWidth: > 0 } &&
+                JsonElement.DeepEquals(bar.Data.Get("segments"), expected.Get("segments")) &&
+                bar.Data.Get("segments").Items().Count() == expectedSegments &&
+                bar.Data.Number("bar_ratio") == expected.Number("bar_ratio"),
+                "side ranking did not render the first panel's segmented contribution bar");
+    }
+
     private void ApplyFixture(System.Text.Json.Nodes.JsonNode state)
     {
         using var document = JsonDocument.Parse(state.ToJsonString());
@@ -531,6 +730,10 @@ public partial class MainWindow
                     selector.ToolTip is string {Length:>0}) &&
                 panel.CategoryLabel.IsVisible && panel.RankingLabel.IsVisible && panel.RateLabel.IsVisible,
                 "live ranking filters do not fit above the table with their guidance");
+        if(panel.View.Get("config").Text("category")=="damage")
+            Require(panel.BossOnly.IsVisible && panel.BossOnly.ActualHeight==24 &&
+                    panel.BossOnly.TranslatePoint(new Point(panel.BossOnly.ActualWidth,0),toolbar).X<=toolbar.ActualWidth,
+                    "boss scope control did not fit in the ranking toolbar");
         if(singleRow)
         {
             double baseline=panel.Category.TranslatePoint(new Point(0,panel.Category.ActualHeight),toolbar).Y;
@@ -895,6 +1098,78 @@ public partial class MainWindow
         }
         finally { ApplyState(original); }
     }
+
+    private async Task VerifyBossScope(string id,HudWindow hud)
+    {
+        var panel=Panels[id];
+        var normalConfig=panel.Configuration();
+        var historyConfig=HistoryPanel.Configuration();
+        string owner=LiveInspector.Owner ?? panel.View.Get("entries").Items().First().Text("owner_id");
+        activePanel=id;
+        LiveInspector.Pin(owner,panel.View);
+        string wholeBattleDamage=TotalDamage.Text;
+        try
+        {
+            panel.BossOnly.IsChecked=true;
+            panel.BossOnly.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            for(int wait=0;wait<40 && commands>0;wait++) await Task.Delay(50);
+            Require(panel.View.Get("config").Bool("boss_only") && !panel.View.Bool("boss_damage_available") &&
+                    panel.BossOnly.IsChecked==true && panel.RateNotice.Visibility==Visibility.Visible &&
+                    panel.RateNotice.Text==panel.View.Text("boss_damage_reason") && panel.Rows.Items.Count==0,
+                    "boss toggle did not reach the worker or displayed full-battle damage as boss damage");
+            Require(StatisticPanel.IsBossScope(hud.Panel.View.Get("config")) &&
+                    hud.Panel.Heading.Text.StartsWith("仅首领·") && hud.Panel.Rows.Items.Count==0 &&
+                    OperatorTrend.Visibility==Visibility.Collapsed && TotalDamage.Text==wholeBattleDamage &&
+                    HasText(LiveInspector,"首领总伤"),"boss scope diverged across the HUD, inspector or dashboard");
+
+            var unavailable=State.Clone();
+            var scoped=System.Text.Json.Nodes.JsonNode.Parse(unavailable.GetRawText())!.AsObject();
+            scoped["status"]="live";
+            var scopedPanel=scoped["panels"]!.AsArray().First(value=>
+                value!["config"]!["panel_id"]!.GetValue<string>()==id)!;
+            scopedPanel["boss_damage_available"]=true;
+            scopedPanel["boss_damage_reason"]="";
+            scoped["boss_live_analysis"]=ScopedTrend(345);
+            scoped["boss_effective_live_analysis"]=ScopedTrend(123);
+            try
+            {
+                ApplyState(JsonSerializer.SerializeToElement(scoped));
+                Require(OperatorTrend.Visibility==Visibility.Visible &&
+                        HasText(OperatorTrend,"首领伤害 · 近 5 秒 DPS 趋势") && HasText(OperatorTrend,"345 DPS"),
+                        "boss raw trend did not consume its own series");
+                scopedPanel["config"]!["effective_only"]=true;
+                ApplyState(JsonSerializer.SerializeToElement(scoped));
+                Require(HasText(OperatorTrend,"首领有效伤害 · 近 5 秒 DPS 趋势") && HasText(OperatorTrend,"123 DPS") &&
+                        hud.Panel.Heading.Text.StartsWith("仅首领·有效伤害"),
+                        "effective boss scope reused the raw or global trend");
+            }
+            finally { ApplyState(unavailable); }
+
+            var healing=new Dictionary<string,object?>(panel.Configuration()){["category"]="healing"};
+            await Command("panel_update",new(){["config"]=healing});
+            Require(panel.BossOnly.Visibility==Visibility.Collapsed && panel.View.Get("config").Bool("boss_only") &&
+                    !hud.Panel.Heading.Text.StartsWith("仅首领·"),"healing was filtered or lost the saved boss preference");
+
+            var historyBoss=new Dictionary<string,object?>(historyConfig){["category"]="damage",["boss_only"]=true};
+            await Command("history_config",new(){["config"]=historyBoss});
+            Require(HistoryPanel.BossOnly.IsChecked==true && HistoryPanel.BossOnly.Visibility==Visibility.Visible &&
+                    HistoryPanel.RateNotice.Visibility==Visibility.Visible && HistoryPanel.Rows.Items.Count==0,
+                    "an older history record showed all-target rows under boss scope");
+        }
+        finally
+        {
+            await Command("history_config",new(){["config"]=historyConfig});
+            await Command("panel_update",new(){["config"]=normalConfig});
+        }
+        Require(!panel.View.Get("config").Bool("boss_only") && panel.Rows.Items.Count>0 &&
+                OperatorTrend.Visibility==Visibility.Visible,"clearing boss scope did not restore the normal views");
+
+        System.Text.Json.Nodes.JsonNode ScopedTrend(int dps) => JsonSerializer.SerializeToNode(new
+        {
+            battle_id=State.Text("battle_id"), game_time=State.Number("game_time"), segment=1,
+            team_recent_dps=dps, operators=new[]{new{owner_id=owner,name="合成验收",recent_dps=dps}},
+        })!;
+    }
     private static void Click(int x,int y)
     {
         Require(SetCursorPos(x,y),"SetCursorPos failed");
@@ -1080,6 +1355,12 @@ public partial class MainWindow
                     $"HUD did not restore width and fit its current rows: {actual[2]}x{actual[3]} expected {width}x{height}");
             checks.Add("saved HUD position, width, lock and opacity restored with current-row height");
         }
+        string sideSource = Panels.Keys.First();
+        bool sideHudAlreadyOpen = Huds.ContainsKey(sideSource);
+        OpenHud(sideSource);
+        await VerifySideMode(Huds[sideSource], output);
+        if (!sideHudAlreadyOpen) CloseHud(sideSource);
+        checks.Add("side mode follows a private emulator window, mirrors the first live ranking and restores the full GUI with HUD and enemy panel intact");
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",
@@ -1546,9 +1827,11 @@ public partial class MainWindow
         checks.Add("ranking footer locks, selects and restores a fully transparent HUD without affecting other HUDs");
         await Settle();
         VerifyShareScope(id,originalHud);
+        await VerifyBossScope(id,originalHud);
         await VerifyHudRows(originalHud,output);
         checks.Add("HUD typography, one/four/five rows auto-fit, sixth row scroll and monitor work area");
         checks.Add("share scope reaches live, history, HUD, details and ranking PNG with legacy fallback");
+        checks.Add("boss filter reaches worker, ranking, details, HUD and history without using whole-battle values");
         Require(originalHud.Panel.Heading.Text=="溢出总伤·近5秒DPS","HUD title lost the initial rank and rate basis");
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});

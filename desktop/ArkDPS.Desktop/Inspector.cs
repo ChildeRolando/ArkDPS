@@ -15,10 +15,11 @@ public sealed class Inspector : Border
     private readonly StackPanel body=new();
     private string? owner;
     private bool compactReference;
+    private bool primaryDataOnly;
     private JsonElement lastView;
     private ReferenceReport? referenceReport;
     private (string Owner, string Theme, string Row, string Entry, string Detail,
-        string Rates, int Rank, bool Effective, string Metric, string Ranking,
+        string Rates, int Rank, bool Effective, bool BossScope, string Metric, string Ranking,
         string RateBasis, string RateReason, string RateHint, string ShareDescription)? displayed;
     internal string? Owner => owner;
     public bool CompactReference
@@ -42,6 +43,11 @@ public sealed class Inspector : Border
         AutomationProperties.SetName(this,"干员详情");
         Child=body; Empty();
     }
+    internal void UsePrimaryDataOnly()
+    {
+        primaryDataOnly=true;
+        CompactReference=true;
+    }
     internal void Empty()
     {
         displayed=null;
@@ -61,16 +67,17 @@ public sealed class Inspector : Border
     {
         lastView=view;
         if(owner==null) return;
+        var config=view.Get("config");
+        bool bossScope=StatisticPanel.IsBossScope(config);
         var row=view.Get("source").Get(owner);
         if(row.ValueKind!=JsonValueKind.Object)
         {
-            if(displayed.HasValue && displayed.Value.Owner!=owner) Empty();
+            if(bossScope || displayed is { } previous && (previous.Owner!=owner || previous.BossScope)) Empty();
             return;
         }
         var entries=view.Get("entries").Items().ToArray();
         int index=Array.FindIndex(entries,x=>x.Text("owner_id")==owner);
         var entry=index<0 ? default : entries[index];
-        var config=view.Get("config");
         bool effective=config.Text("category")=="damage" && config.Bool("effective_only");
         var detail=view.Get("details_by_owner").Get(owner);
         if(detail.ValueKind!=JsonValueKind.Object) detail=entry.Get("detail");
@@ -80,7 +87,7 @@ public sealed class Inspector : Border
         string ranking=config.Text("ranking");
         string rateReason=view.Text("rate_reason"), rateHint=view.Text("rate_hint");
         var signature=(owner,Theme.Key,Raw(row),Raw(entry),Raw(detail),Raw(rates),
-            index,effective,metric,ranking,config.Text("rate_basis"),rateReason,rateHint,shareInfo.Description);
+            index,effective,bossScope,metric,ranking,config.Text("rate_basis"),rateReason,rateHint,shareInfo.Description);
         if(displayed==signature) return;
         displayed=signature;
 
@@ -134,12 +141,15 @@ public sealed class Inspector : Border
         hero.Child=heroDock;body.Children.Add(hero);
 
         var stats=new WrapPanel{Margin=new Thickness(0,0,0,4)};
-        AddStat(stats,"总伤害",row.UiInt("damage"));
-        AddStat(stats,"有效伤害",Effective(row));
+        AddStat(stats,bossScope ? "首领总伤" : "总伤害",row.UiInt("damage"));
+        AddStat(stats,bossScope ? "首领有效伤害" : "有效伤害",Effective(row));
         AddStat(stats,"过量伤害",row.UiInt("overkill_damage"));
         AddStat(stats,"溢出伤害率",OverkillRate(row));
-        AddStat(stats,"治疗",row.UiInt("healing"));
-        AddStat(stats,"有效护盾",row.UiInt("shield_absorbed"));
+        if(!bossScope)
+        {
+            AddStat(stats,"治疗",row.UiInt("healing"));
+            AddStat(stats,"有效护盾",row.UiInt("shield_absorbed"));
+        }
         if(stats.Children.Count>0) body.Children.Add(stats);
         body.Children.Add(Text(OverkillNote(row,view),10,false,"Muted",new Thickness(0,4,0,2)));
         if(row.Get("burst_unknown_reason").ValueKind==JsonValueKind.String)
@@ -240,9 +250,9 @@ public sealed class Inspector : Border
         var rateStats=new WrapPanel();
         AddStat(rateStats,effective ? "有效 DPS" : "DPS",RateText(row,damageRate,"engagement_damage",
             effective ? detail : default, effective ? "effective_engagement_damage" : ""));
-        AddStat(rateStats,"HPS",RateText(row,healingRate,"engagement_healing",default,""));
+        if(!bossScope) AddStat(rateStats,"HPS",RateText(row,healingRate,"engagement_healing",default,""));
         AddStat(rateStats,"伤害活跃秒",row.UiInt("active_damage"));
-        AddStat(rateStats,"治疗活跃秒",row.UiInt("active_healing"));
+        if(!bossScope) AddStat(rateStats,"治疗活跃秒",row.UiInt("active_healing"));
         body.Children.Add(rateStats);
         var rateNote=damageRate.Text("note");if(rateNote.Length==0) rateNote=healingRate.Text("note");
         if(rateNote.Length>0) body.Children.Add(Text(rateNote,10,false,"Muted",new Thickness(0,5,0,0)));
@@ -261,7 +271,7 @@ public sealed class Inspector : Border
     private ReferenceReport ShowReference()
     {
         if(referenceReport is { } existing && existing.Skin==Theme.Key && ReferenceEquals(Child,existing)) return existing;
-        if(referenceReport?.Skin!=Theme.Key) referenceReport=new ReferenceReport();
+        if(referenceReport?.Skin!=Theme.Key) referenceReport=new ReferenceReport(primaryDataOnly);
         Background=Brushes.Transparent;
         BorderThickness=new Thickness(0);
         Padding=new Thickness(0);
@@ -331,15 +341,17 @@ public sealed class Inspector : Border
         private readonly TextBlock ringTitle=Label("总伤",14,ChartInk,true);
         private readonly TextBlock ringValue=Label("—",17,ChartInk,true);
         private readonly Ring ring=new(Theme.IsBabel ? 7 : 14,ChartDivider,Enumerable.Range(0,DamageTypes.Length).Select(DamageColor).ToArray());
-        private readonly Border compositionField;
+        private readonly Border? compositionField;
+        private readonly TextBlock? sideHeading, sideHint;
+        private readonly StackPanel statsBody=new();
 
-        internal ReferenceReport()
+        internal ReferenceReport(bool primaryDataOnly)
         {
             var modules=new Grid();
             var primaryWidth=new GridLength(1.28,GridUnitType.Star);
             var chartWidth=new GridLength(1,GridUnitType.Star);
             modules.ColumnDefinitions.Add(new ColumnDefinition{Width=primaryWidth});
-            modules.ColumnDefinitions.Add(new ColumnDefinition{Width=chartWidth});
+            if(!primaryDataOnly) modules.ColumnDefinitions.Add(new ColumnDefinition{Width=chartWidth});
             modules.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
             modules.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
 
@@ -394,7 +406,6 @@ public sealed class Inspector : Border
             ratios.Children.Add(mitigation);
             ratios.Children.Add(skillShare);
             AutomationProperties.SetAutomationId(ratios,"CompactOperatorRatios");
-            var statsBody=new StackPanel();
             statsBody.Children.Add(readings);
             statsBody.Children.Add(new Border
             {
@@ -402,10 +413,33 @@ public sealed class Inspector : Border
                 Margin=new Thickness(0,4,0,0),
             });
 
-            var statsPanel=PanelFrame(Module(Label("主要数据",15,MetricInk,true),statsBody,MetricDivider),
-                new Thickness(0,0,3,0),UseThemeColors ? Theme.Resource("Card") : DarkFace,MetricDivider);
+            var title=Label("主要数据",15,MetricInk,true);
+            UIElement statsContent=statsBody;
+            if(primaryDataOnly)
+            {
+                sideHeading=title;
+                title.TextTrimming=TextTrimming.CharacterEllipsis;
+                title.TextWrapping=TextWrapping.NoWrap;
+                foreach(var label in metricLabels) label.TextWrapping=TextWrapping.NoWrap;
+                metricLabels[1].FontSize=13;
+                sideHint=Label("从排行选择干员",13,MetricMuted);
+                sideHint.Margin=new Thickness(0,7,0,6);
+                var stack=new StackPanel();
+                stack.Children.Add(sideHint);
+                stack.Children.Add(statsBody);
+                statsContent=stack;
+            }
+            var statsPanel=PanelFrame(Module(title,statsContent,MetricDivider),
+                primaryDataOnly ? new Thickness(0) : new Thickness(0,0,3,0),
+                UseThemeColors ? Theme.Resource("Card") : DarkFace,MetricDivider);
             AutomationProperties.SetAutomationId(statsPanel,"CompactOperatorStats");
             modules.Children.Add(statsPanel);
+            Children.Add(modules);
+            if(primaryDataOnly)
+            {
+                Reset();
+                return;
+            }
 
             var chart=new Grid{MinHeight=115};
             chart.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
@@ -442,7 +476,6 @@ public sealed class Inspector : Border
             AutomationProperties.SetAutomationId(chartPanel,"CompactOperatorComposition");
             Grid.SetColumn(chartPanel,1);
             modules.Children.Add(chartPanel);
-            Children.Add(modules);
 
             bool stacked=false;
             modules.SizeChanged+=(_,e)=>
@@ -491,6 +524,7 @@ public sealed class Inspector : Border
             portrait.Source=null;
             avatar.ToolTip="从排行选择干员";
             AutomationProperties.SetName(avatar,"干员头像");
+            SetSideSelection(null);
             SetMetrics(default,default,default,default,false,"",SharePresentation.From(default));
         }
 
@@ -503,13 +537,25 @@ public sealed class Inspector : Border
             portrait.Source=Portraits.Get(owner,row.Get("present").ValueKind==JsonValueKind.False);
             avatar.ToolTip=displayName;
             AutomationProperties.SetName(avatar,displayName+"头像");
+            SetSideSelection(displayName);
             SetMetrics(row,view,entry,detail,effective,ranking,shareInfo);
+        }
+
+        private void SetSideSelection(string? name)
+        {
+            if(sideHeading==null || sideHint==null) return;
+            sideHeading.Text=name is null ? "干员详情" : name+" · 主要数据";
+            sideHeading.ToolTip=name;
+            sideHint.Visibility=name is null ? Visibility.Visible : Visibility.Collapsed;
+            statsBody.Visibility=name is null ? Visibility.Collapsed : Visibility.Visible;
         }
 
         private void SetMetrics(JsonElement row,JsonElement view,JsonElement entry,JsonElement detail,
             bool effective,string ranking,SharePresentation shareInfo)
         {
-            string category=view.Get("config").Text("category");
+            var config=view.Get("config");
+            string category=config.Text("category");
+            bool bossScope=StatisticPanel.IsBossScope(config);
             double skill=detail.Number(effective ? "skill_damage_effective" : "skill_damage",double.NaN);
             double ordinary=detail.Number(effective ? "non_skill_damage_effective" : "non_skill_damage",double.NaN);
             double splitTotal=skill+ordinary;
@@ -524,11 +570,15 @@ public sealed class Inspector : Border
             double seconds=row.Number("presence_seconds",double.NaN);
             string presence=row.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
                 ? FormatTime(seconds) : "—";
-            metricLabels[0].Text=effective ? "有效伤害" : "总伤";
-            metricLabels[1].Text=rateLabel.Length==0 && category!="shield" ? DefaultLabels[1]
-                : category=="shield" ? "有效护盾"
+            bool side=sideHeading!=null;
+            metricLabels[0].Text=side && category=="healing" ? "总治疗"
+                : (bossScope ? "首领" : "")+(effective ? "有效伤害" : "总伤");
+            string unit=category=="healing" ? "HPS" : "DPS";
+            metricLabels[1].Text=category=="shield" ? "有效护盾"
+                : rateLabel.Length==0 ? DefaultLabels[1]
+                : side ? (rateLabel=="全周期DPS" ? "全周期" : rateLabel)+" "+unit
                 : rateLabel=="全周期DPS" && category=="damage" ? "全周期 DPS"
-                : $"{(category=="healing" ? "HPS" : "DPS")}（{rateLabel}）";
+                : $"{unit}（{rateLabel}）";
             metricLabels[2].Text=view.Text("share_scope")=="known" ? shareInfo.Label : (ranking,category) switch
             {
                 ("dps","healing") => "HPS 占比",
@@ -538,11 +588,15 @@ public sealed class Inspector : Border
                 ("recent",_) => "近期伤害占比",
                 _ => "伤害占比",
             };
-            SetMetric(0,effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
-                effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
-                    ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。");
+            if(side && category=="healing")
+                SetMetric(0,Number(row.Get("healing")),"累计归属于该干员的治疗量。");
+            else
+                SetMetric(0,effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
+                    (bossScope ? "统计命中首领敌人的伤害。" : "")+
+                    (effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
+                        ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。"));
             string rateHint=category=="shield" ? "累计归属于该干员的实际护盾吸收量。"
-                : DescribeRate(view.Get("config").Text("rate_basis"),category=="healing",effective);
+                : DescribeRate(config.Text("rate_basis"),category=="healing",effective);
             SetMetric(1,category=="shield" ? Number(row.Get("shield_absorbed")) : rate,
                 WithNote(rateHint,entry.Text("rate_note")));
             SetMetric(2,share,WithNote("该干员当前排行指标 ÷ 同口径指标合计。",shareInfo.Description));
@@ -607,6 +661,7 @@ public sealed class Inspector : Border
 
         private void SetComposition(bool effective,JsonElement row,JsonElement detail)
         {
+            if(compositionField==null) return;
             compositionTitle.Text=effective ? "有效伤害构成" : "伤害属性构成";
             ringTitle.Text=effective ? "有效" : "总伤";
             ringValue.Text=effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage"));

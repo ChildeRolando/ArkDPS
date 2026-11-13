@@ -1,0 +1,17 @@
+<UserControl x:Class="ArkDPS.Desktop.SideFriendlyView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:ArkDPS.Desktop"
+             UseLayoutRounding="True">
+ <Grid SizeChanged="FitDetails">
+  <Grid.RowDefinitions>
+   <RowDefinition Height="*"/>
+   <RowDefinition Height="Auto"/>
+  </Grid.RowDefinitions>
+  <local:StatisticPanel x:Name="RankingPanel"/>
+  <ScrollViewer x:Name="DetailViewport" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                Margin="0,8,0,0" Focusable="False">
+   <local:Inspector x:Name="Details" AutomationProperties.AutomationId="SideOperatorDetails"/>
+  </ScrollViewer>
+ </Grid>
+</UserControl>

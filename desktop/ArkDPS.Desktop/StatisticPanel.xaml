@@ -50,6 +50,40 @@
    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
    <Setter Property="Margin" Value="0,0,4,0"/>
   </Style>
+  <Style x:Key="SideRankedRow" TargetType="ListBoxItem" BasedOn="{StaticResource ReferenceRankedRow}">
+   <Setter Property="ToolTip" Value="{Binding Tooltip}"/>
+   <Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="True"/>
+   <Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
+   <Setter Property="AutomationProperties.HelpText" Value="{Binding Tooltip}"/>
+  </Style>
+  <Style x:Key="SideNumberCell" TargetType="TextBlock" BasedOn="{StaticResource ReferenceNumberCell}">
+   <Setter Property="FontSize" Value="13"/>
+   <Setter Property="TextWrapping" Value="NoWrap"/>
+   <Setter Property="Margin" Value="0,0,6,0"/>
+  </Style>
+  <DataTemplate x:Key="SideRow" DataType="{x:Type local:RowItem}">
+   <Grid Height="36" Margin="8,0,2,0" SnapsToDevicePixels="True">
+    <Grid.ColumnDefinitions>
+     <ColumnDefinition Width="30"/><ColumnDefinition Width="*"/>
+     <ColumnDefinition Width="70"/><ColumnDefinition Width="65"/>
+    </Grid.ColumnDefinitions>
+    <Border Width="28" Height="28" HorizontalAlignment="Left" Background="{DynamicResource ConsoleCard}"
+            BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1" ClipToBounds="True">
+     <Grid>
+      <TextBlock Text="{Binding Initial}" Foreground="{DynamicResource ConsoleInk}" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      <Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/>
+     </Grid>
+    </Border>
+    <Border Grid.Column="1" Background="Transparent" ToolTip="{Binding RankedBarTooltip}" Margin="4,0,7,0">
+     <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}"
+                            AutomationProperties.AutomationId="SideRankingContribution" Height="8" VerticalAlignment="Center"/>
+    </Border>
+    <TextBlock Grid.Column="2" Text="{Binding CumulativeTotal}" Style="{StaticResource SideNumberCell}"
+               AutomationProperties.AutomationId="SideRankingTotal"/>
+    <TextBlock Grid.Column="3" Text="{Binding CompactRate}" Style="{StaticResource SideNumberCell}"
+               AutomationProperties.AutomationId="SideRankingRate"/>
+   </Grid>
+  </DataTemplate>
   <DataTemplate x:Key="ReferenceRow" DataType="{x:Type local:RowItem}">
    <Grid x:Name="ReferenceOperatorRow" Height="36" ToolTip="{Binding Tooltip}" SnapsToDevicePixels="True">
     <Grid.ColumnDefinitions>
@@ -237,6 +271,10 @@
      <Button x:Name="DuplicateButton" Content="复制" AutomationProperties.Name="复制统计面板" Click="Duplicate" Style="{StaticResource RankingToolbarAction}"/>
      <Button x:Name="DeleteButton" Content="删除" AutomationProperties.Name="删除统计面板" Click="Delete" Style="{StaticResource RankingToolbarAction}"/>
     </StackPanel>
+    <ToggleButton x:Name="BossOnly" Content="仅首领" Click="FilterChanged" Height="24" MinHeight="24"
+                  FontSize="11" Padding="5,1" VerticalAlignment="Bottom" Margin="3,0,0,3"
+                  Visibility="Collapsed" AutomationProperties.HelpText="只统计命中首领敌人的伤害。"
+                  ToolTip="只统计命中首领敌人的伤害。"/>
    </WrapPanel>
 
    <Border x:Name="RateNoticePanel" Grid.Row="2" Visibility="Collapsed" Margin="14,0,14,8" Background="{DynamicResource Inset}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="{DynamicResource ControlRadius}" Padding="10,7">
@@ -277,8 +315,17 @@
      <TextBlock x:Name="ReferenceRateHeading" Grid.Column="4" Text="DPS" Style="{StaticResource ReferenceNumberCell}" FontSize="13" FontWeight="SemiBold"/>
      <TextBlock x:Name="ReferenceShareHeading" Grid.Column="5" Text="占比" Style="{StaticResource ReferenceNumberCell}" FontSize="13" FontWeight="SemiBold"/>
     </Grid>
+    <Border x:Name="SideHeader" Background="{DynamicResource ConsoleCard}" BorderBrush="{DynamicResource ConsoleLine}"
+            BorderThickness="0,0,0,1" Visibility="Collapsed">
+     <Grid MinHeight="26" Margin="8,0,2,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="70"/><ColumnDefinition Width="65"/></Grid.ColumnDefinitions>
+      <TextBlock Text="贡献" Style="{StaticResource SideNumberCell}" TextAlignment="Left" FontWeight="SemiBold" Margin="34,0,0,0"/>
+      <TextBlock x:Name="SideTotalHeading" Grid.Column="1" Style="{StaticResource SideNumberCell}" FontWeight="SemiBold"/>
+      <TextBlock x:Name="SideRateHeading" Grid.Column="2" Style="{StaticResource SideNumberCell}" FontWeight="SemiBold"/>
+     </Grid>
+    </Border>
     <ListBox x:Name="Rows" Grid.Row="1" ItemContainerStyle="{StaticResource RankedRow}" ScrollViewer.ScrollChanged="ReferenceScrollChanged" SelectionChanged="RowSelected" MouseEnter="HoldOrder" MouseLeave="ReleaseOrder" MaxHeight="520" MinHeight="80" KeyboardNavigation.DirectionalNavigation="Contained"/>
-    <TextBlock x:Name="Empty" Grid.Row="1" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="280" TextAlignment="Center" FontSize="13" Margin="14"/>
+    <TextBlock x:Name="Empty" Grid.Row="1" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="280" TextAlignment="Center" TextWrapping="Wrap" FontSize="13" Margin="14"/>
     <Grid x:Name="ReferenceFooter" Grid.Row="2" Background="{DynamicResource ConsoleCard}" MinHeight="31" Visibility="Collapsed">
     <Grid.ColumnDefinitions>
      <ColumnDefinition Width="28"/><ColumnDefinition Width="1.55*" MinWidth="134"/><ColumnDefinition Width="*" MinWidth="30"/>
