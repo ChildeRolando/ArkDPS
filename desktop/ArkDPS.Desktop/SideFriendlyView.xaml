@@ -3,98 +3,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:ArkDPS.Desktop"
              UseLayoutRounding="True">
- <UserControl.Resources>
-  <Style x:Key="SideOperatorRow" TargetType="ListBoxItem">
-   <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-   <Setter Property="Cursor" Value="Hand"/>
-   <Setter Property="ToolTip" Value="{Binding Tooltip}"/>
-   <Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="True"/>
-   <Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
-   <Setter Property="AutomationProperties.HelpText" Value="{Binding Tooltip}"/>
-   <Setter Property="Template">
-    <Setter.Value>
-     <ControlTemplate TargetType="ListBoxItem">
-      <Border x:Name="RowSurface" Background="{DynamicResource Console}" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="0,0,0,1">
-       <Grid>
-        <ContentPresenter/>
-        <Border x:Name="SelectionMark" Width="2" HorizontalAlignment="Left" IsHitTestVisible="False"/>
-        <Border x:Name="FocusOutline" BorderBrush="{DynamicResource FocusOnDark}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"/>
-       </Grid>
-      </Border>
-      <ControlTemplate.Triggers>
-       <Trigger Property="IsMouseOver" Value="True">
-        <Setter TargetName="RowSurface" Property="Background" Value="{DynamicResource ConsoleCard}"/>
-       </Trigger>
-       <Trigger Property="IsSelected" Value="True">
-        <Setter TargetName="RowSurface" Property="Background" Value="{DynamicResource ReferenceRankSelection}"/>
-        <Setter TargetName="SelectionMark" Property="Background" Value="{DynamicResource ReferenceRankSelectionEdge}"/>
-       </Trigger>
-       <Trigger Property="IsKeyboardFocusWithin" Value="True">
-        <Setter TargetName="FocusOutline" Property="Visibility" Value="Visible"/>
-       </Trigger>
-      </ControlTemplate.Triggers>
-     </ControlTemplate>
-    </Setter.Value>
-   </Setter>
-  </Style>
-  <ControlTemplate x:Key="SideDpsBar" TargetType="ProgressBar">
-   <Grid>
-    <Border x:Name="PART_Track" Background="{DynamicResource ContributionTrack}" CornerRadius="1"/>
-    <Border x:Name="PART_Indicator" HorizontalAlignment="Left" Background="{DynamicResource ReferenceRankSelectionEdge}" CornerRadius="1"/>
-   </Grid>
-  </ControlTemplate>
-  <DataTemplate x:Key="SideDpsRow" DataType="{x:Type local:RowItem}">
-   <Grid Height="43" Margin="10,0,9,0">
-    <Grid.ColumnDefinitions>
-     <ColumnDefinition Width="32"/>
-     <ColumnDefinition Width="*"/>
-     <ColumnDefinition Width="66"/>
-    </Grid.ColumnDefinitions>
-    <Border Height="32" ClipToBounds="True" Background="{DynamicResource ConsoleCard}"
-            BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1">
-     <Grid>
-      <TextBlock Text="{Binding Initial}" Foreground="{DynamicResource ConsoleInk}" FontSize="15"
-                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
-      <Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/>
-     </Grid>
-    </Border>
-    <ProgressBar Grid.Column="1" Value="{Binding BarRatio, Mode=OneWay}"
-                 Maximum="1" Height="6" VerticalAlignment="Center" Margin="10,0,6,0"
-                 Template="{StaticResource SideDpsBar}" IsHitTestVisible="False" Focusable="False"/>
-    <TextBlock Grid.Column="2" Text="{Binding Rate}" FontFamily="{DynamicResource DataFont}"
-               Foreground="{DynamicResource ConsoleInk}" FontSize="15" FontWeight="SemiBold"
-               VerticalAlignment="Center" TextAlignment="Right" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-   </Grid>
-  </DataTemplate>
- </UserControl.Resources>
  <Grid SizeChanged="FitDetails">
   <Grid.RowDefinitions>
    <RowDefinition Height="*"/>
    <RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
-  <Border Background="{DynamicResource Console}" BorderBrush="{DynamicResource ConsoleLine}"
-          BorderThickness="1" CornerRadius="{DynamicResource CardRadius}">
-   <DockPanel>
-    <Border DockPanel.Dock="Top" Background="{DynamicResource ConsoleCard}" BorderBrush="{DynamicResource ConsoleLine}"
-            BorderThickness="0,0,0,1" Padding="10,7,10,7">
-     <DockPanel>
-      <TextBlock DockPanel.Dock="Right" Text="近 5 秒" FontSize="12" VerticalAlignment="Center"
-                 Foreground="{DynamicResource ConsoleMuted}" Margin="8,0,0,0"/>
-      <TextBlock Text="DPS 排行" FontFamily="{DynamicResource HeadingFont}" FontSize="15" FontWeight="SemiBold"
-                 Foreground="{DynamicResource ConsoleInk}" VerticalAlignment="Center"/>
-     </DockPanel>
-    </Border>
-    <Grid>
-     <ListBox x:Name="Rows" ItemTemplate="{StaticResource SideDpsRow}" ItemContainerStyle="{StaticResource SideOperatorRow}"
-              AutomationProperties.Name="干员近 5 秒 DPS 排行" AutomationProperties.AutomationId="SideDpsRanking"
-              SelectionChanged="SelectOperator" MouseLeave="ReleaseOrder" ScrollViewer.VerticalScrollBarVisibility="Auto"
-              VirtualizingPanel.VirtualizationMode="Recycling" KeyboardNavigation.DirectionalNavigation="Contained"/>
-     <TextBlock x:Name="EmptyMessage" Text="等待战斗数据" Foreground="{DynamicResource ConsoleMuted}"
-                HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" TextAlignment="Center"
-                TextWrapping="Wrap" Margin="12,8" IsHitTestVisible="False"/>
-    </Grid>
-   </DockPanel>
-  </Border>
+  <local:StatisticPanel x:Name="RankingPanel"/>
   <ScrollViewer x:Name="DetailViewport" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                 Margin="0,8,0,0" Focusable="False">
    <local:Inspector x:Name="Details" AutomationProperties.AutomationId="SideOperatorDetails"/>

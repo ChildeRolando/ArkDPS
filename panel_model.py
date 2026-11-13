@@ -491,6 +491,7 @@ class PanelEntry:
     # Complete display text for the rate column: '123/s', '无接敌' or '—'.
     rate_text: str = ''
     rate_note: str = ''
+    cumulative_display_value: str = '—'
 
 
 @dataclass
@@ -942,19 +943,22 @@ def render_panel(config: PanelConfig,
             else ((), False))
         share = value / denominator if denominator is not None and owner in known_values else None
         rate, rate_state, rate_text, rate_note = rates[owner]
-        shown = total_value(row) if ranking is Ranking.DPS else value
+        cumulative = value if ranking is Ranking.TOTAL else total_value(row)
+        cumulative_display = format_compact(cumulative, number_units)
+        shown = format_compact(value, number_units) if ranking is Ranking.RECENT else cumulative_display
         entries.append(PanelEntry(
             owner_id=owner, name=row.name, value=value,
             bar_ratio=(value / max_value) if max_value > 0 else 0.0,
             share=share, share_display=format_percent(share),
-            display_value=format_compact(shown, number_units) if _finite(shown) else '—',
+            display_value=shown,
             exact_value=f'{value!r}',
             rate=rate, rate_display=format_compact(rate, number_units), rate_label=rate_label,
             present=row.present, portrait_muted=row.present is False,
             incomplete=not complete.get(owner, False),
             segments=segments, segments_complete=segments_complete,
             detail=details[owner],
-            rate_state=rate_state, rate_text=rate_text, rate_note=rate_note))
+            rate_state=rate_state, rate_text=rate_text, rate_note=rate_note,
+            cumulative_display_value=cumulative_display))
     entries.sort(key=lambda e: (-e.value, e.name, e.owner_id))
     return PanelView(config=config, title=config.display_title, entries=entries,
                      total=sum(displayed.values()), denominator=denominator,

@@ -564,12 +564,14 @@ public sealed class Inspector : Border
             double seconds=row.Number("presence_seconds",double.NaN);
             string presence=row.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
                 ? FormatTime(seconds) : "—";
-            metricLabels[0].Text=effective ? "有效伤害" : "总伤";
-            metricLabels[1].Text=sideHeading!=null ? "近 5 秒 DPS"
-                : rateLabel.Length==0 && category!="shield" ? DefaultLabels[1]
-                : category=="shield" ? "有效护盾"
+            bool side=sideHeading!=null;
+            metricLabels[0].Text=side && category=="healing" ? "总治疗" : effective ? "有效伤害" : "总伤";
+            string unit=category=="healing" ? "HPS" : "DPS";
+            metricLabels[1].Text=category=="shield" ? "有效护盾"
+                : rateLabel.Length==0 ? DefaultLabels[1]
+                : side ? (rateLabel=="全周期DPS" ? "全周期" : rateLabel)+" "+unit
                 : rateLabel=="全周期DPS" && category=="damage" ? "全周期 DPS"
-                : $"{(category=="healing" ? "HPS" : "DPS")}（{rateLabel}）";
+                : $"{unit}（{rateLabel}）";
             metricLabels[2].Text=view.Text("share_scope")=="known" ? shareInfo.Label : (ranking,category) switch
             {
                 ("dps","healing") => "HPS 占比",
@@ -579,9 +581,12 @@ public sealed class Inspector : Border
                 ("recent",_) => "近期伤害占比",
                 _ => "伤害占比",
             };
-            SetMetric(0,effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
-                effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
-                    ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。");
+            if(side && category=="healing")
+                SetMetric(0,Number(row.Get("healing")),"累计归属于该干员的治疗量。");
+            else
+                SetMetric(0,effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
+                    effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
+                        ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。");
             string rateHint=category=="shield" ? "累计归属于该干员的实际护盾吸收量。"
                 : DescribeRate(view.Get("config").Text("rate_basis"),category=="healing",effective);
             SetMetric(1,category=="shield" ? Number(row.Get("shield_absorbed")) : rate,

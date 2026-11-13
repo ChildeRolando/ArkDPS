@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Media;
@@ -44,8 +45,7 @@ public partial class MainWindow
             ContentRoot.Visibility = Visibility.Collapsed;
             SideRoot.Visibility = Visibility.Visible;
             SideTabs.SelectedIndex = route == "enemies" ? 1 : 0;
-            if (!ShowingPreviousBattle)
-                SideFriendly.Update(DisplayedBattleId, State.Get("side_ranking"));
+            RefreshSideRanking();
             ApplyShellLayout();
             UpdateSidePlacement(placeFallback: true);
             SideAttachmentTimer.Start();
@@ -70,6 +70,12 @@ public partial class MainWindow
         ArrangePanels();
         QueueWorkAreaLayout();
         EnterSideMode.Focus();
+    }
+
+    private void RefreshSideRanking()
+    {
+        var firstPanel = PanelHost.Children.OfType<StatisticPanel>().FirstOrDefault();
+        SideFriendly.Update(DisplayedBattleId, firstPanel?.View ?? default);
     }
 
     private void UpdateSidePlacement(bool placeFallback = false)

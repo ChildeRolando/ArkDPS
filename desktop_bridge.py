@@ -39,7 +39,6 @@ from panel_model import (EventAvailability, PanelConfig, Ranking, RateBasis, det
 import stage_names
 
 PROTOCOL_VERSION = 1
-SIDE_RANKING = PanelConfig(ranking=Ranking.DPS)
 MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
 BRIDGE_COMMANDS = frozenset((
@@ -296,8 +295,6 @@ class DesktopState:
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
-                    side_ranking=(self.view(SIDE_RANKING, stats, None, live_event)
-                                  if self.layout.side_mode else None),
                     live_analysis=self.live_analysis,
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),

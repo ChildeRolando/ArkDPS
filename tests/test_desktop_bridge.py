@@ -46,26 +46,31 @@ def test_first_launch_and_default_model_ignores_legacy_projection(tmp_path):
     assert view['source']['a']['shield_absorbed'] is None
 
 
-def test_side_mode_persists_full_window_geometry_and_ranks_by_recent_damage(tmp_path):
+def test_side_mode_persists_full_window_geometry_and_preserves_rankings(tmp_path):
     state = DesktopState(tmp_path)
     data = analysis_sample(rate=20.)
     data['statistics']['rows']['b']['recent_damage'] = 70.
     state.accept('sample', data)
     normal = state.snapshot()
-    assert normal['side_ranking'] is None
     gui = dict(x=50, y=60, width=1200, height=800)
     cmd(state, 'placement', gui=gui, huds=[], side_mode=True)
     docked = state.snapshot()
     assert docked['panels'] == normal['panels']
-    assert [entry['owner_id'] for entry in docked['side_ranking']['entries']] == ['b', 'a']
-    assert docked['side_ranking']['config']['rate_basis'] == 'recent_5s'
-    assert docked['side_ranking']['source'] == normal['panels'][0]['source']
     restored = DesktopState(tmp_path)
     assert restored.layout.side_mode and restored.layout.gui.to_dict() == gui
     cmd(restored, 'placement', gui=gui, huds=[])
     assert restored.layout.side_mode
     cmd(restored, 'placement', gui=gui, huds=[], side_mode=False)
     assert not DesktopState(tmp_path).layout.side_mode
+
+
+def test_legacy_recent_ranking_reports_cumulative_amount_for_side_column(tmp_path):
+    state = DesktopState(tmp_path)
+    cmd(state, 'panel_update', config=dict(panel_id='default', category='damage', ranking='recent'))
+    state.accept('sample', analysis_sample(rate=20.))
+    entry = state.snapshot()['panels'][0]['entries'][0]
+    assert entry['display_value'] == '20'
+    assert entry['cumulative_display_value'] == '1.2K'
 
 
 def test_snapshot_team_totals_keep_unknown_unknown():

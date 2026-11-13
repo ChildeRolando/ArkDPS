@@ -60,11 +60,11 @@ public partial class MainWindow
         Native.Restore(this, JsonSerializer.SerializeToElement(Native.Geometry(this)));
         await Settle();
         string normalGeometryBefore = JsonSerializer.Serialize(Native.Geometry(this));
-        var hudHandle = Native.Handle(hud);
-        long hudStyle = Native.ExStyle(hud);
-        double hudOpacity = hud.Opacity;
-        var hudBounds = Native.Bounds(hud);
         ToggleButton? enemyPin = null;
+        var originalPanels = State.Get("layout").Get("panels").Items().ToArray();
+        string firstId = originalPanels[0].Text("panel_id");
+        string? addedSideTestPanel = null;
+        var sourceConfig = new { panel_id = firstId, category = "damage", ranking = "total", rate_basis = "full_cycle" };
 
         var fixture = new Window
         {
@@ -79,6 +79,23 @@ public partial class MainWindow
             Math.Min(600, work.Width / 2), Math.Min(680, work.Height - 58));
         try
         {
+            await Command("panel_update", new() { ["config"] = sourceConfig });
+            if (originalPanels.Length == 1)
+            {
+                await Command("panel_add");
+                addedSideTestPanel = State.Get("layout").Get("panels").Items().Last().Text("panel_id");
+            }
+            string secondId = addedSideTestPanel ?? originalPanels[1].Text("panel_id");
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = secondId, category = "healing", ranking = "dps", rate_basis = "recent_5s"
+            }});
+            await Settle();
+            var hudHandle = Native.Handle(hud);
+            long hudStyle = Native.ExStyle(hud);
+            double hudOpacity = hud.Opacity;
+            var hudBounds = Native.Bounds(hud);
+
             fixture.Show();
             Native.Place(fixture, originalPlayer);
             await Settle();
@@ -96,19 +113,29 @@ public partial class MainWindow
                     JsonElement.DeepEquals(State.Get("layout").Get("gui"), JsonSerializer.SerializeToElement(normalGeometry)) &&
                     !ContentRoot.IsVisible && SideRoot.IsVisible, "side mode did not preserve the full layout geometry");
 
-            var ranking = (ListBox?)FindAutomationElement(SideFriendly, "SideDpsRanking");
-            Require(ranking is { Items.Count: > 1 }, "side ranking does not show live DPS data");
-            ranking!.SelectedIndex = 0;
-            await Settle();
-            Require(HasText(SideFriendly, "阿米娅 · 主要数据") && HasText(SideFriendly, "总伤") &&
-                    FindAutomationElement(SideFriendly, "CompactOperatorStats") is not null &&
-                    FindAutomationElement(SideFriendly, "CompactOperatorComposition") is null &&
-                    FindVisual<LiveTrendView>(SideFriendly, _ => true) is null,
-                    "side details did not use the primary data card");
-            var row = (ListBoxItem)ranking.ItemContainerGenerator.ContainerFromIndex(0);
-            Require(!HasText(row, "阿米娅") && System.Windows.Automation.AutomationProperties.GetName(row) == "阿米娅",
-                    "side ranking must expose the portrait owner's name through accessibility only");
+            Require(Panels[secondId].View.Get("config").Text("category") == "healing" &&
+                    Panels[secondId].View.Get("entries").Items().Any(),
+                    "alternate source panel must have data and a different category");
+            await VerifySideRanking(Panels[firstId].View, "总伤", "全周期 DPS", expectedSegments: 4);
             Screenshot.Window(this, Path.Combine(output, "side-friendly.png"));
+
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = firstId, category = "damage", ranking = "recent", rate_basis = "recent_5s"
+            }});
+            var recent = Panels[firstId].View;
+            var recentEntry = recent.Get("entries").Items().First();
+            Require(recentEntry.Text("cumulative_display_value") != recentEntry.Text("display_value"),
+                    "the recent-sort fixture must distinguish cumulative damage from the ranking value");
+            await VerifySideRanking(recent, "总伤", "近 5 秒 DPS", expectedSegments: 1);
+
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle", effective_only = true
+            }});
+            await VerifySideRanking(Panels[firstId].View, "有效伤害", "全周期 DPS", expectedSegments: 4);
+            await Command("panel_update", new() { ["config"] = sourceConfig });
+            await Settle();
 
             SideTabs.SelectedIndex = 1;
             await Settle();
@@ -153,6 +180,11 @@ public partial class MainWindow
             SetSideMode(false);
             SideAttachment.FixtureWindow = 0;
             fixture.Close();
+            await Command("panel_update", new() { ["config"] = originalPanels[0] });
+            if (addedSideTestPanel is not null)
+                await Command("panel_delete", new() { ["panel_id"] = addedSideTestPanel });
+            else if (originalPanels.Length > 1)
+                await Command("panel_update", new() { ["config"] = originalPanels[1] });
             await SavePlacement();
             await Settle();
         }
@@ -160,6 +192,46 @@ public partial class MainWindow
                 normalGeometryBefore == JsonSerializer.Serialize(Native.Geometry(this)) && enemyPin?.IsChecked == true,
                 "returning to full mode did not restore the regular window");
         enemyPin!.IsChecked = false;
+    }
+
+    private async Task VerifySideRanking(JsonElement source, string expectedMetric, string expectedRateLabel, int expectedSegments)
+    {
+        var sourcePanel = FindVisual<StatisticPanel>(SideFriendly, _ => true);
+        var ranking = sourcePanel is null ? null : FindAutomationElement(sourcePanel, "SideDpsRanking") as ListBox;
+        Require(ranking is { Items.Count: > 1 }, "side mode does not reuse the live statistic panel");
+        var expectedEntries = source.Get("entries").Items().ToArray();
+        Require(ranking!.Items.Cast<RowItem>().Select(row => row.Id)
+            .SequenceEqual(expectedEntries.Select(entry => entry.Text("owner_id"))),
+            "side ranking did not follow the first live panel's order and owners");
+        ranking.SelectedIndex = 0;
+        ranking.ScrollIntoView(ranking.SelectedItem);
+        await Settle();
+        var expected = expectedEntries[0];
+        string name = expected.Text("name");
+        var primary = FindAutomationElement(SideFriendly, "CompactOperatorStats");
+        var totalMetric = primary is null ? null : FindAutomationElement(primary, "CompactOperatorMetric0");
+        var rateMetric = primary is null ? null : FindAutomationElement(primary, "CompactOperatorMetric1");
+        Require(primary is not null && HasText(primary, name + " · 主要数据") &&
+                totalMetric is not null && HasText(totalMetric, expectedMetric) &&
+                rateMetric is not null && HasText(rateMetric, expectedRateLabel) &&
+                FindAutomationElement(SideFriendly, "CompactOperatorComposition") is null &&
+                FindVisual<LiveTrendView>(SideFriendly, _ => true) is null,
+                "side details did not use the selected operator's primary data card");
+        var container = (ListBoxItem)ranking.ItemContainerGenerator.ContainerFromIndex(0);
+        Require(FindVisual<TextBlock>(container, text => text.IsVisible && (text.Text == name || text.Text == "1")) is null &&
+                System.Windows.Automation.AutomationProperties.GetName(container) == name,
+                "side ranking displays rank or name, or hides name from accessibility");
+        var total = FindAutomationElement(container, "SideRankingTotal") as TextBlock;
+        var rate = FindAutomationElement(container, "SideRankingRate") as TextBlock;
+        Require(total is { IsVisible: true } && total.Text == expected.Text("cumulative_display_value") &&
+                rate is { IsVisible: true } && rate.Text == expected.Text("rate_text") && total.Text != rate.Text,
+                "side ranking lost separate cumulative output and selected rate values");
+        var bar = FindAutomationElement(container, "SideRankingContribution") as ContributionBar;
+        Require(bar is { IsVisible: true, ActualWidth: > 0 } &&
+                JsonElement.DeepEquals(bar.Data.Get("segments"), expected.Get("segments")) &&
+                bar.Data.Get("segments").Items().Count() == expectedSegments &&
+                bar.Data.Number("bar_ratio") == expected.Number("bar_ratio"),
+                "side ranking did not render the first panel's segmented contribution bar");
     }
 
     private void ApplyFixture(System.Text.Json.Nodes.JsonNode state)
@@ -1195,7 +1267,7 @@ public partial class MainWindow
         OpenHud(sideSource);
         await VerifySideMode(Huds[sideSource], output);
         if (!sideHudAlreadyOpen) CloseHud(sideSource);
-        checks.Add("side mode follows a private emulator window and restores the full GUI with HUD and enemy panel intact");
+        checks.Add("side mode follows a private emulator window, mirrors the first live ranking and restores the full GUI with HUD and enemy panel intact");
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",

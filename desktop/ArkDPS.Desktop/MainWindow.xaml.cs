@@ -294,7 +294,7 @@ public partial class MainWindow : Window
             {
                 foreach(var (id,panel) in Panels)
                     UpdateLivePanel(id,panel,panel.View,Panels.Count>1);
-                SideFriendly.RefreshAppearance();
+                if (sideMode) RefreshSideRanking();
             }
             RefreshLiveAvailability();
             return false;
@@ -322,11 +322,7 @@ public partial class MainWindow : Window
             if(activePanel==id){activePanel="";ResetLiveInspector();}
         }
         string battle=state.Text("battle_id");
-        bool battleChanged = battle != lastBattle;
-        if(battleChanged){lastBattle=battle;ResetLiveInspector();foreach(var panel in Panels.Values)panel.ClearSelection();}
-        var sideRanking = state.Get("side_ranking");
-        if (sideMode || battleChanged || sideRanking.ValueKind == JsonValueKind.Object)
-            SideFriendly.Update(battle, sideRanking);
+        if(battle!=lastBattle){lastBattle=battle;ResetLiveInspector();foreach(var panel in Panels.Values)panel.ClearSelection();}
         foreach(var view in views)
         {
             string id=view.Get("config").Text("panel_id");
@@ -344,6 +340,7 @@ public partial class MainWindow : Window
             }
             UpdateLivePanel(id,panel,view,views.Length>1);
         }
+        if (sideMode) RefreshSideRanking();
         RefreshHudLayoutTargets(views);
         RefreshHudFooter();
         RefreshLiveAvailability();
