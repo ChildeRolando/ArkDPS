@@ -243,16 +243,16 @@ def test_hud_styles_are_per_panel_and_survive_closing_and_restarting(tmp_path):
 
     cmd(state, 'hud_style', panel_id='default',
         style={'name_font': 21.5, 'name_width': 168, 'column_gap': 9, 'bar_width': 0})
-    cmd(state, 'hud_style', panel_id=second, style={'width': 700, 'row_gap': 4})
+    cmd(state, 'hud_style', panel_id=second, style={'width': 700, 'row_gap': 4, 'scale': 0.8})
     profiles = state.snapshot()['layout']['hud_styles']
     default_style = dict(title_font=20, name_font=15, number_font=15, width=484,
                          row_height=46, title_height=44, portrait_size=38,
                          rank_width=28, portrait_width=52, name_width=92, bar_width=158,
                          total_width=78, rate_width=76, share_width=68,
-                         row_gap=1, column_gap=2, padding=4)
+                         row_gap=1, column_gap=2, padding=4, scale=1.0)
     assert profiles['default'] == dict(default_style, name_font=21.5, name_width=168,
                                        column_gap=9, bar_width=0)
-    assert profiles[second] == dict(default_style, width=700, row_gap=4)
+    assert profiles[second] == dict(default_style, width=700, row_gap=4, scale=0.8)
 
     gui = dict(x=50, y=60, width=1200, height=800)
     hud = dict(panel_id=second, x=-700, y=30, width=830, height=480, opacity=.83, locked=True)
@@ -546,6 +546,18 @@ def test_preparing_status_keeps_last_verified_view_and_observer_status(tmp_path)
     assert '保留上一局统计' in result['status_text']
     assert result['observer_status'] == 'ready'
     assert result['panels'][0]['entries'][0]['value'] == 1230
+
+
+def test_lobby_signal_preserves_the_last_battle_and_terminal_status(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_metadata={'stage_id': 'Obt/Main/level_main_01-07'}))
+    state.accept('lifecycle', 'ended')
+    state.accept('battle_waiting', True)
+    snapshot = state.snapshot()
+    assert snapshot['battle_waiting'] is True
+    assert snapshot['status'] == 'ended'
+    assert snapshot['stage_code'] == '1-7'
+    assert snapshot['panels'][0]['entries'][0]['value'] == 1230
 
 
 def test_export_exact_json_and_archive_protection(tmp_path):
@@ -1122,7 +1134,7 @@ def test_engagement_without_events_explains_itself_and_recovers_in_same_panel(tm
     view = state.snapshot()['panels'][0]
     assert view['config']['panel_id'] == panel_id
     assert view['rate_available'] is False
-    assert '事件观测未连接' in view['rate_reason']
+    assert '事件观察未连接' in view['rate_reason']
     assert view['rate_action'] == 'retry' and view['rate_action_label']
     assert all(entry['rate'] is None for entry in view['entries'])
     assert all(entry['rate_text'] == '—' for entry in view['entries'])
@@ -1162,7 +1174,7 @@ def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path)
     view = selected['view']
     assert selected['record']['event_status'] == 'failed'
     assert view['rate_available'] is False
-    assert '该局事件观测未连接' in view['rate_reason']
+    assert '该局事件观察未连接' in view['rate_reason']
     assert '无法补采' in view['rate_hint']
     assert view['rate_action'] == 'settings'
     assert all(entry['rate'] is None for entry in view['entries'])

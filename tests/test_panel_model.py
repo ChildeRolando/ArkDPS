@@ -528,10 +528,10 @@ def test_event_unavailable_explains_engagement_and_never_zero_fills():
                         event=EventAvailability('failed',
                                                 'unable to connect to remote frida-server'))
     assert view.rate_available is False
-    assert '事件观测未连接' in view.rate_reason
+    assert '事件观察未连接' in view.rate_reason
     assert 'unable to connect to remote frida-server' in view.rate_reason
-    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观测者')
-    assert '事件观测' in view.rate_hint
+    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观察者')
+    assert '事件观察' in view.rate_hint
     entry = view.entries[0]
     assert entry.rate is None
     assert entry.rate_text == '—'
@@ -586,7 +586,7 @@ def test_event_coverage_closed_mid_battle_keeps_prefix_and_marks_gap():
     assert entry.rate == pytest.approx(50) and entry.rate_text == '50/s'
     assert view.rate_available is False
     assert '中断' in view.rate_reason and 'observer stopped' in view.rate_reason
-    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观测者')
+    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观察者')
     assert '不补零' in view.rate_hint
 
 
@@ -596,7 +596,7 @@ def test_history_event_incomplete_reason_is_explicit_and_not_backfilled():
     view = render_panel(engagement_config(), rows,
                         event=EventAvailability('failed', 'observer unavailable', live=False))
     assert view.rate_available is False
-    assert '该局事件观测未连接' in view.rate_reason
+    assert '该局事件观察未连接' in view.rate_reason
     assert '无法补采' in view.rate_hint
     assert (view.rate_action, view.rate_action_label) == ('settings', '打开连接设置')
     entry = view.entries[0]
@@ -695,7 +695,7 @@ def test_event_unknown_reason_is_specific_for_failed_and_partial_coverage():
                                error='unable to connect to remote frida-server', live=True)
     view = render_panel(PanelConfig(), [row], event=failed)
     reason = view.entries[0].detail['event_reason']
-    assert '事件观测未连接' in reason
+    assert '事件观察未连接' in reason
     assert 'unable to connect to remote frida-server' in reason
 
     row.event_coverage_end = 12.34

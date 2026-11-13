@@ -93,40 +93,40 @@ def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, s
     detail = f'（{error}）' if error else ''
     if event.live:
         if event.status == 'failed':
-            reason = f'接敌数据不可用：事件观测未连接{detail}'
-            hint = ('接敌 DPS/HPS 与活跃时间需要事件观测。可以重连观测者，'
+            reason = f'接敌数据不可用：事件观察未连接{detail}'
+            hint = ('接敌 DPS/HPS 与活跃时间需要事件观察。可以重连观察者，'
                     '或打开连接设置检查 Frida 端点。')
-            action, label = 'retry', '重连观测者'
+            action, label = 'retry', '重连观察者'
         elif event.status == 'gap':
             reason = f'接敌数据已中断：仅保留已覆盖区间{detail}'
-            hint = '未覆盖区间保持未知且不补零。重连观测者后会显示新覆盖的数据。'
-            action, label = 'retry', '重连观测者'
+            hint = '未覆盖区间保持未知且不补零。重连观察者后会显示新覆盖的数据。'
+            action, label = 'retry', '重连观察者'
         elif event.status == 'incompatible':
-            reason = '接敌数据不可用：事件观测与当前游戏版本不兼容'
-            hint = '请检查游戏版本与连接设置，再重连观测者。'
+            reason = '接敌数据不可用：事件观察与当前游戏版本不兼容'
+            hint = '请检查游戏版本与连接设置，再重连观察者。'
             action, label = 'settings', '打开连接设置'
         elif event.status in ('unavailable', 'stopped'):
-            reason = ('接敌数据不可用：事件观测已关闭'
+            reason = ('接敌数据不可用：事件观察已关闭'
                       if event.status == 'unavailable'
-                      else '接敌数据不可用：事件观测已停止')
-            hint = '在连接设置中启用观测者，再点击「应用设置并重连」。'
+                      else '接敌数据不可用：事件观察已停止')
+            hint = '在连接设置中启用观察者，再点击「应用设置并重连」。'
             action, label = 'settings', '打开连接设置'
         elif event.status is None:
             reason = '接敌数据尚未可用：等待事件能力诊断'
-            hint = '等待事件观测诊断；长时间无结果请打开连接设置检查 Frida 端点。'
+            hint = '等待事件观察诊断；长时间无结果请打开连接设置检查 Frida 端点。'
             action, label = 'settings', '打开连接设置'
         else:
-            reason = '接敌数据尚未可用：事件观测正在建立'
+            reason = '接敌数据尚未可用：事件观察正在建立'
             hint = '等待同帧事件基线；长时间未就绪请打开连接设置检查 Frida 端点。'
             action, label = 'settings', '打开连接设置'
     else:
         if event.status == 'failed':
-            reason = f'接敌数据不可用：该局事件观测未连接{detail}'
+            reason = f'接敌数据不可用：该局事件观察未连接{detail}'
         elif event.status == 'gap':
-            reason = f'接敌数据不完整：该局事件观测中途中断{detail}'
+            reason = f'接敌数据不完整：该局事件观察中途中断{detail}'
         else:
-            reason = '接敌数据不可用：该局未开启事件观测'
-        hint = '历史记录无法补采事件；开启事件观测后新战局会记录接敌数据。'
+            reason = '接敌数据不可用：该局未开启事件观察'
+        hint = '历史记录无法补采事件；开启事件观察后新战局会记录接敌数据。'
         action, label = 'settings', '打开连接设置'
     return False, reason, hint, action, label
 
@@ -705,7 +705,7 @@ def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
         if not row.presence_complete or row.presence_seconds is None:
             return 'unknown', '—', '在场时间未建立可靠覆盖；全周期 DPS 未知'
         if row.presence_seconds <= 0:
-            return 'unknown', '—', '未观测到在场时间；全周期 DPS 未知'
+            return 'unknown', '—', '未观察到在场时间；全周期 DPS 未知'
         return 'unknown', '—', '总量或在场时间不完整；全周期 DPS 未知'
     if not engagement:
         return 'unknown', '—', ''
@@ -714,7 +714,7 @@ def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
         return 'no_engagement', '无接敌', '已覆盖区间内未观察到接敌事件（可靠零）'
     if available:
         return 'unknown', '—', '该干员事件覆盖不完整，接敌数据未知'
-    return 'unavailable', '—', '接敌数据不可用：需要事件观测（不以 0 或墙钟替代）'
+    return 'unavailable', '—', '接敌数据不可用：需要事件观察（不以 0 或墙钟替代）'
 
 
 def detail_rates(rows: Iterable[PanelSourceRow],
@@ -752,7 +752,7 @@ def _owner_detail(row: PanelSourceRow, *, effective: bool, rate_reason: str) -> 
         event_reason = ('事件仅覆盖到 ' + format_one_decimal(row.event_coverage_end)
                         + ' 游戏秒，之后未知')
     else:
-        event_reason = '事件观测未建立覆盖'
+        event_reason = '事件观察未建立覆盖'
     return {'damage_by_type': dict(row.damage_by_type),
             'damage': row.damage, 'healing': row.healing,
             'shield_absorbed': row.shield,
@@ -909,11 +909,11 @@ def render_panel(config: PanelConfig,
         reasons.append('近期窗口不一致，无法计算占比')
     elif missing_rows:
         if recent_ranking:
-            reasons.append('部分干员的近期数值或窗口未完整观测')
+            reasons.append('部分干员的近期数值或窗口未完整观察')
         elif engagement_ranking:
-            reasons.append('部分干员的接敌事件未完整观测')
+            reasons.append('部分干员的接敌事件未完整观察')
         elif full_cycle_ranking:
-            reasons.append('部分干员的总量或在场时间未完整观测')
+            reasons.append('部分干员的总量或在场时间未完整观察')
         elif effective:
             reasons.append('部分干员的有效伤害未知')
         else:

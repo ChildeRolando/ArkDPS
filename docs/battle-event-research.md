@@ -15,7 +15,7 @@
 
 - 原生快照提供干员伤害/治疗累计及伤害分类槽，和编队、召唤宿主等归属信息；累计快照是总量的权威来源。
 - 正式事件流当前有三类：`damage`、`healing`、`shield_absorbed`。伤害/治疗来自 `Entity.ApplyModifier`；已验证数值盾吸收来自 `Buff.OnTakeDamage` 与 `BlockDamage._AssignDynamicVar`。护盾只对已验证来源和机制提供可靠事件，不代表一般盾/减伤都覆盖。
-- 产品伤害事件现在额外序列化目标 ID、签名 `realDelta`、目标 HP 前后、`killed`、`targetType`、`damageType`、`cancelReason`，以及同帧已验证护盾的 `shield_absorbed` 上下文；金额读取原生 `m_value`，捕获样本（frame 697：`m_value=14`、`realDelta=0`、HP 未变、`BlockDamage` 吸收 14）显示它是吸收前的来伤值，吸收量须由统计层单独扣除，不是 HP `realDelta`。仍未覆盖技能、攻击/命中关联 ID 和原始伤害子类；这些新字段的设备端偏移与逐干员对账要等 ARK-21 的事件观测恢复后验证，读取失败时只让过量保持未知。原生累计依旧不能与逐事件再相加。
+- 产品伤害事件现在额外序列化目标 ID、签名 `realDelta`、目标 HP 前后、`killed`、`targetType`、`damageType`、`cancelReason`，以及同帧已验证护盾的 `shield_absorbed` 上下文；金额读取原生 `m_value`，捕获样本（frame 697：`m_value=14`、`realDelta=0`、HP 未变、`BlockDamage` 吸收 14）显示它是吸收前的来伤值，吸收量须由统计层单独扣除，不是 HP `realDelta`。仍未覆盖技能、攻击/命中关联 ID 和原始伤害子类；这些新字段的设备端偏移与逐干员对账要等 ARK-21 的事件观察恢复后验证，读取失败时只让过量保持未知。原生累计依旧不能与逐事件再相加。
 - 产品近期 DPS/HPS 来自原生累计快照差分；接敌 DPS/HPS 来自已观察的伤害/治疗事件。事件序号、水位、帧、游戏时间和缺口状态用于覆盖完整性。
 - 研究 Frida probe 曾将 `AttackInfo.GetFinalAtk`、`BattleFormula.CalculateDamage*` 与 `Entity.ApplyModifier` 对账；祥子样本确认 `atk` 与 `atkScale` 分离，并观察到击杀超出目标剩余 HP 的数值差。但这批公式字段尚不属于正式产品事件 schema，原始探针记录不是仓库内的可重放验收工件。
 
@@ -76,7 +76,7 @@ run7 的 `ready` 元数据实际解析到以下候选重载（只代表该次 AR
 2. **画清生产与研究的边界。** 现有产品脚本的核心观察点为 `Entity.ApplyModifier`、`Buff.OnTakeDamage`、`BlockDamage._AssignDynamicVar`；研究候选包括 `CalculateDamage*`、`CalculateElementDamage`、`AttackInfo.GetFinalAtk`、`OnCalculateDamage` / `OnBeingCalculateDamage` / `OnAfterOutputDamage` 等。先确认回调之间是同一结算链还是重复观察，避免重复累计；hook 方法清单不等于可发布 schema。
 3. **按事件族做小而可证伪的受控样本。** 顺序建议：物理/法术/真伤/元素分支；有/无 DEF/RES、穿透与伤害增益；击杀前后 HP 差和溢出；数值盾完整/部分/耗尽；治疗与满血/持续恢复；SP 多种获取与技能开关；Buff/属性变更；召唤物及宿主；敌人出生/死亡/漏怪/波次。逐条记录“方法实际触发、payload、公式映射、累计对账、版本/环境”，无事件也作为结果保存。
 4. **在产品接入前先验证完整关联与开销。** 优先使用公式方法输入/输出和最终 Modifier 的调用上下文或可靠关联 ID；仅以同帧/线程/指针近邻配对要标明推导并实测。测定丢失、重入、高频开销、暂停/倍速、换局、observer 生命周期与 hook 错误；遵守现有版本校验，不使用会改游戏数值的测试手法。
-5. **建立原始事件档案与派生口径分层。** 保存原始 payload、方法版本/签名和 coverage，再由稳定统计层派生 DPH、净减伤、HP 实扣、溢出、治疗过量、护盾吸收等。快照用于累计对账，逐击事件用于时间与因果分析；两者不能重复加总。接入前未观测事件保持未知，不能外推成全局指标。
+5. **建立原始事件档案与派生口径分层。** 保存原始 payload、方法版本/签名和 coverage，再由稳定统计层派生 DPH、净减伤、HP 实扣、溢出、治疗过量、护盾吸收等。快照用于累计对账，逐击事件用于时间与因果分析；两者不能重复加总。接入前未观察事件保持未知，不能外推成全局指标。
 
 ## 当前优先级结论
 

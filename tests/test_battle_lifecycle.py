@@ -259,6 +259,28 @@ def test_observed_absence_allows_a_new_battle_with_all_addresses_and_clock_reuse
     assert len(r.sessions.pop_archives()) == 1
 
 
+def test_waiting_signal_keeps_stage_through_settlement_and_clears_it_in_lobby():
+    collector, runtime, _ = begin()
+    collector.lifecycle.update(source='home', target='battle_loader')
+    runtime.poll(collector)
+    assert runtime.feed.battle_waiting is False
+
+    collector.lifecycle.update(source='level_a', target='battle_finish', transiting=True)
+    runtime.poll(collector)
+    assert runtime.feed.battle_waiting is False
+    collector.lifecycle.update(battle=None, state=None, transiting=False)
+    runtime.poll(collector)
+    assert runtime.feed.battle_waiting is False
+    collector.lifecycle.update(source='battle_finish', target='home')
+    runtime.poll(collector)
+    assert runtime.feed.battle_waiting is True
+    assert runtime.sessions.state == 'ended'
+    assert runtime.display_sample()['rows'][0]['damage'] == 100.
+    assert len(runtime.sessions.pop_archives()) == 1
+    runtime.feed.gap()
+    assert runtime.feed.battle_waiting is None
+
+
 def test_finished_object_is_not_reopened_while_scene_tears_down():
     c, r, _ = begin()
     c.lifecycle.update(transiting=True, target='battle_finish')
@@ -563,6 +585,62 @@ def test_terminal_same_frame_revisions_are_kept_until_confirmed_scene_exit():
     record, = r.sessions.pop_archives()
     assert record['statistics']['rows']['a']['damage'] == 31899.103515625
     assert record['statistics']['rows']['a']['recent_damage'] is None
+
+
+@pytest.mark.parametrize('final_watermark', [True, False])
+def test_battle_end_keeps_open_skill_split_only_with_complete_events(final_watermark):
+    c, runtime = FakeCollector(), BattleRuntime()
+    c.advance(time=10., frame=10, damage=0.)
+    events = []
+
+    def mark():
+        return dict(sequence=len(events), epoch=len(events), active=0,
+                    frame=c.sample['frame'], game_time=c.sample['game_time'])
+
+    observer = SimpleNamespace(mark=mark, read_through=lambda sequence: dict(
+        events=deepcopy(events[:sequence])), commit_events=lambda _: None)
+    runtime.poll(c, observer)
+
+    def record(frame, kind, amount, **fields):
+        events.append(dict(sequence=len(events) + 1, frame=frame, game_time=float(frame),
+                           source='a', kind=kind, amount=amount, **fields))
+
+    record(11, 'damage', 20, target='enemy_1', hp_before=100, hp_after=80,
+           real_delta=-20, killed=False, damage_type=1)
+    record(11, 'skill_start', 1, skill_id='skill', proof={'method': 'Character.SwitchToSkillState'})
+    record(12, 'skill_end', 1, skill_id='skill', skill_reason=1,
+           proof={'method': 'Character.OnAfterSkill'})
+    c.advance(time=12., frame=12, damage=20.)
+    runtime.poll(c, observer)
+    live = runtime.sessions.live()['statistics']['rows']['a']
+    assert live['skill_active_seconds'] == 1
+    assert live['skill_split_effective_complete']
+
+    record(15, 'damage', 50, target='enemy_2', hp_before=10, hp_after=0,
+           real_delta=-10, killed=True, shield_absorbed=0, damage_type=1)
+    c.lifecycle.update(state=3, ready=False)
+    c.advance(time=15., frame=15, damage=70.)
+    runtime.poll(c, observer if final_watermark else None)
+    final = runtime.sessions.live()['statistics']['rows']['a']
+    c.lifecycle['battle'] = None
+    runtime.poll(c)
+    archive, = runtime.sessions.pop_archives()
+    row = archive['statistics']['rows']['a']
+    assert row == final
+    assert row['skill_window_count'] == 1
+    if final_watermark:
+        assert archive['event_status'] == 'finished'
+        assert row['skill_active_seconds'] == 4
+        assert row['skill_coverage_complete']
+        assert row['skill_split_effective_complete']
+        assert row['skill_damage_effective'] == 10
+        assert row['non_skill_damage_effective'] == 20
+        assert row['skill_split_reason'] is None
+    else:
+        assert archive['event_status'] == 'gap'
+        assert row['skill_damage_effective'] is None
+        assert not row['skill_split_effective_complete']
+        assert row['skill_split_reason'] == '事件覆盖已结束'
 
 
 def test_active_sample_cannot_reopen_a_finalizing_generation():

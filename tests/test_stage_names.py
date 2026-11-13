@@ -98,6 +98,8 @@ def test_live_bridge_history_and_search_use_the_same_resolution(tmp_path):
     snapshot = state.snapshot()
 
     assert snapshot['stage'] == '1-7'
+    assert snapshot['stage_code'] == '1-7'
+    assert snapshot['stage_name'] == '暴君'
     assert snapshot['stage_raw'] == MAIN
     assert MAIN in snapshot['stage_detail']
     assert snapshot['stage_known'] is True
@@ -106,6 +108,19 @@ def test_live_bridge_history_and_search_use_the_same_resolution(tmp_path):
     assert ROGUE in item['stage_detail']
     # Both the readable name and the legacy native id remain searchable.
     assert '急不可耐' in item['search'] and ROGUE.casefold() in item['search']
+
+
+@pytest.mark.parametrize('raw, code, name, label', [
+    (ACTIVITY, 'OF-8', '汐斯塔狂想曲', 'OF-8 汐斯塔狂想曲'),
+    (ROGUE, 'ISW-NO', '急不可耐', '急不可耐'),
+    ('Obt/Unknown/level_new', None, None, 'new'),
+    (None, None, None, None),
+])
+def test_live_stage_code_and_name_keep_fallback_in_display_label(tmp_path, raw, code, name, label):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_metadata={'stage_id': raw}))
+    snapshot = state.snapshot()
+    assert (snapshot['stage_code'], snapshot['stage_name'], snapshot['stage']) == (code, name, label)
 
 
 def test_json_export_keeps_the_resolved_name_and_the_raw_id():

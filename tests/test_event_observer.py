@@ -19,7 +19,7 @@ def test_incompatible_version_never_attaches():
 
 
 @pytest.mark.parametrize('native_error, expected', [
-    ('Process is not using emulation', '请重启设备端 Frida 服务后重连观测者'),
+    ('Process is not using emulation', '请重启设备端 Frida 服务后重连观察者'),
     ('Unexpected realm failure', 'Unexpected realm failure'),
 ])
 def test_emulated_attach_failure_keeps_native_realm_untouched(monkeypatch, native_error, expected):

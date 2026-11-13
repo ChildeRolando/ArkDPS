@@ -64,6 +64,16 @@ class BattleFeed:
                                  kind, deepcopy(sample), roster, reason, deepcopy(events),
                                  deepcopy(self.current_lifecycle))
 
+    @property
+    def battle_waiting(self):
+        """Use guarded scene evidence, with no update when a read failed."""
+        current = self.current_lifecycle
+        if current is None:
+            return None
+        # Settlement can own the flow after the battle singleton is gone.
+        return (current['target'] != 'battle_finish' and
+                (current['battle'] is None or current['state'] in (0, 1)))
+
     def gap(self, reason='read_unavailable'):
         self.current_lifecycle = None
         return self._emit('gap', reason=reason)

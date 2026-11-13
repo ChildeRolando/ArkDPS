@@ -27,15 +27,16 @@ internal static class Native
     {
         var r = Bounds(window); return new { x=r[0], y=r[1], width=r[2], height=r[3] };
     }
-    public static void Restore(Window window, JsonElement geometry, bool restoreHeight=true)
+    public static void Restore(Window window, JsonElement geometry, bool restoreSize=true)
     {
         if (geometry.ValueKind != JsonValueKind.Object) return;
         int x=(int)geometry.Number("x"), y=(int)geometry.Number("y"), width=(int)geometry.Number("width"), height=(int)geometry.Number("height");
         var work = System.Windows.Forms.Screen.FromRectangle(new System.Drawing.Rectangle(x,y,width,height)).WorkingArea;
-        width=Math.Min(Math.Max(width,350),work.Width);
-        height=Math.Min(restoreHeight ? Math.Max(height,230) : Bounds(window)[3],work.Height);
+        width=Math.Min(Math.Max(width,restoreSize ? 350 : 1),work.Width);
+        height=Math.Min(restoreSize ? Math.Max(height,230) : Bounds(window)[3],work.Height);
         x=Math.Clamp(x,work.Left,work.Right-width); y=Math.Clamp(y,work.Top,work.Bottom-height);
-        if (!SetWindowPos(Handle(window), IntPtr.Zero,x,y,width,height,0x0014)) throw new Win32Exception();
+        uint flags=restoreSize ? 0x0014u : 0x0015u;
+        if (!SetWindowPos(Handle(window), IntPtr.Zero,x,y,width,height,flags)) throw new Win32Exception();
     }
     internal static void KeepInWorkingArea(Window window, System.Drawing.Rectangle work)
     {

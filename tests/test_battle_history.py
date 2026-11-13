@@ -466,6 +466,20 @@ def test_product_replay_accepts_legacy_rows_but_checks_recorded_formula_metrics(
         replay(path)
 
 
+def test_product_replay_accepts_legacy_wording_only_in_known_stat_reasons():
+    from capture_battles import _same_statistics
+
+    actual = {'rows': {'a': {'skill_split_reason': '未观察到技能效果的实际结束',
+                             'damage': 20.0}}}
+    recorded = {'rows': {'a': {'skill_split_reason': '未观测到技能效果的实际结束',
+                               'damage': 20.0}}}
+    assert _same_statistics(actual, recorded)
+    recorded['rows']['a']['damage'] = 19.0
+    assert not _same_statistics(actual, recorded)
+    recorded['rows']['a'].update(damage=20.0, skill_split_reason='未观测到弹药技能的实际结束')
+    assert not _same_statistics(actual, recorded)
+
+
 def test_reads_are_independent_and_duplicate_json_keys_are_diagnosed(tmp_path):
     history = BattleHistory(tmp_path)
     original = record()

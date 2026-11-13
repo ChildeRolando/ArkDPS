@@ -84,8 +84,8 @@ class HudPlacement:
         opacity = raw.get('opacity', 0.9)
         if isinstance(opacity, bool) or not isinstance(opacity, (int, float)):
             raise ValueError('HUD 透明度必须是数字')
-        if not 0.7 <= float(opacity) <= 1.0:
-            raise ValueError('HUD 透明度必须在 0.7 到 1.0 之间')
+        if not 0 <= opacity <= 1.0:
+            raise ValueError('HUD 透明度必须在 0 到 1.0 之间')
         locked = raw.get('locked', False)
         if not isinstance(locked, bool):
             raise ValueError('HUD 锁定状态必须是布尔值')
@@ -99,7 +99,7 @@ class HudPlacement:
 
 @dataclass(frozen=True)
 class HudStyle:
-    """User-adjustable HUD dimensions in device-independent pixels."""
+    """User-adjustable HUD dimensions in DIPs and overall size multiplier."""
 
     title_font: float = 20
     name_font: float = 15
@@ -118,6 +118,7 @@ class HudStyle:
     row_gap: float = 1
     column_gap: float = 2
     padding: float = 4
+    scale: float = 1.0
 
     def __post_init__(self):
         for field in fields(self):
@@ -125,6 +126,8 @@ class HudStyle:
             value = getattr(self, key)
             if key.endswith('_font'):
                 minimum, maximum = 6, 64
+            elif key == 'scale':
+                minimum, maximum = 0.5, 2.0
             elif key == 'width':
                 minimum, maximum = 240, 2000
             elif key == 'row_height':
@@ -322,7 +325,7 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
         raise ValueError('布局文件没有可用面板')
     event = raw.get('event_observation', True)
     if not isinstance(event, bool):
-        warnings.append('事件观测开关无效，已使用默认开启')
+        warnings.append('事件观察开关无效，已使用默认开启')
         event = True
     gui = None
     if raw.get('gui') is not None:

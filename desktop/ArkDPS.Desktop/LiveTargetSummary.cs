@@ -358,10 +358,10 @@ public sealed class LiveTargetSummary : Border
                 var target = new EnemyItem(row, current.Uid, EnemyItem.RosterIdentity(row));
                 Show(name, target.Name);
                 var code = row.Text("code");
-                string lifecycle = LastObservation ? "最后观测 · 状态未知" : target.Status;
+                string lifecycle = LastObservation ? "最后观察 · 状态未知" : target.Status;
                 Show(identity, code.Length == 0 ? lifecycle : code + " · " + lifecycle);
                 identity.ToolTip = row.Bool("uses_last_readings")
-                    ? target.Tooltip + "\n部分读数保留最后一次观测值"
+                    ? target.Tooltip + "\n部分读数保留最后一次观察值"
                     : target.Tooltip;
                 Show(badge, target.Portrait is null ? target.Badge : "");
                 portrait.Source = target.Portrait;

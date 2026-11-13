@@ -188,7 +188,7 @@
   <Grid Grid.Row="1" Grid.Column="1" Background="Transparent">
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
    <DockPanel x:Name="SubpageHeader" Visibility="Collapsed" Grid.Row="0" Margin="12,13,12,8">
-    <Button x:Name="SubpageReconnectButton" Content="重连观测者" DockPanel.Dock="Right" Click="Rescan" Padding="11,7" VerticalAlignment="Center"/>
+    <Button x:Name="SubpageReconnectButton" Content="重连观察者" DockPanel.Dock="Right" Click="Rescan" Padding="11,7" VerticalAlignment="Center"/>
     <Border HorizontalAlignment="Left" Background="{DynamicResource SubpageHeadingSurface}" Padding="{DynamicResource SubpageHeadingPadding}">
      <StackPanel>
       <TextBlock x:Name="PageTitle" Style="{StaticResource PageTitle}" Foreground="{DynamicResource HeroInk}" FontSize="25" Text="实时战况"/>
@@ -207,7 +207,7 @@
          <DockPanel x:Name="StatusBadge" DockPanel.Dock="Right" Margin="12,0,0,0" VerticalAlignment="Center">
           <Ellipse x:Name="StatusLight" DockPanel.Dock="Left" Width="8" Height="8" Margin="0,0,6,0"
                    VerticalAlignment="Center" Fill="#777B80" IsHitTestVisible="False"/>
-          <TextBlock x:Name="Status" Text="等待连接观测者" Foreground="{DynamicResource FrameMuted}" FontSize="12"
+          <TextBlock x:Name="Status" Text="等待连接观察者" Foreground="{DynamicResource FrameMuted}" FontSize="12"
                      TextTrimming="CharacterEllipsis" MaxWidth="224" VerticalAlignment="Center"/>
          </DockPanel>
          <TextBlock x:Name="LiveFrameTitle" Text="实时DPS / LIVE DPS" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FrameInk}" TextTrimming="CharacterEllipsis"/>
@@ -227,15 +227,18 @@
                   Background="{DynamicResource BabelPaperAccent}"/>
          </Grid>
          <StackPanel x:Name="BabelMastheadHeading" Visibility="Collapsed" VerticalAlignment="Center" Margin="22,0,8,0">
-          <TextBlock x:Name="BabelMastheadTitle" Text="BABEL" FontFamily="{DynamicResource HeadingFont}"
-                     FontSize="72" FontWeight="Bold" LineHeight="72" LineStackingStrategy="BlockLineHeight"
-                     Foreground="{DynamicResource BabelPaperInk}" TextWrapping="NoWrap"/>
-          <StackPanel Orientation="Horizontal" Margin="2,4,0,0">
-           <Path Data="M 0,4 L 4,0 L 8,4 L 4,8 Z" Width="8" Height="8" Stretch="Fill"
+          <Viewbox StretchDirection="DownOnly" HorizontalAlignment="Left">
+           <TextBlock x:Name="BabelMastheadTitle" Text="观察停止" FontFamily="{DynamicResource HeadingFont}"
+                      FontSize="72" FontWeight="Bold" LineHeight="72" LineStackingStrategy="BlockLineHeight"
+                      Foreground="{DynamicResource BabelPaperInk}"/>
+          </Viewbox>
+          <DockPanel x:Name="BabelMastheadSubtitle" Margin="2,4,0,0">
+           <Path DockPanel.Dock="Left" Data="M 0,4 L 4,0 L 8,4 L 4,8 Z" Width="8" Height="8" Stretch="Fill"
                  Fill="{DynamicResource BabelPaperAccent}" Margin="0,0,7,0" VerticalAlignment="Center"
                  IsHitTestVisible="False"/>
-           <TextBlock Text="巴别塔" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource BabelPaperMuted}"/>
-          </StackPanel>
+           <TextBlock x:Name="BabelMastheadStageCode" Text="等待进入战斗" FontSize="14" FontWeight="SemiBold"
+                      Foreground="{DynamicResource BabelPaperMuted}" TextTrimming="CharacterEllipsis"/>
+          </DockPanel>
          </StackPanel>
          <Border x:Name="BabelMetricStrip" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed"
                  Background="{DynamicResource Inset}" IsHitTestVisible="False"/>
@@ -251,7 +254,7 @@
          </Border>
          <UniformGrid x:Name="MetricCards" Grid.Column="1" Columns="4">
           <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="∑   平均DPS" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="AverageDps" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
-          <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="峰值DPS（观测）" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="PeakDps" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
+          <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="峰值DPS（观察）" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="PeakDps" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
           <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="战斗时间" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="Clock" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
           <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="总伤" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="TotalDamage" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
          </UniformGrid>
@@ -270,10 +273,23 @@
        </HeaderedContentControl>
        <HeaderedContentControl x:Name="RankingFrame" Grid.Column="1" Header="干员DPS排行 / OPERATOR DPS RANKING" Style="{StaticResource ResearchFrame}" Padding="3" Margin="0,0,5,0">
         <DockPanel>
-         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,2,0,0">
+         <WrapPanel x:Name="RankingFooter" DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="0,2,0,0">
+          <StackPanel x:Name="HudFooterControls" Orientation="Horizontal" Margin="0,0,6,0" Visibility="Collapsed">
+           <ComboBox x:Name="HudFooterTarget" Width="62" MinHeight="22" FontSize="11" Padding="5,2,22,2"
+                     SelectedValuePath="Id" DisplayMemberPath="Label"
+                     AutomationProperties.Name="要调整的 HUD" ToolTip="选择要调整的 HUD"
+                     SelectionChanged="HudFooterSelectionChanged" Visibility="Collapsed"/>
+           <Button x:Name="HudFooterLock" Content="锁定 HUD" Click="ToggleFooterHudLock" Padding="6,1" MinHeight="22" FontSize="11"/>
+           <TextBlock Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,5,0" FontSize="11"/>
+           <Slider x:Name="HudFooterOpacity" Minimum="0" Maximum="100" Value="10" Width="55" TickFrequency="1"
+                   IsSnapToTickEnabled="True" ValueChanged="FooterHudOpacityChanged" VerticalAlignment="Center"
+                   AutomationProperties.Name="HUD 透明度"/>
+           <TextBlock Text="{Binding Value, ElementName=HudFooterOpacity, StringFormat={}{0:0}%}"
+                      Foreground="{DynamicResource Muted}" Width="31" TextAlignment="Right" VerticalAlignment="Center" FontSize="11"/>
+          </StackPanel>
           <Button x:Name="AddPanelButton" Content="+ 新建面板" Click="AddPanel" Padding="6,1" MinHeight="22" FontSize="11"/>
-          <Button x:Name="LiveReconnectButton" Content="重连观测者" Click="Rescan" Padding="6,1" MinHeight="22" FontSize="11"/>
-         </StackPanel>
+          <Button x:Name="LiveReconnectButton" Content="重连观察者" Click="Rescan" Padding="6,1" MinHeight="22" FontSize="11"/>
+         </WrapPanel>
          <ScrollViewer x:Name="RankingScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
           <StackPanel x:Name="PanelHost"/>
          </ScrollViewer>
@@ -432,8 +448,8 @@
        </StackPanel>
       </Border>
       <Border x:Name="ConnectionEventForm" Grid.Row="1" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12">
-       <StackPanel><TextBlock Text="观测者与连接诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
-        <CheckBox x:Name="EventsEnabled" Content="启用观测者"/>
+       <StackPanel><TextBlock Text="观察者与连接诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
+        <CheckBox x:Name="EventsEnabled" Content="启用观察者"/>
         <TextBlock Text="连接后，可按游戏事件统计有效伤害、伤害溢出、被减伤率、技能期伤害与覆盖率、接敌 DPS 和护盾实际吸收，并追踪敌人入场、血量变化、重生与离场。"
                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>
         <TextBlock Text="关闭或连接失败时，继续使用伤害与治疗累计快照。事件未覆盖的统计显示为未知。"

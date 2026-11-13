@@ -1,4 +1,5 @@
 """Versioned layout persistence, migration, corruption and reachability."""
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -140,7 +141,7 @@ def test_invalid_panels_and_huds_are_skipped_with_diagnostic(tmp_path):
                    panel('good').to_dict()],
         'huds': [{'panel_id': 'missing', 'x': 1, 'y': 2, 'width': 3, 'height': 4},
                  {'panel_id': 'good', 'x': 1, 'y': 2, 'width': 3, 'height': 4,
-                  'opacity': 0.1}],
+                  'opacity': -0.1}],
     }), encoding='utf-8')
     result = ls.LayoutStore(path).load()
     assert result.ok
@@ -149,7 +150,7 @@ def test_invalid_panels_and_huds_are_skipped_with_diagnostic(tmp_path):
     assert result.layout.event_observation is True
     assert result.layout.gui is None
     assert '跳过' in result.warning and 'HUD' in result.warning
-    assert '事件观测开关' in result.warning and 'GUI 窗口几何' in result.warning
+    assert '事件观察开关' in result.warning and 'GUI 窗口几何' in result.warning
 
 
 def test_fully_invalid_panel_list_is_treated_as_damaged(tmp_path):
@@ -175,6 +176,57 @@ def test_invalid_hud_styles_only_skip_affected_profiles(tmp_path):
     assert '2 个无效 HUD 样式' in result.warning
     assert dict(result.layout.hud_styles) == {'one': ls.HudStyle(name_font=22)}
     assert result.layout.huds[0].panel_id == 'two'
+
+
+def test_saved_hud_style_defaults_to_unscaled_and_persists_new_scale(tmp_path):
+    path = tmp_path / 'layout.json'
+    path.write_text(json.dumps({
+        'version': 3,
+        'panels': [{'panel_id': 'one'}],
+        'huds': [{'panel_id': 'one', 'x': 8, 'y': 16, 'width': 500, 'height': 200}],
+        'hud_styles': {'one': {'width': 600, 'name_font': 22}},
+    }), encoding='utf-8')
+    store = ls.LayoutStore(path)
+    before = store.load()
+    assert before.ok and not before.warning
+    assert dict(before.layout.hud_styles)['one'].scale == 1.0
+
+    resized = ls.HudStyle(width=600, name_font=22, scale=1.375)
+    store.save(replace(before.layout, hud_styles=(('one', resized),)))
+    after = store.load()
+    assert after.ok and not after.warning
+    assert dict(after.layout.hud_styles) == {'one': resized}
+    assert after.layout.huds == before.layout.huds
+    assert json.loads(path.read_text(encoding='utf-8'))['hud_styles']['one']['scale'] == 1.375
+
+
+@pytest.mark.parametrize('opacity', [0, 0.1, 1])
+def test_hud_opacity_roundtrip_includes_full_transparency(tmp_path, opacity):
+    placement = ls.HudPlacement.from_dict({
+        'panel_id': 'one', 'x': 8, 'y': 16, 'width': 500, 'height': 200,
+        'opacity': opacity, 'locked': True,
+    })
+    store = ls.LayoutStore(tmp_path / 'layout.json')
+    store.save(ls.Layout(panels=(panel('one'),), huds=(placement,)))
+    loaded = store.load()
+    assert loaded.ok and not loaded.warning
+    assert loaded.layout.huds == (placement,)
+    assert loaded.layout.huds[0].opacity == opacity
+
+
+@pytest.mark.parametrize('opacity', [-0.01, 1.01, True, '0', None, float('nan'), float('inf')])
+def test_invalid_hud_opacity_is_rejected(opacity):
+    with pytest.raises(ValueError, match='透明度'):
+        ls.HudPlacement.from_dict({
+            'panel_id': 'one', 'x': 8, 'y': 16, 'width': 500, 'height': 200,
+            'opacity': opacity,
+        })
+
+
+@pytest.mark.parametrize('scale', [0.49, 2.01, True, '1.25', None, float('nan'), float('inf')])
+def test_invalid_hud_scale_is_rejected(scale):
+    with pytest.raises(ValueError, match='scale'):
+        ls.HudStyle.from_dict({'scale': scale})
 
 
 def test_saved_hud_requires_a_matching_panel(tmp_path):
