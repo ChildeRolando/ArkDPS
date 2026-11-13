@@ -27,6 +27,17 @@ internal static class Native
     {
         var r = Bounds(window); return new { x=r[0], y=r[1], width=r[2], height=r[3] };
     }
+    internal static void Place(Window window, System.Drawing.Rectangle rectangle)
+    {
+        var handle = Handle(window);
+        if (GetWindowRect(handle, out var current) && current.Left == rectangle.Left &&
+            current.Top == rectangle.Top && current.Right == rectangle.Right && current.Bottom == rectangle.Bottom)
+            return;
+        const uint noActivateOrZOrder = 0x0014; // SWP_NOACTIVATE | SWP_NOZORDER
+        if (!SetWindowPos(handle, IntPtr.Zero, rectangle.X, rectangle.Y,
+                rectangle.Width, rectangle.Height, noActivateOrZOrder))
+            throw new Win32Exception();
+    }
     public static void Restore(Window window, JsonElement geometry, bool restoreSize=true)
     {
         if (geometry.ValueKind != JsonValueKind.Object) return;

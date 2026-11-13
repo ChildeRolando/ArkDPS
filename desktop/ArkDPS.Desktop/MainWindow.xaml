@@ -83,8 +83,29 @@
   <Style x:Key="ResearchReadout" TargetType="TextBlock" BasedOn="{StaticResource Readout}">
    <Setter Property="Foreground" Value="{DynamicResource MetricInk}"/><Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/><Setter Property="FontSize" Value="27"/>
   </Style>
+  <Style x:Key="SideTab" TargetType="TabItem">
+   <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+   <Setter Property="Background" Value="Transparent"/>
+   <Setter Property="FontWeight" Value="SemiBold"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TabItem">
+    <Border x:Name="TabSurface" Background="{TemplateBinding Background}" BorderThickness="0,0,0,2"
+            BorderBrush="Transparent" Padding="8,7">
+     <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    </Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="TabSurface" Property="Background" Value="{DynamicResource Inset}"/></Trigger>
+     <Trigger Property="IsSelected" Value="True">
+      <Setter TargetName="TabSurface" Property="Background" Value="{DynamicResource Inset}"/>
+      <Setter TargetName="TabSurface" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+     </Trigger>
+     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="TabSurface" Property="BorderBrush" Value="{DynamicResource Focus}"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
  </Window.Resources>
  <Border x:Name="WindowSurface" Background="{DynamicResource Bg}">
+ <Grid>
  <Grid x:Name="ContentRoot">
   <Grid.RowDefinitions><RowDefinition Height="36"/><RowDefinition Height="*"/></Grid.RowDefinitions>
   <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavigationColumn" Width="208"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -124,6 +145,8 @@
      <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="{DynamicResource ChromeInk}"/>
      <TextBlock Text="ORCU / DPS LAB" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="0,2,0,0"/>
     </StackPanel>
+    <Button x:Name="EnterSideMode" Content="侧边吸附" Click="ToggleSideMode" Style="{StaticResource ChromeButton}"
+            Width="Auto" Padding="9,3" Margin="0,0,6,0" ToolTip="将主窗口吸附在 MuMu 一侧"/>
     <Button Click="MinimizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最小化"><Path Data="M 0 5 H 10" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
     <Button Click="ToggleMaximizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最大化或还原"><Path Data="M 0 0 H 9 V 9 H 0 Z" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
     <Button Click="QuitClick" Style="{StaticResource ChromeButton}" AutomationProperties.Name="退出 ArkDPS"><Path Data="M 0 0 L 9 9 M 9 0 L 0 9" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
@@ -391,7 +414,7 @@
            <TextBlock Text="{Binding AttrsText}" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap"/>
           </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
          </ListBox>
-         <TextBlock x:Name="EnemyEmpty" Text="场上暂无已入场敌人。" Foreground="{DynamicResource Muted}" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" MaxWidth="300" Visibility="Collapsed"/>
+         <TextBlock x:Name="EnemyEmpty" Text="场上暂无已入场敌人。" Foreground="{DynamicResource Muted}" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="300" Visibility="Collapsed"/>
         </Grid>
        </DockPanel>
       </Border>
@@ -464,6 +487,56 @@
 
    <TextBlock x:Name="Footer" Grid.Row="2" Visibility="Collapsed"/>
   </Grid>
+ </Grid>
+ <Border x:Name="SideRoot" Visibility="Collapsed" Background="{DynamicResource Bg}" BorderBrush="{DynamicResource FrameEdge}" BorderThickness="1">
+  <Grid>
+   <Grid.RowDefinitions>
+    <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+   </Grid.RowDefinitions>
+   <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Edge}" BorderThickness="0,0,0,1" Padding="10,5">
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+      <Image Source="Assets/LoneTrail/arkdps-icon.png" Width="25" Height="20" Margin="0,0,6,0"/>
+      <TextBlock Text="ArkDPS" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource DisplayFont}"
+                 FontWeight="Bold" FontSize="19" VerticalAlignment="Center"/>
+     </StackPanel>
+     <Button x:Name="LeaveSideMode" Grid.Column="1" Content="恢复主面板" Click="ToggleSideMode"
+             MinHeight="30" Padding="7,3" Margin="0,0,4,0"/>
+     <Button Grid.Column="2" Click="MinimizeWindow" MinHeight="30" Width="30" Padding="4" Margin="0"
+             ToolTip="最小化" AutomationProperties.Name="最小化">
+      <Path Data="M 0 5 H 10" Stroke="{DynamicResource Ink}" StrokeThickness="1.2"/>
+     </Button>
+    </Grid>
+   </Border>
+   <TabControl x:Name="SideTabs" Grid.Row="1" Padding="6" AutomationProperties.Name="侧边战况">
+    <TabControl.Template><ControlTemplate TargetType="TabControl">
+     <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource Edge}" BorderThickness="0,0,0,1">
+       <UniformGrid Rows="1" IsItemsHost="True" KeyboardNavigation.TabNavigation="Once"/>
+      </Border>
+      <ContentPresenter x:Name="PART_SelectedContentHost" Grid.Row="1" ContentSource="SelectedContent"
+                        Margin="{TemplateBinding Padding}"/>
+     </Grid>
+    </ControlTemplate></TabControl.Template>
+    <TabItem Header="我方" Style="{StaticResource SideTab}"><local:SideFriendlyView x:Name="SideFriendly"/></TabItem>
+    <TabItem Header="敌方" Style="{StaticResource SideTab}"><ContentControl x:Name="SideEnemyHost"
+          HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/></TabItem>
+   </TabControl>
+   <Border Grid.Row="2" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Edge}" BorderThickness="0,1,0,0" Padding="10,5">
+    <StackPanel>
+     <TextBlock x:Name="SideAttachmentStatus" Visibility="Collapsed" Foreground="{DynamicResource Ink}" FontSize="12"/>
+     <DockPanel ToolTip="{Binding ToolTip, ElementName=StatusBadge}">
+      <Ellipse DockPanel.Dock="Left" Width="7" Height="7" VerticalAlignment="Center" Margin="0,0,6,0"
+               Fill="{Binding Fill, ElementName=StatusLight}"/>
+      <TextBlock Text="{Binding Text, ElementName=Status}" Foreground="{DynamicResource Muted}" FontSize="11"
+                 TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+     </DockPanel>
+    </StackPanel>
+   </Border>
+  </Grid>
+ </Border>
  </Grid>
  </Border>
 </Window>

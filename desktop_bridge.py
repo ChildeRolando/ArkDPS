@@ -33,12 +33,13 @@ from event_observer import ObserverStatus
 from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
-from panel_model import (EventAvailability, PanelConfig, detail_rates,
+from panel_model import (EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, render_panel, rows_from_statistics,
                          team_status)
 import stage_names
 
 PROTOCOL_VERSION = 1
+SIDE_RANKING = PanelConfig(ranking=Ranking.DPS)
 MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
 BRIDGE_COMMANDS = frozenset((
@@ -77,7 +78,8 @@ def empty_text(config, source, complete):
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
     key = {'damage': 'damage', 'healing': 'healing', 'shield': 'shield_absorbed'}[config.category.value]
-    if config.ranking.value == 'recent':
+    if config.ranking is Ranking.RECENT or (
+            config.ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S):
         key = 'recent_' + config.category.value
     if any(row.get(key) is None for row in source.values()):
         return '当前指标尚无可靠数据 · 未知不记零'
@@ -294,6 +296,8 @@ class DesktopState:
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
+                    side_ranking=(self.view(SIDE_RANKING, stats, None, live_event)
+                                  if self.layout.side_mode else None),
                     live_analysis=self.live_analysis,
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),
@@ -349,7 +353,8 @@ class DesktopState:
             huds = tuple(HudPlacement.from_dict(h) for h in cmd['huds'])
             if any(h.panel_id not in known for h in huds):
                 raise ValueError('HUD 源面板已删除')
-            self.persist(replace(self.layout, gui=GuiGeometry.from_dict(cmd['gui']), huds=huds))
+            self.persist(replace(self.layout, gui=GuiGeometry.from_dict(cmd['gui']), huds=huds,
+                                 side_mode=cmd.get('side_mode', self.layout.side_mode)))
         elif op == 'history_refresh':
             self.refresh_history()
         elif op == 'history_select':

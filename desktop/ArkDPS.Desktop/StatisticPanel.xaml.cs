@@ -55,6 +55,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public string Initial => Name.Length > 0 ? Name[..1] : "?";
     public string Total => Entry.Text("display_value");
     public string Rate => Entry.Text("rate_text");
+    public double BarRatio => Math.Clamp(Entry.Number("bar_ratio"),0,1);
     public string Share => Entry.Text("share_display");
     public string MetricCategory { get; internal set; } = "";
     internal SharePresentation ShareInfo { get; set; }=new("占比","",false);

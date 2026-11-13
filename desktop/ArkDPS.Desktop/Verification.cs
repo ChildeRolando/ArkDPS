@@ -52,6 +52,116 @@ public partial class MainWindow
     private static void WriteArchive(string stateDirectory,string battleId,string stage)=>
         File.WriteAllText(HistoryPath(stateDirectory,battleId),
             ArchiveJson(stateDirectory,battleId,stage),new System.Text.UTF8Encoding(false));
+
+    private async Task VerifySideMode(HudWindow hud, string output)
+    {
+        await Navigate("live");
+        await Settle();
+        Native.Restore(this, JsonSerializer.SerializeToElement(Native.Geometry(this)));
+        await Settle();
+        string normalGeometryBefore = JsonSerializer.Serialize(Native.Geometry(this));
+        var hudHandle = Native.Handle(hud);
+        long hudStyle = Native.ExStyle(hud);
+        double hudOpacity = hud.Opacity;
+        var hudBounds = Native.Bounds(hud);
+        ToggleButton? enemyPin = null;
+
+        var fixture = new Window
+        {
+            Title = "ArkDPS side mode fixture",
+            ResizeMode = ResizeMode.NoResize,
+            WindowStyle = WindowStyle.None,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        var work = System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea;
+        var originalPlayer = new System.Drawing.Rectangle(work.Left + 32, work.Top + 20,
+            Math.Min(600, work.Width / 2), Math.Min(680, work.Height - 58));
+        try
+        {
+            fixture.Show();
+            Native.Place(fixture, originalPlayer);
+            await Settle();
+            SideAttachment.FixtureWindow = Native.Handle(fixture);
+            SetSideMode(true);
+            await SavePlacement();
+            await Settle();
+            var expected = SideAttachment.GetPlacement(default, Native.Handle(this), SideWidth);
+            var current = Native.Bounds(this);
+            Require(expected.State == EmulatorPlacementState.Attached && expected.Bounds is { } rectangle &&
+                    current.SequenceEqual(new[] { rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height }) &&
+                    current[0] == originalPlayer.Right && current[1] == originalPlayer.Top &&
+                    current[3] == originalPlayer.Height, "side window did not align with the emulator fixture");
+            Require(State.Get("layout").Bool("side_mode") &&
+                    JsonElement.DeepEquals(State.Get("layout").Get("gui"), JsonSerializer.SerializeToElement(normalGeometry)) &&
+                    !ContentRoot.IsVisible && SideRoot.IsVisible, "side mode did not preserve the full layout geometry");
+
+            var ranking = (ListBox?)FindAutomationElement(SideFriendly, "SideDpsRanking");
+            Require(ranking is { Items.Count: > 1 }, "side ranking does not show live DPS data");
+            ranking!.SelectedIndex = 0;
+            await Settle();
+            Require(HasText(SideFriendly, "阿米娅 · 主要数据") && HasText(SideFriendly, "总伤") &&
+                    FindAutomationElement(SideFriendly, "CompactOperatorStats") is not null &&
+                    FindAutomationElement(SideFriendly, "CompactOperatorComposition") is null &&
+                    FindVisual<LiveTrendView>(SideFriendly, _ => true) is null,
+                    "side details did not use the primary data card");
+            var row = (ListBoxItem)ranking.ItemContainerGenerator.ContainerFromIndex(0);
+            Require(!HasText(row, "阿米娅") && System.Windows.Automation.AutomationProperties.GetName(row) == "阿米娅",
+                    "side ranking must expose the portrait owner's name through accessibility only");
+            Screenshot.Window(this, Path.Combine(output, "side-friendly.png"));
+
+            SideTabs.SelectedIndex = 1;
+            await Settle();
+            Require(ReferenceEquals(SideEnemyHost.Content, EnemySummary) && TargetSummary.IsVisible &&
+                    HasText(TargetSummary, "源石虫") && HasText(TargetSummary, "180"),
+                    "side enemy tab lost the existing enemy unit card");
+            enemyPin = (ToggleButton?)FindAutomationElement(TargetSummary, "LockLiveEnemy");
+            Require(enemyPin is not null, "side enemy tab lost the original enemy pin control");
+            enemyPin!.IsChecked = true;
+            Screenshot.Window(this, Path.Combine(output, "side-enemy.png"));
+
+            var moved = new System.Drawing.Rectangle(originalPlayer.X + 60, originalPlayer.Y + 18,
+                originalPlayer.Width - 24, originalPlayer.Height - 32);
+            Native.Place(fixture, moved);
+            UpdateSidePlacement();
+            await Settle();
+            current = Native.Bounds(this);
+            Require(current[0] == moved.Right && current[1] == moved.Top && current[3] == moved.Height,
+                    "side window did not follow the fixture move and resize");
+            fixture.WindowState = WindowState.Minimized;
+            await Settle();
+            UpdateSidePlacement();
+            Require(SideAttachmentStatus.Text == "MuMu 已最小化" && current.SequenceEqual(Native.Bounds(this)),
+                    "minimized fixture displaced the side panel");
+            fixture.WindowState = WindowState.Normal;
+            await Settle();
+            UpdateSidePlacement();
+            Require(SideAttachmentStatus.Visibility == Visibility.Collapsed, "side panel did not reattach after restore");
+            var shortPlayer = new System.Drawing.Rectangle(moved.X, moved.Y, moved.Width, Math.Min(moved.Height, 260));
+            Native.Place(fixture, shortPlayer);
+            UpdateSidePlacement();
+            await Settle();
+            Require(TargetSummary.Child is ScrollViewer { ScrollableHeight: > 0 },
+                    "short side enemy tab did not scroll to its lower unit cards");
+            Require(Huds.TryGetValue(hud.PanelId, out var sameHud) && sameHud == hud &&
+                    hudHandle == Native.Handle(hud) && hudStyle == Native.ExStyle(hud) &&
+                    hudOpacity == hud.Opacity && hudBounds.SequenceEqual(Native.Bounds(hud)),
+                    "changing main window mode changed a running HUD");
+        }
+        finally
+        {
+            SetSideMode(false);
+            SideAttachment.FixtureWindow = 0;
+            fixture.Close();
+            await SavePlacement();
+            await Settle();
+        }
+        Require(!State.Get("layout").Bool("side_mode") && LiveBody.Children.Contains(EnemySummary) &&
+                normalGeometryBefore == JsonSerializer.Serialize(Native.Geometry(this)) && enemyPin?.IsChecked == true,
+                "returning to full mode did not restore the regular window");
+        enemyPin!.IsChecked = false;
+    }
+
     private void ApplyFixture(System.Text.Json.Nodes.JsonNode state)
     {
         using var document = JsonDocument.Parse(state.ToJsonString());
@@ -1080,6 +1190,12 @@ public partial class MainWindow
                     $"HUD did not restore width and fit its current rows: {actual[2]}x{actual[3]} expected {width}x{height}");
             checks.Add("saved HUD position, width, lock and opacity restored with current-row height");
         }
+        string sideSource = Panels.Keys.First();
+        bool sideHudAlreadyOpen = Huds.ContainsKey(sideSource);
+        OpenHud(sideSource);
+        await VerifySideMode(Huds[sideSource], output);
+        if (!sideHudAlreadyOpen) CloseHud(sideSource);
+        checks.Add("side mode follows a private emulator window and restores the full GUI with HUD and enemy panel intact");
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",

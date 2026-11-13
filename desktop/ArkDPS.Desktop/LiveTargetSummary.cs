@@ -47,6 +47,15 @@ public sealed class LiveTargetSummary : Border
         Update("", default, "");
     }
 
+    internal void SetDocked(bool docked)
+    {
+        Padding = new Thickness(docked ? 4 : 6);
+        cardScroll.MaxHeight = docked ? double.PositiveInfinity : 540;
+        cardScroll.CanContentScroll = !docked;
+        cardScroll.VerticalScrollBarVisibility = docked ? ScrollBarVisibility.Auto : ScrollBarVisibility.Hidden;
+        foreach (var card in cards) card.SetDocked(docked);
+    }
+
     internal void Update(string battleId, JsonElement enemy, string enemyStatus)
     {
         status = enemyStatus;
@@ -232,7 +241,9 @@ public sealed class LiveTargetSummary : Border
         private readonly TextBlock identity = Label(12, "ConsoleMuted");
         private readonly TextBlock badge = Label(28, "ConsoleMuted", bold: true);
         private readonly Image portrait = new() { Stretch = Stretch.Uniform };
+        private readonly ColumnDefinition portraitColumn = new() { Width = new GridLength(112) };
         private readonly Border portraitFrame;
+        private bool docked;
         private string? renderedSkin;
         private readonly Border headerMark = new()
         {
@@ -287,7 +298,7 @@ public sealed class LiveTargetSummary : Border
             header.Children.Add(heading);
 
             var body = new Grid();
-            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) });
+            body.ColumnDefinitions.Add(portraitColumn);
             body.ColumnDefinitions.Add(new ColumnDefinition());
             card.Children.Add(body);
 
@@ -306,7 +317,7 @@ public sealed class LiveTargetSummary : Border
             portraitFrame.SetResourceReference(BorderBrushProperty, "ConsoleLine");
             SizeChanged += (_, args) =>
             {
-                if (args.WidthChanged) portraitFrame.Height = args.NewSize.Width < 230 ? 94 : 100;
+                if (args.WidthChanged) FitPortrait(args.NewSize.Width);
             };
             var overlay = new Grid { Margin = new Thickness(0, 0, 8, 0) };
             overlay.Children.Add(portraitFrame);
@@ -323,6 +334,18 @@ public sealed class LiveTargetSummary : Border
             attack = Reading(stats, "ATK");
             defense = Reading(stats, "DEF");
             resistance = Reading(stats, "RES");
+        }
+
+        internal void SetDocked(bool value)
+        {
+            docked = value;
+            portraitColumn.Width = new GridLength(docked ? 92 : 112);
+            FitPortrait(ActualWidth);
+        }
+
+        private void FitPortrait(double width)
+        {
+            portraitFrame.Height = docked ? 82 : width < 230 ? 94 : 100;
         }
 
         internal void Reset()

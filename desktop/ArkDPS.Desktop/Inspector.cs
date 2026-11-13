@@ -15,6 +15,7 @@ public sealed class Inspector : Border
     private readonly StackPanel body=new();
     private string? owner;
     private bool compactReference;
+    private bool primaryDataOnly;
     private JsonElement lastView;
     private ReferenceReport? referenceReport;
     private (string Owner, string Theme, string Row, string Entry, string Detail,
@@ -41,6 +42,11 @@ public sealed class Inspector : Border
         BorderThickness=new Thickness(1); Padding=new Thickness(14);
         AutomationProperties.SetName(this,"干员详情");
         Child=body; Empty();
+    }
+    internal void UsePrimaryDataOnly()
+    {
+        primaryDataOnly=true;
+        CompactReference=true;
     }
     internal void Empty()
     {
@@ -261,7 +267,7 @@ public sealed class Inspector : Border
     private ReferenceReport ShowReference()
     {
         if(referenceReport is { } existing && existing.Skin==Theme.Key && ReferenceEquals(Child,existing)) return existing;
-        if(referenceReport?.Skin!=Theme.Key) referenceReport=new ReferenceReport();
+        if(referenceReport?.Skin!=Theme.Key) referenceReport=new ReferenceReport(primaryDataOnly);
         Background=Brushes.Transparent;
         BorderThickness=new Thickness(0);
         Padding=new Thickness(0);
@@ -331,15 +337,17 @@ public sealed class Inspector : Border
         private readonly TextBlock ringTitle=Label("总伤",14,ChartInk,true);
         private readonly TextBlock ringValue=Label("—",17,ChartInk,true);
         private readonly Ring ring=new(Theme.IsBabel ? 7 : 14,ChartDivider,Enumerable.Range(0,DamageTypes.Length).Select(DamageColor).ToArray());
-        private readonly Border compositionField;
+        private readonly Border? compositionField;
+        private readonly TextBlock? sideHeading, sideHint;
+        private readonly StackPanel statsBody=new();
 
-        internal ReferenceReport()
+        internal ReferenceReport(bool primaryDataOnly)
         {
             var modules=new Grid();
             var primaryWidth=new GridLength(1.28,GridUnitType.Star);
             var chartWidth=new GridLength(1,GridUnitType.Star);
             modules.ColumnDefinitions.Add(new ColumnDefinition{Width=primaryWidth});
-            modules.ColumnDefinitions.Add(new ColumnDefinition{Width=chartWidth});
+            if(!primaryDataOnly) modules.ColumnDefinitions.Add(new ColumnDefinition{Width=chartWidth});
             modules.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
             modules.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
 
@@ -394,7 +402,6 @@ public sealed class Inspector : Border
             ratios.Children.Add(mitigation);
             ratios.Children.Add(skillShare);
             AutomationProperties.SetAutomationId(ratios,"CompactOperatorRatios");
-            var statsBody=new StackPanel();
             statsBody.Children.Add(readings);
             statsBody.Children.Add(new Border
             {
@@ -402,10 +409,33 @@ public sealed class Inspector : Border
                 Margin=new Thickness(0,4,0,0),
             });
 
-            var statsPanel=PanelFrame(Module(Label("主要数据",15,MetricInk,true),statsBody,MetricDivider),
-                new Thickness(0,0,3,0),UseThemeColors ? Theme.Resource("Card") : DarkFace,MetricDivider);
+            var title=Label("主要数据",15,MetricInk,true);
+            UIElement statsContent=statsBody;
+            if(primaryDataOnly)
+            {
+                sideHeading=title;
+                title.TextTrimming=TextTrimming.CharacterEllipsis;
+                title.TextWrapping=TextWrapping.NoWrap;
+                foreach(var label in metricLabels) label.TextWrapping=TextWrapping.NoWrap;
+                metricLabels[1].FontSize=13;
+                sideHint=Label("从排行选择干员",13,MetricMuted);
+                sideHint.Margin=new Thickness(0,7,0,6);
+                var stack=new StackPanel();
+                stack.Children.Add(sideHint);
+                stack.Children.Add(statsBody);
+                statsContent=stack;
+            }
+            var statsPanel=PanelFrame(Module(title,statsContent,MetricDivider),
+                primaryDataOnly ? new Thickness(0) : new Thickness(0,0,3,0),
+                UseThemeColors ? Theme.Resource("Card") : DarkFace,MetricDivider);
             AutomationProperties.SetAutomationId(statsPanel,"CompactOperatorStats");
             modules.Children.Add(statsPanel);
+            Children.Add(modules);
+            if(primaryDataOnly)
+            {
+                Reset();
+                return;
+            }
 
             var chart=new Grid{MinHeight=115};
             chart.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(1,GridUnitType.Star)});
@@ -442,7 +472,6 @@ public sealed class Inspector : Border
             AutomationProperties.SetAutomationId(chartPanel,"CompactOperatorComposition");
             Grid.SetColumn(chartPanel,1);
             modules.Children.Add(chartPanel);
-            Children.Add(modules);
 
             bool stacked=false;
             modules.SizeChanged+=(_,e)=>
@@ -491,6 +520,7 @@ public sealed class Inspector : Border
             portrait.Source=null;
             avatar.ToolTip="从排行选择干员";
             AutomationProperties.SetName(avatar,"干员头像");
+            SetSideSelection(null);
             SetMetrics(default,default,default,default,false,"",SharePresentation.From(default));
         }
 
@@ -503,7 +533,17 @@ public sealed class Inspector : Border
             portrait.Source=Portraits.Get(owner,row.Get("present").ValueKind==JsonValueKind.False);
             avatar.ToolTip=displayName;
             AutomationProperties.SetName(avatar,displayName+"头像");
+            SetSideSelection(displayName);
             SetMetrics(row,view,entry,detail,effective,ranking,shareInfo);
+        }
+
+        private void SetSideSelection(string? name)
+        {
+            if(sideHeading==null || sideHint==null) return;
+            sideHeading.Text=name is null ? "干员详情" : name+" · 主要数据";
+            sideHeading.ToolTip=name;
+            sideHint.Visibility=name is null ? Visibility.Visible : Visibility.Collapsed;
+            statsBody.Visibility=name is null ? Visibility.Collapsed : Visibility.Visible;
         }
 
         private void SetMetrics(JsonElement row,JsonElement view,JsonElement entry,JsonElement detail,
@@ -525,7 +565,8 @@ public sealed class Inspector : Border
             string presence=row.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
                 ? FormatTime(seconds) : "—";
             metricLabels[0].Text=effective ? "有效伤害" : "总伤";
-            metricLabels[1].Text=rateLabel.Length==0 && category!="shield" ? DefaultLabels[1]
+            metricLabels[1].Text=sideHeading!=null ? "近 5 秒 DPS"
+                : rateLabel.Length==0 && category!="shield" ? DefaultLabels[1]
                 : category=="shield" ? "有效护盾"
                 : rateLabel=="全周期DPS" && category=="damage" ? "全周期 DPS"
                 : $"{(category=="healing" ? "HPS" : "DPS")}（{rateLabel}）";
@@ -607,6 +648,7 @@ public sealed class Inspector : Border
 
         private void SetComposition(bool effective,JsonElement row,JsonElement detail)
         {
+            if(compositionField==null) return;
             compositionTitle.Text=effective ? "有效伤害构成" : "伤害属性构成";
             ringTitle.Text=effective ? "有效" : "总伤";
             ringValue.Text=effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage"));
