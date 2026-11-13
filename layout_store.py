@@ -325,7 +325,7 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
         raise ValueError('布局文件没有可用面板')
     event = raw.get('event_observation', True)
     if not isinstance(event, bool):
-        warnings.append('事件观测开关无效，已使用默认开启')
+        warnings.append('事件观察开关无效，已使用默认开启')
         event = True
     gui = None
     if raw.get('gui') is not None:

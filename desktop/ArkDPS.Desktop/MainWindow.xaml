@@ -228,15 +228,15 @@
          </Grid>
          <StackPanel x:Name="BabelMastheadHeading" Visibility="Collapsed" VerticalAlignment="Center" Margin="22,0,8,0">
           <Viewbox StretchDirection="DownOnly" HorizontalAlignment="Left">
-           <TextBlock x:Name="BabelMastheadTitle" Text="—" FontFamily="{DynamicResource HeadingFont}"
+           <TextBlock x:Name="BabelMastheadTitle" Text="观察停止" FontFamily="{DynamicResource HeadingFont}"
                       FontSize="72" FontWeight="Bold" LineHeight="72" LineStackingStrategy="BlockLineHeight"
                       Foreground="{DynamicResource BabelPaperInk}"/>
           </Viewbox>
-          <DockPanel x:Name="BabelMastheadSubtitle" Margin="2,4,0,0" Visibility="Collapsed">
+          <DockPanel x:Name="BabelMastheadSubtitle" Margin="2,4,0,0">
            <Path DockPanel.Dock="Left" Data="M 0,4 L 4,0 L 8,4 L 4,8 Z" Width="8" Height="8" Stretch="Fill"
                  Fill="{DynamicResource BabelPaperAccent}" Margin="0,0,7,0" VerticalAlignment="Center"
                  IsHitTestVisible="False"/>
-           <TextBlock x:Name="BabelMastheadStageCode" FontSize="14" FontWeight="SemiBold"
+           <TextBlock x:Name="BabelMastheadStageCode" Text="等待进入战斗" FontSize="14" FontWeight="SemiBold"
                       Foreground="{DynamicResource BabelPaperMuted}" TextTrimming="CharacterEllipsis"/>
           </DockPanel>
          </StackPanel>
@@ -254,7 +254,7 @@
          </Border>
          <UniformGrid x:Name="MetricCards" Grid.Column="1" Columns="4">
           <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="∑   平均DPS" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="AverageDps" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
-          <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="峰值DPS（观测）" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="PeakDps" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
+          <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="峰值DPS（观察）" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="PeakDps" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
           <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="战斗时间" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="Clock" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
           <Border Style="{StaticResource ResearchMetric}"><StackPanel><TextBlock Text="总伤" Style="{StaticResource ResearchMetricLabel}"/><TextBlock x:Name="TotalDamage" Text="—" Style="{StaticResource ResearchReadout}"/></StackPanel></Border>
          </UniformGrid>

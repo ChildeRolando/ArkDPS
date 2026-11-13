@@ -483,7 +483,7 @@ public partial class StatisticPanel : UserControl
             ? "护盾只统计实际吸收总量。"
             : "近 5 秒看最近输出，接敌按交战活跃时间，全周期按在场时间。";
         Rate.ToolTip=isEngagement && reason.Length>0 ? reason
-            : rateBasis=="full_cycle" ? "全周期速率 = 累计量 / 在场时间（自本次观测起）"
+            : rateBasis=="full_cycle" ? "全周期速率 = 累计量 / 在场时间（自本次观察起）"
             : RateLabel.ToolTip;
         ReferenceRateHeading.Text=RateHeading.Text;
         ReferenceTotalHeading.Text=config.Text("ranking")=="recent" ? "近期"

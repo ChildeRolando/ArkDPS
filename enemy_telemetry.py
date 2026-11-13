@@ -520,6 +520,16 @@ class EnemyTelemetry:
         self._pending_events = defaultdict(list)
         self._finished = set()
         self._phase_calibration = set()
+        self._trap_catalog = None
+
+    def _enemy_name(self, eid, name):
+        if name and name != eid:
+            return name
+        if not eid.startswith('trap_'):
+            return name
+        if self._trap_catalog is None:
+            self._trap_catalog = _load_enemy_db() or {}
+        return (self._trap_catalog.get(eid) or {}).get('name') or eid
 
     def _record_entries(self, observation):
         if observation is None:
@@ -548,7 +558,8 @@ class EnemyTelemetry:
         identity = (getattr(self.reader, '_db', None) or {}).get(eid) or {}
         return dict(
             instance_uid=uid, roster_id=None, spawn_order=None, eid=eid,
-            name=identity.get('name') or eid, code=identity.get('code') or '',
+            name=self._enemy_name(eid, identity.get('name')) or eid,
+            code=identity.get('code') or '',
             lifecycle='entered', alive=None, state_id=None, state='未知',
             spawn_frame=None, spawn_time=None, end_frame=None, end_reason=None,
             finish_reason=None, hp=None, max_hp=None, hp_known=False,
@@ -932,6 +943,8 @@ class EnemyTelemetry:
             message = (snapshot or {}).get('msg') or '敌人快照不完整'
             return 'stale', message
         rows = enemy_rows(snapshot)
+        for row in rows:
+            row['name'] = self._enemy_name(row['eid'], row['name'])
         if self._stream_complete is None:
             self._rows = rows
         else:
@@ -947,6 +960,8 @@ class EnemyTelemetry:
                 self._snapshot_frame = observed_frame
                 self._seeded = self._stream_complete
         planned = enemy_rows(snapshot, include_pending=True)
+        for row in planned:
+            row['name'] = self._enemy_name(row['eid'], row['name'])
         # Conditional branches only count once observed; scheduled waves form
         # the deterministic stage HP pool even when a poll misses a short life.
         self._cache_plan([row for row in planned if row['lifecycle'] in ENTERED_LIFECYCLES

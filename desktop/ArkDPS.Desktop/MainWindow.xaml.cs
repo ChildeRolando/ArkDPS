@@ -297,7 +297,6 @@ public partial class MainWindow : Window
         retainBattleSnapshot=false;
         Stage.Text=state.Text("stage").Length>0 ? state.Text("stage") : "关卡未知";
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
-        UpdateBabelMasthead(state);
         var analysis = state.Get("live_analysis");
         var totals=state.Get("totals");
         CurrentDps.Text = OverviewNumber(analysis.Get("team_recent_dps"));
@@ -341,18 +340,27 @@ public partial class MainWindow : Window
         RefreshLiveAvailability();
         return panelLayoutChanged;
     }
-    private void UpdateBabelMasthead(JsonElement state)
+    private void UpdateBabelMasthead(string status,bool observing)
     {
-        string code=state.Text("stage_code"), name=state.Text("stage_name");
-        if(code.Length==0 && name.Length==0 && state.Text("stage_raw").Length>0)
-            code=state.Text("stage");
-        string title=name.Length>0 ? name : code;
-        string subtitle=code==title ? "" : code;
-        BabelMastheadTitle.Text=title.Length>0 ? title : "—";
+        bool waiting=status=="waiting" || State.Bool("battle_waiting") || State.Text("battle_id").Length==0;
+        string title, subtitle;
+        if(waiting)
+        {
+            title=observing ? "观察中" : "观察停止";
+            subtitle="等待进入战斗";
+        }
+        else
+        {
+            string code=State.Text("stage_code"), name=State.Text("stage_name");
+            if(code.Length==0 && name.Length==0 && State.Text("stage_raw").Length>0)
+                code=State.Text("stage");
+            title=name.Length>0 ? name : code.Length>0 ? code : "关卡未知";
+            subtitle=code==title ? "" : code;
+        }
+        BabelMastheadTitle.Text=title;
         BabelMastheadStageCode.Text=subtitle;
         BabelMastheadSubtitle.Visibility=subtitle.Length>0 ? Visibility.Visible : Visibility.Collapsed;
-        BabelMastheadHeading.ToolTip=subtitle.Length>0 ? $"{title} · {subtitle}"
-            : title.Length>0 ? title : null;
+        BabelMastheadHeading.ToolTip=subtitle.Length>0 ? $"{title} · {subtitle}" : title;
     }
     private void UpdateLivePanel(string id,StatisticPanel panel,JsonElement view,bool canDelete)
     {
@@ -373,6 +381,9 @@ public partial class MainWindow : Window
         string coverage=State.Text("event_status");
         bool disabled=observer=="disabled" || (observer.Length==0 &&
             State.Get("layout").Get("event_observation").ValueKind==JsonValueKind.False);
+        bool observing=!disabled && status is not ("disconnected" or "reconnecting" or "locating")
+            && (observer=="ready" || (observer.Length==0 && coverage=="recording"));
+        UpdateBabelMasthead(status,observing);
         string phase=status switch
         {
             "waiting" => "等待进入战斗",
@@ -384,14 +395,14 @@ public partial class MainWindow : Window
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" => (workerLabel,StatusAmber),
             "locating" => (disabled ? workerLabel : "正在连接观察者",StatusAmber),
-            _ when disabled => ($"观测已关闭·{phase}",StatusGray),
+            _ when disabled => ($"观察已关闭·{phase}",StatusGray),
             _ when (observer is "failed" or "incompatible" or "stopped") ||
                    ((status is "waiting" or "live" or "degraded") && (coverage is "failed" or "gap"))
-                => ($"观测中断·{phase}",StatusRed),
+                => ($"观察中断·{phase}",StatusRed),
             _ when status!="degraded" && (observer=="ready" || coverage=="recording")
-                => ($"观测中·{phase}",StatusGreen),
+                => ($"观察中·{phase}",StatusGreen),
             "waiting" => ("等待连接观察者",StatusAmber),
-            _ => ($"等待观测·{phase}",StatusAmber),
+            _ => ($"等待观察·{phase}",StatusAmber),
         };
         if(ShowingPreviousBattle) label="上次快照 · "+label;
         Status.Text=label;

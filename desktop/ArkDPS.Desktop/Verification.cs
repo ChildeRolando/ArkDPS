@@ -146,11 +146,11 @@ public partial class MainWindow
         lobby["event_status"] = null;
         lobby["observer_status"] = "ready";
         ApplyFixture(lobby);
-        Require(Status.Text == "观测中·等待进入战斗" && StatusLight.Fill == StatusGreen,
+        Require(Status.Text == "观察中·等待进入战斗" && StatusLight.Fill == StatusGreen,
             "an attached observer did not show a green waiting status before the battle");
         lobby["observer_status"] = "failed";
         ApplyFixture(lobby);
-        Require(Status.Text == "观测中断·等待进入战斗" && StatusLight.Fill == StatusRed,
+        Require(Status.Text == "观察中断·等待进入战斗" && StatusLight.Fill == StatusRed,
             "a failed lobby observer left the green status on");
         var analysis = fixture["live_analysis"] ?? new System.Text.Json.Nodes.JsonObject
         {
@@ -256,6 +256,16 @@ public partial class MainWindow
         Require(ReferenceEquals(selected, EnemyList.SelectedItem) && selected.HpPercentKnown &&
             !selected.HpText.Contains("≥"), "native MaxHP confirmation did not update the same enemy");
         Require(HasText(EnemyPage, "关卡预估血量"), "stage estimate is not independently labeled");
+        var trap = new EnemyItem(JsonSerializer.SerializeToElement(new
+        {
+            eid="trap_086_larva", name="“汲营枯枝”", lifecycle="active", alive=true
+        }), "trap-fixture", "");
+        Require(trap.Name=="“汲营枯枝”" && trap.Portrait is System.Windows.Media.Imaging.CroppedBitmap
+                { PixelWidth:48, PixelHeight:48 } &&
+                EnemyPortraits.Get(trap.Eid,true) is System.Windows.Media.Imaging.CroppedBitmap
+                { PixelWidth:48, PixelHeight:48 } &&
+                EnemyPortraits.Get("trap_missing_fixture",false)==null,
+            "enemy cards did not load exact trap portraits and preserve the unknown fallback");
 
         await Navigate("live");
         fixture["game_time"] = 26;
@@ -277,14 +287,14 @@ public partial class MainWindow
         pinnedRow["mitigation_unknown_reason"]="部分伤害缺少同次命中的公式前后值";
         ApplyFixture(fixture);
         var observedMitigation=FindOperatorRatio("Mitigation");
-        Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观测减伤率") &&
+        Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观察减伤率") &&
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
                 observedTip.Text.Contains("经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害") &&
                 observedTip.Text.Contains("已配对的 27 击"),
                 "partial mitigation did not expose its measured value and sample scope");
         pinnedRow["observed_mitigation_rate"]=-11.32;
         ApplyFixture(fixture);
-        Require(HasText(observedMitigation,"-11%") && HasText(observedMitigation,"已观测减伤率") &&
+        Require(HasText(observedMitigation,"-11%") && HasText(observedMitigation,"已观察减伤率") &&
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock negativeTip} &&
                 negativeTip.Text.Contains("无法确定差额来自哪项修正") &&
                 negativeTip.Text.Contains("已配对的 27 击"),
@@ -293,7 +303,7 @@ public partial class MainWindow
         ApplyFixture(fixture);
         Require(HasText(FindOperatorRatio("Mitigation"),"0%") &&
                 HasText(FindOperatorRatio("Mitigation"),"被减伤率") &&
-                !HasText(FindOperatorRatio("Mitigation"),"已观测减伤率"),
+                !HasText(FindOperatorRatio("Mitigation"),"已观察减伤率"),
                 "complete zero mitigation did not take precedence over the observed subset");
         pinnedRow["mitigation_rate"]=18.34;
         var pinnedDetail=liveView["details_by_owner"]![pinnedOwner]!;
@@ -463,8 +473,30 @@ public partial class MainWindow
                     nextStage["stage_name"]=null;
                     nextStage["stage_raw"]=null;
                     ApplyFixture(nextStage);
-                    Require(BabelMastheadTitle.Text=="—" && BabelMastheadSubtitle.Visibility==Visibility.Collapsed,
-                        "Babel stage banner retained the previous stage when metadata was missing");
+                    Require(BabelMastheadTitle.Text=="关卡未知" && BabelMastheadSubtitle.Visibility==Visibility.Collapsed,
+                        "Babel did not distinguish an in-progress stage without metadata");
+                    var waiting=fixture.DeepClone();
+                    waiting["status"]="waiting";
+                    waiting["battle_id"]=null;
+                    waiting["event_status"]=null;
+                    waiting["observer_status"]="ready";
+                    ApplyFixture(waiting);
+                    Require(BabelMastheadTitle.Text=="观察中" && BabelMastheadStageCode.Text=="等待进入战斗" &&
+                            BabelMastheadSubtitle.IsVisible,
+                        "Babel waiting banner did not show an active observer");
+                    waiting["observer_status"]="disabled";
+                    ApplyFixture(waiting);
+                    Require(BabelMastheadTitle.Text=="观察停止" && BabelMastheadStageCode.Text=="等待进入战斗",
+                        "Babel waiting banner did not show a stopped observer");
+                    waiting=fixture.DeepClone();
+                    waiting["status"]="ended";
+                    waiting["battle_waiting"]=true;
+                    waiting["event_status"]="finished";
+                    waiting["observer_status"]="ready";
+                    ApplyFixture(waiting);
+                    Require(BabelMastheadTitle.Text=="观察中" && BabelMastheadStageCode.Text=="等待进入战斗" &&
+                            TotalDamage.Text=="711,630",
+                        "Babel lobby after battle did not preserve the last statistics");
                     analysis["team_recent_dps"] = 123456789;
                     ApplyFixture(fixture);
                     await Settle();
@@ -1585,7 +1617,7 @@ public partial class MainWindow
                 !EnemyChart.Points[^1].DamageComplete,"scoped damage lower bound did not render");
             Require(EnemyStatusHint.Text.Contains("离场时尚余 600 HP（1 个实例）"),
                 "HP remaining at enemy departure did not render");
-            Require(EnemyStatusHint.Text.Contains("已观测敌方回血 400 HP") &&
+            Require(EnemyStatusHint.Text.Contains("已观察敌方回血 400 HP") &&
                 EnemyStatusHint.Text.Contains("含回血累计可承受量 ≥ 26400 HP"),
                 "enemy recovery and damage capacity did not render");
             if (State.Get("enemy").Get("non_team_native_damage").TryNumber() > 0)

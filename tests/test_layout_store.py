@@ -150,7 +150,7 @@ def test_invalid_panels_and_huds_are_skipped_with_diagnostic(tmp_path):
     assert result.layout.event_observation is True
     assert result.layout.gui is None
     assert '跳过' in result.warning and 'HUD' in result.warning
-    assert '事件观测开关' in result.warning and 'GUI 窗口几何' in result.warning
+    assert '事件观察开关' in result.warning and 'GUI 窗口几何' in result.warning
 
 
 def test_fully_invalid_panel_list_is_treated_as_damaged(tmp_path):

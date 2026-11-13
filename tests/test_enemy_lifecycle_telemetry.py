@@ -41,6 +41,28 @@ class Battle:
         )
 
 
+def test_map_device_names_apply_to_snapshot_and_event_only_rows():
+    shrine = enemy('1', eid='trap_011_ore')
+    shrine.name = shrine.eid
+    native = enemy('2', eid='trap_1112_acblzd')
+    native.name = '场内名称'
+    battle = Battle((10, [shrine, native]))
+    seed = battle.sample(10)
+    assert {row['eid']: row['name'] for row in seed['rows']} == {
+        'trap_011_ore': '源石祭坛', 'trap_1112_acblzd': '场内名称',
+    }
+
+    result = battle.sample(
+        11,
+        event(1, 11, 'enemy_enter', uid='3', eid='trap_086_larva', hp_after=100),
+        event(2, 11, 'enemy_enter', uid='4', eid='trap_future_unknown', hp_after=100),
+    )
+    names = {row['eid']: row['name'] for row in result['rows']}
+    assert names['trap_086_larva'] == '“汲营枯枝”'
+    assert names['trap_future_unknown'] == 'trap_future_unknown'
+    assert battle.polls == 1
+
+
 def test_enemy_events_update_health_exit_and_same_frame_curve_without_polling():
     battle = Battle((10, [enemy('10')]))
     seeded = battle.sample(10, damage=12)

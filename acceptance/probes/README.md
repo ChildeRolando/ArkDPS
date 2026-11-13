@@ -1,6 +1,6 @@
 # Android 事件研究探针
 
-用于已经授权的本机实验。已验证环境：Android 客户端 2.7.91 ARM64、MuMu、Frida Python/server 17.26.1。与产品的只读内存快照采集器分开；Interceptor 会安装观测 hook，但脚本没有改写参数、返回值或战斗数值。
+用于已经授权的本机实验。已验证环境：Android 客户端 2.7.91 ARM64、MuMu、Frida Python/server 17.26.1。与产品的只读内存快照采集器分开；Interceptor 会安装观察 hook，但脚本没有改写参数、返回值或战斗数值。
 
 需自行准备匹配版本的 Frida server、ADB 转发和当前游戏 PID。本脚本不会安装 server、改模拟器设置或启动游戏。不要把本次进程的地址当作下次可用地址；脚本从 IL2CPP 元数据重新找到方法，并核对所用字段布局，失败时不会开始观察。
 

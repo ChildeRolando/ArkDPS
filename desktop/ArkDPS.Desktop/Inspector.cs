@@ -193,7 +193,7 @@ public sealed class Inspector : Border
                 ? "技能拆分未知：" + splitReason
                 : effective && detail.Bool("skill_split_complete")
                     ? "有效技能拆分未知：过量伤害证据不足。"
-                    : "技能拆分未知：事件观测或技能窗口未覆盖。",
+                    : "技能拆分未知：事件观察或技能窗口未覆盖。",
                 11, false, "Muted", new Thickness(0, 1, 0, 2)));
         var coverageNote=coverageKnown
             ? "覆盖率按技能开启时间占在场时间计算；被动技能计入非技能。"
@@ -232,7 +232,7 @@ public sealed class Inspector : Border
                 card.Child=stack;mix.Children.Add(card);
             }
             if(mix.Children.Count>0) body.Children.Add(mix);
-            else body.Children.Add(Text("已观测伤害为 0",11,false,"Muted"));
+            else body.Children.Add(Text("已观察伤害为 0",11,false,"Muted"));
         }
 
         Section("独立接敌速率");
@@ -574,9 +574,9 @@ public sealed class Inspector : Border
             string output=healing ? "治疗量" : effective ? "有效伤害" : "伤害";
             return basis switch
             {
-                "engagement" => $"已观测的{output} ÷ 活跃时长。每次事件产生 1.5 秒活跃区间，重叠区间合并，超出观测末尾的部分截断。",
-                "full_cycle" => $"累计{output} ÷ 在场时长。已观测活跃时长更长时，以活跃时长为准。",
-                _ => $"最近最多 5 个游戏秒内的{output} ÷ 该观测窗口的时长。",
+                "engagement" => $"已观察的{output} ÷ 活跃时长。每次事件产生 1.5 秒活跃区间，重叠区间合并，超出观察末尾的部分截断。",
+                "full_cycle" => $"累计{output} ÷ 在场时长。已观察活跃时长更长时，以活跃时长为准。",
+                _ => $"最近最多 5 个游戏秒内的{output} ÷ 该观察窗口的时长。",
             };
         }
 
@@ -779,8 +779,8 @@ public sealed class Inspector : Border
 
     private static (double Fraction,string Label,string Explanation) MitigationReading(JsonElement row)
     {
-        const string formula="1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害。\n观测值使用同一击的原始伤害与护盾吸收前的结算伤害。结算伤害包含其他伤害修正。";
-        const string negativeNote="\n结算伤害高于公式前伤害时，比例为负。当前观测记录两端数值，无法确定差额来自哪项修正。";
+        const string formula="1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。结算伤害包含其他伤害修正。";
+        const string negativeNote="\n结算伤害高于公式前伤害时，比例为负。当前观察记录两端数值，无法确定差额来自哪项修正。";
         double full=row.Get("mitigation_rate").TryNumber(double.NaN);
         if(double.IsFinite(full)) return (full/100,"被减伤率",full<0 ? formula+negativeNote : formula);
 
@@ -796,7 +796,7 @@ public sealed class Inspector : Border
                 coverage+=$"这些命中的结算伤害占当前累计总伤的 {Percentage(after/total)}。";
             if(reason.Length>0) coverage+="\n整局统计缺口："+reason;
             string explanation=observed<0 ? formula+negativeNote : formula;
-            return (observed/100,"已观测减伤率",explanation+"\n"+coverage);
+            return (observed/100,"已观察减伤率",explanation+"\n"+coverage);
         }
         return (double.NaN,"被减伤率",formula+"\n"+(reason.Length>0 ? reason : "尚无同一击的公式前伤害与结算伤害。"));
     }
@@ -806,7 +806,7 @@ public sealed class Inspector : Border
         if(!row.Bool("event_coverage_complete"))
         {
             string reason=view.Text("rate_reason");
-            if(reason.Length==0) reason="事件观测未建立覆盖或已中断";
+            if(reason.Length==0) reason="事件观察未建立覆盖或已中断";
             return "过量未知："+reason;
         }
         var overkillReason=row.Text("overkill_unknown_reason");

@@ -13,7 +13,7 @@
 | --- | --- |
 | 产品行为、界面、HUD 和设置 | [V1 设计基线](docs/v1-design.md)、[面板模型](docs/panel-model.md)、[设置与布局](docs/settings-and-layout.md) |
 | Worker 协议、进程与断连恢复 | [桌面运行时](docs/desktop-runtime.md)、[桌面桥接](desktop_bridge.py)、[采集会话](collection_session.py) |
-| MuMu 定位、版本校验、事件观测 | [连接配置](docs/connection.md)、[事件采集与验收](docs/event-capture.md)、[原生采集](collector.py) |
+| MuMu 定位、版本校验、事件观察 | [连接配置](docs/connection.md)、[事件采集与验收](docs/event-capture.md)、[原生采集](collector.py) |
 | 伤害口径、来源归属、战局切换、归档 | [统计核心](docs/statistics-core.md)、[累计与战绩契约](docs/snapshot-adapter.md)、[战局生命周期](battle_lifecycle.py) |
 | 实机复现与事件对账 | [实机实验手册](docs/experiment-playbook.md)、[MAA 作业目录](acceptance/maa/README.md) |
 | Windows 构建、验收与分发 | [便携包构建与发布验收](docs/windows-release.md)、[Windows CI](.github/workflows/windows.yml) |
@@ -27,7 +27,7 @@
 | 目的 | 命令 |
 | --- | --- |
 | 源码运行 | `start.cmd` 或 `python app.py` |
-| 无界面采集 | `python app.py --capture-seconds <秒>`。连接和观测参数见 `python app.py --help` |
+| 无界面采集 | `python app.py --capture-seconds <秒>`。连接和观察参数见 `python app.py --help` |
 | Python 回归 | `python -m pytest tests -q`。本机插件冲突时设置 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'` 并加 `--assert=plain` |
 | WPF 改动验收 | `python acceptance/verify_wpf.py --output runtime/wpf-source` |
 | 便携包构建与验收 | `python tools/package_windows.py --output runtime/packages`，然后 `python acceptance/verify_wpf_package.py <zip> --output runtime/package-validation` |

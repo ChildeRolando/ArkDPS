@@ -141,7 +141,8 @@ def load_enemy_db(tables_dir=None):
         path = None
     json_path = catalog_path('enemy_names') if use_bundle else None
     json_path = json_path or _find_names_json(tables_dir)
-    cache_key = fingerprint(path, json_path)
+    trap_path = catalog_path('trap_names') if use_bundle else None
+    cache_key = fingerprint(path, json_path, trap_path)
     if _db_cache is not None and _db_cache_key == cache_key:
         return _db_cache
     db = {}
@@ -153,6 +154,17 @@ def load_enemy_db(tables_dir=None):
             db.update(rows if rows is not None else _load_names_json(json_path))
     except Exception:
         pass
+    if trap_path:
+        try:
+            catalog = load_catalog('trap_names')
+            if catalog.get('schema_version') == 1 and isinstance(catalog.get('names'), dict):
+                for eid, name in catalog['names'].items():
+                    if eid.startswith('trap_') and isinstance(name, str) and name:
+                        identity = db.setdefault(eid, {})
+                        if not identity.get('name') or identity['name'] == eid:
+                            identity['name'] = name
+        except (OSError, TypeError, ValueError, AttributeError):
+            pass
     _db_cache = db
     _db_cache_key = cache_key
     return _db_cache

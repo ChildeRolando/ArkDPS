@@ -548,6 +548,18 @@ def test_preparing_status_keeps_last_verified_view_and_observer_status(tmp_path)
     assert result['panels'][0]['entries'][0]['value'] == 1230
 
 
+def test_lobby_signal_preserves_the_last_battle_and_terminal_status(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_metadata={'stage_id': 'Obt/Main/level_main_01-07'}))
+    state.accept('lifecycle', 'ended')
+    state.accept('battle_waiting', True)
+    snapshot = state.snapshot()
+    assert snapshot['battle_waiting'] is True
+    assert snapshot['status'] == 'ended'
+    assert snapshot['stage_code'] == '1-7'
+    assert snapshot['panels'][0]['entries'][0]['value'] == 1230
+
+
 def test_export_exact_json_and_archive_protection(tmp_path):
     state = DesktopState(tmp_path)
     original = record()
@@ -1122,7 +1134,7 @@ def test_engagement_without_events_explains_itself_and_recovers_in_same_panel(tm
     view = state.snapshot()['panels'][0]
     assert view['config']['panel_id'] == panel_id
     assert view['rate_available'] is False
-    assert '事件观测未连接' in view['rate_reason']
+    assert '事件观察未连接' in view['rate_reason']
     assert view['rate_action'] == 'retry' and view['rate_action_label']
     assert all(entry['rate'] is None for entry in view['entries'])
     assert all(entry['rate_text'] == '—' for entry in view['entries'])
@@ -1162,7 +1174,7 @@ def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path)
     view = selected['view']
     assert selected['record']['event_status'] == 'failed'
     assert view['rate_available'] is False
-    assert '该局事件观测未连接' in view['rate_reason']
+    assert '该局事件观察未连接' in view['rate_reason']
     assert '无法补采' in view['rate_hint']
     assert view['rate_action'] == 'settings'
     assert all(entry['rate'] is None for entry in view['entries'])

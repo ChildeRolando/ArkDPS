@@ -49,15 +49,15 @@ BRIDGE_COMMANDS = frozenset((
 
 
 def event_label(status, error=None):
-    labels = {'recording': '事件观测中 · 护盾仅含观测区间',
-              'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观测',
+    labels = {'recording': '事件观察中 · 护盾仅含观察区间',
+              'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观察',
               'gap': '事件中断 · 伤害/治疗快照继续',
               'failed': '事件不可用 · 使用伤害/治疗快照',
               'incompatible': '观察者与游戏版本不兼容 · 使用伤害/治疗快照',
               'stopped': '观察者已停止 · 使用伤害/治疗快照',
               'disabled': '事件已关闭 · 使用伤害/治疗快照',
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
-              'finished': '事件观测结束 · 保留已覆盖区间'}
+              'finished': '事件观察结束 · 保留已覆盖区间'}
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
 
@@ -113,6 +113,7 @@ class DesktopState:
         self.diagnostic = None
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
+        self.battle_waiting = False
         self.scanning = False
         self.history_notice = ''
         self.refresh_history()
@@ -152,6 +153,8 @@ class DesktopState:
             self.observer_status, self.observer_error = value
         elif kind == 'lifecycle':
             self.lifecycle = value
+        elif kind == 'battle_waiting':
+            self.battle_waiting = value
         elif kind == 'history':
             # A record was committed by the collection owner: re-read the list
             # now instead of polling the directory on every snapshot.
@@ -280,6 +283,7 @@ class DesktopState:
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     totals=team_totals(stats),
                     status=status, status_text=label, error=self.error,
+                    battle_waiting=self.battle_waiting,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
                     observer_status=self.observer_status, event_status=self.event_status,
                     event_text=event_label(event_status, event_error),
@@ -442,6 +446,7 @@ class CollectionWorker:
                 try:
                     usable = False
                     current_config, current_enabled, current_target = None, False, None
+                    last_battle_waiting = None
                     last_observer_state = None
                     endpoint_bound = False
                     retries = 0
@@ -501,15 +506,15 @@ class CollectionWorker:
                             if observer_state != last_observer_state:
                                 last_observer_state = observer_state
                                 self.events.put(('observer', observer_state))
+                            runtime = self.session.runtime
                             started = time.monotonic()
                             try:
                                 sample = self.session.read()
-                                runtime = self.session.runtime
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
                                     self.events.put(('sample', sample))
                             except CaptureRetry as exc:
-                                lifecycle = self.session.runtime.sessions.state
+                                lifecycle = runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
                                 if lifecycle == 'playing' or isinstance(exc, MappingRetry):
                                     retries += 1
@@ -535,6 +540,11 @@ class CollectionWorker:
                                       'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
                                 usable = False
+                            if usable:
+                                battle_waiting = runtime.feed.battle_waiting
+                                if battle_waiting is not None and battle_waiting != last_battle_waiting:
+                                    last_battle_waiting = battle_waiting
+                                    self.events.put(('battle_waiting', battle_waiting))
                         if (usable and current_enabled and current_target is not None
                                 and time.monotonic() - self.last_endpoint_check >= 5):
                             started = time.monotonic()

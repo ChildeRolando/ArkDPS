@@ -120,7 +120,7 @@ public sealed class EnemyItem : INotifyPropertyChanged
         if (phaseHp != null)
         {
             if (!row.Bool("phase_from_birth") || !row.Bool("phase_coverage_complete"))
-                phaseHp += "（观测不完整）";
+                phaseHp += "（观察不完整）";
         }
         string phaseFloor=Int(row.Get("phase_max_hp_lower_bound"));
         if(phaseFloor!="—")
@@ -153,44 +153,51 @@ public sealed class EnemyItem : INotifyPropertyChanged
 
 internal static class EnemyPortraits
 {
-    private static JsonElement manifest;
-    private static BitmapImage? normal, muted;
-    private static readonly Dictionary<string, ImageSource> cache = new();
-    private static bool loaded;
+    private static readonly Lazy<Atlas?> enemies = new(() => LoadAtlas("enemy_portraits"));
+    private static readonly Lazy<Atlas?> traps = new(() => LoadAtlas("trap_portraits"));
 
     public static ImageSource? Get(string id, bool gray)
     {
         if (string.IsNullOrEmpty(id)) return null;
-        if (!loaded)
+        return (id.StartsWith("trap_", StringComparison.Ordinal) ? traps : enemies).Value?.Get(id, gray);
+    }
+
+    private static Atlas? LoadAtlas(string folder)
+    {
+        try
         {
-            loaded = true;
-            try
-            {
-                var path = Path.Combine(App.Root, "assets", "enemy_portraits");
-                using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(path, "manifest.json")));
-                manifest = doc.RootElement.Clone();
-                normal = Load(Path.Combine(path, "normal.png"));
-                muted = Load(Path.Combine(path, "muted.png"));
-            }
-            catch (Exception ex) when (ex is IOException or JsonException or NotSupportedException)
-            {
-                return null;
-            }
+            var path = Path.Combine(App.Root, "assets", folder);
+            using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(path, "manifest.json")));
+            return new Atlas(doc.RootElement.Clone(), Load(Path.Combine(path, "normal.png")),
+                Load(Path.Combine(path, "muted.png")));
         }
-        var metadata = manifest.Get("portraits").Get(id);
-        if (metadata.ValueKind != JsonValueKind.Object || normal == null || muted == null) return null;
-        string key = id + gray;
-        if (!cache.TryGetValue(key, out var image))
+        catch (Exception ex) when (ex is IOException or JsonException or NotSupportedException)
         {
-            int index = (int)metadata.Number("index");
-            int cell = (int)manifest.Number("cell_size");
-            int cols = (int)manifest.Number("columns");
-            image = new CroppedBitmap(gray ? muted : normal,
-                new Int32Rect(index % cols * cell, index / cols * cell, cell, cell));
-            image.Freeze();
-            cache[key] = image;
+            return null;
         }
-        return image;
+    }
+
+    private sealed class Atlas(JsonElement manifest, BitmapImage normal, BitmapImage muted)
+    {
+        private readonly Dictionary<(string Id, bool Gray), ImageSource> cache = new();
+
+        internal ImageSource? Get(string id, bool gray)
+        {
+            var metadata = manifest.Get("portraits").Get(id);
+            if (metadata.ValueKind != JsonValueKind.Object) return null;
+            var key = (id, gray);
+            if (!cache.TryGetValue(key, out var image))
+            {
+                int index = (int)metadata.Number("index");
+                int cell = (int)manifest.Number("cell_size");
+                int cols = (int)manifest.Number("columns");
+                image = new CroppedBitmap(gray ? muted : normal,
+                    new Int32Rect(index % cols * cell, index / cols * cell, cell, cell));
+                image.Freeze();
+                cache[key] = image;
+            }
+            return image;
+        }
     }
 
     private static BitmapImage Load(string path)
@@ -493,7 +500,7 @@ public partial class MainWindow
         {
             JsonValueKind.True => "已入场人数合并入场事件与快照。",
             JsonValueKind.False => "入场事件覆盖不完整，已入场人数为已确认下限。",
-            _ => "已入场人数来自已观测的敌人快照。",
+            _ => "已入场人数来自已观察的敌人快照。",
         };
         if(hasReading)
         {
@@ -510,7 +517,7 @@ public partial class MainWindow
                     +totals.UiInt("departed_hp_count")+" 个实例）。");
             if(totals.Get("recovered_hp").TryNumber()>0)
             {
-                hints.Add("已观测敌方回血 "+totals.UiInt("recovered_hp")+" HP。");
+                hints.Add("已观察敌方回血 "+totals.UiInt("recovered_hp")+" HP。");
                 hints.Add("含回血累计可承受量 "+EnemyReading(totals,"damage_capacity_with_recovery",false)+" HP。");
             }
             if(shownEnemy.Get("non_team_native_damage").TryNumber()>0)
@@ -518,7 +525,7 @@ public partial class MainWindow
             if(scopedDamage)
                 hints.Add("我方对敌扣血按已入场实例统计，从事件采集起点累计。");
             else if(shownEnemy.Get("damage_baseline").ValueKind==JsonValueKind.Number)
-                hints.Add("我方有效伤害从敌情观测起点累计（起点 "+shownEnemy.UiInt("damage_baseline")+"）。");
+                hints.Add("我方有效伤害从敌情观察起点累计（起点 "+shownEnemy.UiInt("damage_baseline")+"）。");
         }
         EnemyStatusHint.Text=string.Join("\n",hints);
         EnemyEmpty.Visibility=enemyRows.Count==0 ? Visibility.Visible : Visibility.Collapsed;

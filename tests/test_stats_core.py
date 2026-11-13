@@ -711,7 +711,7 @@ def test_unconfirmed_cast_completion_survives_recast_and_battle_end(recast):
     assert not row['skill_coverage_complete']
     assert not row['skill_split_complete']
     assert row['skill_window_count'] == (2 if recast else 1)
-    assert row['skill_split_reason'] == '未观测到技能效果的实际结束'
+    assert row['skill_split_reason'] == '未观察到技能效果的实际结束'
 
 
 @pytest.mark.parametrize('outbound_first', [False, True])

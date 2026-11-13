@@ -102,6 +102,14 @@ _OPTIONAL_FORMULA_METRICS = frozenset({
     'observed_mitigation_rate', 'observed_mitigation_before', 'observed_mitigation_after',
     'mitigation_matched_hits',
 })
+_TERMINOLOGY_REASON_FIELDS = {
+    'mitigation_unknown_reason', 'overkill_unknown_reason', 'skill_split_reason',
+}
+_LEGACY_REASON_TEXT = {
+    '事件观测未建立': '事件观察未建立',
+    '未观测到弹药技能的实际结束': '未观察到弹药技能的实际结束',
+    '未观测到技能效果的实际结束': '未观察到技能效果的实际结束',
+}
 
 
 def _same_json(actual, recorded):
@@ -119,6 +127,15 @@ def _same_statistics(actual, recorded):
                         if key not in _OPTIONAL_FORMULA_METRICS
                         or key in recorded_rows.get(owner, ())}
                 for owner, row in rows.items()
+            })
+            recorded = dict(recorded, rows={
+                owner: {
+                    key: _LEGACY_REASON_TEXT.get(value, value)
+                    if key in _TERMINOLOGY_REASON_FIELDS and isinstance(value, str)
+                    else value
+                    for key, value in row.items()
+                }
+                for owner, row in recorded_rows.items()
             })
     return _same_json(actual, recorded)
 

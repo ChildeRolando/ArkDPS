@@ -314,7 +314,7 @@ class Statistics:
     def finish(self, game_time):
         self.advance(game_time)
         self.end_time = game_time
-        self._close_skill_windows(game_time)
+        self._close_skill_windows(game_time, battle_end=True)
 
     def invalidate_snapshots(self):
         """Mark a known collection gap; retain totals but stop certifying them.
@@ -365,7 +365,7 @@ class Statistics:
             self.event_coverage_end = end_time
             if not complete:
                 self.event_coverage_broken = True
-            self._close_skill_windows(end_time)
+            self._close_skill_windows(end_time, battle_end=complete)
 
     def _skill_active_seconds(self, owner):
         end = (self.event_coverage_end if self.event_coverage_end is not None
@@ -386,11 +386,11 @@ class Statistics:
         if window is None or ('cast_completed_at' not in window and 'movement_at' not in window):
             return None
         if 'skchr_angel2_3' in (window['key'], window['id']):
-            return '未观测到弹药技能的实际结束'
+            return '未观察到弹药技能的实际结束'
         if live and window['effect_started']:
             # The observed portion of a confirmed activation is a usable window.
             return None
-        return '未观测到技能效果的实际结束'
+        return '未观察到技能效果的实际结束'
 
     def _close_skill_window(self, owner, game_time, reason, *, confirmed):
         window = self.skill_active.pop(owner)
@@ -402,9 +402,12 @@ class Statistics:
         window['reason'] = reason
         self.skill_windows.setdefault(owner, []).append(window)
 
-    def _close_skill_windows(self, game_time):
-        for owner in tuple(self.skill_active):
-            self._close_skill_window(owner, game_time, 'coverage_end', confirmed=False)
+    def _close_skill_windows(self, game_time, *, battle_end):
+        reason = 'battle_end' if battle_end else 'coverage_end'
+        for owner, window in tuple(self.skill_active.items()):
+            # A reliable battle end clips any window that was valid while open.
+            confirmed = battle_end and self._unconfirmed_skill_reason(window, live=True) is None
+            self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
 
     def _record_skill_transition(self, owner, source, kind, game_time, *,
                                  key, skill_id, name, method, reason):
@@ -585,7 +588,7 @@ class Statistics:
         # Keep the original full-battle scope separate from valid matched hits.
         # A later gap does not change the values of previously settled pairs.
         if not self.event_coverage:
-            reason = '事件观测未建立'
+            reason = '事件观察未建立'
         elif self.event_coverage_broken:
             reason = '事件覆盖已结束'
         elif self.mitigation_probe_incomplete:
@@ -901,7 +904,7 @@ class Statistics:
             if overkill_known:
                 overkill_unknown_reason = None
             elif not self.event_coverage:
-                overkill_unknown_reason = '事件观测未建立'
+                overkill_unknown_reason = '事件观察未建立'
             elif not coverage_complete:
                 overkill_unknown_reason = '事件覆盖已结束'
             elif self.all_overkill_unknown:
@@ -1011,7 +1014,7 @@ class Statistics:
                             and abs(skill_value + non_skill_value - expected)
                             <= max(0.01, abs(expected) * 1e-6))
             if not skill_known:
-                reason = ('事件观测未建立' if not self.event_coverage else
+                reason = ('事件观察未建立' if not self.event_coverage else
                           '事件覆盖已结束' if not coverage_complete else
                           skill_incomplete_reason or '技能事件覆盖不完整')
             elif not covers_total:

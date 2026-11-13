@@ -37,7 +37,7 @@
 - [累计、生命周期与本地战绩](snapshot-adapter.md#本地战绩ark-8) — 冻结交接、版本化 BattleRecord、最近 100 局读取及故障诊断。
 - [实时事件采集入口与验收](event-capture.md) — 可选观察器、共享采集入口、覆盖语义和宿主机验收命令。
 - [GUI/HUD 共用面板模型](panel-model.md) — 面板配置、排序、柱长与占比口径（Tk 实现已封存）。
-- [设置、托盘与窗口配置恢复](settings-and-layout.md) — 布局版本与迁移、可达位置、托盘生命周期、事件观测开关与退出清理（Tk 历史章节已封存）。
+- [设置、托盘与窗口配置恢复](settings-and-layout.md) — 布局版本与迁移、可达位置、托盘生命周期、事件观察开关与退出清理（Tk 历史章节已封存）。
 - [ADR 0001：总伤害包含过量部分](adr/0001-damage-totals-include-overkill.md)
 - [ADR 0004：过量伤害作为独立事件派生指标](adr/0004-overkill-as-separate-event-derived-metric.md)
 - [ADR 0003：WPF 展示与 Python 子进程](adr/0003-wpf-python-worker.md)
