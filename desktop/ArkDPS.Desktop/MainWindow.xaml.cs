@@ -95,7 +95,11 @@ public partial class MainWindow : Window
         save.Tick+=async(_,_)=>{save.Stop();await SavePlacement();};
         Loaded+=async(_,_)=>await Start();
         ContentRoot.SizeChanged += (_, _) => ArrangePanels();
-        StateChanged += (_, _) => QueueWorkAreaLayout();
+        StateChanged += (_, _) =>
+        {
+            if (WindowState != WindowState.Minimized) sideMinimizedWithPlayer = false;
+            QueueWorkAreaLayout();
+        };
         DpiChanged += (_, _) => QueueWorkAreaLayout();
         LocationChanged += (_, _) => { if(!sideMode) { QueueWorkAreaLayout(); ScheduleSave(); } };
         SideAttachmentTimer.Tick += (_, _) => UpdateSidePlacement();
@@ -875,7 +879,11 @@ public partial class MainWindow : Window
         value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
             ? Math.Round(number, MidpointRounding.AwayFromZero).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "—";
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
-    private void MinimizeWindow(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void MinimizeWindow(object sender, RoutedEventArgs e)
+    {
+        sideMinimizedWithPlayer = false;
+        WindowState = WindowState.Minimized;
+    }
     private void ToggleMaximizeWindow(object sender, RoutedEventArgs e) =>
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     private void DragTitleBar(object sender, MouseButtonEventArgs e)
@@ -1188,10 +1196,11 @@ public partial class MainWindow : Window
         }
         catch(Exception ex){tray?.Dispose();tray=null;Footer.Text="托盘不可用；关闭时保留任务栏恢复入口。"+ex.Message;}
     }
-    internal void ShowGui(){if(closingRequested || quitting)return;Show();WindowState=WindowState.Normal;UpdateSidePlacement();Activate();}
+    internal void ShowGui(){if(closingRequested || quitting)return;Show();WindowState=WindowState.Normal;UpdateSidePlacement(allowMinimize: false);Activate();}
     private void OnClosing(object? sender,CancelEventArgs e)
     {
         if(quitting)return;e.Cancel=true;ScheduleSave();
+        sideMinimizedWithPlayer = false;
         if(tray?.Visible==true)Hide();else WindowState=WindowState.Minimized;
     }
     private async void QuitClick(object sender,RoutedEventArgs e)=>await Quit();

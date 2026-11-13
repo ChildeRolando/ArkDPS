@@ -729,7 +729,12 @@ public partial class StatisticPanel : UserControl
     private void CloseHud(object sender,RoutedEventArgs e) => CloseRequested?.Invoke();
     private void RateActionClicked(object sender,RoutedEventArgs e) => RateActionRequested?.Invoke(view.Text("rate_action"));
     private void RowSelected(object sender,SelectionChangedEventArgs e) {if(!updating && Rows.SelectedItem is RowItem item) PinRequested?.Invoke(item.Id);}
-    private void HoldOrder(object sender,MouseEventArgs e) => hold=true;
-    private void ReleaseOrder(object sender,MouseEventArgs e) {hold=false;if(view.ValueKind==JsonValueKind.Object) Update(view,deleteAvailable);}
+    private void HoldOrder(object sender,MouseEventArgs e) => hold=!sideRanking;
+    private void ReleaseOrder(object sender,MouseEventArgs e)
+    {
+        if(!hold) return;
+        hold=false;
+        if(view.ValueKind==JsonValueKind.Object) Update(view,deleteAvailable);
+    }
     internal void ClearSelection() => Rows.SelectedItem=null;
 }

@@ -15,6 +15,8 @@ public partial class MainWindow
     private readonly EmulatorAttachment SideAttachment = new();
     private readonly DispatcherTimer SideAttachmentTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private bool sideMode;
+    private nint minimizedPlayer;
+    private bool sideMinimizedWithPlayer;
     private (double MinWidth, double MinHeight, ResizeMode ResizeMode, bool Maximized) fullWindow;
     private string? lastAttachmentError;
 
@@ -55,6 +57,8 @@ public partial class MainWindow
 
         SideAttachmentTimer.Stop();
         SideAttachment.RaiseAlongsidePlayer(default, 0);
+        minimizedPlayer = 0;
+        if (sideMinimizedWithPlayer) RestoreSideWindow();
         SideEnemyHost.Content = null;
         LiveBody.Children.Insert(0, EnemySummary);
         TargetSummary.SetDocked(false);
@@ -78,9 +82,9 @@ public partial class MainWindow
         SideFriendly.Update(DisplayedBattleId, firstPanel?.View ?? default);
     }
 
-    private void UpdateSidePlacement(bool placeFallback = false)
+    private void UpdateSidePlacement(bool placeFallback = false, bool allowMinimize = true)
     {
-        if (!sideMode || !IsVisible || WindowState != WindowState.Normal || closingRequested)
+        if (!sideMode || !IsVisible || closingRequested || WindowState == WindowState.Maximized)
         {
             SideAttachment.RaiseAlongsidePlayer(default, 0);
             return;
@@ -91,6 +95,24 @@ public partial class MainWindow
             nint window = Native.Handle(this);
             var placement = SideAttachment.GetPlacement(State.Get("diagnostic"), window, SideWidth,
                 State.Get("connection_config"));
+            if (placement.State == EmulatorPlacementState.Minimized)
+            {
+                // A taskbar or tray restore remains usable during the same MuMu minimize.
+                bool justMinimized = minimizedPlayer != placement.PlayerWindow;
+                minimizedPlayer = placement.PlayerWindow;
+                if (allowMinimize && justMinimized && WindowState == WindowState.Normal)
+                {
+                    sideMinimizedWithPlayer = true;
+                    WindowState = WindowState.Minimized;
+                }
+                SetSideAttachmentStatus("MuMu 已最小化");
+                SideAttachment.RaiseAlongsidePlayer(default, 0);
+                return;
+            }
+
+            minimizedPlayer = 0;
+            if (sideMinimizedWithPlayer) RestoreSideWindow();
+            if (WindowState != WindowState.Normal) return;
             if (placement.Bounds is Rectangle bounds)
                 Native.Place(this, bounds);
             else
@@ -99,7 +121,6 @@ public partial class MainWindow
             SetSideAttachmentStatus(placement.State switch
             {
                 EmulatorPlacementState.Attached => "",
-                EmulatorPlacementState.Minimized => "MuMu 已最小化",
                 EmulatorPlacementState.NoRoom => "侧边空间不足，暂靠屏幕边缘",
                 EmulatorPlacementState.Ambiguous => "请在设置中选择要吸附的 MuMu 实例",
                 _ => "等待 MuMu 窗口"
@@ -113,6 +134,15 @@ public partial class MainWindow
             lastAttachmentError = error.Message;
             SetSideAttachmentStatus("无法吸附 MuMu 窗口");
         }
+    }
+
+    private void RestoreSideWindow()
+    {
+        sideMinimizedWithPlayer = false;
+        bool activate = ShowActivated;
+        ShowActivated = false;
+        try { WindowState = WindowState.Normal; }
+        finally { ShowActivated = activate; }
     }
 
     private void FitUnattachedSideWindow(nint window, bool entering)

@@ -907,6 +907,73 @@ def test_worker_startup_setup_error_is_reported(tmp_path, monkeypatch):
     assert worker.session is None
 
 
+def test_worker_paces_advancing_samples_and_preserves_retry_backoff(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from event_capture import CaptureRetry
+
+    clock = 0.0
+    delays, starts = [], []
+    reads = iter([
+        (.08, {'state': 2, 'battle_id': 'live', 'frame': 10}),
+        (.27, {'state': 2, 'battle_id': 'live', 'frame': 20}),
+        (.08, {'state': 2, 'battle_id': 'live', 'frame': 20}),
+        (.08, CaptureRetry('baseline crossed an event or game frame')),
+        (.08, {'state': 3, 'battle_id': 'live', 'frame': 30}),
+        (.08, None),
+    ])
+    diagnostics = SimpleNamespace(as_dict=dict, selected_serial='serial', version_actual='test')
+    target = SimpleNamespace(adb_path='adb', serial='serial', diagnostics=diagnostics)
+    worker = CollectionWorker(DesktopState(tmp_path/'state'))
+
+    def wait(delay):
+        nonlocal clock
+        delays.append(delay)
+        clock += delay
+        if len(delays) == 6:
+            worker.stop.set()
+
+    class Session:
+        cleanup_errors = {}
+        collector = SimpleNamespace(diagnostics=diagnostics)
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+            runtime.sessions.state = 'playing'
+
+        def connect(self):
+            pass
+
+        def read(self):
+            nonlocal clock
+            starts.append(clock)
+            duration, sample = next(reads)
+            clock += duration
+            if isinstance(sample, CaptureRetry):
+                raise sample
+            return sample
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock))
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    worker.request(worker.effective[0], False)
+    worker.run()
+
+    assert delays == pytest.approx([.12, .05, .2, .2, .2, .2])
+    assert starts == pytest.approx([0, .20, .52, .80, 1.08, 1.36])
+    events = list(worker.events.queue)
+    assert not any(kind == 'error' for kind, _ in events)
+    assert [sample['frame'] for kind, sample in events if kind == 'sample'] == [10, 20, 20, 30]
+
+
 def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import desktop_bridge

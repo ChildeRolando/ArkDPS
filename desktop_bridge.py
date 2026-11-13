@@ -41,6 +41,8 @@ import stage_names
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
+COLLECTION_PERIOD = .2
+COLLECTION_MIN_REST = .05
 BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
@@ -507,7 +509,9 @@ class CollectionWorker:
                     endpoint_bound = False
                     retries = 0
                     last_retry_audit = float('-inf')
+                    last_live_frame = None
                     while not self.stop.is_set():
+                        next_live_read = None
                         try:
                             config, enabled = self.requests.get_nowait()
                         except queue.Empty:
@@ -519,6 +523,7 @@ class CollectionWorker:
                             endpoint_bound = False
                             retries = 0
                             last_retry_audit = float('-inf')
+                            last_live_frame = None
                             self.last_connect_attempt = time.monotonic()
                             self.events.put(('scanning', True))
                             if self.release():
@@ -569,6 +574,11 @@ class CollectionWorker:
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
                                     self.events.put(('sample', sample))
+                                    if sample.get('state') == 2 and sample.get('frame') is not None:
+                                        frame = (sample.get('battle_id'), sample['frame'])
+                                        if frame != last_live_frame:
+                                            next_live_read = started + COLLECTION_PERIOD
+                                        last_live_frame = frame
                             except CaptureRetry as exc:
                                 lifecycle = runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
@@ -623,7 +633,12 @@ class CollectionWorker:
                                 and time.monotonic() - self.last_connect_attempt >= 5):
                             self.last_connect_attempt = time.monotonic()
                             self.request(current_config, current_enabled)
-                        self.stop.wait(.2)
+                        # Pace successful live reads start-to-start, with a short
+                        # rest even if capture took longer than the whole period.
+                        # Idle, paused and retry paths keep their existing backoff.
+                        delay = (COLLECTION_PERIOD if next_live_read is None else
+                                 max(COLLECTION_MIN_REST, next_live_read - time.monotonic()))
+                        self.stop.wait(delay)
                 finally:
                     # Session shutdown writes final audit records; keep its sink open.
                     # A transient cleanup failure gets one retry before the sink closes.

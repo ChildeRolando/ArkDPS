@@ -297,6 +297,10 @@ class PanelSourceRow:
     non_skill_damage: float | None = None
     skill_damage_effective: float | None = None
     non_skill_damage_effective: float | None = None
+    observed_skill_damage: float | None = None
+    observed_non_skill_damage: float | None = None
+    observed_skill_damage_effective: float | None = None
+    observed_non_skill_damage_effective: float | None = None
     skill_split_complete: bool = False
     skill_split_effective_complete: bool = False
     skill_split_reason: str | None = None
@@ -425,8 +429,16 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
     rows = {}
     for owner, row in (result.get('rows') or {}).items():
         scoped = row.get('boss_damage')
-        if not available or not isinstance(scoped, Mapping):
+        if not isinstance(scoped, Mapping):
             scoped = {}
+        elif not available:
+            # Preserve the observed boss-only skill split when its full
+            # totals and ranking cannot be certified.
+            scoped = {key: scoped.get(key) for key in (
+                'observed_skill_damage', 'observed_non_skill_damage',
+                'observed_skill_damage_effective', 'observed_non_skill_damage_effective',
+            )}
+            scoped['skill_split_reason'] = reason
         # These values describe the operator, independent of whom they hit.
         identity = {key: row[key] for key in (
             'name', 'present', 'sources', 'presence_seconds', 'presence_complete',
@@ -491,6 +503,10 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             non_skill_damage=row.get('non_skill_damage'),
             skill_damage_effective=row.get('skill_damage_effective'),
             non_skill_damage_effective=row.get('non_skill_damage_effective'),
+            observed_skill_damage=row.get('observed_skill_damage'),
+            observed_non_skill_damage=row.get('observed_non_skill_damage'),
+            observed_skill_damage_effective=row.get('observed_skill_damage_effective'),
+            observed_non_skill_damage_effective=row.get('observed_non_skill_damage_effective'),
             skill_split_complete=bool(row.get('skill_split_complete', False)),
             skill_split_effective_complete=bool(
                 row.get('skill_split_effective_complete', False)),
@@ -821,6 +837,10 @@ def _owner_detail(row: PanelSourceRow, *, effective: bool, rate_reason: str) -> 
             'non_skill_damage': row.non_skill_damage,
             'skill_damage_effective': row.skill_damage_effective,
             'non_skill_damage_effective': row.non_skill_damage_effective,
+            'observed_skill_damage': row.observed_skill_damage,
+            'observed_non_skill_damage': row.observed_non_skill_damage,
+            'observed_skill_damage_effective': row.observed_skill_damage_effective,
+            'observed_non_skill_damage_effective': row.observed_non_skill_damage_effective,
             'skill_split_complete': row.skill_split_complete,
             'skill_split_effective_complete': row.skill_split_effective_complete,
             'skill_split_reason': row.skill_split_reason,

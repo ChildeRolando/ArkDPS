@@ -2,8 +2,12 @@
 
 import pytest
 
+from battle_history import BattleRecord
+from battle_share import record_view
 from event_stream import EventStream
+from panel_model import PanelConfig, panel_statistics, render_panel, rows_from_statistics
 from stats_core import Statistics
+from test_battle_history import record
 
 
 BOSS = 'enemy_1506_patrt'
@@ -88,6 +92,84 @@ def test_unattributed_positive_burst_leaves_team_scope_unverified_without_counti
     assert row['mitigation_matched_hits'] == 1
     assert row['boss_damage']['damage'] == 80
     assert row['boss_damage']['mitigation_rate'] == 50
+
+
+def test_skill_split_reconciles_credited_bursts_even_if_another_burst_has_no_owner():
+    s = battle(host=60, summon=0)
+    s.event('bar', 1, 'host', 'elemental_bar', 20, target_instance='credited')
+    s.event('skill', 1, 'host', 'skill_start', 1)
+    burst(s, 'credited')
+    burst(s, 'unattributed', target=NORMAL)
+    burst(s, 'direct', source='host')
+    row = s.result()['rows']['operator']
+    assert row['burst_complete'] is False
+    assert row['burst_unknown_reason']
+    assert row['effective_damage'] == 100
+    assert row['skill_split_reason'] == row['burst_unknown_reason']
+    assert row['skill_split_effective_complete'] is False
+    assert row['observed_skill_damage_effective'] == 100
+    assert row['observed_non_skill_damage_effective'] == 0
+
+
+def test_observed_skill_share_keeps_only_verifiable_effective_hits_after_a_gap():
+    s = battle(host=180, summon=0)
+    s.event('ordinary', .2, 'host', 'damage', 100, target=BOSS,
+            hp_after=500, killed=False, damage_type=1)
+    s.event('skill', .4, 'host', 'skill_start', 1)
+    s.event('lethal', .6, 'host', 'damage', 60, target=BOSS,
+            real_delta=-20, hp_before=20, hp_after=0, killed=True,
+            shield_absorbed=0, damage_type=1)
+    s.event('unverified', .8, 'host', 'damage', 20, target=BOSS, damage_type=1)
+    s.event('friendly', .9, 'host', 'damage', 500, target='char_self',
+            hp_after=500, killed=False, damage_type=1)
+    s.mark_boss_watermark(1)
+    s.invalidate_events(1)
+    s.finish(1)
+    result = s.result()
+    row = result['rows']['operator']
+    assert row['skill_split_effective_complete'] is False
+    assert row['skill_damage_effective'] is None
+    assert row['skill_split_reason'] == '事件覆盖已结束'
+    assert row['observed_skill_damage'] == 80
+    assert row['observed_non_skill_damage'] == 100
+    assert row['observed_skill_damage_effective'] == 20
+    assert row['observed_non_skill_damage_effective'] == 100
+    assert row['boss_damage']['observed_skill_damage_effective'] == 20
+    assert row['boss_damage']['observed_non_skill_damage_effective'] == 100
+
+    config = PanelConfig(effective_only=True)
+    view = render_panel(config, rows_from_statistics(panel_statistics(config, result)))
+    detail = view.details_by_owner['operator']
+    assert detail['observed_skill_damage_effective'] == 20
+    assert detail['observed_non_skill_damage_effective'] == 100
+    assert not view.entries  # An unverified full-battle effective total stays unavailable.
+    boss_config = PanelConfig(effective_only=True, boss_only=True)
+    boss_view = render_panel(boss_config, rows_from_statistics(panel_statistics(boss_config, result)))
+    assert boss_view.details_by_owner['operator']['observed_skill_damage_effective'] == 20
+    assert not boss_view.entries
+
+    archive = record().to_dict()
+    archive['statistics']['rows']['a'].update(
+        observed_skill_damage_effective=20, observed_non_skill_damage_effective=100,
+        skill_split_effective_complete=False, skill_split_reason=row['skill_split_reason'])
+    restored = BattleRecord.from_dict(archive)
+    history_view = record_view(restored, config)
+    assert history_view.details_by_owner['a']['observed_skill_damage_effective'] == 20
+    assert history_view.details_by_owner['a']['observed_non_skill_damage_effective'] == 100
+
+
+def test_observed_skill_share_is_labelled_partial_when_native_totals_include_missing_damage():
+    s = battle(host=150, summon=0)
+    s.event('ordinary', .2, 'host', 'damage', 100, target=NORMAL,
+            hp_after=500, killed=False, damage_type=1)
+    s.event('skill', .4, 'host', 'skill_start', 1)
+    s.event('active', .6, 'host', 'damage', 20, target=NORMAL,
+            hp_after=480, killed=False, damage_type=1)
+    row = s.result()['rows']['operator']
+    assert row['skill_split_reason'] == '技能窗口未覆盖全部伤害事件'
+    assert row['skill_split_effective_complete'] is False
+    assert row['observed_skill_damage_effective'] == 20
+    assert row['observed_non_skill_damage_effective'] == 100
 
 
 def test_wire_burst_pair_reconciles_with_explicit_source_and_retries_once():
