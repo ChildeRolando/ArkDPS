@@ -176,3 +176,4 @@ class EventStream:
             self._fail('watermark does not match the delivered stream')
         self.frame = frame
         self.game_time = game_time
+        self.statistics.mark_boss_watermark(game_time)

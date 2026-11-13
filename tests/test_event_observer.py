@@ -151,3 +151,17 @@ def test_read_and_ack_timeouts_reuse_the_committed_cursor():
         ('read', 3, 4, None), ('ack', None, None, 4),
     ]
     assert observer.status == ObserverStatus.READY
+
+
+def test_terminal_mark_uses_short_deadline_without_changing_normal_requests(monkeypatch):
+    observer = FridaEventObserver(collector(VersionStatus.COMPATIBLE), 'unused')
+    requests = []
+
+    def request(operation, **arguments):
+        requests.append((operation, arguments))
+        return {'terminal_boundary': {'sequence': 1}}
+
+    monkeypatch.setattr(observer, '_request', request)
+    assert observer.read_terminal_mark() == {'terminal_boundary': {'sequence': 1}}
+    observer.mark()
+    assert requests == [('mark', {'timeout': .5}), ('mark', {})]

@@ -50,6 +50,7 @@ class FridaEventObserver:
         self._ack_error = None
 
     request_timeout = 5.0
+    terminal_mark_timeout = 0.5
 
     def _wake_request(self):
         with self._request_lock:
@@ -121,7 +122,7 @@ class FridaEventObserver:
                 self.status = ObserverStatus.FAILED
             raise
 
-    def _request(self, operation, **arguments):
+    def _request(self, operation, *, timeout=None, **arguments):
         script = self.script
         if self.status != ObserverStatus.READY or script is None:
             raise RuntimeError(self.error or f'observer is {self.status.value}')
@@ -141,7 +142,7 @@ class FridaEventObserver:
                 if self.status != ObserverStatus.READY or script.is_destroyed:
                     raise RuntimeError(self.error or str(exc)) from exc
                 raise ObserverReadRetry(f'observer {operation} request failed: {exc}') from exc
-            received = pending.done.wait(self.request_timeout)
+            received = pending.done.wait(self.request_timeout if timeout is None else timeout)
             if self.status != ObserverStatus.READY or script.is_destroyed:
                 raise RuntimeError(self.error or 'observer no longer available')
             if not received:
@@ -155,6 +156,10 @@ class FridaEventObserver:
 
     def mark(self):
         return self._request('mark')
+
+    def read_terminal_mark(self):
+        # The battle already ended. An optional proof must not hold up archiving.
+        return self._request('mark', timeout=self.terminal_mark_timeout)
 
     def read_through(self, sequence):
         if self._ack_error:

@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from event_capture import CaptureRetry, LiveEventCapture
+from event_capture import CaptureRetry, LiveEventCapture, read_terminal_mark
 from event_stream import StreamGap
 from roster import CharacterEntry, RosterSnapshot
 from roster import RosterUnavailable
@@ -69,6 +69,14 @@ def event(sequence, frame=1, game_time=0, amount=20):
             'source': 'char_a', 'kind': 'damage', 'amount': amount}
 
 
+def test_terminal_mark_uses_optional_bounded_observer_method():
+    observer = Observer(Collector())
+    assert read_terminal_mark(observer)['frame'] == 1
+    terminal_mark = {'terminal_boundary': {'frame': 2}}
+    observer.read_terminal_mark = lambda: terminal_mark
+    assert read_terminal_mark(observer) is terminal_mark
+
+
 def test_baseline_event_and_replay_keep_snapshot_authoritative():
     collector = Collector()
     observer = Observer(collector)
@@ -114,6 +122,32 @@ def test_formula_pair_flows_through_damage_queue_without_using_hp_delta():
 
     capture.adapter.on_end()
     assert capture.adapter.result()['rows']['char_a']['mitigation_rate'] == pytest.approx(32)
+
+
+def test_boss_damage_follows_the_same_ordered_settlement_and_watermark():
+    collector = Collector()
+    collector.damage = 0
+    observer = Observer(collector)
+    original_drain = observer.drain
+    observer.drain = lambda: {**original_drain(), 'boss_damage_ready': True}
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time, collector.damage = 2, 1, 70
+    observer.sequence = observer.epoch = 2
+    observer.events = [
+        dict(event(1, frame=2, game_time=1, amount=50), target='enemy_1506_patrt',
+             hp_before=30, hp_after=0, real_delta=-30, killed=True, shield_absorbed=0,
+             damage_type=1, mitigation_before=100, mitigation_after=50),
+        dict(event(2, frame=2, game_time=1), target='enemy_1000_gopro',
+             hp_after=20, killed=False, damage_type=2),
+    ]
+    result = capture.sample()
+    row = result['rows']['char_a']
+    assert result['boss_damage_available']
+    assert row['damage'] == 70
+    assert row['boss_damage']['damage'] == 50
+    assert row['boss_damage']['effective_damage'] == 30
+    assert row['boss_damage']['mitigation_rate'] == 50
 
 
 @pytest.mark.parametrize('fields', [

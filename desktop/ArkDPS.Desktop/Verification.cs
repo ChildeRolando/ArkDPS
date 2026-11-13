@@ -134,6 +134,23 @@ public partial class MainWindow
                 panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle", effective_only = true
             }});
             await VerifySideRanking(Panels[firstId].View, "有效伤害", "全周期 DPS", expectedSegments: 4);
+
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle",
+                effective_only = true, boss_only = true
+            }});
+            await Settle();
+            var scoped = Panels[firstId].View;
+            var sideRanking = FindVisual<StatisticPanel>(SideFriendly, _ => true);
+            Require(sideRanking is not null && StatisticPanel.IsBossScope(sideRanking.View.Get("config")) &&
+                    sideRanking.View.Get("config").Bool("effective_only") &&
+                    sideRanking.Heading.Text.Contains("仅首领") &&
+                    !sideRanking.View.Bool("boss_damage_available") &&
+                    sideRanking.View.Get("entries").Items().Count() == 0 &&
+                    sideRanking.RateNotice.IsVisible && sideRanking.RateNotice.Text == scoped.Text("boss_damage_reason"),
+                    "side ranking lost the first panel's boss scope or used all-target fallback");
+
             await Command("panel_update", new() { ["config"] = sourceConfig });
             await Settle();
 
@@ -713,6 +730,10 @@ public partial class MainWindow
                     selector.ToolTip is string {Length:>0}) &&
                 panel.CategoryLabel.IsVisible && panel.RankingLabel.IsVisible && panel.RateLabel.IsVisible,
                 "live ranking filters do not fit above the table with their guidance");
+        if(panel.View.Get("config").Text("category")=="damage")
+            Require(panel.BossOnly.IsVisible && panel.BossOnly.ActualHeight==24 &&
+                    panel.BossOnly.TranslatePoint(new Point(panel.BossOnly.ActualWidth,0),toolbar).X<=toolbar.ActualWidth,
+                    "boss scope control did not fit in the ranking toolbar");
         if(singleRow)
         {
             double baseline=panel.Category.TranslatePoint(new Point(0,panel.Category.ActualHeight),toolbar).Y;
@@ -1076,6 +1097,78 @@ public partial class MainWindow
                     row.Share=="—", "legacy unknown shares acquired a denominator");
         }
         finally { ApplyState(original); }
+    }
+
+    private async Task VerifyBossScope(string id,HudWindow hud)
+    {
+        var panel=Panels[id];
+        var normalConfig=panel.Configuration();
+        var historyConfig=HistoryPanel.Configuration();
+        string owner=LiveInspector.Owner ?? panel.View.Get("entries").Items().First().Text("owner_id");
+        activePanel=id;
+        LiveInspector.Pin(owner,panel.View);
+        string wholeBattleDamage=TotalDamage.Text;
+        try
+        {
+            panel.BossOnly.IsChecked=true;
+            panel.BossOnly.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            for(int wait=0;wait<40 && commands>0;wait++) await Task.Delay(50);
+            Require(panel.View.Get("config").Bool("boss_only") && !panel.View.Bool("boss_damage_available") &&
+                    panel.BossOnly.IsChecked==true && panel.RateNotice.Visibility==Visibility.Visible &&
+                    panel.RateNotice.Text==panel.View.Text("boss_damage_reason") && panel.Rows.Items.Count==0,
+                    "boss toggle did not reach the worker or displayed full-battle damage as boss damage");
+            Require(StatisticPanel.IsBossScope(hud.Panel.View.Get("config")) &&
+                    hud.Panel.Heading.Text.StartsWith("仅首领·") && hud.Panel.Rows.Items.Count==0 &&
+                    OperatorTrend.Visibility==Visibility.Collapsed && TotalDamage.Text==wholeBattleDamage &&
+                    HasText(LiveInspector,"首领总伤"),"boss scope diverged across the HUD, inspector or dashboard");
+
+            var unavailable=State.Clone();
+            var scoped=System.Text.Json.Nodes.JsonNode.Parse(unavailable.GetRawText())!.AsObject();
+            scoped["status"]="live";
+            var scopedPanel=scoped["panels"]!.AsArray().First(value=>
+                value!["config"]!["panel_id"]!.GetValue<string>()==id)!;
+            scopedPanel["boss_damage_available"]=true;
+            scopedPanel["boss_damage_reason"]="";
+            scoped["boss_live_analysis"]=ScopedTrend(345);
+            scoped["boss_effective_live_analysis"]=ScopedTrend(123);
+            try
+            {
+                ApplyState(JsonSerializer.SerializeToElement(scoped));
+                Require(OperatorTrend.Visibility==Visibility.Visible &&
+                        HasText(OperatorTrend,"首领伤害 · 近 5 秒 DPS 趋势") && HasText(OperatorTrend,"345 DPS"),
+                        "boss raw trend did not consume its own series");
+                scopedPanel["config"]!["effective_only"]=true;
+                ApplyState(JsonSerializer.SerializeToElement(scoped));
+                Require(HasText(OperatorTrend,"首领有效伤害 · 近 5 秒 DPS 趋势") && HasText(OperatorTrend,"123 DPS") &&
+                        hud.Panel.Heading.Text.StartsWith("仅首领·有效伤害"),
+                        "effective boss scope reused the raw or global trend");
+            }
+            finally { ApplyState(unavailable); }
+
+            var healing=new Dictionary<string,object?>(panel.Configuration()){["category"]="healing"};
+            await Command("panel_update",new(){["config"]=healing});
+            Require(panel.BossOnly.Visibility==Visibility.Collapsed && panel.View.Get("config").Bool("boss_only") &&
+                    !hud.Panel.Heading.Text.StartsWith("仅首领·"),"healing was filtered or lost the saved boss preference");
+
+            var historyBoss=new Dictionary<string,object?>(historyConfig){["category"]="damage",["boss_only"]=true};
+            await Command("history_config",new(){["config"]=historyBoss});
+            Require(HistoryPanel.BossOnly.IsChecked==true && HistoryPanel.BossOnly.Visibility==Visibility.Visible &&
+                    HistoryPanel.RateNotice.Visibility==Visibility.Visible && HistoryPanel.Rows.Items.Count==0,
+                    "an older history record showed all-target rows under boss scope");
+        }
+        finally
+        {
+            await Command("history_config",new(){["config"]=historyConfig});
+            await Command("panel_update",new(){["config"]=normalConfig});
+        }
+        Require(!panel.View.Get("config").Bool("boss_only") && panel.Rows.Items.Count>0 &&
+                OperatorTrend.Visibility==Visibility.Visible,"clearing boss scope did not restore the normal views");
+
+        System.Text.Json.Nodes.JsonNode ScopedTrend(int dps) => JsonSerializer.SerializeToNode(new
+        {
+            battle_id=State.Text("battle_id"), game_time=State.Number("game_time"), segment=1,
+            team_recent_dps=dps, operators=new[]{new{owner_id=owner,name="合成验收",recent_dps=dps}},
+        })!;
     }
     private static void Click(int x,int y)
     {
@@ -1734,9 +1827,11 @@ public partial class MainWindow
         checks.Add("ranking footer locks, selects and restores a fully transparent HUD without affecting other HUDs");
         await Settle();
         VerifyShareScope(id,originalHud);
+        await VerifyBossScope(id,originalHud);
         await VerifyHudRows(originalHud,output);
         checks.Add("HUD typography, one/four/five rows auto-fit, sixth row scroll and monitor work area");
         checks.Add("share scope reaches live, history, HUD, details and ranking PNG with legacy fallback");
+        checks.Add("boss filter reaches worker, ranking, details, HUD and history without using whole-battle values");
         Require(originalHud.Panel.Heading.Text=="溢出总伤·近5秒DPS","HUD title lost the initial rank and rate basis");
         string ranks=string.Join("|",Panels[id].View.Get("entries").Items().Select(e=>e.Text("owner_id")+e.Text("value")+e.Text("bar_ratio")+e.Text("share")));
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});

@@ -53,9 +53,10 @@ internal sealed class LiveTrendModel
         Changed?.Invoke();
     }
 
-    internal void Apply(JsonElement state)
+    internal void Apply(JsonElement state) => Apply(state,state.Get("live_analysis"));
+
+    internal void Apply(JsonElement state,JsonElement data)
     {
-        var data = state.Get("live_analysis");
         var battle = data.Text("battle_id");
         if (battle.Length == 0) battle = state.Text("battle_id");
         bool newBattle = battle.Length > 0 && BattleId != battle;
@@ -202,6 +203,7 @@ public sealed class LiveTrendView : Border
     private LiveTrendModel? model;
     private LiveTrendKind kind;
     private string? owner;
+    private string operatorScope = "";
     private string displayedBattle = "";
     private double? cursor;
     private bool IsReferenceCompact => Kind == LiveTrendKind.Compact;
@@ -254,6 +256,15 @@ public sealed class LiveTrendView : Border
         if (IsVisible) Refresh();
     }
 
+    internal void SetOperatorScope(string scope)
+    {
+        if(operatorScope==scope) return;
+        operatorScope=scope;
+        cursor=null;
+        UpdateHeading();
+        if(IsVisible) Refresh();
+    }
+
     internal void RefreshTheme()
     {
         ApplyAppearance();
@@ -295,9 +306,7 @@ public sealed class LiveTrendView : Border
         bool reference = IsReferenceCompact;
         bool paper = reference && Theme.IsPeople;
         bool babel = reference && Theme.IsBabel;
-        heading.Text = Kind == LiveTrendKind.Operator ? "干员近 5 秒 DPS 趋势"
-            : babel ? "实时 DPS 时间轴" : paper ? "实时 DPS 趋势" : "实时 DPS 趋势 / LIVE OUTPUT (STACKED)";
-        AutomationProperties.SetName(chart, heading.Text);
+        UpdateHeading();
         chart.Height = reference ? 138 : 108;
         marker.Visibility = reference ? Visibility.Visible : Visibility.Collapsed;
         marker.Background = paper ? Theme.Resource("Accent") : babel ? Theme.Resource("Signal") : HeaderAccent;
@@ -315,6 +324,15 @@ public sealed class LiveTrendView : Border
         Padding = reference ? new Thickness(0) : new Thickness(12, 9, 12, 8);
         BorderThickness = IsReferenceCompact ? new Thickness(0) : new Thickness(1);
         readout.Margin = reference ? new Thickness(10, 0, 10, 2) : new Thickness();
+    }
+
+    private void UpdateHeading()
+    {
+        heading.Text = Kind==LiveTrendKind.Operator
+            ? (operatorScope.Length>0 ? operatorScope+" · " : "干员")+"近 5 秒 DPS 趋势"
+            : Theme.IsBabel ? "实时 DPS 时间轴" : Theme.IsPeople ? "实时 DPS 趋势"
+            : "实时 DPS 趋势 / LIVE OUTPUT (STACKED)";
+        AutomationProperties.SetName(chart,heading.Text);
     }
 
     private void OnData()

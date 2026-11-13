@@ -19,7 +19,7 @@ public sealed class Inspector : Border
     private JsonElement lastView;
     private ReferenceReport? referenceReport;
     private (string Owner, string Theme, string Row, string Entry, string Detail,
-        string Rates, int Rank, bool Effective, string Metric, string Ranking,
+        string Rates, int Rank, bool Effective, bool BossScope, string Metric, string Ranking,
         string RateBasis, string RateReason, string RateHint, string ShareDescription)? displayed;
     internal string? Owner => owner;
     public bool CompactReference
@@ -67,16 +67,17 @@ public sealed class Inspector : Border
     {
         lastView=view;
         if(owner==null) return;
+        var config=view.Get("config");
+        bool bossScope=StatisticPanel.IsBossScope(config);
         var row=view.Get("source").Get(owner);
         if(row.ValueKind!=JsonValueKind.Object)
         {
-            if(displayed.HasValue && displayed.Value.Owner!=owner) Empty();
+            if(bossScope || displayed is { } previous && (previous.Owner!=owner || previous.BossScope)) Empty();
             return;
         }
         var entries=view.Get("entries").Items().ToArray();
         int index=Array.FindIndex(entries,x=>x.Text("owner_id")==owner);
         var entry=index<0 ? default : entries[index];
-        var config=view.Get("config");
         bool effective=config.Text("category")=="damage" && config.Bool("effective_only");
         var detail=view.Get("details_by_owner").Get(owner);
         if(detail.ValueKind!=JsonValueKind.Object) detail=entry.Get("detail");
@@ -86,7 +87,7 @@ public sealed class Inspector : Border
         string ranking=config.Text("ranking");
         string rateReason=view.Text("rate_reason"), rateHint=view.Text("rate_hint");
         var signature=(owner,Theme.Key,Raw(row),Raw(entry),Raw(detail),Raw(rates),
-            index,effective,metric,ranking,config.Text("rate_basis"),rateReason,rateHint,shareInfo.Description);
+            index,effective,bossScope,metric,ranking,config.Text("rate_basis"),rateReason,rateHint,shareInfo.Description);
         if(displayed==signature) return;
         displayed=signature;
 
@@ -140,12 +141,15 @@ public sealed class Inspector : Border
         hero.Child=heroDock;body.Children.Add(hero);
 
         var stats=new WrapPanel{Margin=new Thickness(0,0,0,4)};
-        AddStat(stats,"总伤害",row.UiInt("damage"));
-        AddStat(stats,"有效伤害",Effective(row));
+        AddStat(stats,bossScope ? "首领总伤" : "总伤害",row.UiInt("damage"));
+        AddStat(stats,bossScope ? "首领有效伤害" : "有效伤害",Effective(row));
         AddStat(stats,"过量伤害",row.UiInt("overkill_damage"));
         AddStat(stats,"溢出伤害率",OverkillRate(row));
-        AddStat(stats,"治疗",row.UiInt("healing"));
-        AddStat(stats,"有效护盾",row.UiInt("shield_absorbed"));
+        if(!bossScope)
+        {
+            AddStat(stats,"治疗",row.UiInt("healing"));
+            AddStat(stats,"有效护盾",row.UiInt("shield_absorbed"));
+        }
         if(stats.Children.Count>0) body.Children.Add(stats);
         body.Children.Add(Text(OverkillNote(row,view),10,false,"Muted",new Thickness(0,4,0,2)));
         if(row.Get("burst_unknown_reason").ValueKind==JsonValueKind.String)
@@ -246,9 +250,9 @@ public sealed class Inspector : Border
         var rateStats=new WrapPanel();
         AddStat(rateStats,effective ? "有效 DPS" : "DPS",RateText(row,damageRate,"engagement_damage",
             effective ? detail : default, effective ? "effective_engagement_damage" : ""));
-        AddStat(rateStats,"HPS",RateText(row,healingRate,"engagement_healing",default,""));
+        if(!bossScope) AddStat(rateStats,"HPS",RateText(row,healingRate,"engagement_healing",default,""));
         AddStat(rateStats,"伤害活跃秒",row.UiInt("active_damage"));
-        AddStat(rateStats,"治疗活跃秒",row.UiInt("active_healing"));
+        if(!bossScope) AddStat(rateStats,"治疗活跃秒",row.UiInt("active_healing"));
         body.Children.Add(rateStats);
         var rateNote=damageRate.Text("note");if(rateNote.Length==0) rateNote=healingRate.Text("note");
         if(rateNote.Length>0) body.Children.Add(Text(rateNote,10,false,"Muted",new Thickness(0,5,0,0)));
@@ -549,7 +553,9 @@ public sealed class Inspector : Border
         private void SetMetrics(JsonElement row,JsonElement view,JsonElement entry,JsonElement detail,
             bool effective,string ranking,SharePresentation shareInfo)
         {
-            string category=view.Get("config").Text("category");
+            var config=view.Get("config");
+            string category=config.Text("category");
+            bool bossScope=StatisticPanel.IsBossScope(config);
             double skill=detail.Number(effective ? "skill_damage_effective" : "skill_damage",double.NaN);
             double ordinary=detail.Number(effective ? "non_skill_damage_effective" : "non_skill_damage",double.NaN);
             double splitTotal=skill+ordinary;
@@ -565,7 +571,8 @@ public sealed class Inspector : Border
             string presence=row.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
                 ? FormatTime(seconds) : "—";
             bool side=sideHeading!=null;
-            metricLabels[0].Text=side && category=="healing" ? "总治疗" : effective ? "有效伤害" : "总伤";
+            metricLabels[0].Text=side && category=="healing" ? "总治疗"
+                : (bossScope ? "首领" : "")+(effective ? "有效伤害" : "总伤");
             string unit=category=="healing" ? "HPS" : "DPS";
             metricLabels[1].Text=category=="shield" ? "有效护盾"
                 : rateLabel.Length==0 ? DefaultLabels[1]
@@ -585,10 +592,11 @@ public sealed class Inspector : Border
                 SetMetric(0,Number(row.Get("healing")),"累计归属于该干员的治疗量。");
             else
                 SetMetric(0,effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
-                    effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
-                        ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。");
+                    (bossScope ? "统计命中首领敌人的伤害。" : "")+
+                    (effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
+                        ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。"));
             string rateHint=category=="shield" ? "累计归属于该干员的实际护盾吸收量。"
-                : DescribeRate(view.Get("config").Text("rate_basis"),category=="healing",effective);
+                : DescribeRate(config.Text("rate_basis"),category=="healing",effective);
             SetMetric(1,category=="shield" ? Number(row.Get("shield_absorbed")) : rate,
                 WithNote(rateHint,entry.Text("rate_note")));
             SetMetric(2,share,WithNote("该干员当前排行指标 ÷ 同口径指标合计。",shareInfo.Description));
