@@ -513,7 +513,8 @@ function formulaBatch(thread,when,create=false){
  let batch=pendingFormulaDamage.get(thread);
  if(!batch||!sameMitigationTime(batch,when)){
   if(!create)return null;
-  batch={...when,hits:new Map(),unowned:new Map(),factories:new Map()};
+  batch={...when,hits:new Map(),unowned:new Map(),factories:new Map(),
+   postFormulaAttacks:new Map(),postFormulaHits:new Map()};
   pendingFormulaDamage.set(thread,batch);
  }
  return batch;
@@ -549,8 +550,9 @@ function verifiedFactoryModifier(result,modifier){
 function takeFormulaDamage(scope,source,type,raw){
  const batch=formulaBatch(scope.tid,scope.when);
  const when=scope.when,key=formulaDamageKey(source,scope.target,type);
- // Consume both slots on the first settlement, even if the hit is rejected.
+ // Consume pending evidence on the first settlement, even if it is rejected.
  const ordinary=consumeFormula(batch?.hits,key),factory=consumeFormula(batch?.factories,key);
+ batch?.postFormulaHits.delete(key);
  if(ordinary?.raw===raw)return ordinary;
  if(factory?.raw===raw&&verifiedFactoryModifier(factory,scope.mod))return factory;
  if(ordinary===undefined&&factory===undefined){
@@ -597,6 +599,7 @@ function beginDamageFormula(invocation,target,source,attack,eligible,nested){
  invocation.previous=previous;
  invocation.entered=true;
  formulaScopes.set(invocation.tid,null);
+ pendingFormulaDamage.get(invocation.tid)?.postFormulaAttacks.delete(attack.toString());
  if(!eligible||target.isNull()||attack.isNull()||source.equals(target)||!mitigationTargetId(target))return;
  let sourceId=null,targetUid=null;
  if(source.isNull()){
@@ -617,13 +620,26 @@ function finishDamageFormula(result){
  if(!scope||!sameMitigationTime(scope.when,time()))return;
  const type=scope.attack.add(mitigationMethods.damageType).readS32(),raw=fixedBits(result);
  const after=Number(raw)/4294967296;
- if(type<1||type>3)return;
+ if(type<1||type>3||!Number.isFinite(after)||after<0)return;
  if(scope.source.isNull()&&raw===0n&&scope.beforeRaw===0n)return;
  if(scope.conflict||type!==scope.type||!Number.isFinite(scope.before)||scope.before<=0){
-  if(scope.sourceId)noteMitigationDiagnostic('formula_missing_pre',scope.sourceId,scope.when,{after},null);
+  if(scope.sourceId){
+   noteMitigationDiagnostic('formula_missing_pre',scope.sourceId,scope.when,{after},null);
+   // Some producers call GetFinalAtk on the original AttackInfo only after
+   // the outer formula returns. Its nested calculations can change type.
+   // Keep the final type and return value for the subsequent factory call.
+   if(mitigationFactoryReady&&!this.previous){
+    const sourceUid=scope.source.add(0x18).readU32(),targetUid=scope.target.add(0x18).readU32();
+    if(sourceUid&&targetUid){
+     const batch=formulaBatch(scope.tid,scope.when,true);
+     rememberUnique(batch.postFormulaAttacks,scope.attack.toString(),
+      {raw,after,source:scope.source,target:scope.target,sourceUid,targetUid,type});
+    }
+   }
+  }
   return;
  }
- if(Number.isFinite(after)&&after>=0)rememberFormulaDamage(scope,raw,after);
+ rememberFormulaDamage(scope,raw,after);
 }
 function restoreDamageFormula(){
  if(!this.entered)return;
@@ -635,7 +651,7 @@ function enterDamageFactory(args,index){
  activeDamageFactories.add(this.tid);
  this.enteredFactory=true;
  const when=time(),batch=formulaBatch(this.tid,when);
- if(!batch?.unowned.size)return;
+ if(!batch||(batch.unowned.size===0&&batch.postFormulaHits.size===0))return;
  const type=args[index].toInt32(),target=args[index+3];
  if(type<1||type>3||target.isNull()||!mitigationTargetId(target))return;
  const targetUid=target.add(0x18).readU32();
@@ -643,19 +659,26 @@ function enterDamageFactory(args,index){
  const raw=fixedBits(args[0]),originValue=index===2?fixedBits(args[1]):raw;
  const beforeRaw=fixedBits(args[index+5]);
  const source=args[index+2],unowned=batch.unowned;
- const formula=consumeFormula(unowned,unownedFormulaKey(target,targetUid,type,raw)+beforeRaw);
+ const unownedFormula=consumeFormula(unowned,unownedFormulaKey(target,targetUid,type,raw)+beforeRaw);
  if(originValue!==raw){
   // The eight-argument factory carries an independent reference amount.
   // A matching source-null calculation belongs to that reference slot.
   const reference=unownedFormulaKey(target,targetUid,type,originValue);
   for(const key of unowned.keys())if(key.startsWith(reference))unowned.delete(key);
  }
- if(formula===null){mitigationCounts.factory_ambiguous++;return;}
- if(!formula||source.isNull()||source.equals(target)||!own(entityId(source)))return;
+ if(unownedFormula===null){mitigationCounts.factory_ambiguous++;return;}
+ if(source.isNull()||source.equals(target)||!own(entityId(source)))return;
  const key=formulaDamageKey(source,target,type);
- if(batch.hits.get(key)?.raw===raw)return; // prefer the directly attributed calculation
+ const postFormula=consumeFormula(batch.postFormulaHits,key);
+ const ordinary=batch.hits.get(key);
+ if(ordinary?.raw===raw)return; // prefer the directly attributed calculation
  const sourceUid=source.add(0x18).readU32(),storage=this.context.x8;
  if(!sourceUid||!storage||storage.isNull())return;
+ const matchesPost=postFormula?.raw===raw&&postFormula.beforeRaw===beforeRaw&&
+  postFormula.sourceUid===sourceUid&&postFormula.targetUid===targetUid;
+ if(!unownedFormula&&postFormula===null){mitigationCounts.factory_ambiguous++;return;}
+ const formula=unownedFormula||(matchesPost&&ordinary===undefined?postFormula:null);
+ if(!formula)return;
  this.factory={batch,when,key,storage,result:{...formula,source,sourceUid,targetUid,originValue}};
 }
 function finishDamageFactory(){
@@ -722,8 +745,24 @@ function installMitigationHooks(){
    if(sameFormulaHit(scope,args[0])){
     this.scope=scope;
     this.type=args[0].add(mitigationMethods.damageType).readS32();
+   }else if(!formulaScopes.has(this.tid)){
+    const batch=pendingFormulaDamage.get(this.tid);
+    if(!batch?.postFormulaAttacks.size||!sameMitigationTime(batch,time()))return;
+    const candidate=consumeFormula(batch.postFormulaAttacks,args[0].toString());
+    if(candidate&&candidate.type===args[0].add(mitigationMethods.damageType).readS32()){
+     this.postFormula=candidate;
+     this.postFormulaBatch=batch;
+    }
    }
   },function(result){
+   if(this.postFormula){
+    const candidate=this.postFormula,batch=this.postFormulaBatch;
+    const beforeRaw=fixedBits(result);
+    if(beforeRaw<=0n||!sameMitigationTime(batch,time()))return;
+    const key=formulaDamageKey(candidate.source,candidate.target,candidate.type);
+    rememberUnique(batch.postFormulaHits,key,{...candidate,beforeRaw,before:Number(beforeRaw)/4294967296});
+    return;
+   }
    const scope=this.scope;
    if(!scope||this.type<1||this.type>3)return;
    const beforeRaw=fixedBits(result);

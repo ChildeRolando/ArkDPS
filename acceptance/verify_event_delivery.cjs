@@ -514,6 +514,123 @@ missing=mitigationDiagnostics();
 assert.equal(missing.unpaired_damage,UNPAIRED_DAMAGE_SAMPLE_LIMIT+2);
 assert.equal(missing.unpaired_damage_samples.length,UNPAIRED_DAMAGE_SAMPLE_LIMIT);
 assert.equal(missing.unpaired_damage_samples[0].target,'trap_0');
+
+const delayedBefore=140,delayedAfter=70;
+const delayedAttack=pointer('0x701','',2),referenceAttack=pointer('0x702','',2);
+function finishWithoutInput({from=gladiia,to=target,info=delayedAttack,standalone=false,
+                             after=delayedAfter}={}){
+  if(standalone)enter('no_event',[to,from,info])(raw(after));
+  else enter('outer',[to,from,flag(1),flag(1),info])(raw(after));
+}
+function laterInput(info=delayedAttack,before=delayedBefore,thread=7){
+  enter('final',[info],thread)(raw(before));
+}
+function delayedFactory(overrides={}){
+  factory(delayedBefore,delayedAfter,overrides);
+}
+function delayedHit(overrides={}){
+  return openModifier(fixtureModifier(delayedBefore,delayedAfter,overrides));
+}
+
+// Owned outer formula. An eight-argument factory carries the distinct
+// source-less reference calculation between the main formula and its getter.
+nextFrame();
+finishWithoutInput();
+calculate(60,30,target,[1,0],nullEntity,7,1,'nested');
+laterInput();
+delayedFactory({rawValue:30});
+assert.equal(ratio(delayedHit({originValue:30}),delayedAfter,2),sample(delayedBefore,delayedAfter));
+assert.equal(ratio(delayedHit({originValue:30}),delayedAfter,2),'null');
+
+// Neither a delayed formula alone nor an unowned formula can provide the
+// positive source attribution needed for this fallback.
+nextFrame();
+finishWithoutInput({standalone:true});
+laterInput();
+noPair(fixtureModifier(delayedBefore,delayedAfter));
+nextFrame();
+finishWithoutInput({from:nullEntity,standalone:true});
+laterInput();
+delayedFactory();
+assert.equal(ratio(delayedHit(),delayedAfter,2),'null');
+
+// Re-entrant formula callbacks can inspect alternate AttackInfo values.
+// The exact caller input and factory replace the ambiguous in-scope pair.
+nextFrame();
+const initialInfo=pointer('0x701','',2);
+const finishConflicted=enter('outer',[target,gladiia,flag(1),flag(1),initialInfo]);
+for(const [type,value] of [[2,delayedBefore+1],[1,delayedBefore]]){
+  const local=pointer('0x703','',type);
+  const finishNested=enter('no_event',[target,gladiia,local]);
+  const finishInternal=enter('internal',[local,raw(0),raw(0),target]);
+  laterInput(local,value);
+  finishInternal(raw(delayedAfter));
+  finishNested(raw(delayedAfter));
+}
+initialInfo.readS32=()=>1;
+finishConflicted(raw(delayedAfter));
+laterInput(initialInfo);
+delayedFactory({type:1});
+assert.equal(ratio(delayedHit({type:1}),delayedAfter),sample(delayedBefore,delayedAfter));
+
+nextFrame();
+finishWithoutInput({standalone:true});
+laterInput();
+delayedFactory();
+assert.equal(ratio(delayedHit(),delayedAfter,2),sample(delayedBefore,delayedAfter));
+
+for(const [name,withCandidate] of [
+  ['wrong AttackInfo pointer',()=>laterInput(referenceAttack)],
+  ['changed AttackInfo type',()=>laterInput(pointer('0x701','',1))],
+  ['different getter value',()=>laterInput(delayedAttack,delayedBefore+1)],
+  ['non-positive getter',()=>laterInput(delayedAttack,0)],
+  ['different getter thread',()=>laterInput(delayedAttack,delayedBefore,8)],
+  ['getter after frame advance',()=>{nextFrame();laterInput();}],
+  ['factory after frame advance',()=>{laterInput();nextFrame();}],
+  ['duplicate complete pairs',()=>{laterInput();finishWithoutInput();laterInput();}],
+]){
+  nextFrame();
+  finishWithoutInput();
+  withCandidate();
+  delayedFactory();
+  assert.equal(ratio(delayedHit(),delayedAfter,2),'null',name);
+}
+
+for(const [name,overrides] of [
+  ['wrong factory owner',{from:wisadel}],
+  ['wrong factory target',{to:other}],
+  ['wrong factory type',{type:1}],
+  ['different factory output',{returned:fixtureModifier(delayedBefore,delayedAfter+1)}],
+  ['different factory input',{returned:fixtureModifier(delayedBefore+1,delayedAfter)}],
+]){
+  nextFrame();
+  finishWithoutInput();
+  laterInput();
+  delayedFactory(overrides);
+  assert.equal(ratio(delayedHit(overrides),delayedAfter,overrides.type??2),'null',name);
+}
+nextFrame();
+finishWithoutInput({after:delayedAfter+1});
+laterInput();
+delayedFactory();
+noPair(fixtureModifier(delayedBefore,delayedAfter));
+
+nextFrame();
+finishWithoutInput();
+laterInput();
+delayedFactory();
+target.uid++;
+assert.equal(ratio(delayedHit(),delayedAfter,2),'null','target instance changed before ApplyModifier');
+target.uid--;
+for(const friendly of [gladiia,angel,token]){
+  nextFrame();
+  finishWithoutInput({to:friendly});
+  laterInput();
+  delayedFactory({to:friendly});
+  assert.equal(ratio(delayedHit({to:friendly}),delayedAfter,2),'null');
+}
+assert.equal(active,0);
+assert.equal(activeHooks.size,0);
 `, {assert}, {filename: 'product-mitigation-delivery'});
 
 console.log('PASS_EVENT_DELIVERY');
