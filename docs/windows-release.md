@@ -8,7 +8,7 @@
 
 Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](https://github.com/ChildeRolando/ArkDPS/releases)。
 
-已发布便携包的清单位于 `metadata/release.json`，当前从 `main` 构建的 CI 候选使用根目录的 `release.json`。清单记录源提交 `head`、载荷文件的逐文件 SHA-256、协议和运行时版本。复核时记录源提交、ZIP 摘要、命令、原始日志和截图。
+便携包的清单位于 `metadata/release.json`。清单记录发行版本、源提交 `head`、载荷文件的逐文件 SHA-256、协议和运行时版本。复核时记录源提交、ZIP 摘要、命令、原始日志和截图。
 
 ## 下载与更新
 
@@ -40,12 +40,12 @@ python -m pytest tests -q --assert=plain
 python tools/package_windows.py --output runtime/packages
 ```
 
-构建器先验证「HEAD 精确 + 工作区干净」，再 `dotnet publish` 自包含 WPF、解包固定 SHA-256 的
+构建器先验证「HEAD 精确 + 工作区干净」，再 `dotnet publish` 自包含 WPF 单文件、解包固定 SHA-256 的
 CPython 3.12.10 embeddable 运行时、下载并核验固定 Frida 17.26.1 wheel，然后按 `BACKEND` 白名单复制
 worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还会断言包内 manifest 不存在
 `tkinter` / Tcl / Tk 文件，并用包内 Python 执行 `import desktop_bridge` 且断言 `"tkinter" not in sys.modules`。
 
-已发布的便携包使用 `ArkDPS-<版本>-win-x64.zip` 命名，RC 在 GitHub 标为预发行。复现某个发布包时，切到该版本的构建提交，再按该提交的构建器参数与清单格式操作。
+已发布的便携包使用 `ArkDPS-<版本>-win-x64.zip` 命名，RC 在 GitHub 标为预发行。复现某个发布包时，切到该版本的构建提交，再按该提交的构建器参数与清单格式操作。构建器可用 `--version` 指定包版本。
 
 `requirements-test.txt` 单独固定 pytest 与 Pillow（Python 包名 `PIL`）：后者仅用于测试中独立解码 PNG，
 不是产品运行时依赖。`requirements-windows.txt` 只保留事件客户端 pin。
@@ -61,6 +61,7 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 `verify_wpf.py` 驱动真实 WPF 与真实 stdio 握手，覆盖合成历史、双主题、HUD 几何/锁定/透明度恢复、
 历史页进入自动刷新与归档后自动更新、事件不可用原因与恢复入口、PNG 导出和新进程重启恢复。
 `verify_wpf_package.py` 在新目录验证清洁解压、载荷摘要、使用包内 Python/.NET 运行、v1 → WPF v3 布局迁移和 WPF 重启恢复。
+WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 
 **这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确
 `NOT VERIFIED`。混合 DPI 与实机项仍以独立验收为准，不得把离线回执当作实机通过证据。

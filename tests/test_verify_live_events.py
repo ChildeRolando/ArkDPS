@@ -159,13 +159,13 @@ def test_enemy_hp_and_finish_reconcile_as_ordered_enemy_state(tmp_path):
     raw_events = records[1]['data']['events']
     common = dict(frame=2, game_time=1, source=None, target='enemy_a', target_instance='12', amount=0)
     raw_events.extend([
-        dict(common, sequence=3, kind='enemy_hp', hp_before=50, hp_after=0),
+        dict(common, sequence=3, kind='enemy_hp', hp_before=50, hp_after=50, enemy_max_hp=100),
         dict(common, sequence=4, kind='enemy_fake_death', hp_after=0),
         dict(common, sequence=5, kind='enemy_finish', hp_after=0, finish_reason=2),
     ])
     shared = dict(frame=2, game_time=1, eid='enemy_a', instance_uid='12', hp_after=0)
     projected = [
-        dict(shared, sequence=3, kind='enemy_hp', hp_before=50),
+        dict(shared, sequence=3, kind='enemy_hp', hp_before=50, hp_after=50, enemy_max_hp=100),
         dict(shared, sequence=4, kind='enemy_fake_death'),
         dict(shared, sequence=5, kind='enemy_finish', finish_reason=2),
     ]
@@ -179,3 +179,12 @@ def test_enemy_hp_and_finish_reconcile_as_ordered_enemy_state(tmp_path):
     path.write_text('\n'.join(json.dumps(record) for record in records))
     with pytest.raises(ValueError, match='published enemy state differs'):
         module.verify(tmp_path)
+
+
+
+@pytest.mark.parametrize('value', [False, -10, 0, float('inf'), float('nan')])
+def test_verifier_rejects_invalid_enemy_max_hp(value):
+    event = dict(sequence=1, kind='enemy_hp', frame=2, game_time=1, source=None, amount=0,
+                 target='enemy_a', target_instance='12', hp_after=10, enemy_max_hp=value)
+    with pytest.raises(ValueError, match='invalid enemy max HP'):
+        module.enemy_state_event(event)

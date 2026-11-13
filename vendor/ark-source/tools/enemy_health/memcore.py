@@ -51,7 +51,7 @@ def probe_adb_executable(path: str) -> tuple[bool, str]:
         return False, '所选文件不存在'
     try:
         result = subprocess.run(
-            [path, 'version'], capture_output=True, text=True, errors='replace',
+            [path, 'version'], stdin=subprocess.DEVNULL, capture_output=True, text=True, errors='replace',
             timeout=8,
             creationflags=(getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                            if os.name == 'nt' else 0),
@@ -113,7 +113,7 @@ def query_adb_devices(adb_path: str, connect_known: bool = False,
     def run(*args, timeout=8):
         try:
             return subprocess.run(
-                [adb_path, *args], capture_output=True, timeout=timeout,
+                [adb_path, *args], stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
                 creationflags=flags)
         except (OSError, subprocess.TimeoutExpired):
             return None
@@ -1316,7 +1316,9 @@ class MemCore:
         if use_target and self.adb_serial:
             command += ['-s', self.adb_serial]
         command += list(args)
-        return subprocess.run(command, capture_output=True, timeout=timeout,
+        # ADB shell can read stdin even for commands that do not use input.
+        # Keep the desktop worker's JSONL command pipe private to the worker.
+        return subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
                               creationflags=self._NO_WINDOW)
 
     def adb(self, *args, timeout=30) -> bytes:

@@ -168,6 +168,8 @@ class LiveEventCapture:
             statistics.mark_shields_unknown()
         if payload.get('skill_unknown'):
             statistics.mark_skill_unknown()
+        if payload.get('mitigation_ready') is False or payload.get('mitigation_unknown'):
+            statistics.mark_mitigation_unknown()
         if 'enemy_entry_ready' in payload or 'enemy_entry_unknown' in payload:
             statistics.observe_enemy_entry(
                 self.adapter.event_stream.baseline_frame,
@@ -188,6 +190,11 @@ class LiveEventCapture:
             )
         elif statistics.enemy_state_start_frame is not None:
             statistics.mark_enemy_state_unknown()
+        if 'enemy_damage_ready' in payload or statistics.enemy_damage is not None:
+            statistics.observe_enemy_damage(complete=(
+                payload.get('enemy_damage_ready') is True
+                and payload.get('enemy_damage_unknown') is not True
+                and (self.initial_drain or statistics.enemy_damage is not None)))
 
     def ingest(self, sample, roster, sequence, drained):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.
@@ -216,6 +223,10 @@ class LiveEventCapture:
                 if self.initial_drain and event['sequence'] <= self.baseline_sequence:
                     continue
                 payload = {k: v for k, v in event.items() if k != 'proof'}
+                proof = event.get('proof')
+                if (payload.get('kind') in ('skill_start', 'skill_end')
+                        and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
+                    payload['skill_method'] = proof['method']
                 self.adapter.accept_event(session=sample['session'], refresh_result=False, **payload)
             self.initial_drain = False
             if any(event.get('sequence', -1) <= sequence for event in self.pending):

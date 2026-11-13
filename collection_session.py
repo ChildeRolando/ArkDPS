@@ -7,6 +7,7 @@ from battle_history import BattleRecord, HistoryError
 
 from collector import Collector, SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_capture import LiveEventCapture
+from event_observer import ObserverStatus
 from event_stream import StreamGap
 
 
@@ -99,8 +100,10 @@ class CollectionSession:
         generation = observation.generation
         previous, self._observer_generation = self._observer_generation, generation
         error = (observation.events or {}).get('error')
+        observer_ready = (self.observer is not None
+                          and getattr(self.observer, 'status', ObserverStatus.READY) == ObserverStatus.READY)
         if (previous is None or previous == generation or not self.frida_remote or
-                (self.event_status not in ('failed', 'gap') and not error)):
+                (observer_ready and not error)):
             return False, self.observer
         # The feed has confirmed a different battle. A failed attempt belongs
         # to this generation even when its first event barrier needs a retry.
@@ -180,14 +183,15 @@ class CollectionSession:
             observation = self.runtime.poll(self.collector, self.observer,
                                            prepare_observer=self._prepare_battle_observer)
         except (CaptureRetry, FrameMismatch, RosterUnavailable, SampleUnavailable) as exc:
-            if isinstance(exc, BattleChanged):
+            if isinstance(exc, (CaptureRetry, BattleChanged)):
                 raise
             raise CaptureRetry(str(exc)) from exc
         finally:
             self._drain_archives()
         if self.runtime.sessions.capture is not None:
             self.capture = self.runtime.sessions.capture
-        if observation.kind not in ('sample', 'terminal') or observation.sample is None:
+        if (observation.kind not in ('sample', 'terminal') or observation.sample is None
+                or observation.generation != self.runtime.sessions.generation):
             raise CaptureRetry(f'lifecycle: {observation.kind}/{observation.reason}')
         sample = self.runtime.display_sample()
         if sample is None:
@@ -197,15 +201,12 @@ class CollectionSession:
             sample.update(event_status=self.event_status, event_error=self.event_error)
         else:
             self.event_status, self.event_error = status, sample['event_error']
-        if (self.runtime.sessions.state == 'finalizing' and
-                sample['event_status'] == 'recording'):
-            sample['event_status'] = self.event_status = 'finished'
         self._attach_enemy(sample)
         self.audit('published', sample)
         return sample
 
     def _attach_enemy(self, sample):
-        """Project committed enemy events alongside the independent damage total."""
+        """Project enemy lifecycle and HP damage at the same committed watermark."""
         session = sample.get('session')
         if session is not None and session != self._enemy_session:
             self._enemy_session = session
@@ -236,7 +237,7 @@ class CollectionSession:
             return
         now = time.monotonic()
         poll_due = now - self._enemy_last_poll >= 1.0
-        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state')
+        event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state', 'enemy_damage')
                       if key in stats}
         state = event_data.get('enemy_state')
         if poll_due or (state is not None and state['complete']) or event_data != self._enemy_event_data:

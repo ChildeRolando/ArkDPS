@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -32,9 +33,12 @@ def seed(directory):
         overkill = damage * .08
         value.update(name=name, damage=damage, healing=(i % 3) * 4567.89,
             overkill_damage=overkill, effective_damage=damage - overkill,
+            overkill_damage_by_type={'physical': overkill*.55, 'arts': overkill*.3,
+                'elemental': overkill*.1, 'true': overkill*.05},
+            overkill_type_complete=True, types_available=True, types_stale=False,
             skill_damage=damage * .42, non_skill_damage=damage * .58,
-            skill_damage_effective=(damage - overkill) * .42,
-            non_skill_damage_effective=(damage - overkill) * .58,
+            skill_damage_effective=damage * .42 - overkill,
+            non_skill_damage_effective=damage * .58,
             skill_split_complete=True, skill_split_effective_complete=True,
             skill_seen=True, skill_active_seconds=4.2,
             skill_coverage_complete=True, skill_split_reason=None,
@@ -48,7 +52,7 @@ def seed(directory):
             recent_damage_by_type={'physical': (12-i)*97.23},
             recent_damage_window=[7., 12.], recent_healing_window=[7., 12.])
         rows[owner] = value
-    original['statistics']['rows'] = rows
+    original['statistics'].update(rows=rows, game_time=12., totals_complete=True)
     archive = BattleRecord.from_dict(original)
     history = BattleHistory(directory / 'history')
     history.save(archive)
@@ -60,22 +64,23 @@ def seed(directory):
         dict(game_time=6., entered_total_hp=26000., remaining_hp=14100.,
              our_effective_damage=11900., our_damage_known=True, entered_count=3, alive_count=2, hp_complete=True),
         dict(game_time=12., entered_total_hp=26000., remaining_hp=6200.,
-             our_effective_damage=19800., our_damage_known=True, entered_count=3, alive_count=1, hp_complete=True),
+             our_effective_damage=18700., our_damage_known=True, our_damage_complete=False,
+             entered_count=3, alive_count=2, hp_complete=True),
     ]
     enemies = [
-        dict(roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',
+        dict(instance_uid='1', roster_id=1, spawn_order=1, eid='enemy_1007_slime', name='源石虫',
              code='B1', hp=1200., max_hp=2400., hp_known=True, hp_ratio=.5,
              atk=180., **{'def': 20.}, res=0., move_speed=.7, attack_speed=100.,
              alive=True, lifecycle='active', state_id=1, state='移动',
              spawn_frame=120, end_frame=None, end_reason=None,
              is_summon=False, position={'x': 1.5, 'y': 2.5}),
-        dict(roster_id=2, spawn_order=2, eid='enemy_1048_hirman', name='碎岩者',
-             code='B2', hp=0., max_hp=9800., hp_known=True, hp_ratio=0.,
+        dict(instance_uid='2', roster_id=2, spawn_order=2, eid='enemy_1048_hirman', name='碎岩者',
+             code='B2', hp=600., max_hp=9800., hp_known=True, hp_ratio=600./9800.,
              atk=750., **{'def': 120.}, res=20., move_speed=.55, attack_speed=86.,
-             alive=False, lifecycle='departed', state_id=5, state='死亡',
-             spawn_frame=240, end_frame=540, end_reason='death',
+             alive=False, lifecycle='departed', state_id=None, state='已离场',
+             spawn_frame=240, end_frame=330, end_reason='finish_7',
              is_summon=False, position={'x': 3.25, 'y': 4.0}),
-        dict(roster_id=3, spawn_order=3, eid='enemy_1506_patrt', name='重装防御者',
+        dict(instance_uid='3', roster_id=3, spawn_order=3, eid='enemy_1506_patrt', name='重装防御者',
              code='B3', hp=5000., max_hp=13800., hp_known=True, hp_ratio=.36,
              atk=320., **{'def': 400.}, res=0., move_speed=.45, attack_speed=100.,
              alive=True, lifecycle='active', state_id=2, state='攻击',
@@ -83,8 +88,12 @@ def seed(directory):
              is_summon=False, position={'x': 6.0, 'y': 3.5}),
     ]
     enemy = dict(status='ready', error=None, ready=True, rows=enemies, non_team_native_damage=500,
+                 damage_scope='entered',
                  totals=dict(entered_count=3, alive_count=2,
                              entered_total_hp=26000., remaining_hp=6200.,
+                             stage_total_hp_estimate=36000., stage_total_hp_complete=False,
+                             departed_hp=600., departed_hp_count=1,
+                             recovered_hp=400., damage_capacity_with_recovery=26400.,
                              hp_complete=True),
                  series=series, last_point=series[-1])
     sample = dict(battle_id='synthetic-live', session='synthetic-live', frame=360,
@@ -111,11 +120,23 @@ def main():
                     '-c', 'Release', '--nologo'], cwd=ROOT, check=True)
     # Each invocation owns a NEW directory. Never overwrite a user's settings.
     import tempfile
-    directory = Path(tempfile.mkdtemp(prefix='state-', dir=output))
+    previous_state = Path(tempfile.mkdtemp(prefix='state-', dir=output))
+    directory = previous_state
     fixture = seed(directory)
-    if args.migrate_v1:
-        (directory/'layout.json').write_text(json.dumps(dict(version=1, panels=[dict(panel_id='default',
-            category='damage', ranking='total', rate_basis='recent_5s')])), encoding='utf-8')
+    panel = dict(panel_id='default', category='damage', ranking='total', rate_basis='recent_5s')
+    legacy_layout = dict(version=1, panels=[panel]) if args.migrate_v1 else dict(
+        version=3, panels=[panel], theme='original')
+    (directory/'layout.json').write_text(json.dumps(legacy_layout), encoding='utf-8')
+    old_history = {}
+    if args.bundle and args.migrate_v1:
+        from connection import ConnectionConfig, ConnectionConfigStore
+        connection = ConnectionConfig(serial='127.0.0.1:16384', auto_detect=False)
+        ConnectionConfigStore(previous_state / 'connection.json').save(connection)
+        old_history = {path.name: path.read_bytes() for path in (previous_state / 'history').glob('*.json')}
+        assert len(old_history) == 2
+        directory = args.bundle.resolve() / 'collector/runtime'
+        shutil.copytree(previous_state, directory)
+        fixture = directory / fixture.name
     executable = (args.bundle.resolve()/'ArkDPS.Desktop.exe') if args.bundle else ROOT/'desktop/ArkDPS.Desktop/bin/Release/net10.0-windows/ArkDPS.Desktop.exe'
     # Reject a mismatched worker before accepting any snapshots.
     if not args.bundle:
@@ -136,16 +157,27 @@ def main():
         subprocess.run(command + ['--offline', '--state-dir', str(directory), '--fixture', str(fixture),
                         '--verify', str(target)], cwd=ROOT, timeout=120, check=True)
         receipt = json.loads((target/'receipt.json').read_text('utf-8'))
+        assert ('share scope reaches live, history, HUD, details and ranking PNG with legacy fallback'
+                in receipt['checks']), 'share scope UI checks did not run'
         if args.bundle:
             assert receipt['worker_runtime']['python'] == '3.12.10'
             assert Path(receipt['worker_runtime']['executable']).resolve() == (args.bundle/'python/python.exe').resolve()
             assert receipt['worker_runtime']['frida'] == '17.26.1'
+        if old_history:
+            assert receipt['restored_connection'] == connection.to_dict()
+            for name, original in old_history.items():
+                assert (directory / 'history' / name).read_bytes() == original, name
+                assert (previous_state / 'history' / name).read_bytes() == original, name
+            assert json.loads((previous_state / 'layout.json').read_text('utf-8')) == legacy_layout
         receipts.append(receipt)
     import struct
     for phase in ('first-launch', 'restart'):
-        for theme in ('lone-trail', 'original'):
+        for theme in ('lone-trail', 'people', 'babel'):
             width, height = struct.unpack('>II', (output/phase/(theme+'-ranking.png')).read_bytes()[16:24])
             assert width == 900 and height > 900, 'full ranking export clipped to visible viewport'
+    assert not list(directory.glob('layout.json.corrupt-*')), 'valid legacy layout was quarantined'
+    assert receipts[0]['restored_layout']['theme'] == 'lone-trail', 'legacy theme did not fall back to Lone Trail'
+    assert receipts[1]['restored_layout']['theme'] == 'babel', 'Babel did not survive a restart'
     assert receipts[1]['restored_layout'] == receipts[0]['layout'], 'fresh process did not read exact saved layout'
     files = {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in output.rglob('*.png')}
@@ -153,6 +185,8 @@ def main():
                    checks=['Native WPF + versioned parent-child stdio JSON Lines', 'Separate process restart matches saved v3 layout'],
                    phases=receipts, screenshots_sha256=files,
                    limitations=['Synthetic data only; no MuMu/game input acceptance. See phase receipts for physical tray result.'])
+    if old_history:
+        receipt['checks'].append('copied legacy runtime retains connection settings and history; old state remains usable')
     (output/'receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2),encoding='utf-8')
     print('PASS_OFFLINE_WPF', output)
 

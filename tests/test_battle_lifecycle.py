@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from battle_lifecycle import (BattleFeed, BattleObservation, BattleRuntime,
-                              BattleSessions, BattleView)
+                              BattleSessions, BattleView, MappingRetry)
 from roster import CharacterEntry, RosterSnapshot
 from snapshot_adapter import FrameMismatch, MappingUnavailable
 from event_capture import CaptureRetry
@@ -105,6 +105,91 @@ def test_torn_lifecycle_binding_retries_without_losing_battle(monkeypatch):
             runtime.poll(collector)
     assert not runtime.sessions.pop_archives()
     assert runtime.poll(collector).generation == first.generation
+
+
+def test_busy_event_frames_retry_inside_lifecycle_bracket_without_consuming(monkeypatch):
+    import battle_lifecycle
+
+    c, runtime = FakeCollector(), BattleRuntime()
+    monkeypatch.setattr(battle_lifecycle, 'time', SimpleNamespace(monotonic=lambda: 0.))
+    mark = dict(sequence=0, epoch=0, active=0, frame=10, game_time=10.)
+    marks = iter([
+        dict(mark, frame=9, game_time=9.),  # Already older than guarded counters.
+        mark, dict(mark, epoch=1),        # Crossed a callback while reading roster.
+        mark, mark,                      # Re-read all inputs inside a fresh pair.
+    ])
+    reads, acks = [], []
+    roster_reads = []
+    read_roster = c.read_roster
+
+    def roster():
+        roster_reads.append(True)
+        return read_roster()
+
+    def drain(sequence):
+        assert c.reads == 2
+        reads.append(sequence)
+        return dict(events=[])
+
+    monkeypatch.setattr(c, 'read_roster', roster)
+    observer = SimpleNamespace(mark=lambda: next(marks), read_through=drain,
+                               commit_events=acks.append)
+    observation = runtime.poll(c, observer)
+    assert next(marks, None) is None
+    assert observation.events['before'] == observation.events['after'] == mark
+    assert runtime.sessions.event_status == 'recording'
+    assert len(roster_reads) == 2
+    assert reads == acks == [0]
+    assert c.reads == 2
+
+
+@pytest.mark.parametrize('elapsed, expected_marks', [(0., 3), (.05, 1)])
+def test_busy_event_frames_leave_uncommitted_batch_and_last_sample_untouched(
+        monkeypatch, elapsed, expected_marks):
+    import battle_lifecycle
+
+    c, runtime, baseline = begin()
+    c.advance()
+    times = iter([0., elapsed])
+    monkeypatch.setattr(battle_lifecycle, 'time',
+                        SimpleNamespace(monotonic=lambda: next(times, elapsed)))
+    marks = []
+    events = []
+
+    def mark():
+        marks.append(True)
+        return dict(sequence=2, epoch=3, active=1, frame=11, game_time=11.,
+                    active_hooks=['Entity.ApplyModifier'])
+
+    observer = SimpleNamespace(mark=mark, read_through=events.append,
+                               commit_events=events.append)
+    with pytest.raises(CaptureRetry, match='callback is in flight'):
+        runtime.poll(c, observer)
+    assert len(marks) == expected_marks
+    assert events == []
+    assert runtime.feed.sequence == baseline.sequence
+    assert runtime.sessions.latest_sample == baseline.sample
+
+
+def test_successful_frame_retry_still_requires_closing_lifecycle_check(monkeypatch):
+    import battle_lifecycle
+
+    c, runtime, baseline = begin()
+    c.advance()
+    c.reads = 0
+    c.after = dict(c.lifecycle, battle=(100, 300))
+    monkeypatch.setattr(battle_lifecycle, 'time', SimpleNamespace(monotonic=lambda: 0.))
+    mark = dict(sequence=1, epoch=1, active=0, frame=11, game_time=11.)
+    marks = iter([dict(mark, active=1), mark, mark])
+    events = []
+    observer = SimpleNamespace(mark=lambda: next(marks), read_through=events.append,
+                               commit_events=events.append)
+    with pytest.raises(CaptureRetry, match='生命周期'):
+        runtime.poll(c, observer)
+    assert next(marks, None) is None
+    assert c.reads == 2
+    assert events == []
+    assert runtime.sessions.latest_sample == baseline.sample
 
 
 def test_abandon_between_bracket_reads_is_preserved_in_single_archive():
@@ -299,8 +384,9 @@ def test_bad_new_roster_preserves_old_data_and_hands_off_its_archive_immediately
     c, r, _ = begin()
     c.advance(time=1., frame=1, damage=5.)
     c.roster = replace(c.roster, entries=())
-    with pytest.raises(MappingUnavailable):
+    with pytest.raises(MappingRetry) as retry:
         r.poll(c)
+    assert isinstance(retry.value.__cause__, MappingUnavailable)
     assert total(r) == 100.
     record, = r.sessions.pop_archives()
     assert record['statistics']['rows']['a']['damage'] == 100.

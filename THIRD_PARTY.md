@@ -54,6 +54,13 @@ ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff75850538032
 `vendor/ark-source/game_data/catalogs/stage_names.json` 由 `tools/build_stage_names.py` 在构建期生成，运行时只读取该紧凑目录，不访问游戏文件。数据来自 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) 固定提交 `6f63c14e27b847ef74b53b00fe51fc322b3cd7ff` 的 `zh_CN/gamedata/excel/stage_table.json`、`roguelike_topic_table.json` 与 `zone_table.json`；生成工具核验三份文件的 SHA-256 与大小，目录内记录来源提交及逐文件摘要。上游数据同样来自游戏客户端解包，版权归 Hypergryph / 上海鹰角网络科技有限公司，仅用于学习与交流；本项目未使用其程序代码，也不代表游戏厂商认可。目录的 `bundle_data_version` 与本仓库 `vendor/ark-source/game_data/manifest.json` 的 `data_version` 对齐；数据包升级而未重建目录时，应用显式提示版本不匹配并退回可读短码，不静默显示内部路径。
 
 
+## 孤星界面字体
+
+[Barlow Semi Condensed](https://github.com/google/fonts/tree/3218ae2acc5bce7ccd97c477965b5b4094241fb0/ofl/barlowsemicondensed)
+与 [IBM Plex Mono](https://github.com/google/fonts/tree/2e5fa2e951237b6ae65f705693d12ca76a7f78c8/ofl/ibmplexmono)
+随 WPF 客户端分发，各含 Regular、SemiBold、Bold 三个未修改字重。两者均采用 SIL Open Font License 1.1，
+原许可与版权声明保存在 `Assets/Fonts`，并随 Windows 便携包发布。
+
 ## Windows 桌面运行时分发（ARK-19）
 
 `tools/package_windows.py` 从官方 Python.org HTTPS 地址取得 CPython 3.12.10 embeddable x64，并使用固定 SHA-256 核验；原始 `python/LICENSE.txt` 保留在分发目录。自包含 .NET 10 / WPF 产物随包分发，保留 .NET `LICENSE.txt` 与 `ThirdPartyNotices.txt` 于 `licenses/`。默认完整包还保留 PyPI `frida==17.26.1` wheel 的 `dist-info/licenses/COPYING`（wxWindows Library Licence 3.1）及元数据，不将该许可改写为本仓库许可。Python 3.12 不需要其仅针对 Python <3.11 的 typing_extensions 依赖。安装包不包含 Frida server 或 ADB，也不安装/启动设备服务；明确 `--without-events` 仅生成无 Frida 的累计快照变体。

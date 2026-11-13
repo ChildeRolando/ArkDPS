@@ -109,7 +109,7 @@ class SubprocessRunner:
         if os.name == 'nt':
             flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         try:
-            proc = subprocess.run(args, capture_output=True, text=True,
+            proc = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                   encoding='utf-8', errors='replace',
                                   timeout=timeout or self.timeout, creationflags=flags)
         except FileNotFoundError as exc:

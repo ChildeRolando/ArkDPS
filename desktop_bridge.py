@@ -9,6 +9,8 @@ import base64
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
+import math
+import os
 from pathlib import Path
 import queue
 import socket
@@ -19,23 +21,31 @@ import traceback
 from uuid import uuid4
 
 from battle_history import BattleHistory, BattleRecord
-from battle_lifecycle import BattleRuntime
-from battle_share import (json_bytes, record_labels, record_stage, record_statistics,
+from battle_lifecycle import BattleRuntime, MappingRetry
+from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
                         resolve_configured)
 from event_capture import CaptureRetry
-from frida_provision import ensure_frida_endpoint
-from layout_store import LayoutStore, GuiGeometry, HudPlacement
+from event_observer import ObserverStatus
+from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
+from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
-from panel_model import (EventAvailability, PanelConfig, detail_rates, render_panel,
-                        rows_from_statistics, team_status)
+from panel_model import (EventAvailability, PanelConfig, detail_rates,
+                         live_damage_rates, render_panel, rows_from_statistics,
+                         team_status)
 import stage_names
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
+BRIDGE_SLOW_PHASE_SECONDS = .5
+BRIDGE_COMMANDS = frozenset((
+    'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
+    'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
+    'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
+))
 
 
 def event_label(status, error=None):
@@ -43,6 +53,9 @@ def event_label(status, error=None):
               'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观测',
               'gap': '事件中断 · 伤害/治疗快照继续',
               'failed': '事件不可用 · 使用伤害/治疗快照',
+              'incompatible': '观测者与游戏版本不兼容 · 使用伤害/治疗快照',
+              'stopped': '观测者已停止 · 使用伤害/治疗快照',
+              'disabled': '事件已关闭 · 使用伤害/治疗快照',
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
               'finished': '事件观测结束 · 保留已覆盖区间'}
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
@@ -93,10 +106,13 @@ class DesktopState:
         self.last = None
         self.last_frame = None
         self.last_progress = 0.
+        self.live_analysis = None
+        self.analysis_interrupted = False
         self.error = ''
         self.connection_text = '等待定位本局'
         self.diagnostic = None
         self.event_status = self.event_error = self.lifecycle = None
+        self.observer_status = self.observer_error = None
         self.scanning = False
         self.history_notice = ''
         self.refresh_history()
@@ -110,6 +126,8 @@ class DesktopState:
 
     def accept(self, kind, value):
         if kind == 'sample':
+            if self.last is not None and observation_age(self.last) > 2:
+                self.analysis_interrupted = True
             self.error = ''
             frame = (value.get('session'), value.get('frame'))
             if frame != self.last_frame:
@@ -117,8 +135,10 @@ class DesktopState:
                 self.last_frame = frame
             self.last = value
             self.event_status, self.event_error = value.get('event_status'), value.get('event_error')
+            self.update_live_analysis(value)
         elif kind == 'error':
             self.error = str(value)
+            self.analysis_interrupted = True
         elif kind == 'warning':
             if value not in self.warnings:
                 self.warnings.append(value)
@@ -128,6 +148,8 @@ class DesktopState:
             self.diagnostic = value
         elif kind == 'event':
             self.event_status, self.event_error = value
+        elif kind == 'observer':
+            self.observer_status, self.observer_error = value
         elif kind == 'lifecycle':
             self.lifecycle = value
         elif kind == 'history':
@@ -138,38 +160,90 @@ class DesktopState:
             self.scanning = value
             if value:
                 self.error = ''
+                self.observer_status = self.observer_error = None
+                self.analysis_interrupted = True
+
+    def update_live_analysis(self, sample):
+        """Keep one chart sample and its in-process observed peak per battle."""
+        statistics = sample.get('statistics') or {}
+        battle_id = sample.get('battle_id', sample.get('session'))
+        game_time = statistics.get('game_time', sample.get('game_time'))
+        previous = self.live_analysis
+        same_battle = previous is not None and previous['battle_id'] == battle_id
+        if not same_battle:
+            self.live_analysis = None
+            self.analysis_interrupted = False
+        if (not isinstance(battle_id, str) or not battle_id or
+                type(game_time) not in (float, int) or not math.isfinite(game_time) or game_time < 0 or
+                observation_age(sample) > 2 or (same_battle and game_time < previous['game_time'])):
+            self.analysis_interrupted = True
+            return
+
+        terminal = statistics.get('ended') is True or self.lifecycle in ('ended', 'frozen', 'finalizing')
+        team_recent, operators = live_damage_rates(statistics, game_time)
+        complete, _, _ = team_status(statistics)
+        team_total = team_totals(statistics)['damage'] if complete else None
+        if team_total is not None and (not math.isfinite(team_total) or team_total < 0):
+            team_total = None
+        if not complete or terminal:
+            team_recent = None
+        if terminal:
+            for operator in operators:
+                operator['recent_dps'] = None
+
+        segment = previous['segment'] if same_battle else 0
+        peak = previous['observed_peak_dps'] if same_battle else None
+        if same_battle:
+            lost_coverage = (
+                previous['team_total_damage'] is not None and team_total is None
+                or previous['team_recent_dps'] is not None and team_recent is None and not terminal
+            )
+            if self.analysis_interrupted or lost_coverage:
+                segment += 1
+        if team_recent is not None:
+            peak = team_recent if peak is None else max(peak, team_recent)
+        average = team_total / game_time if team_total is not None and game_time > 0 else None
+        self.live_analysis = dict(
+            battle_id=battle_id, game_time=game_time, segment=segment,
+            team_recent_dps=team_recent,
+            team_average_dps=average if average is not None and math.isfinite(average) else None,
+            observed_peak_dps=peak, team_total_damage=team_total, operators=operators)
+        self.analysis_interrupted = False
 
     def status(self):
         if self.scanning:
             return 'locating', '正在定位 · 保留最后有效记录'
         if self.error:
             return 'disconnected', '连接断开 / 读取中断 · 显示最后有效记录'
+        if self.lifecycle == 'preparing':
+            return 'preparing', ('战斗准备中 · 保留上一局统计' if self.last else '战斗准备中')
         if not self.last:
             return 'waiting', '等待战斗数据'
         if self.lifecycle in ('ended', 'finalizing', 'frozen'):
             return self.lifecycle, {'ended': '战斗结束', 'finalizing': '等待结算确认', 'frozen': '战局冻结'}[self.lifecycle]
         if observation_age(self.last) > 2:
-            return 'stale', '数据已过期 · 请重新定位'
+            return 'stale', '数据已过期 · 等待下一次可靠采样 · 保留最后有效记录'
         if time.monotonic() - self.last_progress > .8:
             return 'paused', '暂停 / 等待战斗推进'
         if self.event_status in ('gap', 'failed', 'unavailable'):
             return 'degraded', '正在统计 · 事件降级'
         return 'live', '正在统计'
 
-    @staticmethod
-    def view(config, statistics, complete=None, event=None):
+    def view(self, config, statistics, complete=None, event=None):
         source = statistics.get('rows') or {}
+        number_units = self.layout.number_units
         if complete is None:
-            complete, reason, note = team_status(statistics)
+            complete, reason, note = team_status(statistics, number_units)
         else:
             reason, note = '', ''
         rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
-                                   team_note=note, event=event))
+                                   team_note=note, event=event, number_units=number_units))
         view['empty_text'] = empty_text(config, source, complete)
         view['rates'] = detail_rates(
-            rows, event, effective=config.effective_only and config.category.value == 'damage')
+            rows, event, effective=config.effective_only and config.category.value == 'damage',
+            number_units=number_units)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source
@@ -181,21 +255,16 @@ class DesktopState:
         status, label = self.status()
         history = []
         for record in self.records.values():
-            labels = record_labels(record)
-            stage = record_stage(record)
+            item = record_display(record)
             names = ' '.join(row.get('name', '') for row in record.statistics['rows'].values())
             # Readable labels and the native id both match, so old records stay searchable.
-            search = ' '.join(labels) + ' ' + names + ' ' + (stage.raw or '')
-            history.append(dict(battle_id=record.battle_id, labels=labels,
-                                stage=stage.label, stage_detail=stage.detail,
-                                search=search.casefold()))
+            item['search'] = ' '.join((*item['labels'], item['date'], names, item['stage_raw'] or '')).casefold()
+            history.append(item)
         selected = None
         if self.selected:
-            selected_stage = record_stage(self.selected)
             selected_stats = record_statistics(self.selected)
             selected = dict(
-                battle_id=self.selected.battle_id, labels=record_labels(self.selected),
-                stage=selected_stage.label, stage_detail=selected_stage.detail,
+                record_display(self.selected),
                 view=self.view(self.history_config, selected_stats, None,
                                EventAvailability(status=self.selected.event_status,
                                                  error=self.selected.event_error, live=False)),
@@ -204,18 +273,23 @@ class DesktopState:
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         live_event = EventAvailability(status=sample.get('event_status', self.event_status),
                                        error=sample.get('event_error', self.event_error), live=True)
+        event_status, event_error = self.event_status, self.event_error
+        if event_status is None or self.observer_status in ('disabled', 'failed', 'incompatible', 'stopped'):
+            event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     totals=team_totals(stats),
                     status=status, status_text=label, error=self.error,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
-                    event_text=event_label(self.event_status, self.event_error),
+                    observer_status=self.observer_status, event_status=self.event_status,
+                    event_text=event_label(event_status, event_error),
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
                     stage=live_stage.label if has_live_stage else None,
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
+                    live_analysis=self.live_analysis,
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),
                     history=history, history_selected=selected, history_notice=self.history_notice)
@@ -246,10 +320,25 @@ class DesktopState:
             panels = tuple(p for p in self.layout.panels if p.panel_id != cmd['panel_id'])
             if not panels:
                 raise ValueError('至少保留一个面板')
+            panel_id = cmd['panel_id']
             self.persist(replace(self.layout, panels=panels,
-                                 huds=tuple(h for h in self.layout.huds if h.panel_id != cmd['panel_id'])))
+                                 huds=tuple(h for h in self.layout.huds if h.panel_id != panel_id),
+                                 hud_styles=tuple((key, style) for key, style in self.layout.hud_styles
+                                                  if key != panel_id)))
         elif op == 'theme':
             self.persist(replace(self.layout, theme=cmd['theme']))
+        elif op == 'number_units':
+            self.persist(replace(self.layout, number_units=cmd['number_units']))
+        elif op == 'hud_style':
+            panel_id = cmd['panel_id']
+            if panel_id not in {p.panel_id for p in self.layout.panels}:
+                raise ValueError('HUD 源面板已删除')
+            styles = dict(self.layout.hud_styles)
+            if cmd['style'] is None:
+                styles.pop(panel_id, None)
+            else:
+                styles[panel_id] = HudStyle.from_dict(cmd['style'])
+            self.persist(replace(self.layout, hud_styles=tuple(styles.items())))
         elif op == 'placement':
             known = {p.panel_id for p in self.layout.panels}
             huds = tuple(HudPlacement.from_dict(h) for h in cmd['huds'])
@@ -325,7 +414,7 @@ class CollectionWorker:
         try:
             self.session.close()
         except Exception as exc:
-            self.cleanup_error = '旧采集会话清理失败；修复后重新定位：' + str(exc)
+            self.cleanup_error = f'旧采集会话清理失败（{exc}）。请解决问题后重连观测者。'
             self.events.put(('error', self.cleanup_error))
             return False
         if self.session.cleanup_errors:
@@ -352,6 +441,10 @@ class CollectionWorker:
                 try:
                     usable = False
                     current_config, current_enabled, current_target = None, False, None
+                    last_observer_state = None
+                    endpoint_bound = False
+                    retries = 0
+                    last_retry_audit = float('-inf')
                     while not self.stop.is_set():
                         try:
                             config, enabled = self.requests.get_nowait()
@@ -360,6 +453,10 @@ class CollectionWorker:
                         if config is not None:
                             current_config, current_enabled = config, enabled
                             usable = False
+                            last_observer_state = None
+                            endpoint_bound = False
+                            retries = 0
+                            last_retry_audit = float('-inf')
                             self.last_connect_attempt = time.monotonic()
                             self.events.put(('scanning', True))
                             if self.release():
@@ -370,6 +467,8 @@ class CollectionWorker:
                                     if enabled:
                                         ok, detail = ensure_frida_endpoint(target.adb_path, target.serial,
                                                                            remote=self.endpoint)
+                                        endpoint_bound = ok
+                                        self.last_endpoint_check = time.monotonic()
                                         audit('frida_endpoint', {'ok': ok, 'detail': detail})
                                         if not ok:
                                             self.events.put(('warning', '事件端点：' + detail))
@@ -392,27 +491,65 @@ class CollectionWorker:
                                     self.release()
                             self.events.put(('scanning', False))
                         if usable and self.session is not None:
+                            # Attachment can be confirmed in the lobby, before any battle sample.
+                            observer_state = ('disabled', None)
+                            if current_enabled:
+                                observer = self.session.observer
+                                observer_state = ((observer.status, observer.error) if observer is not None
+                                                  else ('failed', self.session.event_error))
+                            if observer_state != last_observer_state:
+                                last_observer_state = observer_state
+                                self.events.put(('observer', observer_state))
+                            started = time.monotonic()
                             try:
                                 sample = self.session.read()
                                 runtime = self.session.runtime
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
                                     self.events.put(('sample', sample))
-                            except CaptureRetry:
-                                self.events.put(('lifecycle', self.session.runtime.sessions.state))
+                            except CaptureRetry as exc:
+                                lifecycle = self.session.runtime.sessions.state
+                                self.events.put(('lifecycle', lifecycle))
+                                if lifecycle == 'playing' or isinstance(exc, MappingRetry):
+                                    retries += 1
+                                    now = time.monotonic()
+                                    if now - last_retry_audit >= 5:
+                                        reason = str(exc).partition('\n')[0].strip()
+                                        if reason.startswith('observer ') and ' request failed:' in reason:
+                                            reason = reason.partition(':')[0]
+                                        audit('capture_retry', {
+                                            'reason': reason[:200], 'count': retries,
+                                            'duration_ms': round((now - started) * 1000, 1),
+                                            'monotonic': now})
+                                        retries = 0
+                                        last_retry_audit = now
                             except BattleChanged as exc:
                                 self.events.put(('error', str(exc)))
+                                usable = False
+                                self.last_connect_attempt = time.monotonic()
                                 self.request(current_config, current_enabled)
                             except Exception as exc:
+                                audit('capture_error', {'error_type': type(exc).__name__,
+                                      'reason': str(exc).partition('\n')[0][:200],
+                                      'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
                                 usable = False
                         if (usable and current_enabled and current_target is not None
                                 and time.monotonic() - self.last_endpoint_check >= 5):
-                            self.last_endpoint_check = time.monotonic()
-                            ok, detail = ensure_frida_endpoint(current_target.adb_path,
-                                                               current_target.serial,
-                                                               remote=self.endpoint)
-                            audit('frida_keepalive', {'ok': ok, 'detail': detail})
+                            started = time.monotonic()
+                            observer = self.session.observer
+                            # ADB may still accept TCP while the device-side route is
+                            # stale. Only a live attached observer permits the fast path.
+                            observer_ready = observer is not None and observer.status == ObserverStatus.READY
+                            check = keep_frida_endpoint if endpoint_bound and observer_ready else ensure_frida_endpoint
+                            ok, detail = check(current_target.adb_path, current_target.serial,
+                                               remote=self.endpoint)
+                            endpoint_bound = ok
+                            finished = time.monotonic()
+                            self.last_endpoint_check = finished
+                            audit('frida_keepalive', {'ok': ok, 'detail': detail,
+                                  'duration_ms': round((finished - started) * 1000, 1),
+                                  'monotonic': finished})
                             if not ok:
                                 self.events.put(('warning', '事件端点保活：' + detail))
                         if (not usable and current_config is not None
@@ -440,24 +577,97 @@ class CollectionWorker:
 def serve(input_stream, output, state, worker=None):
     """Versioned UTF-8 JSON Lines: hello, snapshot/state/error, quit/bye."""
     handshake = False
+    trace = os.environ.get('ARKDPS_BRIDGE_TRACE') == '1'
+    last_reply: tuple[int, str, str, int] | None = None
     while True:
-        line = input_stream.readline(MAX_MESSAGE + 1)
+        line = input_stream.readline(MAX_MESSAGE + 2)
         if not line:
             return
-        if len(line.encode('utf-8')) > MAX_MESSAGE:
+        delimiter_size = 2 if line.endswith('\r\n') else int(line.endswith('\n'))
+        if len(line.encode('utf-8')) - delimiter_size > MAX_MESSAGE:
             raise ValueError('worker 消息长度越界')
+        if not line.endswith('\n'):
+            # EOF can interrupt a write after the JSON object but before its delimiter.
+            return
         cmd = {}
+        log_op, request_id = 'unknown', None
+        phase = 'request'
+        phase_start = started = time.perf_counter()
+        response_bytes = None
         quit_requested = False
+        cache_response = False
+
+        def diagnostic(event, *, error=None):
+            now = time.perf_counter()
+            size = '' if response_bytes is None else f' bytes={response_bytes}'
+            failure = '' if error is None else f' error={error}'
+            try:
+                print(f'[bridge] {datetime.now(timezone.utc).isoformat()} op={log_op} id={request_id} '
+                      f'phase={phase} event={event} elapsed_ms={(now - started) * 1000:.1f} '
+                      f'phase_ms={(now - phase_start) * 1000:.1f}{size}{failure}', file=sys.stderr, flush=True)
+            except OSError:
+                pass
+
+        def advance(next_phase):
+            nonlocal phase, phase_start
+            now = time.perf_counter()
+            if now - phase_start >= BRIDGE_SLOW_PHASE_SECONDS:
+                diagnostic('slow')
+            phase, phase_start = next_phase, now
+            if trace:
+                diagnostic('begin')
+
+        def send(payload):
+            advance('write')
+            if log_op != 'snapshot' and not trace:
+                diagnostic('reply_ready')
+            try:
+                output.write(payload + '\n')
+                advance('flush')
+                output.flush()
+            except OSError as exc:
+                diagnostic('failed', error=type(exc).__name__)
+                return False
+            advance('complete')
+            if log_op != 'snapshot' or trace or time.perf_counter() - started >= BRIDGE_SLOW_PHASE_SECONDS:
+                diagnostic('sent')
+            return True
+
         try:
             cmd = json.loads(line)
+            if isinstance(cmd, dict):
+                request_op, raw_id = cmd.get('op'), cmd.get('id')
+                if isinstance(request_op, str) and request_op in BRIDGE_COMMANDS:
+                    log_op = request_op
+                if type(raw_id) is int:
+                    request_id = raw_id
+            if log_op != 'snapshot' or trace:
+                diagnostic('received')
             if not isinstance(cmd, dict) or type(cmd.get('version')) is not int or cmd.get('version') != PROTOCOL_VERSION:
                 raise ValueError('不支持的 worker 协议版本')
+            if request_id is None and ('id' in cmd or last_reply is not None):
+                raise ValueError('worker 命令缺少整数编号')
+            if request_id is not None and last_reply is not None:
+                last_id, last_line, last_payload, last_size = last_reply
+                if request_id < last_id:
+                    raise ValueError('worker 命令编号已过期')
+                if request_id == last_id:
+                    if line != last_line:
+                        raise ValueError('worker 重试内容与原命令不一致')
+                    response_bytes = last_size
+                    diagnostic('replay')
+                    if not send(last_payload):
+                        return
+                    continue
+            cache_response = request_id is not None
+            advance('events')
             if worker:
                 while True:
                     try:
                         state.accept(*worker.events.get_nowait())
                     except queue.Empty:
                         break
+            advance('command')
             op = cmd['op']
             if op == 'hello':
                 handshake = True
@@ -467,7 +677,8 @@ def serve(input_stream, output, state, worker=None):
                 except PackageNotFoundError:
                     frida_version = None
                 result = dict(transport='stdio-jsonl', worker='ArkDPS Python', version=PROTOCOL_VERSION,
-                              python=sys.version.split()[0], executable=sys.executable, frida=frida_version)
+                              python=sys.version.split()[0], executable=sys.executable, frida=frida_version,
+                              request_replay=True)
                 kind = 'hello'
             elif not handshake:
                 raise ValueError('必须先完成 hello 握手')
@@ -487,20 +698,33 @@ def serve(input_stream, output, state, worker=None):
                 if op == 'connection_apply' and worker:
                     worker.request(state.connection, state.layout.event_observation)
                 kind = 'snapshot' if op == 'snapshot' else 'state'
-            reply = dict(version=PROTOCOL_VERSION, id=cmd.get('id'), kind=kind, ok=True,
+            advance('snapshot')
+            reply = dict(version=PROTOCOL_VERSION, id=request_id, kind=kind, ok=True,
                          result=result, state=state.snapshot())
         except Exception as exc:
-            reply = dict(version=PROTOCOL_VERSION, id=cmd.get('id') if isinstance(cmd, dict) else None,
+            diagnostic('failed', error=type(exc).__name__)
+            reply = dict(version=PROTOCOL_VERSION, id=request_id,
                          kind='error', ok=False, error=str(exc))
-        payload = json.dumps(reply, ensure_ascii=False, allow_nan=False)
-        if len(payload.encode('utf-8')) > MAX_MESSAGE:
-            raise ValueError('worker 响应长度越界')
+        advance('encode')
+        encode_error = None
         try:
-            output.write(payload + chr(10))
-            output.flush()
-        except (BrokenPipeError, OSError):
-            return
-        if quit_requested:
+            payload = json.dumps(reply, ensure_ascii=False, allow_nan=False)
+            response_bytes = len(payload.encode('utf-8'))
+            if response_bytes > MAX_MESSAGE:
+                diagnostic('failed', error='oversize')
+                encode_error = 'worker 响应长度越界'
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+            diagnostic('failed', error=type(exc).__name__)
+            encode_error = 'worker 无法编码响应'
+        if encode_error is not None:
+            payload = json.dumps(dict(version=PROTOCOL_VERSION, id=request_id, kind='error',
+                                      ok=False, error=encode_error), ensure_ascii=False)
+            response_bytes = len(payload.encode('utf-8'))
+        # A completed command can outlive the parent's wait for its response.
+        # Cache the actual reply, including errors, before the first pipe write.
+        if cache_response:
+            last_reply = (request_id, line, payload, response_bytes)
+        if not send(payload) or quit_requested:
             return
 
 

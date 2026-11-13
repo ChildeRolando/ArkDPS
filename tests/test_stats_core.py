@@ -72,6 +72,42 @@ def test_source_keys_and_event_dedup_keep_host_attribution():
         s.register_source('summon-key', 'other')
 
 
+def test_formula_coverage_checks_each_source_before_aggregating_a_summon():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('host', 'operator')
+    s.register_source('summon', 'operator')
+    s.register_source('untouched', 'other')
+    s.snapshot(0, {key: {'damage': 0, 'healing': 0} for key in s.owners})
+    s.snapshot(1, {'host': {'damage': 30, 'healing': 0},
+                   'summon': {'damage': 70, 'healing': 0},
+                   'untouched': {'damage': 25, 'healing': 0}})
+    s.event('a', 1, 'host', 'damage', 20, mitigation_before=25, mitigation_after=20)
+    s.event('b', 1, 'summon', 'damage', 80, mitigation_before=100, mitigation_after=80)
+    s.event('c', 1, 'untouched', 'damage', 25, mitigation_before=25, mitigation_after=25)
+    rows = s.result()['rows']
+    assert rows['operator']['mitigation_rate'] is None
+    assert rows['other']['mitigation_rate'] == 0
+
+
+def test_formula_gain_retains_signed_observed_mitigation_through_terminal_gap():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 50, 'healing': 0}})
+    s.event('a', 1, 'a', 'damage', 50, mitigation_before=40, mitigation_after=50)
+    assert s.result()['rows']['a']['mitigation_rate'] == -25
+    s.invalidate_events()
+    s.finish(2)
+    s.correct_final_totals({'a': {'damage': 75, 'healing': 0}})
+    row = s.result()['rows']['a']
+    assert row['mitigation_rate'] is None
+    assert row['mitigation_unknown_reason'] == '事件覆盖已结束'
+    assert row['observed_mitigation_rate'] == -25
+    assert row['observed_mitigation_before'] == 40
+    assert row['observed_mitigation_after'] == 50
+    assert row['mitigation_matched_hits'] == 1
+
+
 def test_missing_source_and_counter_failure_are_not_zero_filled():
     s = Statistics('battle', 0)
     s.register_source('a', 'a')
@@ -266,22 +302,33 @@ def test_living_target_proves_zero_overkill_without_full_hp_reconstruction():
 
 
 
-def test_friendly_self_damage_does_not_enter_engagement_dps():
+@pytest.mark.parametrize('friendly_target', ['char_1041_angel2', 'char_002_amiya', 'token_friendly'])
+def test_friendly_self_damage_does_not_enter_engagement_dps(friendly_target):
     s = Statistics('friendly', 0, event_coverage=True)
-    s.register_source('a', 'A')
-    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
-    s.advance(10)
-    s.event('self', 1, 'a', 'damage', 25, target='char_a', hp_after=10, killed=False)
-    s.event('enemy', 2, 'a', 'damage', 100, target='enemy_1',
-            hp_after=10, killed=False)
+    angel = 'char_1041_angel2'
+    s.register_source(angel, 'A')
+    s.snapshot(0, {angel: {'damage': 0, 'healing': 0}})
+    s.snapshot(10, {angel: {'damage': 100, 'healing': 0}})
+    s.event('skill-start', .5, angel, 'skill_start', 1)
+    s.event('friendly-hp', 1, angel, 'hp_damage', 25, target=friendly_target, damage_type=3)
+    s.event('friendly', 1, angel, 'damage', 25, target=friendly_target, hp_after=10,
+            killed=False, damage_type=3, mitigation_before=25, mitigation_after=25)
+    s.event('skill-end', 1.5, angel, 'skill_end', 1)
+    s.event('enemy', 2, angel, 'damage', 60, target='enemy_1', hp_after=10, killed=False,
+            damage_type=1, mitigation_before=75, mitigation_after=60)
+    s.event('stage-object', 2, angel, 'damage', 40, target='trap_321_shnbox', hp_after=10,
+            killed=False, damage_type=1, mitigation_before=50, mitigation_after=40)
     row = s.result()['rows']['A']
     assert row['observed_damage'] == 100
     assert row['active_damage'] == pytest.approx(1.5)
     assert row['engagement_damage'] == pytest.approx(100 / 1.5)
+    assert row['skill_damage'] == 0 and row['non_skill_damage'] == 100
+    assert row['mitigation_matched_hits'] == 2
+    assert row['mitigation_rate'] == pytest.approx(20)
 
 
 
-def test_hp_damage_events_provide_target_overkill():
+def test_incoming_hp_events_alone_do_not_prove_overkill():
     s = Statistics('hp', 0, event_coverage=True)
     s.register_source('a', 'A')
     s.snapshot(0, {'a': {'damage': 1000, 'healing': 0}})
@@ -291,9 +338,9 @@ def test_hp_damage_events_provide_target_overkill():
     s.event('hp2', 1.5, 'a', 'hp_damage', 50, target='enemy_2',
             hp_before=100, shield_absorbed=0)
     row = s.result()['rows']['A']
-    assert row['overkill_damage'] == 50
-    assert row['overkill_coverage_complete'] is True
-    assert row['effective_damage'] == 950
+    assert row['overkill_damage'] is None
+    assert row['overkill_coverage_complete'] is False
+    assert row['effective_damage'] is None
 
 
 def test_hp_damage_missing_hp_or_shield_stays_unknown():
@@ -530,7 +577,8 @@ def test_unattributed_elemental_burst_is_unknown_not_guessed():
     assert row['damage'] == pytest.approx(1000)
 
 
-def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_once():
+@pytest.mark.parametrize('unresolved', [False, True])
+def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_once(unresolved):
     s = Statistics('battle', 0, event_coverage=True)
     s.register_source('a', 'a')
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
@@ -542,12 +590,26 @@ def test_sourced_burst_is_already_in_native_and_sourceless_overkill_is_added_onc
     s.event('bar', .6, 'a', 'elemental_bar', 100, target_instance='second')
     s.event('sourceless-burst', .7, None, 'elemental_burst', 300, target='enemy_1',
             hp_before=100, hp_after=0, real_delta=-100, target_instance='second')
+    if unresolved:
+        s.event('unowned-burst', .9, None, 'elemental_burst', 900, target='enemy_1',
+                hp_before=50, hp_after=0, real_delta=-50, target_instance='third')
     row = s.result()['rows']['a']
-    assert row['burst_settlement'] == 800
+    assert row['burst_complete'] is (not unresolved)
+    if unresolved:
+        assert row['burst_unknown_reason']
+        assert row['burst_damage'] is None
+        assert row['burst_overkill'] is None
+        assert row['burst_settlement'] is None
+    else:
+        assert row['burst_damage'] == 400
+        assert row['burst_overkill'] == 400
+        assert row['burst_settlement'] == 800
     assert row['burst_added_settlement'] == 300
     assert row['damage'] == 1800
     assert row['overkill_damage'] == 400
-    assert row['overkill_damage_by_type'] == {'elemental': 400}
+    assert row['overkill_damage_by_type'] == {
+        'physical': 0, 'arts': 0, 'elemental': 400, 'true': 0,
+    }
     assert row['effective_damage'] == 1400
 
 
@@ -588,6 +650,102 @@ def test_duplicate_skill_start_and_end_markers_stay_one_window():
     assert row['skill_window_count'] == 1
 
 
+@pytest.mark.parametrize('end_method', ['Character.OnSkillFinish', 'Character.SwitchOutFromSkillState'])
+def test_open_skill_includes_effective_damage_before_matching_finish(end_method):
+    s = Statistics('cast-completion', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(5)
+    s.event('before', .5, 'a', 'damage', 20, target='enemy_2', real_delta=-20,
+            hp_before=100, hp_after=80, killed=False, damage_type=1)
+    s.event('start', 1, 'a', 'skill_start', 1, skill_id='skill',
+            skill_method='Character.OnSkillStart')
+    s.event('effect-start', 1, 'a', 'skill_start', 1, skill_id='skill',
+            skill_method='Character.SwitchToSkillState')
+    s.event('cast', 2, 'a', 'skill_end', 1, skill_id='skill',
+            skill_method='Character.OnAfterSkill', skill_reason=1)
+    s.event('wrong-finish', 3, 'a', 'skill_end', 1, skill_id='other', skill_method=end_method)
+    s.event('during', 5, 'a', 'damage', 50, target='enemy_1', real_delta=-10,
+            hp_before=10, hp_after=0, killed=True, damage_type=1, shield_absorbed=0)
+    live = s.result()['rows']['A']
+    assert live['skill_active_seconds'] == 4
+    assert live['skill_coverage_complete']
+    assert live['skill_split_effective_complete']
+    assert live['skill_damage_effective'] == 10
+    assert live['non_skill_damage_effective'] == 20
+    assert live['skill_split_reason'] is None
+
+    s.advance(11)
+    s.event('finish', 10, 'a', 'skill_end', 1, skill_id='skill', skill_method=end_method)
+    s.event('after', 11, 'a', 'damage', 20, target='enemy_2', real_delta=-20,
+            hp_before=80, hp_after=60, killed=False, damage_type=1)
+    s.finish(12)
+    row = s.result()['rows']['A']
+    assert row['skill_active_seconds'] == 9
+    assert row['skill_window_count'] == 1
+    assert row['skill_coverage_complete']
+    assert row['skill_damage_effective'] == 10
+    assert row['non_skill_damage_effective'] == 40
+    assert row['skill_split_reason'] is None
+
+
+@pytest.mark.parametrize('recast', [False, True])
+def test_unconfirmed_cast_completion_survives_recast_and_battle_end(recast):
+    s = Statistics('unconfirmed-cast', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.advance(10)
+    s.event('start', 1, 'a', 'skill_start', 1, skill_id='skill',
+            skill_method='Character.OnSkillStart')
+    s.event('cast', 2, 'a', 'skill_end', 1, skill_id='skill',
+            skill_method='Character.OnAfterSkill', skill_reason=1)
+    assert s.result()['rows']['A']['skill_active_seconds'] is None
+    if recast:
+        s.event('recast', 6, 'a', 'skill_start', 1, skill_id='skill',
+                skill_method='Character.OnSkillStart')
+        s.event('finish', 7, 'a', 'skill_end', 1, skill_id='skill',
+                skill_method='Character.OnSkillFinish')
+    s.finish(10)
+    row = s.result()['rows']['A']
+    assert row['skill_active_seconds'] is None
+    assert not row['skill_coverage_complete']
+    assert not row['skill_split_complete']
+    assert row['skill_window_count'] == (2 if recast else 1)
+    assert row['skill_split_reason'] == '未观测到技能效果的实际结束'
+
+
+@pytest.mark.parametrize('outbound_first', [False, True])
+def test_ulpian_skill_window_extends_from_cast_through_return_movement(outbound_first):
+    s = Statistics('ulpian-movement', 0, event_coverage=True)
+    s.register_source('char_4145_ulpia', 'Ulpian')
+    s.snapshot(0, {'char_4145_ulpia': {'damage': 0, 'healing': 0}})
+    s.advance(5)
+
+    def transition(event_id, time, kind, method, reason=None, skill_id=None):
+        s.event(event_id, time, 'char_4145_ulpia', kind, 1, skill_method=method,
+                skill_reason=reason, skill_id=skill_id)
+
+    transition('start', 1, 'skill_start', 'Character.SwitchToSkillState', skill_id='skchr_ulpia_3')
+    cast = ('cast', 2, 'skill_end', 'Character.OnAfterSkill', 1, 'skchr_ulpia_3')
+    outbound = ('outbound', 2, 'skill_end', 'BattleController.OnCharacterFinished', 11)
+    for marker in (outbound, cast) if outbound_first else (cast, outbound):
+        transition(*marker)
+    transition('outbound-duplicate', 2, 'skill_end', 'BattleController.OnCharacterFinished', 11)
+    s.event('during', 5, 'char_4145_ulpia', 'damage', 50, target='enemy_1')
+    live = s.result()['rows']['Ulpian']
+    assert live['skill_active_seconds'] == 4 and live['skill_damage'] == 50
+    assert live['skill_split_complete']
+    s.advance(12)
+    transition('return', 10, 'skill_end', 'BattleController.OnCharacterFinished', 11)
+    s.event('after', 11, 'char_4145_ulpia', 'damage', 20, target='enemy_1')
+    row = s.result()['rows']['Ulpian']
+    assert row['skill_window_count'] == 1
+    assert row['skill_active_seconds'] == 9
+    assert row['skill_damage'] == 50
+    assert row['non_skill_damage'] == 20
+    assert row['skill_coverage_complete']
+
+
 def test_skill_split_is_unknown_after_event_coverage_ends():
     s = Statistics('skill-gap', 0, event_coverage=True)
     s.register_source('a', 'A')
@@ -608,9 +766,10 @@ def test_clean_event_coverage_close_keeps_final_effective_and_skill_metrics():
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
     s.advance(1)
     s.event('start', .1, 'a', 'skill_start', 1, skill_key='k')
-    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1')
-    s.event('hp', .2, 'a', 'hp_damage', 50, target='enemy_1',
+    s.event('hp', .2, 'a', 'hp_damage', 200, target='enemy_1',
             hp_before=10, shield_absorbed=0, damage_type=1)
+    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1', hp_before=10,
+            hp_after=0, real_delta=-10, killed=True, shield_absorbed=0, damage_type=1)
     s.event('end', .3, 'a', 'skill_end', 1, skill_key='k')
     s.advance(1)
     s.snapshot(1, {'a': {'damage': 50, 'healing': 0}})
@@ -662,20 +821,52 @@ def test_skill_coverage_and_effective_split_use_per_event_overkill():
     assert row['skill_coverage_complete'] is True
 
 
-def test_hp_overkill_evidence_splits_effective_skill_damage():
+def test_settled_overkill_evidence_splits_effective_skill_damage():
     s = Statistics('skill-hp-effective', 0, event_coverage=True)
     s.register_source('a', 'A')
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
     s.advance(1)
     s.event('start', .1, 'a', 'skill_start', 1, skill_key='k')
-    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1')
-    s.event('hp', .2, 'a', 'hp_damage', 50, target='enemy_1',
+    s.event('hp', .2, 'a', 'hp_damage', 200, target='enemy_1',
             hp_before=10, shield_absorbed=0, damage_type=1)
+    s.event('hit', .2, 'a', 'damage', 50, target='enemy_1', hp_before=10,
+            hp_after=0, real_delta=-10, killed=True, shield_absorbed=0, damage_type=1)
     s.event('end', .3, 'a', 'skill_end', 1, skill_key='k')
     s.advance(1)
     row = s.result()['rows']['A']
     assert row['skill_damage'] == 50
     assert row['skill_damage_effective'] == 10
     assert row['skill_split_effective_complete'] is True
-    assert row['overkill_damage_by_type'] == {'physical': 40}
+    assert row['overkill_damage_by_type'] == {
+        'physical': 40, 'arts': 0, 'elemental': 0, 'true': 0,
+    }
     assert row['overkill_type_complete'] is True
+
+
+
+def test_stage_reduction_uses_post_settlement_without_subtracting_incoming_excess():
+    s = Statistics('stage-reduction', 0, event_coverage=True)
+    s.register_source('a', 'A')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(1, {'a': {'damage': 2_750, 'healing': 0}})
+    s.event('skill', .1, 'a', 'skill_start', 1)
+    s.event('incoming1', .2, 'a', 'hp_damage', 6_400, target='enemy_1',
+            target_instance='one', hp_before=1_800, shield_absorbed=0, damage_type=1)
+    s.event('actual1', .2, 'a', 'damage', 1_600, target='enemy_1', target_instance='one',
+            hp_before=1_800, hp_after=200, real_delta=-1_600, killed=False,
+            shield_absorbed=0, damage_type=1)
+    s.event('incoming2', .3, 'a', 'hp_damage', 4_600, target='enemy_1',
+            target_instance='one', hp_before=200, shield_absorbed=0, damage_type=1)
+    s.event('actual2', .3, 'a', 'damage', 1_150, target='enemy_1', target_instance='one',
+            hp_before=200, hp_after=0, real_delta=-200, killed=True,
+            shield_absorbed=0, damage_type=1)
+    s.event('dead', .3, 'a', 'damage', 500, target='enemy_1', target_instance='one',
+            hp_before=0, hp_after=0, real_delta=0, killed=True, shield_absorbed=0)
+    s.event('immune', .4, 'a', 'damage', 700, target='enemy_2', target_instance='two',
+            hp_before=300, hp_after=300, real_delta=0, killed=False, cancel_reason=1)
+
+    row = s.result()['rows']['A']
+    assert row['damage'] == row['observed_damage'] == row['skill_damage'] == 2_750
+    assert row['overkill_damage'] == 950
+    assert row['effective_damage'] == row['skill_damage_effective'] == 1_800
+    assert row['overkill_damage_by_type']['physical'] == 950

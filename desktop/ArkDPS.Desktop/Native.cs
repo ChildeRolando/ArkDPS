@@ -27,14 +27,24 @@ internal static class Native
     {
         var r = Bounds(window); return new { x=r[0], y=r[1], width=r[2], height=r[3] };
     }
-    public static void Restore(Window window, JsonElement geometry)
+    public static void Restore(Window window, JsonElement geometry, bool restoreHeight=true)
     {
         if (geometry.ValueKind != JsonValueKind.Object) return;
         int x=(int)geometry.Number("x"), y=(int)geometry.Number("y"), width=(int)geometry.Number("width"), height=(int)geometry.Number("height");
         var work = System.Windows.Forms.Screen.FromRectangle(new System.Drawing.Rectangle(x,y,width,height)).WorkingArea;
-        width=Math.Min(Math.Max(width,350),work.Width); height=Math.Min(Math.Max(height,230),work.Height);
+        width=Math.Min(Math.Max(width,350),work.Width);
+        height=Math.Min(restoreHeight ? Math.Max(height,230) : Bounds(window)[3],work.Height);
         x=Math.Clamp(x,work.Left,work.Right-width); y=Math.Clamp(y,work.Top,work.Bottom-height);
         if (!SetWindowPos(Handle(window), IntPtr.Zero,x,y,width,height,0x0014)) throw new Win32Exception();
+    }
+    internal static void KeepInWorkingArea(Window window, System.Drawing.Rectangle work)
+    {
+        var bounds=Bounds(window);
+        int x=Math.Clamp(bounds[0],work.Left,Math.Max(work.Left,work.Right-bounds[2]));
+        int y=Math.Clamp(bounds[1],work.Top,Math.Max(work.Top,work.Bottom-bounds[3]));
+        if(x==bounds[0] && y==bounds[1]) return;
+        const uint moveOnly=0x0015; // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+        if(!SetWindowPos(Handle(window),IntPtr.Zero,x,y,0,0,moveOnly)) throw new Win32Exception();
     }
     public static long ExStyle(Window window) => IntPtr.Size == 8 ? GetWindowLongPtr(Handle(window),-20).ToInt64() : GetWindowLong32(Handle(window),-20);
     public static void Lock(Window window, bool locked)
