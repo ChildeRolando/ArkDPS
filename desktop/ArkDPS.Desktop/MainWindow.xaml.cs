@@ -297,6 +297,7 @@ public partial class MainWindow : Window
         retainBattleSnapshot=false;
         Stage.Text=state.Text("stage").Length>0 ? state.Text("stage") : "关卡未知";
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
+        UpdateBabelMasthead(state);
         var analysis = state.Get("live_analysis");
         var totals=state.Get("totals");
         CurrentDps.Text = OverviewNumber(analysis.Get("team_recent_dps"));
@@ -339,6 +340,19 @@ public partial class MainWindow : Window
         RefreshHudFooter();
         RefreshLiveAvailability();
         return panelLayoutChanged;
+    }
+    private void UpdateBabelMasthead(JsonElement state)
+    {
+        string code=state.Text("stage_code"), name=state.Text("stage_name");
+        if(code.Length==0 && name.Length==0 && state.Text("stage_raw").Length>0)
+            code=state.Text("stage");
+        string title=name.Length>0 ? name : code;
+        string subtitle=code==title ? "" : code;
+        BabelMastheadTitle.Text=title.Length>0 ? title : "—";
+        BabelMastheadStageCode.Text=subtitle;
+        BabelMastheadSubtitle.Visibility=subtitle.Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        BabelMastheadHeading.ToolTip=subtitle.Length>0 ? $"{title} · {subtitle}"
+            : title.Length>0 ? title : null;
     }
     private void UpdateLivePanel(string id,StatisticPanel panel,JsonElement view,bool canDelete)
     {

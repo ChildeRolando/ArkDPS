@@ -421,11 +421,12 @@ public partial class MainWindow
                     var mark = width >= 1100 ? BabelBrandMark : BabelCompactBrandMark;
                     Require(mark.IsVisible && mark.Source is not null && BabelSidebarMark.Source is not null &&
                         BabelMastheadSurface.IsVisible && BabelMastheadArtwork.Source is not null &&
-                        BabelMastheadTitle.Text == "BABEL" && BabelMastheadTitle.IsVisible &&
+                        BabelMastheadTitle.Text == "汐斯塔狂想曲" && BabelMastheadTitle.IsVisible &&
+                        BabelMastheadStageCode.Text == "OF-8" && BabelMastheadStageCode.IsVisible &&
                         !BabelMastheadArtwork.IsHitTestVisible &&
                         new[] { LiveNavAsset, EnemyNavAsset, HistoryNavAsset, SettingsNavAsset }
                             .Select(icon => icon.Source).OfType<System.Windows.Media.ImageSource>().Distinct().Count() == 4,
-                        "Babel shell artwork did not load at the requested width");
+                        "Babel shell artwork or current stage did not load at the requested width");
                     if (width < 1100)
                         Require(Skin.ActualHeight <= 54, "Babel skin name wrapped in the compact picker");
                 }
@@ -445,6 +446,25 @@ public partial class MainWindow
                 Screenshot.Window(this, Path.Combine(output, $"{theme}-live-{width}x{height}-dip.png"));
                 if (theme == Theme.Babel && width < 1100)
                 {
+                    var nextStage=fixture.DeepClone();
+                    nextStage["battle_id"]="verification-babel-next-stage";
+                    nextStage["stage_code"]="VEC-SP01";
+                    nextStage["stage_name"]="一段足够长的关卡名称用来检查窄窗口";
+                    ApplyFixture(nextStage);
+                    await Settle();
+                    var titleRight=BabelMastheadTitle.TranslatePoint(
+                        new Point(BabelMastheadTitle.ActualWidth,0),OverviewGrid).X;
+                    var metricLeft=CurrentMetric.TranslatePoint(new Point(),OverviewGrid).X;
+                    Require(BabelMastheadTitle.Text=="一段足够长的关卡名称用来检查窄窗口" && titleRight<=metricLeft &&
+                            BabelMastheadStageCode.Text=="VEC-SP01" &&
+                            Equals(BabelMastheadHeading.ToolTip,"一段足够长的关卡名称用来检查窄窗口 · VEC-SP01"),
+                        "Babel stage banner did not switch stage or overlapped the DPS readout");
+                    nextStage["stage_code"]=null;
+                    nextStage["stage_name"]=null;
+                    nextStage["stage_raw"]=null;
+                    ApplyFixture(nextStage);
+                    Require(BabelMastheadTitle.Text=="—" && BabelMastheadSubtitle.Visibility==Visibility.Collapsed,
+                        "Babel stage banner retained the previous stage when metadata was missing");
                     analysis["team_recent_dps"] = 123456789;
                     ApplyFixture(fixture);
                     await Settle();

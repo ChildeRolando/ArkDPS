@@ -286,6 +286,7 @@ class DesktopState:
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
                     stage=live_stage.label if has_live_stage else None,
+                    stage_code=live_stage.code or None, stage_name=live_stage.name or None,
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
