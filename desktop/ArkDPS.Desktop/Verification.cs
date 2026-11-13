@@ -117,6 +117,7 @@ public partial class MainWindow
                     Panels[secondId].View.Get("entries").Items().Any(),
                     "alternate source panel must have data and a different category");
             await VerifySideRanking(Panels[firstId].View, "总伤", "全周期 DPS", expectedSegments: 4);
+            VerifySideRankingDuringHover(firstId);
             Screenshot.Window(this, Path.Combine(output, "side-friendly.png"));
 
             await Command("panel_update", new() { ["config"] = new
@@ -175,12 +176,44 @@ public partial class MainWindow
             fixture.WindowState = WindowState.Minimized;
             await Settle();
             UpdateSidePlacement();
-            Require(SideAttachmentStatus.Text == "MuMu 已最小化" && current.SequenceEqual(Native.Bounds(this)),
-                    "minimized fixture displaced the side panel");
+            Require(WindowState == WindowState.Minimized && sideMinimizedWithPlayer &&
+                    State.Get("layout").Bool("side_mode"),
+                    "side panel did not minimize with the attached fixture");
             fixture.WindowState = WindowState.Normal;
             await Settle();
             UpdateSidePlacement();
-            Require(SideAttachmentStatus.Visibility == Visibility.Collapsed, "side panel did not reattach after restore");
+            Require(WindowState == WindowState.Normal && !sideMinimizedWithPlayer &&
+                    SideAttachmentStatus.Visibility == Visibility.Collapsed && current.SequenceEqual(Native.Bounds(this)),
+                    "side panel did not restore to the attached bounds");
+
+            MinimizeWindow(this, new RoutedEventArgs());
+            fixture.WindowState = WindowState.Minimized;
+            UpdateSidePlacement();
+            fixture.WindowState = WindowState.Normal;
+            UpdateSidePlacement();
+            Require(WindowState == WindowState.Minimized && !sideMinimizedWithPlayer,
+                    "restoring the fixture undid a manual side panel minimize");
+            ShowGui();
+
+            fixture.WindowState = WindowState.Minimized;
+            UpdateSidePlacement();
+            ShowGui();
+            UpdateSidePlacement();
+            Require(WindowState == WindowState.Normal && SideAttachmentStatus.Text == "MuMu 已最小化",
+                    "manual recovery of the side panel did not stay open");
+            fixture.WindowState = WindowState.Normal;
+            UpdateSidePlacement();
+
+            fixture.WindowState = WindowState.Minimized;
+            UpdateSidePlacement();
+            Require(WindowState == WindowState.Minimized, "side panel did not follow a second minimize");
+            SideAttachment.FixtureWindow = 0;
+            UpdateSidePlacement();
+            Require(WindowState == WindowState.Normal && SideAttachmentStatus.Text == "等待 MuMu 窗口",
+                    "side panel stayed minimized after the attached player went away");
+            fixture.WindowState = WindowState.Normal;
+            SideAttachment.FixtureWindow = Native.Handle(fixture);
+
             var shortPlayer = new System.Drawing.Rectangle(moved.X, moved.Y, moved.Width, Math.Min(moved.Height, 260));
             Native.Place(fixture, shortPlayer);
             UpdateSidePlacement();
@@ -249,6 +282,50 @@ public partial class MainWindow
                 bar.Data.Get("segments").Items().Count() == expectedSegments &&
                 bar.Data.Number("bar_ratio") == expected.Number("bar_ratio"),
                 "side ranking did not render the first panel's segmented contribution bar");
+    }
+
+    private void VerifySideRankingDuringHover(string panelId)
+    {
+        var ranking = (ListBox)(FindAutomationElement(SideFriendly, "SideDpsRanking")
+            ?? throw new InvalidOperationException("side ranking missing during hover test"));
+        var pinned = (RowItem)ranking.Items[0];
+        var promoted = (RowItem)ranking.Items[1];
+        ranking.SelectedItem = pinned;
+        var original = State.Clone();
+        var next = System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
+        var panel = next["panels"]!.AsArray().First(value =>
+            value!["config"]!["panel_id"]!.GetValue<string>() == panelId)!;
+        var entries = panel["entries"]!.AsArray();
+        var promotedEntry = entries[1]!;
+        entries.RemoveAt(1);
+        entries.Insert(0, promotedEntry);
+        double newTotal = pinned.Entry.Number("value") + 5000;
+        promotedEntry["value"] = newTotal;
+        string shownTotal = Json.CompactAmount(newTotal);
+        promotedEntry["display_value"] = shownTotal;
+        promotedEntry["cumulative_display_value"] = shownTotal;
+
+        // Route WPF hover without moving the desktop cursor or obscuring the HUD.
+        void Hover(RoutedEvent routedEvent) => ranking.RaiseEvent(new System.Windows.Input.MouseEventArgs(
+            System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount) { RoutedEvent = routedEvent });
+
+        Hover(System.Windows.Input.Mouse.MouseEnterEvent);
+        try
+        {
+            ApplyFixture(next);
+            var expected = Panels[panelId].View.Get("entries").Items().Select(entry => entry.Text("owner_id"));
+            Require(ranking.Items.Cast<RowItem>().Select(row => row.Id).SequenceEqual(expected) &&
+                    ReferenceEquals(ranking.Items[0], promoted) && promoted.CumulativeTotal == shownTotal,
+                    "hovering the side ranking delayed a new rank order or cumulative value");
+            Require(ReferenceEquals(ranking.SelectedItem, pinned) &&
+                    HasText(SideFriendly, pinned.Name + " · 主要数据"),
+                    "a live side ranking reorder changed the pinned operator");
+        }
+        finally
+        {
+            Hover(System.Windows.Input.Mouse.MouseLeaveEvent);
+            ApplyState(original);
+        }
     }
 
     private void ApplyFixture(System.Text.Json.Nodes.JsonNode state)
@@ -326,6 +403,62 @@ public partial class MainWindow
             UpdateEnemySummary();
         }
     }
+    private void VerifyMitigationDisplay()
+    {
+        var original = Panels.Values.First().View;
+        var fixture = System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
+        string owner = original.Get("entries").Items().First().Text("owner_id");
+        var pinnedRow = fixture["source"]![owner]!;
+        var inspector = new Inspector { CompactReference = true };
+        inspector.Pin(owner, original);
+        FrameworkElement Ratio() => FindAutomationElement(inspector, "CompactOperatorRatioMitigation")
+            ?? throw new InvalidOperationException("missing mitigation ring");
+        void Apply() => inspector.Update(JsonSerializer.SerializeToElement(fixture));
+        Require(HasText(Ratio(),"—"),"unavailable mitigation rendered as zero");
+        pinnedRow["observed_mitigation_rate"]=58.4695;
+        pinnedRow["observed_mitigation_after"]=7660.38;
+        pinnedRow["mitigation_matched_hits"]=27;
+        pinnedRow["mitigation_unknown_reason"]="部分伤害缺少同次命中的公式前后值";
+        Apply();
+        var observedMitigation=Ratio();
+        Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观察减伤率") &&
+                observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
+                observedTip.Text.Contains("经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害") &&
+                observedTip.Text.Contains("已配对的 27 击"),
+                "partial mitigation did not expose its measured value and sample scope");
+        pinnedRow["observed_mitigation_rate"]=-11.32;
+        Apply();
+        Require(HasText(observedMitigation,"-11%") && HasText(observedMitigation,"已观察减伤率") &&
+                observedMitigation.ToolTip is ToolTip {Content:TextBlock negativeTip} &&
+                negativeTip.Text.Contains("无法确定差额来自哪项修正") &&
+                negativeTip.Text.Contains("已配对的 27 击"),
+                "negative observed mitigation did not retain its sign, uncertainty and sample scope");
+        pinnedRow["observed_mitigation_rate"]=0.23;
+        Apply();
+        Require(observedMitigation.ToolTip is ToolTip {Content:TextBlock smallTip} &&
+                smallTip.Text.Contains("舍入前比例 0.23%"),
+                "a small nonzero rate did not retain its precision in the explanation");
+        pinnedRow["observed_mitigation_rate"]=2.235178087e-6;
+        pinnedRow["observed_mitigation_before"]=166730.00013;
+        pinnedRow["observed_mitigation_after"]=166729.99641;
+        pinnedRow["mitigation_matched_hits"]=68;
+        pinnedRow["mitigation_unknown_reason"]="事件覆盖已结束";
+        Apply();
+        Require(HasText(observedMitigation,"0%") && HasText(observedMitigation,"已观察减伤率") &&
+                observedMitigation.ToolTip is ToolTip {Content:TextBlock zeroTip} &&
+                zeroTip.Text.Contains("公式前 166,730，结算 166,730") &&
+                zeroTip.Text.Contains("测量精度内相同") && zeroTip.Text.Contains("已配对的 68 击") &&
+                zeroTip.Text.Contains("事件覆盖已结束"),
+                "verified zero mitigation did not expose its paired values and coverage gap");
+        pinnedRow["observed_mitigation_rate"]=58.4695;
+        pinnedRow["mitigation_rate"]=0;
+        Apply();
+        Require(HasText(Ratio(),"0%") &&
+                HasText(Ratio(),"被减伤率") &&
+                !HasText(Ratio(),"已观察减伤率"),
+                "complete zero mitigation did not take precedence over the observed subset");
+    }
+
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
     {
         await Command("theme", new() { ["theme"] = Theme.LoneTrail });
@@ -479,31 +612,6 @@ public partial class MainWindow
         var liveView=fixture["panels"]!.AsArray()[0]!;
         string pinnedOwner=liveView["entries"]!.AsArray()[0]!["owner_id"]!.GetValue<string>();
         var pinnedRow=liveView["source"]![pinnedOwner]!;
-        Require(HasText(FindOperatorRatio("Mitigation"),"—"),"unavailable mitigation rendered as zero");
-        pinnedRow["observed_mitigation_rate"]=58.4695;
-        pinnedRow["observed_mitigation_after"]=7660.38;
-        pinnedRow["mitigation_matched_hits"]=27;
-        pinnedRow["mitigation_unknown_reason"]="部分伤害缺少同次命中的公式前后值";
-        ApplyFixture(fixture);
-        var observedMitigation=FindOperatorRatio("Mitigation");
-        Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观察减伤率") &&
-                observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
-                observedTip.Text.Contains("经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害") &&
-                observedTip.Text.Contains("已配对的 27 击"),
-                "partial mitigation did not expose its measured value and sample scope");
-        pinnedRow["observed_mitigation_rate"]=-11.32;
-        ApplyFixture(fixture);
-        Require(HasText(observedMitigation,"-11%") && HasText(observedMitigation,"已观察减伤率") &&
-                observedMitigation.ToolTip is ToolTip {Content:TextBlock negativeTip} &&
-                negativeTip.Text.Contains("无法确定差额来自哪项修正") &&
-                negativeTip.Text.Contains("已配对的 27 击"),
-                "negative observed mitigation did not retain its sign, uncertainty and sample scope");
-        pinnedRow["mitigation_rate"]=0;
-        ApplyFixture(fixture);
-        Require(HasText(FindOperatorRatio("Mitigation"),"0%") &&
-                HasText(FindOperatorRatio("Mitigation"),"被减伤率") &&
-                !HasText(FindOperatorRatio("Mitigation"),"已观察减伤率"),
-                "complete zero mitigation did not take precedence over the observed subset");
         pinnedRow["mitigation_rate"]=18.34;
         var pinnedDetail=liveView["details_by_owner"]![pinnedOwner]!;
         var savedCoverage=pinnedDetail["skill_coverage"]?.DeepClone();
@@ -1361,6 +1469,10 @@ public partial class MainWindow
         await VerifySideMode(Huds[sideSource], output);
         if (!sideHudAlreadyOpen) CloseHud(sideSource);
         checks.Add("side mode follows a private emulator window, mirrors the first live ranking and restores the full GUI with HUD and enemy panel intact");
+        checks.Add("hovering the side ranking does not delay snapshot order or change the pinned operator");
+        checks.Add("side mode follows emulator minimize and restore, honors manual minimize and recovers when the emulator exits");
+        VerifyMitigationDisplay();
+        checks.Add("mitigation distinguishes missing data, verified zero and small nonzero ratios");
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",
@@ -1789,6 +1901,29 @@ public partial class MainWindow
                     "skill-period ring did not switch to effective data");
         }
         else Require(HasText(LiveInspector,"技能有效伤害"),"inspector did not switch skill split to effective data");
+        var effectiveView = Panels[id].View;
+        var partialView = System.Text.Json.Nodes.JsonNode.Parse(effectiveView.GetRawText())!;
+        var partialSplit = partialView["details_by_owner"]![owner]!;
+        partialSplit["skill_split_effective_complete"] = false;
+        partialSplit["skill_damage_effective"] = null;
+        partialSplit["non_skill_damage_effective"] = null;
+        partialSplit["observed_skill_damage_effective"] = 25;
+        partialSplit["observed_non_skill_damage_effective"] = 75;
+        partialSplit["skill_split_reason"] = "技能窗口未覆盖全部伤害事件";
+        LiveInspector.Update(JsonSerializer.SerializeToElement(partialView));
+        if (LiveInspector.CompactReference)
+        {
+            var skillRing=FindOperatorRatio("SkillShare");
+            Require(HasText(skillRing,"已观察技能期有效伤害占比") && HasText(skillRing,"25%") &&
+                    skillRing.ToolTip is ToolTip {Content:TextBlock partialTip} &&
+                    partialTip.Text.Contains("技能窗口未覆盖全部伤害事件",StringComparison.Ordinal),
+                    "partial effective skill share lost its observed ratio or coverage reason");
+        }
+        else Require(HasText(LiveInspector,"已观察技能有效伤害") &&
+                     HasText(LiveInspector,"技能窗口未覆盖全部伤害事件"),
+                     "full inspector did not label the observed effective skill share");
+        LiveInspector.Update(effectiveView);
+        checks.Add("incomplete skill damage displays an observed share with the coverage reason");
         Screenshot.Window(this,Path.Combine(output,"effective-inspector.png"));
         LastUiError="";
         Panels[id].EffectiveOnly.IsChecked=true;

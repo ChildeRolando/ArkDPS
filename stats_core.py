@@ -21,6 +21,31 @@ ENEMY_STATE_KINDS = frozenset({
 })
 
 
+class ObservedSkillDamage:
+    def __init__(self):
+        self.skill = self.non_skill = 0.0
+        self.skill_effective = self.non_skill_effective = 0.0
+
+    def hit(self, skill, amount, overkill):
+        effective = max(0.0, amount - overkill) if overkill is not None else 0.0
+        if skill:
+            self.skill += amount
+            self.skill_effective += effective
+        else:
+            self.non_skill += amount
+            self.non_skill_effective += effective
+
+    def result(self):
+        has_damage = self.skill + self.non_skill > 0
+        has_effective = self.skill_effective + self.non_skill_effective > 0
+        return {
+            'observed_skill_damage': self.skill if has_damage else None,
+            'observed_non_skill_damage': self.non_skill if has_damage else None,
+            'observed_skill_damage_effective': self.skill_effective if has_effective else None,
+            'observed_non_skill_damage_effective': self.non_skill_effective if has_effective else None,
+        }
+
+
 class BossDamage:
     """Target-scoped damage for one operator, including attributed summons."""
 
@@ -31,13 +56,14 @@ class BossDamage:
         self.typed = self.overkill_known = True
         self.overkill_reason = None
         self.skill = self.skill_overkill = 0.0
+        self.observed_split = ObservedSkillDamage()
         self.before = self.after = 0.0
         self.pairs = 0
         self.mitigation_known = True
         self.recent = deque()
         self.active = self.active_end = 0.0
 
-    def hit(self, when, amount, kind, overkill, reason, skill, before, after):
+    def hit(self, when, amount, kind, overkill, reason, skill, before, after, *, split_observable):
         self.total += amount
         self.typed &= kind is not None
         self.overkill_known &= overkill is not None
@@ -51,6 +77,8 @@ class BossDamage:
         if skill:
             self.skill += amount
             self.skill_overkill += excess
+        if split_observable:
+            self.observed_split.hit(skill, amount, overkill)
         if before is not None:
             self.before += before
             self.after += after
@@ -112,6 +140,7 @@ class BossDamage:
             'skill_split_complete': skill_known,
             'skill_split_effective_complete': effective_skill_known,
             'skill_split_reason': None if skill_known else reason or '技能事件覆盖不完整',
+            **self.observed_split.result(),
             'mitigation_rate': observed_rate if mitigation_complete else None,
             'mitigation_before': self.before if mitigation_complete else None,
             'mitigation_after': self.after if mitigation_complete else None,
@@ -136,6 +165,7 @@ class Statistics:
         self.event_coverage_end = None
         self.event_coverage_broken = False
         self.baseline_ready = False
+        self.initial_damage = {}
         self.owners = {}
         self.sources = {}
         self.events = {}
@@ -188,6 +218,7 @@ class Statistics:
         self.skill_windows = {}
         self.skill_observed = {}
         self.non_skill_observed = {}
+        self.observed_skill_splits = {}
         self.skill_seen = set()
         self.skill_unknown = False
         self.skill_incomplete = {}
@@ -233,7 +264,20 @@ class Statistics:
             pair = self._mitigation_pair(amount, before, after)
             kind = NATIVE_DAMAGE_TYPES.get(damage_type) if type(damage_type) is int else None
             meter.hit(when, amount, kind, overkill, reason,
-                      owner in self.skill_active, before if pair else None, after if pair else None)
+                      owner in self.skill_active, before if pair else None, after if pair else None,
+                      split_observable=self._skill_hit_observable(owner))
+
+    def _skill_hit_observable(self, owner):
+        window = self.skill_active.get(owner)
+        if window is not None:
+            return self._unconfirmed_skill_reason(window, live=True) is None
+        return not self.skill_unknown and owner not in self.skill_incomplete
+
+    def _observe_skill_hit(self, owner, amount, overkill):
+        if self._skill_hit_observable(owner):
+            if owner not in self.observed_skill_splits:
+                self.observed_skill_splits[owner] = ObservedSkillDamage()
+            self.observed_skill_splits[owner].hit(owner in self.skill_active, amount, overkill)
 
     @staticmethod
     def _time(value):
@@ -619,6 +663,8 @@ class Statistics:
                 old = self.sources.get(source)
                 if old and values[kind] < old['values'][kind]:
                     raise ValueError('cumulative counter decreased')
+        if not self.baseline_ready:
+            self.initial_damage = {source: values['damage'] for source, values in counters.items()}
         self.now = game_time
         self.baseline_ready = True
         for source, state in self.sources.items():
@@ -928,6 +974,7 @@ class Statistics:
             bucket = (self.skill_observed if attributed in self.skill_active
                       else self.non_skill_observed)
             bucket[attributed] = bucket.get(attributed, 0.0) + amount
+            self._observe_skill_hit(attributed, amount, burst_overkill)
             if burst_overkill > 0:
                 overkill_bucket = (self.skill_overkill
                                    if attributed in self.skill_active
@@ -986,13 +1033,11 @@ class Statistics:
             else:
                 self.overkill_incomplete.add(owner)
                 self.overkill_reason[owner] = reason
-        if kind == 'damage' and amount > 0:
-            friendly = (isinstance(target, str)
-                        and (target.startswith('char_') or target.startswith('token_')))
-            if not friendly:
+            if amount > 0 and not friendly:
                 bucket = (self.skill_observed if owner in self.skill_active
                           else self.non_skill_observed)
                 bucket[owner] = bucket.get(owner, 0.0) + amount
+                self._observe_skill_hit(owner, amount, overkill if known else None)
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
         elif kind in ('damage', 'healing') and amount > 0:
@@ -1203,22 +1248,35 @@ class Statistics:
             skill_value = self.skill_observed.get(owner, 0.0)
             non_skill_value = self.non_skill_observed.get(owner, 0.0)
             expected = row.get('observed_damage')
-            if expected is not None and burst_complete and burst:
+            # Reconcile the credited split against credited damage. An
+            # unowned burst is in neither total, but known bursts are in both.
+            if expected is not None and burst:
                 expected += burst['settlement']
             covers_total = (expected is not None
                             and abs(skill_value + non_skill_value - expected)
                             <= max(0.01, abs(expected) * 1e-6))
+            if complete and row['damage'] is not None:
+                initial = sum(self.initial_damage.get(source, 0.0) for source in sources)
+                # A same-frame event can arrive just after the opening mark.
+                # Its counter appears in the next snapshot. Only a shortfall
+                # against native damage proves missing coverage here.
+                native_damage = row['damage'] - initial
+                covers_total &= (skill_value + non_skill_value
+                                 >= native_damage - max(0.01, abs(native_damage) * 1e-6))
             if not skill_known:
                 reason = ('事件观察未建立' if not self.event_coverage else
                           '事件覆盖已结束' if not coverage_complete else
                           skill_incomplete_reason or '技能事件覆盖不完整')
             elif not covers_total:
                 reason = '技能窗口未覆盖全部伤害事件'
+            elif not burst_complete:
+                reason = self.burst_unknown_reason
             else:
                 reason = None
             split_skill_overkill = self.skill_overkill.get(owner, 0.0)
             split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
-            effective_split_known = skill_known and covers_total and overkill_known
+            split_complete = skill_known and covers_total and burst_complete
+            effective_split_known = split_complete and overkill_known
             row['skill_damage'] = skill_value if skill_known else None
             row['non_skill_damage'] = non_skill_value if skill_known else None
             row['skill_damage_effective'] = (
@@ -1234,9 +1292,12 @@ class Statistics:
                 self._skill_active_seconds(owner)
                 if self.event_coverage and skill_incomplete_reason is None else None)
             row['skill_coverage_complete'] = skill_known
-            row['skill_split_complete'] = skill_known and covers_total
+            row['skill_split_complete'] = split_complete
             row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason
+            observed = self.observed_skill_splits.get(owner)
+            if observed is not None:
+                row.update(observed.result())
             if self.boss_damage is not None:
                 row['boss_damage'], boss_reason = self._boss_row(owner, registered, row)
                 if boss_reason:

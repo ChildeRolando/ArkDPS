@@ -97,10 +97,12 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
     return summary
 
 
-_OPTIONAL_FORMULA_METRICS = frozenset({
+_OPTIONAL_DERIVED_METRICS = frozenset({
     'mitigation_rate', 'mitigation_before', 'mitigation_after', 'mitigation_unknown_reason',
     'observed_mitigation_rate', 'observed_mitigation_before', 'observed_mitigation_after',
     'mitigation_matched_hits',
+    'observed_skill_damage', 'observed_non_skill_damage',
+    'observed_skill_damage_effective', 'observed_non_skill_damage_effective',
 })
 _TERMINOLOGY_REASON_FIELDS = {
     'mitigation_unknown_reason', 'overkill_unknown_reason', 'skill_split_reason',
@@ -116,16 +118,22 @@ def _same_json(actual, recorded):
     return json.dumps(actual, sort_keys=True) == json.dumps(recorded, sort_keys=True)
 
 
+def _recorded_metrics(row, recorded):
+    out = {key: value for key, value in row.items()
+           if key not in _OPTIONAL_DERIVED_METRICS or key in recorded}
+    if isinstance(out.get('boss_damage'), dict) and isinstance(recorded.get('boss_damage'), dict):
+        out['boss_damage'] = _recorded_metrics(out['boss_damage'], recorded['boss_damage'])
+    return out
+
+
 def _same_statistics(actual, recorded):
     if isinstance(actual, dict) and isinstance(recorded, dict):
         rows, recorded_rows = actual.get('rows'), recorded.get('rows')
         if isinstance(rows, dict) and isinstance(recorded_rows, dict):
-            # Older journals omit newly derived formula fields. Check every
-            # field the writer actually recorded, including formula values.
+            # Older journals can omit derived metrics. Check every value the
+            # writer recorded, including optional fields when present.
             actual = dict(actual, rows={
-                owner: {key: value for key, value in row.items()
-                        if key not in _OPTIONAL_FORMULA_METRICS
-                        or key in recorded_rows.get(owner, ())}
+                owner: _recorded_metrics(row, recorded_rows.get(owner) or {})
                 for owner, row in rows.items()
             })
             recorded = dict(recorded, rows={

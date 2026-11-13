@@ -193,6 +193,12 @@ class BattleRecord:
                                'burst_overkill', 'burst_settlement', 'effective_damage',
                                'presence_seconds', 'recent_overkill_damage'):
                     _number(row[metric], metric, nullable=True)
+                for scope in (row, row.get('boss_damage')):
+                    if isinstance(scope, dict):
+                        for metric in ('observed_skill_damage', 'observed_non_skill_damage',
+                                       'observed_skill_damage_effective',
+                                       'observed_non_skill_damage_effective'):
+                            _number(scope.get(metric), metric, nullable=True)
                 _number(row['coverage_start'], 'row coverage_start')
                 _require(row['coverage_start'] <= data['duration'], 'invalid row coverage start')
                 for flag in ('counter_snapshot_complete', 'event_coverage_complete',

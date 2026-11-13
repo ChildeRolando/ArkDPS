@@ -847,6 +847,88 @@ def test_finish_marker_must_match_last_accepted_battle_watermark(ending, fault):
     assert not runtime.sessions.pop_archives()
 
 
+@pytest.mark.parametrize('preparing', [False, True])
+@pytest.mark.parametrize('fault', [None, 'no_observer', 'sequence', 'epoch', 'identity',
+                                    'native_session', 'frame_did_not_reset', 'uncommitted_tail'])
+def test_same_native_round_reset_retires_only_the_last_verified_watermark(preparing, fault):
+    collector, runtime = FakeCollector(), BattleRuntime()
+    collector.advance(time=10., frame=300, damage=0.)
+    observed_events, drains, committed = [], [], []
+    sequence = epoch = 0
+
+    def mark():
+        return dict(frame=collector.sample['frame'], game_time=collector.sample['game_time'],
+                    sequence=sequence, epoch=epoch, active=0)
+
+    def read(through):
+        drains.append(through)
+        acknowledged = committed[-1] if committed else 0
+        return {'events': [event for event in observed_events
+                           if acknowledged < event['sequence'] <= through]}
+
+    observer = SimpleNamespace(mark=mark, read_through=read, commit_events=committed.append)
+    runtime.poll(collector, observer)
+    observed_events.extend([
+        dict(sequence=1, frame=330, game_time=11., source='a', kind='skill_start', amount=1.,
+             skill_id='skill', proof={'method': 'Character.SwitchToSkillState'}),
+        dict(sequence=2, frame=360, game_time=12., source='a', kind='damage', amount=20.,
+             target='enemy_1', hp_before=100., hp_after=80., real_delta=-20., killed=False,
+             damage_type=1, mitigation_before=25., mitigation_after=20.),
+    ])
+    sequence, epoch = 2, 5
+    collector.advance(time=12., frame=360, damage=20.)
+    previous = runtime.poll(collector, observer)
+    row = runtime.sessions.live()['statistics']['rows']['a']
+    assert row['skill_damage_effective'] == 20.
+    assert row['skill_active_seconds'] == 1.
+    assert drains == committed == [0, 2]
+
+    if fault == 'uncommitted_tail':
+        collector.advance(time=13., frame=390, damage=25.)
+        runtime.poll(collector, None)
+    frame = 360 if fault == 'frame_did_not_reset' else 0
+    collector.advance(time=0., frame=frame, damage=0.)
+    collector.sample['rows'][0]['healing'] = 0.
+    if preparing:
+        collector.roster = RosterSnapshot(frame, (), frozenset(), True)
+        collector.sample['rows'].clear()
+    if fault == 'identity':
+        collector.lifecycle['battle'] = collector.sample['battle_identity'] = (100, 300)
+    if fault == 'native_session':
+        collector.sample['session'] = 'new_level_or_stats'
+    if fault in ('sequence', 'epoch'):
+        epoch += 1
+    if fault == 'sequence':
+        sequence += 1
+        observed_events.append(dict(sequence=3, frame=0, game_time=0., source='a',
+                                    kind='damage', amount=100.))
+    use_observer = None if fault == 'no_observer' else observer
+    successor = runtime.poll(collector, use_observer)
+    assert successor.generation == previous.generation + 1
+    assert successor.kind == ('preparing' if preparing else 'sample')
+    if preparing:
+        assert drains == committed == [0, 2]
+        assert successor.events is None
+    elif use_observer is not None:
+        assert drains == committed == [0, 2, sequence]
+        assert total(runtime) == 0.
+    archive, = runtime.sessions.pop_archives()
+    assert archive['metadata']['outcome'] == 'unknown'
+    assert archive['statistics']['rows']['a']['damage'] == (25. if fault == 'uncommitted_tail' else 20.)
+    if fault is None:
+        assert successor.round_reset == dict(before=mark(), after=mark(), sequence=sequence)
+        assert archive['event_status'] == 'finished'
+        assert archive['event_error'] is None
+        assert archive['statistics']['rows']['a']['skill_damage_effective'] == 20.
+        assert archive['statistics']['rows']['a']['skill_active_seconds'] == 1.
+    else:
+        assert archive['event_status'] == 'gap'
+        assert archive['event_error'] == '未取得最终事件水位'
+        assert archive['statistics']['rows']['a']['skill_damage_effective'] is None
+    assert not runtime.sessions.consume(successor)
+    assert not runtime.sessions.pop_archives()
+
+
 def test_mid_battle_gap_then_end_keeps_totals_but_not_completeness():
     from panel_model import team_status
 

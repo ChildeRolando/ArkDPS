@@ -156,20 +156,15 @@ public sealed class Inspector : Border
             body.Children.Add(Text("元素爆条归属未知："+row.Text("burst_unknown_reason"),10,false,"Muted",new Thickness(0,2,0,0)));
 
         Section("技能 / 非技能");
-        string skillKey=effective ? "skill_damage_effective" : "skill_damage";
-        string nonSkillKey=effective ? "non_skill_damage_effective" : "non_skill_damage";
-        double skillDamage=detail.Number(skillKey,double.NaN);
-        double nonSkillDamage=detail.Number(nonSkillKey,double.NaN);
-        bool skillKnown=detail.Bool(effective ? "skill_split_effective_complete" : "skill_split_complete")
-            && double.IsFinite(skillDamage) && skillDamage>=0
-            && double.IsFinite(nonSkillDamage) && nonSkillDamage>=0;
+        var split=SkillSplitReading(detail,effective);
+        string observedPrefix=split.Observed ? "已观察" : "";
         double coverageValue=detail.Number("skill_coverage",double.NaN);
         bool coverageKnown=detail.Bool("skill_coverage_complete") && coverageValue is >= 0 and <= 1;
         var splitStats = new WrapPanel();
-        AddStat(splitStats, effective ? "技能有效伤害" : "技能伤害",
-            skillKnown ? detail.UiInt(skillKey) : "—",showZero:true);
-        AddStat(splitStats, effective ? "非技能有效伤害" : "非技能伤害",
-            skillKnown ? detail.UiInt(nonSkillKey) : "—",showZero:true);
+        AddStat(splitStats, observedPrefix+(effective ? "技能有效伤害" : "技能伤害"),
+            Number(split.Skill),showZero:true);
+        AddStat(splitStats, observedPrefix+(effective ? "非技能有效伤害" : "非技能伤害"),
+            Number(split.NonSkill),showZero:true);
         AddStat(splitStats, "技能覆盖率", coverageKnown
             ? SkillCoverageText(coverageValue) : "—");
         AddStat(splitStats, "技能开启秒", detail.Bool("skill_coverage_complete")
@@ -177,15 +172,14 @@ public sealed class Inspector : Border
         AddStat(splitStats, "在场秒", row.Bool("presence_complete")
             ? row.UiInt("presence_seconds") : "—",showZero:true);
         body.Children.Add(splitStats);
-        double splitTotal=skillDamage+nonSkillDamage;
-        if (skillKnown && double.IsFinite(splitTotal) && splitTotal>0)
+        if (double.IsFinite(split.Fraction))
         {
-            double skillShare=skillDamage/splitTotal;
-            string splitSummary=$"技能伤害占比 {Percentage(skillShare)} · 非技能伤害占比 {Percentage(1-skillShare)}";
+            double skillShare=split.Fraction;
+            string splitSummary=$"{split.Label} {Percentage(skillShare)}";
             var splitBar = new Grid { Height = 8, Margin = new Thickness(0, 3, 0, 5) };
             AutomationProperties.SetName(splitBar,splitSummary);
             AutomationProperties.SetAutomationId(splitBar,"InspectorSkillSplitBar");
-            splitBar.ToolTip=splitSummary;
+            splitBar.ToolTip=splitSummary+"\n"+split.Explanation;
             splitBar.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(skillShare,GridUnitType.Star) });
             splitBar.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1-skillShare,GridUnitType.Star) });
             var skillPart = new Border { Background = Theme.Resource("Accent"),
@@ -198,13 +192,10 @@ public sealed class Inspector : Border
             body.Children.Add(splitBar);
         }
         string splitReason=detail.Text("skill_split_reason");
-        if (!skillKnown)
-            body.Children.Add(Text(splitReason.Length > 0
-                ? "技能拆分未知：" + splitReason
-                : effective && detail.Bool("skill_split_complete")
-                    ? "有效技能拆分未知：过量伤害证据不足。"
-                    : "技能拆分未知：事件观察或技能窗口未覆盖。",
-                11, false, "Muted", new Thickness(0, 1, 0, 2)));
+        if (!split.Complete)
+            body.Children.Add(Text((split.Observed
+                ? $"{split.Label} {Percentage(split.Fraction)} · 整局统计缺口："
+                : "技能拆分未知：")+split.Reason,11,false,"Muted",new Thickness(0,1,0,2)));
         var coverageNote=coverageKnown
             ? "覆盖率按技能开启时间占在场时间计算；被动技能计入非技能。"
             : splitReason.Length>0 ? "技能覆盖率未知："+splitReason
@@ -556,11 +547,7 @@ public sealed class Inspector : Border
             var config=view.Get("config");
             string category=config.Text("category");
             bool bossScope=StatisticPanel.IsBossScope(config);
-            double skill=detail.Number(effective ? "skill_damage_effective" : "skill_damage",double.NaN);
-            double ordinary=detail.Number(effective ? "non_skill_damage_effective" : "non_skill_damage",double.NaN);
-            double splitTotal=skill+ordinary;
-            bool splitKnown=detail.Bool(effective ? "skill_split_effective_complete" : "skill_split_complete")
-                && double.IsFinite(splitTotal) && skill>=0 && ordinary>=0;
+            var split=SkillSplitReading(detail,effective);
             double skillCoverage=detail.Number("skill_coverage",double.NaN);
             bool coverageKnown=detail.Bool("skill_coverage_complete") && skillCoverage is >= 0 and <= 1;
             string reason=detail.Text("skill_split_reason");
@@ -614,12 +601,8 @@ public sealed class Inspector : Border
             var mitigationReading=MitigationReading(row);
             mitigation.Caption=mitigationReading.Label;
             mitigation.Update(mitigationReading.Fraction,mitigationReading.Explanation);
-            string splitBasis=effective ? "技能期有效伤害 ÷ 已拆分的总有效伤害。" : "技能期伤害 ÷ 已拆分的总伤害。";
-            skillShare.Caption=effective ? "技能期有效伤害占比" : "技能期伤害占比";
-            skillShare.Update(splitKnown && splitTotal>0 ? skill/splitTotal : double.NaN,
-                WithNote(splitBasis+"被动技能的伤害归入非技能期。",
-                    !splitKnown ? (reason.Length>0 ? reason : "技能期伤害覆盖不足。")
-                        : splitTotal==0 ? "已拆分的伤害为零，无法计算占比。" : ""));
+            skillShare.Caption=split.Label;
+            skillShare.Update(split.Fraction,split.Explanation);
             SetComposition(effective,row,detail);
         }
 
@@ -832,17 +815,68 @@ public sealed class Inspector : Border
     }
     private static string OverkillRate(JsonElement row)=>Percentage(OverkillFraction(row));
 
+    private static (double Skill,double NonSkill,double Fraction,bool Complete,bool Observed,
+        string Label,string Reason,string Explanation) SkillSplitReading(JsonElement detail,bool effective)
+    {
+        string suffix=effective ? "_effective" : "";
+        string skillKey="skill_damage"+suffix, nonSkillKey="non_skill_damage"+suffix;
+        string label=effective ? "技能期有效伤害占比" : "技能期伤害占比";
+        string formula=(effective ? "技能期有效伤害 ÷ 已拆分的总有效伤害。" : "技能期伤害 ÷ 已拆分的总伤害。")
+            +"被动技能的伤害归入非技能期。";
+        static bool Valid(double skill,double nonSkill) =>
+            skill>=0 && nonSkill>=0 && double.IsFinite(skill+nonSkill);
+
+        double skill=detail.Number(skillKey,double.NaN), nonSkill=detail.Number(nonSkillKey,double.NaN);
+        if(detail.Bool("skill_split"+suffix+"_complete") && Valid(skill,nonSkill))
+        {
+            double total=skill+nonSkill;
+            return (skill,nonSkill,total>0 ? skill/total : double.NaN,true,false,label,"",
+                total>0 ? formula : formula+"\n已拆分的伤害为零，无法计算占比。");
+        }
+
+        string reason=detail.Text("skill_split_reason");
+        if(reason.Length==0) reason=effective && detail.Bool("skill_split_complete")
+            ? "过量伤害证据不足。" : "事件观察或技能窗口未覆盖。";
+        skill=detail.Number("observed_"+skillKey,double.NaN);
+        nonSkill=detail.Number("observed_"+nonSkillKey,double.NaN);
+        if(Valid(skill,nonSkill) && skill+nonSkill>0)
+            return (skill,nonSkill,skill/(skill+nonSkill),false,true,"已观察"+label,reason,
+                formula+"\n按已观察且可归入技能期或非技能期的伤害计算。\n整局统计缺口："+reason);
+        return (double.NaN,double.NaN,double.NaN,false,false,label,reason,formula+"\n"+reason);
+    }
+
     private static (double Fraction,string Label,string Explanation) MitigationReading(JsonElement row)
     {
         const string formula="1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。结算伤害包含其他伤害修正。";
         const string negativeNote="\n结算伤害高于公式前伤害时，比例为负。当前观察记录两端数值，无法确定差额来自哪项修正。";
+        // The native fixed-point unity multiplier can differ from 1 by ~2e-8.
+        const double zeroTolerance=0.00001; // percentage points
+        double hits=row.Get("mitigation_matched_hits").TryNumber();
+        bool counted=double.IsFinite(hits) && hits>0;
+        static double Fraction(double percent) => Math.Abs(percent)<=zeroTolerance ? 0 : percent/100;
+
+        string Explain(double percent,string prefix)
+        {
+            string explanation=formula;
+            if(percent < -zeroTolerance) explanation+=negativeNote;
+            double before=row.Get(prefix+"mitigation_before").TryNumber(double.NaN);
+            double after=row.Get(prefix+"mitigation_after").TryNumber(double.NaN);
+            if(double.IsFinite(before) && before>0 && double.IsFinite(after) && after>=0)
+                explanation+=$"\n配对命中合计：公式前 {Number(before)}，结算 {Number(after)}。";
+            if(Math.Abs(percent)<=zeroTolerance)
+                explanation+="\n配对命中的公式前后伤害在测量精度内相同。";
+            else if(Math.Abs(percent)<0.5)
+                explanation+=$"\n舍入前比例 {percent.ToString("0.#####",CultureInfo.InvariantCulture)}%。";
+            return explanation;
+        }
+
         double full=row.Get("mitigation_rate").TryNumber(double.NaN);
-        if(double.IsFinite(full)) return (full/100,"被减伤率",full<0 ? formula+negativeNote : formula);
+        if(double.IsFinite(full))
+            return (Fraction(full),"被减伤率",Explain(full,"")+(counted ? $"\n已配对的 {Number(hits)} 击。" : ""));
 
         string reason=row.Text("mitigation_unknown_reason");
         double observed=row.Get("observed_mitigation_rate").TryNumber(double.NaN);
-        double hits=row.Get("mitigation_matched_hits").TryNumber();
-        if(double.IsFinite(observed) && double.IsFinite(hits) && hits>0)
+        if(double.IsFinite(observed) && counted)
         {
             string coverage=$"仅统计已配对的 {Number(hits)} 击。";
             double after=row.Get("observed_mitigation_after").TryNumber(double.NaN);
@@ -850,8 +884,7 @@ public sealed class Inspector : Border
             if(row.Bool("counter_snapshot_complete") && after>=0 && total>0 && after<=total)
                 coverage+=$"这些命中的结算伤害占当前累计总伤的 {Percentage(after/total)}。";
             if(reason.Length>0) coverage+="\n整局统计缺口："+reason;
-            string explanation=observed<0 ? formula+negativeNote : formula;
-            return (observed/100,"已观察减伤率",explanation+"\n"+coverage);
+            return (Fraction(observed),"已观察减伤率",Explain(observed,"observed_")+"\n"+coverage);
         }
         return (double.NaN,"被减伤率",formula+"\n"+(reason.Length>0 ? reason : "尚无同一击的公式前伤害与结算伤害。"));
     }

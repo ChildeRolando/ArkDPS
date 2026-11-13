@@ -31,6 +31,7 @@ class BattleObservation:
     reason: str = ''
     events: dict | None = None
     lifecycle: dict | None = None
+    round_reset: dict | None = None
 
 
 class MappingRetry(CaptureRetry):
@@ -72,11 +73,11 @@ class BattleFeed:
         self.stage = None
         self.retired_stage = None
 
-    def _emit(self, kind, sample=None, roster=None, reason='', events=None):
+    def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None):
         self.sequence += 1
         return BattleObservation(self.id, self.sequence, self.generation,
                                  kind, deepcopy(sample), roster, reason, deepcopy(events),
-                                 deepcopy(self.current_lifecycle))
+                                 deepcopy(self.current_lifecycle), deepcopy(round_reset))
 
     @property
     def battle_waiting(self):
@@ -264,14 +265,23 @@ class BattleFeed:
                 and not (stage and self.retired_stage and stage != self.retired_stage)):
             if self.retired_clock is None or now >= self.retired_clock:
                 return self._emit('waiting', reason='retired_battle')
-        changed = (self.identity != identity or stage_changed or self.native_session != sample['session']
-                   or (self.clock is not None and now < self.clock))
+        same_native = (self.identity == identity and not stage_changed
+                       and self.native_session == sample['session'])
+        clock_reset = same_native and self.clock is not None and now < self.clock
+        changed = not same_native or clock_reset
         generation = self.generation + int(changed)
         preparing = (generation > published_generation and roster.present_known
                      and not roster.entries and not sample['rows'])
         # Preparation has no owner baseline. Keep the observer attached and
         # leave the previous prefix for the next accepted combat watermark.
-        events = None if preparing else self._drain(observer, events)
+        # A same-controller round reset can still prove the old stream ended
+        # at its last accepted watermark, without draining preparation events.
+        events = events if preparing else self._drain(observer, events)
+        round_reset = None
+        if clock_reset and events is not None and 'sequence' in events:
+            drained = events.get('drain') or {}
+            if not (drained.get('error') or drained.get('stopped')):
+                round_reset = {key: events[key] for key in ('before', 'after', 'sequence')}
         if changed:
             self.generation = generation
             self.terminal = False
@@ -283,8 +293,8 @@ class BattleFeed:
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
         if preparing:
-            return self._emit('preparing', sample, roster, reason='empty_roster')
-        return self._emit('sample', sample, roster, events=events)
+            return self._emit('preparing', sample, roster, reason='empty_roster', round_reset=round_reset)
+        return self._emit('sample', sample, roster, events=events, round_reset=round_reset)
 
 
 class BattleSessions:
@@ -404,13 +414,47 @@ class BattleSessions:
         if self.event_status == 'recording':
             self._close_event_gap('未取得最终事件水位')
 
+    def _clock_reset_matches_watermark(self, observation, stream):
+        evidence = observation.round_reset
+        next_sample, previous = observation.sample, self.latest_sample
+        if not isinstance(evidence, dict) or observation.generation != self.generation + 1 or not next_sample:
+            return False
+        try:
+            if (not previous['native_session']
+                    or next_sample['native_session'] != previous['native_session']
+                    or tuple(next_sample['battle_identity']) != tuple(previous['battle_identity'])
+                    or next_sample['frame'] >= previous['frame']
+                    or next_sample['game_time'] >= previous['game_time']):
+                return False
+            mark = self._last_event_mark
+            after = evidence['after']
+            return (baseline_barrier(mark, previous, mark) == stream.sequence
+                    and stream.frame == mark['frame'] and stream.game_time == mark['game_time']
+                    and baseline_barrier(evidence['before'], next_sample, after) == stream.sequence
+                    and evidence['sequence'] == stream.sequence and after['epoch'] == mark['epoch'])
+        except (KeyError, ValueError, TypeError):
+            return False
+
     def _finish_at_verified_watermark(self, observation):
-        boundary = (observation.events or {}).get('terminal_boundary')
         if (self.event_status != 'recording' or self._last_event_mark is None or
-                not isinstance(boundary, dict) or self.latest_sample is None):
+                self.latest_sample is None):
             return False
         stream = self.adapter.event_stream
         if stream is None or stream.closed or self.adapter.statistics.end_time is not None:
+            return False
+        if observation.kind in ('sample', 'preparing'):
+            if not self._clock_reset_matches_watermark(observation, stream):
+                return False
+        elif not self._terminal_boundary_matches_watermark(observation, stream):
+            return False
+        self.adapter.statistics.invalidate_rates()
+        self.adapter.finish()
+        self.event_status, self.event_error = 'finished', None
+        return True
+
+    def _terminal_boundary_matches_watermark(self, observation, stream):
+        boundary = (observation.events or {}).get('terminal_boundary')
+        if not isinstance(boundary, dict):
             return False
         try:
             controller, native = self.latest_sample['battle_identity']
@@ -429,16 +473,13 @@ class BattleSessions:
                 return False
         except (KeyError, ValueError, TypeError):
             return False
-        # The final callback reached the same point already consumed together
-        # with native counters and roster. An advanced boundary needs a new pair.
-        self.adapter.statistics.invalidate_rates()
-        self.adapter.finish()
-        self.event_status, self.event_error = 'finished', None
         return True
 
-    def _archive(self, reason):
+    def _archive(self, reason, *, successor=None):
         if self.adapter is None or self._archived:
             return
+        if successor is not None:
+            self._finish_at_verified_watermark(successor)
         self._close_unverified_event_end()
         self.adapter.finish()
         self._archives.append(deepcopy(dict(
@@ -515,7 +556,7 @@ class BattleSessions:
         if observation.kind == 'preparing':
             if observation.generation <= self.generation:
                 return False
-            self._archive('new_battle')
+            self._archive('new_battle', successor=observation)
             self.preparing_generation = observation.generation
             self.state = 'preparing'
             self.connection = 'connected'
@@ -531,7 +572,7 @@ class BattleSessions:
             # roster cannot yet be mapped. Keep the old adapter for display;
             # its independent archive copy cannot be lost with the new sample.
             if observation.generation > self.generation:
-                self._archive('new_battle')
+                self._archive('new_battle', successor=observation)
                 adapter = BattleStatisticsAdapter()
                 adapter.update(observation.sample, observation.roster)
                 self.adapter = adapter
