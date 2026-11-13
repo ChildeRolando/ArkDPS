@@ -31,7 +31,7 @@ FRIDA_SHA256 = 'f4f6875afed9f0c493af790b2b2d18fe9bfb379a35ecb708f14c2d4b15df6e1e
 # Nothing Tk-shaped may reach the portable package: the panel is sealed and the
 # WPF client renders every surface itself.
 TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', 'tcl86t')
-BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py',
+BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py', 'boss_catalog.py',
            'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py',
            'connection.py', 'event_capture.py', 'event_observer.py', 'event_stream.py',
            'frida_provision.py',

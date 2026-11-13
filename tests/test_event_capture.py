@@ -124,6 +124,32 @@ def test_formula_pair_flows_through_damage_queue_without_using_hp_delta():
     assert capture.adapter.result()['rows']['char_a']['mitigation_rate'] == pytest.approx(32)
 
 
+def test_boss_damage_follows_the_same_ordered_settlement_and_watermark():
+    collector = Collector()
+    collector.damage = 0
+    observer = Observer(collector)
+    original_drain = observer.drain
+    observer.drain = lambda: {**original_drain(), 'boss_damage_ready': True}
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time, collector.damage = 2, 1, 70
+    observer.sequence = observer.epoch = 2
+    observer.events = [
+        dict(event(1, frame=2, game_time=1, amount=50), target='enemy_1506_patrt',
+             hp_before=30, hp_after=0, real_delta=-30, killed=True, shield_absorbed=0,
+             damage_type=1, mitigation_before=100, mitigation_after=50),
+        dict(event(2, frame=2, game_time=1), target='enemy_1000_gopro',
+             hp_after=20, killed=False, damage_type=2),
+    ]
+    result = capture.sample()
+    row = result['rows']['char_a']
+    assert result['boss_damage_available']
+    assert row['damage'] == 70
+    assert row['boss_damage']['damage'] == 50
+    assert row['boss_damage']['effective_damage'] == 30
+    assert row['boss_damage']['mitigation_rate'] == 50
+
+
 @pytest.mark.parametrize('fields', [
     {}, {'mitigation_before': 45},
     {'mitigation_before': True, 'mitigation_after': 20},

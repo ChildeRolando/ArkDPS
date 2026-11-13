@@ -2,6 +2,8 @@
 
 当前 WPF 提供侧栏导航、实时总览、排行、HUD 和干员详情。「孤星」「人们，我们。」和「巴别塔」共用布局与数据模型，各有主题图稿和样式。干员详情中的「被减伤率」使用 `mitigation_rate`（百分比）；没有公式前伤害证据时保持未知并显示“—”，不以过量或护盾替代。
 
+伤害面板的「仅首领」与「有效伤害 / 溢出总伤」独立组合。开关按面板保存，排行、干员详情和对应 HUD 共用所选口径。近 5 秒 DPS 按这段时间内命中首领的结算事件计算，接敌 DPS 使用首领命中的活跃区间，全周期 DPS 使用干员在场时间。历史战绩保存首领伤害数据，旧战绩没有该字段时显示未知。
+
 当前 WPF 展示通过 `desktop_bridge.py` 只读消费 `panel_model.py`，C# 不重算排行/柱长/占比；运行与验收见 [桌面运行时](desktop-runtime.md)。产品 UI 只有 WPF：Tk 实现（`gui_panel.py`、`hud.py`、`gui_history.py`、`ui_theme.py`）已归档封存到 `archive/legacy-tk`，见 [ADR 0005](adr/0005-seal-legacy-tk.md)。下文 ARK-9/10/12/19 章节是 Tk 时代的实现与验收记录，只作追溯，不代表 WPF 的实机验收已完成。
 
 共享模型实现于 `panel_model.py`；`app.py` / `gui_panel.py` 的实时 GUI、`hud.py` 的 HUD 和 `gui_history.py` 的历史窗口使用该模型，共享同一口径。

@@ -33,8 +33,8 @@ from event_observer import ObserverStatus
 from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
-from panel_model import (EventAvailability, PanelConfig, detail_rates,
-                         live_damage_rates, render_panel, rows_from_statistics,
+from panel_model import (Category, EventAvailability, PanelConfig, detail_rates,
+                         live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
                          team_status)
 import stage_names
 
@@ -73,7 +73,16 @@ def team_totals(statistics):
     return result
 
 
-def empty_text(config, source, complete):
+def empty_text(config, source, complete, view):
+    if config.boss_scope:
+        if not view['boss_damage_available']:
+            return view['boss_damage_reason']
+        # The displayed metric can be a rate or effective damage even when
+        # raw cumulative damage is known.
+        complete_key = 'footer_rate_complete' if config.ranking.value == 'dps' else 'footer_total_complete'
+        if not view[complete_key]:
+            return view['boss_damage_reason'] or '当前首领伤害指标尚无可靠数据'
+        return '暂无首领伤害（已知为零）'
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
     key = {'damage': 'damage', 'healing': 'healing', 'shield': 'shield_absorbed'}[config.category.value]
@@ -107,6 +116,8 @@ class DesktopState:
         self.last_frame = None
         self.last_progress = 0.
         self.live_analysis = None
+        self.boss_live_analysis = None
+        self.boss_effective_live_analysis = None
         self.analysis_interrupted = False
         self.error = ''
         self.connection_text = '等待定位本局'
@@ -175,6 +186,8 @@ class DesktopState:
         same_battle = previous is not None and previous['battle_id'] == battle_id
         if not same_battle:
             self.live_analysis = None
+            self.boss_live_analysis = None
+            self.boss_effective_live_analysis = None
             self.analysis_interrupted = False
         if (not isinstance(battle_id, str) or not battle_id or
                 type(game_time) not in (float, int) or not math.isfinite(game_time) or game_time < 0 or
@@ -211,7 +224,38 @@ class DesktopState:
             team_recent_dps=team_recent,
             team_average_dps=average if average is not None and math.isfinite(average) else None,
             observed_peak_dps=peak, team_total_damage=team_total, operators=operators)
+        boss_statistics = panel_statistics(PanelConfig(boss_only=True), statistics)
+        if boss_statistics['boss_damage_available'] or self.boss_live_analysis is not None:
+            boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
+            self.boss_live_analysis = self.boss_trend_point(
+                boss_statistics, battle_id, game_time, self.boss_live_analysis,
+                terminal=terminal, covered=boss_coverage)
+            self.boss_effective_live_analysis = self.boss_trend_point(
+                boss_statistics, battle_id, game_time, self.boss_effective_live_analysis,
+                terminal=terminal, covered=boss_coverage, effective=True)
         self.analysis_interrupted = False
+
+    def boss_trend_point(self, statistics, battle_id, game_time, previous, *,
+                         terminal, covered, effective=False):
+        team_recent, operators = live_damage_rates(statistics, game_time, effective=effective)
+        complete, _, _ = team_status(statistics)
+        if not complete or terminal or not covered:
+            team_recent = None
+        if terminal or not covered:
+            for operator in operators:
+                operator['recent_dps'] = None
+        segment = 0
+        if previous is not None:
+            segment = previous['segment']
+            current_rates = {row['owner_id']: row['recent_dps'] for row in operators}
+            lost_coverage = not terminal and (
+                previous['team_recent_dps'] is not None and team_recent is None
+                or any(row['recent_dps'] is not None and current_rates.get(row['owner_id']) is None
+                       for row in previous['operators']))
+            if self.analysis_interrupted or lost_coverage:
+                segment += 1
+        return dict(battle_id=battle_id, game_time=game_time, segment=segment,
+                    team_recent_dps=team_recent, operators=operators)
 
     def status(self):
         if self.scanning:
@@ -233,19 +277,27 @@ class DesktopState:
         return 'live', '正在统计'
 
     def view(self, config, statistics, complete=None, event=None):
+        statistics = panel_statistics(config, statistics, history=event is not None and not event.live)
         source = statistics.get('rows') or {}
         number_units = self.layout.number_units
-        if complete is None:
+        if complete is None or config.boss_scope:
             complete, reason, note = team_status(statistics, number_units)
         else:
             reason, note = '', ''
+        if config.boss_scope:
+            reason = statistics['boss_damage_reason'] or reason
+            complete = complete and statistics['boss_damage_available']
+            note = ''
         rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
                                    team_note=note, event=event, number_units=number_units))
-        view['empty_text'] = empty_text(config, source, complete)
+        if config.boss_scope:
+            view['boss_damage_available'] = statistics['boss_damage_available']
+            view['boss_damage_reason'] = statistics['boss_damage_reason']
+        view['empty_text'] = empty_text(config, source, complete, view)
         view['rates'] = detail_rates(
-            rows, event, effective=config.effective_only and config.category.value == 'damage',
+            rows, event, effective=config.effective_only and config.category is Category.DAMAGE,
             number_units=number_units)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
@@ -295,6 +347,8 @@ class DesktopState:
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
                     live_analysis=self.live_analysis,
+                    boss_live_analysis=self.boss_live_analysis,
+                    boss_effective_live_analysis=self.boss_effective_live_analysis,
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),
                     history=history, history_selected=selected, history_notice=self.history_notice)

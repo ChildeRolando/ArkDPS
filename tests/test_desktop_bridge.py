@@ -194,6 +194,183 @@ def test_panel_details_keep_owners_outside_rank_and_in_old_history(tmp_path):
     assert snapshot['history_selected']['view']['details_by_owner']['a']['skill_damage'] is None
 
 
+def boss_fixture():
+    return dict(damage=180., effective_damage=160., overkill_damage=20.,
+                counter_snapshot_complete=True, event_coverage_complete=True,
+                overkill_coverage_complete=True, overkill_type_complete=True,
+                damage_by_type={'arts': 180.}, overkill_damage_by_type={'arts': 20.},
+                observed_damage=180., active_damage=4., engagement_damage=45.,
+                recent_damage=36., recent_damage_window=(17.3, 22.3),
+                recent_overkill_damage=20., recent_damage_by_type={'arts': 36.},
+                skill_damage=120., non_skill_damage=60., skill_damage_effective=100.,
+                non_skill_damage_effective=60., skill_split_complete=True,
+                skill_split_effective_complete=True, mitigation_rate=10.)
+
+
+def boss_analysis_sample(game_time, *, battle_id='battle-a'):
+    data = analysis_sample(game_time, battle_id=battle_id)
+    data.update(event_status='recording', event_error=None)
+    stats = data['statistics']
+    stats['boss_damage_available'] = True
+    for row in stats['rows'].values():
+        row['boss_damage'] = dict(
+            boss_fixture(), recent_damage_window=(max(0., game_time - 5), game_time))
+    stats['rows']['b']['boss_damage'].update(recent_damage=0., recent_overkill_damage=0.)
+    return data
+
+
+def test_boss_trend_samples_both_scopes_independent_of_panel_filter(tmp_path):
+    state = DesktopState(tmp_path)
+    assert state.snapshot()['boss_live_analysis'] is None
+    state.accept('sample', boss_analysis_sample(21.))
+    before = state.snapshot()
+    raw = before['boss_live_analysis']
+    effective = before['boss_effective_live_analysis']
+    assert raw == {
+        'battle_id': 'battle-a', 'game_time': 21., 'segment': 0, 'team_recent_dps': 36.,
+        'operators': [{'owner_id': 'a', 'name': '赫默', 'recent_dps': 36.},
+                      {'owner_id': 'b', 'name': '夜刀', 'recent_dps': 0.}],
+    }
+    assert effective['team_recent_dps'] == 32.
+    assert [op['recent_dps'] for op in effective['operators']] == [32., 0.]
+    assert before['live_analysis']['team_recent_dps'] == 100.
+    cmd(state, 'panel_update', config=dict(state.layout.panels[0].to_dict(),
+                                           boss_only=True, effective_only=True))
+    assert state.snapshot()['boss_live_analysis'] == raw
+    assert state.snapshot()['boss_effective_live_analysis'] == effective
+
+
+def test_boss_trend_preserves_unknown_scopes_and_breaks_on_event_gaps(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', boss_analysis_sample(20.))
+    partial = boss_analysis_sample(21.)
+    partial['statistics']['rows']['a']['boss_damage']['overkill_coverage_complete'] = False
+    state.accept('sample', partial)
+    snapshot = state.snapshot()
+    raw = snapshot['boss_live_analysis']
+    effective = snapshot['boss_effective_live_analysis']
+    assert raw['team_recent_dps'] == 36. and raw['segment'] == 0
+    assert effective['team_recent_dps'] is None and effective['segment'] == 1
+    assert [op['recent_dps'] for op in effective['operators']] == [None, 0.]
+
+    # Even a stale previous calculation must not carry through an event gap.
+    gap = dict(boss_analysis_sample(22.), event_status='gap')
+    state.accept('sample', gap)
+    snapshot = state.snapshot()
+    assert snapshot['live_analysis']['team_recent_dps'] == 100.
+    assert snapshot['live_analysis']['segment'] == 0
+    for key in ('boss_live_analysis', 'boss_effective_live_analysis'):
+        assert snapshot[key]['team_recent_dps'] is None
+        assert all(op['recent_dps'] is None for op in snapshot[key]['operators'])
+    assert snapshot['boss_live_analysis']['segment'] == 1
+    assert snapshot['boss_effective_live_analysis']['segment'] == 2
+
+    state.accept('sample', boss_analysis_sample(23.))
+    assert state.snapshot()['boss_live_analysis']['segment'] == 1
+    state.accept('error', 'lost')
+    state.accept('sample', boss_analysis_sample(24.))
+    assert state.snapshot()['boss_live_analysis']['segment'] == 2
+    assert state.snapshot()['boss_effective_live_analysis']['segment'] == 3
+
+    terminal = boss_analysis_sample(25.)
+    terminal['statistics']['ended'] = True
+    state.accept('sample', terminal)
+    assert state.snapshot()['boss_live_analysis']['team_recent_dps'] is None
+    assert state.snapshot()['boss_live_analysis']['segment'] == 2
+    state.accept('sample', analysis_sample(3., battle_id='battle-b'))
+    assert state.snapshot()['boss_live_analysis'] is None
+    assert state.snapshot()['boss_effective_live_analysis'] is None
+
+
+@pytest.mark.parametrize('basis,expected', [
+    ('recent_5s', 32.), ('engagement', 40.), ('full_cycle', 20.),
+])
+@pytest.mark.parametrize('ranking', ['total', 'dps'])
+def test_boss_only_uses_scoped_rates_and_details_without_changing_global_stats(tmp_path, basis, expected, ranking):
+    state = DesktopState(tmp_path)
+    data = analysis_sample()
+    data.update(event_status='recording', event_error=None)
+    stats = data['statistics']
+    stats['boss_damage_available'] = True
+    stats['rows']['a'].update(boss_damage=boss_fixture(), presence_complete=True, presence_seconds=8.)
+    # A known zero participates in the denominator without appearing as a rank.
+    stats['rows']['b']['boss_damage'] = dict(
+        boss_fixture(), damage=0., effective_damage=0., observed_damage=0., active_damage=0.,
+        recent_damage=0., engagement_damage=None, overkill_damage=0., recent_overkill_damage=0.)
+    stats['rows']['b'].update(presence_complete=True, presence_seconds=8.)
+    state.accept('sample', data)
+    cfg = state.layout.panels[0].to_dict()
+    cmd(state, 'panel_update', config=dict(cfg, boss_only=True, effective_only=True,
+                                           rate_basis=basis, ranking=ranking))
+    snapshot = state.snapshot()
+    view = snapshot['panels'][0]
+    a, = view['entries']
+    assert view['boss_damage_available']
+    assert (a['owner_id'], a['value'], a['rate'], a['share']) == (
+        'a', expected if ranking == 'dps' else 160., expected, 1.)
+    assert view['footer_total'] == 160. and view['share_scope'] == 'team'
+    assert view['source']['a']['damage'] == 180.
+    assert view['source']['a']['mitigation_rate'] == 10.
+    assert view['details_by_owner']['a']['effective_damage_by_type'] == {'arts': 160.}
+    assert view['details_by_owner']['a']['skill_damage_effective'] == 100.
+    assert view['rates']['a']['damage']['text'] == '40/s'
+    assert snapshot['totals']['damage'] == 1730.
+    assert stats['rows']['a']['damage'] == 1230.
+
+    cmd(state, 'panel_update', config=dict(cfg, boss_only=True, effective_only=False))
+    total = state.snapshot()['panels'][0]
+    assert total['entries'][0]['value'] == 180.
+    assert total['details_by_owner']['a']['skill_damage'] == 120.
+
+    cmd(state, 'panel_update', config=dict(cfg, boss_only=True, category='healing'))
+    healing = state.snapshot()['panels'][0]
+    assert healing['config']['boss_only'] and healing['entries'][0]['value'] == 615.
+    assert 'boss_damage_available' not in healing
+    assert LayoutStore(tmp_path / 'layout.json').load().layout.panels[0].boss_only
+
+
+def test_boss_only_history_uses_archived_scope_and_reports_legacy_unknown(tmp_path):
+    old = record(0).to_dict()
+    old['statistics'].pop('boss_damage_available', None)
+    old['statistics'].pop('boss_damage_reason', None)
+    old['statistics']['rows']['a'].pop('boss_damage', None)
+    new = record(1).to_dict()
+    new['statistics']['boss_damage_available'] = True
+    new['statistics']['rows']['a']['boss_damage'] = boss_fixture()
+    history = BattleHistory(tmp_path / 'history')
+    history.save(BattleRecord.from_dict(old))
+    history.save(BattleRecord.from_dict(new))
+    state = DesktopState(tmp_path)
+    cmd(state, 'history_config', config={'boss_only': True, 'effective_only': True})
+    cmd(state, 'history_select', battle_id='battle:1')
+    selected = state.snapshot()['history_selected']
+    assert selected['view']['entries'][0]['value'] == 160.
+    assert selected['record']['statistics']['rows']['a']['damage'] == 230.
+
+    cmd(state, 'history_select', battle_id='battle:0')
+    view = state.snapshot()['history_selected']['view']
+    assert not view['boss_damage_available']
+    assert '未记录首领伤害' in view['empty_text']
+    assert not view['entries'] and view['footer_total'] is None
+    assert view['details_by_owner']['a']['damage'] is None
+
+
+def test_boss_only_does_not_report_partial_effective_data_as_zero(tmp_path):
+    state = DesktopState(tmp_path)
+    data = analysis_sample()
+    stats = data['statistics']
+    stats.update(boss_damage_available=True, boss_damage_reason='部分目标身份未确认')
+    stats['rows']['a']['boss_damage'] = dict(
+        boss_fixture(), effective_damage=None, overkill_coverage_complete=False)
+    state.accept('sample', data)
+    cmd(state, 'panel_update', config=dict(state.layout.panels[0].to_dict(),
+                                           boss_only=True, effective_only=True))
+    view = state.snapshot()['panels'][0]
+    assert view['boss_damage_available']
+    assert not view['entries'] and view['footer_total'] is None
+    assert view['empty_text'] == '部分目标身份未确认'
+
+
 def test_rate_does_not_change_ranks_bars_shares_and_shield_rejects_engagement(tmp_path):
     state = DesktopState(tmp_path)
     state.accept('sample', sample())

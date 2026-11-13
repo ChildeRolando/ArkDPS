@@ -30,7 +30,7 @@ def test_version_two_roundtrip_keeps_panels_hud_gui_and_event_choice(tmp_path):
     store = ls.LayoutStore(tmp_path / 'layout.json')
     layout = ls.Layout(
         panels=(panel('p1', category=Category.HEALING, ranking=Ranking.RECENT),
-                panel('p2')),
+                panel('p2', effective_only=True, boss_only=True)),
         huds=(ls.HudPlacement('p1', -500, 40, 410, 360, opacity=0.73, locked=True),),
         gui=ls.GuiGeometry(-1080, 20, 900, 720),
         event_observation=False)
@@ -42,17 +42,21 @@ def test_version_two_roundtrip_keeps_panels_hud_gui_and_event_choice(tmp_path):
     assert raw['version'] == ls.LAYOUT_VERSION
     assert raw['huds'][0]['opacity'] == 0.73
     assert raw['event_observation'] is False
+    assert raw['panels'][1]['boss_only'] is True
 
 
 def test_version_one_panel_collection_is_migrated(tmp_path):
     path = tmp_path / 'layout.json'
+    legacy = panel('legacy', category=Category.SHIELD).to_dict()
+    del legacy['boss_only']
     path.write_text(json.dumps({'version': 1, 'panels': [
-        panel('legacy', category=Category.SHIELD).to_dict()]}), encoding='utf-8')
+        legacy]}), encoding='utf-8')
     store = ls.LayoutStore(path)
     result = store.load()
     assert result.ok and result.migrated_from == 1
     assert '迁移' in result.warning
     assert result.layout.panels[0].panel_id == 'legacy'
+    assert result.layout.panels[0].boss_only is False
     assert result.layout.huds == () and result.layout.gui is None
     assert result.layout.event_observation is True
     store.save(result.layout)

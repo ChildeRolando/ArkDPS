@@ -47,6 +47,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer poll=new(){Interval=TimeSpan.FromMilliseconds(200)};
     private readonly DispatcherTimer save=new(){Interval=TimeSpan.FromMilliseconds(600)};
     private readonly LiveTrendModel trendModel = new();
+    private readonly LiveTrendModel bossTrendModel = new();
+    private readonly LiveTrendModel bossEffectiveTrendModel = new();
     internal readonly Dictionary<string,StatisticPanel> Panels=new();
     internal readonly Dictionary<string,HudWindow> Huds=new();
     internal JsonElement State;
@@ -185,6 +187,8 @@ public partial class MainWindow : Window
         responseStale=true;
         UpdateLiveStatus(status,label);
         trendModel.Interrupt();
+        bossTrendModel.Interrupt();
+        bossEffectiveTrendModel.Interrupt();
         UpdateEnemies(State.Get("enemy"),DisplayedBattleId,
             ShowingPreviousBattle ? "previous" : status=="reconnecting" ? "disconnected" : status);
         UpdateEnemySummary();
@@ -306,6 +310,8 @@ public partial class MainWindow : Window
             ? analysis.Get("team_total_damage") : totals.Get("damage"));
         UpdateLiveStatus(state.Text("status"),state.Text("status_text"));
         trendModel.Apply(state);
+        bossTrendModel.Apply(state,state.Get("boss_live_analysis"));
+        bossEffectiveTrendModel.Apply(state,state.Get("boss_effective_live_analysis"));
         double time = state.Get("game_time").TryNumber(double.NaN);
         int elapsed = double.IsFinite(time) ? (int)Math.Clamp(Math.Round(time, MidpointRounding.AwayFromZero), 0, int.MaxValue) : 0;
         Clock.Text = double.IsFinite(time) && time >= 0 ? $"{elapsed / 60:00}:{elapsed % 60:00}" : "—";
@@ -328,8 +334,7 @@ public partial class MainWindow : Window
                 {
                     activePanel = id;
                     LiveInspector.Pin(owner, Panels[id].View);
-                    OperatorTrend.SetOwner(owner);
-                    OperatorTrend.Visibility = Visibility.Visible;
+                    UpdateOperatorTrend(Panels[id].View);
                 };
                 Panels.Add(id,panel);PanelHost.Children.Add(panel);
             }
@@ -367,7 +372,30 @@ public partial class MainWindow : Window
         panel.Update(view,canDelete);
         if(Huds.TryGetValue(id,out var hud))
             hud.Update(view,Status.Text+" · "+EventStatus.Text);
-        if(activePanel==id) LiveInspector.Update(view);
+        if(activePanel==id)
+        {
+            LiveInspector.Update(view);
+            UpdateOperatorTrend(view);
+        }
+    }
+    private void UpdateOperatorTrend(JsonElement view)
+    {
+        var config=view.Get("config");
+        var owner=LiveInspector.Owner;
+        if(!StatisticPanel.IsBossScope(config))
+        {
+            OperatorTrend.Bind(trendModel);
+            OperatorTrend.SetOperatorScope("");
+            OperatorTrend.SetOwner(owner);
+            return;
+        }
+        bool effective=config.Bool("effective_only");
+        var model=effective ? bossEffectiveTrendModel : bossTrendModel;
+        OperatorTrend.Bind(model);
+        OperatorTrend.SetOperatorScope(effective ? "首领有效伤害" : "首领伤害");
+        bool hasPoints=view.Bool("boss_damage_available") && owner!=null &&
+            model.Points.Any(point=>point.Operators.TryGetValue(owner,out var rate) && rate.HasValue);
+        OperatorTrend.SetOwner(hasPoints ? owner : null);
     }
     private void RefreshLiveAvailability()
     {

@@ -9,6 +9,7 @@ distinct client statistic entries, not transient entities.
 from collections import deque
 from math import isclose, isfinite
 
+from boss_catalog import classify_boss
 from source_classification import classify_unmapped_source
 
 # Native DamageType values used by the verified 2.7.91 event probe.
@@ -18,6 +19,110 @@ DAMAGE_TYPE_KEYS = ('physical', 'arts', 'elemental', 'true')
 ENEMY_STATE_KINDS = frozenset({
     'enemy_enter', 'enemy_hp', 'enemy_fake_death', 'enemy_reborn', 'enemy_finish',
 })
+
+
+class BossDamage:
+    """Target-scoped damage for one operator, including attributed summons."""
+
+    def __init__(self):
+        self.total = self.overkill = 0.0
+        self.by_type = dict.fromkeys(DAMAGE_TYPE_KEYS, 0.0)
+        self.overkill_by_type = dict.fromkeys(DAMAGE_TYPE_KEYS, 0.0)
+        self.typed = self.overkill_known = True
+        self.overkill_reason = None
+        self.skill = self.skill_overkill = 0.0
+        self.before = self.after = 0.0
+        self.pairs = 0
+        self.mitigation_known = True
+        self.recent = deque()
+        self.active = self.active_end = 0.0
+
+    def hit(self, when, amount, kind, overkill, reason, skill, before, after):
+        self.total += amount
+        self.typed &= kind is not None
+        self.overkill_known &= overkill is not None
+        if overkill is None:
+            self.overkill_reason = reason
+        excess = overkill or 0.0
+        self.overkill += excess
+        if kind is not None:
+            self.by_type[kind] += amount
+            self.overkill_by_type[kind] += excess
+        if skill:
+            self.skill += amount
+            self.skill_overkill += excess
+        if before is not None:
+            self.before += before
+            self.after += after
+            self.pairs += 1
+        elif amount > 0:
+            self.mitigation_known = False
+        self.recent.append((when, kind, amount, excess))
+        if amount > 0:
+            self.active += when + 1.5 - max(when, self.active_end)
+            self.active_end = when + 1.5
+
+    def result(self, start, end, *, known, rate_known, skill_known, mitigation_known, reason):
+        recent_start = max(start, end - 5)
+        while self.recent and self.recent[0][0] < recent_start:
+            self.recent.popleft()
+        recent = [hit for hit in self.recent
+                  if (hit[0] > recent_start or recent_start == start) and hit[0] <= end]
+        active = max(0.0, self.active - max(0.0, self.active_end - end))
+        duration = end - recent_start
+        recent_known = rate_known and duration > 0
+        effective_known = known and self.overkill_known
+        effective_skill_known = skill_known and effective_known
+        recent_by_type = dict.fromkeys(DAMAGE_TYPE_KEYS, 0.0)
+        if recent_known and self.typed:
+            for _, kind, amount, _ in recent:
+                recent_by_type[kind] += amount / duration
+        observed_rate = ((1 - self.after / self.before) * 100 if self.before > 0 else None)
+        mitigation_complete = (known and mitigation_known and self.mitigation_known
+                               and observed_rate is not None)
+        return {
+            'damage': self.total if known else None,
+            'observed_damage': self.total if known else None,
+            'damage_by_type': dict(self.by_type) if known and self.typed else {},
+            'types_available': known and self.typed,
+            'types_stale': not known,
+            'counter_snapshot_complete': known,
+            'event_coverage_complete': known,
+            'event_coverage_end': end,
+            'recent_damage': sum(hit[2] for hit in recent) / duration if recent_known else None,
+            'recent_damage_by_type': recent_by_type if recent_known and self.typed else {},
+            'recent_damage_window': (recent_start, end) if recent_known else None,
+            'engagement_damage': self.total / active if known and active > 0 else None,
+            'active_damage': active if known else None,
+            'overkill_damage': self.overkill if effective_known else None,
+            'recent_overkill_damage': (sum(hit[3] for hit in recent)
+                                       if recent_known and effective_known else None),
+            'overkill_coverage_complete': effective_known,
+            'overkill_type_complete': effective_known and self.typed,
+            'overkill_damage_by_type': (dict(self.overkill_by_type)
+                                       if effective_known and self.typed else None),
+            'overkill_unknown_reason': None if effective_known else reason or self.overkill_reason,
+            'effective_damage': max(0.0, self.total - self.overkill) if effective_known else None,
+            'skill_damage': self.skill if skill_known else None,
+            'non_skill_damage': self.total - self.skill if skill_known else None,
+            'skill_damage_effective': max(0.0, self.skill - self.skill_overkill)
+                                      if effective_skill_known else None,
+            'non_skill_damage_effective': max(0.0, self.total - self.skill - self.overkill + self.skill_overkill)
+                                          if effective_skill_known else None,
+            'skill_split_complete': skill_known,
+            'skill_split_effective_complete': effective_skill_known,
+            'skill_split_reason': None if skill_known else reason or '技能事件覆盖不完整',
+            'mitigation_rate': observed_rate if mitigation_complete else None,
+            'mitigation_before': self.before if mitigation_complete else None,
+            'mitigation_after': self.after if mitigation_complete else None,
+            'mitigation_unknown_reason': (None if mitigation_complete else reason or
+                                          ('首领命中缺少同次命中的公式前后值' if self.total > 0
+                                           else '尚无可核对的首领公式前后伤害')),
+            'observed_mitigation_rate': observed_rate,
+            'observed_mitigation_before': self.before if observed_rate is not None else None,
+            'observed_mitigation_after': self.after if observed_rate is not None else None,
+            'mitigation_matched_hits': self.pairs,
+        }
 
 
 class Statistics:
@@ -100,6 +205,35 @@ class Statistics:
         # Per-event overkill is split by the same skill window as its damage.
         self.skill_overkill = {}
         self.non_skill_overkill = {}
+        self.boss_damage = None
+        self.boss_event_end = None
+        self.boss_observed_from = None
+        self.boss_target_unknown = set()
+        self.boss_settlement_totals = {}
+        self.boss_damage_incomplete = False
+
+    def observe_boss_damage(self, *, complete):
+        if self.boss_damage is None:
+            self.boss_damage = {}
+        self.boss_damage_incomplete |= not complete
+
+    def _record_boss_damage(self, source, owner, when, target, amount, damage_type,
+                            overkill, reason=None, before=None, after=None):
+        if self.boss_damage is None:
+            return
+        if isinstance(target, str) and target.startswith(('char_', 'token_')):
+            return
+        if source is not None:
+            self.boss_settlement_totals[source] = self.boss_settlement_totals.get(source, 0.0) + amount
+        is_boss = classify_boss(target)
+        if is_boss is None and amount > 0:
+            self.boss_target_unknown.add(owner)
+        if is_boss:
+            meter = self.boss_damage.setdefault(owner, BossDamage())
+            pair = self._mitigation_pair(amount, before, after)
+            kind = NATIVE_DAMAGE_TYPES.get(damage_type) if type(damage_type) is int else None
+            meter.hit(when, amount, kind, overkill, reason,
+                      owner in self.skill_active, before if pair else None, after if pair else None)
 
     @staticmethod
     def _time(value):
@@ -370,6 +504,12 @@ class Statistics:
             if not complete:
                 self.event_coverage_broken = True
             self._close_skill_windows(end_time, battle_end=complete)
+
+    def mark_boss_watermark(self, game_time):
+        if self.boss_damage is not None:
+            if self.boss_observed_from is None:
+                self.boss_observed_from = game_time
+            self.boss_event_end = game_time
 
     def _skill_active_seconds(self, owner):
         end = (self.event_coverage_end if self.event_coverage_end is not None
@@ -763,6 +903,8 @@ class Statistics:
                 self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
                 if amount > 0 and not friendly:
                     self.mitigation_unattributed_burst = True
+                if classify_boss(target) is not False:
+                    self.boss_damage_incomplete = True
                 return
             if not friendly and (amount > 0 or mitigation_before is not None
                                  or mitigation_after is not None):
@@ -772,6 +914,8 @@ class Statistics:
                 'added_settlement': 0.0,
             })
             burst_overkill = max(0.0, amount - actual)
+            self._record_boss_damage(source, attributed, game_time, target, amount, 5, burst_overkill,
+                                     before=mitigation_before, after=mitigation_after)
             entry['actual'] += actual
             entry['overkill'] += burst_overkill
             entry['settlement'] += amount
@@ -821,6 +965,9 @@ class Statistics:
                 hp_after=hp_after, killed=killed, target_type=target_type,
                 damage_type=damage_type, cancel_reason=cancel_reason,
                 shield_absorbed=shield_absorbed)
+            self._record_boss_damage(
+                source, owner, game_time, target, amount, damage_type,
+                overkill if known else None, reason, mitigation_before, mitigation_after)
             if known:
                 if killed and target_instance:
                     self.last_elemental.pop(target_instance, None)
@@ -895,10 +1042,44 @@ class Statistics:
             baseline += fraction * (after[1][kind] - baseline)
         return (history[-1][1][kind] - baseline) / duration
 
+    def _boss_row(self, owner, registered, row):
+        end = self.boss_event_end
+        reason = None
+        if self.event_coverage_broken or self.boss_damage_incomplete or self.all_engagement_unknown:
+            reason = '首领伤害事件覆盖不完整'
+        elif end != self.now:
+            reason = '等待与当前累计同帧的伤害事件'
+        elif owner in self.boss_target_unknown:
+            reason = '部分伤害目标的首领身份未知'
+        elif owner in self.engagement_incomplete or any(
+            source in self.incoming_damage_sources and source not in self.settled_damage_sources
+            for source in registered
+        ):
+            reason = '部分伤害事件缺失'
+        elif not row['counter_snapshot_complete'] or any(
+            not isclose(self.boss_settlement_totals.get(source, 0.0),
+                        self.sources[source]['values']['damage'], rel_tol=1e-6, abs_tol=0.01)
+            for source in registered
+        ):
+            reason = '已捕获伤害与原生累计尚未对齐'
+        meter = self.boss_damage.get(owner)
+        if not registered and meter is None and reason is None:
+            reason = '尚无可核对的原生累计'
+        meter = meter or BossDamage()
+        observed_from = self.start_time if self.boss_observed_from is None else self.boss_observed_from
+        scoped = meter.result(
+            observed_from, end if end is not None else observed_from,
+            known=reason is None, rate_known=reason is None and self.end_time is None
+            and self.event_coverage_end is None,
+            skill_known=reason is None and row['skill_coverage_complete'],
+            mitigation_known=not self.mitigation_probe_incomplete, reason=reason)
+        return scoped, reason
+
     def result(self):
         """Return per-owner values and explicit coverage; unknown is None."""
         owners = set(self.owners.values())
         rows = {}
+        boss_reasons = set()
         for owner in owners:
             sources = [s for s, o in self.owners.items() if o == owner and s in self.sources]
             registered = [s for s, o in self.owners.items() if o == owner]
@@ -1056,6 +1237,10 @@ class Statistics:
             row['skill_split_complete'] = skill_known and covers_total
             row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason
+            if self.boss_damage is not None:
+                row['boss_damage'], boss_reason = self._boss_row(owner, registered, row)
+                if boss_reason:
+                    boss_reasons.add(boss_reason)
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())
@@ -1071,6 +1256,9 @@ class Statistics:
             'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                       else self.end_time if self.event_coverage else None),
         }
+        if self.boss_damage is not None:
+            result['boss_damage_available'] = True
+            result['boss_damage_reason'] = ' · '.join(sorted(boss_reasons))
         if self.enemy_entry_start_frame is not None:
             result['enemy_entry'] = {
                 'complete': not (self.enemy_entry_incomplete or self.event_coverage_broken),

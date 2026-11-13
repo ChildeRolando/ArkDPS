@@ -1,4 +1,4 @@
-"""Paired elemental settlements flow through the mitigation accounting."""
+"""Paired elemental settlements share mitigation and boss accounting."""
 
 import pytest
 
@@ -17,6 +17,7 @@ def battle(host=100, summon=80):
     stats.snapshot(0, {key: {'damage': 0, 'healing': 0} for key in stats.owners})
     stats.snapshot(1, {'host': {'damage': host, 'healing': 0},
                        'summon': {'damage': summon, 'healing': 0}})
+    stats.observe_boss_damage(complete=True)
     return stats
 
 
@@ -36,7 +37,9 @@ def test_paired_bursts_include_supplement_without_changing_source_reconciliation
     s.event('bar', 1, 'summon', 'elemental_bar', 20, target_instance='supplement')
     burst(s, 'supplement')
     burst(s, 'supplement')
+    s.mark_boss_watermark(1)
     row = s.result()['rows']['operator']
+    boss = row['boss_damage']
 
     assert row['damage'] == 240
     assert row['effective_damage'] == 225
@@ -44,11 +47,18 @@ def test_paired_bursts_include_supplement_without_changing_source_reconciliation
     assert row['observed_mitigation_before'] == 365
     assert row['observed_mitigation_after'] == 240
     assert row['mitigation_matched_hits'] == 3
+    assert boss['observed_mitigation_before'] == 240
+    assert boss['observed_mitigation_after'] == 140
+    assert boss['mitigation_matched_hits'] == 2
     if complete:
         assert row['mitigation_rate'] == pytest.approx((1 - 240 / 365) * 100)
+        assert boss['damage'] == 140
+        assert boss['effective_damage'] == 125
+        assert boss['mitigation_rate'] == pytest.approx((1 - 140 / 240) * 100)
     else:
         assert row['mitigation_rate'] is None
         assert row['mitigation_unknown_reason'] == '公式后伤害与本局累计不一致'
+        assert boss['mitigation_rate'] is None
 
 
 @pytest.mark.parametrize('before, after', [(None, None), (80, None), (80, 50)])
@@ -56,23 +66,28 @@ def test_unpaired_burst_keeps_full_mitigation_unknown_and_retains_matched_subset
     s = battle(host=60, summon=80)
     burst(s, 'direct', source='summon', amount=80, actual=75, before=160, after=80)
     burst(s, 'unpaired', source='host', before=before, after=after)
+    s.mark_boss_watermark(1)
     row = s.result()['rows']['operator']
-    assert row['damage'] == 140
-    assert row['mitigation_rate'] is None
-    assert row['observed_mitigation_rate'] == 50
-    assert row['mitigation_matched_hits'] == 1
+    for scope in (row, row['boss_damage']):
+        assert scope['damage'] == 140
+        assert scope['mitigation_rate'] is None
+        assert scope['observed_mitigation_rate'] == 50
+        assert scope['mitigation_matched_hits'] == 1
 
 
 def test_unattributed_positive_burst_leaves_team_scope_unverified_without_counting_its_pair():
     s = battle(host=0, summon=80)
     burst(s, 'direct', source='summon', amount=80, actual=75, before=160, after=80)
     burst(s, 'unattributed', target=NORMAL)
+    s.mark_boss_watermark(1)
     row = s.result()['rows']['operator']
     assert row['damage'] == 80
     assert row['mitigation_rate'] is None
     assert '元素爆条' in row['mitigation_unknown_reason']
     assert row['observed_mitigation_rate'] == 50
     assert row['mitigation_matched_hits'] == 1
+    assert row['boss_damage']['damage'] == 80
+    assert row['boss_damage']['mitigation_rate'] == 50
 
 
 def test_wire_burst_pair_reconciles_with_explicit_source_and_retries_once():
@@ -90,3 +105,4 @@ def test_wire_burst_pair_reconciles_with_explicit_source_and_retries_once():
     assert row['effective_damage'] == 50
     assert row['mitigation_rate'] == 25
     assert row['mitigation_matched_hits'] == 1
+    assert row['boss_damage']['mitigation_rate'] == 25

@@ -233,6 +233,9 @@ public partial class StatisticPanel : UserControl
     internal JsonElement View => view;
     public StatisticPanel() { InitializeComponent(); Rows.ItemsSource=items; }
 
+    internal static bool IsBossScope(JsonElement config) =>
+        config.Text("category")=="damage" && config.Bool("boss_only");
+
     internal void ConfigureHud(Action? close=null)
     {
         if(IsHud) return;
@@ -443,13 +446,19 @@ public partial class StatisticPanel : UserControl
         view=value; updating=true;
         var config=value.Get("config");
         var share=SharePresentation.From(value);
+        bool bossScope=IsBossScope(config);
+        bool bossUnavailable=bossScope && !value.Bool("boss_damage_available");
+        string bossReason=bossScope ? value.Text("boss_damage_reason") : "";
+        if(bossUnavailable && bossReason.Length==0) bossReason="首领伤害数据不可用。";
         if(IsHud) ApplyHudSkin();
         Heading.Text=IsHud ? HudTitle(config) : value.Text("title");
         var knownShare=value.Text("share_scope")=="known";
         PanelKind.Text=IsHud ? share.Label : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
         PanelKind.Visibility=referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
         PanelKind.ToolTip=IsHud ? share.Description : null;
-        Heading.ToolTip=IsHud ? share.Description : null;
+        Heading.ToolTip=!IsHud ? null : bossScope
+            ? string.Join("\n",new[]{Heading.Text,bossReason,share.Description}.Where(text=>text.Length>0))
+            : share.Description;
         HudClose.Visibility=IsHud && CloseRequested!=null ? Visibility.Visible : Visibility.Collapsed;
         Rows.ItemTemplate=(DataTemplate)FindResource(IsHud ? "HudRow" : referenceStyle ? "ReferenceRow" : "FullRow");
         TableHeader.Visibility=IsHud||referenceStyle ? Visibility.Collapsed : Visibility.Visible;
@@ -462,15 +471,19 @@ public partial class StatisticPanel : UserControl
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
             ? Visibility.Visible : Visibility.Collapsed;
+        BossOnly.IsChecked=config.Bool("boss_only");
+        BossOnly.Visibility=!IsHud && category=="damage" ? Visibility.Visible : Visibility.Collapsed;
         // The engagement column depends on event observation. Never leave it as a
         // silently blank column: show the reason and a retry/settings entry while
         // still allowing a switch back to the five-second window.
         var rateBasis=config.Text("rate_basis");
         var isEngagement=category!="shield" && rateBasis=="engagement";
         var reason=value.Text("rate_reason");
-        var action=isEngagement ? value.Text("rate_action") : "";
-        RateNotice.Text=reason;
-        RateNotice.Visibility=isEngagement && reason.Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        var action=isEngagement && !bossUnavailable ? value.Text("rate_action") : "";
+        RateNotice.Text=string.Join(" · ",new[]{IsHud && bossUnavailable ? "" : bossReason,
+            isEngagement && !bossUnavailable ? reason : ""}
+            .Where(text=>text.Length>0).Distinct());
+        RateNotice.Visibility=RateNotice.Text.Length>0 ? Visibility.Visible : Visibility.Collapsed;
         RateNoticePanel.Visibility=RateNotice.Visibility;
         RateAction.Content=value.Text("rate_action_label");
         RateAction.Visibility=isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
@@ -545,7 +558,8 @@ public partial class StatisticPanel : UserControl
                 if(index!=i) items.Move(index,i);
             }
         for(int i=0;i<items.Count;i++) items[i].SetRank(i+1);
-        Empty.Text=value.Text("empty_text"); Empty.Visibility=items.Count==0 ? Visibility.Visible : Visibility.Collapsed;
+        Empty.Text=bossUnavailable ? bossReason : value.Text("empty_text");
+        Empty.Visibility=items.Count==0 && (!bossUnavailable || IsHud) ? Visibility.Visible : Visibility.Collapsed;
         updating=false;
     }
 
@@ -561,6 +575,7 @@ public partial class StatisticPanel : UserControl
             _=>"溢出总伤",
         };
         if(recent) metric="近5秒"+metric;
+        if(IsBossScope(config)) metric="仅首领·"+metric;
         if(category=="shield") return metric;
 
         string window=config.Text("rate_basis") switch
@@ -585,7 +600,8 @@ public partial class StatisticPanel : UserControl
         ["category"]=((ComboBoxItem)Category.SelectedItem).Tag,
         ["ranking"]=((ComboBoxItem)Ranking.SelectedItem).Tag,
         ["rate_basis"]=Category.SelectedIndex==2 ? "recent_5s" : ((ComboBoxItem)Rate.SelectedItem).Tag,
-        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0
+        ["effective_only"]=EffectiveOnly.IsChecked==true&&Category.SelectedIndex==0,
+        ["boss_only"]=BossOnly.IsChecked==true
     };
     internal void SetConfigurationAvailable(bool available)
     {
@@ -602,19 +618,18 @@ public partial class StatisticPanel : UserControl
                 Select(Ranking,config.Text("ranking"));
                 Select(Rate,config.Text("rate_basis"));
                 EffectiveOnly.IsChecked=config.Bool("effective_only");
+                BossOnly.IsChecked=config.Bool("boss_only");
             }
             finally{updating=false;}
         }
-        Category.IsEnabled=EffectiveOnly.IsEnabled=DuplicateButton.IsEnabled=available;
+        Category.IsEnabled=EffectiveOnly.IsEnabled=BossOnly.IsEnabled=DuplicateButton.IsEnabled=available;
         Ranking.IsEnabled=Rate.IsEnabled=available && hasRate;
         DeleteButton.IsEnabled=available && deleteAvailable;
     }
-    private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e)
-    {
-        if(updating || !configurationAvailable || Command==null || Category.SelectedItem==null || Ranking.SelectedItem==null || Rate.SelectedItem==null) return;
-        await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});
-    }
-    private async void EffectiveChanged(object sender,RoutedEventArgs e)
+    private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e) => await CommitConfiguration();
+    private async void EffectiveChanged(object sender,RoutedEventArgs e) => await CommitConfiguration();
+    private async void FilterChanged(object sender,RoutedEventArgs e) => await CommitConfiguration();
+    private async Task CommitConfiguration()
     {
         if(updating||!configurationAvailable||Command==null||Category.SelectedItem==null||Ranking.SelectedItem==null||Rate.SelectedItem==null) return;
         await Command(IsHistory ? "history_config" : "panel_update",new(){["config"]=Configuration()});

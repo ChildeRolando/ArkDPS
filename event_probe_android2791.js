@@ -223,6 +223,7 @@ const unknownSources=new Set();
 const engagementUnknownSources=new Set();
 let shieldUnknown=false;
 let damageUnknown=false;
+let bossDamageUnknown=false;
 let engagementUnknown=false;
 let skillUnknown=false;
 // Recoverable unattributable callbacks are counted, not escalated globally.
@@ -416,6 +417,7 @@ function refreshEnemyEntryFrame(frame) {
   enemyPhaseUnknown=false;
   enemyHpWrites.clear();
   enemyStateUnknown=false;
+  bossDamageUnknown=false;
  }
  enemyEntryFrame=frame;
 }
@@ -1362,6 +1364,8 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
         const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence);
         noteUnpairedDamage(this,event,type);
        }catch(e){fatal=String(e);}
+      }else if((!this.source||owned)&&amount>0&&fp(this.mod.add(0x48))!==0){
+       bossDamageUnknown=true;
       }
       return;
      }
@@ -1390,7 +1394,9 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
        const target=hit?hit.target:this.target;
        if(target&&!target.isNull())evidence=nonlethalEvidence(target);
       }
-      if(evidence&&damageInstance)evidence.target_instance=damageInstance;
+      const damageTarget=hit?hit.target:this.target;
+      evidence={target:targetKey(damageTarget),target_instance:damageInstance,
+       target_type:targetType,damage_type:type,...evidence};
       if(evidence&&evidence.real_delta===0&&evidence.hp_before===evidence.hp_after
          &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1))return;
       try{
@@ -1488,6 +1494,7 @@ function enemyEntryQuality(frame){
 }
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
+  boss_damage_ready:true,boss_damage_unknown:bossDamageUnknown,
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
   skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
   enemy_damage_ready:enemyDamageReady,enemy_damage_unknown:enemyDamageUnknown,
