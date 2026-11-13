@@ -32,6 +32,11 @@ def enemy_state_event(event):
             result[key] = value
     if kind == 'enemy_hp' and 'hp_after' not in result:
         raise ValueError('enemy HP event has no settlement value')
+    maximum = event.get('enemy_max_hp')
+    if maximum is not None:
+        if kind != 'enemy_hp' or type(maximum) not in (int, float) or not 0 < maximum < math.inf:
+            raise ValueError('invalid enemy max HP')
+        result['enemy_max_hp'] = maximum
     reason = event.get('finish_reason')
     if kind == 'enemy_finish':
         if type(reason) is not int or reason == 0 or not -(1 << 31) <= reason < (1 << 31):

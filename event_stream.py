@@ -80,21 +80,26 @@ class EventStream:
         self.stop()
         raise StreamGap(message)
 
-    def accept(self, *, session, sequence, frame, game_time, source, kind, amount,
+    def accept(self, verified_skill_end_owner=None, /, *, session, sequence, frame,
+               game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
                cancel_reason=None, shield_absorbed=None, target_instance=None,
+               target_uid=None, enemy_damage_owner=None,
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
+               skill_method=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
-               enemy_entry_attributes=None, finish_reason=None):
+               enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None,
+               mitigation_before=None, mitigation_after=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
                    target, real_delta, hp_before, hp_after, killed,
                    target_type, damage_type, cancel_reason, shield_absorbed,
-                   target_instance, skill_key, skill_id, skill_name, skill_reason,
+                   target_instance, target_uid, enemy_damage_owner,
+                   skill_key, skill_id, skill_name, skill_reason, skill_method,
                    phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
-                   finish_reason)
+                   finish_reason, enemy_max_hp, mitigation_before, mitigation_after)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -117,6 +122,10 @@ class EventStream:
                 self.statistics.record_enemy_reborn(
                     frame, game_time, source, amount, target, target_instance,
                     hp_before, hp_after, phase_total_hp, phase_count, phase_from_birth)
+            elif kind == 'enemy_damage':
+                self.statistics.record_enemy_damage(
+                    source, enemy_damage_owner, damage_type, amount, target,
+                    target_uid, target_instance)
             elif kind not in ENEMY_STATE_KINDS:
                 self.statistics.event(
                     f'{self.session}:{sequence}', game_time, source, kind, amount,
@@ -125,7 +134,9 @@ class EventStream:
                     damage_type=damage_type, cancel_reason=cancel_reason,
                     shield_absorbed=shield_absorbed, target_instance=target_instance,
                     skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
-                    skill_reason=skill_reason)
+                    skill_reason=skill_reason, skill_method=skill_method,
+                    verified_skill_end_owner=verified_skill_end_owner,
+                    mitigation_before=mitigation_before, mitigation_after=mitigation_after)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':
@@ -134,6 +145,8 @@ class EventStream:
             elif kind == 'enemy_reborn':
                 self.statistics.mark_enemy_phase_unknown()
                 self.statistics.mark_enemy_state_unknown()
+            elif kind == 'enemy_damage':
+                self.statistics.observe_enemy_damage(complete=False)
             elif kind != 'hp_damage':
                 self._fail(f'event is invalid or cannot be attributed: {exc}')
         else:
@@ -143,7 +156,7 @@ class EventStream:
                         sequence, kind, frame, game_time, source, amount, target, target_instance,
                         hp_before=hp_before, hp_after=hp_after, phase_total_hp=phase_total_hp,
                         phase_count=phase_count, phase_from_birth=phase_from_birth,
-                        finish_reason=finish_reason)
+                        finish_reason=finish_reason, enemy_max_hp=enemy_max_hp)
                 except (ValueError, TypeError, OverflowError):
                     self.statistics.mark_enemy_state_unknown()
         self.sequence = sequence

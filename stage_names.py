@@ -39,16 +39,17 @@ class StageDisplay:
 
     @property
     def detail(self) -> str:
+        return f'原始关卡 ID：{self.raw or "—"} · {self.description}'
+
+    @property
+    def description(self) -> str:
         if self.raw is None:
-            return '原始关卡 ID：— · 未知关卡'
-        fields = [f'原始关卡 ID：{self.raw}']
+            return '未知关卡'
         if self.known:
-            fields.append(f'代号 {self.code or "—"} · 名称 {self.name or "—"} · 区域 {self.zone or "—"}')
+            detail = f'代号 {self.code or "—"} · 名称 {self.name or "—"} · 区域 {self.zone or "—"}'
         else:
-            fields.append('未收录于关卡表 · 显示兜底短码')
-        if self.warning:
-            fields.append(self.warning)
-        return ' · '.join(fields)
+            detail = '未收录于关卡表 · 显示兜底短码'
+        return f'{detail} · {self.warning}' if self.warning else detail
 
 
 class StageCatalog:

@@ -4,8 +4,9 @@ import pytest
 
 from collection_session import CollectionSession
 from connection import VersionStatus
-from collector import BattleChanged, UnsupportedVersion, SampleUnavailable
+from collector import BattleChanged, EnemyTelemetry, UnsupportedVersion, SampleUnavailable
 from test_event_capture import Collector as SnapshotCollector, Observer, event
+from test_enemy_lifecycle_telemetry import enemy
 
 
 class Collector(SnapshotCollector):
@@ -99,6 +100,35 @@ def test_enemy_page_shows_other_native_damage_separately_from_team_effective_dam
     current._attach_enemy(sample)
     assert sample['enemy']['last_point']['our_effective_damage'] == 1100
     assert sample['enemy']['non_team_native_damage'] == 500
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_enemy_page_matches_damage_to_the_exact_entered_uid(complete):
+    current, collector, _ = session()
+    reader = SimpleNamespace(poll_fast=lambda: {
+        'ok': True, 'fixed_frame': 10,
+        'enemies': [enemy('10'), enemy('20', eid='trap_box', roster_id=2)],
+    })
+    telemetry = EnemyTelemetry(reader, clock=lambda: 0, bootstrap=lambda _: True)
+    collector.enemy_telemetry = telemetry
+    collector.read_enemies = telemetry.sample
+    sample = {
+        'session': 'scope', 'frame': 10, 'game_time': 1.0,
+        'statistics': {
+            'rows': {'char_a': {'damage': 500, 'effective_damage': 400}},
+            'enemy_state': {'complete': True, 'start_frame': 10, 'events': []},
+            'enemy_damage': {'complete': complete, 'by_uid': {
+                '10': {'eid': 'enemy_a', 'amount': 20.0},
+                '20': {'eid': 'trap_box', 'amount': 7.0},
+                '30': {'eid': 'trap_box', 'amount': 100.0},
+            }},
+        },
+    }
+    current._attach_enemy(sample)
+    assert sample['enemy']['damage_scope'] == 'entered'
+    point = sample['enemy']['last_point']
+    assert point['our_effective_damage'] == 27
+    assert point['our_damage_complete'] is complete
 
 
 def test_default_entry_observes_after_certification_before_locating():

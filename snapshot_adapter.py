@@ -292,14 +292,14 @@ class BattleStatisticsAdapter:
             self.event_stream.accept(**event)
             return
         source = event.get('source')
-        if kind in ('hp_damage', 'skill_start', 'skill_end') and self.event_stream.closed:
+        supplemental = kind in ('hp_damage', 'skill_start', 'skill_end', 'enemy_damage')
+        if supplemental and self.event_stream.closed:
             # Supplemental evidence may still be in flight after authoritative
             # coverage ended. Drop it without raising again.
             return
         # Target-side HP evidence is supplemental. An unattributable HP record
         # must not tear down the authoritative damage/engagement stream; the
         # ordered receiver drops it while advancing the shared sequence.
-        supplemental = kind in ('hp_damage', 'skill_start', 'skill_end')
         if not supplemental and kind != 'elemental_burst' and (
                 not isinstance(source, str) or not source):
             self.event_stream.stop()
@@ -311,15 +311,25 @@ class BattleStatisticsAdapter:
             self.event_stream.stop()
             raise StreamGap('event source is ambiguous')
         owner = self.owner_map.owners.get(source) if source is not None else None
+        if kind == 'enemy_damage':
+            self.event_stream.accept(
+                enemy_damage_owner=owner if source not in blocked and owner not in blocked else None,
+                **event)
+            return
+        verified_skill_end_owner = None
         if owner is not None and source not in self.statistics.owners:
             can_register = not (source in blocked or owner in blocked)
             if not can_register and not supplemental:
                 self.event_stream.stop()
                 raise StreamGap('event source cannot be registered')
-            if can_register and not self._register(source, owner):
+            if can_register and kind == 'skill_end':
+                # A character-finish callback may have no matching start or
+                # native counter. Resolve it without creating a counter source.
+                verified_skill_end_owner = owner
+            elif can_register and not self._register(source, owner):
                 self.event_stream.stop()
                 raise StreamGap('event source cannot be registered')
-        self.event_stream.accept(**event)
+        self.event_stream.accept(verified_skill_end_owner, **event)
 
     def _register(self, cid: str, owner: str) -> bool:
         if cid in self.owner_map.owners and self.owner_map.owners[cid] != owner:

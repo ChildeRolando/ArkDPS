@@ -84,6 +84,25 @@ def test_event_zero_and_partial_coverage_and_summon_sources_round_trip(tmp_path)
     assert history.get(value.battle_id).records[0].to_dict() == data
 
 
+def test_signed_formula_rate_and_optional_legacy_fields_round_trip(tmp_path):
+    history = BattleHistory(tmp_path)
+    data = record().to_dict()
+    row = data['statistics']['rows']['a']
+    fields = {'mitigation_before': 40., 'mitigation_after': 50.,
+              'mitigation_rate': -25., 'mitigation_unknown_reason': None}
+    row.update(fields)
+    value = BattleRecord.from_dict(data)
+    history.save(value)
+    restored = history.get(value.battle_id).records[0].statistics['rows']['a']
+    assert {key: restored[key] for key in fields} == fields
+
+    legacy = record(1).to_dict()
+    for key in fields:
+        legacy['statistics']['rows']['a'].pop(key, None)
+    history.save(BattleRecord.from_dict(legacy))
+    assert not fields.keys() & history.get('battle:1').records[0].statistics['rows']['a'].keys()
+
+
 @pytest.mark.parametrize('damage', ['truncated', 'version', 'content', 'nan', 'wrong_id'])
 def test_one_bad_file_diagnosed_other_records_read_and_not_overwritten(tmp_path, damage):
     history = BattleHistory(tmp_path)
@@ -409,6 +428,42 @@ def test_journal_replay_preserves_old_evidence_and_verifies_new_intervals(tmp_pa
         write()
         with pytest.raises(ValueError, match='archive differs'):
             replay(path)
+
+
+def test_product_replay_accepts_legacy_rows_but_checks_recorded_formula_metrics(tmp_path):
+    from dataclasses import asdict
+    from capture_battles import replay
+    from capture_cli import json_value
+    collector, runtime = FakeCollector(), BattleRuntime()
+    records = [dict(kind='lifecycle_header', data=dict(feed=runtime.feed.id))]
+    runtime.record = lambda observation: records.append(
+        dict(kind='lifecycle_observation', data=asdict(observation)))
+    runtime.poll(collector)
+    published = runtime.display_sample()
+    records.append(dict(kind='published', data=published))
+    collector.lifecycle['battle'] = None
+    runtime.poll(collector)
+    archive, = runtime.sessions.pop_archives()
+    records.append(dict(kind='archive_ready', data=archive))
+    summary = runtime.sessions.live()
+    records.append(dict(kind='lifecycle_summary', data=summary))
+
+    for data in (published, archive, summary):
+        row = data['statistics']['rows']['a']
+        for key in tuple(row):
+            if 'mitigation' in key:
+                row.pop(key)
+    path = tmp_path / 'formula.jsonl'
+
+    def write():
+        path.write_text('\n'.join(json.dumps(r, default=json_value) for r in records), encoding='utf-8')
+
+    write()
+    assert replay(path)['archives'] == 1
+    archive['statistics']['rows']['a']['observed_mitigation_rate'] = 42
+    write()
+    with pytest.raises(ValueError, match='archive differs'):
+        replay(path)
 
 
 def test_reads_are_independent_and_duplicate_json_keys_are_diagnosed(tmp_path):

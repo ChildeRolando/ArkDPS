@@ -124,6 +124,30 @@ def test_occupied_live_slot_failure_is_rejected_but_empty_list_is_known():
         parse_results(results, layout, frame=1)
 
 
+def test_mixed_live_list_ignores_verified_enemy_without_reading_character_data():
+    ops, layout = build_operations(0x1000)
+    results = [None] * len(ops)
+    player = populated_player(results, layout, (0x100,))
+    data, key, _ = player['characters'][0]
+    results[data] = data_bytes('char_a', 11)
+    results[key] = string_bytes('char_a')
+    live = layout['live'][1]
+    results[live['items']] = struct.pack('<QQ', 0x200, 0x300)
+    name, namespace = live['classes'][0]
+    results[name] = b'Enemy\x00'
+    results[namespace] = b'Torappu.Battle\x00'
+    results[live['slots'][1][0]] = results[data]
+
+    snapshot = parse_results(results, layout, frame=2)
+    assert [entry.cid for entry in snapshot.entries] == ['char_a']
+    assert snapshot.present_unique_ids == {11}
+    assert snapshot.present_known
+
+    results[namespace] = None
+    with pytest.raises(RosterUnavailable, match='非空在场单位数据读取不完整'):
+        parse_results(results, layout, frame=2)
+
+
 @pytest.mark.parametrize('failure', ['data', 'short_data', 'key', 'invalid_key', 'lists'])
 def test_unread_live_npc_cannot_hide_shared_key_conflict(failure):
     from snapshot_adapter import BattleStatisticsAdapter, build_owner_map

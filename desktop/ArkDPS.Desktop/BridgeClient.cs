@@ -6,6 +6,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace ArkDPS.Desktop;
@@ -38,6 +39,21 @@ internal static class Json
         return item.ToString();
     }
     // Detail panels use whole numbers; compact list values keep their own form.
+    internal static string NumberUnits { get; set; } = "western";
+    internal static string CompactAmount(double? amount)
+    {
+        if (amount is not double value || !double.IsFinite(value)) return "—";
+        bool chinese = NumberUnits == "chinese";
+        double whole = Math.Round(Math.Abs(value));
+        double major = chinese ? 100_000_000 : 1_000_000;
+        double minor = chinese ? 10_000 : 1_000;
+        if (whole < minor) return Math.Round(value).ToString("0", CultureInfo.InvariantCulture);
+        double scaledMinor = Math.Round(value / minor, 1);
+        return whole >= major || Math.Abs(scaledMinor) >= major / minor
+            ? Math.Round(value / major, 1).ToString("0.#", CultureInfo.InvariantCulture) + (chinese ? "亿" : "M")
+            : scaledMinor.ToString("0.#", CultureInfo.InvariantCulture) + (chinese ? "万" : "K");
+    }
+
     public static string UiInt(this JsonElement value, string name)
     {
         var item = value.Get(name);
@@ -65,19 +81,33 @@ internal sealed class BridgeClient : IAsyncDisposable
 {
     public const int Version = 1;
     private const int MaxMessage = 32 * 1024 * 1024;
-    private static readonly UTF8Encoding ReplyEncoding = new(false, true);
+    private static readonly UTF8Encoding WireEncoding = new(false, true);
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
     // Bounded so a worker that stops answering cannot keep the UI alive:
     // quit must be answered in QuitSeconds, and the process must exit in ExitSeconds.
     internal const int QuitSeconds = 5;
     internal const int ExitSeconds = 10;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly Channel<string> replies = Channel.CreateBounded<string>(new BoundedChannelOptions(4)
+    {
+        SingleReader = true,
+        SingleWriter = true,
+    });
     private readonly Process process;
     private readonly StreamWriter log;
-    private bool transportUnusable;
+    private readonly Stream input;
+    private readonly Stream output;
+    private volatile bool closing;
+    private volatile BridgeTransportException? firstFault;
     private int sequence;
+    private int replayedId;
+    private string? replayedReply;
+    private long bytesRead;
     public string LogPath { get; }
     public JsonElement Hello { get; private set; }
     public bool Connected => !process.HasExited;
+    public bool CanSend => !closing && firstFault == null && Connected;
+
     public BridgeClient(string root, string python, string[] arguments)
     {
         string directory = Path.Combine(root, "runtime"); Directory.CreateDirectory(directory);
@@ -99,102 +129,189 @@ internal sealed class BridgeClient : IAsyncDisposable
         {
             if (!process.Start()) throw new IOException("无法启动 Python 采集进程");
             process.BeginErrorReadLine();
+            input = process.StandardInput.BaseStream;
+            output = process.StandardOutput.BaseStream;
+            _ = Task.Factory.StartNew(ReadReplies, CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default);
         }
         catch { log.Dispose(); throw; }
     }
-    public async Task ConnectAsync()
+    public async Task ConnectAsync(TimeSpan? timeoutOverride = null)
     {
-        var hello=await RequestAsync("hello");Hello=hello.Get("result");
+        var hello=await RequestAsync("hello",timeoutOverride:timeoutOverride);Hello=hello.Get("result");
     }
-    private async Task<string> ReadLineAsync(CancellationToken token)
+    private void ReadReplies()
     {
-        // A StreamReader character read can try to fill its caller's buffer
-        // after a full byte-buffer read, even when it already has the newline.
-        // The worker waits for the next command once that newline is sent.
-        var stream = process.StandardOutput.BaseStream;
-        using var result = new MemoryStream();
+        // Process redirects are synchronous Windows pipes. The reader owns the
+        // stream until shutdown and can drain a late reply while a retry is written.
         var chunk = new byte[4096];
+        using var line = new MemoryStream();
+        try
+        {
+            while (true)
+            {
+                int count = output.Read(chunk);
+                if (count == 0) throw new IOException("Python 采集进程已退出；日志：" + LogPath);
+                Interlocked.Add(ref bytesRead, count);
+                for (int offset = 0; offset < count;)
+                {
+                    int end = Array.IndexOf(chunk, (byte)'\n', offset, count - offset);
+                    int length = (end < 0 ? count : end) - offset;
+                    line.Write(chunk, offset, length);
+                    int size = (int)line.Length;
+                    if (size > 0 && line.GetBuffer()[size - 1] == '\r') size--;
+                    if (size > MaxMessage) throw new IOException("worker 响应长度越界");
+                    if (end < 0) break;
+                    string json = WireEncoding.GetString(line.GetBuffer(), 0, size);
+                    if (!replies.Writer.TryWrite(json)) throw new IOException("worker 发送了过多未请求的消息");
+                    line.SetLength(0);
+                    offset = end + 1;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            replies.Writer.TryComplete(ex);
+        }
+    }
+
+    private async Task<string> ReceiveReply(int id, CancellationToken token)
+    {
         while (true)
         {
-            int count = await stream.ReadAsync(chunk.AsMemory(), token);
-            if (count == 0) throw new IOException("Python 采集进程已退出；日志：" + LogPath);
-            int end = Array.IndexOf(chunk, (byte)'\n', 0, count);
-            int length = end < 0 ? count : end;
-            long size = result.Length + length;
-            bool trailingCr = length > 0 ? chunk[length - 1] == '\r'
-                : result.Length > 0 && result.GetBuffer()[(int)result.Length - 1] == '\r';
-            if (size - (trailingCr ? 1 : 0) > MaxMessage)
-                throw new IOException("worker 响应长度越界");
-            result.Write(chunk, 0, length);
-            if (end < 0) continue;
-            if (end != count - 1) throw new IOException("worker 发送了未请求的消息");
-            return ReplyEncoding.GetString(result.GetBuffer(), 0, (int)size - (trailingCr ? 1 : 0));
+            string json = await replies.Reader.ReadAsync(token).ConfigureAwait(false);
+            if (replayedId == 0 || json != replayedReply) return json;
+            // One retransmission can produce one duplicate reply. Match the
+            // original bytes before skipping it, so a mismatched ID still fails closed.
+            WriteDiagnostic("bridge", $"id={id} ignored_duplicate_id={replayedId}");
+            replayedId = 0;
+            replayedReply = null;
         }
     }
 
     public async Task<JsonElement> RequestAsync(string op, Dictionary<string, object?>? fields = null,
                                                 TimeSpan? timeoutOverride = null)
     {
-        await gate.WaitAsync();
+        await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if(transportUnusable)throw new IOException("worker 协议通道已失效；已拒绝后续命令");
-            var command = fields == null ? new Dictionary<string, object?>() : new(fields);
-            int id = ++sequence; command["version"] = Version; command["id"] = id; command["op"] = op;
-            string payload=JsonSerializer.Serialize(command);
-            if (Encoding.UTF8.GetByteCount(payload)>MaxMessage) throw new IOException("消息过大；导出内容超过 32 MiB");
-            using var timeout = new CancellationTokenSource(timeoutOverride ?? TimeSpan.FromSeconds(90));
-            bool requestMayHaveBeenSent = false;
-            try
-            {
-                requestMayHaveBeenSent = true;
-                await process.StandardInput.WriteLineAsync(payload.AsMemory(),timeout.Token);
-                await process.StandardInput.FlushAsync(timeout.Token);
-                using var document = JsonDocument.Parse(await ReadLineAsync(timeout.Token));
-                var reply = document.RootElement;
-                var responseVersion=reply.Get("version");var responseId=reply.Get("id");
-                if(responseVersion.ValueKind!=JsonValueKind.Number || !responseVersion.TryGetInt32(out int version) || version!=Version ||
-                   responseId.ValueKind!=JsonValueKind.Number || !responseId.TryGetInt32(out int responseSequence) || responseSequence!=id)
-                    throw new IOException("worker 协议版本或消息序号不匹配");
-                string kind=reply.Text("kind");var ok=reply.Get("ok");
-                if(ok.ValueKind==JsonValueKind.False)
-                {
-                    if(kind!="error" || reply.Get("error").ValueKind!=JsonValueKind.String)
-                        throw new IOException("worker 错误响应格式无效");
-                    throw new BridgeCommandException(reply.Text("error"));
-                }
-                if(ok.ValueKind!=JsonValueKind.True)throw new IOException("worker 成功响应缺少布尔 ok");
-                string expectedKind=op switch{"hello"=>"hello","snapshot"=>"snapshot","quit"=>"bye",_=>"state"};
-                if(kind!=expectedKind)throw new IOException("worker 响应类型不匹配");
-                if(op=="hello" && reply.Get("result").Text("transport")!="stdio-jsonl")
-                    throw new IOException("Python worker 握手失败；请检查 UI 与采集器版本。");
-                return reply.Clone();
-            }
-            catch(BridgeCommandException){throw;}
-            catch when(requestMayHaveBeenSent)
-            {
-                // A partial write, timeout, malformed reply or sequence mismatch
-                // makes it impossible to know which response belongs to which request.
-                transportUnusable = true;
-                throw;
-            }
+            if (firstFault is { } fault)
+                throw new BridgeTransportException("worker 协议通道已失效 · " + fault.Message, fault);
+            if (!CanSend)
+                throw new BridgeTransportException(closing ? "采集进程正在关闭" : "Python 采集进程已退出");
+            TimeSpan timeout = timeoutOverride ?? (op is "detect" or "export" ? TimeSpan.FromSeconds(90) : RequestTimeout);
+            return await ExchangeAsync(op, fields, timeout).ConfigureAwait(false);
         }
         finally { gate.Release(); }
+    }
+    private async Task<JsonElement> ExchangeAsync(string op, Dictionary<string, object?>? fields, TimeSpan timeout)
+    {
+        var command = fields == null ? new Dictionary<string, object?>() : new(fields);
+        int id = ++sequence;
+        command["version"] = Version;
+        command["id"] = id;
+        command["op"] = op;
+        byte[] request = WireEncoding.GetBytes(JsonSerializer.Serialize(command) + "\n");
+        if (request.Length - 1 > MaxMessage) throw new BridgeCommandException("消息过大 · 导出内容超过 32 MiB");
+        long started = Stopwatch.GetTimestamp();
+        long previousBytes = Interlocked.Read(ref bytesRead);
+        bool canReplay = op is not ("hello" or "quit") && Hello.Bool("request_replay");
+        bool retried = false;
+        string phase = "write";
+        try
+        {
+            TimeSpan firstWait = canReplay ? timeout / 2 : timeout;
+            string json;
+            while (true)
+            {
+                TimeSpan remaining = (retried ? timeout : firstWait) - Stopwatch.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero) throw new TimeoutException();
+                using var deadline = new CancellationTokenSource(remaining);
+                phase = "write";
+                Task write = Task.Run(() =>
+                {
+                    input.Write(request);
+                    input.Flush();
+                });
+                try
+                {
+                    await write.WaitAsync(deadline.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The pipe can still be unwinding during shutdown.
+                    _ = write.ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                    throw;
+                }
+                phase = "read";
+                try
+                {
+                    json = await ReceiveReply(id, deadline.Token).ConfigureAwait(false);
+                    break;
+                }
+                catch (OperationCanceledException) when (canReplay && !retried && deadline.IsCancellationRequested)
+                {
+                    retried = true;
+                    WriteDiagnostic("bridge", $"op={op} id={id} phase=read event=retry " +
+                        $"reply_bytes={Interlocked.Read(ref bytesRead) - previousBytes}");
+                }
+            }
+            phase = "validate";
+            using var document = JsonDocument.Parse(json);
+            var reply = document.RootElement;
+            var responseVersion = reply.Get("version");
+            var responseId = reply.Get("id");
+            if (responseVersion.ValueKind != JsonValueKind.Number || !responseVersion.TryGetInt32(out int version) || version != Version ||
+                responseId.ValueKind != JsonValueKind.Number || !responseId.TryGetInt32(out int responseSequence) || responseSequence != id)
+                throw new IOException("worker 协议版本或消息序号不匹配");
+            replayedId = retried ? id : 0;
+            replayedReply = retried ? json : null;
+            string kind = reply.Text("kind");
+            var ok = reply.Get("ok");
+            if (ok.ValueKind == JsonValueKind.False)
+            {
+                if (kind != "error" || reply.Get("error").ValueKind != JsonValueKind.String)
+                    throw new IOException("worker 错误响应格式无效");
+                throw new BridgeCommandException(reply.Text("error"));
+            }
+            if (ok.ValueKind != JsonValueKind.True) throw new IOException("worker 成功响应缺少布尔 ok");
+            string expectedKind = op switch { "hello" => "hello", "snapshot" => "snapshot", "quit" => "bye", _ => "state" };
+            if (kind != expectedKind) throw new IOException("worker 响应类型不匹配");
+            if (op == "hello" && reply.Get("result").Text("transport") != "stdio-jsonl")
+                throw new IOException("Python worker 握手失败；请检查 UI 与采集器版本。");
+            return reply.Clone();
+        }
+        catch (BridgeCommandException) { throw; }
+        catch (Exception ex)
+        {
+            double elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            Exception cause = ex is OperationCanceledException ? new TimeoutException("等待采集进程超时", ex) :
+                ex is ChannelClosedException { InnerException: { } pipeError } ? pipeError : ex;
+            string reason = cause is TimeoutException ? "等待采集进程超时" : cause.Message;
+            var fault = new BridgeTransportException(reason + $"（{op} #{id}）", cause);
+            firstFault = fault;
+            WriteDiagnostic("bridge", $"op={op} id={id} phase={phase} " +
+                $"elapsed_ms={elapsed:F0} request_bytes={request.Length} " +
+                $"reply_bytes={Interlocked.Read(ref bytesRead) - previousBytes} error={cause.GetType().Name}");
+            throw fault;
+        }
     }
     public async ValueTask DisposeAsync()
     {
         Exception? error=null;
+        closing = true;
         try
         {
-            if(!process.HasExited)
+            if (firstFault == null && Connected && gate.Wait(0))
             {
-                if(!transportUnusable)
+                try
                 {
-                    var bye=await RequestAsync("quit",timeoutOverride:TimeSpan.FromSeconds(QuitSeconds));
+                    var bye=await ExchangeAsync("quit",null,TimeSpan.FromSeconds(QuitSeconds)).ConfigureAwait(false);
                     if(bye.Text("kind")!="bye") error=new IOException("worker 退出确认缺失");
                 }
-                // On an uncertain stream, quit could consume stale/partial output.
-                // Closing stdin is the worker's documented EOF cleanup signal.
+                finally { gate.Release(); }
             }
         }
         catch(Exception ex){error=ex;}
@@ -207,21 +324,22 @@ internal sealed class BridgeClient : IAsyncDisposable
             {
                 // EOF is also a shutdown signal on UI crashes. Python joins its
                 // collector thread; never kill by name or abandon device cleanup.
-                try{process.StandardInput.Close();}catch(IOException ex){closeError=ex;}
+                var closeInput = Task.Run(input.Dispose);
                 // Wait for the process exit itself, not for EOF on the redirected
                 // stderr pipe: a grandchild that inherited that handle can keep the
                 // pipe open after the worker is already gone, and awaiting the pipe
                 // would then block the UI forever. Never use WaitForExitAsync here.
-                exited=await WaitForExitBoundedAsync(TimeSpan.FromSeconds(ExitSeconds));
+                exited=await WaitForExitBoundedAsync(TimeSpan.FromSeconds(ExitSeconds)).ConfigureAwait(false);
                 if(!exited)
                 {
                     string diagnostic="worker 未在 "+ExitSeconds+" 秒内退出；仅结束本进程持有的子进程 PID "+process.Id;
                     try{process.Kill();}catch(Exception ex){diagnostic+="；结束子进程失败："+ex.Message;}
-                    bool killed=await WaitForExitBoundedAsync(TimeSpan.FromSeconds(2));
+                    bool killed=await WaitForExitBoundedAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                     if(!killed) diagnostic+="；结束命令后仍未退出";
-                    WriteDiagnostic(diagnostic);
+                    WriteDiagnostic("exit",diagnostic);
                     error=new IOException(diagnostic+"；诊断日志："+LogPath,error);
                 }
+                if (closeInput.IsFaulted) closeError=closeInput.Exception?.GetBaseException();
             }
             finally
             {
@@ -231,8 +349,9 @@ internal sealed class BridgeClient : IAsyncDisposable
                     if(exit!=0)error=new IOException("采集进程退出码 "+exit+"；清理日志："+LogPath,error);
                 }
                 else error??=new IOException("采集进程退出未确认；诊断日志："+LogPath,closeError);
+                output.Dispose();
                 try{process.Dispose();}catch(InvalidOperationException){}
-                log.Dispose();
+                lock(log) log.Dispose();
             }
         }
         if(error!=null)throw error;
@@ -244,13 +363,16 @@ internal sealed class BridgeClient : IAsyncDisposable
         {
             long remaining=deadline-Environment.TickCount64;
             if(remaining<=0)return false;
-            await Task.Delay((int)Math.Min(100,remaining));
+            await Task.Delay((int)Math.Min(100,remaining)).ConfigureAwait(false);
         }
         return true;
     }
-    private void WriteDiagnostic(string message)
+    private void WriteDiagnostic(string section,string message)
     {
-        try{lock(log) log.WriteLine("[exit] "+DateTime.Now.ToString("O")+" "+message);}catch(ObjectDisposedException){}
+        try{lock(log) log.WriteLine($"[{section}] "+DateTime.Now.ToString("O")+" "+message);}
+        catch (ObjectDisposedException) {}
+        catch (IOException) {}
     }
 }
 internal sealed class BridgeCommandException(string message) : Exception(message);
+internal sealed class BridgeTransportException(string message, Exception? cause = null) : IOException(message, cause);

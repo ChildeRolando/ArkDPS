@@ -370,6 +370,20 @@ def test_process_lookup_requires_device_side_status(output, expected):
     assert MemCore._pid_for_known_package(channel)[1] == expected
 
 
+def test_lifecycle_adb_shell_cannot_read_desktop_protocol_stdin(monkeypatch):
+    import subprocess
+    from tools.enemy_health.memcore import MemCore
+
+    def run(args, **kwargs):
+        assert args == ['adb', '-s', 'serial', 'shell', 'pidof game']
+        assert kwargs['stdin'] == subprocess.DEVNULL
+        return subprocess.CompletedProcess(args, 0, stdout=b'123\n', stderr=b'')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    channel = SimpleNamespace(_require_adb=lambda: 'adb', adb_serial='serial', _NO_WINDOW=0)
+    assert MemCore._adb_result(channel, 'shell', 'pidof game').stdout == b'123\n'
+
+
 @pytest.mark.parametrize('output', ['', 'error: device offline', '123\n',
                                     '\nARKDPS_PID_QUERY:127\n',
                                     '\nARKDPS_PID_QUERY:0\n',

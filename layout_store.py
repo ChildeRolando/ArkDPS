@@ -3,8 +3,8 @@
 Version 1 is the detached :class:`panel_model.PanelCollection` document written
 by earlier builds (panels only). Version 2 adds GUI window geometry, one
 placement per HUD and the event-observation preference. Version 3 adds the
-application theme. Older documents migrate in memory and write version 3 on
-the next save.
+application theme and optional per-panel HUD styles. Older documents migrate in
+memory and write version 3 on the next save.
 
 A damaged or future-version file is never overwritten silently: it is moved to
 ``layout.json.corrupt-<timestamp>`` and the caller receives a warning plus the
@@ -20,16 +20,17 @@ import json
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from panel_model import PanelConfig
+from panel_model import DEFAULT_NUMBER_UNITS, NUMBER_UNITS, PanelConfig
 
 ROOT = Path(__file__).resolve().parent
 LAYOUT_VERSION = 3
-THEMES = ('lone-trail', 'contingency-contract', 'babel', 'near-light', 'il-siracusano', 'original')
+DEFAULT_THEME = 'lone-trail'
+THEMES = (DEFAULT_THEME, 'people', 'babel')
 DEFAULT_GUI = (960, 700)
 DEFAULT_GUI_MINIMUM = (440, 500)
 DEFAULT_HUD_MINIMUM = (350, 230)
@@ -96,6 +97,62 @@ class HudPlacement:
         return GuiGeometry(self.x, self.y, self.width, self.height)
 
 
+@dataclass(frozen=True)
+class HudStyle:
+    """User-adjustable HUD dimensions in device-independent pixels."""
+
+    title_font: float = 20
+    name_font: float = 15
+    number_font: float = 15
+    width: float = 484
+    row_height: float = 46
+    title_height: float = 44
+    portrait_size: float = 38
+    rank_width: float = 28
+    portrait_width: float = 52
+    name_width: float = 92
+    bar_width: float = 158
+    total_width: float = 78
+    rate_width: float = 76
+    share_width: float = 68
+    row_gap: float = 1
+    column_gap: float = 2
+    padding: float = 4
+
+    def __post_init__(self):
+        for field in fields(self):
+            key = field.name
+            value = getattr(self, key)
+            if key.endswith('_font'):
+                minimum, maximum = 6, 64
+            elif key == 'width':
+                minimum, maximum = 240, 2000
+            elif key == 'row_height':
+                minimum, maximum = 16, 160
+            elif key == 'title_height':
+                minimum, maximum = 20, 160
+            elif key == 'portrait_size':
+                minimum, maximum = 0, 128
+            elif key.endswith('_width'):
+                minimum, maximum = 0, 600
+            else:
+                minimum, maximum = 0, 48
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not minimum <= value <= maximum):
+                raise ValueError(f'HUD 样式的 {key} 必须在 {minimum} 到 {maximum} 之间')
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> 'HudStyle':
+        if not isinstance(raw, dict):
+            raise ValueError('HUD 样式必须是 JSON 对象')
+        if raw.keys() - {field.name for field in fields(cls)}:
+            raise ValueError('HUD 样式含未知字段')
+        return cls(**raw)
+
+
 def _geometry_fields(raw: dict, label: str) -> tuple[int, int, int, int]:
     values = []
     for key in ('x', 'y', 'width', 'height'):
@@ -119,11 +176,15 @@ class Layout:
     huds: tuple[HudPlacement, ...] = ()
     gui: GuiGeometry | None = None
     event_observation: bool = True
-    theme: str = 'lone-trail'
+    theme: str = DEFAULT_THEME
+    number_units: str = DEFAULT_NUMBER_UNITS
+    hud_styles: tuple[tuple[str, HudStyle], ...] = ()
 
     def __post_init__(self):
         if self.theme not in THEMES:
             raise ValueError('未知皮肤')
+        if not isinstance(self.number_units, str) or self.number_units not in NUMBER_UNITS:
+            raise ValueError('未知数值单位')
         if not self.panels:
             raise ValueError('至少需要一个面板')
         ids = [panel.panel_id for panel in self.panels]
@@ -132,13 +193,18 @@ class Layout:
         hud_ids = [hud.panel_id for hud in self.huds]
         if len(hud_ids) != len(set(hud_ids)):
             raise ValueError('同一面板只能有一个 HUD')
+        style_ids = [panel_id for panel_id, _ in self.hud_styles]
+        if len(style_ids) != len(set(style_ids)) or set(style_ids) - set(ids):
+            raise ValueError('HUD 样式必须对应唯一的源面板')
 
     def to_dict(self) -> dict:
         return {'version': LAYOUT_VERSION, 'theme': self.theme,
                 'event_observation': bool(self.event_observation),
+                'number_units': self.number_units,
                 'gui': self.gui.to_dict() if self.gui else None,
                 'panels': [panel.to_dict() for panel in self.panels],
-                'huds': [hud.to_dict() for hud in self.huds]}
+                'huds': [hud.to_dict() for hud in self.huds],
+                'hud_styles': {panel_id: style.to_dict() for panel_id, style in self.hud_styles}}
 
     @classmethod
     def default(cls) -> 'Layout':
@@ -202,6 +268,29 @@ def _parse_huds(raw: object, panels: Sequence[PanelConfig],
     return tuple(placements.values())
 
 
+def _parse_hud_styles(raw: object, panels: Sequence[PanelConfig],
+                      warnings: list[str]) -> tuple[tuple[str, HudStyle], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        warnings.append('HUD 样式无效，已忽略')
+        return ()
+    known = {panel.panel_id for panel in panels}
+    styles = []
+    skipped = 0
+    for panel_id, style in raw.items():
+        if panel_id not in known:
+            skipped += 1
+            continue
+        try:
+            styles.append((panel_id, HudStyle.from_dict(style)))
+        except ValueError:
+            skipped += 1
+    if skipped:
+        warnings.append(f'已跳过 {skipped} 个无效 HUD 样式')
+    return tuple(styles)
+
+
 def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     """Return (layout, warnings, migrated_from); raises ValueError if unusable."""
     if not isinstance(raw, dict):
@@ -242,12 +331,18 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
         except ValueError as exc:
             warnings.append(f'GUI 窗口几何无效，已使用默认位置：{exc}')
     huds = _parse_huds(raw.get('huds'), panels, warnings)
-    theme = raw.get('theme', 'lone-trail')
+    hud_styles = _parse_hud_styles(raw.get('hud_styles'), panels, warnings)
+    theme = raw.get('theme', DEFAULT_THEME)
     if theme not in THEMES:
-        warnings.append('皮肤设置无效，已使用孤星')
-        theme = 'lone-trail'
+        warnings.append('已保存的皮肤不可用，已切换为孤星')
+        theme = DEFAULT_THEME
+    number_units = raw.get('number_units', DEFAULT_NUMBER_UNITS)
+    if not isinstance(number_units, str) or number_units not in NUMBER_UNITS:
+        warnings.append('数值单位设置无效，已使用 K / M')
+        number_units = DEFAULT_NUMBER_UNITS
     return Layout(panels=panels, huds=huds, gui=gui,
-                  event_observation=event, theme=theme), warnings, migrated_from
+                  event_observation=event, theme=theme,
+                  number_units=number_units, hud_styles=hud_styles), warnings, migrated_from
 
 
 class LayoutStore:

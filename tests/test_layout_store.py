@@ -58,6 +58,43 @@ def test_version_one_panel_collection_is_migrated(tmp_path):
     assert json.loads(path.read_text(encoding='utf-8'))['version'] == ls.LAYOUT_VERSION
 
 
+@pytest.mark.parametrize('theme', [
+    'contingency-contract', 'near-light', 'il-siracusano', 'original',
+    'unknown', None, {'id': 'people'},
+])
+def test_unavailable_theme_falls_back_without_discarding_layout(tmp_path, theme):
+    store = ls.LayoutStore(tmp_path / 'layout.json')
+    expected = ls.Layout(
+        panels=(panel('saved', category=Category.HEALING),),
+        huds=(ls.HudPlacement('saved', 10, 20, 400, 300, opacity=0.83, locked=True),),
+        gui=ls.GuiGeometry(50, 60, 1200, 800),
+        event_observation=False,
+        number_units='chinese',
+        hud_styles=(('saved', ls.HudStyle(name_font=21.5, width=700)),),
+    )
+    store.path.write_text(json.dumps(dict(expected.to_dict(), theme=theme)), encoding='utf-8')
+
+    loaded = store.load()
+    assert loaded.ok and loaded.backup is None and '孤星' in loaded.warning
+    assert loaded.layout == expected and loaded.layout.theme == 'lone-trail'
+
+    store.save(loaded.layout)
+    reloaded = store.load()
+    assert reloaded.ok and not reloaded.warning and reloaded.layout == expected
+
+
+def test_preexisting_babel_theme_loads_without_falling_back(tmp_path):
+    path = tmp_path / 'layout.json'
+    path.write_text(json.dumps({'version': 3, 'theme': 'babel', 'panels': [
+        panel('saved', category=Category.SHIELD).to_dict()]}), encoding='utf-8')
+
+    result = ls.LayoutStore(path).load()
+
+    assert result.ok and result.warning == ''
+    assert result.layout.theme == 'babel'
+    assert result.layout.panels == (panel('saved', category=Category.SHIELD),)
+
+
 def test_bare_panel_document_without_version_is_accepted_as_legacy(tmp_path):
     path = tmp_path / 'layout.json'
     path.write_text(json.dumps({'panels': [panel('a').to_dict()]}), encoding='utf-8')
@@ -121,6 +158,23 @@ def test_fully_invalid_panel_list_is_treated_as_damaged(tmp_path):
                     encoding='utf-8')
     result = ls.LayoutStore(path).load()
     assert not result.ok and result.layout == ls.Layout.default()
+
+
+def test_invalid_hud_styles_only_skip_affected_profiles(tmp_path):
+    path = tmp_path / 'layout.json'
+    path.write_text(json.dumps({
+        'version': 3,
+        'panels': [{'panel_id': 'one'}, {'panel_id': 'two'}],
+        'huds': [{'panel_id': 'two', 'x': 0, 'y': 0, 'width': 500, 'height': 200}],
+        'hud_styles': {'one': {'name_font': 22}, 'two': {'width': -10},
+                       'removed': {'padding': 8}},
+    }), encoding='utf-8')
+    result = ls.LayoutStore(path).load()
+
+    assert result.ok and result.backup is None
+    assert '2 个无效 HUD 样式' in result.warning
+    assert dict(result.layout.hud_styles) == {'one': ls.HudStyle(name_font=22)}
+    assert result.layout.huds[0].panel_id == 'two'
 
 
 def test_saved_hud_requires_a_matching_panel(tmp_path):

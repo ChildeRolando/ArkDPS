@@ -46,7 +46,7 @@ jobs:
           path: |
             runtime/ci-build/*.zip
             runtime/ci-build/*.sha256
-            runtime/ci-build/ArkDPS-win-x64-*/release.json
+            runtime/ci-build/ArkDPS-win-x64-*/metadata/release.json
             runtime/wpf-source/
             runtime/package-validation/
           if-no-files-found: warn

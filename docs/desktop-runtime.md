@@ -18,7 +18,11 @@
 
 依照 ARK-19 最新修正，当前始终是一对父子进程，因此使用重定向的 stdin/stdout；**不使用 Named Pipes、TCP 或第三方 IPC 依赖**。只有未来有独立 worker 生命周期或多客户端需求时才重新评估 Named Pipes。
 
-每行一个 UTF-8 JSON 对象（无 BOM），命令含整数 `version: 1`、递增 `id` 和 `op`。UI 串行化请求/响应；响应携带相同 version/id。不兼容版本（包括字符串/布尔版本）、越界消息或序号不符都拒绝，不维护兼容协议分支。单条上限 32 MiB；命令等待有超时，错误会标记“最后有效记录”，不冒充仍然实时。请求可能已发送后若遇超时、I/O、JSON 解码或序号/版本错误，UI 将通道标记为不可用并拒绝后续命令，不自动重放；不在失步流上发送 `quit`，而关闭 stdin 触发 worker 的 EOF 清理。收到完整、序号匹配的 worker `error` 响应不视为通道失步。
+每行一个 UTF-8 JSON 对象（无 BOM），命令含整数 `version: 1`、递增 `id` 和 `op`。UI 串行发送请求，按 version/id 核对回复。单条上限 32 MiB。收到完整、序号匹配的 `error` 时，只结束该请求，通道继续可用。
+
+WPF 在后台按字节写入命令，并用独立线程读取回复。ADB 子进程的标准输入连接到空设备，避免 ADB shell 读取桌面命令。worker 在握手中声明 `request_replay`，并缓存最近一条命令的原文和序列化回复。写入成功后等不到回复时，UI 最多用同一编号补发一次。worker 直接返回缓存回复，同一命令只执行一次。UI 会丢弃补发产生的一条完全相同的重复回复。
+
+最终超时、I/O 故障或协议校验失败会触发自动重连。UI 保留最后有效统计和已载入的战绩，先关闭旧 worker 的 stdin 完成清理，再启动新 worker。跨进程恢复不会补发结果未知的旧命令。自动重试用完后，可点击「重连观测者」继续。超时日志记录命令名、编号、读写阶段和字节数，便于与 worker 日志核对。
 
 | op / 响应 kind | 语义 |
 | --- | --- |
@@ -29,6 +33,10 @@
 | `quit` / `bye` | bye 只在采集清理完成后发送；清理失败返回 error，UI 等待退出并显示失败。 |
 
 `snapshot` 的面板视图还包含事件可用性字段（`rate_available`/`rate_reason`/`rate_hint`/`rate_action`/`rate_action_label`）和逐行速率分类（`rate_state`/`rate_text`/`rate_note`）。WPF 只在接敌口径下显示原因与入口；`retry` 调用既有 `rescan`（不重启应用），`settings` 导航到连接设置。字段语义由 [panel-model](panel-model.md#事件不可用时的接敌展示ark-22) 拥有。
+
+`details_by_owner` 使用与榜单行相同的详情投影，以归属干员 ID 索引。干员退出近期榜后仍可在固定详情中查看。历史详情读取选中战绩的完整面板视图。
+
+可选的 `live_analysis` 提供单个战局采样点、连续段标识、团队指标和各干员近期 DPS。团队近 5 秒 DPS 沿用含过量的近期速率，只有团队归属完整且可靠窗口一致时汇总。本局平均 DPS 使用已确认累计伤害除以游戏时间。观测峰值在本次采集内维护。WPF 按游戏秒保留最近 10 分钟，按连续段断开曲线，换局清空。该字段独立于历史记录和导出格式。
 
 stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。历史页是拉取式缓存：每次进入页面发送 `history_refresh`；采集会话每成功提交一条新战绩就推送一次 `history` 事件（仅 `result.written` 为真时），`serve` 在下一条 `snapshot` 前重新 `list_recent()`，所以打开的历史页也会自动出现新局。自动刷新保留当前选中副本、详情与筛选条件，不按轮询扫描目录；「刷新」按钮只作手动兜底。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
 
@@ -51,7 +59,7 @@ python tools/package_windows.py --output runtime/packages
 
 Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新的隔离目录；ZIP 拒绝路径穿越/符号链接/超大展开。Python `._pth` 仅白名单包内目录，不读系统 Python、用户 site-packages 或 `PYTHONPATH`。没有全局 pip install。
 
-`release.json` 同时登记 UI/worker/运行时/资源文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本；两端不一致明确拒绝。完整升级整个目录，不单独替换旧 worker。用户配置和历史不打进构建产物；已有配置可在退出应用后迁移到包内 `collector/runtime`，不要覆盖历史。运行目录必须可写；保护目录下会明确报错，而不是偷偷改存储位置。
+`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本；两端不一致明确拒绝。升级时解压新版到新目录，退出旧版后复制 `collector/runtime` 中的用户配置和历史。运行目录必须可写。
 
 ## 可复核验收
 

@@ -69,8 +69,34 @@ def test_enemy_lifecycle_events_share_the_damage_watermark_and_preserve_same_fra
         'enemy_entry_attributes'] == {'max_hp': 60_000}
 
 
+def test_enemy_max_hp_updates_are_preserved_independently_of_hp_and_damage():
+    capture = LiveEventCapture(None)
+    ingest(capture, 1, 0)
+    result = ingest(
+        capture, 2, 4, event(1, 'enemy_enter', hp_after=4_062.5,
+                             enemy_entry_attributes={'max_hp': 4_062.5}),
+        event(2, 'enemy_hp', hp_before=4_062.5, hp_after=4_062.5, enemy_max_hp=8_125),
+        event(3, 'enemy_hp', hp_before=4_062.5, hp_after=4_037.5),
+        event(4, 'damage', source='char_a', amount=25, target_instance='0x7000'),
+        damage=125)
+    state = result['enemy_state']
+    assert state['complete']
+    assert state['events'][0]['enemy_entry_attributes'] == {'max_hp': 4_062.5}
+    assert state['events'][1]['enemy_max_hp'] == 8_125
+    assert state['events'][1]['hp_before'] == state['events'][1]['hp_after'] == 4_062.5
+    assert 'enemy_max_hp' not in state['events'][2]
+    assert result['rows']['char_a']['observed_damage'] == 25
+    assert result['rows']['char_a']['damage'] == 125
+
+
 @pytest.mark.parametrize('invalid', [
     event(2, 'enemy_hp'),
+    event(2, 'enemy_hp', hp_after=0, enemy_max_hp=0),
+    event(2, 'enemy_hp', hp_after=0, enemy_max_hp=-1),
+    event(2, 'enemy_hp', hp_after=0, enemy_max_hp=True),
+    event(2, 'enemy_hp', hp_after=0, enemy_max_hp=float('inf')),
+    event(2, 'enemy_hp', hp_after=0, enemy_max_hp=float('nan')),
+    event(2, 'enemy_finish', hp_after=0, finish_reason=2, enemy_max_hp=100),
     event(2, 'enemy_hp', hp_after=True),
     event(2, 'enemy_hp', hp_after=float('nan')),
     event(2, 'enemy_finish', finish_reason=True),

@@ -199,10 +199,44 @@ def test_product_snapshot_events_final_revision_and_archive_have_one_id():
         assert archive['statistics']['rows']['char_a']['damage'] == 125
         assert archive['statistics']['rows']['char_a']['observed_damage'] == 20
         assert archive['statistics']['game_time'] == 1
+        assert archive['event_status'] == last['event_status'] == 'finished'
+        assert archive['event_error'] is None
         assert archive['metadata']['outcome'] == 'unknown'
     finally:
         session.close()
     assert calls.count('attach') == calls.count('detach') == 1
+
+
+@pytest.mark.parametrize('ending', ['scene_left', 'terminal_without_observer'])
+def test_missing_terminal_event_watermark_archives_a_gap_and_keeps_native_totals(ending):
+    session, collector, _, records = connected()
+    try:
+        session.read()
+        advance(session, collector)
+        assert session.read()['event_status'] == 'recording'
+        if ending == 'terminal_without_observer':
+            collector.state = 3
+            observer, session.observer = session.observer, None
+            try:
+                # Matching the last live frame alone cannot verify the event endpoint.
+                collector.damage = 125
+                terminal = session.read()
+                assert terminal['event_status'] == 'gap'
+            finally:
+                session.observer = observer
+        collector.state = 1
+        with pytest.raises(CaptureRetry):
+            session.read()
+        archive, = [data for kind, data in records if kind == 'archive_ready']
+        row = archive['statistics']['rows']['char_a']
+        assert row['damage'] == (120 if ending == 'scene_left' else 125)
+        assert row['observed_damage'] == 20
+        assert row['event_coverage_end'] == 1
+        assert not row['event_coverage_complete']
+        assert archive['event_status'] == 'gap'
+        assert archive['event_error'] == '未取得最终事件水位'
+    finally:
+        session.close()
 
 
 def test_same_map_clock_and_address_reuse_discards_old_event_queue_and_history_stays_pinned():
@@ -250,6 +284,102 @@ def test_transient_frame_failure_preserves_events_until_a_reliable_pair(monkeypa
         sample = session.read()
         assert sample['statistics']['rows']['char_a']['observed_damage'] == 20
         assert sample['event_status'] == 'recording'
+    finally:
+        session.close()
+
+
+def test_subround_with_unmapped_roster_preserves_observer_and_archives(tmp_path, monkeypatch):
+    from battle_lifecycle import MappingRetry
+    from capture_battles import replay
+    from capture_cli import json_value
+
+    session, collector, calls, records = connected()
+    try:
+        previous = session.read()
+        advance(session, collector, terminal=True)
+        session.read()
+        collector.state, collector.frame, collector.game_time, collector.damage = 2, 1, 0, 0
+        original = collector.read_roster
+        monkeypatch.setattr(collector, 'read_roster', lambda: replace(original(), entries=()))
+        observer = session.observer
+        for _ in range(3):
+            with pytest.raises(MappingRetry):
+                session.read()
+            assert session.observer is observer
+            assert session.runtime.display_sample()['battle_id'] == previous['battle_id']
+        assert not any(data.reason == 'read_unavailable' for kind, data in records
+                       if kind == 'lifecycle_observation')
+        monkeypatch.setattr(collector, 'read_roster', original)
+        baseline = session.read()
+        assert baseline['battle_id'] != previous['battle_id']
+        assert baseline['event_status'] == 'recording'
+        advance(session, collector, terminal=True)
+        session.read()
+        collector.state = 1
+        with pytest.raises(CaptureRetry):
+            session.read()
+    finally:
+        session.close()
+
+    assert calls.count('attach') == calls.count('detach') == 1
+    path = tmp_path / 'capture.jsonl'
+    path.write_text('\n'.join(json.dumps(dict(kind=kind, data=data), default=json_value)
+                              for kind, data in records), encoding='utf-8')
+    result = replay(path)
+    assert result['archives'] == 2
+
+
+def test_empty_preparation_preserves_observer_and_has_no_archive(monkeypatch):
+    session, collector, calls, records = connected()
+    try:
+        previous = session.read()
+        advance(session, collector)
+        session.read()
+        collector.state, collector.frame, collector.game_time = 2, 1, 0
+        original_roster, original_sample = collector.read_roster, collector.read
+        monkeypatch.setattr(collector, 'read_roster', lambda: replace(original_roster(), entries=()))
+        monkeypatch.setattr(collector, 'read', lambda: dict(original_sample(), rows=[]))
+        observer = session.observer
+        drained, committed = [], []
+        drain = observer.drain
+        def read_through(sequence):
+            drained.append(sequence)
+            return drain()
+        observer.read_through = read_through
+        observer.commit_events = committed.append
+        for _ in range(2):
+            with pytest.raises(CaptureRetry, match='preparing'):
+                session.read()
+            assert session.observer is observer
+            assert session.runtime.sessions.state == 'preparing'
+            assert session.runtime.display_sample()['battle_id'] == previous['battle_id']
+        prepared = [data for kind, data in records if kind == 'lifecycle_observation' and data.kind == 'preparing']
+        assert len({observation.generation for observation in prepared}) == 1
+        assert all(observation.events is None for observation in prepared)
+        archives = [data for kind, data in records if kind == 'archive_ready']
+        assert [archive['battle_id'] for archive in archives] == [previous['battle_id']]
+        assert not drained and not committed
+
+        collector.state = 3
+        with pytest.raises(CaptureRetry, match='end'):
+            session.read()
+        assert session.runtime.sessions.state == 'ended'
+        assert len([1 for kind, _ in records if kind == 'archive_ready']) == 1
+
+        collector.state = 1
+        with pytest.raises(CaptureRetry, match='initializing'):
+            session.read()
+        collector.state, collector.frame, collector.game_time, collector.damage = 2, 1, 0, 0
+        with pytest.raises(CaptureRetry, match='preparing'):
+            session.read()
+        generation = session.runtime.sessions.preparing_generation
+        monkeypatch.setattr(collector, 'read_roster', original_roster)
+        monkeypatch.setattr(collector, 'read', original_sample)
+        sample = session.read()
+        assert sample['battle_id'].endswith(f':{generation}')
+        assert sample['event_status'] == 'recording' and session.observer is observer
+        assert drained == committed == [observer.sequence]
+        assert calls.count('attach') == 1
     finally:
         session.close()
 

@@ -11,11 +11,11 @@ import json
 from pathlib import Path
 import time
 
-from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions
+from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions, MappingRetry
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL
 from roster import CharacterEntry, RosterSnapshot
 from event_capture import CaptureRetry
-from snapshot_adapter import AdapterError
+from snapshot_adapter import AdapterError, MappingUnavailable
 
 
 def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
@@ -62,7 +62,11 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
                     write({'observation': asdict(observation)})
                     summary['samples'] += int(observation.kind == 'sample')
                 except CaptureRetry as exc:
-                    write({'retry': str(exc)})
+                    retry = {'retry': str(exc)}
+                    if isinstance(exc, MappingRetry):
+                        # The attempted new generation can archive its predecessor.
+                        retry['observation'] = asdict(exc.observation)
+                    write(retry)
                 except Exception as exc:
                     summary['errors'] += 1
                     # poll already issued the gap, preserve that exact sequence
@@ -93,12 +97,46 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
     return summary
 
 
+_OPTIONAL_FORMULA_METRICS = frozenset({
+    'mitigation_rate', 'mitigation_before', 'mitigation_after', 'mitigation_unknown_reason',
+    'observed_mitigation_rate', 'observed_mitigation_before', 'observed_mitigation_after',
+    'mitigation_matched_hits',
+})
+
+
+def _same_json(actual, recorded):
+    return json.dumps(actual, sort_keys=True) == json.dumps(recorded, sort_keys=True)
+
+
+def _same_statistics(actual, recorded):
+    if isinstance(actual, dict) and isinstance(recorded, dict):
+        rows, recorded_rows = actual.get('rows'), recorded.get('rows')
+        if isinstance(rows, dict) and isinstance(recorded_rows, dict):
+            # Older journals omit newly derived formula fields. Check every
+            # field the writer actually recorded, including formula values.
+            actual = dict(actual, rows={
+                owner: {key: value for key, value in row.items()
+                        if key not in _OPTIONAL_FORMULA_METRICS
+                        or key in recorded_rows.get(owner, ())}
+                for owner, row in rows.items()
+            })
+    return _same_json(actual, recorded)
+
+
+def _same_lifecycle_state(actual, recorded):
+    if 'statistics' in actual and 'statistics' in recorded:
+        return (_same_statistics(actual['statistics'], recorded['statistics'])
+                and _same_json({key: value for key, value in actual.items() if key != 'statistics'},
+                               {key: value for key, value in recorded.items() if key != 'statistics'}))
+    return _same_json(actual, recorded)
+
+
 def same_archive(actual, recorded):
     # Pre-history journals did not contain snapshot interval history. Keep
     # their existing evidence replayable; new journals verify the field too.
     if 'snapshot_intervals' not in recorded:
         actual = {key: value for key, value in actual.items() if key != 'snapshot_intervals'}
-    return json.dumps(actual, sort_keys=True) == json.dumps(recorded, sort_keys=True)
+    return _same_lifecycle_state(actual, recorded)
 
 
 def replay(path):
@@ -126,10 +164,15 @@ def replay(path):
                     entries=tuple(CharacterEntry(**entry) for entry in roster['entries']),
                     present_unique_ids=frozenset(roster['present_unique_ids']),
                     present_known=roster['present_known'])
-            sessions.consume(BattleObservation(**raw))
+            try:
+                sessions.consume(BattleObservation(**raw))
+            except MappingUnavailable:
+                if 'retry' not in value:
+                    raise
+            else:
+                samples += int(raw['kind'] == 'sample')
             if 'connection' in value:
                 sessions.connection = value['connection']
-            samples += int(raw['kind'] == 'sample')
             pending.extend(sessions.pop_archives())
         elif 'archive_ready' in value:
             if not pending or not same_archive(pending.pop(0), value['archive_ready']):
@@ -138,8 +181,7 @@ def replay(path):
         elif 'summary' in value:
             expected = value['summary']
             if (samples != expected['samples'] or archives != expected['archives'] or
-                    json.dumps(sessions.live(), sort_keys=True) !=
-                    json.dumps(expected['last_state'], sort_keys=True)):
+                    not _same_lifecycle_state(sessions.live(), expected['last_state'])):
                 raise ValueError('summary differs from replay')
             finished = True
     if sessions is None or pending or not finished:
@@ -159,9 +201,6 @@ def observation_from_json(raw):
 
 def replay_product(lines):
     """Verify the GUI/CLI journal, including event drains, publications and handoffs."""
-    def equal(left, right):
-        return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
-
     sessions = None
     pending = []
     samples = archives = 0
@@ -180,6 +219,9 @@ def replay_product(lines):
             observation = observation_from_json(data)
             try:
                 sessions.consume(observation)
+            except MappingUnavailable:
+                pending.extend(sessions.pop_archives())
+                continue
             except (AdapterError, ValueError):
                 # The following recorded gap must close the failed read. It
                 # cannot publish a value or silently erase an archive signal.
@@ -196,12 +238,12 @@ def replay_product(lines):
                 raise ValueError('archive differs from replayed lifecycle/events')
             archives += 1
         elif kind == 'published':
-            if sessions is None or failures or not equal(sessions.adapter.result(), data['statistics']):
+            if sessions is None or failures or not _same_statistics(sessions.adapter.result(), data['statistics']):
                 raise ValueError('published statistics differ from replay')
             if data['session'] != sessions.battle_id:
                 raise ValueError('published battle ID differs from lifecycle')
         elif kind == 'lifecycle_summary':
-            if sessions is None or not equal(sessions.live(), data):
+            if sessions is None or not _same_lifecycle_state(sessions.live(), data):
                 raise ValueError('summary differs from replay')
             finished = True
     if sessions is None or pending or not finished or failures:

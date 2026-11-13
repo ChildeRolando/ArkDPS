@@ -18,6 +18,37 @@ def test_incompatible_version_never_attaches():
     assert observer.status == ObserverStatus.INCOMPATIBLE
 
 
+@pytest.mark.parametrize('native_error, expected', [
+    ('Process is not using emulation', '请重启设备端 Frida 服务后重连观测者'),
+    ('Unexpected realm failure', 'Unexpected realm failure'),
+])
+def test_emulated_attach_failure_keeps_native_realm_untouched(monkeypatch, native_error, expected):
+    class NotSupportedError(Exception):
+        pass
+
+    realms = []
+
+    def attach(pid, *, realm):
+        realms.append((pid, realm))
+        raise NotSupportedError(native_error)
+
+    device = SimpleNamespace(attach=attach)
+    manager = SimpleNamespace(add_remote_device=lambda remote: device)
+    monkeypatch.setitem(sys.modules, 'frida', SimpleNamespace(
+        __version__='17.26.1', get_device_manager=lambda: manager,
+        NotSupportedError=NotSupportedError,
+    ))
+    active = collector(VersionStatus.COMPATIBLE)
+    active.core = SimpleNamespace(mc=SimpleNamespace(pid=17561))
+    observer = FridaEventObserver(active, '127.0.0.1:27043')
+    with pytest.raises((NotSupportedError, RuntimeError), match=expected):
+        observer.start()
+    assert observer.status == ObserverStatus.FAILED
+    assert expected in observer.error
+    assert realms == [(17561, 'emulated')]
+    assert observer.session is observer.script is None
+
+
 def test_unload_failure_still_detaches_own_session():
     calls = []
 

@@ -133,15 +133,19 @@ def test_classified_non_team_source_is_named_without_blocking_shares():
     assert '已排除非队伍来源' in view.share_note
 
 
-def test_real_unknown_source_still_blocks_shares_and_is_named():
+def test_real_unknown_source_keeps_history_share_partial_and_is_named():
     data = _complete_record()
     stats = data['statistics']
     stats['totals_complete'] = True
     stats['unknown_sources'] = ['char_mystery']
-    view = record_view(BattleRecord.from_dict(data), PanelConfig())
+    original = BattleRecord.from_dict(data)
+    view = record_view(original, PanelConfig())
     assert not view.share_known
+    assert view.share_scope == 'known'
+    assert view.entries[0].share == 1.
     assert 'char_mystery' in view.share_reason
     assert '未归属统计来源' in view.share_reason
+    assert 'share_scope' not in exported_record(json_bytes(original))[1]['statistics']
 
 
 def test_legacy_record_is_recomputed_from_finished_native_evidence():
@@ -160,7 +164,7 @@ def test_legacy_record_is_recomputed_from_finished_native_evidence():
     assert normalized['unknown_sources'] == []
     assert normalized['non_team_sources'] == ['trap_321_shnbox']
     view = record_view(BattleRecord.from_dict(data), PanelConfig())
-    assert view.share_known
+    assert view.share_known and view.share_scope == 'team'
     assert 'trap_321_shnbox' in view.share_note
 
 
@@ -176,4 +180,5 @@ def test_legacy_record_without_finished_evidence_stays_incomplete():
     data['last_sample']['guard'] = {'complete': True, 'start': 10, 'end': 10}
     view = record_view(BattleRecord.from_dict(data), PanelConfig())
     assert not view.share_known
+    assert view.share_scope == 'unavailable'
     assert '累计快照不完整' in view.share_reason

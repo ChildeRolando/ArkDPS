@@ -8,9 +8,11 @@ silently converted into a snapshot-only success.
 """
 from __future__ import annotations
 
+import shlex
 import socket
 import subprocess
 import time
+from uuid import uuid4
 
 DEFAULT_REMOTE = '127.0.0.1:27043'
 DEFAULT_DEVICE_PORT = 27864
@@ -38,7 +40,14 @@ def endpoint_ready(remote=DEFAULT_REMOTE, timeout=0.6):
 
 def _adb(adb_path, serial, arguments, timeout=8):
     return subprocess.run([adb_path, '-s', serial, *arguments],
-                          capture_output=True, text=True, timeout=timeout)
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+
+
+def keep_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE):
+    """Check an endpoint already bound to this connection, repairing it if needed."""
+    if adb_path and serial and endpoint_ready(remote):
+        return True, '事件端点已就绪'
+    return ensure_frida_endpoint(adb_path, serial, remote=remote)
 
 
 def ensure_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE,
@@ -57,33 +66,65 @@ def ensure_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE,
     if parts is None:
         return False, '事件端点格式无效：' + str(remote)
     forward = ['forward', f'tcp:{parts[1]}', f'tcp:{device_port}']
+
+    def bind_forward():
+        result = _adb(adb_path, serial, forward)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or '').strip()
+                               or 'adb forward 返回非零')
+
     try:
-        _adb(adb_path, serial, forward)
+        bind_forward()
     except Exception as exc:
         return False, '建立 ADB 转发失败：' + str(exc)
-    if endpoint_ready(remote):
-        return True, '事件端点已就绪'
-    probe = (f'ps -A 2>/dev/null | grep -q "[{server[:1]}]{server[1:]}" '
-             f'|| netstat -ln 2>/dev/null | grep -q ":{device_port}"')
+    listener = (f"netstat -lnt 2>/dev/null | grep -Eq "
+                f"'[:.]{device_port}[[:space:]].*[[:space:]]LISTEN([[:space:]]|$)'")
+
+    def reachable(timeout=0.6):
+        # ADB can accept a local TCP connection even when the device has no
+        # listener for the forwarded port.
+        return (endpoint_ready(remote, timeout=timeout)
+                and _adb(adb_path, serial, ['shell', listener]).returncode == 0)
+
     try:
-        running = _adb(adb_path, serial, ['shell', probe]).returncode == 0
-    except Exception:
-        running = False
-    if not running:
-        start = (f'cd {server_dir} && (./{server} -l 127.0.0.1:{device_port} '
-                 f'> arkdps-frida-server.log 2>&1 &)')
-        try:
-            result = _adb(adb_path, serial, ['shell', start])
-            if result.returncode != 0:
-                detail = (result.stderr or result.stdout or '').strip()
-                return False, '启动设备端 frida-server 失败：' + (detail or 'adb shell 返回非零')
-        except Exception as exc:
-            return False, '启动设备端 frida-server 失败：' + str(exc)
+        if reachable():
+            return True, '事件端点已就绪'
+    except Exception as exc:
+        return False, '检查设备端 frida-server 失败：' + str(exc)
+
+    # Frida clears its temporary directory during startup, even if it later
+    # loses the bind race. An independent directory protects the ARM64 agent
+    # extracted by a server that is already running.
+    directory = f'arkdps-frida-{uuid4().hex}'
+    start = (
+        f'cd {shlex.quote(server_dir)} || exit 1; '
+        '( flock -n 9 || exit 75; '
+        f'if {listener}; then exit 0; fi; '
+        f'{shlex.quote("./" + server)} --directory {directory} '
+        f'-l 127.0.0.1:{device_port} </dev/null >arkdps-frida-server.log 2>&1 9>&- & '
+        'server_pid=$!; '
+        'for tick in 1 2 3 4 5 6 7 8 9 10; do '
+        f'if {listener}; then exit 0; fi; '
+        'if ! kill -0 "$server_pid" 2>/dev/null; then '
+        'tail -n 3 arkdps-frida-server.log >&2; exit 1; fi; '
+        'sleep 0.2; done '
+        ') 9>.frida-start.lock'
+    )
+    try:
+        result = _adb(adb_path, serial, ['shell', start])
+        if result.returncode not in (0, 75):
+            detail = (result.stderr or result.stdout or '').strip()
+            return False, '启动设备端 frida-server 失败：' + (detail or 'adb shell 返回非零')
+    except Exception as exc:
+        return False, '启动设备端 frida-server 失败：' + str(exc)
+    if result.returncode == 75:
+        # Another copy is still launching it. Wait for that listener without
+        # starting another process.
         time.sleep(2)
     try:
-        _adb(adb_path, serial, forward)
+        bind_forward()
+        if reachable(timeout=2):
+            return True, '事件端点已恢复'
     except Exception as exc:
-        return False, '重建 ADB 转发失败：' + str(exc)
-    if endpoint_ready(remote, timeout=2):
-        return True, '事件端点已恢复'
+        return False, '重建 ADB 转发或检查端点失败：' + str(exc)
     return False, '设备端 frida-server 不可达（请确认 Root、二进制路径与端口）'

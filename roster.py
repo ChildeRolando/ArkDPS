@@ -41,6 +41,8 @@ IL2CPP_ARRAY_LENGTH = 0x18
 IL2CPP_ARRAY_ITEMS = 0x20
 IL2CPP_CLASS_FIELDS = 0x80
 IL2CPP_CLASS_FIELD_COUNT = 0x124
+IL2CPP_CLASS_NAME = 0x10
+IL2CPP_CLASS_NAMESPACE = 0x18
 IL2CPP_STRING_LENGTH = 0x10
 IL2CPP_STRING_CHARS = 0x14
 MAX_STRING_CHARS = 110
@@ -52,6 +54,8 @@ MAX_TOKENS = 64
 MAX_LIVE_UNITS = 128
 
 _ID = re.compile(r'[A-Za-z0-9_#.-]+')
+_ENEMY_CLASS = b'Enemy\0'
+_BATTLE_NAMESPACE = b'Torappu.Battle\0'
 
 
 class RosterUnavailable(RuntimeError):
@@ -223,13 +227,24 @@ def build_operations(bc_addr: int) -> tuple[list[tuple], dict]:
     live = []
     for items_index in (live_as_list, live_as_unordered):
         slots = []
+        classes = []
         for index in range(MAX_LIVE_UNITS):
-            data_ptr = ops.deref(items_index, index * 8, CHARACTER_DATA, 8)
+            slot_offset = index * 8
+            data_ptr = ops.deref(items_index, slot_offset, CHARACTER_DATA, 8)
             data = ops.deref(data_ptr, 0, 0, BATTLE_CHARACTER_READ_SIZE)
             key = ops.deref(data, BATTLE_CHARACTER_PREFAB_KEY, 0,
                             IL2CPP_STRING_CHARS + MAX_STRING_CHARS * 2)
             slots.append((data, data_ptr, key))
-        live.append({'items': items_index, 'slots': slots})
+            if items_index == live_as_unordered:
+                # AutoChess also puts Enemy objects in this array. Class
+                # metadata is independent of the Character.data layout.
+                klass = ops.deref(items_index, slot_offset, 0, 8)
+                names = ops.deref(klass, 0, IL2CPP_CLASS_NAME, 16)
+                name = ops.deref(names, 0, 0, len(_ENEMY_CLASS))
+                namespace = ops.deref(names, IL2CPP_CLASS_NAMESPACE - IL2CPP_CLASS_NAME,
+                                      0, len(_BATTLE_NAMESPACE))
+                classes.append((name, namespace))
+        live.append({'items': items_index, 'slots': slots, 'classes': classes})
     return ops.operations, {'player_items': player_items, 'players': players, 'live': live}
 
 
@@ -305,6 +320,9 @@ def parse_results(results: list[bytes | None], layout: dict,
         raise RosterUnavailable('在场单位槽位读取不完整')
     for index in range(_slots(items)):
         if not _u64(items, index * 8):
+            continue
+        name, namespace = group['classes'][index]
+        if results[name] == _ENEMY_CLASS and results[namespace] == _BATTLE_NAMESPACE:
             continue
         data_index, _, key_index = group['slots'][index]
         data = results[data_index]
