@@ -539,7 +539,8 @@ def test_process_exit_handoff_is_immediate_once_and_replayable(tmp_path):
     assert result['last_state']['connection'] == 'disconnected'
 
 
-def test_terminal_read_recovery_updates_totals_but_never_recovers_missing_events(monkeypatch):
+@pytest.mark.parametrize('observer_survives', [True, False])
+def test_terminal_short_read_preserves_queue_until_recovery_or_observer_loss(monkeypatch, observer_survives):
     from roster import RosterUnavailable
 
     session, collector, _, records = connected()
@@ -559,15 +560,17 @@ def test_terminal_read_recovery_updates_totals_but_never_recovers_missing_events
             with pytest.raises(CaptureRetry):
                 session.read()
         assert session.runtime.sessions.state == 'finalizing'
-        assert session.capture.closed
+        assert not session.capture.closed
+        if not observer_survives:
+            session._retire_observer()
         recovered = session.read()
         row = recovered['statistics']['rows']['char_a']
         assert row['damage'] == 175
-        assert row['observed_damage'] == 20
-        assert row['event_coverage_end'] == 1
-        assert not row['event_coverage_complete']
+        assert row['observed_damage'] == (75 if observer_survives else 20)
+        assert row['event_coverage_end'] == (2 if observer_survives else 1)
+        assert row['event_coverage_complete'] is observer_survives
         assert row['recent_damage'] is None
-        assert recovered['event_status'] == 'gap'
+        assert recovered['event_status'] == ('finished' if observer_survives else 'gap')
         collector.state = 1
         with pytest.raises(CaptureRetry):
             session.read()

@@ -52,8 +52,12 @@ class Statistics:
         # Match formula totals per source against its own cumulative counter
         # before aggregating a character and its summons.
         self.mitigation = {}
+        # A sourceless burst is credited to an owner as a supplement to the
+        # native source counters. Its formula pair follows the same rule.
+        self.sourceless_burst_mitigation = {}
         self.mitigation_incomplete = set()
         self.mitigation_probe_incomplete = False
+        self.mitigation_unattributed_burst = False
         # Elemental bar damage is not HP damage; only its source matters.
         self.last_elemental = {}
         self.burst = {}
@@ -557,30 +561,34 @@ class Statistics:
     def mark_mitigation_unknown(self):
         self.mitigation_probe_incomplete = True
 
+    def _mitigation_pair(self, amount, before, after):
+        try:
+            return (self._optional_number(before) and before > 0
+                    and self._optional_number(after) and after >= 0
+                    and isclose(after, amount, rel_tol=0, abs_tol=1e-6))
+        except OverflowError:
+            return False
+
     def _record_mitigation(self, source, owner, amount, before, after):
         if self.mitigation_probe_incomplete:
             return
-        try:
-            valid = (self._optional_number(before) and before > 0
-                     and self._optional_number(after) and after >= 0
-                     and isclose(after, amount, rel_tol=0, abs_tol=1e-6))
-        except OverflowError:
-            valid = False
-        if not valid:
+        if not self._mitigation_pair(amount, before, after):
             self.mitigation_incomplete.add(owner)
             return
-        before_total, after_total, hits = self.mitigation.get(source, (0.0, 0.0, 0))
+        pairs, key = (self.sourceless_burst_mitigation, owner) if source is None else (self.mitigation, source)
+        before_total, after_total, hits = pairs.get(key, (0.0, 0.0, 0))
         totals = before_total + before, after_total + after
         if not all(isfinite(value) for value in totals):
             self.mitigation_incomplete.add(owner)
             return
-        self.mitigation[source] = (*totals, hits + 1)
+        pairs[key] = (*totals, hits + 1)
 
     def _mitigation_result(self, owner, registered, *, complete):
         totals = [self.mitigation.get(source, (0.0, 0.0, 0)) for source in registered]
-        before = sum(pair[0] for pair in totals)
-        after = sum(pair[1] for pair in totals)
-        hits = sum(pair[2] for pair in totals)
+        supplement = self.sourceless_burst_mitigation.get(owner, (0.0, 0.0, 0))
+        before = sum(pair[0] for pair in totals) + supplement[0]
+        after = sum(pair[1] for pair in totals) + supplement[1]
+        hits = sum(pair[2] for pair in totals) + supplement[2]
         rate = (1 - after / before) * 100 if before > 0 and isfinite(before) and isfinite(after) else None
         if rate is not None and not isfinite(rate):
             rate = None
@@ -593,6 +601,8 @@ class Statistics:
             reason = '事件覆盖已结束'
         elif self.mitigation_probe_incomplete:
             reason = '伤害公式回调覆盖不足'
+        elif self.mitigation_unattributed_burst:
+            reason = self.burst_unknown_reason
         elif owner in self.mitigation_incomplete:
             reason = '部分伤害缺少同次命中的公式前后值'
         elif not complete:
@@ -747,12 +757,16 @@ class Statistics:
             if actual > amount + tolerance:
                 raise ValueError('elemental burst actual exceeds settlement')
             attributed = owner if owner is not None else self.last_elemental.get(target_instance)
+            friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
             if attributed is None:
                 self.burst_unknown = True
                 self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
+                if amount > 0 and not friendly:
+                    self.mitigation_unattributed_burst = True
                 return
-            if amount > 0:
-                self.mitigation_incomplete.add(attributed)
+            if not friendly and (amount > 0 or mitigation_before is not None
+                                 or mitigation_after is not None):
+                self._record_mitigation(source, attributed, amount, mitigation_before, mitigation_after)
             entry = self.burst.setdefault(attributed, {
                 'actual': 0.0, 'overkill': 0.0, 'settlement': 0.0, 'count': 0,
                 'added_settlement': 0.0,

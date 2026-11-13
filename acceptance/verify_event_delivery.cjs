@@ -25,6 +25,7 @@ function recv(name,callback) {
 function send(value){response=value;}
 function time(){return {frame:30,game_time:1};}
 function eventQuality(){return {skill_ready:true};}
+function currentTerminalBoundary(){return null;}
 ${between('const EVENT_BUFFER_LIMIT', 'const stacks=')}
 ${between('function record(source', 'function refreshEnemyEntryFrame')}
 ${between('function markEvents()', 'send({ready:true')}
@@ -102,6 +103,84 @@ assert.match(read(7,full.sequence).error,/overflow/);
 assert.equal(sequence,full.sequence);
 assert.equal(queue.length,EVENT_BUFFER_LIMIT);
 `, {assert}, {filename: 'product-event-delivery'});
+
+vm.runInNewContext(`
+let sequence=12,epoch=24,active=0,fatal=null,stopped=false;
+let clock={frame:60,game_time:2};
+const time=()=>{if(clock instanceof Error)throw clock;return clock;};
+const eventQuality=()=>({});
+const activeHooks=new Map(),hooks=[];
+const installed={};
+const Interceptor={attach:(method,handlers)=>installed[method]=handlers};
+const cfg={};
+const ptr=(address,fields={})=>({
+  isNull:()=>address==='0x0',equals:other=>other.toString()===address,
+  toString:()=>address,readPointer:()=>fields[0],
+  add:offset=>({readPointer:()=>fields[offset]})
+});
+const className=klass=>klass;
+const controllerClass=ptr('0x100');
+const terminalMethods={state:'state',destroy:'destroy',controller:controllerClass};
+${between('let terminalBoundary=', 'const enemyStateError=')}
+${between('function markEvents()', 'function receiveEventRequest()')}
+
+const controllerFields={0:controllerClass};
+const controller=ptr('0x200',controllerFields);
+const native=ptr('0x300',{0x28:controller});
+const loggerFields={0:'BattleLogger',0x18:controller,0x30:ptr('0x500',{0:'BattleStats'})};
+const logger=ptr('0x400',loggerFields);
+Object.assign(controllerFields,{0x10:native,0xd8:logger,0x158:ptr('0x600',{0:'LevelData'})});
+const expected={controller:'0x200',native:'0x300',logger:'0x400',stats:'0x500',level:'0x600',
+  frame:60,game_time:2,sequence:12,epoch:24,active:0};
+const destroy=installed.destroy;
+function enter(){
+  const call={};
+  destroy.onEnter.call(call,[controller]);
+  return ()=>destroy.onLeave.call(call);
+}
+const restart=()=>installed.state.onEnter([controller,{toInt32:()=>1}]);
+
+const leave=enter();
+assert.equal(markEvents().terminal_boundary,null);
+leave();
+assert.deepEqual(markEvents().terminal_boundary,expected);
+clock=new Error('clock unavailable after destruction');
+assert.equal(markEvents().retry,true);
+assert.deepEqual(markEvents().terminal_boundary,expected);
+clock={frame:60,game_time:2};
+restart();
+assert.equal(markEvents().terminal_boundary,null);
+
+let finish=enter();
+epoch++;
+finish();
+assert.equal(markEvents().terminal_boundary,null);
+finish=enter();
+sequence++;
+finish();
+assert.equal(markEvents().terminal_boundary,null);
+finish=enter();
+clock={frame:61,game_time:2.03};
+finish();
+assert.equal(markEvents().terminal_boundary,null);
+finish=enter();
+restart();
+finish();
+assert.equal(markEvents().terminal_boundary,null);
+active=1;
+finish=enter();
+active=0;
+finish();
+assert.equal(markEvents().terminal_boundary,null);
+enter()();
+assert.notEqual(markEvents().terminal_boundary,null);
+epoch++;
+assert.equal(markEvents().terminal_boundary,null);
+
+loggerFields[0x18]=ptr('0x999');
+enter()();
+assert.equal(markEvents().terminal_boundary,null);
+`, {assert}, {filename: 'product-terminal-boundary'});
 
 vm.runInNewContext(`
 let enemyDamageUnknown=false;
@@ -184,6 +263,9 @@ const time=()=>({frame,game_time:gameTime});
 const targetKey=pointer=>pointer.id;
 const entityId=pointer=>pointer.id;
 const own=id=>id.startsWith('char_')||id.startsWith('token_');
+const recorded=[];
+const record=(source,kind,amount,when,proof,evidence)=>recorded.push({source,kind,amount,when,evidence});
+const fp=pointer=>Number(pointer.readS64())/4294967296;
 ${between('const activeModifiers=new Map();', 'function markShieldUnknown(')}
 ${between('// One optional observation joins the existing ApplyModifier damage event.', 'function includeEnemyHp(')}
 installMitigationHooks();
@@ -629,6 +711,131 @@ for(const friendly of [gladiia,angel,token]){
   delayedFactory({to:friendly});
   assert.equal(ratio(delayedHit({to:friendly}),delayedAfter,2),'null');
 }
+
+// Elemental HP settlement needs the caller's GetFinalAtk after the formula,
+// the factory's verified return and the same modifier fields on apply.
+const elementalBefore=6000,elementalAfter=units(21474836000000n);
+const elementalAttack=pointer('0x801','',5);
+function elementalFormula({from=nullEntity,to=target}={}){
+  finishWithoutInput({from,to,info:elementalAttack,after:elementalAfter});
+}
+function elementalGetter(info=elementalAttack,before=elementalBefore){
+  laterInput(info,before);
+}
+function elementalFactory(overrides={}){
+  factory(elementalBefore,elementalAfter,{from:nullEntity,type:5,...overrides});
+}
+function elementalModifier(overrides={}){
+  return fixtureModifier(elementalBefore,elementalAfter,{from:nullEntity,type:5,...overrides});
+}
+
+nextFrame();
+elementalFormula();
+elementalGetter();
+elementalFactory();
+assert.equal(ratio(openModifier(elementalModifier()),elementalAfter,5),sample(elementalBefore,elementalAfter));
+noPair(elementalModifier()); // a second settlement cannot reuse the pair
+
+nextFrame();
+elementalFormula({from:gladiia});
+elementalGetter();
+elementalFactory({from:gladiia,rawValue:5800});
+const elementalAdjusted=openModifier(elementalModifier({from:gladiia,originValue:5800}));
+elementalAdjusted.mod.fields.after=6500;
+assert.equal(ratio(elementalAdjusted,6500,5),sample(elementalBefore,6500));
+
+nextFrame();
+elementalFormula({from:gladiia});
+elementalGetter();
+elementalFactory({from:gladiia});
+const elementalBar=elementalModifier({from:gladiia,type:0});
+const readBar=elementalBar.add;
+elementalBar.add=offset=>offset===0x60 ? {readS32:()=>5} : readBar(offset);
+noPair(elementalBar); // targetType 5 and type 0 are buildup, not HP settlement
+assert.equal(ratio(openModifier(elementalModifier({from:gladiia})),elementalAfter,5),
+             sample(elementalBefore,elementalAfter));
+
+// H7-4: the triggering bar is still on the native stack when its
+// source-null HP settlement returns. Emit it ahead of the burst, once.
+const triggeringBar=openModifier(elementalBar);
+triggeringBar.elementalBarTarget={pointer:target,uid:target.uid};
+recordTriggeringElementalBar({tid:8,target},time());
+recordTriggeringElementalBar({tid:7,target:other},time());
+target.uid++;
+recordTriggeringElementalBar({tid:7,target},time());
+target.uid--;
+const ambiguousBar={...triggeringBar,mod:elementalModifier({from:gladiia,type:0})};
+enterModifier(ambiguousBar);
+recordTriggeringElementalBar({tid:7,target},time());
+leaveModifier(ambiguousBar);
+assert.equal(recorded.length,0);
+recordTriggeringElementalBar({tid:7,target},time());
+record(null,'elemental_burst',elementalAfter,time(),{},null);
+recordElementalBar(triggeringBar,time(),elementalAfter);
+leaveModifier(triggeringBar);
+assert.equal(recorded.length,2);
+assert.equal(recorded[0].source,gladiia.id);
+assert.equal(recorded[0].kind,'elemental_bar');
+assert.equal(recorded[0].evidence.target_instance,target.toString());
+assert.equal(recorded[1].kind,'elemental_burst');
+
+nextFrame();
+calculate(elementalBefore,elementalAfter,target,[1,1],gladiia,7,5);
+elementalFactory({from:gladiia});
+noPair(elementalModifier({from:gladiia})); // only an in-formula getter was seen
+
+for(const [label,change] of [
+  ['wrong post-formula input pointer',()=>elementalGetter(pointer('0x802','',5))],
+  ['wrong post-formula input type',()=>elementalGetter(pointer('0x801','',0))],
+  ['post-formula input disagrees with factory',()=>elementalGetter(elementalAttack,elementalBefore+1)],
+  ['post-formula input in a later frame',()=>{nextFrame();elementalGetter();}],
+]){
+  nextFrame();
+  elementalFormula();
+  change();
+  elementalFactory();
+  assert.equal(ratio(openModifier(elementalModifier()),elementalAfter,5),'null',label);
+}
+
+for(const [label,overrides] of [
+  ['factory source differs from formula', {from:gladiia}],
+  ['factory target differs from formula', {to:other}],
+  ['factory type differs from formula', {type:2}],
+  ['factory returned a mismatched raw amount', {returned:modifier(elementalAfter+1,5,0,target,nullEntity)}],
+  ['factory returned a mismatched origin value', {returned:elementalModifier({originValue:0})}],
+]){
+  nextFrame();
+  elementalFormula();
+  elementalGetter();
+  elementalFactory(overrides);
+  const scope=openModifier(elementalModifier(overrides));
+  assert.equal(ratio(scope,elementalAfter,scope.mod.fields.type),'null',label);
+}
+
+nextFrame();
+elementalFormula();
+elementalGetter();
+nextFrame();
+elementalFactory();
+noPair(elementalModifier());
+
+nextFrame();
+elementalFormula();
+elementalGetter();
+elementalFactory();
+noPair(elementalModifier({from:foreign}));
+noPair(elementalModifier({to:other}));
+target.uid++;
+noPair(elementalModifier());
+target.uid--;
+
+nextFrame();
+elementalFormula();
+elementalGetter();
+elementalFactory();
+const canceledElemental=openModifier(elementalModifier());
+canceledElemental.mod.fields.cancel=1;
+assert.equal(ratio(canceledElemental,elementalAfter,5),'null');
 assert.equal(active,0);
 assert.equal(activeHooks.size,0);
 `, {assert}, {filename: 'product-mitigation-delivery'});

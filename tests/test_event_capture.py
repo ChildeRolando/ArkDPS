@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from event_capture import CaptureRetry, LiveEventCapture
+from event_capture import CaptureRetry, LiveEventCapture, read_terminal_mark
 from event_stream import StreamGap
 from roster import CharacterEntry, RosterSnapshot
 from roster import RosterUnavailable
@@ -67,6 +67,14 @@ class Observer:
 def event(sequence, frame=1, game_time=0, amount=20):
     return {'sequence': sequence, 'frame': frame, 'game_time': game_time,
             'source': 'char_a', 'kind': 'damage', 'amount': amount}
+
+
+def test_terminal_mark_uses_optional_bounded_observer_method():
+    observer = Observer(Collector())
+    assert read_terminal_mark(observer)['frame'] == 1
+    terminal_mark = {'terminal_boundary': {'frame': 2}}
+    observer.read_terminal_mark = lambda: terminal_mark
+    assert read_terminal_mark(observer) is terminal_mark
 
 
 def test_baseline_event_and_replay_keep_snapshot_authoritative():

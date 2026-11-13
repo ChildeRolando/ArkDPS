@@ -30,6 +30,12 @@ def acknowledge_event_batch(observer, sequence):
         observer.commit_events(sequence)
 
 
+def read_terminal_mark(observer):
+    if hasattr(observer, 'read_terminal_mark'):
+        return observer.read_terminal_mark()
+    return observer.mark()
+
+
 class LiveEventCapture:
     def __init__(self, collector, observer=None, audit=None):
         self.collector = collector

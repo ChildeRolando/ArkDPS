@@ -568,11 +568,14 @@ def test_prototype_projection_does_not_present_partial_shares_as_full_team():
     assert sample['rows'][0]['share'] is None
 
 
-def test_terminal_same_frame_revisions_are_kept_until_confirmed_scene_exit():
+@pytest.mark.parametrize('exiting', [False, True])
+def test_terminal_same_frame_revisions_are_kept_until_confirmed_scene_exit(exiting):
     # OF-8 native samples: 2964 / 98.79990577697754, first state=3 then a
     # later accounting revision at exactly that frame/time (host aef6051).
     c, r, _ = begin()
     c.lifecycle.update(state=3, ready=False)
+    if exiting:
+        c.lifecycle.update(transiting=True, target='battle_finish')
     c.advance(time=98.79990577697754, frame=2964, damage=28985.8828125)
     r.poll(c)
     c.advance(time=98.79990577697754, frame=2964, damage=31899.103515625)
@@ -588,7 +591,8 @@ def test_terminal_same_frame_revisions_are_kept_until_confirmed_scene_exit():
 
 
 @pytest.mark.parametrize('final_watermark', [True, False])
-def test_battle_end_keeps_open_skill_split_only_with_complete_events(final_watermark):
+@pytest.mark.parametrize('exiting', [False, True])
+def test_battle_end_keeps_open_skill_split_only_with_complete_events(final_watermark, exiting):
     c, runtime = FakeCollector(), BattleRuntime()
     c.advance(time=10., frame=10, damage=0.)
     events = []
@@ -619,6 +623,8 @@ def test_battle_end_keeps_open_skill_split_only_with_complete_events(final_water
     record(15, 'damage', 50, target='enemy_2', hp_before=10, hp_after=0,
            real_delta=-10, killed=True, shield_absorbed=0, damage_type=1)
     c.lifecycle.update(state=3, ready=False)
+    if exiting:
+        c.lifecycle.update(transiting=True, target='battle_finish')
     c.advance(time=15., frame=15, damage=70.)
     runtime.poll(c, observer if final_watermark else None)
     final = runtime.sessions.live()['statistics']['rows']['a']
@@ -771,6 +777,74 @@ def test_normal_end_without_a_settlement_sample_keeps_final_totals():
     view = render_panel(PanelConfig(), rows_from_statistics(stats))
     assert view.share_known and view.share_reason == ''
     assert view.entries[0].share == 1.
+
+
+@pytest.mark.parametrize('ending', ['absent', 'exit_transition'])
+@pytest.mark.parametrize('fault', [None, 'no_marker', 'sequence', 'epoch', 'active', 'clock',
+                                    'controller', 'native', 'stats', 'level', 'observer_error'])
+def test_finish_marker_must_match_last_accepted_battle_watermark(ending, fault):
+    c, runtime = FakeCollector(), BattleRuntime()
+    c.sample['session'] = 'boot:1:10:100:300:400'
+    c.advance(time=10., frame=10, damage=0.)
+    events, reads, committed = [], [], []
+    final_mark = None
+
+    def mark():
+        if final_mark is not None:
+            return final_mark
+        return dict(frame=c.sample['frame'], game_time=c.sample['game_time'],
+                    sequence=len(events), epoch=len(events) + 1, active=0)
+
+    def read(sequence):
+        reads.append(sequence)
+        return {'events': deepcopy(events[len(events) - 1:sequence])}
+
+    observer = SimpleNamespace(mark=mark, read_through=read, commit_events=committed.append)
+    runtime.poll(c, observer)
+    events.append(dict(sequence=1, frame=11, game_time=11., source='a', kind='damage', amount=20.,
+                       target='enemy_1', real_delta=-20., hp_before=100., hp_after=80.,
+                       killed=False, damage_type=1, mitigation_before=25., mitigation_after=20.))
+    c.advance(time=11., frame=11, damage=20.)
+    runtime.poll(c, observer)
+    boundary = dict(mark(), controller='0x64', native='0xc8', logger='0xfa', stats='0x12c', level='0x190')
+    # The clock visible after cleanup may already belong to the next scene.
+    final_mark = dict(frame=0, game_time=0., sequence=1, epoch=2, active=0,
+                      terminal_boundary=boundary)
+    if fault == 'no_marker':
+        final_mark.pop('terminal_boundary')
+    elif fault == 'observer_error':
+        final_mark['error'] = 'detached'
+    elif fault == 'clock':
+        boundary.update(frame=12, game_time=12.)
+    elif fault in ('controller', 'native', 'stats', 'level'):
+        boundary[fault] = '0xff'
+    elif fault is not None:
+        boundary[fault] += 1
+
+    if ending == 'absent':
+        c.lifecycle.update(battle=None, state=None, transiting=True, target='battle_finish')
+    else:
+        c.lifecycle.update(transiting=True, target='battle_finish')
+    observation = runtime.poll(c, observer)
+    assert observation.kind == 'end'
+    assert observation.sample is None
+    assert reads == committed == [0, 1]  # No replay or new drain from the terminal marker.
+    archive, = runtime.sessions.pop_archives()
+    assert archive['metadata']['outcome'] == 'unknown'
+    row = archive['statistics']['rows']['a']
+    assert row['damage'] == 20.
+    assert row['recent_damage'] is None
+    if fault is None:
+        assert archive['event_status'] == 'finished'
+        assert archive['event_error'] is None
+        assert row['mitigation_rate'] == pytest.approx(20.)
+    else:
+        assert archive['event_status'] == 'gap'
+        assert archive['event_error'] == '未取得最终事件水位'
+        assert row['mitigation_rate'] is None
+        assert row['observed_mitigation_rate'] == pytest.approx(20.)
+    assert not runtime.sessions.consume(observation)
+    assert not runtime.sessions.pop_archives()
 
 
 def test_mid_battle_gap_then_end_keeps_totals_but_not_completeness():
