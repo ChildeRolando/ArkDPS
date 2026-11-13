@@ -136,7 +136,7 @@ internal static class Screenshot
         };
         document.Children.Add(Inspector.Text("分型："+damageLegend+"；精确构成见原始 JSON。",11,false,"Muted",new Thickness(24,16,24,4)));
         document.Children.Add(Inspector.Text(SharePresentation.From(view).Description,12,false,"Muted",new Thickness(24,0,24,5)));
-        var record=selected.Get("record");document.Children.Add(Inspector.Text("事件："+record.Text("event_status")+" · "+record.Text("event_error"),11,false,"Muted",new Thickness(24,0,24,4)));
+        document.Children.Add(Inspector.Text("事件："+selected.Text("event_status")+" · "+selected.Text("event_error"),11,false,"Muted",new Thickness(24,0,24,4)));
         document.Children.Add(Inspector.Text("冻结战绩 "+selected.Text("battle_id")+" · "+theme+" · 完整排行（非可见区域截图）",10,false,"Muted",new Thickness(24,0,24,22)));
         return document;
     }

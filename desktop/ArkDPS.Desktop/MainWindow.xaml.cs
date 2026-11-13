@@ -1077,7 +1077,7 @@ public partial class MainWindow : Window
         HistoryPanel.SetConfigurationAvailable(connected && cachedHistorySelection is null);
         HistoryRefreshButton.IsEnabled=connected;
         ExportJson.IsEnabled=ExportPng.IsEnabled=connected && cachedHistorySelection is null &&
-            State.Get("history_selected").Get("record").ValueKind==JsonValueKind.Object;
+            State.Get("history_selected").Text("battle_id").Length>0;
     }
     private async Task SyncCachedHistorySelection()
     {
@@ -1182,8 +1182,11 @@ public partial class MainWindow : Window
         byte[]? png=format=="png" ? Screenshot.Statistics(frozen,theme) : null;
         var dialog=new Microsoft.Win32.SaveFileDialog{Title="保存所选战绩",FileName="ArkDPS-历史."+format,Filter=format=="png" ? "PNG 统计截图|*.png" : "JSON 战绩|*.json",AddExtension=true,DefaultExt="."+format,OverwritePrompt=true};
         if(dialog.ShowDialog(this)!=true)return;
-        await Command("export",new(){["record"]=frozen.Get("record"),["format"]=format,["path"]=dialog.FileName,["overwrite"]=File.Exists(dialog.FileName),["payload"]=png==null ? null : Convert.ToBase64String(png)});
+        await ExportHistory(frozen,format,dialog.FileName,png);
     }
+    private Task ExportHistory(JsonElement frozen,string format,string path,byte[]? png=null)=>
+        Command("export",new(){["battle_id"]=frozen.Text("battle_id"),["format"]=format,["path"]=path,["overwrite"]=File.Exists(path),["payload"]=png==null ? null : Convert.ToBase64String(png)});
+
     private void CreateTray()
     {
         try

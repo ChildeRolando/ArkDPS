@@ -76,6 +76,8 @@ def test_new_battles_archive_old_statistics_and_start_new_generation(change):
     assert archive['statistics']['ended']
     assert archive['battle_id'] != r.sessions.battle_id
     assert not r.sessions.pop_archives()
+    archive['statistics']['rows']['a']['damage'] = 500.
+    assert total(r) == 5.
 
 
 def test_pause_and_retreat_redeployment_never_clear_or_archive():

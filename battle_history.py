@@ -283,6 +283,14 @@ class BattleRecord:
     def statistics(self):
         return deepcopy(self._data['statistics'])
 
+    def statistics_fields(self, fields):
+        statistics = self._data['statistics']
+        return deepcopy({key: statistics[key] for key in fields if key in statistics})
+
+    @property
+    def last_sample(self):
+        return deepcopy(self._data['last_sample'])
+
     @property
     def metadata(self):
         return deepcopy(self._data['metadata'])
@@ -294,6 +302,14 @@ class BattleRecord:
     @property
     def event_error(self):
         return self._data['event_error']
+
+    def display_metadata(self):
+        return dict(metadata=self.metadata, duration=self._data['duration'],
+                    recorded_at=self._data['recorded_at'], observed_at=self._data['observed_at'])
+
+    @property
+    def operator_names(self):
+        return tuple(row.get('name', '') for row in self._data['statistics']['rows'].values())
 
     def to_dict(self):
         return deepcopy(self._data)

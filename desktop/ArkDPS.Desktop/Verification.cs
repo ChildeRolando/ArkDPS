@@ -1752,7 +1752,26 @@ public partial class MainWindow
         checks.Add("history page entry re-reads archives without pressing 刷新");
         string previousHistory=State.Get("history_selected").Text("battle_id");
         await Command("history_select",new(){["battle_id"]=entryBattle});
+        var frozenHistory=State.Get("history_selected").Clone();
         await Command("history_select",new(){["battle_id"]=previousHistory});
+        Require(frozenHistory.Text("battle_id")==entryBattle &&
+                frozenHistory.Get("record").ValueKind==JsonValueKind.Undefined,
+                "history selection did not carry a compact view for the selected battle");
+        string exportPath=Path.Combine(output,"frozen-history.json");
+        await ExportHistory(frozenHistory,"json",exportPath);
+        using(var exported=JsonDocument.Parse(File.ReadAllBytes(exportPath)))
+            Require(exported.RootElement.Text("battle_id")==entryBattle &&
+                    exported.RootElement.Get("statistics").Get("rows").ValueKind==JsonValueKind.Object,
+                    "JSON export used the current selection instead of the frozen archive");
+        string eventStatus=frozenHistory.Text("event_status");
+        Require(eventStatus.Length>0 && HasText(Screenshot.StatisticsDocument(frozenHistory,Theme.Key),"事件："+eventStatus),
+                "ranking PNG lost the selected archive's event status");
+        byte[] frozenPng=Screenshot.Statistics(frozenHistory,Theme.Key);
+        string pngPath=Path.Combine(output,"frozen-history.png");
+        await ExportHistory(frozenHistory,"png",pngPath,frozenPng);
+        Require(File.ReadAllBytes(pngPath).SequenceEqual(frozenPng),
+                "PNG export changed the frozen ranking");
+        checks.Add("compact history selection exports the frozen archive after navigation");
         workerUnavailable=true;
         RefreshHistoryAvailability();
         try

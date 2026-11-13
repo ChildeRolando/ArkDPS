@@ -376,7 +376,9 @@ def test_boss_only_history_uses_archived_scope_and_reports_legacy_unknown(tmp_pa
     cmd(state, 'history_select', battle_id='battle:1')
     selected = state.snapshot()['history_selected']
     assert selected['view']['entries'][0]['value'] == 160.
-    assert selected['record']['statistics']['rows']['a']['damage'] == 230.
+    target = tmp_path / 'boss-filter.json'
+    cmd(state, 'export', format='json', path=str(target), battle_id=selected['battle_id'])
+    assert exported_record(target.read_text('utf-8'))[1]['statistics']['rows']['a']['damage'] == 230.
 
     cmd(state, 'history_select', battle_id='battle:0')
     view = state.snapshot()['history_selected']['view']
@@ -511,7 +513,7 @@ def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_p
     before = copy.deepcopy(state.snapshot())
     original_export = tmp_path / 'western.json'
     cmd(state, 'export', format='json', path=str(original_export),
-        record=before['history_selected']['record'])
+        battle_id=before['history_selected']['battle_id'])
 
     cmd(state, 'number_units', number_units='chinese')
 
@@ -521,7 +523,7 @@ def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_p
     assert data == original_sample
     assert after['live_analysis'] == before['live_analysis']
     assert after['totals'] == before['totals']
-    assert after['history_selected']['record'] == before['history_selected']['record']
+    assert after['history_selected']['battle_id'] == before['history_selected']['battle_id']
     for old, new in [(before['panels'][0], after['panels'][0]),
                      (before['history_selected']['view'], after['history_selected']['view'])]:
         assert [entry['owner_id'] for entry in new['entries']] == [entry['owner_id'] for entry in old['entries']]
@@ -544,7 +546,7 @@ def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_p
 
     new_export = tmp_path / 'chinese.json'
     cmd(state, 'export', format='json', path=str(new_export),
-        record=after['history_selected']['record'])
+        battle_id=after['history_selected']['battle_id'])
     assert new_export.read_bytes() == original_export.read_bytes()
     restarted = DesktopState(tmp_path)
     assert restarted.layout.number_units == 'chinese'
@@ -582,6 +584,11 @@ def test_history_selection_is_immutable_across_refresh_eviction_and_new_battle(t
     assert state.snapshot()['battle_id'] == 'new'
     assert state.snapshot()['history_selected']['battle_id'] == first.battle_id
     assert state.snapshot()['panels'][0]['entries'][0]['value'] == 1230
+    assert not state.history.path_for(first.battle_id).exists()
+    cmd(state, 'history_select', battle_id='battle:102')
+    target = tmp_path / 'evicted-selection.json'
+    cmd(state, 'export', format='json', path=str(target), battle_id=first.battle_id)
+    assert exported_record(target.read_text('utf-8'))[1] == first.to_dict()
 
 
 @pytest.mark.parametrize('version', [None, 0, 2, '1', True])
@@ -770,14 +777,24 @@ def test_lobby_signal_preserves_the_last_battle_and_terminal_status(tmp_path):
 
 def test_export_exact_json_and_archive_protection(tmp_path):
     state = DesktopState(tmp_path)
-    original = record()
+    data = record().to_dict()
+    data['statistics']['enemy_state'] = {'events': [{'raw_value': 1.23456789}]}
+    original = BattleRecord.from_dict(data)
+    state.history.save(original)
+    state.refresh_history()
+    selected = state.snapshot()['history_selected']
+    assert 'record' not in selected
+    assert 'enemy_state' not in selected['view']
     target = tmp_path / 'share.json'
-    cmd(state, 'export', format='json', path=str(target), record=original.to_dict())
+    cmd(state, 'export', format='json', path=str(target), battle_id=selected['battle_id'])
     assert exported_record(target.read_text('utf-8'))[1] == original.to_dict()
     with pytest.raises(FileExistsError):
-        cmd(state, 'export', format='json', path=str(target), record=original.to_dict())
+        cmd(state, 'export', format='json', path=str(target), battle_id=selected['battle_id'])
     with pytest.raises(ValueError, match='历史目录'):
-        cmd(state, 'export', format='json', path=str(state.history.directory / 'bad.json'), record=original.to_dict())
+        cmd(state, 'export', format='json', path=str(state.history.directory / 'bad.json'),
+            battle_id=selected['battle_id'])
+    with pytest.raises(ValueError, match='无法找到要导出的战绩'):
+        cmd(state, 'export', format='json', path=str(target), battle_id='unknown')
 
 
 def test_failed_layout_write_does_not_publish_candidate(tmp_path):
@@ -1447,7 +1464,8 @@ def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path)
              rate_basis='engagement'))
     selected = state.snapshot()['history_selected']
     view = selected['view']
-    assert selected['record']['event_status'] == 'failed'
+    assert selected['event_status'] == 'failed'
+    assert selected['event_error'] == archived['event_error']
     assert view['rate_available'] is False
     assert '该局事件观察未连接' in view['rate_reason']
     assert '无法补采' in view['rate_hint']

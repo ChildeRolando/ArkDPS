@@ -1,5 +1,6 @@
 """A temporary, explicitly attached Frida event observer for Android 2.7.91."""
 from enum import Enum
+import os
 from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -108,6 +109,10 @@ class FridaEventObserver:
                 ) from exc
             self.session.on('detached', self._detached)
             source = Path(__file__).with_name('event_probe_android2791.js').read_text(encoding='utf-8')
+            if os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1':
+                source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
+            if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '1':
+                source = 'globalThis.arkdpsCoalesceEnemyHp = true;\n' + source
             self.script = self.session.create_script(source)
             self.script.on('message', self._message)
             self.script.load()

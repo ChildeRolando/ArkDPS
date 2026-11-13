@@ -12,8 +12,22 @@ function between(first, last) {
   return source.slice(start, end);
 }
 
+for (const traceHpContext of [false, true]) {
+  vm.runInNewContext(`
+    ${between('function shouldObserveCallback(', 'for(const m of cfg.methods.filter(')}
+    for (const [owner, name] of [
+      ['Entity', 'ApplyModifier'], ['Entity', 'OnAfterOutputDamage'],
+      ['Unit', 'OnTakeDamage'], ['Buff', 'OnTakeDamage'], ['BlockDamage', '_AssignDynamicVar'],
+      ['Character', 'OnSkillFinish'], ['BattleController', 'OnCharacterFinished']
+    ]) assert.equal(shouldObserveCallback({owner, name}), true);
+    for (const [owner, name] of [['Entity', 'OnTakeDamage'], ['Unit', 'OnAfterOutputDamage']])
+      assert.equal(shouldObserveCallback({owner, name}), traceHpContext);
+  `, {assert, traceHpContext});
+}
+
 vm.runInNewContext(`
 let sequence=0,epoch=0,active=0,fatal=null,stopped=false;
+const coalesceEnemyHp=false;
 const activeHooks=new Map(),hooks=[];
 const rpc={};
 let receiver=null, response=null, requestId=0;
@@ -106,6 +120,8 @@ assert.equal(queue.length,EVENT_BUFFER_LIMIT);
 
 vm.runInNewContext(`
 let sequence=12,epoch=24,active=0,fatal=null,stopped=false;
+const coalesceEnemyHp=true;
+const enemyMaxHpReady=true;
 let clock={frame:60,game_time:2};
 const time=()=>{if(clock instanceof Error)throw clock;return clock;};
 const eventQuality=()=>({});
@@ -121,6 +137,8 @@ const ptr=(address,fields={})=>({
 const className=klass=>klass;
 const controllerClass=ptr('0x100');
 const terminalMethods={state:'state',destroy:'destroy',controller:controllerClass};
+${between('const EVENT_BUFFER_LIMIT', 'const stacks=')}
+${between('function record(source', 'function refreshEnemyEntryFrame')}
 ${between('let terminalBoundary=', 'const enemyStateError=')}
 ${between('function markEvents()', 'function receiveEventRequest()')}
 
@@ -180,7 +198,117 @@ assert.equal(markEvents().terminal_boundary,null);
 loggerFields[0x18]=ptr('0x999');
 enter()();
 assert.equal(markEvents().terminal_boundary,null);
+
+// Finish sequencing a pending heal before capturing destruction's watermark.
+loggerFields[0x18]=controller;
+record(null,'enemy_enter',0,{frame:57,game_time:1.9},{},{target:'enemy_a',target_instance:'7'});
+for(let hp=10;hp<13;hp++){
+ const evidence={target:'enemy_a',target_instance:'7'};
+ recordEnemyHp({enemyTarget:true,key:'0x7',hpBefore:hp,maxHpBefore:null,evidence},
+               clock,'Entity.SetHpInternal',hp+1,100);
+}
+const prior=sequence;
+enter()();
+const end=markEvents();
+assert.equal(end.sequence,prior+1);
+assert.equal(end.terminal_boundary.sequence,end.sequence);
+assert.equal(end.terminal_boundary.epoch,epoch);
+assert.equal(queue.at(-1).hp_before,11);
+assert.equal(queue.at(-1).hp_after,13);
+restart();
+assert.equal(enemyHpBirths.size,0);
 `, {assert}, {filename: 'product-terminal-boundary'});
+
+for (const coalesceEnemyHp of [false, true]) {
+  vm.runInNewContext(`
+    let sequence=0,epoch=0,active=0,fatal=null,stopped=false;
+    let clock={frame:11,game_time:1.1};
+    const time=()=>clock;
+    const activeHooks=new Map(),enemyHpWrites=new Map(),awaitingEnemyTile=new Map();
+    const enemyHealthPhases=new Map(),pendingEnemyRebirth=new Map();
+    let enemyEntryFrame=null,enemyEntryUnknown=false,enemyPhaseUnknown=false;
+    let enemyStateUnknown=false,bossDamageUnknown=false;
+    const enemyMaxHpReady=true;
+    const eventQuality=frame=>{if(frame!==undefined)refreshEnemyEntryFrame(frame);return {};};
+    const currentTerminalBoundary=()=>null;
+    ${between('const EVENT_BUFFER_LIMIT', 'const stacks=')}
+    ${between('function record(source', 'function isEnemy(')}
+    ${between('function beginEnemyHook(', 'function enemyIdentity(')}
+    ${between('function markEvents()', 'function receiveEventRequest()')}
+    const main={key:'0x7',target:'enemy_a',target_instance:'7'};
+    function lifecycle(kind,identity=main){
+      record(null,kind,0,clock,{}, {target:identity.target,target_instance:identity.target_instance});
+    }
+    function write(before,after,{identity=main,max=100,method='Entity.SetHpInternal',previousMax=null}={}){
+      beginEnemyHook(method);
+      recordEnemyHp({key:identity.key,enemyTarget:true,hpBefore:before,maxHpBefore:previousMax,
+        evidence:{target:identity.target,target_instance:identity.target_instance}},clock,method,after,max);
+      endEnemyHook(method);
+    }
+    function ranges(batch){return batch.events.filter(event=>event.kind==='enemy_hp')
+      .map(event=>[event.hp_before,event.hp_after].join('>')).join(',');}
+    function prefix(after=0){const mark=markEvents();return readEvents(after,mark.sequence);}
+    lifecycle('enemy_enter');
+    clock={frame:12,game_time:1.2};
+    write(1,2);write(2,3);write(3,4);
+    assert.equal(ranges(prefix()),'1>2,2>3,3>4'); // spawn clamp window
+    const baseline=sequence;
+    assert.equal(ackEvents(baseline).acknowledged,baseline);
+    clock={frame:13,game_time:1.3};
+    write(4,5);write(5,6);write(6,7);
+    active=1;
+    const busy=markEvents();
+    assert.equal(busy.active,1);
+    assert.equal(busy.sequence,baseline+(coalesceEnemyHp?1:3));
+    active=0;
+    const marked=markEvents();
+    assert.equal(marked.epoch,6); // every raw write retains its epoch edge
+    const published=readEvents(baseline,marked.sequence);
+    assert.equal(ranges(published),coalesceEnemyHp?'4>5,5>7':'4>5,5>6,6>7');
+    write(7,8);write(8,9);write(9,10); // same frame, next watermark
+    assert.deepEqual(readEvents(baseline,marked.sequence),published);
+    assert.equal(ackEvents(marked.sequence).acknowledged,marked.sequence);
+    assert.equal(ackEvents(marked.sequence).acknowledged,marked.sequence);
+    assert.equal(ranges(prefix(marked.sequence)),coalesceEnemyHp?'7>8,8>10':'7>8,8>9,9>10');
+    let previous=sequence;
+    write(10,11);write(11,12);write(12,13);
+    record('char_a','damage',1,clock,{},{});
+    write(13,14);write(14,15);write(15,16);
+    let batch=prefix(previous);
+    assert.equal(batch.events.map(event=>event.kind).join(','),coalesceEnemyHp
+      ?'enemy_hp,enemy_hp,damage,enemy_hp,enemy_hp':'enemy_hp,enemy_hp,enemy_hp,damage,enemy_hp,enemy_hp,enemy_hp');
+
+    // Different identity, time, MaxHP, callback, discontinuity and direction
+    // each prevent extending the currently buffered run.
+    previous=sequence;
+    write(16,17);write(17,18);write(18,19,{max:101,previousMax:100});
+    write(19,20,{max:101});write(20,21,{max:101,method:'Entity.SetHpInternalDirectly'});
+    write(21,22,{max:101});write(23,24,{max:101});write(24,23,{max:101});
+    const reused={...main,key:'0x99'};
+    write(23,24,{identity:reused,max:101});write(24,25,{identity:reused,max:101});
+    clock={frame:13,game_time:1.31};
+    write(25,26,{identity:reused,max:101});write(26,27,{max:101});
+    batch=prefix(previous);
+    assert.equal(ranges(batch),'16>17,17>18,18>19,19>20,20>21,21>22,23>24,24>23,23>24,24>25,25>26,26>27');
+
+    previous=sequence;
+    lifecycle('enemy_fake_death');
+    write(27,28);write(28,29);write(29,30); // no active phase
+    lifecycle('enemy_reborn');
+    clock={frame:14,game_time:1.4};
+    write(30,31);write(31,32);write(32,33); // new phase guard
+    clock={frame:15,game_time:1.5};
+    write(33,34);write(34,35);write(35,36);
+    refreshEnemyEntryFrame(clock.frame);
+    clock={frame:13,game_time:1.3};
+    refreshEnemyEntryFrame(clock.frame);
+    write(36,37);write(37,38);write(38,39); // old birth invalid after reset
+    batch=prefix(previous);
+    assert.equal(ranges(batch),coalesceEnemyHp?'27>28,28>29,29>30,30>31,31>32,32>33,33>34,34>36,36>37,37>38,38>39'
+      :'27>28,28>29,29>30,30>31,31>32,32>33,33>34,34>35,35>36,36>37,37>38,38>39');
+    assert.equal(active,0);
+  `, {assert, coalesceEnemyHp}, {filename: 'product-enemy-hp-coalescing'});
+}
 
 vm.runInNewContext(`
 let enemyDamageUnknown=false;

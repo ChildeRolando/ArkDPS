@@ -20,7 +20,7 @@ import time
 import traceback
 from uuid import uuid4
 
-from battle_history import BattleHistory, BattleRecord
+from battle_history import BattleHistory
 from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
@@ -114,7 +114,11 @@ class DesktopState:
         self.history = BattleHistory(directory / 'history')
         self.records = {}
         self.selected = None
+        self._previous_selected = None
         self.history_config = PanelConfig(panel_id='history')
+        self._history_index = []
+        self._history_view_key = None
+        self._history_view = None
         self.last = None
         self.last_frame = None
         self.last_progress = 0.
@@ -135,6 +139,14 @@ class DesktopState:
     def refresh_history(self):
         result = self.history.list_recent()
         self.records = {r.battle_id: r for r in result.records}
+        history = []
+        for record in result.records:
+            item = record_display(record)
+            # Readable labels and the native id both match, so old records stay searchable.
+            item['search'] = ' '.join((*item['labels'], item['date'], ' '.join(record.operator_names),
+                                      item['stage_raw'] or '')).casefold()
+            history.append(item)
+        self._history_index = history
         self.history_notice = '；'.join(f'{d.code}: {d.message[:160]}' for d in result.diagnostics)
         if self.selected is None and result.records:
             self.selected = result.records[0]
@@ -307,26 +319,25 @@ class DesktopState:
         view['source'] = source
         return view
 
+    def _selected_history(self):
+        if self.selected is None:
+            self._history_view_key = self._history_view = None
+            return None
+        key = self.selected, self.history_config, self.layout.number_units
+        if key != self._history_view_key:
+            event = EventAvailability(self.selected.event_status, self.selected.event_error, live=False)
+            self._history_view = dict(
+                record_display(self.selected),
+                view=self.view(self.history_config, record_statistics(self.selected, for_panel=True),
+                               event=event),
+                event_status=event.status, event_error=event.error)
+            self._history_view_key = key
+        return self._history_view
+
     def snapshot(self):
         sample = self.last or {}
         stats = sample.get('statistics') or {}
         status, label = self.status()
-        history = []
-        for record in self.records.values():
-            item = record_display(record)
-            names = ' '.join(row.get('name', '') for row in record.statistics['rows'].values())
-            # Readable labels and the native id both match, so old records stay searchable.
-            item['search'] = ' '.join((*item['labels'], item['date'], names, item['stage_raw'] or '')).casefold()
-            history.append(item)
-        selected = None
-        if self.selected:
-            selected_stats = record_statistics(self.selected)
-            selected = dict(
-                record_display(self.selected),
-                view=self.view(self.history_config, selected_stats, None,
-                               EventAvailability(status=self.selected.event_status,
-                                                 error=self.selected.event_error, live=False)),
-                record=self.selected.to_dict())
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         live_event = EventAvailability(status=sample.get('event_status', self.event_status),
@@ -354,7 +365,8 @@ class DesktopState:
                     boss_effective_live_analysis=self.boss_effective_live_analysis,
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),
-                    history=history, history_selected=selected, history_notice=self.history_notice)
+                    history=self._history_index, history_selected=self._selected_history(),
+                    history_notice=self.history_notice)
 
     def persist(self, layout):
         self.store.save(layout)
@@ -411,11 +423,20 @@ class DesktopState:
         elif op == 'history_refresh':
             self.refresh_history()
         elif op == 'history_select':
-            self.selected = self.records[cmd['battle_id']]
+            selected = self.records[cmd['battle_id']]
+            if self.selected is None or selected.battle_id != self.selected.battle_id:
+                self._previous_selected, self.selected = self.selected, selected
         elif op == 'history_config':
             self.history_config = PanelConfig.from_dict(dict(cmd['config'], panel_id='history'))
         elif op == 'export':
-            record = BattleRecord.from_dict(cmd['record'])
+            battle_id = cmd['battle_id']
+            # The save dialog can outlive a pending selection or an archive refresh.
+            record = next((record for record in (self.selected, self._previous_selected)
+                           if record is not None and record.battle_id == battle_id), None)
+            if record is None:
+                record = self.records.get(battle_id)
+            if record is None:
+                raise ValueError('无法找到要导出的战绩')
             if cmd['format'] == 'json':
                 payload = json_bytes(record)
             elif cmd['format'] == 'png':

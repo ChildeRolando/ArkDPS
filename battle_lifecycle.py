@@ -640,9 +640,11 @@ class BattleSessions:
                              statistics=self.adapter.result() if self.adapter else None))
 
     def pop_archives(self):
-        result = list(self._archives)
-        self._archives.clear()
-        return deepcopy(result)
+        # _archive already detached the complete record from live state.
+        # Transfer ownership of the list and its records to the caller.
+        archives = self._archives
+        self._archives = []
+        return archives
 
 
 class BattleView:

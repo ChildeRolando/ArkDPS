@@ -522,13 +522,14 @@ def test_unknown_source_keeps_coverage_and_only_hides_its_overkill():
 
 def test_probe_records_hp_evidence_only_after_onleave():
     js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
-    start = js.index('for(const m of cfg.methods.filter(')
+    start = js.index('for(const m of cfg.methods.filter(shouldObserveCallback))')
     production = js[start:js.index('\ninstallEnemyEntryHooks();', start)]
     enter, leave = production.split('onLeave(){', 1)
     assert 'hp_damage' not in enter
     assert 'recordHpContext(' not in enter
     assert leave.index('const end=time()') < leave.index("record(this.source,'hp_damage'")
     assert leave.index('const end=time()') < leave.index('recordHpContext(')
+    assert 'if(traceHpContext){\n      const hpAfter=' in leave
 
 
 def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
