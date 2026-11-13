@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from battle_lifecycle import (BattleFeed, BattleObservation, BattleRuntime,
-                              BattleSessions, BattleView)
+                              BattleSessions, BattleView, MappingRetry)
 from roster import CharacterEntry, RosterSnapshot
 from snapshot_adapter import FrameMismatch, MappingUnavailable
 from event_capture import CaptureRetry
@@ -384,8 +384,9 @@ def test_bad_new_roster_preserves_old_data_and_hands_off_its_archive_immediately
     c, r, _ = begin()
     c.advance(time=1., frame=1, damage=5.)
     c.roster = replace(c.roster, entries=())
-    with pytest.raises(MappingUnavailable):
+    with pytest.raises(MappingRetry) as retry:
         r.poll(c)
+    assert isinstance(retry.value.__cause__, MappingUnavailable)
     assert total(r) == 100.
     record, = r.sessions.pop_archives()
     assert record['statistics']['rows']['a']['damage'] == 100.

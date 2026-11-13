@@ -288,6 +288,102 @@ def test_transient_frame_failure_preserves_events_until_a_reliable_pair(monkeypa
         session.close()
 
 
+def test_subround_with_unmapped_roster_preserves_observer_and_archives(tmp_path, monkeypatch):
+    from battle_lifecycle import MappingRetry
+    from capture_battles import replay
+    from capture_cli import json_value
+
+    session, collector, calls, records = connected()
+    try:
+        previous = session.read()
+        advance(session, collector, terminal=True)
+        session.read()
+        collector.state, collector.frame, collector.game_time, collector.damage = 2, 1, 0, 0
+        original = collector.read_roster
+        monkeypatch.setattr(collector, 'read_roster', lambda: replace(original(), entries=()))
+        observer = session.observer
+        for _ in range(3):
+            with pytest.raises(MappingRetry):
+                session.read()
+            assert session.observer is observer
+            assert session.runtime.display_sample()['battle_id'] == previous['battle_id']
+        assert not any(data.reason == 'read_unavailable' for kind, data in records
+                       if kind == 'lifecycle_observation')
+        monkeypatch.setattr(collector, 'read_roster', original)
+        baseline = session.read()
+        assert baseline['battle_id'] != previous['battle_id']
+        assert baseline['event_status'] == 'recording'
+        advance(session, collector, terminal=True)
+        session.read()
+        collector.state = 1
+        with pytest.raises(CaptureRetry):
+            session.read()
+    finally:
+        session.close()
+
+    assert calls.count('attach') == calls.count('detach') == 1
+    path = tmp_path / 'capture.jsonl'
+    path.write_text('\n'.join(json.dumps(dict(kind=kind, data=data), default=json_value)
+                              for kind, data in records), encoding='utf-8')
+    result = replay(path)
+    assert result['archives'] == 2
+
+
+def test_empty_preparation_preserves_observer_and_has_no_archive(monkeypatch):
+    session, collector, calls, records = connected()
+    try:
+        previous = session.read()
+        advance(session, collector)
+        session.read()
+        collector.state, collector.frame, collector.game_time = 2, 1, 0
+        original_roster, original_sample = collector.read_roster, collector.read
+        monkeypatch.setattr(collector, 'read_roster', lambda: replace(original_roster(), entries=()))
+        monkeypatch.setattr(collector, 'read', lambda: dict(original_sample(), rows=[]))
+        observer = session.observer
+        drained, committed = [], []
+        drain = observer.drain
+        def read_through(sequence):
+            drained.append(sequence)
+            return drain()
+        observer.read_through = read_through
+        observer.commit_events = committed.append
+        for _ in range(2):
+            with pytest.raises(CaptureRetry, match='preparing'):
+                session.read()
+            assert session.observer is observer
+            assert session.runtime.sessions.state == 'preparing'
+            assert session.runtime.display_sample()['battle_id'] == previous['battle_id']
+        prepared = [data for kind, data in records if kind == 'lifecycle_observation' and data.kind == 'preparing']
+        assert len({observation.generation for observation in prepared}) == 1
+        assert all(observation.events is None for observation in prepared)
+        archives = [data for kind, data in records if kind == 'archive_ready']
+        assert [archive['battle_id'] for archive in archives] == [previous['battle_id']]
+        assert not drained and not committed
+
+        collector.state = 3
+        with pytest.raises(CaptureRetry, match='end'):
+            session.read()
+        assert session.runtime.sessions.state == 'ended'
+        assert len([1 for kind, _ in records if kind == 'archive_ready']) == 1
+
+        collector.state = 1
+        with pytest.raises(CaptureRetry, match='initializing'):
+            session.read()
+        collector.state, collector.frame, collector.game_time, collector.damage = 2, 1, 0, 0
+        with pytest.raises(CaptureRetry, match='preparing'):
+            session.read()
+        generation = session.runtime.sessions.preparing_generation
+        monkeypatch.setattr(collector, 'read_roster', original_roster)
+        monkeypatch.setattr(collector, 'read', original_sample)
+        sample = session.read()
+        assert sample['battle_id'].endswith(f':{generation}')
+        assert sample['event_status'] == 'recording' and session.observer is observer
+        assert drained == committed == [observer.sequence]
+        assert calls.count('attach') == 1
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize('mode', ['disabled', 'startup_failure', 'runtime_failure'])
 def test_lifecycle_retains_default_event_fallback_and_native_totals(mode):
     class Failed(LiveObserver):

@@ -73,7 +73,7 @@ internal sealed class LiveTrendModel
         bool settling = status is "finalizing" or "ended";
         double time = data.Get("game_time").TryNumber(double.NaN);
         if (!double.IsFinite(time) || time < 0 || battle.Length == 0 ||
-            status is "disconnected" or "stale" or "locating" or "waiting" or "frozen")
+            status is "disconnected" or "stale" or "locating" or "waiting" or "frozen" or "preparing")
         {
             breakPending = true;
             if (newBattle || statusChanged) Changed?.Invoke();
@@ -375,6 +375,7 @@ public sealed class LiveTrendView : Border
             "paused" => " · 暂停",
             "stale" or "disconnected" or "locating" => " · 采样中断，保留最近数据",
             "frozen" => " · 战局冻结，保留最近数据",
+            "preparing" => " · 战斗准备中，显示上一局",
             _ => "",
         };
         readout.Visibility = !IsReferenceCompact || points.Length == 0 || cursor.HasValue || stateNote.Length > 0
@@ -385,6 +386,7 @@ public sealed class LiveTrendView : Border
             {
                 "paused" => " · 暂停",
                 "frozen" => " · 战局冻结",
+                "preparing" => " · 战斗准备中",
                 "stale" or "disconnected" or "locating" => " · 采样中断",
                 _ => "",
             });

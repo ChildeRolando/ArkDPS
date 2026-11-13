@@ -534,6 +534,20 @@ def test_statuses_keep_last_valid_values_and_do_not_convert_unknown_to_zero(tmp_
     assert state.status()[0] == 'degraded'
 
 
+def test_preparing_status_keeps_last_verified_view_and_observer_status(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('observer', ('ready', None))
+    state.accept('lifecycle', 'preparing')
+    assert state.status() == ('preparing', '战斗准备中')
+    state.accept('sample', sample())
+    state.accept('lifecycle', 'preparing')
+    result = state.snapshot()
+    assert result['status'] == 'preparing'
+    assert '保留上一局统计' in result['status_text']
+    assert result['observer_status'] == 'ready'
+    assert result['panels'][0]['entries'][0]['value'] == 1230
+
+
 def test_export_exact_json_and_archive_protection(tmp_path):
     state = DesktopState(tmp_path)
     original = record()

@@ -208,6 +208,14 @@ public partial class MainWindow
         analysis["game_time"] = 24;
         ApplyFixture(fixture);
         Require(trendModel.Points[^1].Time == 23, "pause advanced the chart");
+        var preparing = fixture.DeepClone();
+        preparing["status"] = "preparing";
+        preparing["status_text"] = "战斗准备中 · 保留上一局统计";
+        preparing["observer_status"] = "ready";
+        ApplyFixture(preparing);
+        Require(Status.Text.Contains("战斗准备中") && StatusLight.Fill == StatusGreen &&
+                EnemyStatusText.Text.Contains("战斗准备中") && trendModel.Points[^1].Time == 23,
+            "preparation lost the attached observer or advanced the previous battle chart");
         fixture["status"] = "disconnected";
         ApplyFixture(fixture);
         fixture["status"] = "live";

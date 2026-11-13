@@ -11,11 +11,11 @@ import json
 from pathlib import Path
 import time
 
-from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions
+from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions, MappingRetry
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL
 from roster import CharacterEntry, RosterSnapshot
 from event_capture import CaptureRetry
-from snapshot_adapter import AdapterError
+from snapshot_adapter import AdapterError, MappingUnavailable
 
 
 def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
@@ -62,7 +62,11 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
                     write({'observation': asdict(observation)})
                     summary['samples'] += int(observation.kind == 'sample')
                 except CaptureRetry as exc:
-                    write({'retry': str(exc)})
+                    retry = {'retry': str(exc)}
+                    if isinstance(exc, MappingRetry):
+                        # The attempted new generation can archive its predecessor.
+                        retry['observation'] = asdict(exc.observation)
+                    write(retry)
                 except Exception as exc:
                     summary['errors'] += 1
                     # poll already issued the gap, preserve that exact sequence
@@ -160,10 +164,15 @@ def replay(path):
                     entries=tuple(CharacterEntry(**entry) for entry in roster['entries']),
                     present_unique_ids=frozenset(roster['present_unique_ids']),
                     present_known=roster['present_known'])
-            sessions.consume(BattleObservation(**raw))
+            try:
+                sessions.consume(BattleObservation(**raw))
+            except MappingUnavailable:
+                if 'retry' not in value:
+                    raise
+            else:
+                samples += int(raw['kind'] == 'sample')
             if 'connection' in value:
                 sessions.connection = value['connection']
-            samples += int(raw['kind'] == 'sample')
             pending.extend(sessions.pop_archives())
         elif 'archive_ready' in value:
             if not pending or not same_archive(pending.pop(0), value['archive_ready']):
@@ -210,6 +219,9 @@ def replay_product(lines):
             observation = observation_from_json(data)
             try:
                 sessions.consume(observation)
+            except MappingUnavailable:
+                pending.extend(sessions.pop_archives())
+                continue
             except (AdapterError, ValueError):
                 # The following recorded gap must close the failed read. It
                 # cannot publish a value or silently erase an archive signal.

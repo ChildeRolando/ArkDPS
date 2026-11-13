@@ -21,7 +21,7 @@ import traceback
 from uuid import uuid4
 
 from battle_history import BattleHistory, BattleRecord
-from battle_lifecycle import BattleRuntime
+from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
@@ -215,6 +215,8 @@ class DesktopState:
             return 'locating', '正在定位 · 保留最后有效记录'
         if self.error:
             return 'disconnected', '连接断开 / 读取中断 · 显示最后有效记录'
+        if self.lifecycle == 'preparing':
+            return 'preparing', ('战斗准备中 · 保留上一局统计' if self.last else '战斗准备中')
         if not self.last:
             return 'waiting', '等待战斗数据'
         if self.lifecycle in ('ended', 'finalizing', 'frozen'):
@@ -508,7 +510,7 @@ class CollectionWorker:
                             except CaptureRetry as exc:
                                 lifecycle = self.session.runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
-                                if lifecycle == 'playing':
+                                if lifecycle == 'playing' or isinstance(exc, MappingRetry):
                                     retries += 1
                                     now = time.monotonic()
                                     if now - last_retry_audit >= 5:
@@ -527,6 +529,9 @@ class CollectionWorker:
                                 self.last_connect_attempt = time.monotonic()
                                 self.request(current_config, current_enabled)
                             except Exception as exc:
+                                audit('capture_error', {'error_type': type(exc).__name__,
+                                      'reason': str(exc).partition('\n')[0][:200],
+                                      'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
                                 usable = False
                         if (usable and current_enabled and current_target is not None

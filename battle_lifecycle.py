@@ -12,7 +12,7 @@ import math
 import time
 import uuid
 
-from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError
+from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import LiveEventCapture, CaptureRetry, read_event_batch, acknowledge_event_batch
 from event_observer import ObserverReadRetry
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
@@ -30,6 +30,14 @@ class BattleObservation:
     reason: str = ''
     events: dict | None = None
     lifecycle: dict | None = None
+
+
+class MappingRetry(CaptureRetry):
+    """A guarded frame without reliable owner evidence."""
+
+    def __init__(self, reason, observation):
+        super().__init__(reason)
+        self.observation = observation
 
 
 class BattleFeed:
@@ -140,16 +148,21 @@ class BattleFeed:
         now = sample['game_time']
         if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
             raise FrameMismatch('游戏时间无效')
-        if events is not None and 'error' not in events:
+        return sample, roster, events
+
+    @staticmethod
+    def _drain(observer, evidence):
+        if evidence is not None and 'error' not in evidence:
             try:
-                events['drain'] = read_event_batch(observer, events['sequence'])
+                evidence['drain'] = read_event_batch(observer, evidence['sequence'])
             except CaptureRetry:
                 raise
             except Exception as exc:
-                events = {'error': str(exc)}
-        return sample, roster, events
+                return {'error': str(exc)}
+        return evidence
 
-    def acquire(self, collector, observer=None):
+    def acquire(self, collector, observer=None, *, published_generation=0,
+                preparing_generation=None):
         """Bracket cumulative/roster reads with the live singleton and flow.
 
         Failed reads are unknown. Only an observed null/destroyed singleton,
@@ -173,6 +186,8 @@ class BattleFeed:
         exiting = (before['transiting'] and before['source'].startswith('level_')
                    and before['target'] == 'battle_finish')
         if before.get('state') == 3 or exiting:
+            if self.generation == preparing_generation:
+                return self._end('finished')
             # A singleton replacement may be observed only after it finished.
             # It cannot provide a result for the previously observed battle.
             if self.identity == identity and not stage_changed and before.get('state') == 3 and not exiting:
@@ -189,6 +204,7 @@ class BattleFeed:
                     self.terminal = True
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
+                    events = self._drain(observer, events)
                     sample['native_session'] = sample['session']
                     sample['session'] = f'{self.id}:{self.generation}'
                     self.terminal = True
@@ -224,8 +240,14 @@ class BattleFeed:
                 return self._emit('waiting', reason='retired_battle')
         changed = (self.identity != identity or stage_changed or self.native_session != sample['session']
                    or (self.clock is not None and now < self.clock))
+        generation = self.generation + int(changed)
+        preparing = (generation > published_generation and roster.present_known
+                     and not roster.entries and not sample['rows'])
+        # Preparation has no owner baseline. Keep the observer attached and
+        # leave the previous prefix for the next accepted combat watermark.
+        events = None if preparing else self._drain(observer, events)
         if changed:
-            self.generation += 1
+            self.generation = generation
             self.terminal = False
             self.stage = stage
         elif stage:
@@ -234,6 +256,8 @@ class BattleFeed:
         self.native_session = sample['session']
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
+        if preparing:
+            return self._emit('preparing', sample, roster, reason='empty_roster')
         return self._emit('sample', sample, roster, events=events)
 
 
@@ -248,6 +272,7 @@ class BattleSessions:
         self.feed_id = feed_id
         self.sequence = 0
         self.generation = 0
+        self.preparing_generation = None
         self.adapter = None
         self.battle_id = None
         self.state = 'waiting'
@@ -421,11 +446,19 @@ class BattleSessions:
     def consume(self, observation):
         if (observation.feed != self.feed_id or
                 observation.sequence <= self.sequence or
-                observation.generation < self.generation):
+                observation.generation < max(self.generation, self.preparing_generation or 0)):
             return False
-        if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting'):
+        if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting', 'preparing'):
             raise ValueError('unknown observation kind')
-        if observation.kind == 'sample':
+        if observation.kind == 'preparing':
+            if observation.generation <= self.generation:
+                return False
+            self._archive('new_battle')
+            self.preparing_generation = observation.generation
+            self.state = 'preparing'
+            self.connection = 'connected'
+            self.reason = observation.reason
+        elif observation.kind == 'sample':
             if observation.generation <= 0 or observation.sample['session'] != f'{self.feed_id}:{observation.generation}':
                 raise ValueError('sample does not match its observation generation')
             if observation.generation == self.generation and (
@@ -444,6 +477,7 @@ class BattleSessions:
                 self.capture.adapter = adapter
                 self.event_status, self.event_error = 'unavailable', None
                 self.generation = observation.generation
+                self.preparing_generation = None
                 self.battle_id = observation.sample['session']
                 self._archived = False
                 self._terminal_seen = False
@@ -469,18 +503,22 @@ class BattleSessions:
             self.state = 'finalizing'
             self.connection = 'connected'
         elif observation.kind == 'end':
-            if observation.generation != self.generation:
+            if self.preparing_generation is not None and observation.generation == self.preparing_generation:
+                self.preparing_generation = None
+                self.state = 'ended' if self.adapter is not None else 'waiting'
+                self.reason = observation.reason
+            elif observation.generation != self.generation:
                 return False
-            if not self._archived and observation.reason == 'finished':
-                self._merge_terminal_metadata(observation)
-            if observation.sample is not None and not self._archived:
-                self._terminal_update(observation)
-            if self.adapter is not None and self.adapter.statistics.end_time is None:
-                # Keep the last guarded native totals when the battle has
-                # already left, and close event coverage at its last watermark.
-                self._close_unverified_event_end()
-                self.adapter.on_end()
-            self._archive(observation.reason)
+            else:
+                if not self._archived and observation.reason == 'finished':
+                    self._merge_terminal_metadata(observation)
+                if observation.sample is not None and not self._archived:
+                    self._terminal_update(observation)
+                if self.adapter is not None and self.adapter.statistics.end_time is None:
+                    # Preserve native totals and close events at their last watermark.
+                    self._close_unverified_event_end()
+                    self.adapter.on_end()
+                self._archive(observation.reason)
             self.connection = 'disconnected' if observation.reason == 'process_changed' else 'connected'
         elif observation.kind == 'gap':
             self.freeze(observation.reason)
@@ -535,7 +573,17 @@ class BattleRuntime:
 
     def _consume(self, observation):
         self.record(observation)
-        return self.sessions.consume(observation)
+        try:
+            return self.sessions.consume(observation)
+        except MappingUnavailable as exc:
+            # The native battle and event attachment remain valid while
+            # ownership settles. Preserve the queue and the last good view.
+            raise MappingRetry(str(exc), observation) from exc
+
+    def _acquire(self, collector, observer):
+        return self.feed.acquire(collector, observer,
+                                 published_generation=self.sessions.generation,
+                                 preparing_generation=self.sessions.preparing_generation)
 
     def poll(self, collector, observer=None, *, prepare_observer=None):
         """Prepare event recovery only after the feed confirms a new battle."""
@@ -543,7 +591,7 @@ class BattleRuntime:
         from roster import RosterUnavailable
         from tools.stage_global_state.memory import ReadFailure
         try:
-            observation = self.feed.acquire(collector, observer)
+            observation = self._acquire(collector, observer)
             if (prepare_observer is not None and observation.kind == 'sample'
                     and observation.generation != self.sessions.generation):
                 retry, observer = prepare_observer(observation)
@@ -554,7 +602,7 @@ class BattleRuntime:
                     native = dict(observation.sample,
                                   event_capability=deepcopy(collector.event_capability))
                     self._consume(replace(observation, sample=native, events=None))
-                    observation = self.feed.acquire(collector, observer)
+                    observation = self._acquire(collector, observer)
             consumed = self._consume(observation)
             if consumed and observer is not None and self.sessions.event_status in ('recording', 'finished'):
                 evidence = observation.events or {}

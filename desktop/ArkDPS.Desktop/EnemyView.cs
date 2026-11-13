@@ -433,7 +433,7 @@ public partial class MainWindow
         }
 
         string status=enemy.Text("status");
-        bool blocked=battleStatus is "stale" or "disconnected" or "locating" or "frozen" or "previous";
+        bool blocked=battleStatus is "stale" or "disconnected" or "locating" or "frozen" or "previous" or "preparing";
         bool ready=battleId.Length>0 && status=="ready" && !blocked;
         // An unavailable enemy sample does not erase the last published rows for this battle.
         if(ready || (shownEnemy.ValueKind==JsonValueKind.Undefined && status=="ready" && battleId.Length>0))
@@ -478,6 +478,7 @@ public partial class MainWindow
             "finalizing" => "等待战斗结算",
             "disconnected" => "采集连接中断",
             "previous" => "显示上次快照 · 等待新的战斗数据",
+            "preparing" => hasReading ? "战斗准备中 · 显示上一局敌情" : "战斗准备中",
             "frozen" => "战局冻结",
             "stale" => "战斗数据已过期",
             _ => enemyStatus,
@@ -486,7 +487,8 @@ public partial class MainWindow
         var hints=new List<string>();
         string error=enemy.Text("error");
         if(error.Length>0) hints.Add(error);
-        if(!ready && hasReading) hints.Add("显示本局最后一次可用的敌情。");
+        if(!ready && hasReading) hints.Add(battleStatus is "preparing" or "previous"
+            ? "显示上一局最后一次可用的敌情。" : "显示本局最后一次可用的敌情。");
         string entryHint = entryCoverage switch
         {
             JsonValueKind.True => "已入场人数合并入场事件与快照。",

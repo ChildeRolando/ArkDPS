@@ -148,6 +148,25 @@ def test_event_retry_does_not_reattach_disabled_or_healthy_observers(remote):
         session.close()
 
 
+def test_previous_terminal_gap_does_not_reattach_a_healthy_observer():
+    session, collector, calls, _ = connected()
+    try:
+        previous = session.read()
+        observer = session.observer
+        session.observer = None
+        collector.state = 3
+        assert session.read()['event_status'] == 'gap'
+        session.observer = observer
+        next_battle(session, collector)
+        current = session.read()
+        assert current['battle_id'] != previous['battle_id']
+        assert current['event_status'] == 'recording'
+        assert session.observer is observer
+        assert calls.count('attach') == 1
+    finally:
+        session.close()
+
+
 def test_event_retry_detects_loss_first_observed_at_the_next_battle():
     session, collector, calls, _ = connected()
     try:
