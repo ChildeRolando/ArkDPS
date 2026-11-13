@@ -1,6 +1,6 @@
 # ArkDPS 文档导航
 
-根目录 [README](../README.md) 是项目入口；本页按用途索引项目文档。新增、移动或废弃文档时同步更新本页。
+从 [README](../README.md) 下载和使用 ArkDPS。开发前按任务查阅 [AGENTS.md](../AGENTS.md)。
 
 ## 先读
 
@@ -43,8 +43,3 @@
 - [ADR 0003：WPF 展示与 Python 子进程](adr/0003-wpf-python-worker.md)
 - [ADR 0002：接敌伤害与治疗使用独立活跃区间](adr/0002-separate-engagement-windows.md)
 - [ADR 0006：元素爆条伤害按最后元素损伤来源归属](adr/0006-elemental-burst-attribution.md)
-
-## 维护约定
-
-- 实测结论写清版本、日期、证据路径和未覆盖机制；不把计划或作业文件存在说成验收通过。
-- 引用关卡数据时写来源和 SHA-256；坐标统一用 MAA `[列, 行]`，并说明原始坐标转换。

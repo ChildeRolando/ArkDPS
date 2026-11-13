@@ -6,27 +6,21 @@
 
 ## 状态与权威来源
 
-当前版本是 **1.0.0-rc.1 / Windows x64 便携版候选**，不是 MSI 安装器，不注册服务、不自动升级、无代码签名。
-目标环境为 Windows 10/11 x64、MuMu Player 12、官方 Android 游戏 **2.7.91**、Root 开启。
-Windows 10、干净 Windows 安装、多开、其他游戏版本/模拟器及原生 PC 未因构建成功而获得认证。
-本工单仅准备候选；不得创建 GitHub Release、公开下载页或发布 tag，实际对外发布须另行授权。
+Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](https://github.com/ChildeRolando/ArkDPS/releases)。
 
-产物身份以包内 `release.json` 为准：它记录源提交 `head`、UI/worker/运行时/资源文件的逐文件 SHA-256、
-.NET SDK 与运行时、协议版本及内置 Python/Frida 版本。`build-manifest.json` / `artifact.json` 属旧的
-PyInstaller 候选，已随归档停用。独立验收必须同时固定候选 SHA、ZIP SHA-256、命令、原始日志/回执和截图，
-不能用以前候选的 PASS 冒充。
+已发布便携包的清单位于 `metadata/release.json`，当前从 `main` 构建的 CI 候选使用根目录的 `release.json`。清单记录源提交 `head`、载荷文件的逐文件 SHA-256、协议和运行时版本。复核时记录源提交、ZIP 摘要、命令、原始日志和截图。
 
-## 用户快速开始（便携产物）
+## 下载与更新
 
-1. 取 CI 上传的 `windows-wpf-candidate-<sha>` artifact，用 `Get-FileHash <zip> -Algorithm SHA256` 对比 `.sha256` 文件。
-2. 解压到用户可写的新目录，例如个人应用目录；不要放进 Program Files。
-3. 启动 MuMu 12，开启 Root，启动游戏 2.7.91。双击 `ArkDPS.Desktop.exe`；无需系统 Python、pip、MAA 或 Pillow。
-4. 主窗设置中选择 MuMu 实例/ADB。默认自动检测唯一认证实例；多实例必须明确选择。
-5. 首次默认一块伤害面板，无 HUD；新增面板并按需“打开到 HUD”，HUD 在 WPF 中锁定/解锁。
-6. 事件观测默认尝试 `127.0.0.1:27043`。ZIP 自带 **Frida 17.26.1 客户端**，但不安装、启动或打包设备端 Frida server。
-   无端点时伤害/治疗快照仍可用，护盾与接敌指标未知，不是零；设置可关闭事件观测。
-7. 关闭主窗是隐藏到托盘，采集/HUD 继续；从托盘或主窗选择“退出 ArkDPS”才真正清理退出。
-   日志、战绩和配置位于程序旁 `collector/runtime/`。
+适配环境、解压与启动步骤见 [README](../README.md#下载与启动)。可用 `Get-FileHash <zip> -Algorithm SHA256` 对比随包发布的 `.zip.sha256` 文件。验证未发布的候选时，从对应提交的 CI 运行下载 `windows-wpf-candidate-<sha>`。
+
+从 Releases 下载的便携版在设置页提供「检查更新」。启动后会在后台检查一次，发现新版时可点击「查看下载」打开对应的 GitHub Release。
+
+### 观测者
+
+便携包内置 **Frida 17.26.1 客户端**。设备端服务需要另行准备。从 [Frida 17.26.1](https://github.com/frida/frida/releases/tag/17.26.1) 获取与模拟器 Android 系统架构匹配的 `frida-server-17.26.1-android-*.xz`，解压后放到模拟器的 `/data/local/tmp/ark_dps/frida-server-17.26.1`，并赋予执行权限。
+
+在连接设置开启观测者并应用设置。ArkDPS 会尝试启动已准备的服务并建立转发，默认主机端口为 `27043`，设备端口为 `27864`。端点不可用时，实时页仍可显示伤害与治疗累计，缺少事件证据的指标显示为未知。[事件采集与验收](event-capture.md)
 
 ### 升级与回退
 
@@ -37,7 +31,7 @@ PyInstaller 候选，已随归档停用。独立验收必须同时固定候选 S
 
 ## 构建候选
 
-在干净已提交的 Windows x64 checkout，使用 CPython 3.10.10 与 .NET 10 SDK：
+从 `main` 的干净已提交工作区构建。Windows CI 使用 CPython 3.10.10 与 .NET 10 SDK。
 
 ```powershell
 python -m pip install -r requirements-windows.txt -r requirements-test.txt
@@ -50,6 +44,8 @@ python tools/package_windows.py --output runtime/packages
 CPython 3.12.10 embeddable 运行时、下载并核验固定 Frida 17.26.1 wheel，然后按 `BACKEND` 白名单复制
 worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还会断言包内 manifest 不存在
 `tkinter` / Tcl / Tk 文件，并用包内 Python 执行 `import desktop_bridge` 且断言 `"tkinter" not in sys.modules`。
+
+已发布的便携包使用 `ArkDPS-<版本>-win-x64.zip` 命名，RC 在 GitHub 标为预发行。复现某个发布包时，切到该版本的构建提交，再按该提交的构建器参数与清单格式操作。
 
 `requirements-test.txt` 单独固定 pytest 与 Pillow（Python 包名 `PIL`）：后者仅用于测试中独立解码 PNG，
 不是产品运行时依赖。`requirements-windows.txt` 只保留事件客户端 pin。
@@ -64,8 +60,7 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 
 `verify_wpf.py` 驱动真实 WPF 与真实 stdio 握手，覆盖合成历史、双主题、HUD 几何/锁定/透明度恢复、
 历史页进入自动刷新与归档后自动更新、事件不可用原因与恢复入口、PNG 导出和新进程重启恢复。
-`verify_wpf_package.py` 在新目录验证清洁解压、全部文件摘要、缺少全局 Python/.NET 的运行、
-v1 → WPF v3 迁移以及 WPF 重启恢复。
+`verify_wpf_package.py` 在新目录验证清洁解压、载荷摘要、使用包内 Python/.NET 运行、v1 → WPF v3 布局迁移和 WPF 重启恢复。
 
 **这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确
 `NOT VERIFIED`。混合 DPI 与实机项仍以独立验收为准，不得把离线回执当作实机通过证据。
