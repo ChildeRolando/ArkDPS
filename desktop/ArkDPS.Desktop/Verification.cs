@@ -11,6 +11,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace ArkDPS.Desktop;
@@ -594,7 +596,34 @@ public partial class MainWindow
         string id=Panels.Keys.Single(key=>!existing.Contains(key));
         OpenHud(id);
         HudWindow hud=Huds[id];
-        try { await VerifyHudLayoutEditorPanel(id,hud,output); }
+        try
+        {
+            Require(HudFooterControls.IsVisible && HudFooterTarget.IsVisible &&
+                    Equals(HudFooterTarget.SelectedValue,id) &&
+                    RankingFooter.Children.Contains(AddPanelButton) &&
+                    RankingFooter.Children.Contains(LiveReconnectButton) &&
+                    RankingFooter.Children.Contains(HudFooterControls),
+                    "HUD controls are not beside the ranking footer actions");
+            double sourceOpacity=Huds[sourceId].Opacity;
+            HudFooterOpacity.Value=100;
+            Require(hud.Opacity==0 && Huds[sourceId].Opacity==sourceOpacity,
+                    "100% transparency did not make only the selected HUD invisible");
+            await SavePlacement();
+            Require(State.Get("layout").Get("huds").Items().Single(item=>item.Text("panel_id")==id)
+                    .Number("opacity")==0,"fully transparent HUD placement did not save");
+            HudFooterLock.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            Require(hud.Locked && Equals(HudFooterLock.Content,"解锁 HUD"),
+                    "HUD footer cannot lock a fully transparent HUD");
+            HudFooterTarget.SelectedValue=sourceId;
+            Require(HudFooterOpacity.Value==Math.Round((1-sourceOpacity)*100),
+                    "HUD footer did not restore the selected HUD's own transparency");
+            HudFooterTarget.SelectedValue=id;
+            HudFooterLock.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            HudFooterOpacity.Value=10;
+            Require(!hud.Locked && hud.Opacity==.9,
+                    "HUD footer cannot recover a fully transparent locked HUD");
+            await VerifyHudLayoutEditorPanel(id,hud,output);
+        }
         finally
         {
             CloseHud(id);
@@ -637,6 +666,10 @@ public partial class MainWindow
             Require(!editor.SaveButton.IsEnabled && editor.StatusText.Text.Contains("HUD 宽度"),
                     "HUD layout editor accepted a width outside its range");
             width.Text="640";
+            Field("Scale").Text="49";
+            Require(!editor.SaveButton.IsEnabled && editor.StatusText.Text.Contains("整体缩放"),
+                    "HUD layout editor accepted a scale outside its range");
+            Field("Scale").Text="125";
             Field("NameFont").Text="23";
             Field("NameWidth").Text="160";
             Field("RowGap").Text="5";
@@ -648,6 +681,7 @@ public partial class MainWindow
             var previewName=FindVisual<TextBlock>(preview,element=>element.Name=="HudOperatorName");
             var previewRow=FindVisual<Grid>(preview,element=>element.Name=="HudOperatorRow");
             Require(editor.SaveButton.IsEnabled && editor.PreviewSurface.Width==640 && previewName?.FontSize==23 &&
+                    editor.PreviewSurface.LayoutTransform is ScaleTransform {ScaleX:1.25,ScaleY:1.25} &&
                     previewRow?.ColumnDefinitions[3].ActualWidth==0 && hud.LayoutProfile==HudLayout.Default,
                     "HUD draft did not update only the preview or hide a zero-width column");
             Require(!HasVisibleScrollbar(editor),"HUD layout editor displayed a scrollbar");
@@ -656,14 +690,16 @@ public partial class MainWindow
             Require(await completion.Task.WaitAsync(TimeSpan.FromSeconds(10)),"HUD layout save did not succeed");
             await Settle();
             var saved=ReadHudLayout(id);
-            Require(saved is { Width:640, NameFont:23, NameWidth:160, RowGap:5, ColumnGap:7, BarWidth:0 } &&
-                    hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-640)<2,
+            Require(saved is { Width:640, NameFont:23, NameWidth:160, RowGap:5, ColumnGap:7, BarWidth:0, Scale:1.25 } &&
+                    hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-800)<2,
                     "HUD layout did not persist or apply to the open HUD");
+            await VerifyHudScaleDrag(id,hud);
+            saved=ReadHudLayout(id);
             CloseHud(id);
             OpenHud(id);
             hud=Huds[id];
             await Settle();
-            Require(hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-640)<2,
+            Require(saved!=null && hud.LayoutProfile==saved && Math.Abs(hud.ActualWidth-640*saved.Scale)<2,
                     "reopened HUD lost its saved style");
             Require(await SaveHudLayout(id,null),"HUD layout reset did not succeed");
             await Settle();
@@ -708,8 +744,9 @@ public partial class MainWindow
                         "auto-sized HUD went outside its monitor work area");
                 if(count is 1 or 5) Screenshot.Window(hud,Path.Combine(output,$"{Theme.Key}-hud-{count}-rows.png"));
             }
-            Require(Math.Abs(heights[4]-heights[1]-3*style.RowPitch)<2 &&
-                    Math.Abs(heights[5]-heights[4]-style.RowPitch)<2 &&
+            double rowPitch=style.RowPitch*hud.DisplayScale;
+            Require(Math.Abs(heights[4]-heights[1]-3*rowPitch)<2 &&
+                    Math.Abs(heights[5]-heights[4]-rowPitch)<2 &&
                     Math.Abs(heights[6]-heights[5])<2,
                     $"HUD height did not fit one through five rows: {string.Join(", ",heights.Values)}");
             var rows=hud.Panel.Rows;
@@ -721,7 +758,7 @@ public partial class MainWindow
                     name?.FontSize==style.NameFont && amount?.FontSize==style.NumberFont &&
                     hud.Panel.Heading.FontSize==style.TitleFont &&
                     Math.Abs(hud.Panel.TitleRegion.ActualHeight-style.TitleHeight)<2 &&
-                    Math.Abs(hud.ActualWidth-style.Width)<2,
+                    Math.Abs(hud.ActualWidth-hud.BaseWidth*hud.DisplayScale)<2,
                     "HUD compact dimensions or readable type did not fit");
             var scroll=FindVisual<ScrollViewer>(rows,_=>true);
             Require(scroll is { ScrollableHeight: > 0 } && !HasVisibleScrollbar(hud),
@@ -811,6 +848,55 @@ public partial class MainWindow
         Require(SetCursorPos(x,y),"SetCursorPos failed");
         var input=new[]{new Input{Mouse=new MouseInput{Flags=2}},new Input{Mouse=new MouseInput{Flags=4}}};
         Require(SendInput(2,input,Marshal.SizeOf<Input>())==2,"SendInput failed");
+    }
+
+    private async Task VerifyHudScaleDrag(string id,HudWindow hud)
+    {
+        var initial=hud.LayoutProfile;
+        var bounds=Native.Bounds(hud);
+        var grip=(Thumb)(FindAutomationElement(hud,"HudScaleGrip")
+            ?? throw new InvalidOperationException("HUD scale grip missing"));
+        hud.Activate();
+        await Settle();
+        var start=grip.PointToScreen(new Point(grip.ActualWidth/2,grip.ActualHeight/2));
+        var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
+        double fraction=start.X+bounds[2]*.2<work.Right && start.Y+bounds[3]*.2<work.Bottom ? .2 : -.2;
+        var destination=start+new Vector(bounds[2]*fraction,bounds[3]*fraction);
+        GetCursorPos(out var originalPointer);
+        bool pressed=false;
+        void Press(uint flag)
+        {
+            var input=new[]{new Input{Mouse=new MouseInput{Flags=flag}}};
+            Require(SendInput(1,input,Marshal.SizeOf<Input>())==1,"HUD grip pointer button failed");
+        }
+        try
+        {
+            Require(SetCursorPos((int)start.X,(int)start.Y),"HUD grip cursor move failed");
+            Require(GetAncestor(WindowFromPoint(new PointNative{X=(int)start.X,Y=(int)start.Y}),2)==
+                    Native.Handle(hud),"unlocked HUD grip is not hit-testable");
+            Press(2);pressed=true;
+            await WaitForClick(()=>grip.IsDragging);
+            Require(grip.IsDragging,"HUD corner did not capture the pointer");
+            Require(SetCursorPos((int)destination.X,(int)destination.Y),"HUD grip drag failed");
+            await WaitForClick(()=>Math.Abs(hud.LayoutProfile.Scale-initial.Scale)>.1);
+            Require(grip.IsDragging && Math.Abs(hud.LayoutProfile.Scale-initial.Scale*(1+fraction))<.01 &&
+                    ReadHudLayout(id)==initial,"HUD drag did not preview the overall scale");
+            await Settle();
+            double ratio=hud.LayoutProfile.Scale/initial.Scale;
+            var scaled=Native.Bounds(hud);
+            Require(Math.Abs(scaled[2]-bounds[2]*ratio)<3 && Math.Abs(scaled[3]-bounds[3]*ratio)<3 &&
+                    Math.Abs(hud.DisplayScale-hud.LayoutProfile.Scale)<.001,
+                "HUD drag resized the window without scaling its contents proportionally");
+            Press(4);pressed=false;
+            await WaitForClick(()=>ReadHudLayout(id)?.Scale==hud.LayoutProfile.Scale);
+            Require(ReadHudLayout(id)==hud.LayoutProfile && hud.LayoutProfile.Width==initial.Width,
+                "HUD grip did not persist the editor's overall scale or changed the base width");
+        }
+        finally
+        {
+            if(pressed) Press(4);
+            SetCursorPos(originalPointer.X,originalPointer.Y);
+        }
     }
     private static async Task WaitForClick(Func<bool> delivered)
     {
@@ -932,7 +1018,8 @@ public partial class MainWindow
             var dpi=System.Windows.Media.VisualTreeHelper.GetDpi(hud);
             var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
             double width=Math.Clamp(placement.Number("width"),hud.MinWidth*dpi.DpiScaleX,work.Width);
-            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height)*dpi.DpiScaleY);
+            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height)
+                *hud.DisplayScale*dpi.DpiScaleY);
             double x=Math.Clamp(placement.Number("x"),work.Left,Math.Max(work.Left,work.Right-width));
             double y=Math.Clamp(placement.Number("y"),work.Top,Math.Max(work.Top,work.Bottom-height));
             Require(Math.Abs(actual[0]-x)<=2 && Math.Abs(actual[1]-y)<=2,
@@ -1403,7 +1490,8 @@ public partial class MainWindow
         var originalHud=Huds[id];
         await VerifyHudLayoutEditor(id,output);
         originalHud.SetLocked(false);originalHud.SetOpacity(.83);
-        checks.Add("HUD layout editor previews fonts and columns, validates inputs, saves and restores profiles");
+        checks.Add("HUD layout editor previews and validates scale; physical corner drag uniformly scales and persists the HUD");
+        checks.Add("ranking footer locks, selects and restores a fully transparent HUD without affecting other HUDs");
         await Settle();
         VerifyShareScope(id,originalHud);
         await VerifyHudRows(originalHud,output);
@@ -1452,7 +1540,7 @@ public partial class MainWindow
             var titleRegion = hudPanel.TitleRegion;
             Require(hudPanel.PanelFrame.Margin == new Thickness() &&
                     hudPanel.PanelFrame.BorderThickness == new Thickness() &&
-                    titleRegion.ActualWidth >= originalHud.ActualWidth - 2,
+                    titleRegion.ActualWidth*originalHud.DisplayScale >= originalHud.ActualWidth - 2,
                     "HUD does not fill its window or retains the extra frame");
             bool loneTrail=theme==Theme.LoneTrail;
             Require(originalHud.IsTitleDragSource(titleRegion.InputHitTest(new Point(2,2)) as DependencyObject) &&
@@ -1559,6 +1647,15 @@ public partial class MainWindow
                 "unlocked HUD did not reclaim the private test point");
             Click(x,y);await WaitForClick(()=>hudClicks>1 || underClicks>1);
             Require(hudClicks==2 && underClicks==1,"unlocked input not restored");
+            originalHud.SetOpacity(0);
+            await Settle();
+            Require(!originalHud.Locked && GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(under),
+                    "fully transparent unlocked HUD intercepted input");
+            originalHud.SetOpacity(.83);
+            await Settle();
+            await WaitForClick(()=>GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(originalHud));
+            Require(GetAncestor(WindowFromPoint(new PointNative{X=x,Y=y}),2)==Native.Handle(originalHud),
+                    "restoring opacity did not restore unlocked HUD input");
             checks.Add("Win32 SendInput: HUD -> private underlay -> HUD (NOT game certification)");
         }
         finally{under.Close();SetCursorPos(pointer.X,pointer.Y);}
@@ -1632,6 +1729,8 @@ public partial class MainWindow
                 AddPanelButton.IsEnabled && retainedPanel.Category.IsEnabled && Huds[id]==originalHud,
             "the first new battle did not replace the read-only recovery snapshot");
         ApplyState(restoredBattle);
+        Require(await SaveHudLayout(id,HudLayout.Default with {Scale=.8}),"HUD scale restart setup did not save");
+        await Settle();
         await SavePlacement();
         checks.Add("worker transport failure keeps cached statistics and automatically replaces only the worker");
         checks.Add("reconnected worker in the lobby keeps the last battle visible until a new sample arrives");

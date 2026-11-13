@@ -8,13 +8,18 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace ArkDPS.Desktop;
 
 public partial class HudLayoutEditor : Window
 {
     private sealed record Field(string Key,string Label,int Minimum,int Maximum,
-        Func<HudLayout,double> Read,Func<HudLayout,double,HudLayout> Write);
+        Func<HudLayout,double> Read,Func<HudLayout,double,HudLayout> Write,string Unit="");
+
+    private static readonly Field OverallScale=new("Scale","整体缩放",
+        (int)(HudLayout.MinimumScale*100),(int)(HudLayout.MaximumScale*100),
+        x=>x.Scale*100,(x,v)=>x with {Scale=v/100},"%");
 
     private static readonly (string Label,Field[] Fields)[] Groups=
     {
@@ -63,6 +68,7 @@ public partial class HudLayoutEditor : Window
         KeyboardNavigation.SetTabNavigation(preview,KeyboardNavigationMode.None);
         PreviewSurface.Child=preview;
         PreviewSurface.SizeChanged+=(_,_)=>UpdatePreviewSize();
+        AddField(ScaleFieldHost,OverallScale);
         for(int index=0;index<Groups.Length;index++)
         {
             var group=Groups[index];
@@ -95,6 +101,14 @@ public partial class HudLayoutEditor : Window
         row.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(91)});
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(60)});
+        if(field.Unit.Length>0)
+        {
+            row.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
+            var unit=Inspector.Text(field.Unit,13,false,"Muted",new Thickness(5,0,0,0));
+            unit.VerticalAlignment=VerticalAlignment.Center;
+            Grid.SetColumn(unit,3);
+            row.Children.Add(unit);
+        }
         var label=Inspector.Text(field.Label,13);
         label.VerticalAlignment=VerticalAlignment.Center;
         row.Children.Add(label);
@@ -114,6 +128,8 @@ public partial class HudLayoutEditor : Window
             MaxLength=9,VerticalAlignment=VerticalAlignment.Center};
         AutomationProperties.SetName(box,field.Label);
         AutomationProperties.SetAutomationId(box,"HudLayout"+field.Key);
+        if(field.Unit.Length>0)
+            AutomationProperties.SetHelpText(box,$"{field.Minimum}–{field.Maximum}{field.Unit}");
         Grid.SetColumn(box,2);
         row.Children.Add(box);
         inputs.Add((field,slider,box));
@@ -177,19 +193,21 @@ public partial class HudLayoutEditor : Window
     private void RefreshPreview()
     {
         PreviewSurface.Width=draft.Width;
+        PreviewSurface.LayoutTransform=draft.Scale==1 ? Transform.Identity : new ScaleTransform(draft.Scale,draft.Scale);
         preview.ApplyHudLayout(draft);
+        UpdatePreviewSize();
     }
 
     private void UpdatePreviewSize()
     {
-        PreviewSize.Text=FormattableString.Invariant($"{PreviewSurface.ActualWidth:0.#} × {PreviewSurface.ActualHeight:0.#}");
+        PreviewSize.Text=FormattableString.Invariant($"{draft.Width*draft.Scale:0.#} × {PreviewSurface.ActualHeight*draft.Scale:0.#}");
     }
 
     private void UpdateSaveState()
     {
         SaveButton.IsEnabled=!saving && invalid.Count==0;
-        var field=Groups.SelectMany(group=>group.Fields).FirstOrDefault(invalid.Contains);
-        StatusText.Text=field is null ? "" : $"{field.Label}请输入 {field.Minimum}–{field.Maximum} 之间的数值";
+        var field=inputs.Select(input=>input.Field).FirstOrDefault(invalid.Contains);
+        StatusText.Text=field is null ? "" : $"{field.Label}请输入 {field.Minimum}–{field.Maximum}{field.Unit} 之间的数值";
     }
 
     private void ResetClick(object sender,RoutedEventArgs e)
@@ -202,7 +220,7 @@ public partial class HudLayoutEditor : Window
     {
         if(saving || invalid.Count>0) return;
         saving=true;
-        Fields.IsEnabled=ResetButton.IsEnabled=CancelButton.IsEnabled=SaveButton.IsEnabled=false;
+        ScaleFieldHost.IsEnabled=Fields.IsEnabled=ResetButton.IsEnabled=CancelButton.IsEnabled=SaveButton.IsEnabled=false;
         try
         {
             bool saved=await save(reset ? null : draft);
@@ -217,7 +235,7 @@ public partial class HudLayoutEditor : Window
         finally
         {
             saving=false;
-            Fields.IsEnabled=ResetButton.IsEnabled=CancelButton.IsEnabled=true;
+            ScaleFieldHost.IsEnabled=Fields.IsEnabled=ResetButton.IsEnabled=CancelButton.IsEnabled=true;
         }
     }
 

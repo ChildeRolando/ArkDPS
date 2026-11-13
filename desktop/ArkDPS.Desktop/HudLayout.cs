@@ -20,16 +20,24 @@ internal sealed record HudLayout(
     [property: JsonPropertyName("share_width")] double ShareWidth=68,
     [property: JsonPropertyName("row_gap")] double RowGap=1,
     [property: JsonPropertyName("column_gap")] double ColumnGap=2,
-    [property: JsonPropertyName("padding")] double Padding=4)
+    [property: JsonPropertyName("padding")] double Padding=4,
+    [property: JsonPropertyName("scale")] double Scale=1)
 {
     internal const double DefaultRowHeight=46;
+    internal const double MinimumScale=0.5;
+    internal const double MaximumScale=2;
     internal static HudLayout Default { get; }=new();
     internal double RowPitch => RowHeight+RowGap;
 
     internal static HudLayout FromJson(JsonElement style)
     {
         if(style.ValueKind!=JsonValueKind.Object) return Default;
-        try { return style.Deserialize<HudLayout>()??Default; }
+        try
+        {
+            var layout=style.Deserialize<HudLayout>()??Default;
+            return double.IsFinite(layout.Scale) && layout.Scale is >=MinimumScale and <=MaximumScale
+                ? layout : layout with {Scale=Default.Scale};
+        }
         catch(JsonException) { return Default; }
     }
 }

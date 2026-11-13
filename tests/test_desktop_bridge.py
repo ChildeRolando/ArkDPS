@@ -243,16 +243,16 @@ def test_hud_styles_are_per_panel_and_survive_closing_and_restarting(tmp_path):
 
     cmd(state, 'hud_style', panel_id='default',
         style={'name_font': 21.5, 'name_width': 168, 'column_gap': 9, 'bar_width': 0})
-    cmd(state, 'hud_style', panel_id=second, style={'width': 700, 'row_gap': 4})
+    cmd(state, 'hud_style', panel_id=second, style={'width': 700, 'row_gap': 4, 'scale': 0.8})
     profiles = state.snapshot()['layout']['hud_styles']
     default_style = dict(title_font=20, name_font=15, number_font=15, width=484,
                          row_height=46, title_height=44, portrait_size=38,
                          rank_width=28, portrait_width=52, name_width=92, bar_width=158,
                          total_width=78, rate_width=76, share_width=68,
-                         row_gap=1, column_gap=2, padding=4)
+                         row_gap=1, column_gap=2, padding=4, scale=1.0)
     assert profiles['default'] == dict(default_style, name_font=21.5, name_width=168,
                                        column_gap=9, bar_width=0)
-    assert profiles[second] == dict(default_style, width=700, row_gap=4)
+    assert profiles[second] == dict(default_style, width=700, row_gap=4, scale=0.8)
 
     gui = dict(x=50, y=60, width=1200, height=800)
     hud = dict(panel_id=second, x=-700, y=30, width=830, height=480, opacity=.83, locked=True)

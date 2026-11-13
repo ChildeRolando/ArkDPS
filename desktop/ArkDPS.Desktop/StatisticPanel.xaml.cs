@@ -214,9 +214,8 @@ public sealed class OrbitalSurface : FrameworkElement
 public partial class StatisticPanel : UserControl
 {
     internal Func<string,Dictionary<string,object?>?,Task>? Command;
-    internal Action<string>? HudRequested, PinRequested, LockRequested, RateActionRequested;
+    internal Action<string>? HudRequested, PinRequested, RateActionRequested;
     internal Action? CloseRequested;
-    internal Action<string,double>? AlphaRequested;
     private readonly ObservableCollection<RowItem> items=new();
     private JsonElement view;
     private bool updating, hold;
@@ -368,12 +367,10 @@ public partial class StatisticPanel : UserControl
         Selectors.Margin=enable ? new Thickness(5,0,5,4) : new Thickness(14,0,14,8);
         RateNoticePanel.Margin=enable ? new Thickness(5,0,5,3) : new Thickness(14,0,14,8);
         RateNoticePanel.Padding=enable ? new Thickness(5,2,5,2) : new Thickness(10,7,10,7);
-        HudControls.Margin=enable ? new Thickness(5,2,5,4) : new Thickness(14,0,14,10);
         Coverage.Margin=enable ? new Thickness(5,2,5,3) : new Thickness(14,8,14,9);
         Coverage.FontSize=enable ? 12 : 10;
         Coverage.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Empty.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
-        HudOpacityLabel.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         Plot.MinHeight=enable ? 0 : 120;
         Rows.MinHeight=enable ? 74 : 80;
         Rows.MaxHeight=enable ? ReferenceRowsDefaultHeight : 520;
@@ -384,22 +381,18 @@ public partial class StatisticPanel : UserControl
         StyleSelector(Category,CategoryField,CategoryLabel,liveToolbar,72,88);
         StyleSelector(Ranking,RankingField,RankingLabel,liveToolbar,64,96);
         StyleSelector(Rate,RateField,RateLabel,liveToolbar,68,104);
-        foreach(var button in new[]{RateAction,LockButton})
+        if(enable)
         {
-            if(enable)
-            {
-                button.SetResourceReference(StyleProperty,"ReferencePanelAction");
-                button.ClearValue(FontSizeProperty);
-                button.ClearValue(PaddingProperty);
-                button.ClearValue(BackgroundProperty);
-            }
-            else
-            {
-                button.ClearValue(StyleProperty);
-                if(button==RateAction) button.SetResourceReference(BackgroundProperty,"Card");
-                button.Padding=button==RateAction ? new Thickness(9,4,9,4)
-                    : new Thickness(10,5,10,5);
-            }
+            RateAction.SetResourceReference(StyleProperty,"ReferencePanelAction");
+            RateAction.ClearValue(FontSizeProperty);
+            RateAction.ClearValue(PaddingProperty);
+            RateAction.ClearValue(BackgroundProperty);
+        }
+        else
+        {
+            RateAction.ClearValue(StyleProperty);
+            RateAction.SetResourceReference(BackgroundProperty,"Card");
+            RateAction.Padding=new Thickness(9,4,9,4);
         }
         if(view.ValueKind==JsonValueKind.Object) Update(view,deleteAvailable);
     }
@@ -634,12 +627,5 @@ public partial class StatisticPanel : UserControl
     private void RowSelected(object sender,SelectionChangedEventArgs e) {if(!updating && Rows.SelectedItem is RowItem item) PinRequested?.Invoke(item.Id);}
     private void HoldOrder(object sender,MouseEventArgs e) => hold=true;
     private void ReleaseOrder(object sender,MouseEventArgs e) {hold=false;if(view.ValueKind==JsonValueKind.Object) Update(view,deleteAvailable);}
-    private void ToggleLock(object sender,RoutedEventArgs e) => LockRequested?.Invoke(PanelId);
-    private void OpacityChanged(object sender,RoutedPropertyChangedEventArgs<double> e) {if(!updating) AlphaRequested?.Invoke(PanelId,e.NewValue);}
-    internal void HudState(bool open,bool locked,double opacity)
-    {
-        updating=true; HudControls.Visibility=open && !IsHud ? Visibility.Visible : Visibility.Collapsed;
-        LockButton.Content=locked ? "解锁 HUD" : "锁定 HUD"; Alpha.Value=opacity; updating=false;
-    }
     internal void ClearSelection() => Rows.SelectedItem=null;
 }

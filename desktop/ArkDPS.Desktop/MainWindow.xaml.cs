@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     internal JsonElement State;
     private Forms.NotifyIcon? tray;
     private bool initialized,applying,polling,quitting,historyUpdating,historyHidden;
+    private bool syncingHudFooter;
     private object? normalGeometry;
     private bool closingRequested;
     private DispatcherOperation? workAreaLayout;
@@ -216,8 +217,8 @@ public partial class MainWindow : Window
         poll.Stop();
         workerUnavailable=true;
         ErrorText.Text=message;
-        MarkDataStale("disconnected",label+" · 点击重连观测者");
-        HistoryNotice.Text="显示已载入的战绩 · 点击重连观测者恢复更新";
+        MarkDataStale("disconnected",label+" · 点击重连观察者");
+        HistoryNotice.Text="显示已载入的战绩 · 点击重连观察者恢复更新";
         ConnectionDiagnostics.Text=Status.Text+"\n"+message;
     }
     internal void ApplyState(JsonElement state)
@@ -322,8 +323,7 @@ public partial class MainWindow : Window
             string id=view.Get("config").Text("panel_id");
             if(!Panels.TryGetValue(id,out var panel))
             {
-                panel=new StatisticPanel{Command=Command,HudRequested=id=>OpenHud(id),
-                    LockRequested=ToggleLock,AlphaRequested=ChangeAlpha,RateActionRequested=HandleRateAction};
+                panel=new StatisticPanel{Command=Command,HudRequested=id=>OpenHud(id),RateActionRequested=HandleRateAction};
                 panel.PinRequested = owner =>
                 {
                     activePanel = id;
@@ -336,6 +336,7 @@ public partial class MainWindow : Window
             UpdateLivePanel(id,panel,view,views.Length>1);
         }
         RefreshHudLayoutTargets(views);
+        RefreshHudFooter();
         RefreshLiveAvailability();
         return panelLayoutChanged;
     }
@@ -343,11 +344,7 @@ public partial class MainWindow : Window
     {
         panel.Update(view,canDelete);
         if(Huds.TryGetValue(id,out var hud))
-        {
             hud.Update(view,Status.Text+" · "+EventStatus.Text);
-            panel.HudState(true,hud.Locked,hud.Opacity);
-        }
-        else panel.HudState(false,false,.9);
         if(activePanel==id) LiveInspector.Update(view);
     }
     private void RefreshLiveAvailability()
@@ -372,14 +369,14 @@ public partial class MainWindow : Window
         {
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" => (workerLabel,StatusAmber),
-            "locating" => (disabled ? workerLabel : "正在连接观测者",StatusAmber),
+            "locating" => (disabled ? workerLabel : "正在连接观察者",StatusAmber),
             _ when disabled => ($"观测已关闭·{phase}",StatusGray),
             _ when (observer is "failed" or "incompatible" or "stopped") ||
                    ((status is "waiting" or "live" or "degraded") && (coverage is "failed" or "gap"))
                 => ($"观测中断·{phase}",StatusRed),
             _ when status!="degraded" && (observer=="ready" || coverage=="recording")
                 => ($"观测中·{phase}",StatusGreen),
-            "waiting" => ("等待连接观测者",StatusAmber),
+            "waiting" => ("等待连接观察者",StatusAmber),
             _ => ($"等待观测·{phase}",StatusAmber),
         };
         if(ShowingPreviousBattle) label="上次快照 · "+label;
@@ -636,15 +633,32 @@ public partial class MainWindow : Window
     internal void OpenHud(string id,JsonElement placement=default)
     {
         if(!Panels.ContainsKey(id)) return;
-        if(Huds.TryGetValue(id,out var existing)){if(!existing.Locked)existing.Activate();return;}
-        var hud=new HudWindow(id,ShowGui);hud.Panel.RateActionRequested=HandleRateAction;Huds.Add(id,hud);
-        hud.PlacementChanged+=()=>{SyncHudControls(id);ScheduleSave();};
-        hud.ClosedByUser+=()=>{Huds.Remove(id);SyncHudControls(id);if(!closingRequested && Huds.Count==0 && (!IsVisible || WindowState==WindowState.Minimized))ShowGui();ScheduleSave();};
-        if(ReadHudLayout(id) is { } profile) hud.ApplyHudLayout(profile);
+        if(Huds.TryGetValue(id,out var existing))
+        {
+            RefreshHudFooter(id);
+            if(!existing.Locked) existing.Activate();
+            return;
+        }
+        var hud=new HudWindow(id){SaveScale=style=>SaveHudLayout(id,style)};
+        hud.Panel.RateActionRequested=HandleRateAction;Huds.Add(id,hud);
+        hud.PlacementChanged+=()=>
+        {
+            if(HudFooterTarget.SelectedValue is string selected && selected==id) SyncHudFooter();
+            ScheduleSave();
+        };
+        hud.ClosedByUser+=()=>
+        {
+            Huds.Remove(id);
+            RefreshHudFooter();
+            if(!closingRequested && Huds.Count==0 && (!IsVisible || WindowState==WindowState.Minimized)) ShowGui();
+            ScheduleSave();
+        };
+        var profile=ReadHudLayout(id);
+        if(profile!=null) hud.ApplyHudLayout(profile);
         hud.Update(Panels[id].View,Status.Text+" · "+EventStatus.Text);
         hud.Show();
-        if(placement.ValueKind==JsonValueKind.Object) hud.RestorePlacement(placement);
-        SyncHudControls(id);
+        if(placement.ValueKind==JsonValueKind.Object) hud.RestorePlacement(placement,profile!=null);
+        RefreshHudFooter(id);
         ScheduleSave();
     }
     private HudLayout? ReadHudLayout(string panelId)
@@ -669,8 +683,8 @@ public partial class MainWindow : Window
         if(HudLayoutTarget.SelectedItem is not HudLayoutTargetItem item ||
            !Panels.TryGetValue(item.Id,out var panel)) return;
         var initial=ReadHudLayout(item.Id) ?? HudLayout.Default;
-        if(Huds.TryGetValue(item.Id,out var hud) && hud.ActualWidth>0)
-            initial=initial with {Width=Math.Clamp(hud.ActualWidth,240,2000)};
+        if(Huds.TryGetValue(item.Id,out var hud))
+            initial=hud.LayoutProfile with {Width=hud.BaseWidth};
         var editor=new HudLayoutEditor(item.Label,panel.View,initial,style=>SaveHudLayout(item.Id,style)){Owner=this};
         editor.ShowDialog();
     }
@@ -690,20 +704,59 @@ public partial class MainWindow : Window
 
     private void CloseHud(string id)
     {
-        if(!Huds.Remove(id,out var hud))return;hud.SuppressClose=true;hud.Close();
+        if(!Huds.Remove(id,out var hud)) return;
+        hud.SuppressClose=true;
+        hud.Close();
+        RefreshHudFooter();
     }
-    private void SyncHudControls(string id)
+    private void RefreshHudFooter(string? preferredId=null)
     {
-        if(!Panels.TryGetValue(id,out var panel))return;
-        bool open=Huds.TryGetValue(id,out var hud);panel.HudState(open,hud?.Locked??false,hud?.Opacity??.9);
+        if(Huds.Count==0)
+        {
+            HudFooterTarget.ItemsSource=null;
+            HudFooterControls.Visibility=Visibility.Collapsed;
+            HudFooterTarget.Visibility=Visibility.Collapsed;
+            return;
+        }
+        var choices=PanelHost.Children.OfType<StatisticPanel>()
+            .Select((panel,index)=>new HudLayoutTargetItem(panel.PanelId,$"HUD {index+1}"))
+            .Where(item=>Huds.ContainsKey(item.Id)).ToArray();
+        var previous=HudFooterTarget.SelectedValue as string;
+        if(HudFooterTarget.ItemsSource is not HudLayoutTargetItem[] old || !old.SequenceEqual(choices))
+            HudFooterTarget.ItemsSource=choices;
+        HudFooterTarget.SelectedValue=choices.FirstOrDefault(item=>item.Id==(preferredId??previous))?.Id
+            ?? choices.FirstOrDefault()?.Id;
+        HudFooterControls.Visibility=Visibility.Visible;
+        HudFooterTarget.Visibility=choices.Length>1 ? Visibility.Visible : Visibility.Collapsed;
+        SyncHudFooter();
+    }
+    private void HudFooterSelectionChanged(object sender,SelectionChangedEventArgs e)=>SyncHudFooter();
+    private void SyncHudFooter()
+    {
+        if(HudFooterTarget.SelectedValue is not string id || !Huds.TryGetValue(id,out var hud)) return;
+        syncingHudFooter=true;
+        try
+        {
+            HudFooterLock.Content=hud.Locked ? "解锁 HUD" : "锁定 HUD";
+            HudFooterOpacity.Value=Math.Round((1-hud.Opacity)*100);
+        }
+        finally{syncingHudFooter=false;}
+    }
+    private void ToggleFooterHudLock(object sender,RoutedEventArgs e)
+    {
+        if(HudFooterTarget.SelectedValue is string id) ToggleLock(id);
+    }
+    private void FooterHudOpacityChanged(object sender,RoutedPropertyChangedEventArgs<double> e)
+    {
+        if(!syncingHudFooter && HudFooterTarget?.SelectedValue is string id && Huds.TryGetValue(id,out var hud))
+            hud.SetOpacity(1-e.NewValue/100);
     }
     private void ToggleLock(string id)
     {
         if(!Huds.TryGetValue(id,out var hud))return;
-        try{hud.SetLocked(!hud.Locked);SyncHudControls(id);ScheduleSave();}
+        try{hud.SetLocked(!hud.Locked);}
         catch(Exception ex){MessageBox.Show(this,ex.Message,"HUD 锁定失败");}
     }
-    private void ChangeAlpha(string id,double alpha){if(Huds.TryGetValue(id,out var hud)){hud.SetOpacity(alpha);ScheduleSave();}}
     private void UnlockAll(object sender,RoutedEventArgs e)
     {
         foreach(string id in Huds.Keys.ToArray())if(Huds[id].Locked)ToggleLock(id);
@@ -789,7 +842,7 @@ public partial class MainWindow : Window
             do
             {
                 int attempt=automatic ? ++automaticRecoveryAttempts : 1;
-                string progress=automatic ? $"正在自动重连观测者 · {attempt}/{MaxAutomaticRecoveryAttempts}" : "正在重连观测者";
+                string progress=automatic ? $"正在自动重连观察者 · {attempt}/{MaxAutomaticRecoveryAttempts}" : "正在重连观察者";
                 MarkDataStale("reconnecting",progress+" · 保留最后有效记录");
                 HistoryNotice.Text=Status.Text;
                 ConnectionDiagnostics.Text=Status.Text+"\n"+ErrorText.Text;

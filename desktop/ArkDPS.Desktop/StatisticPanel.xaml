@@ -171,7 +171,7 @@
  </UserControl.Resources>
  <Border x:Name="PanelFrame" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="{DynamicResource CardRadius}" Margin="0,0,12,14">
   <Grid>
-   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
    <Border x:Name="TitleRegion">
     <Grid>
@@ -293,11 +293,6 @@
    </Grid>
 
    <TextBlock x:Name="Coverage" Grid.Row="5" Foreground="{DynamicResource Muted}" FontSize="10" Margin="14,8,14,9" TextWrapping="Wrap"/>
-   <WrapPanel x:Name="HudControls" Grid.Row="6" Margin="14,0,14,10" Visibility="Collapsed">
-    <Button x:Name="LockButton" Content="锁定 HUD" Click="ToggleLock" Padding="10,5"/>
-    <TextBlock x:Name="HudOpacityLabel" Text="透明度" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0,8,0" FontSize="11"/>
-    <Slider x:Name="Alpha" Minimum="0.7" Maximum="1" Value="0.9" Width="90" TickFrequency="0.01" ValueChanged="OpacityChanged" VerticalAlignment="Center" AutomationProperties.Name="HUD 透明度"/>
-   </WrapPanel>
   </Grid>
  </Border>
 </UserControl>

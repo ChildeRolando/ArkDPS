@@ -53,8 +53,8 @@ def event_label(status, error=None):
               'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观测',
               'gap': '事件中断 · 伤害/治疗快照继续',
               'failed': '事件不可用 · 使用伤害/治疗快照',
-              'incompatible': '观测者与游戏版本不兼容 · 使用伤害/治疗快照',
-              'stopped': '观测者已停止 · 使用伤害/治疗快照',
+              'incompatible': '观察者与游戏版本不兼容 · 使用伤害/治疗快照',
+              'stopped': '观察者已停止 · 使用伤害/治疗快照',
               'disabled': '事件已关闭 · 使用伤害/治疗快照',
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
               'finished': '事件观测结束 · 保留已覆盖区间'}
@@ -414,7 +414,7 @@ class CollectionWorker:
         try:
             self.session.close()
         except Exception as exc:
-            self.cleanup_error = f'旧采集会话清理失败（{exc}）。请解决问题后重连观测者。'
+            self.cleanup_error = f'旧采集会话清理失败（{exc}）。请解决问题后重连观察者。'
             self.events.put(('error', self.cleanup_error))
             return False
         if self.session.cleanup_errors:

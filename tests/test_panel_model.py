@@ -530,7 +530,7 @@ def test_event_unavailable_explains_engagement_and_never_zero_fills():
     assert view.rate_available is False
     assert '事件观测未连接' in view.rate_reason
     assert 'unable to connect to remote frida-server' in view.rate_reason
-    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观测者')
+    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观察者')
     assert '事件观测' in view.rate_hint
     entry = view.entries[0]
     assert entry.rate is None
@@ -586,7 +586,7 @@ def test_event_coverage_closed_mid_battle_keeps_prefix_and_marks_gap():
     assert entry.rate == pytest.approx(50) and entry.rate_text == '50/s'
     assert view.rate_available is False
     assert '中断' in view.rate_reason and 'observer stopped' in view.rate_reason
-    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观测者')
+    assert (view.rate_action, view.rate_action_label) == ('retry', '重连观察者')
     assert '不补零' in view.rate_hint
 
 
