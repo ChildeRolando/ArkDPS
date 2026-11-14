@@ -255,7 +255,7 @@ public partial class StatisticPanel : UserControl
     private bool configurationAvailable=true;
     private bool deleteAvailable;
     private bool referenceStyle, liveToolbar, sideRanking;
-    private bool sideFilterPending;
+    private bool sideConfigurationPending;
     private string? appliedHudSkin;
     private HudLayout? hudLayout;
     private double hudViewportLimit=double.PositiveInfinity;
@@ -290,7 +290,11 @@ public partial class StatisticPanel : UserControl
         Heading.TextTrimming = TextTrimming.CharacterEllipsis;
         TitleBar.Margin = new Thickness(8, 6, 8, 5);
         Selectors.Margin = new Thickness(8, 0, 8, 4);
-        CategoryField.Visibility = RankingField.Visibility = RateField.Visibility = Visibility.Collapsed;
+        RankingField.Visibility = Visibility.Collapsed;
+        StyleSelector(Category, CategoryField, CategoryLabel, true, 92, 88);
+        StyleSelector(Rate, RateField, RateLabel, true, 104, 104);
+        CategoryLabel.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleMuted");
+        RateLabel.SetResourceReference(TextBlock.ForegroundProperty, "ConsoleMuted");
         RateNoticePanel.Margin = new Thickness(5, 0, 5, 4);
         RateNoticePanel.Padding = new Thickness(5, 3, 5, 3);
         LegendRow.Margin = new Thickness(8, 0, 8, 0);
@@ -580,7 +584,7 @@ public partial class StatisticPanel : UserControl
             : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
         if(sideRanking) UpdateSideHeadings(config,category,value.Text("title"));
         Actions.Visibility=IsHistory||IsHud||sideRanking ? Visibility.Collapsed : Visibility.Visible;
-        Selectors.Visibility=IsHud||sideRanking&&category!="damage" ? Visibility.Collapsed : Visibility.Visible;
+        Selectors.Visibility=IsHud||sideRanking&&PanelId.Length==0 ? Visibility.Collapsed : Visibility.Visible;
         deleteAvailable=canDelete;
         SetConfigurationAvailable(configurationAvailable);
         Legend.Visibility=!IsHud && !referenceStyle && category=="damage" ? Visibility.Visible : Visibility.Collapsed;
@@ -743,54 +747,64 @@ public partial class StatisticPanel : UserControl
         configurationAvailable=available;
         var config=view.Get("config");
         bool hasRate=config.Text("category")!="shield";
-        if(restoreSelection && config.ValueKind==JsonValueKind.Object)
-        {
-            updating=true;
-            try
-            {
-                Select(Category,config.Text("category"));
-                Select(Ranking,config.Text("ranking"));
-                Select(Rate,config.Text("rate_basis"));
-                EffectiveOnly.IsChecked=config.Bool("effective_only");
-                BossOnly.IsChecked=config.Bool("boss_only");
-            }
-            finally{updating=false;}
-        }
-        Category.IsEnabled=DuplicateButton.IsEnabled=available;
-        EffectiveOnly.IsEnabled=BossOnly.IsEnabled=available && (!sideRanking ||
-            !sideFilterPending && PanelId.Length>0 && config.Text("category")=="damage");
-        Ranking.IsEnabled=Rate.IsEnabled=available && hasRate;
+        if(restoreSelection) RestoreConfigurationControls(config);
+        bool canEdit=available && (!sideRanking || !sideConfigurationPending && PanelId.Length>0);
+        Category.IsEnabled=canEdit;
+        DuplicateButton.IsEnabled=available;
+        EffectiveOnly.IsEnabled=BossOnly.IsEnabled=canEdit && (!sideRanking || config.Text("category")=="damage");
+        Ranking.IsEnabled=Rate.IsEnabled=canEdit && hasRate;
         DeleteButton.IsEnabled=available && deleteAvailable;
     }
-    private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e) => await CommitConfiguration();
+    private void RestoreConfigurationControls(JsonElement config)
+    {
+        if(config.ValueKind!=JsonValueKind.Object) return;
+        updating=true;
+        try
+        {
+            Select(Category,config.Text("category"));
+            Select(Ranking,config.Text("category")=="shield" ? "total" : config.Text("ranking"));
+            Select(Rate,config.Text("rate_basis"));
+            EffectiveOnly.IsChecked=config.Bool("effective_only");
+            BossOnly.IsChecked=config.Bool("boss_only");
+        }
+        finally{updating=false;}
+    }
+    private async void ConfigurationChanged(object sender,SelectionChangedEventArgs e)
+    {
+        if(!sideRanking) await CommitConfiguration();
+        else if(sender==Category && Category.SelectedItem is ComboBoxItem category)
+            await CommitSideConfiguration("category",category.Tag);
+        else if(sender==Rate && Rate.SelectedItem is ComboBoxItem rate)
+            await CommitSideConfiguration("rate_basis",rate.Tag);
+    }
     private async void EffectiveChanged(object sender,RoutedEventArgs e) =>
         await CommitDamageFilter("effective_only",EffectiveOnly.IsChecked==true);
     private async void FilterChanged(object sender,RoutedEventArgs e) =>
         await CommitDamageFilter("boss_only",BossOnly.IsChecked==true);
-    private async Task CommitDamageFilter(string field,bool enabled)
-    {
-        if(!sideRanking)
-        {
-            await CommitConfiguration();
-            return;
-        }
+    private Task CommitDamageFilter(string field,bool enabled) =>
+        sideRanking ? CommitSideConfiguration(field,enabled) : CommitConfiguration();
 
+    private async Task CommitSideConfiguration(string field,object value)
+    {
         var config=view.Get("config");
-        if(updating||!configurationAvailable||sideFilterPending||Command is not { } command||
-           PanelId.Length==0||config.Text("category")!="damage") return;
+        if(updating||!configurationAvailable||sideConfigurationPending||Command is not { } command||
+           PanelId.Length==0) return;
         // Preserve the source panel's exact configuration, including legacy
         // sort settings and titles that the compact panel does not edit.
         var updated=config.EnumerateObject().ToDictionary(property=>property.Name,property=>(object?)property.Value);
-        updated[field]=enabled;
-        sideFilterPending=true;
+        updated[field]=value;
+        if(field=="category" && Equals(value,"shield"))
+        {
+            updated["ranking"]="total";
+            updated["rate_basis"]="recent_5s";
+        }
+        sideConfigurationPending=true;
         SetConfigurationAvailable(configurationAvailable);
         try { await command("panel_update",new(){["config"]=updated}); }
         finally
         {
-            sideFilterPending=false;
-            config=view.Get("config");
-            EffectiveOnly.IsChecked=config.Bool("effective_only");
-            BossOnly.IsChecked=config.Bool("boss_only");
+            sideConfigurationPending=false;
+            RestoreConfigurationControls(view.Get("config"));
             SetConfigurationAvailable(configurationAvailable);
         }
     }

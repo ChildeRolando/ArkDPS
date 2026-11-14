@@ -142,16 +142,39 @@ public partial class MainWindow
             async Task SetSideFilter(ToggleButton button, bool enabled)
             {
                 Require(button.IsVisible && button.IsEnabled, "side damage filter is not available");
+                var previous = sideRanking.View.Get("config");
                 button.IsChecked = enabled;
                 button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 for(int wait=0;wait<40 && commands>0;wait++) await Task.Delay(50);
+                var config = RequireSharedSideConfig();
+                Require(config.Text("category") == previous.Text("category") &&
+                        config.Text("ranking") == previous.Text("ranking") &&
+                        config.Text("rate_basis") == previous.Text("rate_basis") &&
+                        button.IsChecked == enabled, "side filter overwrote unrelated settings");
+            }
+            JsonElement RequireSharedSideConfig()
+            {
                 var config = Panels[firstId].View.Get("config");
-                Require(JsonElement.DeepEquals(config, sideRanking.View.Get("config")) &&
+                var saved = State.Get("layout").Get("panels").Items().Single(panel => panel.Text("panel_id") == firstId);
+                Require(JsonElement.DeepEquals(config, saved) &&
+                        JsonElement.DeepEquals(config, sideRanking.View.Get("config")) &&
                         JsonElement.DeepEquals(config, hud.Panel.View.Get("config")) &&
                         JsonElement.DeepEquals(secondConfig, Panels[secondId].View.Get("config")) &&
-                        config.Text("title") == "侧栏口径验收" && config.Text("ranking") == "dps" &&
-                        config.Text("rate_basis") == "full_cycle" && button.IsChecked == enabled,
-                        "side filter did not update its shared panel and HUD, or overwrote unrelated settings");
+                        config.Text("title") == "侧栏口径验收",
+                        "side control did not update its shared panel and HUD, or overwrote another panel or the title");
+                return config;
+            }
+            async Task SelectSideOption(ComboBox selector, string option, string category, string ranking, string rate)
+            {
+                Require(selector.IsVisible && selector.IsEnabled, "side selector is not available");
+                selector.SelectedItem = selector.Items.OfType<ComboBoxItem>().Single(item => Equals(item.Tag, option));
+                for (int wait = 0; wait < 40 && commands > 0; wait++) await Task.Delay(50);
+                await Settle();
+                var config = RequireSharedSideConfig();
+                Require(config.Text("category") == category && config.Text("ranking") == ranking &&
+                        config.Text("rate_basis") == rate && config.Bool("effective_only") && config.Bool("boss_only") &&
+                        Equals((selector.SelectedItem as ComboBoxItem)?.Tag, option),
+                        "side selector did not persist the selected category/rate or preserve both damage filters");
             }
             await SetSideFilter(sideRanking.EffectiveOnly, true);
             Require(Panels[firstId].View.Get("config").Bool("effective_only"),
@@ -168,6 +191,31 @@ public partial class MainWindow
                     sideRanking.View.Get("entries").Items().Count() == 0 &&
                     sideRanking.RateNotice.IsVisible && sideRanking.RateNotice.Text == scoped.Text("boss_damage_reason"),
                     "side ranking lost the first panel's boss scope or used all-target fallback");
+
+            await SelectSideOption(sideRanking.Rate, "recent_5s", "damage", "dps", "recent_5s");
+            Require(sideRanking.SideRateHeading.Text == "DPS" && sideRanking.Heading.Text.Contains("近 5 秒"),
+                    "side DPS did not switch to the selected rate basis");
+            await Command("panel_update", new() { ["config"] = new
+            {
+                panel_id = firstId, category = "damage", ranking = "recent", rate_basis = "recent_5s",
+                title = "侧栏口径验收", effective_only = true, boss_only = true
+            }});
+            await SelectSideOption(sideRanking.Category, "healing", "healing", "recent", "recent_5s");
+            Require(!sideRanking.EffectiveOnly.IsVisible && !sideRanking.BossOnly.IsVisible,
+                    "side healing exposed damage-only filters");
+            await SelectSideOption(sideRanking.Rate, "engagement", "healing", "recent", "engagement");
+            Require(sideRanking.SideRateHeading.Text == "HPS" && sideRanking.Heading.Text.Contains("接敌"),
+                    "side healing did not display the selected HPS basis");
+            await SelectSideOption(sideRanking.Category, "shield", "shield", "total", "recent_5s");
+            Require(sideRanking.Rate.IsVisible && !sideRanking.Rate.IsEnabled && sideRanking.SideRateHeading.Text == "—" &&
+                    !sideRanking.EffectiveOnly.IsVisible && !sideRanking.BossOnly.IsVisible,
+                    "side shield retained DPS sorting, enabled a rate basis or exposed damage-only filters");
+            await SelectSideOption(sideRanking.Category, "damage", "damage", "total", "recent_5s");
+            Require(sideRanking.Rate.IsVisible && sideRanking.Rate.IsEnabled &&
+                    sideRanking.EffectiveOnly.IsVisible && sideRanking.EffectiveOnly.IsChecked == true &&
+                    sideRanking.BossOnly.IsVisible && sideRanking.BossOnly.IsChecked == true,
+                    "side damage did not restore the saved filters and reenable its rate selector");
+
             await SetSideFilter(sideRanking.EffectiveOnly, false);
             Require(sideRanking.View.Get("config").Bool("boss_only") &&
                     !sideRanking.View.Get("config").Bool("effective_only"),
@@ -177,6 +225,29 @@ public partial class MainWindow
                     "side boss filter could not leave a scope with unavailable data");
 
             await Command("panel_update", new() { ["config"] = sourceConfig });
+            int minimumSideWidth = (int)Math.Round(280 * VisualTreeHelper.GetDpi(fixture).DpiScaleX);
+            var widePlayer = new System.Drawing.Rectangle(work.Left, originalPlayer.Top,
+                work.Width - minimumSideWidth, originalPlayer.Height);
+            Native.Place(fixture, widePlayer);
+            await Settle();
+            UpdateSidePlacement();
+            await Settle();
+            Require(Math.Abs(Native.Bounds(this)[2] - minimumSideWidth) <= 2,
+                    "sidebar fixture did not use the minimum attachment width");
+            var controls = new FrameworkElement[] { sideRanking.CategoryField, sideRanking.RateField,
+                sideRanking.EffectiveOnly, sideRanking.BossOnly };
+            var toolbar = sideRanking.Selectors;
+            Require(controls.All(control =>
+            {
+                var topLeft = control.TranslatePoint(new Point(), toolbar);
+                var bottomRight = control.TranslatePoint(new Point(control.ActualWidth, control.ActualHeight), toolbar);
+                return control.IsVisible && control.ActualWidth > 0 && control.ActualHeight > 0 &&
+                       topLeft.X >= -1 && topLeft.Y >= -1 && bottomRight.X <= toolbar.ActualWidth + 1 &&
+                       bottomRight.Y <= toolbar.ActualHeight + 1;
+            }),
+                    "side selectors or damage filters were clipped at the minimum width");
+            Native.Place(fixture, originalPlayer);
+            UpdateSidePlacement();
             await Settle();
 
             SideTabs.SelectedIndex = 1;
@@ -498,7 +569,7 @@ public partial class MainWindow
         var observedMitigation=Ratio();
         Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观察减伤率") &&
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
-                observedTip.Text.Contains("经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害") &&
+                observedTip.Text.Contains("护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害") &&
                 observedTip.Text.Contains("已配对的 27 击"),
                 "partial mitigation did not expose its measured value and sample scope");
         pinnedRow["observed_mitigation_rate"]=-11.32;
@@ -1114,7 +1185,7 @@ public partial class MainWindow
     {
         var ratios=new[] { FindOperatorRatio("Overkill"), FindOperatorRatio("Mitigation"), FindOperatorRatio("SkillShare") };
         var values=new[] { "8%", "18%", "42%" };
-        var formulas=new[] { "过量伤害 ÷ 原生累计总伤", "1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害",
+        var formulas=new[] { "过量伤害 ÷ 原生累计总伤", "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害",
             "技能期伤害 ÷ 已拆分的总伤害" };
         var positions=ratios.Select(field=>field.TranslatePoint(new Point(),LiveInspector)).ToArray();
         var stats=FindAutomationElement(LiveInspector,"CompactOperatorStats")
@@ -1714,6 +1785,7 @@ public partial class MainWindow
         await VerifySideMode(Huds[sideSource], output);
         if (!sideHudAlreadyOpen) CloseHud(sideSource);
         checks.Add("side mode follows a private emulator window, mirrors the first live ranking and restores the full GUI with HUD and enemy panel intact");
+        checks.Add("side category, rate and damage controls update the first panel and HUD while preserving the remaining configuration");
         checks.Add("hovering the side ranking does not delay snapshot order or change the pinned operator");
         checks.Add("side mode follows emulator minimize and restore, honors manual minimize and recovers when the emulator exits");
         checks.Add("side mode follows emulator z-order without taking focus or staying above unrelated windows");

@@ -982,7 +982,7 @@ public sealed class Inspector : Border
 
     private static (double Fraction,string Label,string Explanation) MitigationReading(JsonElement row,JsonElement detail)
     {
-        const string formula="1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。结算伤害包含其他伤害修正。";
+        const string formula="1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。";
         string scopeReason=detail.Text("damage_scope_reason");
         if(scopeReason.Length>0) return (double.NaN,"被减伤率",formula+"\n"+scopeReason);
         var settled=detail.Get("settled_damage");
