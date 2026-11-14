@@ -383,10 +383,16 @@ public partial class MainWindow
                     $"next player={NextFixture(playerHandle):X}, next side={NextFixture(sideHandle):X}, " +
                     $"foreground before={foreground:X}, after={GetForegroundWindow():X}");
 
-            Require(SetWindowPos(playerHandle, coverHandle, 0, 0, 0, 0, noMoveSizeOrActivate),
-                    "could not set up a covering window in front of the emulator");
+            // Switching to another window also transfers focus. Leaving the
+            // sidebar active here would model a user interacting with it.
+            Require(cover.Activate() && GetForegroundWindow() == coverHandle &&
+                    SetWindowPos(sideHandle, coverHandle, 0, 0, 0, 0, noMoveSizeOrActivate) &&
+                    SetWindowPos(playerHandle, sideHandle, 0, 0, 0, 0, noMoveSizeOrActivate) &&
+                    NextFixture(coverHandle) == sideHandle && NextFixture(sideHandle) == playerHandle,
+                    "could not activate a covering window in front of the emulator");
             UpdateSidePlacement();
-            Require(NextFixture(coverHandle) == playerHandle && NextFixture(playerHandle) == sideHandle,
+            Require(NextFixture(coverHandle) == playerHandle && NextFixture(playerHandle) == sideHandle &&
+                    GetForegroundWindow() == coverHandle,
                     "side window rose above a window that covers the emulator");
         }
         finally { cover.Close(); }
