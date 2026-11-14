@@ -21,7 +21,7 @@ def record_labels(record):
 
 def record_display(record):
     """Metadata for the history browser and the share header."""
-    data = record.to_dict()
+    data = record.display_metadata()
     metadata = data['metadata']
     stage = stage_names.resolve(metadata['stage_id'])
     practice = {True: '演习', False: '正式', None: '演习状态未知'}[metadata['practice']]
@@ -114,7 +114,7 @@ def _legacy_non_team(stats, native):
     stats['non_team_output'] = output
 
 
-def record_statistics(record):
+def record_statistics(record, *, for_panel=False):
     """Return frozen statistics with totals completeness resolved for display.
 
     New records carry ``totals_complete`` and the source classification from
@@ -122,8 +122,16 @@ def record_statistics(record):
     above, including reclassifying recognised non-team keys; missing totals
     stay incomplete instead of being zero-filled.
     """
-    stats = record.statistics
-    sample = record.to_dict().get('last_sample') or {}
+    if for_panel:
+        fields = ('rows', 'ended', 'totals_complete', 'non_team_sources', 'non_team_output',
+                  'boss_damage_available', 'boss_damage_reason', 'settlement_unassigned',
+                  *(key for key, _ in DIAGNOSTIC_LABELS))
+        stats = record.statistics_fields(fields)
+    else:
+        stats = record.statistics
+    if 'non_team_sources' in stats and 'totals_complete' in stats:
+        return stats
+    sample = record.last_sample
     if 'non_team_sources' not in stats:
         _legacy_non_team(stats, _native_output(sample))
     if 'totals_complete' not in stats:
@@ -136,11 +144,11 @@ def record_statistics(record):
 
 
 def record_status(record):
-    return team_status(record_statistics(record))
+    return team_status(record_statistics(record, for_panel=True))
 
 
 def record_view(record, config):
-    stats = panel_statistics(config, record_statistics(record), history=True)
+    stats = panel_statistics(config, record_statistics(record, for_panel=True), history=True)
     complete, reason, note = team_status(stats)
     if config.boss_scope:
         reason = stats['boss_damage_reason'] or reason

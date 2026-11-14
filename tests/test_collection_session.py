@@ -46,6 +46,7 @@ class LiveObserver(Observer):
         super().__init__(collector)
         self.calls = collector.calls
         self.remote = remote
+        self.probe_modes = {'coalesce_enemy_hp': False, 'trace_hp_context': False}
 
     def start(self):
         self.calls.append('attach')
@@ -65,7 +66,11 @@ def session(live=True):
 
 def test_shared_entry_attaches_before_locating_and_publishes_core_result():
     current, collector, calls = session()
+    records = []
+    current.audit = lambda kind, data: records.append((kind, data))
     current.connect()
+    assert ('observer_ready', {'remote': 'remote', 'coalesce_enemy_hp': False,
+                               'trace_hp_context': False}) in records
     current.locate()
     assert calls == ['transport', 'attach', 'locate']
     current.read()

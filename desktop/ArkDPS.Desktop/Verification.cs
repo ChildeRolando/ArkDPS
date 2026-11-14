@@ -457,6 +457,148 @@ public partial class MainWindow
                 HasText(Ratio(),"被减伤率") &&
                 !HasText(Ratio(),"已观察减伤率"),
                 "complete zero mitigation did not take precedence over the observed subset");
+
+        fixture["details_by_owner"]![owner]!["settled_damage"]=System.Text.Json.Nodes.JsonNode.Parse("""
+            {"observed_mitigation_rate":23,"observed_mitigation_before":1000,
+             "observed_mitigation_after":770,"mitigation_matched_hits":3,"mitigation_complete":false,
+             "mitigation_reason":"仅核实三次命中"}
+            """);
+        Apply();
+        Require(HasText(Ratio(),"23%") && HasText(Ratio(),"已观察减伤率") &&
+                Ratio().ToolTip is ToolTip {Content:TextBlock perHitTip} &&
+                perHitTip.Text.Contains("已配对的 3 击") && perHitTip.Text.Contains("仅核实三次命中"),
+                "verified per-hit mitigation was replaced by aggregate mitigation");
+        fixture["details_by_owner"]![owner]!["settled_damage"]!["observed_mitigation_rate"]=null;
+        Apply();
+        Require(HasText(Ratio(),"—") && !HasText(Ratio(),"0%"),
+                "missing per-hit mitigation borrowed legacy data");
+    }
+
+    private void VerifyPartialMetricCoverage()
+    {
+        var original=Panels.Values.First().View;
+        var fixture=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
+        string owner=original.Get("entries").Items().First().Text("owner_id");
+        fixture["config"]!["effective_only"]=true;
+        fixture["source"]![owner]!["effective_damage"]=null;
+        fixture["details_by_owner"]![owner]!["effective_damage"]=4321;
+        var coverage=System.Text.Json.Nodes.JsonNode.Parse("""
+            {
+              "effective_damage":{"failed_share":0.31,"basis":"累计结算伤害","reason":"部分伤害缺少扣血证据"},
+              "shield":{"failed_share":null,"reason":"仅有已观察护盾"}
+            }
+            """)!;
+        fixture["details_by_owner"]![owner]!["coverage"]=coverage;
+        fixture["entries"]![0]!["coverage"]=coverage.DeepClone();
+        var packed=JsonSerializer.SerializeToElement(fixture);
+        var ranked=new RowItem {Entry=packed.Get("entries").Items().First()};
+        Require(ranked.DisplayName.StartsWith("* ") &&
+                ranked.Tooltip.Contains("统计失败占比 31%") &&
+                ranked.Tooltip.Contains("分母：累计结算伤害") &&
+                ranked.Tooltip.Contains("有效护盾 统计失败占比 未知"),
+                "ranking tooltip did not separate known and unknown coverage");
+        var inspector=new Inspector {CompactReference=true};
+        inspector.Pin(owner,packed);
+        Require(HasText(inspector,"已观察有效伤害") && HasText(inspector,"4,321") &&
+                HasText(inspector,"有效伤害 31%") && HasText(inspector,"有效护盾 未知"),
+                "inspector hid observed effective damage or displayed an unverified fraction");
+        var hudPanel=new StatisticPanel();
+        hudPanel.ConfigureHud();
+        hudPanel.Update(packed);
+        Require(hudPanel.PanelKind.Text.Contains("部分统计") &&
+                ((RowItem)hudPanel.Rows.Items[0]).DisplayName.StartsWith("* "),
+                "HUD did not mark partial ranking values");
+        var historyPanel=new StatisticPanel {IsHistory=true};
+        historyPanel.Update(packed);
+        Require(historyPanel.Coverage.Text.Contains("统计失败占比"),
+                "history ranking did not show partial coverage");
+
+        var verified=System.Text.Json.Nodes.JsonNode.Parse("""
+            {"effective_damage":{"failed_share":0.06666666666666667,"basis_kind":"hits",
+                "basis":"可对账的伤害命中数","reason":"部分命中无法确认扣盾",
+                "unverified_hits":1,"observed_hits":15}}
+            """)!;
+        fixture["entries"]![0]!["coverage"]=verified;
+        var hitView=JsonSerializer.SerializeToElement(fixture);
+        ranked.Entry=hitView.Get("entries").Items().First();
+        historyPanel.Update(hitView);
+        Require(ranked.Tooltip.Contains("未核实命中 1/15（6.7%）") &&
+                !ranked.Tooltip.Contains("统计失败占比") &&
+                historyPanel.Coverage.Text.Contains("查看命中核实情况"),
+                "verified damage coverage used the legacy failed-damage label for a hit count");
+
+        const string teamCoverage="全队有效伤害覆盖不完整 · 30 次伤害命中未归属";
+        fixture["team_coverage_note"]=teamCoverage;
+        fixture["entries"]![0]!["coverage"]=new System.Text.Json.Nodes.JsonObject();
+        fixture["share_scope"]="known";
+        fixture["share_known"]=false;
+        var teamView=JsonSerializer.SerializeToElement(fixture);
+        var sidePanel=new StatisticPanel();
+        sidePanel.ConfigureSideRanking();
+        foreach(var panel in new[] {historyPanel,sidePanel,hudPanel})
+        {
+            panel.Update(teamView);
+            var label=panel.IsHud ? panel.PanelKind : panel.Coverage;
+            var clean=(RowItem)panel.Rows.Items[0];
+            string visible=panel.IsHud ? "全队覆盖不完整" : teamCoverage;
+            Require(label.Visibility==Visibility.Visible && label.Text.Contains(visible) &&
+                    label.ToolTip is string tooltip && tooltip.Contains(teamCoverage) &&
+                    clean.CoverageMarker.Length==0 && !clean.Tooltip.Contains(teamCoverage),
+                    "team attribution gap must stay in the panel notice and outside operator coverage");
+            panel.Update(packed);
+            Require(!label.Text.Contains(visible), "cleared team notice remained visible");
+        }
+
+        var row=fixture["source"]![owner]!;
+        var detail=fixture["details_by_owner"]![owner]!;
+        row["damage"]=300;
+        row["types_available"]=true;
+        row["types_stale"]=false;
+        row["damage_by_type"]=System.Text.Json.Nodes.JsonNode.Parse("""{"physical":100,"arts":200,"elemental":0,"true":0}""");
+        detail["effective_damage_by_type"]=null;
+        var historyInspector=new Inspector();
+        var liveFallback=JsonSerializer.SerializeToElement(fixture);
+        inspector.Update(liveFallback);
+        historyInspector.Pin(owner,liveFallback);
+        var composition=FindAutomationElement(inspector,"CompactOperatorComposition")
+            ?? throw new InvalidOperationException("missing damage composition");
+        Require(HasText(composition,"溢出总伤属性构成") && HasText(composition,"300") &&
+                HasText(composition,"33%") && HasText(composition,"67%") &&
+                !HasText(composition,"4,321") &&
+                HasText(historyInspector,"溢出总伤属性构成") && HasText(historyInspector,"33%") &&
+                HasText(historyInspector,"有效伤害属性未知"),
+                "missing effective breakdown hid or mislabeled the published raw damage types");
+
+        coverage["effective_damage_by_type"]=coverage["effective_damage"]!.DeepClone();
+        detail["effective_damage_by_type"]=System.Text.Json.Nodes.JsonNode.Parse("""{"physical":10,"arts":15}""");
+        void UpdateComposition()
+        {
+            var current=JsonSerializer.SerializeToElement(fixture);
+            inspector.Update(current);
+            historyInspector.Update(current);
+        }
+        UpdateComposition();
+        Require(HasText(composition,"已观察有效伤害属性构成") && HasText(composition,"25") &&
+                HasText(composition,"40%") && HasText(composition,"60%") &&
+                !HasText(composition,"溢出总伤属性构成") && !HasText(composition,"4,321") &&
+                HasText(historyInspector,"已观察有效伤害属性构成") && HasText(historyInspector,"60%"),
+                "known effective type subset did not replace the raw snapshot composition");
+
+        row["types_stale"]=true;
+        detail["effective_damage_by_type"]=null;
+        UpdateComposition();
+        Require(HasText(composition,"伤害属性未知") && !HasText(composition,"300") &&
+                !HasText(composition,"40%") && HasText(historyInspector,"伤害属性未知"),
+                "unknown effective types rendered a stale chart or borrowed the effective total");
+
+        fixture["config"]!["effective_only"]=false;
+        coverage["damage_by_type"]=coverage["effective_damage"]!.DeepClone();
+        detail["damage_by_type"]=System.Text.Json.Nodes.JsonNode.Parse("""{"arts":20,"elemental":30}""");
+        UpdateComposition();
+        Require(HasText(composition,"已观察溢出总伤属性构成") && HasText(composition,"50") &&
+                HasText(composition,"40%") && HasText(composition,"60%") &&
+                HasText(historyInspector,"已观察溢出总伤属性构成"),
+                "published partial raw types were replaced by stale native types");
     }
 
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
@@ -1250,6 +1392,12 @@ public partial class MainWindow
                 Require(HasText(OperatorTrend,"首领有效伤害 · 近 5 秒 DPS 趋势") && HasText(OperatorTrend,"123 DPS") &&
                         hud.Panel.Heading.Text.StartsWith("仅首领·有效伤害"),
                         "effective boss scope reused the raw or global trend");
+                scoped["boss_effective_live_analysis"]=ScopedTrend(87,observed:true);
+                ApplyState(JsonSerializer.SerializeToElement(scoped));
+                Require(HasText(OperatorTrend,"已观察 87 DPS") &&
+                        bossEffectiveTrendModel.Points[^1].Operators[owner]==87 &&
+                        bossEffectiveTrendModel.Points[^1].Team==null,
+                        "observed boss operator rate was mislabeled as a complete or team rate");
             }
             finally { ApplyState(unavailable); }
 
@@ -1272,10 +1420,11 @@ public partial class MainWindow
         Require(!panel.View.Get("config").Bool("boss_only") && panel.Rows.Items.Count>0 &&
                 OperatorTrend.Visibility==Visibility.Visible,"clearing boss scope did not restore the normal views");
 
-        System.Text.Json.Nodes.JsonNode ScopedTrend(int dps) => JsonSerializer.SerializeToNode(new
+        System.Text.Json.Nodes.JsonNode ScopedTrend(int dps,bool observed=false) => JsonSerializer.SerializeToNode(new
         {
             battle_id=State.Text("battle_id"), game_time=State.Number("game_time"), segment=1,
-            team_recent_dps=dps, operators=new[]{new{owner_id=owner,name="合成验收",recent_dps=dps}},
+            team_recent_dps=observed ? (int?)null : dps, operators=new[]{new{owner_id=owner,name="合成验收",
+                recent_dps=observed ? (int?)null : dps,observed_recent_dps=observed ? dps : (int?)null}},
         })!;
     }
     private static void Click(int x,int y)
@@ -1473,6 +1622,8 @@ public partial class MainWindow
         checks.Add("side mode follows emulator minimize and restore, honors manual minimize and recovers when the emulator exits");
         VerifyMitigationDisplay();
         checks.Add("mitigation distinguishes missing data, verified zero and small nonzero ratios");
+        VerifyPartialMetricCoverage();
+        checks.Add("observed values and failed share reach ranking, inspector, history and HUD");
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",
@@ -1752,7 +1903,26 @@ public partial class MainWindow
         checks.Add("history page entry re-reads archives without pressing 刷新");
         string previousHistory=State.Get("history_selected").Text("battle_id");
         await Command("history_select",new(){["battle_id"]=entryBattle});
+        var frozenHistory=State.Get("history_selected").Clone();
         await Command("history_select",new(){["battle_id"]=previousHistory});
+        Require(frozenHistory.Text("battle_id")==entryBattle &&
+                frozenHistory.Get("record").ValueKind==JsonValueKind.Undefined,
+                "history selection did not carry a compact view for the selected battle");
+        string exportPath=Path.Combine(output,"frozen-history.json");
+        await ExportHistory(frozenHistory,"json",exportPath);
+        using(var exported=JsonDocument.Parse(File.ReadAllBytes(exportPath)))
+            Require(exported.RootElement.Text("battle_id")==entryBattle &&
+                    exported.RootElement.Get("statistics").Get("rows").ValueKind==JsonValueKind.Object,
+                    "JSON export used the current selection instead of the frozen archive");
+        string eventStatus=frozenHistory.Text("event_status");
+        Require(eventStatus.Length>0 && HasText(Screenshot.StatisticsDocument(frozenHistory,Theme.Key),"事件："+eventStatus),
+                "ranking PNG lost the selected archive's event status");
+        byte[] frozenPng=Screenshot.Statistics(frozenHistory,Theme.Key);
+        string pngPath=Path.Combine(output,"frozen-history.png");
+        await ExportHistory(frozenHistory,"png",pngPath,frozenPng);
+        Require(File.ReadAllBytes(pngPath).SequenceEqual(frozenPng),
+                "PNG export changed the frozen ranking");
+        checks.Add("compact history selection exports the frozen archive after navigation");
         workerUnavailable=true;
         RefreshHistoryAvailability();
         try

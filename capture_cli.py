@@ -1,5 +1,5 @@
 """Foreground capture through the same collection session used by the GUI."""
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from enum import Enum
 import hashlib
 import json
@@ -15,8 +15,10 @@ from event_capture import CaptureRetry
 
 
 def json_value(value):
-    if is_dataclass(value):
-        return asdict(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        # The JSON encoder walks nested values itself. A recursive asdict
+        # copy repeats the entire event batch before any bytes can be written.
+        return {field.name: getattr(value, field.name) for field in fields(value)}
     if isinstance(value, (set, frozenset)):
         return sorted(value)
     if isinstance(value, Enum):

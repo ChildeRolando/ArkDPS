@@ -2,6 +2,9 @@
 // Interceptors observe calls only: no argument, return-value, or gameplay writes.
 if(Process.arch!=='arm64')throw new Error('ARM64 emulated realm required');
 const il=Process.getModuleByName('libil2cpp.so');
+const traceHpContext=globalThis.arkdpsTraceHpContext===true;
+const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp===true;
+const observeSourceCharacterUid=globalThis.arkdpsSourceCharacterUid!==false;
 function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
 function className(k){return k.add(0x10).readPointer().readCString();}
 function fieldOffsets(k,names){
@@ -23,6 +26,7 @@ const cfg={methods:[]};let clock;let skillF=null;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;
 let terminalMethods=null;
+let sourceCharacterClasses=null;
 function uniqueMethod(klass,name,argCount) {
  const methods=klass.add(0x98).readPointer(),count=klass.add(0x120).readU16(),matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
@@ -117,6 +121,7 @@ try{
   'Character','BasicSkill','SkillData']);const found={};
  const enemyClasses=new Set(['Enemy','BObject','Attributes']);
  const optionalClasses=new Set([...enemyClasses,'BattleFormula']);
+ if(observeSourceCharacterUid)optionalClasses.add('BattleCharacterData');
  for(let i=0,n=classCount(im);i<n;i++){
   const k=classAt(im,i),name=className(k);if(!wanted.has(name)&&!optionalClasses.has(name))continue;
   const ns=k.add(0x18).readPointer().readCString();
@@ -134,6 +139,13 @@ try{
  expectFields(found.Modifier,{'m_source':0x10,'m_target':0x20,'m_originalSource':0x30,'m_value':0x40,'realDelta':0x58,'<targetType>k__BackingField':0x70,'<damageType>k__BackingField':0x78,'<cancelReason>k__BackingField':0x80});
  // FIXED_FRAME_COUNT is verified from the current class metadata, not an old battle object.
  expectFields(found.BattleController,{'s_fixedFrameCnt':0x14,'s_fixedPlayTime':0x18});
+ if(observeSourceCharacterUid){
+  try{
+   expectFields(found.Character,{'<data>k__BackingField':0x538});
+   expectFields(found.BattleCharacterData,{uniqueId:0x6c});
+   sourceCharacterClasses={character:found.Character,data:found.BattleCharacterData};
+  }catch(e){cfg.sourceCharacterUidError=String(e);}
+ }
  try{mitigationMethods=resolveMitigationMethods(found.BattleFormula,found.Entity,found.Modifier,found.BObject);}
  catch(e){cfg.mitigationError=String(e);}
  const CF=fieldOffsets(found.Character,['m_skill']);
@@ -235,6 +247,19 @@ const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
 function entityId(p){if(p.isNull())throw new Error('missing source entity');const id=str(p.add(0x148).readPointer());if(!id)throw new Error('missing source identity');return id;}
+function sourceCharacterUid(source,sourceId){
+ if(!sourceCharacterClasses||!sourceId||!own(sourceId))return;
+ try{
+  // This is the roster's Character.data UID. BObject.instanceUid has a
+  // different lifetime and must not be substituted for roster identity.
+  // The statistics key can differ from the roster prefab (transformed unit).
+  if(source.isNull()||!source.readPointer().equals(sourceCharacterClasses.character))return;
+  const data=source.add(0x538).readPointer();
+  if(data.isNull()||!data.readPointer().equals(sourceCharacterClasses.data))return;
+  const uid=data.add(0x6c).readU32();
+  if(uid>0)return uid;
+ }catch(e){/* Native identity unavailable; keep the original event. */}
+}
 function time(allowRetry = false) {
  const frame = clock.readU32();
  const game_time = fp(clock.add(4));
@@ -278,12 +303,37 @@ function leaveModifier(scope){
  if(index!==-1)scopes.splice(index,1);
  if(!scopes.length)activeModifiers.delete(scope.tid);
 }
+function shieldModifier(thread,modifier,target,when){
+ if(!modifier)return null;
+ const scope=damageModifier(thread,modifier);
+ if(!scope||scope.mitigationModifierReused||!scope.target?.equals(target)||
+    !sameMitigationTime(scope.when,when)||!scope.settlementTargetUid||
+    damageTargetUid(target)!==scope.settlementTargetUid)return null;
+ return scope;
+}
+function markUnmatchedShield(thread,modifier,target,when){
+ // A copied Modifier& on this thread or the same reference on another
+ // thread can flag uncertainty, but cannot supply a shield amount.
+ for(const [ownerThread,scopes] of activeModifiers){
+  for(const scope of scopes){
+   if(!scope.settlementTargetUid||!sameMitigationTime(scope.when,when))continue;
+   const sameModifier=scope.mod.equals(modifier);
+   const sameThreadTarget=ownerThread===thread&&target&&!target.isNull()&&scope.target?.equals(target);
+   if(sameModifier||sameThreadTarget){
+    scope.numericShieldUnknown=true;
+    scope.unmatchedShield=true;
+   }
+  }
+ }
+}
 function recordElementalBar(scope,when,amount){
  if(scope.elementalBarRecorded)return;
  const target=scope.elementalBarTarget;
  if(!target)return;
+ const evidence={target_instance:target.pointer.toString()};
+ if(target.uid&&damageTargetUid(target.pointer)===target.uid)evidence.target_uid=String(target.uid);
  record(scope.source,'elemental_bar',amount,when,{method:scope.name,type:0,target:5},
-  {target_instance:target.pointer.toString()});
+  evidence,scope.sourceCharacterUid);
  scope.elementalBarRecorded=true;
 }
 function recordTriggeringElementalBar(burst,when){
@@ -353,10 +403,56 @@ function nonlethalSettlement(target, before, real, amount) {
  const key=targetKey(target);
  return key?{target:key,hp_after:before+real,killed:false}:null;
 }
+function damageTargetUid(target){
+ if(!enemyEntryConfig||!target||target.isNull())return null;
+ try{return target.add(0x18).readU32()||null;}catch(e){return null;}
+}
+function rememberNestedElementalKill(child,when,evidence){
+ const uid=child.elementalTargetUid;
+ if(!uid||child.mitigationModifierReused||!evidence?.killed||evidence.cancel_reason!==0||
+    evidence.shield_absorbed!==0||!(evidence.real_delta<0)||evidence.hp_after!==0||
+    damageTargetUid(child.target)!==uid||!child.target.equals(child.mod.add(0x10).readPointer())||
+    !child.nativeModifierSource?.equals(child.mod.readPointer()))return;
+ const scopes=activeModifiers.get(child.tid);
+ if(!scopes||scopes[scopes.length-1]!==child)return;
+ const parents=scopes.slice(0,-1).filter(scope=>{
+  const hit=scope.targetHit;
+  return hit?.uid===uid&&hit.target.equals(child.target)&&scope.target?.equals(child.target)&&
+         hit.hpBefore>=evidence.hp_before&&sameMitigationTime(scope.when,when);
+ });
+ for(const parent of parents){
+  parent.nestedElementalKill=parents.length===1&&parent.nestedElementalKill===undefined?{uid,when}:null;
+ }
+}
+function damageSettledAfterNestedKill(scope,when,amount){
+ const kill=scope.nestedElementalKill,hit=scope.targetHit;
+ if(!kill||scope.targetHitAmbiguous||scope.outputAmbiguous||scope.mitigationModifierReused||
+    !scope.nativeModifierSource||!(amount>0)||!sameMitigationTime(kill.when,when))return null;
+ const target=hit.target,mod=scope.mod;
+ if(damageTargetUid(target)!==kill.uid||!target.equals(mod.add(0x10).readPointer())||
+    !scope.nativeModifierSource.equals(mod.readPointer())||
+    mod.add(0x70).readS32()!==0||fp(mod.add(0x48))!==0||targetHp(target)!==0||
+    shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
+ // The outer modifier still has a settlement amount, but only the child's
+ // HP changed. Do not attach the parent's pre-nesting target HP to this hit.
+ return {real_delta:0,hp_before:0,hp_after:0,killed:true,cancel_reason:0,shield_absorbed:0,
+         settled_after_nested_kill:true};
+}
 function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
-function record(source,kind,amount,when,proof,evidence){
+function record(source,kind,amount,when,proof,evidence,sourceUid){
+ if(coalesceEnemyHp)flushCoalescedEnemyHp();
+ if(source!==null&&sourceUid!==undefined)evidence={...evidence,source_character_uid:sourceUid};
+ const event=enqueueEvent(source,kind,amount,when,proof,evidence);
+ if(coalesceEnemyHp&&event){
+  if(kind==='enemy_enter'||kind==='enemy_reborn')
+   enemyHpBirths.set(evidence.target_instance,{eid:evidence.target,frame:when.frame});
+  else if(kind==='enemy_fake_death'||kind==='enemy_finish')enemyHpBirths.delete(evidence.target_instance);
+ }
+ return event;
+}
+function enqueueEvent(source,kind,amount,when,proof,evidence){
  if(stopped||fatal)return;
  if(!Number.isFinite(amount)||amount<0)throw new Error('invalid amount');
  if(queue.length>=EVENT_BUFFER_LIMIT){
@@ -374,12 +470,55 @@ function record(source,kind,amount,when,proof,evidence){
  queue.push(event);
  return event;
 }
+// Keep the first heal intact. It may establish the HP and MaxHP needed to
+// prove subsequent healing. An exactly contiguous, increasing tail with the
+// same verified MaxHP then contributes its last HP minus its first HP.
+const enemyHpBirths=new Map();
+let enemyHpRun=null;
+function flushCoalescedEnemyHp(){
+ const tail=enemyHpRun?.tail;
+ enemyHpRun=null;
+ if(tail)enqueueEvent(null,'enemy_hp',0,tail.when,{method:tail.method},tail.evidence);
+}
+function resetEnemyHpCoalescing(){
+ if(!coalesceEnemyHp)return;
+ flushCoalescedEnemyHp();
+ enemyHpBirths.clear();
+}
+function recordEnemyHp(write,when,method,hp,maxHp){
+ const {key,evidence,hpBefore,maxHpBefore}=write;
+ if(maxHp!==null)evidence.enemy_max_hp=maxHp;
+ evidence.hp_before=hpBefore;
+ evidence.hp_after=hp;
+ if(coalesceEnemyHp){
+  const {target:eid,target_instance:uid}=evidence;
+  const birth=enemyHpBirths.get(uid);
+  if(write.enemyTarget&&enemyMaxHpReady&&method==='Entity.SetHpInternal'&&maxHpBefore===null
+     &&birth?.eid===eid&&when.frame>birth.frame+1&&Number.isFinite(maxHp)
+     &&0<hpBefore&&hpBefore<hp&&hp<=maxHp){
+   const run=enemyHpRun;
+   if(run&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
+      &&run.when.frame===when.frame&&run.when.game_time===when.game_time&&run.after===hpBefore){
+    if(run.tail)run.tail.evidence.hp_after=hp;
+    else run.tail={when,method,evidence};
+    run.after=hp;
+    return;
+   }
+   flushCoalescedEnemyHp();
+   if(enqueueEvent(null,'enemy_hp',0,when,{method},evidence))
+    enemyHpRun={key,uid,eid,when,maxHp,after:hp,tail:null};
+   return;
+  }
+ }
+ record(null,'enemy_hp',0,when,{method},evidence);
+}
 function recordHpContext(context){
  if(stopped||fatal)return;
  if(hpContext.length>=HP_CONTEXT_BUFFER_LIMIT){
   hpContextDropped++;
   return;
  }
+ if(coalesceEnemyHp)flushCoalescedEnemyHp();
  // Diagnostics do not advance the authoritative sequence. Attach late
  // diagnostics to the next event so repeating a read returns the same slice.
  hpContext.push({eventSequence:Math.max(sequence,readThroughSequence+1),context});
@@ -410,6 +549,7 @@ function ackEvents(through){
 }
 function refreshEnemyEntryFrame(frame) {
  if(enemyEntryFrame!==null&&frame<enemyEntryFrame){
+  resetEnemyHpCoalescing();
   awaitingEnemyTile.clear();
   enemyEntryUnknown=false;
   enemyHealthPhases.clear();
@@ -444,7 +584,7 @@ function enemyIdentity(enemy,uid) {
  if(!uid)throw new Error('missing enemy instance UID');
  return {target:entityId(enemy),target_instance:String(uid)};
 }
-function enemyDamageIdentity(target) {
+function enemyDamageIdentity(target,confirmedUid) {
  const key=targetKey(target);
  if(!key)throw new Error('missing settled target');
  // Some targetable stage objects enter the HP pool, others do not. Keep
@@ -452,37 +592,136 @@ function enemyDamageIdentity(target) {
  if(!key.startsWith('enemy_')&&!key.startsWith('trap_'))return null;
  if(!enemyEntryConfig.assignable(enemyEntryConfig.bObject,target.readPointer()))
   throw new Error('settled target is not a battle object');
- const uid=target.add(0x18).readU32();
+ const uid=confirmedUid??target.add(0x18).readU32();
  if(!uid)throw new Error('missing settled target UID');
  return {target:key,target_uid:String(uid),target_instance:target.toString()};
 }
-function recordEnemyDamage(scope,when) {
+function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed=false}={}) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
  try{
-  const type=scope.mod.add(0x68).readS32();
-  if(![1,2,3,5].includes(type))return;
+  const damageType=type??scope.mod.add(0x68).readS32();
+  if(![1,2,3,5].includes(damageType))return;
   if(scope.sourceReadFailed)throw new Error('missing settled source identity');
-  // ApplyModifier is the only scoped producer for a source-null burst.
-  if(!scope.source)return;
-  if(!Number.isFinite(scope.real)||scope.real>0)throw new Error('invalid settled HP delta');
-  if(scope.real===0)return;
-  const target=enemyDamageIdentity(scope.target);
-  if(target)record(scope.source,'enemy_damage',-scope.real,when,{method:scope.name},
-                   {...target,damage_type:type});
+  if(!scope.source&&!(damageType===5&&scope.nativeSourceNull))return;
+  if(!Number.isFinite(real)||real>0)throw new Error('invalid settled HP delta');
+  if(real===0&&!(shield>0)&&!nested&&!unverified)return;
+  const actualTarget=identity??enemyDamageIdentity(target);
+  if(!actualTarget)return;
+  const evidence={...actualTarget,damage_type:damageType,shield_absorbed:shield??null,
+                  settlement_complete:complete};
+  if(Number.isFinite(nominal)&&nominal+0.01>=-real+(shield??0))
+   evidence.nominal_amount=nominal;
+  if(nested)evidence.settled_after_nested_kill=true;
+  if(killed)evidence.killed=true;
+  record(scope.source,'damage_settlement',real===0?0:-real,when,{method:scope.name},
+         {...evidence,...reduction},scope.sourceCharacterUid);
  }catch(e){enemyDamageUnknown=true;}
 }
-function recordSourcelessEnemyBurst(scope,evidence,when) {
+function flushOutputSettlement(scope,when) {
+ const output=scope.outputSettlement;
+ if(output)
+  damageSettlement(output,output.target,output.real,when,{identity:output.settlementIdentity,
+                   type:output.settlementType});
+ scope.outputSettlement=null;
+}
+function matchOutputSettlement(output,scope,source) {
+ if(!source||!scope||scope.mitigationModifierReused||!scope.nativeModifierSource?.equals(source)||
+    !scope.target?.equals(output.target)||!sameMitigationTime(scope.when,output.when))return false;
+ const uid=damageTargetUid(output.target);
+ if(!uid||uid!==scope.settlementTargetUid)return false;
+ try{
+  output.settlementType=output.mod.add(0x68).readS32();
+  output.settlementIdentity=enemyDamageIdentity(output.target,uid);
+ }
+ catch(e){enemyDamageUnknown=true;return false;}
+ if(!output.settlementIdentity)return false;
+ if(scope.settlementAmbiguous)return true;
+ const previous=scope.outputSettlement;
+ if(previous){
+  // A single ApplyModifier is the deduplication boundary. More than one
+  // incompatible output without distinct target-side commits is ambiguous.
+  if(scope.targetHitAmbiguous||output.real!==previous.real||output.amount!==previous.amount||
+     output.settlementType!==previous.settlementType||
+     output.settlementIdentity.target!==previous.settlementIdentity.target||
+     output.sourceCharacterUid!==previous.sourceCharacterUid){
+   scope.outputSettlement=null;
+   scope.settlementAmbiguous=true;
+   enemyDamageUnknown=true;
+  }
+ }else scope.outputSettlement=output;
+ return true;
+}
+function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null) {
+ if(!enemyDamageReady||!scope.tracksModifier||!target||target.isNull()||
+    !scope.nativeModifierSource||!scope.nativeModifierSource.equals(scope.mod.readPointer())||
+    !scope.target?.equals(target)||!scope.settlementTargetUid||
+    damageTargetUid(target)!==scope.settlementTargetUid)return false;
+ if(scope.mitigationModifierReused){
+  enemyDamageUnknown=true;
+  return false;
+ }
+ const output=scope.outputSettlement;
+ // Signed result from the exact output callback or a checked elemental
+ // ApplyModifier. Do not promote the nominal value of an unmatched callback.
+ const real=scope.settlementAmbiguous?null:output?.real??exactEvidence?.real_delta;
+ const shield=scope.numericShield;
+ const shieldIncoming=scope.firstShieldIncoming;
+ // The shield hook witnessed incoming damage before the engine zeroed
+ // m_value on a full block. Keep that measured value within this hit.
+ const shieldedZero=shield>0&&amount===0&&Number.isFinite(shieldIncoming)&&
+    (real===0||real==null&&fp(scope.mod.add(0x48))===0&&
+     Math.abs(shield-shieldIncoming)<=Math.max(0.01,shieldIncoming*1e-6));
+ const settledAmount=shieldedZero?shieldIncoming:amount;
+ const nativeAmount=shieldedZero?shieldIncoming:output?.amount??amount;
+ const tolerance=Math.max(0.01,Math.abs(settledAmount)*1e-6);
+ if(output&&output.settlementType!==type){
+  flushOutputSettlement(scope,when);
+  return false;
+ }
+ const nested=exactEvidence?.settled_after_nested_kill===true;
+ const cancel=scope.mod.add(0x70).readS32();
+ const exact=shieldedZero||Number.isFinite(real)&&real<=0&&Number.isFinite(settledAmount)&&
+             Math.abs(nativeAmount-settledAmount)<=tolerance;
+ // HP may be capped after the formula even while the target is alive. Use
+ // measured HP endpoints and the numeric shield callbacks for this hit.
+ const hit=scope.targetHit;
+ const capturedHp=exact&&real<0&&cancel===0&&exactEvidence?.real_delta===real&&
+    Number.isFinite(exactEvidence.hp_before)&&Number.isFinite(exactEvidence.hp_after)&&
+    Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,-real*1e-6)&&
+    (type===5&&exactEvidence.hp_before===scope.hpBefore||
+     output&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
+     !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===hit.hpBefore);
+ const killed=capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0;
+ const absorbed=shield>0?shield:!scope.numericShieldUnknown&&
+      (nested||capturedHp||exact&&real<0&&Math.abs(settledAmount+real)<=tolerance)?0:null;
+ const unverified=scope.settlementAmbiguous||scope.unmatchedShield&&!(settledAmount>0)&&!(shield>0)||
+    amount>0&&cancel===0&&!nested&&(!Number.isFinite(real)||(real===0&&!(absorbed>0)));
+ if(!exact&&!(absorbed>0)&&!unverified)return false;
+ const settledReal=Number.isFinite(real)&&real<=0?real:0;
+ const consistent=exact&&settledAmount+0.01>=-settledReal+(absorbed??0);
+ const nominal=(consistent&&(cancel===0||absorbed>0)&&settledAmount>0?settledAmount:undefined);
+ // Existing formula evidence was matched inside this same modifier scope.
+ const pair=consistent&&shieldedZero?shieldMitigationEvidence(scope,type,shieldIncoming):
+       consistent&&(real<0||absorbed>0||nested)?reduction:undefined;
+ scope.outputSettlement=null;
+ damageSettlement(output||scope,target,settledReal,when,{nominal,shield:absorbed,type,nested,unverified,killed,
+                   identity:output?.settlementIdentity,reduction:pair,
+                   complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
+ return true;
+}
+function settleSourcelessBurst(scope,evidence,when,amount,reduction) {
  if(!enemyDamageReady||scope.source||scope.burstTarget===null)return;
  try{
+  if(settleDamage(scope,scope.target,when,amount,5,reduction,evidence))return;
   const real=evidence?.real_delta??fp(scope.mod.add(0x48));
-  if(real===0)return;
+  if(real===0&&!scope.numericShield)return;
   const target=scope.burstTarget;
-  if(!scope.nativeSourceNull||!evidence||!target||!Number.isFinite(real)||real>=0
+  if(!scope.nativeSourceNull||!evidence||!target||!Number.isFinite(real)||real>0
      ||target.target!==evidence.target||target.target_uid!==String(scope.target.add(0x18).readU32()))
    throw new Error('unverified sourceless burst settlement');
   // The host must attribute the HP deduction before the burst consumes its
   // elemental bar owner. Both records stay within this callback's barrier.
-  record(null,'enemy_damage',-real,when,{method:scope.name},{...target,damage_type:5});
+  damageSettlement(scope,scope.target,real,when,{identity:target});
  }catch(e){enemyDamageUnknown=true;}
 }
 // One optional observation joins the existing ApplyModifier damage event.
@@ -608,13 +847,13 @@ function captureMitigation(scope,source){
  const raw=fixedBits(scope.mod.add(0x30).readS64());
  scope.mitigation=takeFormulaDamage(scope,source,type,raw);
 }
-function mitigationEvidence(scope,type,amount){
+function mitigationEvidence(scope,type,amount,verifiedShield=false){
  const result=scope.mitigation;
  if(!result)return null;
  if(scope.mitigationModifierReused||result.type!==type||scope.mod.add(0x60).readS32()!==0||
     !Number.isFinite(amount)||amount<0||
     !result.source.equals(scope.mod.readPointer())||!result.target.equals(scope.mod.add(0x10).readPointer())||
-    scope.mod.add(0x70).readS32()!==0){
+    (!verifiedShield&&scope.mod.add(0x70).readS32()!==0)){
   noteMitigationDiagnostic('apply_changed_at_leave',scope.source,scope.when,result,amount);
   return null;
  }
@@ -626,6 +865,12 @@ function mitigationEvidence(scope,type,amount){
  mitigationCounts.emitted++;
  if(result.originValue!==undefined)mitigationCounts.factory_emitted++;
  return {mitigation_before:result.before,mitigation_after:amount};
+}
+function shieldMitigationEvidence(scope,type,incoming){
+ // Take only the pending formula matched to this same modifier. Its
+ // pre-shield result must equal the numeric shield hook's incoming value.
+ if(scope.mitigation?.after!==incoming)return null;
+ return mitigationEvidence(scope,type,incoming,true);
 }
 function beginDamageFormula(invocation,target,source,attack,eligible,nested){
  const previous=formulaScopes.get(invocation.tid);
@@ -689,8 +934,10 @@ function enterDamageFactory(args,index){
  if(activeDamageFactories.has(this.tid))return; // seven-argument wrapper can delegate to eight
  activeDamageFactories.add(this.tid);
  this.enteredFactory=true;
- const when=time(),batch=formulaBatch(this.tid,when);
+ const batch=pendingFormulaDamage.get(this.tid);
  if(!batch||(batch.unowned.size===0&&batch.postFormulaHits.size===0))return;
+ const when=time();
+ if(!sameMitigationTime(batch,when))return;
  const type=args[index].toInt32(),target=args[index+3];
  if(!mitigationDamageType(type)||target.isNull()||!mitigationTargetId(target))return;
  const targetUid=target.add(0x18).readU32();
@@ -786,8 +1033,11 @@ function installMitigationHooks(){
     this.type=args[0].add(mitigationMethods.damageType).readS32();
    }else if(!formulaScopes.has(this.tid)){
     const batch=pendingFormulaDamage.get(this.tid);
-    if(!batch?.postFormulaAttacks.size||!sameMitigationTime(batch,time()))return;
-    const candidate=consumeFormula(batch.postFormulaAttacks,args[0].toString());
+    if(!batch?.postFormulaAttacks.size)return;
+    const key=args[0].toString(),candidate=batch.postFormulaAttacks.get(key);
+    if(candidate===undefined||!sameMitigationTime(batch,time()))return;
+    // Same-frame claims consume even ambiguous candidates or a mismatched type.
+    batch.postFormulaAttacks.delete(key);
     if(candidate&&candidate.type===args[0].add(mitigationMethods.damageType).readS32()){
      this.postFormula=candidate;
      this.postFormulaBatch=batch;
@@ -942,9 +1192,15 @@ function installEnemyEntryHooks() {
   }
   installed.push(Interceptor.attach(enemyEntryConfig.recycle,{
    onEnter(args){
-     if(!awaitingEnemyTile.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size)return;
+     if(!awaitingEnemyTile.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size
+        &&!enemyHpBirths.size)return;
     try{
      const object=args[0],uid=object.add(0x18).readU32();
+      if(coalesceEnemyHp){
+       const instance=String(uid);
+       if(enemyHpRun?.uid===instance)flushCoalescedEnemyHp();
+       enemyHpBirths.delete(instance);
+      }
       // Retire an in-flight setter before the pooled pointer can be reused.
       enemyHpWrites.delete(object.toString());
      if(awaitingEnemyTile.get(uid)?.equals(object))awaitingEnemyTile.delete(uid);
@@ -1055,8 +1311,10 @@ function installEnemyStateHooks() {
       if(enemy.isNull())return;
       const existing=enemyHpWrites.get(key);
       if(existing){
-       if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null)
+       if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null){
+        if(coalesceEnemyHp)flushCoalescedEnemyHp();
         existing.maxHpBefore=fixedArg(args[2]);
+       }
        return;
       }
       enemyTarget=isEnemy(enemy);
@@ -1067,13 +1325,17 @@ function installEnemyStateHooks() {
       const when=time(),uid=enemy.add(0x18).readU32();
       refreshEnemyEntryFrame(when.frame);
       if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
+      if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
       const evidence=enemyIdentity(enemy,uid),hpBefore=targetHp(enemy);
       if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
       const maxHpBefore=attributeChange?fixedArg(args[2]):null;
       this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,superseded:false};
       enemyHpWrites.set(key,this.write);
       beginEnemyHook(label);
-     }catch(e){if(enemyTarget)enemyStateUnknown=true;}
+     }catch(e){
+      if(coalesceEnemyHp)flushCoalescedEnemyHp();
+      if(enemyTarget)enemyStateUnknown=true;
+     }
     },
     onLeave(){
      const write=this.write;
@@ -1091,9 +1353,11 @@ function installEnemyStateHooks() {
       if(hp===hpBefore&&maxHpBefore===null)return;
       const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
       if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
-      if(maxHp!==null)evidence.enemy_max_hp=maxHp;
-      record(null,'enemy_hp',0,end,{method:label},{...evidence,hp_before:hpBefore,hp_after:hp});
-     }catch(e){if(write.enemyTarget)enemyStateUnknown=true;}
+      recordEnemyHp(write,end,label,hp,maxHp);
+     }catch(e){
+      if(coalesceEnemyHp)flushCoalescedEnemyHp();
+      if(write.enemyTarget)enemyStateUnknown=true;
+     }
      finally{endEnemyHook(label);}
     }
    };
@@ -1187,7 +1451,16 @@ function skillIdentity(charPtr,skillPtr){
   return {skill_key:key||id||null,skill_id:id||null,skill_name:name||null};
  }catch(e){return {};}
 }
-for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||x.owner==='BlockDamage'&&x.name==='_AssignDynamicVar'||x.owner==='Entity'&&x.name==='ApplyModifier'||(x.owner==='Entity'||x.owner==='Unit')&&(x.name==='OnTakeDamage'||x.name==='OnAfterOutputDamage')||x.owner==='Character'||x.owner==='BattleController'&&x.name==='OnCharacterFinished')){
+function shouldObserveCallback({owner,name}){
+ if(owner==='Entity'&&['ApplyModifier','OnAfterOutputDamage'].includes(name)
+    ||owner==='Unit'&&name==='OnTakeDamage'
+    ||owner==='Buff'&&name==='OnTakeDamage'
+    ||owner==='BlockDamage'&&name==='_AssignDynamicVar'
+    ||owner==='Character'||owner==='BattleController'&&name==='OnCharacterFinished')return true;
+ return traceHpContext&&(owner==='Entity'&&name==='OnTakeDamage'
+   ||owner==='Unit'&&name==='OnAfterOutputDamage');
+}
+for(const m of cfg.methods.filter(shouldObserveCallback)){
  hooks.push(Interceptor.attach(ptr(m.address),{
   onEnter(args){
    active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
@@ -1198,6 +1471,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      this.source=entityId(args[1]);
      // A deployable's removal does not end its owner's skill.
      if(!this.source.startsWith('char_')){this.ignore=true;return;}
+     this.sourceCharacterUid=sourceCharacterUid(args[1],this.source);
      this.skillReason=args[2].toInt32();
      return;
     }
@@ -1207,6 +1481,7 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
       this.skillStart=SKILL_START_METHODS.has(method);this.skillEnd=!this.skillStart;
       try{
        this.source=entityId(args[0]);
+       this.sourceCharacterUid=sourceCharacterUid(args[0],this.source);
        this.skill=skillIdentity(args[0],method==='OnAfterSkill'?args[1]:null);
        this.skillReason=(method==='OnAfterSkill'&&args[2])?args[2].toInt32():null;
       }catch(e){skillUnknown=true;this.ignore=true;}
@@ -1218,15 +1493,24 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
     if(this.name.endsWith('.OnAfterOutputDamage')){
      // args[0] is the hidden IL2CPP `this` receiver; modifier is args[1].
      this.mod=args[1];
-     try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
+     try{this.target=this.mod.add(0x10).readPointer();if(traceHpContext)this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
      try{
       const source=this.mod.readPointer();
+      this.nativeModifierSource=source;
       this.source=source.isNull()?null:entityId(source);
+      this.sourceCharacterUid=sourceCharacterUid(source,this.source);
      }catch(e){this.source=null;this.sourceReadFailed=true;}
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
-     if(this.name==='Entity.OnAfterOutputDamage')recordEnemyDamage(this,this.when);
      this.modifierScope=damageModifier(this.tid,this.mod);
+     if(this.name==='Entity.OnAfterOutputDamage'&&enemyDamageReady){
+      if(this.sourceReadFailed)enemyDamageUnknown=true;
+      if(this.source&&own(this.source)){
+       if(this.modifierScope?.mitigationModifierReused)enemyDamageUnknown=true;
+       else if(!matchOutputSettlement(this,this.modifierScope,this.nativeModifierSource))
+        damageSettlement(this,this.target,this.real,this.when);
+      }
+     }
      return;
     }
     if(this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
@@ -1239,14 +1523,18 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
       this.target=this.receiver&&!this.receiver.isNull()?this.receiver:this.mod.add(0x10).readPointer();
       this.hpBefore=targetHp(this.target);
      }catch(e){this.ignore=true;return;}
-     try{this.source=entityId(this.mod.readPointer());}catch(e){this.source=null;}
+     try{
+      const source=this.mod.readPointer();
+      this.source=entityId(source);
+      this.sourceCharacterUid=sourceCharacterUid(source,this.source);
+     }catch(e){this.source=null;}
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
-     try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
+     if(traceHpContext)try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      if(this.name==='Unit.OnTakeDamage'&&this.source){
       const scope=damageModifier(this.tid,this.mod);
-      if(scope&&scope.source===this.source&&scope.when.frame===this.when.frame){
+      if(scope&&scope.source===this.source&&sameMitigationTime(scope.when,this.when)){
        if(scope.targetHit)scope.targetHitAmbiguous=true;
-       else scope.targetHit={target:this.target,hpBefore:this.hpBefore};
+       else scope.targetHit={target:this.target,hpBefore:this.hpBefore,uid:damageTargetUid(this.target)};
       }
      }
      return;
@@ -1256,8 +1544,10 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
      try{
       const source=this.mod.readPointer();
+      this.nativeModifierSource=source;
       this.nativeSourceNull=source.isNull();
       this.source=this.nativeSourceNull?null:entityId(source);
+      this.sourceCharacterUid=sourceCharacterUid(source,this.source);
      }catch(e){this.source=null;}
      if(enemyDamageReady&&this.nativeSourceNull){
       try{
@@ -1267,9 +1557,12 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      if((this.source&&own(this.source))||
         (this.nativeSourceNull&&this.mod.add(0x68).readS32()===5)){
       enterModifier(this);
+      const type=this.mod.add(0x68).readS32();
+      if(enemyDamageReady&&[1,2,3,5].includes(type))this.settlementTargetUid=damageTargetUid(this.target);
       try{captureMitigation(this,this.mod.readPointer());}catch(e){/* Existing damage remains observable. */}
+      if(type===5)this.elementalTargetUid=this.settlementTargetUid??damageTargetUid(this.target);
       if(this.source&&this.target&&!this.target.isNull()&&this.mod.add(0x60).readS32()===5&&
-         this.mod.add(0x68).readS32()===0){
+         type===0){
        this.elementalBarTarget={pointer:this.target,uid:null};
        try{this.elementalBarTarget.uid=this.target.add(0x18).readU32();}
        catch(e){/* The normal bar record still has its target pointer. */}
@@ -1277,35 +1570,61 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      }
      return;
     }
-    const s=stacks.get(this.tid)||[];if(!s.length){shieldUnknown=true;markShieldUnknown(this.when.frame,null);this.ignore=true;return;}
-    this.buff=buff(s[s.length-1]);this.bb=args[1];
-    try{this.damageTarget=args[2].add(0x10).readPointer();}catch(e){this.damageTarget=null;}
-    try{this.source=entityId(this.buff.source);}catch(e){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=true;return;}
+    this.bb=args[1];this.shieldModifierRef=args[2];
+    try{this.damageTarget=this.shieldModifierRef.add(0x10).readPointer();}catch(e){this.damageTarget=null;}
+    this.shieldScope=enemyDamageReady?shieldModifier(this.tid,this.shieldModifierRef,this.damageTarget,this.when):null;
+    const s=stacks.get(this.tid)||[];
+    if(!s.length){
+     shieldUnknown=true;markShieldUnknown(this.when.frame,null);
+     if(enemyDamageReady)markUnmatchedShield(this.tid,this.shieldModifierRef,this.damageTarget,this.when);
+     this.ignore=true;return;
+    }
+    this.buff=buff(s[s.length-1]);
+    if(enemyDamageReady&&!this.shieldScope&&this.buff.hasShield===1)
+     markUnmatchedShield(this.tid,this.shieldModifierRef,this.damageTarget,this.when);
+    if(this.shieldScope&&this.buff.hasShield===1){
+     this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(this.shieldModifierRef.add(0x30));
+     if([this.before,this.amount,this.incoming].every(value=>Number.isFinite(value)&&value>=0)&&
+        this.amount<=this.incoming+0.01&&this.amount<=this.before+0.01)
+      this.settlementShield=true;
+     else this.shieldScope.numericShieldUnknown=true;
+    }
+    try{this.source=entityId(this.buff.source);}catch(e){this.source=null;}
     // A non-player shield still absorbs damage dealt to that target, so the
     // hit's overkill cannot claim the absorbed part as its own excess.
-    if(!own(this.source)){markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=true;return;}
-    if(this.buff.hasShield!==1||!['shining_s_2','catsld_t_1[core]'].includes(this.buff.key)){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=true;return;}
-    this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(args[2].add(0x30));
+    if(!own(this.source)){
+     if(!this.source)shieldUnknown=true;
+     markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=!this.settlementShield;return;
+    }
+    if(this.buff.hasShield!==1||!['shining_s_2','catsld_t_1[core]'].includes(this.buff.key)){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=!this.settlementShield;return;}
+    this.legacyShield=true;
+    this.sourceCharacterUid=sourceCharacterUid(this.buff.source,this.source);
+    if(!this.settlementShield){this.before=dynamic(this.bb);this.amount=fixedArg(args[4]);this.incoming=fp(args[2].add(0x30));}
     if(!Number.isFinite(this.before)||this.before<0||!Number.isFinite(this.incoming)||this.incoming<0){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);this.ignore=true;return;}
    }catch(e){
     if(this.skillStart||this.skillEnd){skillUnknown=true;}
     else if(this.name==='Entity.ApplyModifier'){if(this.source&&own(this.source))unknownSources.add(this.source);else{skippedUnattributed++;}}
-    else{shieldUnknown=true;markShieldUnknown(this.when?this.when.frame:null,this.damageTarget);}
+    else{
+     shieldUnknown=true;markShieldUnknown(this.when?this.when.frame:null,this.damageTarget);
+     if(enemyDamageReady&&this.shieldModifierRef&&this.when)
+      markUnmatchedShield(this.tid,this.shieldModifierRef,this.damageTarget,this.when);
+    }
     this.ignore=true;
    }
   },
   onLeave(){
+   let endStamp;
    try{
     if(this.pushed){const s=stacks.get(this.tid);s.pop();if(!s.length)stacks.delete(this.tid);return;}
     if(this.ignore&&this.name!=='Entity.ApplyModifier')return;
-    const end=time();
+    const end=endStamp=time();
     if(this.skillStart||this.skillEnd){
      if(this.ignore)return;
      if(!this.source){skillUnknown=true;return;}
      const info=this.skill||{};
      const evidence={skill_key:info.skill_key||null,skill_id:info.skill_id||null,skill_name:info.skill_name||null};
      if(this.skillEnd)evidence.skill_reason=this.skillReason;
-     try{record(this.source,this.skillStart?'skill_start':'skill_end',1,end,{method:this.name},evidence);}catch(e){skillUnknown=true;}
+     try{record(this.source,this.skillStart?'skill_start':'skill_end',1,end,{method:this.name},evidence,this.sourceCharacterUid);}catch(e){skillUnknown=true;}
      return;
     }
     if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
@@ -1315,9 +1634,8 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
      if(this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
       const targetKeyValue=targetKey(this.target)||this.target.toString();
       const shield=shieldContextUnknown(end.frame,this.target)?null:shieldTotal(end.frame,this.target);
-      try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()});}catch(e){fatal=String(e);}
+      try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()},this.sourceCharacterUid);}catch(e){fatal=String(e);}
      }
-     const hpAfter=targetHp(this.target);
      const scope=this.modifierScope;
      if(this.name==='Entity.OnAfterOutputDamage'&&scope&&scope.targetHit
         &&!scope.targetHitAmbiguous&&scope.source===this.source
@@ -1329,13 +1647,16 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
       if(settled&&Number.isFinite(this.amount)&&!scope.outputAmbiguous)
        scope.settlement={amount:this.amount,evidence:settled,method:this.name};
      }
-     recordHpContext({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
-      source:this.source||null,target:targetKey(this.target)||this.target.toString(),
-      target_instance:this.target.toString(),modifier_instance:this.mod.toString(),amount:this.amount,
-      real_delta:this.real,hp_before:this.hpBefore,hp_after:hpAfter,
-      killed:hpAfter!==null&&hpAfter<=1e-6,
-      target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32(),
-      cancel_reason:this.mod.add(0x70).readS32()});
+     if(traceHpContext){
+      const hpAfter=targetHp(this.target);
+      recordHpContext({sequence:++hpSequence,hook:this.name,frame:end.frame,game_time:end.game_time,
+       source:this.source||null,target:targetKey(this.target)||this.target.toString(),
+       target_instance:this.target.toString(),modifier_instance:this.mod.toString(),amount:this.amount,
+       real_delta:this.real,hp_before:this.hpBefore,hp_after:hpAfter,
+       killed:hpAfter!==null&&hpAfter<=1e-6,
+       target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32(),
+       cancel_reason:this.mod.add(0x70).readS32()});
+     }
      return;
     }
     if(this.name==='Entity.ApplyModifier'){
@@ -1353,19 +1674,24 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
       if(this.nativeSourceNull&&evidence?.cancel_reason===0){
        try{recordTriggeringElementalBar(this,end);}catch(e){/* Unverified parent; keep the settlement. */}
       }
-      recordSourcelessEnemyBurst(this,evidence,end);
       if(evidence&&instance){
        evidence.target_instance=instance;
+       let reduction;
        try{
-        const reduction=mitigationEvidence(this,type,amount);
+        reduction=mitigationEvidence(this,type,amount);
         if(reduction)Object.assign(evidence,reduction);
        }catch(e){/* Missing formula evidence affects only mitigation. */}
        try{
-        const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence);
+        if(owned)settleDamage(this,this.target,end,amount,type,reduction,evidence);
+        else settleSourcelessBurst(this,evidence,end,amount,reduction);
+        const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
+        if(event)try{rememberNestedElementalKill(this,end,evidence);}catch(e){/* Independently verified burst remains queued. */}
         noteUnpairedDamage(this,event,type);
        }catch(e){fatal=String(e);}
-      }else if((!this.source||owned)&&amount>0&&fp(this.mod.add(0x48))!==0){
-       bossDamageUnknown=true;
+      }else{
+       if(owned)settleDamage(this,this.target,end,amount,type);
+       else settleSourcelessBurst(this,evidence,end,amount);
+       if(amount>0&&fp(this.mod.add(0x48))!==0)bossDamageUnknown=true;
       }
       return;
      }
@@ -1394,32 +1720,52 @@ for(const m of cfg.methods.filter(x=>x.owner==='Buff'&&x.name==='OnTakeDamage'||
        const target=hit?hit.target:this.target;
        if(target&&!target.isNull())evidence=nonlethalEvidence(target);
       }
+      if(!evidence)try{evidence=damageSettledAfterNestedKill(this,end,amount);}catch(e){/* Keep the nominal settlement. */}
       const damageTarget=hit?hit.target:this.target;
       evidence={target:targetKey(damageTarget),target_instance:damageInstance,
        target_type:targetType,damage_type:type,...evidence};
+      // Modifier.CancelReason.MISS can retain its nominal damage value. A
+      // verified miss does not enter the native damage counter.
+      const missed=evidence.cancel_reason===2&&evidence.shield_absorbed===0;
       if(evidence&&evidence.real_delta===0&&evidence.hp_before===evidence.hp_after
-         &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1))return;
+         &&!evidence.settled_after_nested_kill
+         &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1||missed))return;
+      let reduction;
       try{
-       const reduction=mitigationEvidence(this,type,amount);
+       reduction=mitigationEvidence(this,type,amount);
        if(reduction)evidence=Object.assign(evidence||{},reduction);
       }catch(e){/* Missing formula evidence affects only mitigation. */}
+      settleDamage(this,damageTarget,end,amount,type,reduction,
+                   evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null);
      }
      try{
-      const event=record(this.source,kind,amount,end,proof,evidence);
+      const event=record(this.source,kind,amount,end,proof,evidence,this.sourceCharacterUid);
       if(kind==='damage')noteUnpairedDamage(this,event,type);
      }catch(e){fatal=String(e);}
     }else{
      const after=dynamic(this.bb);
-     if(!Number.isFinite(after)||after<0||Math.abs(this.before-after-this.amount)>0.01){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);return;}
-     try{record(this.source,'shield_absorbed',this.amount,end,{method:this.name,buff:this.buff.key,before:this.before,after,incoming:this.incoming});}catch(e){fatal=String(e);}
+     if(!Number.isFinite(after)||after<0||Math.abs(this.before-after-this.amount)>0.01){shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);if(this.shieldScope)this.shieldScope.numericShieldUnknown=true;return;}
+     if(this.settlementShield){
+      this.shieldScope.firstShieldIncoming??=this.incoming;
+      this.shieldScope.numericShield=(this.shieldScope.numericShield||0)+this.amount;
+     }
+     if(!this.legacyShield)return;
+     try{record(this.source,'shield_absorbed',this.amount,end,{method:this.name,buff:this.buff.key,before:this.before,after,incoming:this.incoming},undefined,this.sourceCharacterUid);}catch(e){fatal=String(e);}
      noteShield(this.when.frame,this.damageTarget,this.amount);
     }
    }catch(e){
     if(this.skillStart||this.skillEnd){skillUnknown=true;}
     else if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}}
-    else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);}
+    else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);if(this.shieldScope)this.shieldScope.numericShieldUnknown=true;}
    }finally{
-    if(this.tracksModifier)leaveModifier(this);
+    if(this.tracksModifier){
+     if(this.outputSettlement){
+      if(endStamp&&sameMitigationTime(endStamp,this.when)&&!this.mitigationModifierReused)
+       flushOutputSettlement(this,endStamp);
+      else enemyDamageUnknown=true;
+     }
+     leaveModifier(this);
+    }
     if(this.started){active--;const left=(activeHooks.get(this.name)||1)-1;if(left>0)activeHooks.set(this.name,left);else activeHooks.delete(this.name);}
    }
   }
@@ -1455,7 +1801,10 @@ function installTerminalHooks(){
   hooks.push(Interceptor.attach(terminalMethods.state,{
    onEnter(args){
     const state=args[1].toInt32();
-    if(state===1||state===2){terminalGeneration++;terminalBoundary=null;}
+    if(state===1||state===2){
+     resetEnemyHpCoalescing();
+     terminalGeneration++;terminalBoundary=null;
+    }
    }
   }));
   hooks.push(Interceptor.attach(terminalMethods.destroy,{
@@ -1463,6 +1812,7 @@ function installTerminalHooks(){
     this.generation=++terminalGeneration;
     terminalBoundary=null;
     if(active||fatal||stopped)return;
+    if(coalesceEnemyHp)flushCoalescedEnemyHp();
     try{
      const identity=terminalIdentity(args[0],terminalMethods.controller),stamp=time(true);
      if(identity&&stamp)this.boundary={...identity,...stamp,sequence,epoch,active};
@@ -1494,6 +1844,9 @@ function enemyEntryQuality(frame){
 }
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
+  source_attribution_version:1,
+  partial_damage_version:6,
+  source_character_uid_ready:sourceCharacterClasses!==null,
   boss_damage_ready:true,boss_damage_unknown:bossDamageUnknown,
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
   skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
@@ -1502,6 +1855,7 @@ function eventQuality(frame){
   mitigation_diagnostics:mitigationDiagnostics(),...enemyEntryQuality(frame)};
 }
 function markEvents(){
+ if(coalesceEnemyHp&&!active)flushCoalescedEnemyHp();
  const terminal_boundary=currentTerminalBoundary();
  let current;
  try{current=time(true);}
@@ -1535,6 +1889,8 @@ rpc.exports={
 };
 receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
+ coalesce_enemy_hp:coalesceEnemyHp,trace_hp_context:traceHpContext,
+ source_character_uid_ready:sourceCharacterClasses!==null,source_character_uid_error:cfg.sourceCharacterUidError||null,
  skill_finish_error:cfg.skillFinishError||null,
  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
  mitigation_no_event_ready:mitigationNoEventReady,mitigation_no_event_error:cfg.mitigationNoEventError||null,

@@ -2,9 +2,9 @@ import pytest
 
 from panel_model import (Category, DAMAGE_COLORS, EventAvailability, PanelCollection,
                          PanelConfig, PanelSourceRow, Ranking, RateBasis, detail_rates,
-                         format_compact, non_team_note, render_board, render_panel,
+                         format_compact, non_team_note, panel_statistics, render_board, render_panel,
                          rows_from_statistics, team_status)
-from stats_core import Statistics
+from stats_core import DAMAGE_SCOPE_MISMATCH, Statistics
 
 
 def src(owner, *, damage=None, healing=None, shield=None, recent_damage=None,
@@ -203,6 +203,158 @@ def test_unknown_metric_is_hidden_and_share_is_scoped_to_known_values():
     assert view.share_reason
     # The input row is not deleted or zero-filled.
     assert rows[1].damage is None
+
+
+def test_partial_effective_damage_stays_in_the_ranking_and_labels_the_missing_share():
+    row = PanelSourceRow('A', 'A', damage=100, overkill_unknown_reason='结算缺口',
+                         partial_damage={'effective_damage': 65, 'effective_damage_unverified_share': .2,
+                                         'engagement_effective_damage': 32.5,
+                                         'engagement_effective_damage_unverified_share': .2})
+    exact = PanelSourceRow('B', 'B', damage=60, effective_damage=50, overkill_complete=True)
+    view = render_panel(PanelConfig(effective_only=True, rate_basis=RateBasis.ENGAGEMENT), [row, exact])
+    assert [entry.value for entry in view.entries] == [65, 50]
+    assert view.share_scope == 'known'
+    assert view.denominator == 115
+    assert view.footer_total == 115
+    assert not view.footer_total_complete
+    entry = view.entries[0]
+    assert entry.share == pytest.approx(65 / 115)
+    assert entry.detail['effective_damage'] == 65
+    assert entry.coverage['effective_damage']['failed_share'] == pytest.approx(.2)
+    assert entry.coverage['engagement_effective_damage']['failed_share'] == pytest.approx(.2)
+    assert entry.rate == 32.5
+    assert not entry.segments
+
+
+def test_boss_panel_keeps_observed_damage_when_full_reconciliation_fails():
+    row = PanelSourceRow('A', 'A', counter_complete=False, event_complete=False,
+                         overkill_unknown_reason='首领身份覆盖不全',
+                         partial_damage={'observed_boss_damage': 50, 'effective_damage': 40})
+    raw = render_panel(PanelConfig(boss_only=True), [row], team_complete=False)
+    effective = render_panel(PanelConfig(boss_only=True, effective_only=True), [row], team_complete=False)
+    assert raw.entries[0].value == 50
+    assert raw.entries[0].coverage['boss_damage']['failed_share'] is None
+    assert effective.entries[0].value == 40
+    assert effective.share_scope == 'known'
+
+
+def test_archive_does_not_mix_an_overwide_damage_stream_with_native_totals():
+    statistics = {'boss_damage_available': True, 'rows': {'A': {
+        'damage': 100, 'damage_by_type': {'physical': 100}, 'observed_damage': 125,
+        'counter_snapshot_complete': True, 'partial_damage': {'effective_damage': 120},
+        'boss_damage': {'partial_damage': {'observed_boss_damage': 50, 'effective_damage': 40}},
+    }, 'B': {'damage': 90, 'counter_snapshot_complete': True, 'observed_damage': 90,
+             'partial_damage': {'effective_damage': 65,
+                                'effective_damage_by_type': {'arts': 45, 'elemental': 10},
+                                'effective_damage_unverified_share': .1}}}}
+    rows = rows_from_statistics(statistics)
+    raw = render_panel(PanelConfig(), rows)
+    effective = render_panel(PanelConfig(effective_only=True), rows)
+    assert raw.entries[0].value == 100
+    assert raw.entries[0].detail['damage_by_type'] == {'physical': 100}
+    assert effective.details_by_owner['A']['effective_damage'] is None
+    assert effective.details_by_owner['A']['coverage']['effective_damage']['reason'] == DAMAGE_SCOPE_MISMATCH
+    assert [entry.owner_id for entry in effective.entries] == ['B']
+    b, = effective.entries
+    assert b.detail['effective_damage_by_type'] == {'arts': 45, 'elemental': 10}
+    assert [segment['kind'] for segment in b.segments] == ['arts', 'elemental']
+    assert not b.segments_complete
+    assert 'effective_damage_by_type' in b.detail['coverage']
+    for only_effective in (False, True):
+        config = PanelConfig(boss_only=True, effective_only=only_effective)
+        scoped = rows_from_statistics(panel_statistics(config, statistics, history=True))
+        assert not render_panel(config, scoped).entries
+
+
+def test_verified_settlements_drive_live_and_history_without_mixing_legacy_scopes():
+    lane = {'effective_damage': 80, 'effective_damage_by_type': {'physical': 45, 'arts': 30},
+            'known_hp_damage': 72, 'known_shield_damage': 8, 'complete': False,
+            'unverified_hits': 2, 'observed_hits': 10, 'unverified_share': .2,
+            'recent_effective_damage': 15, 'recent_effective_damage_window': (5, 10),
+            'engagement_effective_damage': 20, 'active_effective_damage': 4,
+            'engagement_damage': 25, 'engagement_damage_unverified_share': .3,
+            'observed_skill_damage': 35, 'observed_non_skill_damage': 15,
+            'observed_skill_damage_effective': 50, 'observed_non_skill_damage_effective': 20,
+            'skill_split_effective_complete': False, 'observed_mitigation_rate': 16,
+            'mitigation_matched_hits': 6, 'reason': '部分命中缺少独立结算证据'}
+    statistics = {'boss_damage_available': False, 'rows': {'A': {
+        'damage': 60, 'damage_by_type': {'arts': 60}, 'observed_damage': 135,
+        'counter_snapshot_complete': True, 'overkill_damage': 12,
+        'event_coverage_complete': True, 'effective_damage': 48, 'engagement_damage': 43,
+        'recent_damage': 8, 'recent_damage_window': (6, 10),
+        'observed_skill_damage_effective': 3, 'observed_non_skill_damage_effective': 7,
+        'settled_damage': lane, 'boss_damage': {
+            'damage': 55, 'damage_by_type': {'physical': 55}, 'effective_damage': 45,
+            'counter_snapshot_complete': True, 'overkill_damage': 10,
+            'settled_damage': {**lane, 'effective_damage': 25, 'effective_damage_by_type': {'arts': 25},
+                               'observed_boss_damage': 30, 'damage_by_type': {'arts': 30}}},
+    }}}
+    rows = rows_from_statistics(statistics)
+    raw, = render_panel(PanelConfig(rate_basis=RateBasis.ENGAGEMENT), rows).entries
+    assert raw.value == 60 and raw.detail['damage_by_type'] == {'arts': 60}
+    assert raw.rate == 25 and raw.detail['observed_skill_damage'] == 35
+    assert raw.coverage['engagement']['failed_share'] == .3
+    effective = render_panel(PanelConfig(effective_only=True, rate_basis=RateBasis.ENGAGEMENT), rows)
+    entry, = effective.entries
+    assert (entry.value, entry.rate, effective.denominator) == (80, 20, 80)
+    assert effective.share_scope == 'known'
+    assert [part['value'] for part in entry.segments] == [45, 30]
+    assert not entry.segments_complete
+    assert entry.detail['observed_skill_damage_effective'] == 50
+    assert entry.detail['observed_non_skill_damage_effective'] == 20
+    assert entry.detail['overkill_damage'] is None
+    assert entry.detail['settled_damage']['observed_mitigation_rate'] == 16
+    assert entry.coverage['effective_damage']['failed_share'] == .2
+    assert entry.coverage['effective_damage']['basis'] == '可对账的伤害命中数'
+    assert entry.coverage['effective_damage']['basis_kind'] == 'hits'
+    assert (entry.coverage['effective_damage']['unverified_hits'],
+            entry.coverage['effective_damage']['observed_hits']) == (2, 10)
+    assert entry.coverage['engagement_effective_damage']['failed_share'] is None
+    recent = render_panel(PanelConfig(effective_only=True, ranking=Ranking.RECENT), rows)
+    assert recent.entries[0].value == recent.denominator == 15
+    for history in (False, True):
+        boss = PanelConfig(boss_only=True, effective_only=True)
+        boss_statistics = panel_statistics(boss, statistics, history=history)
+        assert boss_statistics['boss_damage_available']
+        scoped = render_panel(boss, rows_from_statistics(boss_statistics))
+        assert scoped.entries[0].value == 25
+        assert scoped.entries[0].detail['damage_by_type'] == {'arts': 30}
+        boss_raw = PanelConfig(boss_only=True)
+        assert render_panel(boss_raw, rows_from_statistics(panel_statistics(
+            boss_raw, statistics, history=history))).entries[0].value == 30
+
+    lane.clear()
+    unavailable = render_panel(PanelConfig(effective_only=True), rows_from_statistics(statistics))
+    assert not unavailable.entries
+    assert unavailable.details_by_owner['A']['effective_damage'] is None
+    assert unavailable.details_by_owner['A']['observed_skill_damage_effective'] is None
+
+
+def test_settlement_coverage_does_not_flag_unavailable_windows_or_no_activity():
+    rows = {'Frostleaf': {'damage': 4938, 'settled_damage': {
+        'complete': False, 'effective_damage': 4740.4, 'engagement_effective_damage': 278.3,
+        'observed_hits': 15, 'unverified_hits': 1, 'unverified_share': 1 / 15,
+        'recent_effective_damage': None, 'recent_effective_damage_complete': False,
+        'mitigation_complete': True, 'observed_mitigation_rate': 25,
+        'reason': '部分命中的扣血或扣盾证据不完整',
+    }}, 'NoAttack': {'damage': 0, 'settled_damage': {
+        'complete': True, 'effective_damage': 0, 'observed_hits': 0, 'unverified_hits': 0,
+        'recent_effective_damage_complete': False, 'mitigation_complete': False,
+        'skill_split_effective_complete': False,
+    }}, 'Unavailable': {'damage': 420, 'settled_damage': {
+        'complete': False, 'observed_hits': 2, 'unverified_hits': 2,
+        'reason': '当前玩家阵营未确认', 'mitigation_reason': '同一击的公式未配对',
+    }}}
+    view = render_panel(PanelConfig(effective_only=True), rows_from_statistics({'rows': rows}))
+    (entry,) = view.entries
+    assert entry.owner_id == 'Frostleaf'
+    assert 'recent_effective_damage' not in entry.coverage
+    assert entry.coverage['effective_damage']['unverified_hits'] == 1
+    assert not view.details_by_owner['NoAttack']['coverage']
+    unavailable = view.details_by_owner['Unavailable']
+    assert not unavailable['coverage']
+    assert unavailable['effective_damage_reason'] == '当前玩家阵营未确认'
+    assert unavailable['settled_damage']['mitigation_reason'] == '同一击的公式未配对'
 
 
 def test_caller_reported_incomplete_team_preserves_known_row_shares():

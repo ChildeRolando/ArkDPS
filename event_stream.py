@@ -90,7 +90,9 @@ class EventStream:
                skill_method=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
                enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None,
-               mitigation_before=None, mitigation_after=None):
+               mitigation_before=None, mitigation_after=None,
+               source_character_uid=None, unresolved_source=False, settled_after_nested_kill=False,
+               settlement_complete=None, nominal_amount=None, settlement_identity=None):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
@@ -99,7 +101,9 @@ class EventStream:
                    target_instance, target_uid, enemy_damage_owner,
                    skill_key, skill_id, skill_name, skill_reason, skill_method,
                    phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
-                   finish_reason, enemy_max_hp, mitigation_before, mitigation_after)
+                   finish_reason, enemy_max_hp, mitigation_before, mitigation_after,
+                   source_character_uid, unresolved_source, settled_after_nested_kill,
+                   settlement_complete, nominal_amount, settlement_identity)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -114,7 +118,19 @@ class EventStream:
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
         try:
-            if kind == 'enemy_enter':
+            if self.statistics.settlement_enabled and kind == 'damage_settlement':
+                state, owner, actor = settlement_identity or ('unknown', None, None)
+                self.statistics.record_damage_settlement(
+                    game_time, state, owner, actor, source, target, target_uid, target_instance, amount, shield_absorbed,
+                    settlement_complete, damage_type, nominal_amount, mitigation_before, mitigation_after,
+                    killed=killed)
+            elif settlement_identity == ('summon', None, None):
+                # A proven summon skill never opens a host skill window.
+                pass
+            elif unresolved_source:
+                self.statistics.observe_unresolved_source(
+                    kind, source, amount, target_instance, damage_type=damage_type)
+            elif kind == 'enemy_enter':
                 self.statistics.record_enemy_entry(
                     frame, game_time, source, amount, target, target_instance,
                     enemy_entry_attributes)
@@ -123,9 +139,10 @@ class EventStream:
                     frame, game_time, source, amount, target, target_instance,
                     hp_before, hp_after, phase_total_hp, phase_count, phase_from_birth)
             elif kind == 'enemy_damage':
-                self.statistics.record_enemy_damage(
-                    source, enemy_damage_owner, damage_type, amount, target,
-                    target_uid, target_instance)
+                if not self.statistics.settlement_enabled:
+                    self.statistics.record_enemy_damage(
+                        source, enemy_damage_owner, damage_type, amount, target,
+                        target_uid, target_instance)
             elif kind not in ENEMY_STATE_KINDS:
                 self.statistics.event(
                     f'{self.session}:{sequence}', game_time, source, kind, amount,
@@ -136,7 +153,8 @@ class EventStream:
                     skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
                     skill_reason=skill_reason, skill_method=skill_method,
                     verified_skill_end_owner=verified_skill_end_owner,
-                    mitigation_before=mitigation_before, mitigation_after=mitigation_after)
+                    mitigation_before=mitigation_before, mitigation_after=mitigation_after,
+                    settled_after_nested_kill=settled_after_nested_kill)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':
@@ -147,9 +165,34 @@ class EventStream:
                 self.statistics.mark_enemy_state_unknown()
             elif kind == 'enemy_damage':
                 self.statistics.observe_enemy_damage(complete=False)
+            elif self.statistics.settlement_enabled and kind in ('damage', 'elemental_burst', 'elemental_bar'):
+                if isinstance(source, str) and source:
+                    self.statistics.mark_overkill_unknown(source)
+                if kind == 'elemental_bar':
+                    self.statistics.record_settlement_bar(target_uid, target, target_instance, 'unknown', None, None)
+            elif self.statistics.settlement_enabled and kind in ('skill_start', 'skill_end'):
+                self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
+                                                                 skill_reason)
+            elif self.statistics.settlement_enabled and kind == 'damage_settlement':
+                self.statistics.settlement_stream_incomplete = True
+                self.statistics.observe_enemy_damage(complete=False)
             elif kind != 'hp_damage':
                 self._fail(f'event is invalid or cannot be attributed: {exc}')
         else:
+            if self.statistics.settlement_enabled and settlement_identity:
+                state, owner, actor = settlement_identity
+                if kind == 'elemental_bar':
+                    self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor)
+                elif kind in ('skill_start', 'skill_end') and state == 'local' and actor is not None:
+                    self.statistics.record_settlement_skill(
+                        owner, actor, source, kind, game_time, key=skill_key, skill_id=skill_id,
+                        name=skill_name, method=skill_method or target_instance, reason=skill_reason)
+                elif kind in ('skill_start', 'skill_end') and state == 'unknown':
+                    self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
+                                                                     skill_reason)
+            if self.statistics.settlement_enabled and kind in ('enemy_enter', 'enemy_fake_death',
+                                                               'enemy_reborn', 'enemy_finish'):
+                self.statistics.clear_settlement_bar(target_instance, kind)
             if kind in ENEMY_STATE_KINDS:
                 try:
                     self.statistics.record_enemy_state(

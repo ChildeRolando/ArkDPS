@@ -75,8 +75,11 @@
      </Grid>
     </Border>
     <Border Grid.Column="1" Background="Transparent" ToolTip="{Binding RankedBarTooltip}" Margin="4,0,7,0">
-     <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}"
-                            AutomationProperties.AutomationId="SideRankingContribution" Height="8" VerticalAlignment="Center"/>
+     <DockPanel>
+      <TextBlock DockPanel.Dock="Right" Text="{Binding CoverageMarker}" Visibility="{Binding CoverageMarkerVisibility}" Foreground="{DynamicResource ConsoleMuted}" VerticalAlignment="Center" Margin="3,0,0,0"/>
+      <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}"
+                             AutomationProperties.AutomationId="SideRankingContribution" Height="8" VerticalAlignment="Center"/>
+     </DockPanel>
     </Border>
     <TextBlock Grid.Column="2" Text="{Binding CumulativeTotal}" Style="{StaticResource SideNumberCell}"
                AutomationProperties.AutomationId="SideRankingTotal"/>
@@ -96,7 +99,7 @@
      <Border x:Name="ReferenceOperatorPortrait" Width="30" Height="30" HorizontalAlignment="Left" Background="{DynamicResource ConsoleCard}" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="1" ClipToBounds="True">
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
      </Border>
-     <TextBlock x:Name="ReferenceOperatorName" Grid.Column="1" Text="{Binding Name}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" Margin="5,0,0,0" TextTrimming="CharacterEllipsis"/>
+     <TextBlock x:Name="ReferenceOperatorName" Grid.Column="1" Text="{Binding DisplayName}" Foreground="{DynamicResource ConsoleInk}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" Margin="5,0,0,0" TextTrimming="CharacterEllipsis"/>
     </Grid>
     <local:ContributionBar x:Name="ReferenceOperatorContribution" Grid.Column="2" Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="9" VerticalAlignment="Center" Margin="4,0,4,0"/>
     <TextBlock Grid.Column="3" Text="{Binding Total}" Style="{StaticResource ReferenceNumberCell}"/>
@@ -113,7 +116,7 @@
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Accent}" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
      </Border>
      <StackPanel Margin="7,0,0,0" VerticalAlignment="Center">
-      <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+      <TextBlock Text="{Binding DisplayName}" Foreground="{DynamicResource Ink}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
       <TextBlock Text="{Binding Presence}" Foreground="{DynamicResource Muted}" FontSize="10" Margin="0,1,0,0"/>
      </StackPanel>
     </StackPanel>
@@ -162,7 +165,7 @@
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNumberFont}" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
      </Border>
     </Viewbox>
-    <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding Name}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNameFont}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="{DynamicResource HudProfileNameGap}"/>
+    <TextBlock x:Name="HudOperatorName" Grid.Column="2" Text="{Binding DisplayName}" Foreground="{DynamicResource Ink}" FontFamily="{DynamicResource InterfaceFont}" FontSize="{DynamicResource HudProfileNameFont}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="{DynamicResource HudProfileNameGap}"/>
     <Border Grid.Column="3" Background="Transparent" ToolTip="{Binding BarTooltip}" Margin="{DynamicResource HudProfileBarGap}">
      <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="8" VerticalAlignment="Center"/>
     </Border>

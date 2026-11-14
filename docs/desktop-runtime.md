@@ -27,14 +27,14 @@ WPF 在后台按字节写入命令，并用独立线程读取回复。ADB 子进
 | op / 响应 kind | 语义 |
 | --- | --- |
 | `hello` / `hello` | 必须先握手；返回协议、transport、实际 Python 版本/路径和可选 Frida 客户端版本。 |
-| `snapshot` / `snapshot` | 约每 200ms 请求；包含状态/错误文字、战局标识、既有模型的完整面板视图、配置及所选历史副本。 |
+| `snapshot` / `snapshot` | 约每 200ms 请求。包含状态、战局标识、面板视图、配置、战绩索引和所选战绩的展示数据。 |
 | 面板、主题、位置、历史、连接与导出命令 / `state` | Python 校验并持久化，再返回新状态；没有第二套 C# 配置文件或统计源。 |
 | 任意失败 / `error` | `ok: false`、可读 error；状态不伪造为成功，UI 保留最后有效值并提示。 |
 | `quit` / `bye` | bye 只在采集清理完成后发送；清理失败返回 error，UI 等待退出并显示失败。 |
 
 `snapshot` 的面板视图还包含事件可用性字段（`rate_available`/`rate_reason`/`rate_hint`/`rate_action`/`rate_action_label`）和逐行速率分类（`rate_state`/`rate_text`/`rate_note`）。WPF 只在接敌口径下显示原因与入口；`retry` 调用既有 `rescan`（不重启应用），`settings` 导航到连接设置。字段语义由 [panel-model](panel-model.md#事件不可用时的接敌展示ark-22) 拥有。
 
-`details_by_owner` 使用与榜单行相同的详情投影，以归属干员 ID 索引。干员退出近期榜后仍可在固定详情中查看。历史详情读取选中战绩的完整面板视图。
+`details_by_owner` 使用与榜单行相同的详情投影，以归属干员 ID 索引。干员退出近期榜后仍可在固定详情中查看。历史详情读取选中战绩的完整面板视图。原始战绩由 worker 持有。导出命令使用打开保存窗口时的 `battle_id`，JSON 由 worker 从对应原始战绩生成，PNG 由 WPF 从当时的视图生成。
 
 可选的 `live_analysis` 提供单个战局采样点、连续段标识、团队指标和各干员近期 DPS。团队近 5 秒 DPS 沿用含过量的近期速率，只有团队归属完整且可靠窗口一致时汇总。本局平均 DPS 使用已确认累计伤害除以游戏时间。观察峰值在本次采集内维护。WPF 按游戏秒保留最近 10 分钟，按连续段断开曲线，换局清空。该字段独立于历史记录和导出格式。
 

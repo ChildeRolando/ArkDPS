@@ -1,6 +1,6 @@
 import pytest
 
-from stats_core import Statistics
+from stats_core import DAMAGE_SCOPE_MISMATCH, Statistics
 
 
 def test_mid_battle_baseline_and_short_window():
@@ -278,6 +278,175 @@ def test_lethal_hit_requires_a_verified_absorption_context():
     assert s.result()['overkill_damage'] is None
 
 
+def test_partial_damage_tracks_only_verified_hits_across_a_gap():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.reconcile_damage_scope = True
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(5, {'a': {'damage': 100, 'healing': 30}})
+    s.event('skill', 1, 'a', 'skill_start', 1)
+    s.event('confirmed', 2, 'a', 'damage', 75, target='enemy_1', killed=True,
+            hp_before=40, hp_after=0, real_delta=-40, shield_absorbed=5,
+            mitigation_before=100, mitigation_after=75, damage_type=2)
+    s.event('uncertain', 3, 'a', 'damage', 25, target='enemy_1')
+    s.event('heal', 3.5, 'a', 'healing', 20)
+    s.event('shield', 4, 'a', 'shield_absorbed', 8)
+    s.mark_boss_watermark(5)
+    row = s.result()['rows']['a']
+    partial = row['partial_damage']
+    assert row['effective_damage'] is None
+    assert partial['effective_damage'] == 45
+    assert partial['effective_damage_by_type'] == {'arts': 45}
+    assert partial['effective_damage_unverified_share'] == .25
+    assert partial['skill_damage_unverified_share'] == 0
+    assert partial['skill_effective_damage_unverified_share'] == .25
+    assert partial['mitigation_unverified_share'] == .25
+    assert partial['recent_effective_damage'] == 9
+    assert partial['recent_effective_damage_window'] == (0, 5)
+    assert partial['recent_effective_damage_unverified_share'] == .25
+    assert partial['engagement_effective_damage'] == 30
+    assert partial['engagement_effective_damage_unverified_share'] == .25
+    assert partial['engagement_damage'] == 40
+    assert partial['engagement_healing'] == pytest.approx(20 / 1.5)
+    assert partial['engagement_healing_unverified_share'] == pytest.approx(1 / 3)
+    assert partial['observed_shield_absorbed'] == 8
+    assert partial['shield_observation_window'] == (0, 5)
+
+    s.invalidate_events(5)
+    s.snapshot(8, {'a': {'damage': 150, 'healing': 30}})
+    partial = s.result()['rows']['a']['partial_damage']
+    assert partial['effective_damage'] == 45
+    assert partial['effective_damage_unverified_share'] == .5
+    assert partial['engagement_effective_damage'] == 30
+    assert partial['recent_effective_damage'] is None
+    assert partial['recent_effective_damage_unverified_share'] is None
+    assert partial['shield_observation_window'] == (0, 5)
+
+
+def test_out_of_scope_source_cannot_be_hidden_by_another_sources_missing_events():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.reconcile_damage_scope = True
+    s.observe_boss_damage(complete=True)
+    s.register_source('a', 'a')
+    s.register_source('token_a', 'a')
+    s.register_source('b', 'b')
+    s.snapshot(0, {key: {'damage': 0, 'healing': 0} for key in ('a', 'token_a', 'b')})
+    s.snapshot(5, {'a': {'damage': 100, 'healing': 30},
+                   'token_a': {'damage': 90, 'healing': 0}, 'b': {'damage': 50, 'healing': 0}})
+    s.event('foreign-same-key', 1, 'a', 'damage', 120, target='enemy_1',
+            hp_before=500, hp_after=380, real_delta=-120, killed=False, damage_type=2)
+    s.event('miss', 2, 'a', 'damage', 1000, target='enemy_1',
+            hp_before=380, hp_after=380, real_delta=0, killed=False, damage_type=2,
+            cancel_reason=2, shield_absorbed=0)
+    s.event('heal', 3, 'a', 'healing', 20)
+    s.event('shield', 3.5, 'a', 'shield_absorbed', 8)
+    s.event('valid', 4, 'b', 'damage', 50, target='enemy_1', hp_after=50, killed=False)
+    s.mark_boss_watermark(5)
+    rows = s.result()['rows']
+    row, partial = rows['a'], rows['a']['partial_damage']
+    assert row['damage'] == 190
+    assert row['observed_damage'] == 120
+    assert row['effective_damage'] is None
+    assert row['engagement_damage'] is None
+    assert row['damage_scope_reason'] == row['boss_damage']['damage_scope_reason'] == DAMAGE_SCOPE_MISMATCH
+    assert 'effective_damage' not in partial
+    assert partial['observed_shield_absorbed'] == 8
+    assert partial['engagement_healing'] == pytest.approx(20 / 1.5)
+    assert rows['b']['effective_damage'] == 50
+    assert rows['b']['event_coverage_complete']
+
+
+def test_miss_does_not_hide_a_shielded_hit_or_create_a_scope_conflict():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.reconcile_damage_scope = True
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(3, {'a': {'damage': 25, 'healing': 0}})
+    s.event('miss', 1, 'a', 'damage', 90, target='enemy_1', cancel_reason=2,
+            real_delta=0, hp_before=100, hp_after=100, killed=False, shield_absorbed=0)
+    s.event('shielded', 2, 'a', 'damage', 25, target='enemy_1', cancel_reason=2,
+            real_delta=0, hp_before=100, hp_after=100, killed=False, shield_absorbed=25)
+    row = s.result()['rows']['a']
+    assert row['observed_damage'] == row['effective_damage'] == 25
+    assert 'damage_scope_reason' not in row
+
+
+def test_partial_recent_share_needs_exactly_aligned_native_boundary():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.register_source('a', 'a')
+    for time, amount in ((0, 0), (6, 20), (10, 40)):
+        s.snapshot(time, {'a': {'damage': amount, 'healing': 0}})
+    s.event('confirmed', 7, 'a', 'damage', 20, target='enemy_1', hp_after=10, killed=False)
+    s.mark_boss_watermark(10)
+    partial = s.result()['rows']['a']['partial_damage']
+    assert partial['recent_effective_damage'] == 4
+    assert partial['recent_effective_damage_window'] == (5, 10)
+    assert partial['recent_effective_damage_unverified_share'] is None
+
+
+@pytest.mark.parametrize('valid', [True, False])
+def test_native_counted_parent_after_nested_kill_needs_exact_zero_context(valid):
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(3, {'a': {'damage': 100, 'healing': 0}})
+    s.event('normal', 1, 'a', 'damage', 80, target='enemy_1', hp_after=5, killed=False)
+    s.event('nested', 2, 'a', 'damage', 20, target='enemy_1', hp_before=0, killed=True,
+            hp_after=0, real_delta=0, cancel_reason=0, shield_absorbed=0 if valid else 1,
+            settled_after_nested_kill=True)
+    row = s.result()['rows']['a']
+    assert row['observed_damage'] == 100
+    assert row['effective_damage'] == (80 if valid else None)
+    assert row['overkill_damage'] == (20 if valid else None)
+    assert row['partial_damage']['effective_damage'] == 80
+    assert row['partial_damage']['effective_damage_unverified_share'] == (0 if valid else .2)
+
+
+def test_invalid_elemental_settlement_does_not_discard_other_versioned_hits():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.register_source('a', 'a')
+    s.register_source('b', 'b')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}, 'b': {'damage': 0, 'healing': 0}})
+    s.snapshot(3, {'a': {'damage': 100, 'healing': 0}, 'b': {'damage': 50, 'healing': 0}})
+    s.event('valid-a', 1, 'a', 'damage', 80, target='enemy_1', hp_after=80, killed=False)
+    s.event('invalid-burst', 2, 'a', 'elemental_burst', 20, target='enemy_1',
+            target_instance='target', real_delta=-20, hp_before=100, hp_after=0, killed=True)
+    s.event('valid-b', 2.5, 'b', 'damage', 50, target='enemy_1', hp_after=20, killed=False)
+    rows = s.result()['rows']
+    assert rows['a']['effective_damage'] is None
+    assert rows['a']['burst_complete'] is False
+    assert rows['a']['partial_damage']['effective_damage'] == 80
+    assert rows['a']['partial_damage']['effective_damage_unverified_share'] == pytest.approx(.2)
+    assert rows['b']['effective_damage'] == 50
+    assert rows['b']['event_coverage_complete'] is True
+
+
+@pytest.mark.parametrize('missing_target', [None, [5]])
+def test_missing_elemental_bar_target_never_credits_a_stale_owner(missing_target):
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(3, {'a': {'damage': 80, 'healing': 0}})
+    s.event('valid', 1, 'a', 'damage', 80, target='enemy_1', hp_after=80, killed=False)
+    s.event('earlier-bar', 1.5, 'a', 'elemental_bar', 10, target_instance='target')
+    s.event('unknown-bar', 2, 'a', 'elemental_bar', 20, target_instance=missing_target)
+    s.event('burst', 2, None, 'elemental_burst', 40, target='enemy_1', real_delta=-40,
+            hp_before=80, hp_after=40, killed=False, target_instance='target')
+    row = s.result()['rows']['a']
+    assert row['damage'] == 80
+    assert row['event_coverage_complete'] is True
+    assert row['burst_complete'] is False
+    assert row['partial_damage']['effective_damage'] == 80
+    assert row['partial_damage']['effective_damage_unverified_share'] is None
+
+
 @pytest.mark.parametrize('absorbed', [250, 160, -1])
 def test_contradictory_absorption_evidence_is_unknown(absorbed):
     s = Statistics('battle', 0, event_coverage=True)
@@ -325,6 +494,63 @@ def test_friendly_self_damage_does_not_enter_engagement_dps(friendly_target):
     assert row['skill_damage'] == 0 and row['non_skill_damage'] == 100
     assert row['mitigation_matched_hits'] == 2
     assert row['mitigation_rate'] == pytest.approx(20)
+
+
+@pytest.mark.parametrize('target', ['char_179_cgbird', 'token_friendly'])
+def test_friendly_lethal_overflow_does_not_invalidate_the_outgoing_damage_row(target):
+    owner = 'char_179_cgbird'
+    s = Statistics('friendly-overkill', 0, event_coverage=True)
+    s.damage_settlement_version = 5
+    s.register_source(owner, owner)
+    s.snapshot(0, {owner: {'damage': 0, 'healing': 0}})
+    s.snapshot(2, {owner: {'damage': 0, 'healing': 0}})
+    s.event('friendly', 1, owner, 'damage', 300, target=target, hp_before=60,
+            hp_after=0, real_delta=-60, killed=True, shield_absorbed=0, damage_type=3)
+    row = s.result()['rows'][owner]
+    assert row['damage'] == row['effective_damage'] == row['overkill_damage'] == 0
+    assert row['observed_damage'] == 0
+
+
+def test_inconsistent_legacy_overkill_is_unavailable_while_settled_hp_remains():
+    s = Statistics('settlement', 0, event_coverage=True)
+    s.damage_settlement_version = 5
+    s.settlement_enabled = s.settlement_sides_known = True
+    s.partial_damage_enabled = True
+    s.register_source('char_a', 'char_a')
+    s.snapshot(0, {'char_a': {'damage': 0, 'healing': 0}})
+    s.snapshot(2, {'char_a': {'damage': 10, 'healing': 0}})
+    s.event('old-event', 1, 'char_a', 'damage', 30, target='enemy_1506_patrt',
+            real_delta=-5, hp_before=5, hp_after=0, killed=True, shield_absorbed=0, damage_type=1)
+    s.record_damage_settlement(1, 'local', 'char_a', 7, 'char_a', 'enemy_1506_patrt', '77',
+                               'target', 5, 0, True, 1, 30, None, None)
+    s.mark_boss_watermark(2)
+    result = s.result()
+    row = result['rows']['char_a']
+    assert row['damage'] == 10
+    assert row['effective_damage'] is row['overkill_damage'] is row['overkill_damage_by_type'] is None
+    assert not result['overkill_coverage_complete'] and not row['overkill_coverage_complete']
+    assert row['settled_damage']['effective_damage'] == 5
+
+
+def test_nonlethal_elemental_cap_is_not_booked_as_overkill():
+    source = 'char_a'
+    target = 'enemy_1288_duskls'
+    s = Statistics('settlement', 0, event_coverage=True)
+    s.damage_settlement_version = 5
+    s.settlement_enabled = s.settlement_sides_known = s.partial_damage_enabled = True
+    s.register_source(source, source)
+    s.snapshot(0, {source: {'damage': 0, 'healing': 0}})
+    s.snapshot(5, {source: {'damage': 0, 'healing': 0}})
+    for time, killed in ((1, False), (2, True)):
+        s.record_settlement_bar('77', target, 'target', 'local', source, 7)
+        s.record_damage_settlement(time, 'unknown', None, None, None, target, '77',
+                                   'target', 1, 0, True, 5, 100, 100, 100, killed=killed)
+    s.mark_boss_watermark(5)
+    row = s.result()['rows'][source]
+    assert row['damage'] == 200
+    assert row['overkill_damage'] == 99
+    assert row['settled_damage']['effective_damage'] == 2
+    assert row['settled_damage']['unverified_hits'] == 0
 
 
 

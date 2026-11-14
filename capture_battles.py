@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+from itertools import chain
 import json
 from pathlib import Path
 import time
 
 from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions, MappingRetry
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL
+from desktop_audit import DesktopAuditReader
 from roster import CharacterEntry, RosterSnapshot
 from event_capture import CaptureRetry
 from snapshot_adapter import AdapterError, MappingUnavailable
@@ -103,6 +105,7 @@ _OPTIONAL_DERIVED_METRICS = frozenset({
     'mitigation_matched_hits',
     'observed_skill_damage', 'observed_non_skill_damage',
     'observed_skill_damage_effective', 'observed_non_skill_damage_effective',
+    'partial_damage',
 })
 _TERMINOLOGY_REASON_FIELDS = {
     'mitigation_unknown_reason', 'overkill_unknown_reason', 'skill_split_reason',
@@ -165,14 +168,20 @@ def same_archive(actual, recorded):
 
 
 def replay(path):
-    lines = Path(path).read_text(encoding='utf-8').splitlines()
-    if lines and 'kind' in json.loads(lines[0]):
-        return replay_product(lines)
+    with Path(path).open(encoding='utf-8') as stream:
+        first = stream.readline()
+        lines = chain((first,), stream) if first else ()
+        if first and 'kind' in json.loads(first):
+            return replay_product(lines)
+        return _replay_snapshots(lines)
+
+
+def _replay_snapshots(lines):
     sessions = None
     pending = []
     samples = archives = 0
     finished = False
-    for line in Path(path).read_text(encoding='utf-8').splitlines():
+    for line in lines:
         value = json.loads(line)
         if finished:
             raise ValueError('records after capture summary')
@@ -182,15 +191,8 @@ def replay(path):
             sessions = BattleSessions(value['header']['feed'])
         elif 'observation' in value:
             raw = value['observation']
-            roster = raw.get('roster')
-            if roster is not None:
-                raw['roster'] = RosterSnapshot(
-                    frame=roster['frame'],
-                    entries=tuple(CharacterEntry(**entry) for entry in roster['entries']),
-                    present_unique_ids=frozenset(roster['present_unique_ids']),
-                    present_known=roster['present_known'])
             try:
-                sessions.consume(BattleObservation(**raw))
+                sessions.consume(observation_from_json(raw))
             except MappingUnavailable:
                 if 'retry' not in value:
                     raise
@@ -220,19 +222,21 @@ def observation_from_json(raw):
     if roster is not None:
         raw['roster'] = RosterSnapshot(
             frame=roster['frame'], entries=tuple(CharacterEntry(**entry) for entry in roster['entries']),
-            present_unique_ids=frozenset(roster['present_unique_ids']), present_known=roster['present_known'])
+            present_unique_ids=frozenset(roster['present_unique_ids']),
+            present_known=roster['present_known'], local_player_side=roster.get('local_player_side'))
     return BattleObservation(**raw)
 
 
 def replay_product(lines):
     """Verify the GUI/CLI journal, including event drains, publications and handoffs."""
+    reader = DesktopAuditReader()
     sessions = None
     pending = []
     samples = archives = 0
     finished = False
     failures = 0
     for line in lines:
-        record = json.loads(line)
+        record = reader.restore(json.loads(line))
         kind, data = record['kind'], record['data']
         if kind == 'lifecycle_header':
             if sessions is not None:

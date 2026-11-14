@@ -6,6 +6,7 @@ No server installation, game launch, or ADB configuration is performed here.
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 import threading
 
@@ -17,14 +18,22 @@ def main():
     parser.add_argument('--seconds', type=float, default=0,
                         help='0: wait for Enter; positive: bounded capture duration')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--probe', choices=('shield', 'battle-logger'), default='shield')
+    parser.add_argument('--source', help='native statistic key for the battle-logger probe')
     args = parser.parse_args()
     if args.seconds < 0:
         parser.error('--seconds must be nonnegative')
+    if args.source is not None and (args.probe != 'battle-logger'
+                                    or not re.fullmatch(r'[A-Za-z0-9_#.-]{1,110}', args.source)):
+        parser.error('--source requires --probe battle-logger and a native statistic key')
     import frida
     if frida.__version__ != '17.26.1':
         parser.error('this research probe was validated with Frida 17.26.1')
 
-    source = Path(__file__).with_name('shield_events_android2791.js').read_text(encoding='utf-8')
+    filename = 'battle_logger_android2791.js' if args.probe == 'battle-logger' else 'shield_events_android2791.js'
+    source = Path(__file__).with_name(filename).read_text(encoding='utf-8')
+    if args.source is not None:
+        source = 'globalThis.arkdpsLoggerSource = ' + json.dumps(args.source) + ';\n' + source
     ready, failed = threading.Event(), threading.Event()
     # Refuse to overwrite an earlier experiment.
     with args.output.open('x', encoding='utf-8') as out:
@@ -41,7 +50,7 @@ def main():
                 print(json.dumps(item), file=sys.stderr, flush=True)
             elif item.get('payload', {}).get('ready'):
                 ready.set()
-                print('READY: event observer attached; start MAA now.', flush=True)
+                print('READY: event observer attached.', flush=True)
 
         script.on('message', message)
         try:

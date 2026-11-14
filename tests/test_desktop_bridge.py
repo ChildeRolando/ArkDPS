@@ -13,9 +13,10 @@ from unittest.mock import patch
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
-from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, serve
+from damage_settlement import DamageSettlement
+from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, empty_text, serve
 from layout_store import LayoutStore
-from panel_model import PanelConfig
+from panel_model import PanelConfig, Ranking, RateBasis
 from stats_core import Statistics
 from test_battle_history import record
 from test_battle_share import exported_record
@@ -31,6 +32,12 @@ def test_worker_import_does_not_import_tk_or_frida():
         "import desktop_bridge, sys; assert 'tkinter' not in sys.modules; assert 'frida' not in sys.modules"],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_effective_panel_with_known_native_damage_does_not_call_unknown_effective_damage_zero():
+    config = PanelConfig(effective_only=True)
+    source = {'char_a': {'damage': 50, 'effective_damage': None, 'counter_snapshot_complete': True}}
+    assert empty_text(config, source, True, {}) == '当前有效伤害尚无可靠数据'
 
 
 def test_first_launch_and_default_model_ignores_legacy_projection(tmp_path):
@@ -141,6 +148,19 @@ def test_live_analysis_requires_joint_coverage_for_team_dps(tmp_path, coverage_i
         None if coverage_issue in ('stale_window', 'uncertified') else 0.)
     assert dto['team_total_damage'] == (
         None if coverage_issue in ('unattributed', 'uncertified') else 1730.)
+
+
+def test_live_overview_retains_the_verified_team_subset_for_new_captures(tmp_path):
+    state = DesktopState(tmp_path)
+    data = analysis_sample()
+    stats = data['statistics']
+    stats['unknown_sources'] = ['unmapped']
+    stats['rows']['a']['partial_damage'] = {'effective_damage': 100}
+    state.accept('sample', data)
+    dto = state.snapshot()['live_analysis']
+    assert dto['team_total_damage'] is None
+    assert dto['observed_team_total_damage'] == 1730
+    assert dto['observed_team_recent_dps'] == 100
 
 
 def test_live_analysis_preserves_peak_across_gaps_and_resets_at_new_battle(tmp_path):
@@ -313,6 +333,125 @@ def test_boss_trend_preserves_unknown_scopes_and_breaks_on_event_gaps(tmp_path):
     assert state.snapshot()['boss_effective_live_analysis'] is None
 
 
+def test_verified_boss_chart_keeps_observed_rates_separate_from_complete_rates(tmp_path):
+    state = DesktopState(tmp_path)
+    sample = boss_analysis_sample(21.)
+    rows = sample['statistics']['rows']
+    rows['a']['settled_damage'] = {}
+    rows['a']['boss_damage']['settled_damage'] = dict(
+        effective_damage=90., recent_effective_damage=18., recent_effective_damage_window=(16., 21.),
+        recent_effective_damage_complete=False)
+    rows['b']['settled_damage'] = {}
+    rows['b']['boss_damage']['settled_damage'] = {}
+    sample['statistics']['boss_damage_available'] = False
+    state.accept('sample', sample)
+    snapshot = state.snapshot()
+    assert snapshot['boss_live_analysis'] is None
+    effective = snapshot['boss_effective_live_analysis']
+    assert effective['team_recent_dps'] is None
+    assert [(row['recent_dps'], row['observed_recent_dps']) for row in effective['operators']] == [
+        (None, 18.), (None, None)]
+
+    rows['a']['boss_damage']['settled_damage'].update(
+        observed_boss_damage=100., observed_boss_recent_damage=20.,
+        observed_boss_recent_window=(16., 21.), observed_boss_recent_damage_complete=True,
+        recent_effective_damage_complete=True)
+    rows['b']['boss_damage']['settled_damage'].update(
+        observed_boss_damage=50., observed_boss_recent_damage=10.,
+        observed_boss_recent_window=(16., 21.), observed_boss_recent_damage_complete=True,
+        effective_damage=45., recent_effective_damage=9.,
+        recent_effective_damage_window=(16., 21.), recent_effective_damage_complete=True)
+    state.accept('sample', sample)
+    snapshot = state.snapshot()
+    assert snapshot['boss_live_analysis']['team_recent_dps'] == 30.
+    assert snapshot['boss_effective_live_analysis']['team_recent_dps'] == 27.
+
+    state.accept('sample', dict(sample, event_status='gap'))
+    effective = state.snapshot()['boss_effective_live_analysis']
+    assert effective['team_recent_dps'] is None and effective['segment'] == 1
+    assert all(row['recent_dps'] is None and row['observed_recent_dps'] is None for row in effective['operators'])
+
+
+def test_unassigned_hits_only_limit_team_metrics_in_the_affected_scope(tmp_path):
+    state = DesktopState(tmp_path)
+    data = boss_analysis_sample(21.)
+    stats = data['statistics']
+    stats['settlement_unassigned'] = dict(hits=2, hp=200., shield=0., unscoped_hits=2, boss_hits=0)
+    for owner, row in stats['rows'].items():
+        meter = DamageSettlement()
+        meter.hit(20., 90. if owner == 'a' else 60., 0., 'physical', True, False, 100., 150., 100.)
+        row['settled_damage'] = meter.result(16., 21., 21., stream_complete=True)
+        row['boss_damage']['settled_damage'] = meter.result(16., 21., 21., stream_complete=True, boss=True)
+    state.accept('sample', data)
+
+    raw = state.view(PanelConfig(), stats)
+    assert raw['team_coverage_note'] == ''
+    assert raw['share_known'] and raw['footer_total_complete'] and raw['footer_rate_complete']
+
+    raw_engagement = PanelConfig(rate_basis=RateBasis.ENGAGEMENT)
+    raw = state.view(raw_engagement, stats)
+    assert '2 次伤害命中未归属' in raw['team_coverage_note']
+    assert raw['share_known'] and raw['footer_total_complete'] and not raw['footer_rate_complete']
+    raw = state.view(replace(raw_engagement, ranking=Ranking.DPS), stats)
+    assert raw['share_scope'] == 'known'
+
+    for ranking in (Ranking.TOTAL, Ranking.RECENT, Ranking.DPS):
+        view = state.view(PanelConfig(effective_only=True, ranking=ranking), stats)
+        assert '2 次伤害命中未归属' in view['team_coverage_note']
+        assert '未归属' not in view['share_note']
+        assert view['share_scope'] == 'known'
+        assert not view['footer_total_complete'] and not view['footer_rate_complete']
+        assert all(not entry['incomplete'] and not entry['coverage'] for entry in view['entries'])
+
+    boss = PanelConfig(boss_only=True, effective_only=True)
+    assert state.view(boss, stats)['share_known']
+    assert state.snapshot()['boss_effective_live_analysis']['team_recent_dps'] == 30.
+    stats['settlement_unassigned']['boss_hits'] = 1
+    view = state.view(boss, stats)
+    assert '首领伤害覆盖不完整 · 1 次命中' in view['team_coverage_note']
+    assert not view['share_known']
+    assert all(not entry['incomplete'] and not entry['coverage'] for entry in view['entries'])
+    state.accept('sample', data)
+    trend = state.snapshot()['boss_effective_live_analysis']
+    assert trend['team_recent_dps'] is None
+    assert [operator['recent_dps'] for operator in trend['operators']] == [18., 12.]
+
+    stats['rows']['a']['settled_damage'].update(complete=False, reason='部分命中的扣盾证据不完整',
+                                             unverified_hits=1, unverified_share=1.)
+    view = state.view(PanelConfig(effective_only=True), stats)
+    assert view['entries'][0]['coverage']['effective_damage']['unverified_hits'] == 1
+    assert view['entries'][1]['coverage'] == {}
+
+
+@pytest.mark.parametrize('current', [True, False])
+def test_archived_team_coverage_preserves_recorded_personal_evidence(tmp_path, current):
+    archive = record().to_dict()
+    archive['event_status'] = 'finished'
+    stats = archive['statistics']
+    stats['settlement_unassigned'] = dict(hits=2, hp=50., shield=0.)
+    if current:
+        stats['settlement_unassigned'].update(unscoped_hits=2, boss_hits=0)
+    meter = DamageSettlement()
+    meter.hit(11., 190., 0., 'physical', True, False, 200., 250., 200.)
+    stats['rows']['a']['settled_damage'] = meter.result(6., 12., 12., stream_complete=current, live=False)
+    payload = BattleRecord.from_dict(archive)
+    BattleHistory(tmp_path / 'history').save(payload)
+
+    state = DesktopState(tmp_path)
+    cmd(state, 'history_config', config={'effective_only': True})
+    cmd(state, 'history_select', battle_id=payload.battle_id)
+    history = state.snapshot()['history_selected']['view']
+    assert history['share_scope'] == 'known' and history['footer_total'] == 190.
+    assert not history['footer_total_complete']
+    entry, = history['entries']
+    if current:
+        assert '2 次伤害命中未归属' in history['team_coverage_note']
+        assert not entry['incomplete'] and entry['coverage'] == {}
+    else:
+        assert '2 次命中的归属或目标待确认' in history['team_coverage_note']
+        assert entry['coverage']['effective_damage']['reason'] == '结算事件覆盖不完整'
+
+
 @pytest.mark.parametrize('basis,expected', [
     ('recent_5s', 32.), ('engagement', 40.), ('full_cycle', 20.),
 ])
@@ -376,7 +515,9 @@ def test_boss_only_history_uses_archived_scope_and_reports_legacy_unknown(tmp_pa
     cmd(state, 'history_select', battle_id='battle:1')
     selected = state.snapshot()['history_selected']
     assert selected['view']['entries'][0]['value'] == 160.
-    assert selected['record']['statistics']['rows']['a']['damage'] == 230.
+    target = tmp_path / 'boss-filter.json'
+    cmd(state, 'export', format='json', path=str(target), battle_id=selected['battle_id'])
+    assert exported_record(target.read_text('utf-8'))[1]['statistics']['rows']['a']['damage'] == 230.
 
     cmd(state, 'history_select', battle_id='battle:0')
     view = state.snapshot()['history_selected']['view']
@@ -511,7 +652,7 @@ def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_p
     before = copy.deepcopy(state.snapshot())
     original_export = tmp_path / 'western.json'
     cmd(state, 'export', format='json', path=str(original_export),
-        record=before['history_selected']['record'])
+        battle_id=before['history_selected']['battle_id'])
 
     cmd(state, 'number_units', number_units='chinese')
 
@@ -521,7 +662,7 @@ def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_p
     assert data == original_sample
     assert after['live_analysis'] == before['live_analysis']
     assert after['totals'] == before['totals']
-    assert after['history_selected']['record'] == before['history_selected']['record']
+    assert after['history_selected']['battle_id'] == before['history_selected']['battle_id']
     for old, new in [(before['panels'][0], after['panels'][0]),
                      (before['history_selected']['view'], after['history_selected']['view'])]:
         assert [entry['owner_id'] for entry in new['entries']] == [entry['owner_id'] for entry in old['entries']]
@@ -544,7 +685,7 @@ def test_number_units_reformats_live_and_history_without_changing_raw_data(tmp_p
 
     new_export = tmp_path / 'chinese.json'
     cmd(state, 'export', format='json', path=str(new_export),
-        record=after['history_selected']['record'])
+        battle_id=after['history_selected']['battle_id'])
     assert new_export.read_bytes() == original_export.read_bytes()
     restarted = DesktopState(tmp_path)
     assert restarted.layout.number_units == 'chinese'
@@ -582,6 +723,11 @@ def test_history_selection_is_immutable_across_refresh_eviction_and_new_battle(t
     assert state.snapshot()['battle_id'] == 'new'
     assert state.snapshot()['history_selected']['battle_id'] == first.battle_id
     assert state.snapshot()['panels'][0]['entries'][0]['value'] == 1230
+    assert not state.history.path_for(first.battle_id).exists()
+    cmd(state, 'history_select', battle_id='battle:102')
+    target = tmp_path / 'evicted-selection.json'
+    cmd(state, 'export', format='json', path=str(target), battle_id=first.battle_id)
+    assert exported_record(target.read_text('utf-8'))[1] == first.to_dict()
 
 
 @pytest.mark.parametrize('version', [None, 0, 2, '1', True])
@@ -770,14 +916,24 @@ def test_lobby_signal_preserves_the_last_battle_and_terminal_status(tmp_path):
 
 def test_export_exact_json_and_archive_protection(tmp_path):
     state = DesktopState(tmp_path)
-    original = record()
+    data = record().to_dict()
+    data['statistics']['enemy_state'] = {'events': [{'raw_value': 1.23456789}]}
+    original = BattleRecord.from_dict(data)
+    state.history.save(original)
+    state.refresh_history()
+    selected = state.snapshot()['history_selected']
+    assert 'record' not in selected
+    assert 'enemy_state' not in selected['view']
     target = tmp_path / 'share.json'
-    cmd(state, 'export', format='json', path=str(target), record=original.to_dict())
+    cmd(state, 'export', format='json', path=str(target), battle_id=selected['battle_id'])
     assert exported_record(target.read_text('utf-8'))[1] == original.to_dict()
     with pytest.raises(FileExistsError):
-        cmd(state, 'export', format='json', path=str(target), record=original.to_dict())
+        cmd(state, 'export', format='json', path=str(target), battle_id=selected['battle_id'])
     with pytest.raises(ValueError, match='历史目录'):
-        cmd(state, 'export', format='json', path=str(state.history.directory / 'bad.json'), record=original.to_dict())
+        cmd(state, 'export', format='json', path=str(state.history.directory / 'bad.json'),
+            battle_id=selected['battle_id'])
+    with pytest.raises(ValueError, match='无法找到要导出的战绩'):
+        cmd(state, 'export', format='json', path=str(target), battle_id='unknown')
 
 
 def test_failed_layout_write_does_not_publish_candidate(tmp_path):
@@ -1447,7 +1603,8 @@ def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path)
              rate_basis='engagement'))
     selected = state.snapshot()['history_selected']
     view = selected['view']
-    assert selected['record']['event_status'] == 'failed'
+    assert selected['event_status'] == 'failed'
+    assert selected['event_error'] == archived['event_error']
     assert view['rate_available'] is False
     assert '该局事件观察未连接' in view['rate_reason']
     assert '无法补采' in view['rate_hint']

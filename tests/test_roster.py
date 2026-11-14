@@ -75,6 +75,25 @@ def test_parse_results_maps_characters_tokens_and_presence():
     assert snapshot.present_known is True
 
 
+def test_controller_side_must_match_a_guarded_player_roster_entry():
+    metadata_offset = 0x18
+    ops, layout = build_operations(0x1000, metadata_offset)
+    results = [None] * len(ops)
+    player = populated_player(results, layout, (0x3000,))
+    data, key, _ = player['characters'][0]
+    results[data] = data_bytes('char_a', 1)
+    results[key] = string_bytes('char_a')
+    player_data = bytearray(results[player['player']])
+    struct.pack_into('<i', player_data, BATTLE_PLAYER_DATA_SIDE, 2)
+    results[player['player']] = player_data
+    controller = bytearray(0x300)
+    struct.pack_into('<i', controller, metadata_offset, 1)
+    results[layout['controller']] = controller
+    assert parse_results(results, layout, frame=77).local_player_side is None
+    struct.pack_into('<i', controller, metadata_offset, 2)
+    assert parse_results(results, layout, frame=77).local_player_side == 2
+
+
 def test_parse_results_rejects_garbled_key():
     ops, layout = build_operations(0x1000)
     results = [None] * len(ops)

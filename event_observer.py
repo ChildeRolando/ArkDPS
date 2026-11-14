@@ -1,5 +1,6 @@
 """A temporary, explicitly attached Frida event observer for Android 2.7.91."""
 from enum import Enum
+import os
 from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -41,6 +42,7 @@ class FridaEventObserver:
         self.session = None
         self.script = None
         self.ready = Event()
+        self.probe_modes = {}
         self.cleanup_errors = {}
         self._request_lock = Lock()
         self._request_id = 0
@@ -71,6 +73,13 @@ class FridaEventObserver:
                     pending.response = payload.get('result')
                     pending.done.set()
         elif isinstance(payload, dict) and payload.get('ready'):
+            self.probe_modes = {
+                key: payload[key] for key in ('coalesce_enemy_hp', 'trace_hp_context',
+                                              'source_character_uid_ready')
+                if type(payload.get(key)) is bool
+            }
+            if isinstance(payload.get('source_character_uid_error'), str):
+                self.probe_modes['source_character_uid_error'] = payload['source_character_uid_error']
             self.ready.set()
 
     def _detached(self, reason, *_args):
@@ -90,6 +99,7 @@ class FridaEventObserver:
         self.status = ObserverStatus.ATTACHING
         self.error = None
         self.ready.clear()
+        self.probe_modes = {}
         self._committed_sequence = self._acknowledged_sequence = 0
         self._ack_error = None
         try:
@@ -108,6 +118,10 @@ class FridaEventObserver:
                 ) from exc
             self.session.on('detached', self._detached)
             source = Path(__file__).with_name('event_probe_android2791.js').read_text(encoding='utf-8')
+            if os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1':
+                source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
+            if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '1':
+                source = 'globalThis.arkdpsCoalesceEnemyHp = true;\n' + source
             self.script = self.session.create_script(source)
             self.script.on('message', self._message)
             self.script.load()

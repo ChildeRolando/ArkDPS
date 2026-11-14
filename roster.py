@@ -79,6 +79,7 @@ class RosterSnapshot:
     entries: tuple[CharacterEntry, ...] = ()
     present_unique_ids: frozenset[int] = frozenset()
     present_known: bool = False
+    local_player_side: int | None = None
 
     @property
     def tokens(self) -> tuple[CharacterEntry, ...]:
@@ -165,7 +166,7 @@ def class_fields(mc, klass: int) -> dict[str, int]:
     return out
 
 
-def check_battle_layout(mc, bc_addr: int) -> None:
+def check_battle_layout(mc, bc_addr: int) -> int | None:
     """Fail closed when the battle controller layout is not the verified one."""
     klass = mc.read_ptr(bc_addr)
     fields = class_fields(mc, klass)
@@ -179,7 +180,13 @@ def check_battle_layout(mc, bc_addr: int) -> None:
                 f'{actual if actual is None else hex(actual)}）；拒绝读取归属')
 
 
-def build_operations(bc_addr: int) -> tuple[list[tuple], dict]:
+    side = fields.get('<playerSide>k__BackingField')
+    if type(side) is int and 0x10 <= side <= BATTLE_CONTROLLER_PLAYER_DATA_LIST - 4 and side % 4 == 0:
+        return side
+    return None
+
+
+def build_operations(bc_addr: int, player_side_offset=None) -> tuple[list[tuple], dict]:
     """Build the roster transaction and the indices needed to parse it."""
     ops = _Ops()
     bc = ops.direct(bc_addr, BATTLE_CONTROLLER_UNIT_MANAGER + 0x30)
@@ -245,7 +252,8 @@ def build_operations(bc_addr: int) -> tuple[list[tuple], dict]:
                                       0, len(_BATTLE_NAMESPACE))
                 classes.append((name, namespace))
         live.append({'items': items_index, 'slots': slots, 'classes': classes})
-    return ops.operations, {'player_items': player_items, 'players': players, 'live': live}
+    return ops.operations, {'player_items': player_items, 'players': players, 'live': live,
+                           'controller': bc, 'player_side_offset': player_side_offset}
 
 
 def _slots(result: bytes | None) -> int:
@@ -338,9 +346,17 @@ def parse_results(results: list[bytes | None], layout: dict,
             if predefined is None:
                 raise RosterUnavailable('预置在场单位统计键读取不完整')
             entries.append(predefined)
+    player_side = None
+    side_offset = layout.get('player_side_offset')
+    if side_offset is not None:
+        controller = results[layout['controller']]
+        if controller and len(controller) >= side_offset + 4:
+            candidate = _i32(controller, side_offset)
+            if any(entry.player_side == candidate for entry in entries):
+                player_side = candidate
     return RosterSnapshot(frame=frame, entries=tuple(entries),
                           present_unique_ids=frozenset(present),
-                          present_known=True)
+                          present_known=True, local_player_side=player_side)
 
 
 class RosterReader:
@@ -354,13 +370,13 @@ class RosterReader:
         self.verified = False
 
     def verify(self) -> None:
-        check_battle_layout(self.mc, self.bc_addr)
+        self.player_side_offset = check_battle_layout(self.mc, self.bc_addr)
         self.verified = True
 
     def read(self, max_attempts: int = 8) -> RosterSnapshot:
         if not self.verified:
             self.verify()
-        operations, layout = build_operations(self.bc_addr)
+        operations, layout = build_operations(self.bc_addr, getattr(self, 'player_side_offset', None))
         guard_addr = self.static_fields + CLOCK_FRAME_OFFSET
         values, guard = self.mc.channel().guarded_transaction_read(
             operations, guard_addr, guard_size=4, max_attempts=max_attempts)

@@ -20,7 +20,7 @@ import time
 import traceback
 from uuid import uuid4
 
-from battle_history import BattleHistory, BattleRecord
+from battle_history import BattleHistory
 from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
@@ -28,6 +28,7 @@ from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
                         resolve_configured)
+from desktop_audit import DesktopAuditWriter
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
 from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
@@ -35,7 +36,7 @@ from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
-                         team_status)
+                         settled_boss_damage_rates, team_status)
 import stage_names
 
 PROTOCOL_VERSION = 1
@@ -75,6 +76,13 @@ def team_totals(statistics):
     return result
 
 
+def team_unassigned_hits(statistics, *, boss_scope):
+    unassigned = statistics.get('settlement_unassigned') or {}
+    key = 'boss_hits' if boss_scope else 'unscoped_hits'
+    count = unassigned.get(key, unassigned.get('hits'))
+    return count if type(count) is int and count > 0 else 0
+
+
 def empty_text(config, source, complete, view):
     if config.boss_scope:
         if not view['boss_damage_available']:
@@ -87,6 +95,9 @@ def empty_text(config, source, complete, view):
         return '暂无首领伤害（已知为零）'
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
+    if config.category.value == 'damage' and config.effective_only and any(
+            row.get('effective_damage') is None for row in source.values()):
+        return '当前有效伤害尚无可靠数据'
     key = {'damage': 'damage', 'healing': 'healing', 'shield': 'shield_absorbed'}[config.category.value]
     if config.ranking is Ranking.RECENT or (
             config.ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S):
@@ -114,7 +125,11 @@ class DesktopState:
         self.history = BattleHistory(directory / 'history')
         self.records = {}
         self.selected = None
+        self._previous_selected = None
         self.history_config = PanelConfig(panel_id='history')
+        self._history_index = []
+        self._history_view_key = None
+        self._history_view = None
         self.last = None
         self.last_frame = None
         self.last_progress = 0.
@@ -135,6 +150,14 @@ class DesktopState:
     def refresh_history(self):
         result = self.history.list_recent()
         self.records = {r.battle_id: r for r in result.records}
+        history = []
+        for record in result.records:
+            item = record_display(record)
+            # Readable labels and the native id both match, so old records stay searchable.
+            item['search'] = ' '.join((*item['labels'], item['date'], ' '.join(record.operator_names),
+                                      item['stage_raw'] or '')).casefold()
+            history.append(item)
+        self._history_index = history
         self.history_notice = '；'.join(f'{d.code}: {d.message[:160]}' for d in result.diagnostics)
         if self.selected is None and result.records:
             self.selected = result.records[0]
@@ -227,33 +250,58 @@ class DesktopState:
             team_recent_dps=team_recent,
             team_average_dps=average if average is not None and math.isfinite(average) else None,
             observed_peak_dps=peak, team_total_damage=team_total, operators=operators)
-        boss_statistics = panel_statistics(PanelConfig(boss_only=True), statistics)
-        if boss_statistics['boss_damage_available'] or self.boss_live_analysis is not None:
-            boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
-            self.boss_live_analysis = self.boss_trend_point(
-                boss_statistics, battle_id, game_time, self.boss_live_analysis,
-                terminal=terminal, covered=boss_coverage)
-            self.boss_effective_live_analysis = self.boss_trend_point(
-                boss_statistics, battle_id, game_time, self.boss_effective_live_analysis,
-                terminal=terminal, covered=boss_coverage, effective=True)
+        rows = statistics.get('rows') or {}
+        if any('partial_damage' in row for row in rows.values()):
+            known_damage = [row['damage'] for row in rows.values()
+                            if row.get('counter_snapshot_complete') and type(row.get('damage')) in (int, float)
+                            and math.isfinite(row['damage']) and row['damage'] >= 0]
+            known_rates = [row['recent_dps'] for row in operators if row['recent_dps'] is not None]
+            if team_total is None and known_damage:
+                observed_total = sum(known_damage)
+                self.live_analysis['observed_team_total_damage'] = observed_total
+                if game_time > 0:
+                    self.live_analysis['observed_team_average_dps'] = observed_total / game_time
+            if team_recent is None and not terminal and known_rates:
+                windows = {tuple(rows[row['owner_id']]['recent_damage_window']) for row in operators
+                           if row['recent_dps'] is not None}
+                if len(windows) == 1:
+                    self.live_analysis['observed_team_recent_dps'] = sum(known_rates)
+        boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
+        for effective, state_field in ((False, 'boss_live_analysis'), (True, 'boss_effective_live_analysis')):
+            config = PanelConfig(boss_only=True, effective_only=effective)
+            boss_statistics = panel_statistics(config, statistics)
+            previous_boss = getattr(self, state_field)
+            if boss_statistics['boss_damage_available'] or previous_boss is not None:
+                setattr(self, state_field, self.boss_trend_point(
+                    boss_statistics, battle_id, game_time, previous_boss,
+                    terminal=terminal, covered=boss_coverage, effective=effective))
         self.analysis_interrupted = False
 
     def boss_trend_point(self, statistics, battle_id, game_time, previous, *,
                          terminal, covered, effective=False):
-        team_recent, operators = live_damage_rates(statistics, game_time, effective=effective)
-        complete, _, _ = team_status(statistics)
-        if not complete or terminal or not covered:
+        settled = settled_boss_damage_rates(statistics, game_time, effective=effective)
+        if settled is None:
+            team_recent, operators = live_damage_rates(statistics, game_time, effective=effective)
+            complete, _, _ = team_status(statistics)
+        else:
+            team_recent, operators = settled
+            complete = team_recent is not None
+        if not complete or terminal or not covered or team_unassigned_hits(statistics, boss_scope=True):
             team_recent = None
         if terminal or not covered:
             for operator in operators:
                 operator['recent_dps'] = None
+                if 'observed_recent_dps' in operator:
+                    operator['observed_recent_dps'] = None
         segment = 0
         if previous is not None:
             segment = previous['segment']
-            current_rates = {row['owner_id']: row['recent_dps'] for row in operators}
+            def operator_rate(row):
+                return row['recent_dps'] if row['recent_dps'] is not None else row.get('observed_recent_dps')
+            current_rates = {row['owner_id']: operator_rate(row) for row in operators}
             lost_coverage = not terminal and (
                 previous['team_recent_dps'] is not None and team_recent is None
-                or any(row['recent_dps'] is not None and current_rates.get(row['owner_id']) is None
+                or any(operator_rate(row) is not None and current_rates.get(row['owner_id']) is None
                        for row in previous['operators']))
             if self.analysis_interrupted or lost_coverage:
                 segment += 1
@@ -291,14 +339,34 @@ class DesktopState:
             reason = statistics['boss_damage_reason'] or reason
             complete = complete and statistics['boss_damage_available']
             note = ''
+        team_total_complete = team_rate_complete = True
+        coverage_note = ''
+        if config.category is Category.DAMAGE:
+            unassigned = team_unassigned_hits(statistics, boss_scope=config.boss_scope)
+            if unassigned:
+                team_total_complete = not (config.effective_only or config.boss_scope)
+                settlement = statistics.get('settlement_unassigned') or {}
+                team_rate_complete = team_total_complete and not (
+                    config.rate_basis is RateBasis.ENGAGEMENT and 'unscoped_hits' in settlement)
+                if config.boss_scope:
+                    coverage_note = f'首领伤害覆盖不完整 · {unassigned} 次命中的归属或目标待确认'
+                elif not team_total_complete or not team_rate_complete:
+                    scope = '有效伤害' if config.effective_only else '接敌伤害'
+                    pending = ('次伤害命中未归属' if 'unscoped_hits' in settlement
+                               else '次命中的归属或目标待确认')
+                    coverage_note = f'全队{scope}覆盖不完整 · {unassigned} {pending}'
         rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
-                                   team_note=note, event=event, number_units=number_units))
+                                   team_note=note, team_coverage_note=coverage_note,
+                                   team_total_complete=team_total_complete,
+                                   team_rate_complete=team_rate_complete,
+                                   event=event, number_units=number_units))
         if config.boss_scope:
             view['boss_damage_available'] = statistics['boss_damage_available']
             view['boss_damage_reason'] = statistics['boss_damage_reason']
-        view['empty_text'] = empty_text(config, source, complete, view)
+        ranking_complete = team_rate_complete if config.ranking is Ranking.DPS else team_total_complete
+        view['empty_text'] = empty_text(config, source, complete and ranking_complete, view)
         view['rates'] = detail_rates(
             rows, event, effective=config.effective_only and config.category is Category.DAMAGE,
             number_units=number_units)
@@ -307,26 +375,25 @@ class DesktopState:
         view['source'] = source
         return view
 
+    def _selected_history(self):
+        if self.selected is None:
+            self._history_view_key = self._history_view = None
+            return None
+        key = self.selected, self.history_config, self.layout.number_units
+        if key != self._history_view_key:
+            event = EventAvailability(self.selected.event_status, self.selected.event_error, live=False)
+            self._history_view = dict(
+                record_display(self.selected),
+                view=self.view(self.history_config, record_statistics(self.selected, for_panel=True),
+                               event=event),
+                event_status=event.status, event_error=event.error)
+            self._history_view_key = key
+        return self._history_view
+
     def snapshot(self):
         sample = self.last or {}
         stats = sample.get('statistics') or {}
         status, label = self.status()
-        history = []
-        for record in self.records.values():
-            item = record_display(record)
-            names = ' '.join(row.get('name', '') for row in record.statistics['rows'].values())
-            # Readable labels and the native id both match, so old records stay searchable.
-            item['search'] = ' '.join((*item['labels'], item['date'], names, item['stage_raw'] or '')).casefold()
-            history.append(item)
-        selected = None
-        if self.selected:
-            selected_stats = record_statistics(self.selected)
-            selected = dict(
-                record_display(self.selected),
-                view=self.view(self.history_config, selected_stats, None,
-                               EventAvailability(status=self.selected.event_status,
-                                                 error=self.selected.event_error, live=False)),
-                record=self.selected.to_dict())
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         live_event = EventAvailability(status=sample.get('event_status', self.event_status),
@@ -354,7 +421,8 @@ class DesktopState:
                     boss_effective_live_analysis=self.boss_effective_live_analysis,
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),
-                    history=history, history_selected=selected, history_notice=self.history_notice)
+                    history=self._history_index, history_selected=self._selected_history(),
+                    history_notice=self.history_notice)
 
     def persist(self, layout):
         self.store.save(layout)
@@ -411,11 +479,20 @@ class DesktopState:
         elif op == 'history_refresh':
             self.refresh_history()
         elif op == 'history_select':
-            self.selected = self.records[cmd['battle_id']]
+            selected = self.records[cmd['battle_id']]
+            if self.selected is None or selected.battle_id != self.selected.battle_id:
+                self._previous_selected, self.selected = self.selected, selected
         elif op == 'history_config':
             self.history_config = PanelConfig.from_dict(dict(cmd['config'], panel_id='history'))
         elif op == 'export':
-            record = BattleRecord.from_dict(cmd['record'])
+            battle_id = cmd['battle_id']
+            # The save dialog can outlive a pending selection or an archive refresh.
+            record = next((record for record in (self.selected, self._previous_selected)
+                           if record is not None and record.battle_id == battle_id), None)
+            if record is None:
+                record = self.records.get(battle_id)
+            if record is None:
+                raise ValueError('无法找到要导出的战绩')
             if cmd['format'] == 'json':
                 payload = json_bytes(record)
             elif cmd['format'] == 'png':
@@ -497,10 +574,12 @@ class CollectionWorker:
                 f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{uuid4().hex}.jsonl')
             with path.open('x', encoding='utf-8') as stream:
                 from capture_cli import json_value
-                def audit(kind, data):
-                    stream.write(json.dumps(dict(kind=kind, data=data), ensure_ascii=False,
-                                            default=json_value) + '\n')
+
+                def write_audit(record):
+                    stream.write(json.dumps(record, ensure_ascii=False, default=json_value) + '\n')
                     stream.flush()
+
+                audit = DesktopAuditWriter(write_audit).write
                 try:
                     usable = False
                     current_config, current_enabled, current_target = None, False, None

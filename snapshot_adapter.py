@@ -19,6 +19,10 @@ from event_stream import EventStream, StreamGap
 from source_classification import classify_unmapped_source
 
 DAMAGE_TYPES = ('physical', 'arts', 'true', 'elemental')
+SOURCE_EVENTS = frozenset({
+    'damage', 'healing', 'shield_absorbed', 'hp_damage', 'enemy_damage',
+    'elemental_bar', 'elemental_burst', 'skill_start', 'skill_end',
+})
 
 
 class AdapterError(RuntimeError):
@@ -157,6 +161,16 @@ class BattleStatisticsAdapter:
         self.presence_complete = True
         self.presence_gap = False
         self.finished_session: str | None = None
+        self.source_attribution = False
+        self.source_uid_owners: dict[int, set[str]] = {}
+        self.source_observed_uids: dict[str, set[int]] = {}
+        self.source_aliases: dict[str, str] = {}
+        self.settlement_roster: dict[int, set[CharacterEntry]] = {}
+        self.settlement_tokens: dict[str, set[CharacterEntry]] = {}
+        self.settlement_sides: set[int] = set()
+        self.settlement_side: int | None = None
+        self.settlement_batch_side: int | None = None
+        self.settlement_version = None
 
     @property
     def active(self) -> bool:
@@ -243,6 +257,15 @@ class BattleStatisticsAdapter:
         self.mapping_conflicts = set()
         self.last_roster = None
         self.presented_names = {}
+        self.source_attribution = False
+        self.source_uid_owners.clear()
+        self.source_observed_uids.clear()
+        self.source_aliases.clear()
+        self.settlement_roster.clear()
+        self.settlement_tokens.clear()
+        self.settlement_sides.clear()
+        self.settlement_side = self.settlement_batch_side = None
+        self.settlement_version = None
         self.last_roster_frame = roster.frame
         self.session_switches += 1
 
@@ -259,11 +282,11 @@ class BattleStatisticsAdapter:
             reasons.append(f'frame {frame} != {self.last_frame}')
         if self.last_game_time != self.coverage_start:
             reasons.append(f'time {self.last_game_time} != coverage start {self.coverage_start}')
-        if self.owner_map.unknown_token_cids:
+        if self.owner_map.unknown_token_cids and not self.source_attribution:
             reasons.append('unknown token sources: ' + ', '.join(sorted(self.owner_map.unknown_token_cids)))
-        if self.owner_map.ambiguous_cids:
+        if self.owner_map.ambiguous_cids and not self.source_attribution:
             reasons.append('ambiguous sources: ' + ', '.join(sorted(self.owner_map.ambiguous_cids)))
-        if self.mapping_conflicts:
+        if self.mapping_conflicts and not self.source_attribution:
             reasons.append('mapping conflicts: ' + ', '.join(sorted(self.mapping_conflicts)))
         if reasons:
             raise ValueError('event barrier does not match the initial baseline: ' + '; '.join(reasons))
@@ -292,6 +315,20 @@ class BattleStatisticsAdapter:
             self.event_stream.accept(**event)
             return
         source = event.get('source')
+        if self.statistics.settlement_enabled:
+            if kind == 'damage_settlement':
+                self.event_stream.accept(settlement_identity=self._settlement_identity(
+                    source, event.get('source_character_uid')), **event)
+                return
+            if kind in ('elemental_bar', 'skill_start', 'skill_end'):
+                if (self.settlement_version == 6 and kind != 'elemental_bar'
+                        and isinstance(source, str) and source in self.settlement_tokens):
+                    # A summon can use its own skill. Its callbacks cannot
+                    # start or end the summoning operator's skill window.
+                    event['settlement_identity'] = ('summon', None, None)
+                else:
+                    event['settlement_identity'] = self._settlement_identity(
+                        source, event.get('source_character_uid'))
         supplemental = kind in ('hp_damage', 'skill_start', 'skill_end', 'enemy_damage')
         if supplemental and self.event_stream.closed:
             # Supplemental evidence may still be in flight after authoritative
@@ -300,17 +337,29 @@ class BattleStatisticsAdapter:
         # Target-side HP evidence is supplemental. An unattributable HP record
         # must not tear down the authoritative damage/engagement stream; the
         # ordered receiver drops it while advancing the shared sequence.
+        legacy_damage = kind in ('damage', 'elemental_burst', 'elemental_bar')
+        if (self.statistics.settlement_enabled and legacy_damage and
+                (source is not None or kind != 'elemental_burst') and
+                (not isinstance(source, str) or not source)):
+            self.event_stream.accept(unresolved_source=True, **event)
+            return
         if not supplemental and kind != 'elemental_burst' and (
                 not isinstance(source, str) or not source):
             self.event_stream.stop()
             raise StreamGap('event source is invalid')
         blocked = (self.owner_map.unknown_token_cids | self.owner_map.ambiguous_cids
                    | self.mapping_conflicts)
+        owner = self.owner_map.owners.get(source, self.source_aliases.get(source))
+        if (self.source_attribution and kind in SOURCE_EVENTS and source is not None
+                and (owner is None or source in blocked or owner in blocked)):
+            if kind in ('damage', 'healing', 'elemental_bar', 'elemental_burst', 'shield_absorbed'):
+                self.unknown_sources.add(source)
+            self.event_stream.accept(unresolved_source=True, **event)
+            return
         if (not supplemental and source is not None
                 and (source in blocked or self.owner_map.owners.get(source) in blocked)):
             self.event_stream.stop()
             raise StreamGap('event source is ambiguous')
-        owner = self.owner_map.owners.get(source) if source is not None else None
         if kind == 'enemy_damage':
             self.event_stream.accept(
                 enemy_damage_owner=owner if source not in blocked and owner not in blocked else None,
@@ -331,6 +380,68 @@ class BattleStatisticsAdapter:
                 raise StreamGap('event source cannot be registered')
         self.event_stream.accept(verified_skill_end_owner, **event)
 
+    def _settlement_identity(self, source, uid):
+        """Resolve a hit using its UID and the battle's verified player side."""
+        unknown = ('unknown', None, None)
+        if not isinstance(source, str) or not source:
+            return unknown
+        if self.settlement_version == 6 and classify_unmapped_source(source) is not None:
+            return ('foreign', None, None)
+        if uid is None and self.settlement_version == 6:
+            # A source key can be shared by several summons. Use it only if
+            # their verified hosts agree on both operator and side.
+            tokens = self.settlement_tokens.get(source)
+            if not tokens or source in self.mapping_conflicts:
+                return unknown
+            hosts = set()
+            for token in tokens:
+                if self.settlement_roster.get(token.unique_id) != {token}:
+                    return unknown
+                host = self._settlement_host(token)
+                if host is None or type(host.player_side) is not int:
+                    return unknown
+                hosts.add(host)
+            if len({(host.cid, host.player_side) for host in hosts}) != 1:
+                return unknown
+            host = next(iter(hosts))
+            return self._settlement_owner(host, actor_uid=host.unique_id if len(hosts) == 1 else None)
+        if type(uid) is not int or uid <= 0:
+            return unknown
+        if classify_unmapped_source(source) is not None:
+            return ('foreign', None, None)
+        entries = self.settlement_roster.get(uid)
+        if not entries or len(entries) != 1:
+            return unknown
+        entry, = entries
+        actor = self._settlement_host(entry) if entry.is_token else entry
+        if actor is None:
+            return unknown
+        if entry.cid != source and (source in self.mapping_conflicts
+                                    or self.source_aliases.get(source) != actor.cid):
+            return unknown
+        return self._settlement_owner(actor, actor_uid=actor.unique_id)
+
+    def _settlement_host(self, token):
+        hosts = self.settlement_roster.get(token.host_uid) or ()
+        if len(hosts) == 1:
+            host, = hosts
+            if not host.is_token and host.cid == token.host_key and host.player_side == token.player_side:
+                return host
+        return None
+
+    def _settlement_owner(self, actor, *, actor_uid):
+        if self.settlement_version in (4, 5, 6):
+            side = self.settlement_batch_side
+        else:
+            side = next(iter(self.settlement_sides)) if len(self.settlement_sides) == 1 else None
+        if side is None:
+            # A roster entry proves identity, even when the active player
+            # side for this battle is not yet established.
+            return ('unknown', actor.cid, actor_uid)
+        if actor.player_side != side and not (actor.is_predefined and actor.player_side is None):
+            return ('foreign', None, None)
+        return ('local', actor.cid, actor_uid)
+
     def _register(self, cid: str, owner: str) -> bool:
         if cid in self.owner_map.owners and self.owner_map.owners[cid] != owner:
             self.mapping_conflicts.add(cid)
@@ -343,7 +454,43 @@ class BattleStatisticsAdapter:
         self.owner_map.owners[cid] = owner
         return True
 
-    def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False) -> AdapterUpdate | None:
+    def _bind_event_sources(self, roster, roster_map, events):
+        # Roles may disappear from the active roster on retreat. Preserve
+        # verified ownership evidence within this generation.
+        for entry in roster.entries:
+            self.settlement_roster.setdefault(entry.unique_id, set()).add(entry)
+            if self.settlement_version == 6 and entry.is_token:
+                self.settlement_tokens.setdefault(entry.cid, set()).add(entry)
+            owner = roster_map.owners.get(entry.cid)
+            if owner is not None:
+                self.source_uid_owners.setdefault(entry.unique_id, set()).add(owner)
+        for event in events:
+            if not isinstance(event, dict) or event.get('kind') not in SOURCE_EVENTS:
+                continue
+            source = event.get('source')
+            uid = event.get('source_character_uid')
+            if not isinstance(source, str) or not source or type(uid) is not int or not 0 < uid <= 0xffffffff:
+                continue
+            self.source_observed_uids.setdefault(source, set()).add(uid)
+        for source, uids in self.source_observed_uids.items():
+            candidates = [self.source_uid_owners.get(uid, set()) for uid in uids]
+            owners = set().union(*candidates)
+            known = self.owner_map.owners.get(source, roster_map.owners.get(source))
+            if len(owners) > 1 or (known is not None and owners and owners != {known}):
+                self.mapping_conflicts.add(source)
+            elif len(owners) == 1 and all(candidates):
+                self.source_aliases[source], = owners
+            elif known is not None or source in self.source_aliases:
+                # A cumulative row combines identical native keys. A second,
+                # unowned instance cannot be separated from a confirmed one.
+                self.mapping_conflicts.add(source)
+            if source in self.mapping_conflicts:
+                self.statistics.mark_overkill_unknown(source)
+                self.statistics.mark_engagement_unknown(source)
+                self.statistics.invalidate_source_total(source)
+
+    def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False,
+               source_events=(), source_attribution=False, settlement_version=None) -> AdapterUpdate | None:
         """Apply one cumulative snapshot; returns None for duplicate frames."""
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
@@ -377,6 +524,24 @@ class BattleStatisticsAdapter:
         if self.last_frame is not None and frame == self.last_frame and not terminal and not settling:
             return None
         roster_map = build_owner_map(roster)
+        self.source_attribution |= source_attribution
+        if self.source_attribution:
+            if type(settlement_version) is int:
+                self.settlement_version = settlement_version
+            side = roster.local_player_side if type(roster.local_player_side) is int else None
+            if self.settlement_version in (4, 5, 6):
+                # Guard changes the controller's side while the previous round
+                # is still retiring. The side of a round is fixed at its first
+                # verified roster. Events in a contradicting batch stay unassigned.
+                if self.settlement_side is None:
+                    self.settlement_side = side
+                self.settlement_batch_side = side if side == self.settlement_side else None
+                self.statistics.settlement_sides_known = self.settlement_side is not None
+            else:
+                if side is not None:
+                    self.settlement_sides.add(side)
+                self.statistics.settlement_sides_known = len(self.settlement_sides) == 1
+            self._bind_event_sources(roster, roster_map, source_events)
         # New roster evidence can map tokens that were not attributable when
         # the session started. Never change an existing mapping in-place.
         for cid, owner in roster_map.owners.items():
@@ -395,7 +560,7 @@ class BattleStatisticsAdapter:
 
         blocked = (roster_map.unknown_token_cids | roster_map.ambiguous_cids
                    | self.mapping_conflicts)
-        if self.event_stream is not None and blocked:
+        if self.event_stream is not None and blocked and not self.source_attribution:
             self.event_stream.stop()
         counters: dict[str, dict[str, float]] = {}
         types_update: dict[str, dict[str, float]] = {}
@@ -404,7 +569,7 @@ class BattleStatisticsAdapter:
             cid = row.get('id')
             if not isinstance(cid, str) or not cid:
                 continue
-            owner = self.owner_map.owners.get(cid)
+            owner = self.owner_map.owners.get(cid, self.source_aliases.get(cid))
             if owner is None or cid in blocked or owner in blocked:
                 counter = _counter(row)
                 if counter is not None:
@@ -427,6 +592,8 @@ class BattleStatisticsAdapter:
             if not self._register(cid, owner):
                 continue
             self.non_team_sources.pop(cid, None)
+            if self.source_attribution:
+                self.unknown_sources.discard(cid)
             counters[cid] = counter
             name = row.get('name')
             if cid == owner and name and name != owner:
@@ -434,11 +601,8 @@ class BattleStatisticsAdapter:
             damage_types = _types(row)
             if damage_types is not None:
                 types_update[cid] = damage_types
-        if not counters:
-            # Fail closed: rows exist but none can be attributed. This is a
-            # mapping/layout problem, not a legitimate empty battle.
-            if sample.get('rows'):
-                raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
+        if not counters and sample.get('rows') and not self.source_attribution:
+            raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
         if terminal:
             if self.statistics.end_time is None:
                 if self.event_stream is not None and self.event_stream.frame != frame:

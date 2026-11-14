@@ -21,7 +21,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from release_identity import candidate_head
-DEFAULT_VERSION = '1.0.0-rc.5'
+DEFAULT_VERSION = '1.0.0-rc.6'
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
 PYTHON_URL = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip'
@@ -32,8 +32,8 @@ FRIDA_SHA256 = 'f4f6875afed9f0c493af790b2b2d18fe9bfb379a35ecb708f14c2d4b15df6e1e
 # WPF client renders every surface itself.
 TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', 'tcl86t')
 BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py', 'boss_catalog.py',
-           'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py',
-           'connection.py', 'event_capture.py', 'event_observer.py', 'event_stream.py',
+           'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py', 'damage_settlement.py',
+           'connection.py', 'desktop_audit.py', 'event_capture.py', 'event_observer.py', 'event_stream.py',
            'frida_provision.py',
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
