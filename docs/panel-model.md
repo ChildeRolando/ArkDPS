@@ -23,6 +23,7 @@
 - 数据完整时，分母是全队同口径输出之和。数据有缺口时，以所选指标可靠、口径一致的条目之和计算「已知数据内占比」。已知的零输出和离场条目仍属于各自的分母。未知条目的占比显示 `—`。
 - `share_scope` 为 `team`、`known` 或 `unavailable`。`share_known` 表示全队占比已知。已知分母须大于零。
 - `overkill_damage` / `overkill_coverage_complete` 只随行传播到详情和分享，不进入排行分母。事件流未覆盖、目标、击杀时的护盾/抵挡吸收上下文或实际扣血证据不足时该值为 `None`，不得替换为 0。
+- 第七代逐击结算使用 `overkill_base_damage` 作为详情溢出率分母。仅对过量证据齐全的命中合计实际扣血、扣盾与过量。部分覆盖显示已观察溢出率及可确认的命中缺口。原生累计排行的分母不同，该排行的伤害条不绘制逐击过量斜纹。
 - 技能期伤害占比优先使用完整拆分。拆分不全时，详情用已观察且可判断所属技能窗口的命中计算占比，并显示缺口原因。有效伤害口径只纳入能够核对过量的命中，分母为同一口径下已观察的技能期与非技能期伤害之和。没有正值分母时显示未知。
 - 含过量总伤与元素分段以原生累计为基数，只补入成功归属的无来源爆条。支持逐击结算的战局以已确认的实际扣血和扣盾统计有效伤害，并显示缺口。历史记录缺少逐击结算时使用原版本可核对的证据。归属未知的爆条不计入干员有效伤害。
 - 逐属性过量使用 `overkill_damage_by_type` / `overkill_type_complete`，由事件的原生 `DamageType`（1 物理、2 法术、3 真实、5 元素）分组。未知类型使分属性值保持未知，但不影响已验证的总过量。总量排行的伤害分段可带 `overkill_ratio`，表示该属性段末端被过量占据的比例；近 5 秒排行不派生过量。WPF/HUD/PNG 在同一位置绘制半透明斜纹与警戒线，遗漏类型或事件不完整时不绘制。
@@ -89,11 +90,10 @@ HUD 读取源面板的 `config`，不建立第二套采集。
 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
-python -m pytest tests -q --assert=plain
-python acceptance/verify_wpf.py --output runtime/wpf-source
+python -m pytest tests/test_panel_model.py tests/test_wpf_contract.py -q --assert=plain
 ```
 
-WPF 验收使用明确标注的离线样本，不操作游戏；截图与回执由 `acceptance/verify_wpf.py` 生成。
+界面交互验收使用离线样本。执行条件与命令见 [Windows 验收](windows-release.md#验收)。
 旧 Tk 的命令行测量脚本（`verify_gui.py` 等）已随归档封存，不再可用；混合 DPI 热切换仍需宿主机人工覆盖。
 全黑截图曾导致验收脚本失败，不能作为视觉通过证据。
 
@@ -129,15 +129,14 @@ PNG 从同一记录和 `render_panel` 生成，包含关卡/模式/结果/日期
 取消不产生文件，写入/提交失败保留已有目标与归档。历史目录及解析后的路径别名禁止作为
 导出位置，防止覆盖采集器管理的记录。
 
-验证入口（Windows；Pillow 仅供验收截图）：
+历史与分享逻辑的专项回归：
 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
-python -m pytest tests -q --assert=plain --basetemp=runtime/ark12-full
-python acceptance/verify_wpf.py --output runtime/wpf-history
+python -m pytest tests/test_battle_history.py tests/test_battle_share.py -q --assert=plain
 ```
 
-原 `acceptance/verify_history.py` 的 Tk 窗口测量已封存；历史页的当前验收由 WPF 回执覆盖。
+原 `acceptance/verify_history.py` 的 Tk 窗口测量已封存。历史页的交互验收见 [Windows 验收](windows-release.md#验收)。
 
 `tests/test_battle_share.py` 覆盖各结果/模式、归档占比、精度/未知/覆盖、
 取消/拒绝/确认替换、磁盘失败、归档保护、保存期间切换、实时换局及 HUD 源面板继续更新、

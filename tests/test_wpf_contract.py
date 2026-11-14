@@ -111,7 +111,7 @@ def test_hud_has_single_title_row_close_and_rich_rows():
     assert 'Text="DPS 口径"' in xaml and 'Content="全周期" Tag="full_cycle"' in xaml
     assert '溢出总伤' in xaml
     assert 'Tag="dps"' in xaml and 'Tag="recent"' not in xaml
-    assert '溢出伤害率' in (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
+    assert '伤害溢出率' in (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
 
 
 def test_wpf_picker_and_worker_offer_lone_trail_people_and_babel():

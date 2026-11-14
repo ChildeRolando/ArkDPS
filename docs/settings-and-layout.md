@@ -96,9 +96,9 @@ Frida 端点是本次运行的连接参数，不进入布局或连接配置。`A
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 python -m pytest tests/test_layout_store.py tests/test_desktop_bridge.py tests/test_wpf_contract.py -q --assert=plain
-python -m pytest tests -q --assert=plain
-python acceptance/verify_wpf.py --output runtime/wpf-settings-layout
 ```
+
+布局和 HUD 的交互验收见 [Windows 验收](windows-release.md#验收)。
 
 封存的 `acceptance/verify_settings.py` 曾用合成统计和合成多实例载荷驱动真实 Tk 窗口与系统托盘，再做一次**子进程重启**核对面板、HUD 位置/尺寸/透明度/锁定和 GUI 几何（该脚本已不可运行）；移除显示器与 DPI 变化以注入工作区模拟，另外真实创建并释放一个本工具自己的 adb 转发。主阶段与重启阶段均在创建任何 Tk 窗口前设置并检查 DPI awareness；设置失败不继续几何验收。
 

@@ -25,6 +25,10 @@ internal static class Screenshot
     {
         var detail=entry.Get("detail");var value=detail.Get("overkill_damage");
         if(value.ValueKind==JsonValueKind.Number) return "过量 "+Json.UiText(value.GetRawText());
+        var observed=detail.Get("observed_overkill_damage");
+        if(observed.ValueKind==JsonValueKind.Number) return "已观察过量 "+Json.UiText(observed.GetRawText());
+        if(detail.Get("overkill_base_damage").ValueKind!=JsonValueKind.Undefined)
+            return "过量 — · "+detail.Text("overkill_unknown_reason");
         var reason=detail.Text("event_reason");
         if(detail.Bool("event_coverage_complete"))
         {
@@ -86,9 +90,15 @@ internal static class Screenshot
             BorderThickness = new Thickness(0, 0, 0, babel ? 1 : people ? 3 : 0),
             BorderBrush = Theme.Resource(babel ? "BabelPaperRule" : "Accent")
         });
-        document.Children.Add(Inspector.Text("有效伤害 = 总伤害 − 过量伤害 · 过量来自事件派生 · 斜纹 = 过量伤害 · 护盾仅实际吸收 · 未知为 —",12,false,"Muted",new Thickness(24,18,24,4)));
+        var entries=view.Get("entries").Items().ToArray();
+        bool settled=entries.Any(entry=>entry.Get("detail").Get("settled_damage").ValueKind==JsonValueKind.Object);
+        bool stripes=entries.Any(entry=>entry.Get("segments").Items().Any(segment=>segment.Number("overkill_ratio")>0));
+        string damageNote=settled ? "有效伤害按实际扣血与扣盾统计 · 过量按结算证据统计"
+            : "有效伤害 = 总伤害 − 过量伤害 · 过量来自事件派生";
+        document.Children.Add(Inspector.Text(damageNote+(stripes ? " · 斜纹 = 过量伤害" : "")+
+            " · 护盾仅实际吸收 · 未知为 —",12,false,"Muted",new Thickness(24,18,24,4)));
         document.Children.Add(Inspector.Text(view.Text("metric_label")+" / "+view.Text("rate_label")+"速率 · 原始值排序",12,false,"Muted",new Thickness(24,0,24,14)));
-        foreach(var entry in view.Get("entries").Items())
+        foreach(var entry in entries)
         {
             var item = new RowItem { Entry = entry };
             string surface = people && item.Rank % 2 == 0 ? "ConsoleCard" : "Console";

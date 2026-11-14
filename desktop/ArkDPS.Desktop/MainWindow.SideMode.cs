@@ -56,7 +56,7 @@ public partial class MainWindow
         }
 
         SideAttachmentTimer.Stop();
-        SideAttachment.RaiseAlongsidePlayer(default, 0);
+        SideAttachment.FollowPlayerZOrder(default, Native.Handle(this));
         minimizedPlayer = 0;
         if (sideMinimizedWithPlayer) RestoreSideWindow();
         SideEnemyHost.Content = null;
@@ -84,15 +84,16 @@ public partial class MainWindow
 
     private void UpdateSidePlacement(bool placeFallback = false, bool allowMinimize = true)
     {
-        if (!sideMode || !IsVisible || closingRequested || WindowState == WindowState.Maximized)
+        if (!sideMode || closingRequested) return;
+        nint window = Native.Handle(this);
+        if (!IsVisible || WindowState == WindowState.Maximized)
         {
-            SideAttachment.RaiseAlongsidePlayer(default, 0);
+            SideAttachment.FollowPlayerZOrder(default, window);
             return;
         }
 
         try
         {
-            nint window = Native.Handle(this);
             var placement = SideAttachment.GetPlacement(State.Get("diagnostic"), window, SideWidth,
                 State.Get("connection_config"));
             if (placement.State == EmulatorPlacementState.Minimized)
@@ -106,13 +107,17 @@ public partial class MainWindow
                     WindowState = WindowState.Minimized;
                 }
                 SetSideAttachmentStatus("MuMu 已最小化");
-                SideAttachment.RaiseAlongsidePlayer(default, 0);
+                SideAttachment.FollowPlayerZOrder(default, window);
                 return;
             }
 
             minimizedPlayer = 0;
             if (sideMinimizedWithPlayer) RestoreSideWindow();
-            if (WindowState != WindowState.Normal) return;
+            if (WindowState != WindowState.Normal)
+            {
+                SideAttachment.FollowPlayerZOrder(default, window);
+                return;
+            }
             if (placement.Bounds is Rectangle bounds)
                 Native.Place(this, bounds);
             else
@@ -125,7 +130,7 @@ public partial class MainWindow
                 EmulatorPlacementState.Ambiguous => "请在设置中选择要吸附的 MuMu 实例",
                 _ => "等待 MuMu 窗口"
             });
-            SideAttachment.RaiseAlongsidePlayer(placement, window);
+            SideAttachment.FollowPlayerZOrder(placement, window);
             lastAttachmentError = null;
         }
         catch (System.ComponentModel.Win32Exception error)

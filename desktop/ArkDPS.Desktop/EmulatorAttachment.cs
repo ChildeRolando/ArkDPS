@@ -31,8 +31,10 @@ internal sealed class EmulatorAttachment
     private const int DefaultDpi = 96;
     private const uint ExtendedFrameBounds = 9;
     private const uint Cloaked = 14;
+    private const uint PreviousWindow = 3;
     private const uint WindowOwner = 4;
     private const uint RootAncestor = 2;
+    private const uint RootOwner = 3;
     private const uint NearestMonitor = 2;
 
     private record struct PlayerWindow(nint Handle, uint ProcessId);
@@ -47,22 +49,39 @@ internal sealed class EmulatorAttachment
     private string lastSerial = "";
     private string rememberedAlias = "";
     private bool completedLookup;
-    private nint foregroundPlayer;
+    private bool raisedToTopmost;
 
     internal nint FixtureWindow { get; set; }
 
-    internal void RaiseAlongsidePlayer(EmulatorPlacement placement, nint sideWindow)
+    internal void FollowPlayerZOrder(EmulatorPlacement placement, nint sideWindow)
     {
+        const uint noMoveSizeOrActivate = 0x0013;
+        if (sideWindow == nint.Zero) return;
         nint player = placement.State == EmulatorPlacementState.Attached ? placement.PlayerWindow : nint.Zero;
-        if (player != nint.Zero && GetForegroundWindow() == player)
+        if (player == nint.Zero)
         {
-            const uint noMoveSizeOrActivate = 0x0013;
-            if (foregroundPlayer != player &&
-                SetWindowPos(sideWindow, nint.Zero, 0, 0, 0, 0, noMoveSizeOrActivate))
-                foregroundPlayer = player;
+            if (raisedToTopmost && SetWindowPos(sideWindow, new nint(-2), 0, 0, 0, 0, noMoveSizeOrActivate))
+                raisedToTopmost = false;
+            return;
         }
-        else foregroundPlayer = nint.Zero;
+        nint previous = GetWindow(sideWindow, PreviousWindow);
+        if (previous == player) return;
+        if (GetAncestor(GetForegroundWindow(), RootOwner) == sideWindow)
+        {
+            // Keep an active sidebar in front of MuMu. If MuMu is already
+            // ahead of the sidebar, still close any gap between them.
+            for (int inspected = 0; previous != nint.Zero && previous != player && inspected < 256; inspected++)
+                previous = GetWindow(previous, PreviousWindow);
+            if (previous != player) return;
+        }
+
+        // Follow the actual z-order. An unrelated window can sit between us
+        // and MuMu even when neither window was minimized or changed bounds.
+        if (SetWindowPos(sideWindow, player, 0, 0, 0, 0, noMoveSizeOrActivate))
+            raisedToTopmost = IsTopmost(sideWindow);
     }
+
+    private static bool IsTopmost(nint window) => (GetWindowLong(window, -20) & 0x00000008) != 0;
 
     internal EmulatorPlacement GetPlacement(JsonElement diagnostics, nint ownWindow, int width,
         JsonElement connection = default)
@@ -483,6 +502,7 @@ internal sealed class EmulatorAttachment
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool SetWindowPos(nint window, nint after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern nint GetWindow(nint window, uint command);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(nint window, int index);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint window, StringBuilder text, int maxCount);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(nint window, out WindowRect bounds);
     [DllImport("user32.dll")] private static extern nint MonitorFromRect(ref WindowRect bounds, uint flags);

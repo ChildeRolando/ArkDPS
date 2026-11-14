@@ -1,4 +1,4 @@
-"""Per-hit evidence for attributed enemy HP damage and shield consumption."""
+"""Per-hit evidence for attributed enemy HP, shield and overkill damage."""
 from collections import deque
 from math import isfinite
 
@@ -13,6 +13,9 @@ class DamageSettlement:
         self.by_type = {}
         self.raw_by_type = {}
         self.hits = self.unverified = self.raw_hits = 0
+        self.overkill = self.overkill_base = 0.0
+        self.overkill_hits = 0
+        self.overkill_by_type = {}
         self.skill = self.non_skill = self.raw_skill = self.raw_non_skill = 0.0
         self.skill_hits = self.raw_skill_hits = self.complete_skill_hits = 0
         self.before = self.after = 0.0
@@ -20,7 +23,7 @@ class DamageSettlement:
         self.active = self.active_end = self.raw_active = self.raw_active_end = 0.0
         self.recent = deque()
 
-    def hit(self, when, hp, shield, kind, complete, skill, nominal, before, after):
+    def hit(self, when, hp, shield, kind, complete, skill, nominal, before, after, *, overkill=None):
         effective = hp + (shield or 0.0)
         if complete and effective == 0 and nominal is None:
             return
@@ -30,6 +33,12 @@ class DamageSettlement:
         self.shield += shield or 0.0
         if kind is not None and effective > 0:
             self.by_type[kind] = self.by_type.get(kind, 0.0) + effective
+        if overkill is not None:
+            self.overkill_hits += 1
+            self.overkill += overkill
+            self.overkill_base += effective + overkill
+            if overkill > 0:
+                self.overkill_by_type[kind] = self.overkill_by_type.get(kind, 0.0) + overkill
         if effective > 0:
             self.active += when + 1.5 - max(when, self.active_end)
             self.active_end = when + 1.5
@@ -63,7 +72,8 @@ class DamageSettlement:
         while self.recent[0][0] < when - 5:
             self.recent.popleft()
 
-    def result(self, start, now, end, *, stream_complete, missing_hits=0, live=True, boss=False):
+    def result(self, start, now, end, *, stream_complete, missing_hits=0, live=True, boss=False,
+               include_overkill=False):
         begin = max(start, now - 5)
         recent = [hit for hit in self.recent
                   if (begin < hit[0] or begin == start == hit[0]) and hit[0] <= end]
@@ -90,7 +100,7 @@ class DamageSettlement:
         mitigation_complete = (stream_complete and missing_hits == 0 and
                                self.formula_hits > 0 and self.formula_hits == self.hits)
         share = missing_share(self.hits - self.unverified)
-        return {
+        result = {
             'complete': complete, 'reason': issue, 'known_hp_damage': self.hp,
             'known_shield_damage': self.shield, 'observed_hits': hits,
             'unverified_hits': self.unverified + missing_hits, 'unverified_share': share,
@@ -132,3 +142,17 @@ class DamageSettlement:
             'observed_mitigation_rate': (1 - self.after / self.before) * 100 if self.before else None,
             'mitigation_unverified_share': missing_share(self.formula_hits),
         }
+        if include_overkill:
+            overkill_complete = complete and self.overkill_hits == hits
+            result.update(
+                overkill_damage=self.overkill if overkill_complete else None,
+                observed_overkill_damage=self.overkill if self.overkill_hits else None,
+                overkill_base_damage=self.overkill_base if overkill_complete or self.overkill_hits else None,
+                overkill_coverage_complete=overkill_complete,
+                overkill_matched_hits=self.overkill_hits,
+                overkill_unverified_share=missing_share(self.overkill_hits),
+                overkill_unknown_reason=None if overkill_complete else (
+                    issue or '部分命中缺少同一次结算的过量证据'),
+                overkill_damage_by_type=dict(self.overkill_by_type) if overkill_complete else None,
+            )
+        return result

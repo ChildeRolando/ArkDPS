@@ -202,6 +202,7 @@
       <Setter TargetName="overflow" Property="Foreground" Value="{DynamicResource Muted}"/>
      </Trigger>
      <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="track" Property="BorderBrush" Value="{DynamicResource Focus}"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter TargetName="track" Property="Opacity" Value=".55"/></Trigger>
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>

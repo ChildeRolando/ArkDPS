@@ -508,7 +508,8 @@ class Statistics:
             self.settlement_bars.pop(target_uid, None)
 
     def record_damage_settlement(self, when, state, owner, actor, source, target, target_uid, instance,
-                                 hp, shield, complete, kind, nominal, before, after, *, killed=None):
+                                 hp, shield, complete, kind, nominal, before, after, *, killed=None,
+                                 settled_after_nested_kill=False):
         """Record each confirmed component, preserving independently verified neighbors."""
         valid_target = self._enemy_identity(target, target_uid) and target.startswith(('enemy_', 'trap_'))
         previous = self.enemy_damage.get(target_uid) if valid_target and self.enemy_damage is not None else None
@@ -532,8 +533,21 @@ class Statistics:
         if not nominal_valid:
             nominal = None
         complete = (complete is True and hp_valid and shield_valid and valid_target and kind_name is not None)
+        nested = settled_after_nested_kill is True and hp == 0 and shield == 0 and killed is not False
+        overkill = None
+        if self.damage_settlement_version >= 7 and complete:
+            # A positive difference can also be a cap on a living target.
+            # Only a proven lethal hit or a verified nested kill leaves excess.
+            if killed is False:
+                overkill = 0.0
+            elif nominal is not None:
+                residual = max(0.0, nominal - (hp + shield))
+                if nested or (killed is True and hp > 0):
+                    overkill = residual
+                elif residual <= 0.01:
+                    overkill = 0.0
         if state != 'local' or owner is None or not valid_target:
-            if hp > 0 or shield or not complete:
+            if hp > 0 or shield or not complete or (self.damage_settlement_version >= 7 and nominal):
                 self.settlement_unassigned['hits'] += 1
                 self.settlement_unassigned['hp'] += hp
                 self.settlement_unassigned['shield'] += shield or 0.0
@@ -562,13 +576,13 @@ class Statistics:
         meter = self.settled.get(owner)
         if meter is None:
             meter = self.settled[owner] = DamageSettlement()
-        meter.hit(*args)
+        meter.hit(*args, overkill=overkill)
         boss = classify_boss(target)
         if boss is True:
             meter = self.settled_boss.get(owner)
             if meter is None:
                 meter = self.settled_boss[owner] = DamageSettlement()
-            meter.hit(*args)
+            meter.hit(*args, overkill=overkill)
         elif boss is None:
             self.settlement_boss_missing[owner] = self.settlement_boss_missing.get(owner, 0) + 1
         if source is not None and element:
@@ -595,9 +609,12 @@ class Statistics:
         if boss:
             missing = self.settlement_boss_missing.get(owner, 0) + (missing if self.damage_settlement_version < 6 else 0)
         row = meter.result(self.start_time, self.now, end, stream_complete=stream_complete,
-                           missing_hits=missing, live=self.end_time is None, boss=boss)
+                           missing_hits=missing, live=self.end_time is None, boss=boss,
+                           include_overkill=self.damage_settlement_version >= 7)
         if not self.settlement_sides_known:
             row['reason'] = '当前玩家阵营未确认'
+            if 'overkill_unknown_reason' in row:
+                row['overkill_unknown_reason'] = row['reason']
         return row
 
     @staticmethod
@@ -1752,10 +1769,25 @@ class Statistics:
                     boss_reasons.add(boss_reason)
             if self.settlement_enabled:
                 row['settled_damage'] = self._settlement_row(owner)
-                row.setdefault('boss_damage', {})['settled_damage'] = self._settlement_row(owner, boss=True)
+                boss = row.setdefault('boss_damage', {})
+                boss['settled_damage'] = self._settlement_row(owner, boss=True)
+                if self.damage_settlement_version >= 7:
+                    for scope in (row, boss):
+                        lane = scope['settled_damage']
+                        scope.update(
+                            effective_damage=lane['effective_damage'],
+                            overkill_damage=lane['overkill_damage'],
+                            overkill_coverage_complete=lane['overkill_coverage_complete'],
+                            overkill_unknown_reason=lane['overkill_unknown_reason'],
+                            overkill_damage_by_type=lane['overkill_damage_by_type'],
+                            overkill_type_complete=lane['overkill_coverage_complete'],
+                            recent_overkill_damage=None,
+                        )
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())
+        if self.settlement_enabled and self.damage_settlement_version >= 7:
+            overkill_complete &= not self.settlement_unassigned['hits']
         result = {
             'session': self.session, 'game_time': self.now, 'ended': self.end_time is not None,
             'coverage_start': self.start_time,

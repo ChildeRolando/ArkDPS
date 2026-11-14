@@ -266,6 +266,17 @@ def test_archive_does_not_mix_an_overwide_damage_stream_with_native_totals():
         assert not render_panel(config, scoped).entries
 
 
+def test_archive_precision_difference_does_not_hide_verified_zero_overkill():
+    stats = {'rows': {'A': {'damage': 18971.783203125, 'counter_snapshot_complete': True,
+                            'overkill_damage': 0.0, 'overkill_coverage_complete': True,
+                            'observed_damage': 18971.801990135806,
+                            'partial_damage': {'effective_damage': 18971.801990135806},
+                            'settled_damage': {'effective_damage': 18738.401995352702}}}}
+    detail = render_panel(PanelConfig(), rows_from_statistics(stats)).details_by_owner['A']
+    assert detail['overkill_damage'] == 0.0
+    assert detail['overkill_coverage_complete']
+
+
 def test_verified_settlements_drive_live_and_history_without_mixing_legacy_scopes():
     lane = {'effective_damage': 80, 'effective_damage_by_type': {'physical': 45, 'arts': 30},
             'known_hp_damage': 72, 'known_shield_damage': 8, 'complete': False,
@@ -328,6 +339,48 @@ def test_verified_settlements_drive_live_and_history_without_mixing_legacy_scope
     assert not unavailable.entries
     assert unavailable.details_by_owner['A']['effective_damage'] is None
     assert unavailable.details_by_owner['A']['observed_skill_damage_effective'] is None
+
+
+@pytest.mark.parametrize('boss_only,raw,exact,observed,base,matched', [
+    (False, 230, 20, 20, 200, 5),
+    (True, 150, 0, 0, 90, 3),
+    (False, 230, None, 10, 50, 2),
+    (True, 150, None, 0, 25, 1),
+    (True, 150, None, None, None, 0),
+])
+def test_verified_overkill_uses_same_hit_subset_without_changing_raw_ranking(
+        boss_only, raw, exact, observed, base, matched):
+    complete = exact is not None
+    reason = None if complete else '部分命中的过量证据不完整'
+    overkill = {'overkill_damage': exact, 'observed_overkill_damage': observed,
+                'overkill_base_damage': base, 'overkill_coverage_complete': complete,
+                'overkill_matched_hits': matched, 'overkill_unverified_share': None if complete else .25,
+                'overkill_unknown_reason': reason,
+                'overkill_damage_by_type': {'physical': exact} if complete else None}
+    all_lane = {'complete': True, 'effective_damage': 180,
+                **({} if boss_only else overkill)}
+    boss_lane = {'complete': True, 'effective_damage': 90,
+                 'observed_boss_damage': 150, 'observed_boss_damage_complete': True,
+                 'damage_by_type': {'physical': 150}, **(overkill if boss_only else {})}
+    statistics = {'rows': {'A': {
+        'damage': 230, 'damage_by_type': {'physical': 230}, 'counter_snapshot_complete': True,
+        'overkill_damage': 30, 'overkill_coverage_complete': True,
+        'overkill_damage_by_type': {'physical': 30}, 'overkill_type_complete': True,
+        'recent_overkill_damage': 7, 'settled_damage': all_lane,
+        'boss_damage': {'settled_damage': boss_lane},
+    }}}
+    config = PanelConfig(boss_only=boss_only)
+    (entry,) = render_panel(config, rows_from_statistics(panel_statistics(config, statistics))).entries
+    assert entry.value == entry.detail['damage'] == raw
+    assert entry.detail['overkill_damage'] == exact
+    assert entry.detail['overkill_damage_by_type'] == overkill['overkill_damage_by_type']
+    assert entry.detail['observed_overkill_damage'] == observed
+    assert entry.detail['overkill_base_damage'] == base
+    assert entry.detail['overkill_coverage_complete'] is complete
+    assert entry.detail['overkill_matched_hits'] == matched
+    assert entry.detail['overkill_unknown_reason'] == reason
+    assert entry.detail['recent_overkill_damage'] is None
+    assert entry.segments and all('overkill_ratio' not in segment for segment in entry.segments)
 
 
 def test_settlement_coverage_does_not_flag_unavailable_windows_or_no_activity():

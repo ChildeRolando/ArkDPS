@@ -90,6 +90,7 @@ public partial class MainWindow : Window
         SetNavState("live");
         HistoryPanel.IsHistory=true;HistoryPanel.Command=Command;HistoryPanel.RateActionRequested=HandleRateAction;
         HistoryPanel.PinRequested=id=>HistoryInspector.Pin(id,HistoryPanel.View);
+        SideFriendly.ConfigureCommands(Command);
         Outcome.SelectedIndex=0;Practice.SelectedIndex=0;
         poll.Tick+=async(_,_)=>await Poll();
         save.Tick+=async(_,_)=>{save.Stop();await SavePlacement();};
@@ -412,6 +413,7 @@ public partial class MainWindow : Window
         bool available=!workerUnavailable && !ShowingPreviousBattle;
         AddPanelButton.IsEnabled=available;
         foreach(var panel in Panels.Values) panel.SetConfigurationAvailable(available);
+        SideFriendly.SetConfigurationAvailable(available);
     }
     private void UpdateLiveStatus(string status,string workerLabel)
     {

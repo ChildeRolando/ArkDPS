@@ -52,6 +52,8 @@ worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还�
 
 ## 验收
 
+日常开发按 [开发代理指南的本地验收规则](../AGENTS.md#运行与验收) 选择专项检查。下面的命令用于交互式验收，优先在隔离的 Windows CI 中运行。`--offline` 和独立的 state 目录只隔离游戏连接和数据，脚本仍会占用当前 Windows 桌面的鼠标。
+
 ```powershell
 python acceptance/verify_wpf.py --output runtime/wpf-source
 python acceptance/verify_wpf.py --bundle runtime/packages/<解压目录> --output runtime/wpf-bundle

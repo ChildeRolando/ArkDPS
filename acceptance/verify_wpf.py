@@ -154,8 +154,14 @@ def main():
     for phase in ('first-launch', 'restart'):
         target = output/phase
         command = [str(executable)] + ([] if args.bundle else ['--repo', str(ROOT), '--python', sys.executable])
-        subprocess.run(command + ['--offline', '--state-dir', str(directory), '--fixture', str(fixture),
-                        '--verify', str(target)], cwd=ROOT, timeout=120, check=True)
+        try:
+            subprocess.run(command + ['--offline', '--state-dir', str(directory), '--fixture', str(fixture),
+                            '--verify', str(target)], cwd=ROOT, timeout=120, check=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            failure = target / 'failure.txt'
+            if failure.is_file():
+                print(failure.read_text('utf-8'), file=sys.stderr, flush=True)
+            raise
         receipt = json.loads((target/'receipt.json').read_text('utf-8'))
         assert ('share scope reaches live, history, HUD, details and ranking PNG with legacy fallback'
                 in receipt['checks']), 'share scope UI checks did not run'
