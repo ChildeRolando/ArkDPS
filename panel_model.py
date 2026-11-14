@@ -1086,6 +1086,7 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
     reason = lane.get('reason') or '仅统计已核实的命中'
     typed = _effective_by_type(row)
     effective = _effective_damage(row)
+    hits = lane.get('observed_hits')
     for key in ('effective_damage', 'recent_effective_damage', 'engagement_effective_damage',
                 'effective_damage_by_type', 'engagement', 'skill_damage', 'skill_effective_damage', 'mitigation'):
         coverage.pop(key, None)
@@ -1094,22 +1095,33 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
         share = lane.get(share_key) if share_key else None
         if not _finite(share) or not 0 <= share <= 1:
             share = basis = None
-        coverage[key] = dict(failed_share=share, basis=basis, reason=reason)
+        item = coverage[key] = dict(failed_share=share, basis=basis, reason=reason)
+        if share_key:
+            item['basis_kind'] = 'hits'
+        unverified = lane.get('unverified_hits')
+        if (share_key in ('unverified_share', 'engagement_effective_damage_unverified_share')
+                and share is not None and type(hits) is int and type(unverified) is int
+                and 0 <= unverified <= hits and hits > 0 and math.isclose(share, unverified / hits)):
+            item.update(unverified_hits=unverified, observed_hits=hits)
 
-    if not complete:
+    if not complete and _finite(effective):
         mark('effective_damage', 'unverified_share', basis='可对账的伤害命中数')
+    if not complete and _finite(row.effective_observed()):
         mark('engagement_effective_damage', 'engagement_effective_damage_unverified_share', basis='可对账的伤害命中数')
-    if not row.settled_recent_complete():
+    if not row.settled_recent_complete() and _valid_window(row.effective_recent_window()) and _finite(row.effective_recent()):
         mark('recent_effective_damage', 'recent_effective_damage_unverified_share', basis='近 5 秒可对账的伤害命中数')
-    if lane.get('engagement_damage_complete', complete) is not True:
-        mark('engagement', 'engagement_damage_unverified_share', basis='接敌区间内可对账的伤害命中数')
+    if lane.get('engagement_damage_complete', complete) is not True and _finite(row.engagement(Category.DAMAGE)):
+        mark('engagement', 'engagement_damage_unverified_share', basis='可对账的伤害命中数')
     if typed and (not complete or exceeds_native_damage(effective, sum(typed.values()))):
         mark('effective_damage_by_type')
-    if lane.get('skill_split_complete') is not True:
-        mark('skill_damage', 'skill_damage_unverified_share', basis='可对账的伤害命中数')
-    if lane.get('skill_split_effective_complete') is not True:
-        mark('skill_effective_damage', 'skill_effective_damage_unverified_share', basis='可对账的伤害命中数')
-    if lane.get('mitigation_complete') is not True:
+    for suffix in ('', '_effective'):
+        skill = lane.get('observed_skill_damage' + suffix)
+        non_skill = lane.get('observed_non_skill_damage' + suffix)
+        if (lane.get('skill_split' + suffix + '_complete') is not True
+                and _finite(skill) and _finite(non_skill) and skill + non_skill > 0):
+            key = 'skill_effective_damage' if suffix else 'skill_damage'
+            mark(key, key + '_unverified_share', basis='可对账的伤害命中数')
+    if lane.get('mitigation_complete') is not True and _finite(lane.get('observed_mitigation_rate')):
         mark('mitigation', 'mitigation_unverified_share', basis='可对账的伤害命中数',
              reason=lane.get('mitigation_reason') or reason)
     if row.damage is None and _finite(lane.get('observed_boss_damage')):
@@ -1185,6 +1197,8 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
     if lane is not None:
         detail['settled_damage'] = dict(lane)
         detail['engagement_damage'] = row.engagement(Category.DAMAGE)
+        if _effective_damage(row) is None and lane.get('reason'):
+            detail['effective_damage_reason'] = lane['reason']
         for suffix in ('', '_effective'):
             complete_key = 'skill_split' + suffix + '_complete'
             split = lane.get(complete_key) is True
@@ -1194,7 +1208,9 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                 observed = detail['observed_' + key] = lane.get('observed_' + key)
                 detail[key] = observed if split else None
             if not split:
-                detail['skill_split' + suffix + '_reason'] = lane.get('skill_split_reason') or lane.get('reason')
+                reason = lane.get('skill_split_reason') or lane.get('reason')
+                if reason or lane.get('observed_hits'):
+                    detail['skill_split' + suffix + '_reason'] = reason or '部分命中缺少技能窗口证据'
     return detail
 
 

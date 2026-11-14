@@ -157,6 +157,7 @@ public sealed class Inspector : Border
             MetricCoverage.IsPartial(coverage,"effective_damage");
         string effectiveLabel=(partialEffective ? "已观察" : "")+(bossScope ? "首领有效伤害" : "有效伤害");
         AddStat(stats,effectiveLabel,Number(detail.Get("effective_damage")),showZero:partialEffective);
+        string effectiveReason=detail.Text("effective_damage_reason");
         AddStat(stats,"过量伤害",Number(detail.Get("overkill_damage")));
         AddStat(stats,"溢出伤害率",scopeReason.Length==0 ? OverkillRate(row,detail) : "—");
         if(!bossScope)
@@ -167,6 +168,7 @@ public sealed class Inspector : Border
                 partialShield ? Number(detail.Get("shield_absorbed")) : row.UiInt("shield_absorbed"),showZero:partialShield);
         }
         if(stats.Children.Count>0) body.Children.Add(stats);
+        if(effectiveReason.Length>0) body.Children.Add(Text("有效伤害未知："+effectiveReason,10,false,"Muted"));
         body.Children.Add(Text(scopeReason.Length>0 ? scopeReason : OverkillNote(row,detail,view),
             10,false,"Muted",new Thickness(0,4,0,2)));
         if(row.Get("burst_unknown_reason").ValueKind==JsonValueKind.String)
@@ -647,14 +649,18 @@ public sealed class Inspector : Border
             if(side && category=="healing")
                 SetMetric(0,Number(row.Get("healing")),"累计归属于该干员的治疗量。");
             else
+            {
+                string effectiveReason=detail.Text("effective_damage_reason");
                 SetMetric(0,Number(detail.Get(effective ? "effective_damage" : "damage")),
                     (bossScope ? "统计命中首领敌人的伤害。" : "")+
                     (effective ? WithNote(detail.Get("settled_damage").ValueKind==JsonValueKind.Object
                             ? "逐击统计已核实的实际扣血与护盾吸收。" : "总伤害减去过量伤害。",
                         scopeReason.Length>0 ? scopeReason :
                         partialEffective ? MetricCoverage.Detail(coverage,"effective_damage") :
+                        effectiveReason.Length>0 ? effectiveReason :
                         detail.Get("effective_damage").ValueKind!=JsonValueKind.Number ? OverkillNote(row,detail,view) : "")
                         : "归属于该干员的累计结算伤害，含过量伤害。"));
+            }
             string rateHint=category=="shield" ? "累计归属于该干员的实际护盾吸收量。"
                 : DescribeRate(config.Text("rate_basis"),category=="healing",effective);
             string rateCoverage=(category,config.Text("rate_basis"),effective) switch
@@ -911,6 +917,9 @@ public sealed class Inspector : Border
         string scopeReason=detail.Text("damage_scope_reason");
         if(scopeReason.Length>0)
             return (double.NaN,double.NaN,double.NaN,false,false,label,scopeReason,formula+"\n"+scopeReason);
+        var settled=detail.Get("settled_damage");
+        if(settled.ValueKind==JsonValueKind.Object && settled.Bool("complete") && settled.Get("observed_hits").TryNumber(double.NaN)==0)
+            return (double.NaN,double.NaN,double.NaN,true,false,label,"",formula+"\n本次未造成伤害，无法计算占比。");
         static bool Valid(double skill,double nonSkill) =>
             skill>=0 && nonSkill>=0 && double.IsFinite(skill+nonSkill);
 
@@ -973,6 +982,8 @@ public sealed class Inspector : Border
 
         string reason=verifiedPerHit ? damage.Text("mitigation_reason") : row.Text("mitigation_unknown_reason");
         if(verifiedPerHit && reason.Length==0) reason=damage.Text("reason");
+        if(verifiedPerHit && damage.Bool("complete") && damage.Get("observed_hits").TryNumber(double.NaN)==0)
+            reason="本次未造成伤害，没有可配对的命中。";
         if(double.IsFinite(observed) && counted)
         {
             string coverage=$"仅统计已配对的 {Number(hits)} 击。";

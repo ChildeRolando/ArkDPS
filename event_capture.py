@@ -35,7 +35,8 @@ def source_attribution_batch(drained, after, through):
     version = drained.get('source_attribution_version')
     if type(version) is not int or version != 1 or drained.get('error') or drained.get('stopped'):
         return {}
-    return dict(source_attribution=True, source_events=(
+    return dict(source_attribution=True, settlement_version=drained.get('partial_damage_version'),
+                source_events=(
         event for event in drained.get('events', ())
         if isinstance(event, dict) and type(event.get('sequence')) is int
         and after < event['sequence'] <= through
@@ -234,11 +235,11 @@ class LiveEventCapture:
             if drained.get('stopped'):
                 raise StreamGap('observer stopped')
             version = drained.get('partial_damage_version')
-            if type(version) is int and version in (1, 2, 3):
+            if type(version) is int and version in (1, 2, 3, 4):
                 self.adapter.statistics.partial_damage_enabled = True
                 if version >= 2:
                     self.adapter.statistics.reconcile_damage_scope = True
-                if version == 3:
+                if version >= 3:
                     self.adapter.statistics.settlement_enabled = True
                     self.adapter.statistics.settlement_stream_incomplete |= (
                         drained.get('damage_settlement_ready', drained.get('enemy_damage_ready')) is not True

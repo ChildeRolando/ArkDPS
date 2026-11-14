@@ -513,6 +513,20 @@ public partial class MainWindow
         Require(historyPanel.Coverage.Text.Contains("统计失败占比"),
                 "history ranking did not show partial coverage");
 
+        var verified=System.Text.Json.Nodes.JsonNode.Parse("""
+            {"effective_damage":{"failed_share":0.06666666666666667,"basis_kind":"hits",
+                "basis":"可对账的伤害命中数","reason":"部分命中无法确认扣盾",
+                "unverified_hits":1,"observed_hits":15}}
+            """)!;
+        fixture["entries"]![0]!["coverage"]=verified;
+        var hitView=JsonSerializer.SerializeToElement(fixture);
+        ranked.Entry=hitView.Get("entries").Items().First();
+        historyPanel.Update(hitView);
+        Require(ranked.Tooltip.Contains("未核实命中 1/15（6.7%）") &&
+                !ranked.Tooltip.Contains("统计失败占比") &&
+                historyPanel.Coverage.Text.Contains("查看命中核实情况"),
+                "verified damage coverage used the legacy failed-damage label for a hit count");
+
         var row=fixture["source"]![owner]!;
         var detail=fixture["details_by_owner"]![owner]!;
         row["damage"]=300;

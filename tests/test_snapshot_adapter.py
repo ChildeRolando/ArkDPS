@@ -187,6 +187,44 @@ def test_source_null_burst_only_credits_its_target_uid_and_consumes_bar_once():
     assert result['settlement_unassigned'] == {'hits': 2, 'hp': 60, 'shield': 0}
 
 
+def test_retiring_settlement_round_does_not_adopt_the_next_round_side():
+    opponent = replace(CHAR_A, unique_id=4, player_side=1)
+    players = replace(roster([CHAR_A, opponent], frame=10), local_player_side=0)
+    next_players = replace(players, frame=12, local_player_side=1)
+    adapter = BattleStatisticsAdapter()
+    options = dict(source_attribution=True, settlement_version=4)
+    adapter.update(sample([row('char_a')], 0, 10), players, **options)
+    adapter.start_events(session='battle-1', frame=10, sequence=0)
+    stats = adapter.statistics
+    stats.settlement_enabled = stats.partial_damage_enabled = True
+    adapter.update(sample([row('char_a', 30)], 1, 11), paired(players, 11), **options)
+
+    def hit(sequence, frame, time, actor_uid):
+        adapter.accept_event(session='battle-1', sequence=sequence, frame=frame, game_time=time,
+                             kind='damage_settlement', source='char_a', source_character_uid=actor_uid,
+                             target='enemy_1506_patrt', target_uid='77', target_instance='target',
+                             damage_type=1, amount=30, shield_absorbed=0, settlement_complete=True)
+
+    hit(1, 11, 1, 1)
+    adapter.event_stream.watermark(session='battle-1', sequence=1, frame=11, game_time=1)
+    adapter.update(sample([row('char_a', 30)], 2, 12), next_players, **options)
+    adapter.event_stream.watermark(session='battle-1', sequence=1, frame=12, game_time=2)
+    lane = stats.result()['rows']['char_a']['settled_damage']
+    assert lane['effective_damage'] == 30 and lane['complete'] and lane['reason'] is None
+
+    adapter.update(sample([row('char_a', 30)], 3, 13), paired(next_players, 13), **options)
+    hit(2, 13, 3, 4)
+    adapter.event_stream.watermark(session='battle-1', sequence=2, frame=13, game_time=3)
+    result = stats.result()
+    lane = result['rows']['char_a']['settled_damage']
+    assert lane['effective_damage'] == 30 and lane['unverified_hits'] == 1
+    assert result['settlement_unassigned']['hp'] == 30
+
+    adapter.update(sample([row('char_a')], 0, 0, session='battle-2'),
+                   paired(next_players, 0), **options)
+    assert adapter.settlement_batch_side == 1
+
+
 def test_shared_prefab_for_player_and_map_character_stays_ambiguous():
     map_a = entry('char_a', 9, predefined=True)
     adapter = BattleStatisticsAdapter()

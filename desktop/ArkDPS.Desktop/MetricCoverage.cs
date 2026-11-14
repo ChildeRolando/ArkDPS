@@ -34,12 +34,28 @@ internal static class MetricCoverage
     internal static string Summary(JsonElement coverage,bool shortForm=false)
     {
         var lines=Metrics.Where(metric=>IsPartial(coverage,metric.Key))
-            .Select(metric=>metric.Label+" "+(shortForm ? Percentage(coverage.Get(metric.Key)) : Detail(coverage,metric.Key)));
+            .Select(metric=>metric.Label+" "+(shortForm ? ShortShare(coverage.Get(metric.Key)) : Detail(coverage,metric.Key)));
         string summary=string.Join(shortForm ? " · " : "\n",lines);
-        return summary.Length>0 && shortForm ? "统计失败占比 · "+summary : summary;
+        bool hitCoverage=HasHitCoverage(coverage);
+        return summary.Length>0 && shortForm ? (hitCoverage ? "部分统计 · " : "统计失败占比 · ")+summary : summary;
     }
 
-    private static string Share(JsonElement item)=>"统计失败占比 "+Percentage(item);
+    internal static bool HasHitCoverage(JsonElement coverage) =>
+        Metrics.Any(metric=>coverage.Get(metric.Key).Text("basis_kind")=="hits");
+
+    private static string ShortShare(JsonElement item)=>item.Text("basis_kind")=="hits" ? Share(item) : Percentage(item);
+
+    private static string Share(JsonElement item)
+    {
+        string percent=Percentage(item);
+        if(item.Text("basis_kind")!="hits") return "统计失败占比 "+percent;
+        if(percent=="未知") return "未核实命中占比未知";
+        var missed=item.Get("unverified_hits");
+        var hits=item.Get("observed_hits");
+        return missed.ValueKind==JsonValueKind.Number && hits.ValueKind==JsonValueKind.Number
+            ? $"未核实命中 {missed.GetRawText()}/{hits.GetRawText()}（{percent}）"
+            : "未核实命中 "+percent;
+    }
 
     private static string Percentage(JsonElement item)
     {

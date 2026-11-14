@@ -616,8 +616,10 @@ public partial class StatisticPanel : UserControl
         var partial=incoming.Where(entry=>MetricCoverage.HasPartial(entry.Get("coverage"))).ToArray();
         if(partial.Length>0)
         {
-            string marker=IsHud ? "* 部分统计" : "* 部分统计 · 查看统计失败占比";
-            const string hint="悬浮在带 * 的排行行上，查看各项的统计失败占比与统计口径。";
+            bool hitCoverage=partial.Any(entry=>MetricCoverage.HasHitCoverage(entry.Get("coverage")));
+            string detail=hitCoverage ? "命中核实情况" : "统计失败占比";
+            string marker=IsHud ? "* 部分统计" : "* 部分统计 · 查看"+detail;
+            string hint="悬浮在带 * 的排行行上，查看各项的"+detail+"与统计口径。";
             if(IsHud)
             {
                 PanelKind.Text=knownShare ? share.Label+" · "+marker : marker;

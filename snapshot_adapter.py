@@ -167,6 +167,9 @@ class BattleStatisticsAdapter:
         self.source_aliases: dict[str, str] = {}
         self.settlement_roster: dict[int, set[CharacterEntry]] = {}
         self.settlement_sides: set[int] = set()
+        self.settlement_side: int | None = None
+        self.settlement_batch_side: int | None = None
+        self.settlement_version = None
 
     @property
     def active(self) -> bool:
@@ -259,6 +262,8 @@ class BattleStatisticsAdapter:
         self.source_aliases.clear()
         self.settlement_roster.clear()
         self.settlement_sides.clear()
+        self.settlement_side = self.settlement_batch_side = None
+        self.settlement_version = None
         self.last_roster_frame = roster.frame
         self.session_switches += 1
 
@@ -390,11 +395,14 @@ class BattleStatisticsAdapter:
         if entry.cid != source and (source in self.mapping_conflicts
                                     or self.source_aliases.get(source) != actor.cid):
             return unknown
-        if len(self.settlement_sides) != 1:
+        if self.settlement_version == 4:
+            side = self.settlement_batch_side
+        else:
+            side = next(iter(self.settlement_sides)) if len(self.settlement_sides) == 1 else None
+        if side is None:
             # A roster entry proves identity, even when the active player
             # side for this battle is not yet established.
             return ('unknown', actor.cid, actor.unique_id)
-        side, = self.settlement_sides
         if actor.player_side != side and not (actor.is_predefined and actor.player_side is None):
             return ('foreign', None, None)
         return ('local', actor.cid, actor.unique_id)
@@ -445,7 +453,7 @@ class BattleStatisticsAdapter:
                 self.statistics.invalidate_source_total(source)
 
     def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False,
-               source_events=(), source_attribution=False) -> AdapterUpdate | None:
+               source_events=(), source_attribution=False, settlement_version=None) -> AdapterUpdate | None:
         """Apply one cumulative snapshot; returns None for duplicate frames."""
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
@@ -481,9 +489,21 @@ class BattleStatisticsAdapter:
         roster_map = build_owner_map(roster)
         self.source_attribution |= source_attribution
         if self.source_attribution:
-            if type(roster.local_player_side) is int:
-                self.settlement_sides.add(roster.local_player_side)
-            self.statistics.settlement_sides_known = len(self.settlement_sides) == 1
+            if type(settlement_version) is int:
+                self.settlement_version = settlement_version
+            side = roster.local_player_side if type(roster.local_player_side) is int else None
+            if self.settlement_version == 4:
+                # Guard changes the controller's side while the previous round
+                # is still retiring. The side of a round is fixed at its first
+                # verified roster. Events in a contradicting batch stay unassigned.
+                if self.settlement_side is None:
+                    self.settlement_side = side
+                self.settlement_batch_side = side if side == self.settlement_side else None
+                self.statistics.settlement_sides_known = self.settlement_side is not None
+            else:
+                if side is not None:
+                    self.settlement_sides.add(side)
+                self.statistics.settlement_sides_known = len(self.settlement_sides) == 1
             self._bind_event_sources(roster, roster_map, source_events)
         # New roster evidence can map tokens that were not attributable when
         # the session started. Never change an existing mapping in-place.

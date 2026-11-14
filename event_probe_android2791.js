@@ -679,8 +679,14 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  const cancel=scope.mod.add(0x70).readS32();
  const exact=shieldedZero||Number.isFinite(real)&&real<=0&&Number.isFinite(settledAmount)&&
              Math.abs(nativeAmount-settledAmount)<=tolerance;
+ // The target-side HP transition proves the lethal portion. Only a clean
+ // same-hit shield scope allows the unspent nominal part to be overkill.
+ const hit=scope.targetHit;
+ const lethal=output&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
+      !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence?.killed===true&&
+      exactEvidence.hp_after===0&&exactEvidence.real_delta===real&&exactEvidence.hp_before===-real&&cancel===0;
  const absorbed=shield>0?shield:!scope.numericShieldUnknown&&
-      (nested||exact&&real<0&&Math.abs(settledAmount+real)<=tolerance)?0:null;
+      (nested||exact&&real<0&&(lethal||Math.abs(settledAmount+real)<=tolerance))?0:null;
  const unverified=scope.settlementAmbiguous||scope.unmatchedShield&&!(settledAmount>0)&&!(shield>0)||
     amount>0&&cancel===0&&!nested&&(!Number.isFinite(real)||(real===0&&!(absorbed>0)));
  if(!exact&&!(absorbed>0)&&!unverified)return false;
@@ -1714,7 +1720,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        if(reduction)evidence=Object.assign(evidence||{},reduction);
       }catch(e){/* Missing formula evidence affects only mitigation. */}
       settleDamage(this,damageTarget,end,amount,type,reduction,
-                   evidence.settled_after_nested_kill?evidence:null);
+                   evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null);
      }
      try{
       const event=record(this.source,kind,amount,end,proof,evidence,this.sourceCharacterUid);
@@ -1823,7 +1829,7 @@ function enemyEntryQuality(frame){
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   source_attribution_version:1,
-  partial_damage_version:3,
+  partial_damage_version:4,
   source_character_uid_ready:sourceCharacterClasses!==null,
   boss_damage_ready:true,boss_damage_unknown:bossDamageUnknown,
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,

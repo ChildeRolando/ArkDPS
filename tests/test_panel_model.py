@@ -306,6 +306,9 @@ def test_verified_settlements_drive_live_and_history_without_mixing_legacy_scope
     assert entry.detail['settled_damage']['observed_mitigation_rate'] == 16
     assert entry.coverage['effective_damage']['failed_share'] == .2
     assert entry.coverage['effective_damage']['basis'] == '可对账的伤害命中数'
+    assert entry.coverage['effective_damage']['basis_kind'] == 'hits'
+    assert (entry.coverage['effective_damage']['unverified_hits'],
+            entry.coverage['effective_damage']['observed_hits']) == (2, 10)
     assert entry.coverage['engagement_effective_damage']['failed_share'] is None
     recent = render_panel(PanelConfig(effective_only=True, ranking=Ranking.RECENT), rows)
     assert recent.entries[0].value == recent.denominator == 15
@@ -325,6 +328,33 @@ def test_verified_settlements_drive_live_and_history_without_mixing_legacy_scope
     assert not unavailable.entries
     assert unavailable.details_by_owner['A']['effective_damage'] is None
     assert unavailable.details_by_owner['A']['observed_skill_damage_effective'] is None
+
+
+def test_settlement_coverage_does_not_flag_unavailable_windows_or_no_activity():
+    rows = {'Frostleaf': {'damage': 4938, 'settled_damage': {
+        'complete': False, 'effective_damage': 4740.4, 'engagement_effective_damage': 278.3,
+        'observed_hits': 15, 'unverified_hits': 1, 'unverified_share': 1 / 15,
+        'recent_effective_damage': None, 'recent_effective_damage_complete': False,
+        'mitigation_complete': True, 'observed_mitigation_rate': 25,
+        'reason': '部分命中的扣血或扣盾证据不完整',
+    }}, 'NoAttack': {'damage': 0, 'settled_damage': {
+        'complete': True, 'effective_damage': 0, 'observed_hits': 0, 'unverified_hits': 0,
+        'recent_effective_damage_complete': False, 'mitigation_complete': False,
+        'skill_split_effective_complete': False,
+    }}, 'Unavailable': {'damage': 420, 'settled_damage': {
+        'complete': False, 'observed_hits': 2, 'unverified_hits': 2,
+        'reason': '当前玩家阵营未确认', 'mitigation_reason': '同一击的公式未配对',
+    }}}
+    view = render_panel(PanelConfig(effective_only=True), rows_from_statistics({'rows': rows}))
+    (entry,) = view.entries
+    assert entry.owner_id == 'Frostleaf'
+    assert 'recent_effective_damage' not in entry.coverage
+    assert entry.coverage['effective_damage']['unverified_hits'] == 1
+    assert not view.details_by_owner['NoAttack']['coverage']
+    unavailable = view.details_by_owner['Unavailable']
+    assert not unavailable['coverage']
+    assert unavailable['effective_damage_reason'] == '当前玩家阵营未确认'
+    assert unavailable['settled_damage']['mitigation_reason'] == '同一击的公式未配对'
 
 
 def test_caller_reported_incomplete_team_preserves_known_row_shares():
