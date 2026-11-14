@@ -745,8 +745,10 @@ function enterDamageFactory(args,index){
  if(activeDamageFactories.has(this.tid))return; // seven-argument wrapper can delegate to eight
  activeDamageFactories.add(this.tid);
  this.enteredFactory=true;
- const when=time(),batch=formulaBatch(this.tid,when);
+ const batch=pendingFormulaDamage.get(this.tid);
  if(!batch||(batch.unowned.size===0&&batch.postFormulaHits.size===0))return;
+ const when=time();
+ if(!sameMitigationTime(batch,when))return;
  const type=args[index].toInt32(),target=args[index+3];
  if(!mitigationDamageType(type)||target.isNull()||!mitigationTargetId(target))return;
  const targetUid=target.add(0x18).readU32();
@@ -842,8 +844,11 @@ function installMitigationHooks(){
     this.type=args[0].add(mitigationMethods.damageType).readS32();
    }else if(!formulaScopes.has(this.tid)){
     const batch=pendingFormulaDamage.get(this.tid);
-    if(!batch?.postFormulaAttacks.size||!sameMitigationTime(batch,time()))return;
-    const candidate=consumeFormula(batch.postFormulaAttacks,args[0].toString());
+    if(!batch?.postFormulaAttacks.size)return;
+    const key=args[0].toString(),candidate=batch.postFormulaAttacks.get(key);
+    if(candidate===undefined||!sameMitigationTime(batch,time()))return;
+    // Same-frame claims consume even ambiguous candidates or a mismatched type.
+    batch.postFormulaAttacks.delete(key);
     if(candidate&&candidate.type===args[0].add(mitigationMethods.damageType).readS32()){
      this.postFormula=candidate;
      this.postFormulaBatch=batch;
@@ -1621,6 +1626,7 @@ rpc.exports={
 };
 receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
+ coalesce_enemy_hp:coalesceEnemyHp,trace_hp_context:traceHpContext,
  skill_finish_error:cfg.skillFinishError||null,
  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
  mitigation_no_event_ready:mitigationNoEventReady,mitigation_no_event_error:cfg.mitigationNoEventError||null,

@@ -95,6 +95,8 @@ python app.py --capture-seconds 600 --baseline-timeout 240 --expect-head <最终
 python capture_battles.py --replay <本轮新目录>/capture.jsonl
 ```
 
+桌面自动日志以 `desktop_enemy_state_delta_v1` 记录发布与收尾统计中的敌方状态序列。每条记录注明前缀长度，只写该局新增的事件。`capture_battles.py --replay` 按局与状态起始帧重建完整记录，再执行原有的逐值校验。原始生命周期证据、战绩归档和命令行验收日志沿用既有格式。
+
 默认端口仍为 `127.0.0.1:27043`；`--no-events` 单独验证快照降级。旧 `capture_battles.py --seconds` 仅用于快照诊断，不替代默认事件入口集成验收。原生胜负、演习和退出原因仍缺本候选实机字段证据，保持未知，不能由 MAA 完成、状态 3 或结束场景推导。
 
 2026-11-08 本轮复核没有其他活动兄弟编码运行，宿主机已释放设备。绝对路径 ADB 读到 PID 26586；MAA 6.21.4 在 `F:/Code/python/python.exe` 与已配置的 Frida Python 下都无法建立连接，日志为 `CreateOverlappablePipe failed, err 5`，回调 `ConnectFailed / Connection command failed to exec`。未执行导航、部署或消耗。新证据为 Review Loop `evidence/ark6-live-work/maa-connect-1794095141219848900` 和 `maa-connect-1794095150287986700`。须在最终候选补同图重开、切图、暂停、撤退再部署、结束/退出与元信息取证。旧设备占用不再是阻塞理由。

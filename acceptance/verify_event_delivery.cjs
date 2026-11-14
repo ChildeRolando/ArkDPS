@@ -378,7 +378,7 @@ assert.equal(nonlethalSettlement(target,17,-17,17),null);
 
 vm.runInNewContext(`
 const hooks=[],activeHooks=new Map(),registered=new Map(),cfg={};
-let active=0,epoch=0,frame=30,gameTime=1;
+let active=0,epoch=0,frame=30,gameTime=1,clockReads=0;
 const mitigationMethods={outer:'outer',noEvent:'no_event',internal:'internal',final:'final',
   factories:['factory7','factory8'],damageType:0};
 const il={name:'libil2cpp.so',base:0};
@@ -387,7 +387,7 @@ const Interceptor={attach(address,hook){
   registered.set(address,hook);
   return {detach(){registered.delete(address);}};
 }};
-const time=()=>({frame,game_time:gameTime});
+const time=()=>{clockReads++;return {frame,game_time:gameTime};};
 const targetKey=pointer=>pointer.id;
 const entityId=pointer=>pointer.id;
 const own=id=>id.startsWith('char_')||id.startsWith('token_');
@@ -966,6 +966,52 @@ canceledElemental.mod.fields.cancel=1;
 assert.equal(ratio(canceledElemental,elementalAfter,5),'null');
 assert.equal(active,0);
 assert.equal(activeHooks.size,0);
+
+// Calls with no pending evidence, or a getter using a different AttackInfo,
+// do not need to read the native clock. Keep factory epoch bookkeeping and
+// consume only a same-frame claim on the matching AttackInfo pointer.
+const noCandidateThread=51;
+const countBeforeEmptyFactory=clockReads,epochBeforeEmptyFactory=epoch;
+const leaveEmptyFactory=enter('factory7',[],noCandidateThread);
+assert.equal(active,1);
+leaveEmptyFactory(null);
+assert.equal(clockReads,countBeforeEmptyFactory);
+assert.equal(epoch,epochBeforeEmptyFactory+1);
+assert.equal(activeDamageFactories.has(noCandidateThread),false);
+
+nextFrame();
+elementalFormula();
+const key=elementalAttack.toString();
+const batch=pendingFormulaDamage.get(7);
+assert.equal(batch.postFormulaAttacks.has(key),true);
+const countBeforeUnmatched=clockReads;
+elementalGetter(pointer('0x802','',5));
+enter('factory7',[],7)(null); // only an unclaimed formula exists
+assert.equal(clockReads,countBeforeUnmatched);
+assert.equal(batch.postFormulaAttacks.has(key),true);
+elementalGetter();
+assert.equal(batch.postFormulaAttacks.has(key),false);
+elementalFactory();
+assert.equal(ratio(openModifier(elementalModifier()),elementalAfter,5),sample(elementalBefore,elementalAfter));
+
+nextFrame();
+elementalFormula();
+const staleBatch=pendingFormulaDamage.get(7);
+nextFrame();
+const countBeforeStale=clockReads;
+elementalGetter();
+assert.equal(clockReads,countBeforeStale+1);
+assert.equal(staleBatch.postFormulaAttacks.has(key),true);
+assert.equal(staleBatch.postFormulaHits.size,0);
+
+nextFrame();
+elementalFormula();
+const mismatchedBatch=pendingFormulaDamage.get(7);
+elementalGetter(pointer(key,'',0));
+assert.equal(mismatchedBatch.postFormulaAttacks.has(key),false);
+elementalGetter();
+elementalFactory();
+noPair(elementalModifier());
 `, {assert}, {filename: 'product-mitigation-delivery'});
 
 console.log('PASS_EVENT_DELIVERY');

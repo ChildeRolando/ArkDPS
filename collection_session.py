@@ -75,7 +75,9 @@ class CollectionSession:
             self.observer = self.observer_factory(self.collector, self.frida_remote)
             self.observer.start()
             self.event_status = 'ready'
-            self.audit('observer_ready', {'remote': self.frida_remote})
+            self.audit('observer_ready', {
+                'remote': self.frida_remote, **getattr(self.observer, 'probe_modes', {}),
+            })
         except Exception as exc:
             self.event_status, self.event_error = 'failed', str(exc)
             self.audit('observer_error', {'reason': str(exc)})

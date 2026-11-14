@@ -42,6 +42,7 @@ class FridaEventObserver:
         self.session = None
         self.script = None
         self.ready = Event()
+        self.probe_modes = {}
         self.cleanup_errors = {}
         self._request_lock = Lock()
         self._request_id = 0
@@ -72,6 +73,10 @@ class FridaEventObserver:
                     pending.response = payload.get('result')
                     pending.done.set()
         elif isinstance(payload, dict) and payload.get('ready'):
+            self.probe_modes = {
+                key: payload[key] for key in ('coalesce_enemy_hp', 'trace_hp_context')
+                if type(payload.get(key)) is bool
+            }
             self.ready.set()
 
     def _detached(self, reason, *_args):
@@ -91,6 +96,7 @@ class FridaEventObserver:
         self.status = ObserverStatus.ATTACHING
         self.error = None
         self.ready.clear()
+        self.probe_modes = {}
         self._committed_sequence = self._acknowledged_sequence = 0
         self._ack_error = None
         try:

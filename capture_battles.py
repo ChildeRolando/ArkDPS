@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+from itertools import chain
 import json
 from pathlib import Path
 import time
 
 from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions, MappingRetry
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL
+from desktop_audit import DesktopAuditReader
 from roster import CharacterEntry, RosterSnapshot
 from event_capture import CaptureRetry
 from snapshot_adapter import AdapterError, MappingUnavailable
@@ -165,14 +167,20 @@ def same_archive(actual, recorded):
 
 
 def replay(path):
-    lines = Path(path).read_text(encoding='utf-8').splitlines()
-    if lines and 'kind' in json.loads(lines[0]):
-        return replay_product(lines)
+    with Path(path).open(encoding='utf-8') as stream:
+        first = stream.readline()
+        lines = chain((first,), stream) if first else ()
+        if first and 'kind' in json.loads(first):
+            return replay_product(lines)
+        return _replay_snapshots(lines)
+
+
+def _replay_snapshots(lines):
     sessions = None
     pending = []
     samples = archives = 0
     finished = False
-    for line in Path(path).read_text(encoding='utf-8').splitlines():
+    for line in lines:
         value = json.loads(line)
         if finished:
             raise ValueError('records after capture summary')
@@ -226,13 +234,14 @@ def observation_from_json(raw):
 
 def replay_product(lines):
     """Verify the GUI/CLI journal, including event drains, publications and handoffs."""
+    reader = DesktopAuditReader()
     sessions = None
     pending = []
     samples = archives = 0
     finished = False
     failures = 0
     for line in lines:
-        record = json.loads(line)
+        record = reader.restore(json.loads(line))
         kind, data = record['kind'], record['data']
         if kind == 'lifecycle_header':
             if sessions is not None:
