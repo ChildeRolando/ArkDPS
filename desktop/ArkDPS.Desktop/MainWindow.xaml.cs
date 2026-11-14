@@ -312,11 +312,11 @@ public partial class MainWindow : Window
         Stage.ToolTip=state.Text("stage_detail").Length>0 ? state.Text("stage_detail") : null;
         var analysis = state.Get("live_analysis");
         var totals=state.Get("totals");
-        CurrentDps.Text = OverviewNumber(analysis.Get("team_recent_dps"));
-        AverageDps.Text = OverviewNumber(analysis.Get("team_average_dps"));
+        ShowOverviewMetric(CurrentDps, analysis.Get("team_recent_dps"), analysis.Get("observed_team_recent_dps"));
+        ShowOverviewMetric(AverageDps, analysis.Get("team_average_dps"), analysis.Get("observed_team_average_dps"));
         PeakDps.Text = OverviewNumber(analysis.Get("observed_peak_dps"));
-        TotalDamage.Text = OverviewNumber(analysis.ValueKind == JsonValueKind.Object
-            ? analysis.Get("team_total_damage") : totals.Get("damage"));
+        ShowOverviewMetric(TotalDamage, analysis.ValueKind == JsonValueKind.Object
+            ? analysis.Get("team_total_damage") : totals.Get("damage"), analysis.Get("observed_team_total_damage"));
         UpdateLiveStatus(state.Text("status"),state.Text("status_text"));
         trendModel.Apply(state);
         bossTrendModel.Apply(state,state.Get("boss_live_analysis"));
@@ -875,6 +875,13 @@ public partial class MainWindow : Window
             }
         }
     }
+    private static void ShowOverviewMetric(TextBlock text,JsonElement exact,JsonElement observed)
+    {
+        bool partial=exact.ValueKind!=JsonValueKind.Number && observed.ValueKind==JsonValueKind.Number;
+        text.Text=OverviewNumber(partial ? observed : exact)+(partial ? "*" : "");
+        text.ToolTip=partial ? "仅汇总已核实数据 · 统计失败占比未知" : null;
+    }
+
     private static string OverviewNumber(JsonElement value) =>
         value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
             ? Math.Round(number, MidpointRounding.AwayFromZero).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "—";

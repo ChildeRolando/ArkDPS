@@ -91,7 +91,7 @@ class EventStream:
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
                enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None,
                mitigation_before=None, mitigation_after=None,
-               source_character_uid=None, unresolved_source=False):
+               source_character_uid=None, unresolved_source=False, settled_after_nested_kill=False):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
@@ -101,7 +101,7 @@ class EventStream:
                    skill_key, skill_id, skill_name, skill_reason, skill_method,
                    phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
                    finish_reason, enemy_max_hp, mitigation_before, mitigation_after,
-                   source_character_uid, unresolved_source)
+                   source_character_uid, unresolved_source, settled_after_nested_kill)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -141,7 +141,8 @@ class EventStream:
                     skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
                     skill_reason=skill_reason, skill_method=skill_method,
                     verified_skill_end_owner=verified_skill_end_owner,
-                    mitigation_before=mitigation_before, mitigation_after=mitigation_after)
+                    mitigation_before=mitigation_before, mitigation_after=mitigation_after,
+                    settled_after_nested_kill=settled_after_nested_kill)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':

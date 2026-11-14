@@ -233,6 +233,8 @@ class LiveEventCapture:
                 raise StreamGap(f"observer callback error: {drained['error']}")
             if drained.get('stopped'):
                 raise StreamGap('observer stopped')
+            if type(drained.get('partial_damage_version')) is int and drained['partial_damage_version'] == 1:
+                self.adapter.statistics.partial_damage_enabled = True
             self._apply_quality(drained)
             self.pending.extend(drained['events'])
             while self.pending:

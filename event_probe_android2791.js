@@ -378,6 +378,41 @@ function nonlethalSettlement(target, before, real, amount) {
  const key=targetKey(target);
  return key?{target:key,hp_after:before+real,killed:false}:null;
 }
+function damageTargetUid(target){
+ if(!enemyEntryConfig||!target||target.isNull())return null;
+ try{return target.add(0x18).readU32()||null;}catch(e){return null;}
+}
+function rememberNestedElementalKill(child,when,evidence){
+ const uid=child.elementalTargetUid;
+ if(!uid||child.mitigationModifierReused||!evidence?.killed||evidence.cancel_reason!==0||
+    evidence.shield_absorbed!==0||!(evidence.real_delta<0)||evidence.hp_after!==0||
+    damageTargetUid(child.target)!==uid||!child.target.equals(child.mod.add(0x10).readPointer())||
+    !child.nativeModifierSource?.equals(child.mod.readPointer()))return;
+ const scopes=activeModifiers.get(child.tid);
+ if(!scopes||scopes[scopes.length-1]!==child)return;
+ const parents=scopes.slice(0,-1).filter(scope=>{
+  const hit=scope.targetHit;
+  return hit?.uid===uid&&hit.target.equals(child.target)&&scope.target?.equals(child.target)&&
+         hit.hpBefore>=evidence.hp_before&&sameMitigationTime(scope.when,when);
+ });
+ for(const parent of parents){
+  parent.nestedElementalKill=parents.length===1&&parent.nestedElementalKill===undefined?{uid,when}:null;
+ }
+}
+function damageSettledAfterNestedKill(scope,when,amount){
+ const kill=scope.nestedElementalKill,hit=scope.targetHit;
+ if(!kill||scope.targetHitAmbiguous||scope.outputAmbiguous||scope.mitigationModifierReused||
+    !scope.nativeModifierSource||!(amount>0)||!sameMitigationTime(kill.when,when))return null;
+ const target=hit.target,mod=scope.mod;
+ if(damageTargetUid(target)!==kill.uid||!target.equals(mod.add(0x10).readPointer())||
+    !scope.nativeModifierSource.equals(mod.readPointer())||
+    mod.add(0x70).readS32()!==0||fp(mod.add(0x48))!==0||targetHp(target)!==0||
+    shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
+ // The outer modifier still has a settlement amount, but only the child's
+ // HP changed. Do not attach the parent's pre-nesting target HP to this hit.
+ return {real_delta:0,hp_before:0,hp_after:0,killed:true,cancel_reason:0,shield_absorbed:0,
+         settled_after_nested_kill:true};
+}
 function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
@@ -1359,9 +1394,9 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      if(traceHpContext)try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      if(this.name==='Unit.OnTakeDamage'&&this.source){
       const scope=damageModifier(this.tid,this.mod);
-      if(scope&&scope.source===this.source&&scope.when.frame===this.when.frame){
+      if(scope&&scope.source===this.source&&sameMitigationTime(scope.when,this.when)){
        if(scope.targetHit)scope.targetHitAmbiguous=true;
-       else scope.targetHit={target:this.target,hpBefore:this.hpBefore};
+       else scope.targetHit={target:this.target,hpBefore:this.hpBefore,uid:damageTargetUid(this.target)};
       }
      }
      return;
@@ -1371,6 +1406,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
      try{
       const source=this.mod.readPointer();
+      this.nativeModifierSource=source;
       this.nativeSourceNull=source.isNull();
       this.source=this.nativeSourceNull?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
@@ -1384,6 +1420,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
         (this.nativeSourceNull&&this.mod.add(0x68).readS32()===5)){
       enterModifier(this);
       try{captureMitigation(this,this.mod.readPointer());}catch(e){/* Existing damage remains observable. */}
+      if(this.mod.add(0x68).readS32()===5)this.elementalTargetUid=damageTargetUid(this.target);
       if(this.source&&this.target&&!this.target.isNull()&&this.mod.add(0x60).readS32()===5&&
          this.mod.add(0x68).readS32()===0){
        this.elementalBarTarget={pointer:this.target,uid:null};
@@ -1481,6 +1518,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        }catch(e){/* Missing formula evidence affects only mitigation. */}
        try{
         const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
+        if(event)try{rememberNestedElementalKill(this,end,evidence);}catch(e){/* Independently verified burst remains queued. */}
         noteUnpairedDamage(this,event,type);
        }catch(e){fatal=String(e);}
       }else if((!this.source||owned)&&amount>0&&fp(this.mod.add(0x48))!==0){
@@ -1513,10 +1551,12 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        const target=hit?hit.target:this.target;
        if(target&&!target.isNull())evidence=nonlethalEvidence(target);
       }
+      if(!evidence)try{evidence=damageSettledAfterNestedKill(this,end,amount);}catch(e){/* Keep the nominal settlement. */}
       const damageTarget=hit?hit.target:this.target;
       evidence={target:targetKey(damageTarget),target_instance:damageInstance,
        target_type:targetType,damage_type:type,...evidence};
       if(evidence&&evidence.real_delta===0&&evidence.hp_before===evidence.hp_after
+         &&!evidence.settled_after_nested_kill
          &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1))return;
       try{
        const reduction=mitigationEvidence(this,type,amount);
@@ -1618,6 +1658,7 @@ function enemyEntryQuality(frame){
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   source_attribution_version:1,
+  partial_damage_version:1,
   source_character_uid_ready:sourceCharacterClasses!==null,
   boss_damage_ready:true,boss_damage_unknown:bossDamageUnknown,
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,

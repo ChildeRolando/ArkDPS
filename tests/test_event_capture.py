@@ -535,7 +535,7 @@ def test_probe_records_hp_evidence_only_after_onleave():
 def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
     js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
     assert 'scopes[index].mod.equals(modifier)' in js
-    assert 'scope.source===this.source&&scope.when.frame===this.when.frame' in js
+    assert 'scope.source===this.source&&sameMitigationTime(scope.when,this.when)' in js
     assert 'if(scope.targetHit)scope.targetHitAmbiguous=true' in js
     assert 'overkillEvidence(this.mod,hit.target,hit.hpBefore,end.frame)' in js
     assert 'settlement&&settlement.amount===amount' in js

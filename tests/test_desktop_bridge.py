@@ -149,6 +149,19 @@ def test_live_analysis_requires_joint_coverage_for_team_dps(tmp_path, coverage_i
         None if coverage_issue in ('unattributed', 'uncertified') else 1730.)
 
 
+def test_live_overview_retains_the_verified_team_subset_for_new_captures(tmp_path):
+    state = DesktopState(tmp_path)
+    data = analysis_sample()
+    stats = data['statistics']
+    stats['unknown_sources'] = ['unmapped']
+    stats['rows']['a']['partial_damage'] = {'effective_damage': 100}
+    state.accept('sample', data)
+    dto = state.snapshot()['live_analysis']
+    assert dto['team_total_damage'] is None
+    assert dto['observed_team_total_damage'] == 1730
+    assert dto['observed_team_recent_dps'] == 100
+
+
 def test_live_analysis_preserves_peak_across_gaps_and_resets_at_new_battle(tmp_path):
     state = DesktopState(tmp_path)
     state.accept('sample', analysis_sample(20., 50.))

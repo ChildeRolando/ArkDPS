@@ -205,6 +205,39 @@ def test_unknown_metric_is_hidden_and_share_is_scoped_to_known_values():
     assert rows[1].damage is None
 
 
+def test_partial_effective_damage_stays_in_the_ranking_and_labels_the_missing_share():
+    row = PanelSourceRow('A', 'A', damage=100, overkill_unknown_reason='结算缺口',
+                         partial_damage={'effective_damage': 65, 'effective_damage_unverified_share': .2,
+                                         'engagement_effective_damage': 32.5,
+                                         'engagement_effective_damage_unverified_share': .2})
+    exact = PanelSourceRow('B', 'B', damage=60, effective_damage=50, overkill_complete=True)
+    view = render_panel(PanelConfig(effective_only=True, rate_basis=RateBasis.ENGAGEMENT), [row, exact])
+    assert [entry.value for entry in view.entries] == [65, 50]
+    assert view.share_scope == 'known'
+    assert view.denominator == 115
+    assert view.footer_total == 115
+    assert not view.footer_total_complete
+    entry = view.entries[0]
+    assert entry.share == pytest.approx(65 / 115)
+    assert entry.detail['effective_damage'] == 65
+    assert entry.coverage['effective_damage']['failed_share'] == pytest.approx(.2)
+    assert entry.coverage['engagement_effective_damage']['failed_share'] == pytest.approx(.2)
+    assert entry.rate == 32.5
+    assert not entry.segments
+
+
+def test_boss_panel_keeps_observed_damage_when_full_reconciliation_fails():
+    row = PanelSourceRow('A', 'A', counter_complete=False, event_complete=False,
+                         overkill_unknown_reason='首领身份覆盖不全',
+                         partial_damage={'observed_boss_damage': 50, 'effective_damage': 40})
+    raw = render_panel(PanelConfig(boss_only=True), [row], team_complete=False)
+    effective = render_panel(PanelConfig(boss_only=True, effective_only=True), [row], team_complete=False)
+    assert raw.entries[0].value == 50
+    assert raw.entries[0].coverage['boss_damage']['failed_share'] is None
+    assert effective.entries[0].value == 40
+    assert effective.share_scope == 'known'
+
+
 def test_caller_reported_incomplete_team_preserves_known_row_shares():
     rows = [src('A', damage=100), src('B', damage=100)]
     view = render_panel(total(), rows, team_complete=False)

@@ -112,6 +112,8 @@ internal static class Screenshot
             }
             else row.Children.Add(portrait);
             var text=new StackPanel{Margin=new Thickness(0,9,12,16)};text.Children.Add(Inspector.Text(item.Name,16,true,"ConsoleInk"));text.Children.Add(Inspector.Text(item.Presence,11,false,"ConsoleMuted"));Grid.SetColumn(text,1);row.Children.Add(text);
+            if(item.CoverageDescription is { Length:>0 } coverage)
+                text.Children.Add(Inspector.Text(coverage,11,false,"ConsoleMuted"));
             var values=new StackPanel{Margin=new Thickness(0,8,12,16),HorizontalAlignment=HorizontalAlignment.Right};
             var exact=Inspector.Text(Json.UiText(entry.Text("exact_value")),18,true,"ConsoleInk");exact.SetResourceReference(TextBlock.FontFamilyProperty,"DisplayFont");exact.TextWrapping=TextWrapping.NoWrap;exact.TextAlignment=TextAlignment.Right;
             var secondary=Inspector.Text(item.Share+(item.Rate.Length>0 ? "   "+item.Rate : ""),12,false,"ConsoleMuted");secondary.TextAlignment=TextAlignment.Right;

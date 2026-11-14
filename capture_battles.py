@@ -105,6 +105,7 @@ _OPTIONAL_DERIVED_METRICS = frozenset({
     'mitigation_matched_hits',
     'observed_skill_damage', 'observed_non_skill_damage',
     'observed_skill_damage_effective', 'observed_non_skill_damage_effective',
+    'partial_damage',
 })
 _TERMINOLOGY_REASON_FIELDS = {
     'mitigation_unknown_reason', 'overkill_unknown_reason', 'skill_split_reason',

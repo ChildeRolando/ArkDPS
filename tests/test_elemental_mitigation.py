@@ -142,11 +142,16 @@ def test_observed_skill_share_keeps_only_verifiable_effective_hits_after_a_gap()
     detail = view.details_by_owner['operator']
     assert detail['observed_skill_damage_effective'] == 20
     assert detail['observed_non_skill_damage_effective'] == 100
-    assert not view.entries  # An unverified full-battle effective total stays unavailable.
+    assert row['effective_damage'] is None
+    assert view.entries[0].value == 120
+    assert view.entries[0].coverage['effective_damage']['failed_share'] is None
+    assert view.share_scope == 'known'
     boss_config = PanelConfig(effective_only=True, boss_only=True)
     boss_view = render_panel(boss_config, rows_from_statistics(panel_statistics(boss_config, result)))
     assert boss_view.details_by_owner['operator']['observed_skill_damage_effective'] == 20
-    assert not boss_view.entries
+    assert row['boss_damage']['effective_damage'] is None
+    assert boss_view.entries[0].value == 120
+    assert boss_view.entries[0].coverage['effective_damage']['failed_share'] is None
 
     archive = record().to_dict()
     archive['statistics']['rows']['a'].update(

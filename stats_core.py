@@ -46,6 +46,67 @@ class ObservedSkillDamage:
         }
 
 
+def _unverified_share(verified, total):
+    if total is None or total <= 0 or not isfinite(verified) or not isfinite(total):
+        return None
+    if isclose(verified, total, rel_tol=1e-6, abs_tol=0.01):
+        return 0.0
+    return (total - verified) / total if 0 <= verified < total else None
+
+
+class PartialDamage:
+    def __init__(self):
+        self.verified = self.effective = self.skill_verified = 0.0
+        self.active = self.active_end = 0.0
+        self.recent = deque()
+
+    def hit(self, when, amount, overkill, *, split_observable, supplement=False):
+        if amount <= 0:
+            return
+        if overkill is not None:
+            effective = max(0.0, amount - overkill)
+            self.verified += amount
+            self.effective += effective
+            if split_observable:
+                self.skill_verified += amount
+            if effective > 0:
+                self.active += when + 1.5 - max(when, self.active_end)
+                self.active_end = when + 1.5
+        else:
+            if not supplement:
+                return
+            effective = 0.0
+        self.recent.append((when, amount if overkill is not None else 0.0,
+                            effective, amount if supplement else 0.0))
+        while self.recent[0][0] < when - 5:
+            self.recent.popleft()
+
+    def result(self, observed, total, matched_mitigation, start, end, *, recent_native=None,
+               include_start=False):
+        skill_verified = observed.skill + observed.non_skill if observed is not None else 0.0
+        active = max(0.0, self.active - max(0.0, self.active_end - end))
+        recent = [hit for hit in self.recent
+                  if (hit[0] > start or (include_start and hit[0] == start)) and hit[0] <= end]
+        window_verified = sum(hit[1] for hit in recent)
+        has_recent = window_verified > 0 and end > start
+        recent_total = (recent_native + sum(hit[3] for hit in recent)
+                        if recent_native is not None else None)
+        effective_unverified = _unverified_share(self.verified, total)
+        return {
+            'effective_damage': self.effective if self.verified > 0 else None,
+            'effective_damage_unverified_share': effective_unverified,
+            'skill_damage_unverified_share': _unverified_share(skill_verified, total),
+            'skill_effective_damage_unverified_share': _unverified_share(self.skill_verified, total),
+            'mitigation_unverified_share': _unverified_share(matched_mitigation, total),
+            'recent_effective_damage': sum(hit[2] for hit in recent) / (end - start) if has_recent else None,
+            'recent_effective_damage_window': (start, end) if has_recent else None,
+            'recent_effective_damage_unverified_share': _unverified_share(window_verified, recent_total),
+            'engagement_effective_damage': self.effective / active if active > 0 else None,
+            'engagement_effective_damage_unverified_share': effective_unverified,
+            'active_effective_damage': active if self.verified > 0 else None,
+        }
+
+
 class BossDamage:
     """Target-scoped damage for one operator, including attributed summons."""
 
@@ -62,8 +123,10 @@ class BossDamage:
         self.mitigation_known = True
         self.recent = deque()
         self.active = self.active_end = 0.0
+        self.partial = None
 
-    def hit(self, when, amount, kind, overkill, reason, skill, before, after, *, split_observable):
+    def hit(self, when, amount, kind, overkill, reason, skill, before, after, *, split_observable,
+            partial_damage_enabled):
         self.total += amount
         self.typed &= kind is not None
         self.overkill_known &= overkill is not None
@@ -79,6 +142,10 @@ class BossDamage:
             self.skill_overkill += excess
         if split_observable:
             self.observed_split.hit(skill, amount, overkill)
+        if partial_damage_enabled:
+            if self.partial is None:
+                self.partial = PartialDamage()
+            self.partial.hit(when, amount, overkill, split_observable=split_observable)
         if before is not None:
             self.before += before
             self.after += after
@@ -90,7 +157,8 @@ class BossDamage:
             self.active += when + 1.5 - max(when, self.active_end)
             self.active_end = when + 1.5
 
-    def result(self, start, end, *, known, rate_known, skill_known, mitigation_known, reason):
+    def result(self, start, end, *, known, rate_known, skill_known, mitigation_known, reason,
+               live=False):
         recent_start = max(start, end - 5)
         while self.recent and self.recent[0][0] < recent_start:
             self.recent.popleft()
@@ -108,7 +176,7 @@ class BossDamage:
         observed_rate = ((1 - self.after / self.before) * 100 if self.before > 0 else None)
         mitigation_complete = (known and mitigation_known and self.mitigation_known
                                and observed_rate is not None)
-        return {
+        row = {
             'damage': self.total if known else None,
             'observed_damage': self.total if known else None,
             'damage_by_type': dict(self.by_type) if known and self.typed else {},
@@ -152,6 +220,20 @@ class BossDamage:
             'observed_mitigation_after': self.after if observed_rate is not None else None,
             'mitigation_matched_hits': self.pairs,
         }
+        if self.partial is not None:
+            partial = self.partial.result(self.observed_split, self.total if known else None,
+                                          self.after, recent_start, end,
+                                          recent_native=sum(hit[2] for hit in recent) if known else None,
+                                          include_start=recent_start == start)
+            partial.update(engagement_damage=self.total / active if active > 0 else None,
+                           active_damage=active,
+                           observed_boss_damage=self.total,
+                           observed_boss_recent_damage=sum(hit[2] for hit in recent) / duration
+                           if duration > 0 and live else None,
+                           observed_boss_recent_window=(recent_start, end) if duration > 0 else None,
+                           engagement_damage_unverified_share=0.0 if known and self.total > 0 else None)
+            row['partial_damage'] = partial
+        return row
 
 
 class Statistics:
@@ -243,6 +325,11 @@ class Statistics:
         self.boss_target_unknown = set()
         self.boss_settlement_totals = {}
         self.boss_damage_incomplete = False
+        self.partial_damage_enabled = False
+        self.partial_damage = {}
+        self.partial_watermark = None
+        self.partial_unquantified_damage = set()
+        self.partial_unattributed_damage = False
 
     def observe_boss_damage(self, *, complete):
         if self.boss_damage is None:
@@ -266,7 +353,8 @@ class Statistics:
             kind = NATIVE_DAMAGE_TYPES.get(damage_type) if type(damage_type) is int else None
             meter.hit(when, amount, kind, overkill, reason,
                       owner in self.skill_active, before if pair else None, after if pair else None,
-                      split_observable=self._skill_hit_observable(owner))
+                      split_observable=self._skill_hit_observable(owner),
+                      partial_damage_enabled=self.partial_damage_enabled)
 
     def _skill_hit_observable(self, owner):
         window = self.skill_active.get(owner)
@@ -279,6 +367,14 @@ class Statistics:
             if owner not in self.observed_skill_splits:
                 self.observed_skill_splits[owner] = ObservedSkillDamage()
             self.observed_skill_splits[owner].hit(owner in self.skill_active, amount, overkill)
+
+    def _partial_hit(self, owner, when, amount, overkill, *, supplement=False):
+        if self.partial_damage_enabled and amount > 0:
+            if owner not in self.partial_damage:
+                self.partial_damage[owner] = PartialDamage()
+            self.partial_damage[owner].hit(when, amount, overkill,
+                                           split_observable=self._skill_hit_observable(owner),
+                                           supplement=supplement)
 
     @staticmethod
     def _time(value):
@@ -580,6 +676,8 @@ class Statistics:
             self._close_skill_windows(end_time, battle_end=complete)
 
     def mark_boss_watermark(self, game_time):
+        if self.partial_damage_enabled:
+            self.partial_watermark = game_time
         if self.boss_damage is not None:
             if self.boss_observed_from is None:
                 self.boss_observed_from = game_time
@@ -843,7 +941,8 @@ class Statistics:
         }
 
     def _overkill(self, amount, *, target, real_delta, hp_before, hp_after,
-                  killed, target_type, damage_type, cancel_reason, shield_absorbed):
+                  killed, target_type, damage_type, cancel_reason, shield_absorbed,
+                  settled_after_nested_kill=False):
         """Derive one hit's overkill from native settlement evidence.
 
         Returns ``(known, value, reason)``. On failure ``reason`` names the
@@ -859,6 +958,15 @@ class Statistics:
             return False, 0.0, '伤害类型无效'
         if cancel_reason is not None and type(cancel_reason) is not int:
             return False, 0.0, '取消原因无效'
+        if settled_after_nested_kill is not False:
+            if (settled_after_nested_kill is not True or target.startswith(('char_', 'token_'))
+                    or killed is not True or type(cancel_reason) is not int or cancel_reason != 0
+                    or not all(self._optional_number(value) and value == 0
+                               for value in (real_delta, hp_before, hp_after, shield_absorbed))):
+                return False, 0.0, '嵌套击杀后的结算证据不一致'
+            # The child caused the terminal HP transition. The parent is still
+            # credited by the client at nominal value, with zero actual damage.
+            return True, amount, ''
         # A non-lethal hit cannot overkill: if the probe observed that the
         # target was still alive after this hit, no HP-before/real-delta
         # reconstruction is required. This matters for same-frame multi-hit
@@ -893,13 +1001,31 @@ class Statistics:
             return False, 0.0, '护盾吸收与实际扣血之和不一致'
         return True, max(0.0, amount - shield_absorbed - actual), ''
 
+    def _reject_burst_evidence(self, error, owner, target, amount, *, sourceless):
+        if not self.partial_damage_enabled:
+            raise ValueError(error)
+        self.burst_unknown = True
+        self.burst_unknown_reason = '部分元素爆条缺少可靠的扣血结算'
+        if amount > 0 and (not isinstance(target, str) or not target.startswith(('char_', 'token_'))):
+            if owner is None:
+                self.mitigation_unattributed_burst = True
+                self.partial_unattributed_damage |= sourceless
+            else:
+                self.overkill_incomplete.add(owner)
+                self.overkill_reason[owner] = self.burst_unknown_reason
+                self.mitigation_incomplete.add(owner)
+                if sourceless:
+                    self.partial_unquantified_damage.add(owner)
+        if classify_boss(target) is not False:
+            self.boss_damage_incomplete = True
+
     def event(self, event_id, game_time, source, kind, amount, *,
               target=None, real_delta=None, hp_before=None, hp_after=None,
               killed=None, target_type=None, damage_type=None,
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
               verified_skill_end_owner=None, skill_method=None,
-              mitigation_before=None, mitigation_after=None):
+              mitigation_before=None, mitigation_after=None, settled_after_nested_kill=False):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
         Duplicate IDs with identical payload are ignored; conflicts are rejected.
@@ -946,7 +1072,7 @@ class Statistics:
             raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
         payload = (game_time, source, kind, amount, evidence, target_instance, owner,
                    skill_key, skill_id, skill_name, skill_reason, skill_method,
-                   mitigation_before, mitigation_after)
+                   mitigation_before, mitigation_after, settled_after_nested_kill)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
@@ -956,29 +1082,48 @@ class Statistics:
         self.events[event_id] = payload
         self.last_event_time = game_time
         if kind == 'elemental_bar':
-            if not target_instance or owner is None:
+            if (not target_instance or owner is None
+                    or (self.partial_damage_enabled and not isinstance(target_instance, str))):
+                if self.partial_damage_enabled:
+                    # The next source-null burst could belong to this bar.
+                    # Without the target identity no previous bar is reliable.
+                    self.last_elemental.clear()
+                    self.burst_unknown = True
+                    self.burst_unknown_reason = '元素损伤缺少可靠的目标身份'
+                    return
                 raise ValueError('elemental bar needs a source and target instance')
             self.last_elemental[target_instance] = owner
             return
         if kind == 'elemental_burst':
-            if not target_instance:
-                raise ValueError('elemental burst needs a target instance')
+            if not target_instance or (self.partial_damage_enabled and not isinstance(target_instance, str)):
+                self._reject_burst_evidence('elemental burst needs a target instance', owner, target, amount,
+                                            sourceless=source is None)
+                return
+            attributed = owner if owner is not None else self.last_elemental.get(target_instance)
+            tolerance = max(0.01, amount * 1e-6)
             if (not self._optional_number(real_delta) or real_delta > 0
                     or not self._optional_number(hp_before)
                     or not self._optional_number(hp_after)
-                    or hp_before < 0 or hp_after < 0):
-                raise ValueError('invalid elemental burst evidence')
+                    or hp_before < 0 or hp_after < 0
+                    or (self.partial_damage_enabled and (abs(hp_before - hp_after + real_delta) > tolerance
+                        or type(killed) is not bool or killed != (hp_after <= 1e-6)))):
+                self._reject_burst_evidence('invalid elemental burst evidence', attributed, target, amount,
+                                            sourceless=source is None)
+                self.last_elemental.pop(target_instance, None)
+                return
             actual = -real_delta
-            tolerance = max(0.01, amount * 1e-6)
             if actual > amount + tolerance:
-                raise ValueError('elemental burst actual exceeds settlement')
-            attributed = owner if owner is not None else self.last_elemental.get(target_instance)
+                self._reject_burst_evidence('elemental burst actual exceeds settlement', attributed, target, amount,
+                                            sourceless=source is None)
+                self.last_elemental.pop(target_instance, None)
+                return
             friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
             if attributed is None:
                 self.burst_unknown = True
                 self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
                 if amount > 0 and not friendly:
                     self.mitigation_unattributed_burst = True
+                    self.partial_unattributed_damage |= self.partial_damage_enabled and source is None
                 if classify_boss(target) is not False:
                     self.boss_damage_incomplete = True
                 return
@@ -1005,6 +1150,8 @@ class Statistics:
                       else self.non_skill_observed)
             bucket[attributed] = bucket.get(attributed, 0.0) + amount
             self._observe_skill_hit(attributed, amount, burst_overkill)
+            if not friendly:
+                self._partial_hit(attributed, game_time, amount, burst_overkill, supplement=source is None)
             if burst_overkill > 0:
                 overkill_bucket = (self.skill_overkill
                                    if attributed in self.skill_active
@@ -1029,7 +1176,7 @@ class Statistics:
             # A modifier can still return its nominal amount for a target
             # already at zero HP or for a cancelled hit. These verified zero
             # settlements are absent from the source's native output counter.
-            if (real_delta == 0 and self._optional_number(hp_before)
+            if (settled_after_nested_kill is False and real_delta == 0 and self._optional_number(hp_before)
                     and hp_before == hp_after
                     and (hp_before == 0 and killed is True or cancel_reason == 1)):
                 return
@@ -1041,12 +1188,12 @@ class Statistics:
                 amount, target=target, real_delta=real_delta, hp_before=hp_before,
                 hp_after=hp_after, killed=killed, target_type=target_type,
                 damage_type=damage_type, cancel_reason=cancel_reason,
-                shield_absorbed=shield_absorbed)
+                shield_absorbed=shield_absorbed, settled_after_nested_kill=settled_after_nested_kill)
             self._record_boss_damage(
                 source, owner, game_time, target, amount, damage_type,
                 overkill if known else None, reason, mitigation_before, mitigation_after)
             if known:
-                if killed and target_instance:
+                if killed and target_instance and settled_after_nested_kill is False:
                     self.last_elemental.pop(target_instance, None)
                 self.overkill[owner] = self.overkill.get(owner, 0.0) + overkill
                 if overkill > 0:
@@ -1068,6 +1215,7 @@ class Statistics:
                           else self.non_skill_observed)
                 bucket[owner] = bucket.get(owner, 0.0) + amount
                 self._observe_skill_hit(owner, amount, overkill if known else None)
+                self._partial_hit(owner, game_time, amount, overkill if known else None)
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
         elif kind in ('damage', 'healing') and amount > 0:
@@ -1142,13 +1290,46 @@ class Statistics:
             reason = '尚无可核对的原生累计'
         meter = meter or BossDamage()
         observed_from = self.start_time if self.boss_observed_from is None else self.boss_observed_from
+        live = self.end_time is None and self.event_coverage_end is None
         scoped = meter.result(
             observed_from, end if end is not None else observed_from,
-            known=reason is None, rate_known=reason is None and self.end_time is None
-            and self.event_coverage_end is None,
+            known=reason is None, rate_known=reason is None and live, live=live,
             skill_known=reason is None and row['skill_coverage_complete'],
             mitigation_known=not self.mitigation_probe_incomplete, reason=reason)
         return scoped, reason
+
+    def _partial_row(self, owner, row, observed, burst, sources):
+        end = max(self.last_event_time, self.partial_watermark or self.start_time)
+        start = max(self.start_time, self.now - 5)
+        comparable_damage = (row['counter_snapshot_complete'] and not self.partial_unattributed_damage
+                             and owner not in self.partial_unquantified_damage)
+        total = row['damage'] if comparable_damage else None
+        recent_native = (row['recent_damage'] * (self.now - start)
+                         if comparable_damage and end == self.now
+                         and row['recent_damage_window'] == (start, self.now)
+                         and all(any(when == start for when, _ in self.sources[source]['history'])
+                                 for source in sources)
+                         else None)
+        meter = self.partial_damage.get(owner) or PartialDamage()
+        partial = meter.result(observed, total, row['observed_mitigation_after'] or 0.0, start, end,
+                               recent_native=recent_native, include_start=start == self.start_time)
+        absorbed = self.shields.get(owner)
+        partial['observed_shield_absorbed'] = absorbed
+        partial['shield_observation_window'] = (self.start_time, end) if absorbed is not None else None
+        # Existing engagement counts ordinary damage. Attributed elemental
+        # bursts contribute to the cumulative damage, so exclude that same
+        # settlement from the denominator for this particular engagement rate.
+        if total is not None and burst:
+            total -= burst['settlement']
+        healing = row['healing'] if row['counter_snapshot_complete'] else None
+        for kind, denominator in (('damage', total), ('healing', healing)):
+            evidence = self.engagement.get((owner, kind))
+            if evidence:
+                active = sum(max(0.0, min(end, right) - left) for left, right in evidence['intervals'])
+                partial['engagement_' + kind] = evidence['total'] / active if active > 0 else None
+                partial['active_' + kind] = active
+                partial['engagement_' + kind + '_unverified_share'] = _unverified_share(evidence['total'], denominator)
+        return partial
 
     def result(self):
         """Return per-owner values and explicit coverage; unknown is None."""
@@ -1328,6 +1509,8 @@ class Statistics:
             observed = self.observed_skill_splits.get(owner)
             if observed is not None:
                 row.update(observed.result())
+            if self.partial_damage_enabled:
+                row['partial_damage'] = self._partial_row(owner, row, observed, burst, sources)
             if self.boss_damage is not None:
                 row['boss_damage'], boss_reason = self._boss_row(owner, registered, row)
                 if boss_reason:

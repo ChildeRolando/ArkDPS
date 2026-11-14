@@ -81,6 +81,7 @@ public sealed class Inspector : Border
         bool effective=config.Text("category")=="damage" && config.Bool("effective_only");
         var detail=view.Get("details_by_owner").Get(owner);
         if(detail.ValueKind!=JsonValueKind.Object) detail=entry.Get("detail");
+        var coverage=detail.Get("coverage");
         var rates=view.Get("rates").Get(owner);
         var shareInfo=SharePresentation.From(view);
         string metric=view.Text("metric_label");
@@ -142,13 +143,18 @@ public sealed class Inspector : Border
 
         var stats=new WrapPanel{Margin=new Thickness(0,0,0,4)};
         AddStat(stats,bossScope ? "首领总伤" : "总伤害",row.UiInt("damage"));
-        AddStat(stats,bossScope ? "首领有效伤害" : "有效伤害",Effective(row));
+        bool partialEffective=MetricCoverage.IsPartial(coverage,"effective_damage");
+        string effectiveLabel=(partialEffective ? "已观察" : "")+(bossScope ? "首领有效伤害" : "有效伤害");
+        string effectiveValue=partialEffective ? Number(detail.Get("effective_damage")) : Effective(row);
+        AddStat(stats,effectiveLabel,effectiveValue,showZero:partialEffective);
         AddStat(stats,"过量伤害",row.UiInt("overkill_damage"));
         AddStat(stats,"溢出伤害率",OverkillRate(row));
         if(!bossScope)
         {
             AddStat(stats,"治疗",row.UiInt("healing"));
-            AddStat(stats,"有效护盾",row.UiInt("shield_absorbed"));
+            bool partialShield=MetricCoverage.IsPartial(coverage,"shield");
+            AddStat(stats,partialShield ? "已观察有效护盾" : "有效护盾",
+                partialShield ? Number(detail.Get("shield_absorbed")) : row.UiInt("shield_absorbed"),showZero:partialShield);
         }
         if(stats.Children.Count>0) body.Children.Add(stats);
         body.Children.Add(Text(OverkillNote(row,view),10,false,"Muted",new Thickness(0,4,0,2)));
@@ -239,9 +245,13 @@ public sealed class Inspector : Border
         Section("独立接敌速率");
         var damageRate=rates.Get("damage");var healingRate=rates.Get("healing");
         var rateStats=new WrapPanel();
-        AddStat(rateStats,effective ? "有效 DPS" : "DPS",RateText(row,damageRate,"engagement_damage",
-            effective ? detail : default, effective ? "effective_engagement_damage" : ""));
-        if(!bossScope) AddStat(rateStats,"HPS",RateText(row,healingRate,"engagement_healing",default,""));
+        bool partialDps=MetricCoverage.IsPartial(coverage,effective ? "engagement_effective_damage" : "engagement");
+        bool partialHps=MetricCoverage.IsPartial(coverage,"engagement_healing");
+        AddStat(rateStats,(partialDps ? "已观察" : "")+(effective ? "有效 DPS" : "DPS"),
+            RateText(row,damageRate,"engagement_damage",partialDps,
+                effective ? detail : default, effective ? "effective_engagement_damage" : ""),showZero:partialDps);
+        if(!bossScope) AddStat(rateStats,partialHps ? "已观察 HPS" : "HPS",
+            RateText(row,healingRate,"engagement_healing",partialHps),showZero:partialHps);
         AddStat(rateStats,"伤害活跃秒",row.UiInt("active_damage"));
         if(!bossScope) AddStat(rateStats,"治疗活跃秒",row.UiInt("active_healing"));
         body.Children.Add(rateStats);
@@ -253,6 +263,8 @@ public sealed class Inspector : Border
         if(!row.Bool("event_coverage_complete"))
             body.Children.Add(Text("事件覆盖不完整：未建立事件覆盖的区间保持未知，不补零",10,false,"Muted",new Thickness(0,5,0,0)));
 
+        string failure=MetricCoverage.Summary(coverage);
+        if(failure.Length>0) body.Children.Add(Text(failure,11,false,"Muted",new Thickness(0,5,0,0)));
         Section("归属来源");
         string sources=string.Join("\n",row.Get("sources").Items().Select(x=>x.Text()));
         body.Children.Add(Text(sources.Length>0 ? sources : "—",10,false,"Muted"));
@@ -334,6 +346,7 @@ public sealed class Inspector : Border
         private readonly Ring ring=new(Theme.IsBabel ? 7 : 14,ChartDivider,Enumerable.Range(0,DamageTypes.Length).Select(DamageColor).ToArray());
         private readonly Border? compositionField;
         private readonly TextBlock? sideHeading, sideHint;
+        private readonly TextBlock coverageNote=Label("",11,MetricMuted);
         private readonly StackPanel statsBody=new();
 
         internal ReferenceReport(bool primaryDataOnly)
@@ -403,6 +416,9 @@ public sealed class Inspector : Border
                 Child=ratios,BorderBrush=MetricDivider,BorderThickness=new Thickness(0,1,0,0),
                 Margin=new Thickness(0,4,0,0),
             });
+            coverageNote.Margin=new Thickness(0,4,0,2);
+            coverageNote.TextWrapping=TextWrapping.Wrap;
+            statsBody.Children.Add(coverageNote);
 
             var title=Label("主要数据",15,MetricInk,true);
             UIElement statsContent=statsBody;
@@ -547,6 +563,8 @@ public sealed class Inspector : Border
             var config=view.Get("config");
             string category=config.Text("category");
             bool bossScope=StatisticPanel.IsBossScope(config);
+            var coverage=detail.Get("coverage");
+            bool partialEffective=effective && MetricCoverage.IsPartial(coverage,"effective_damage");
             var split=SkillSplitReading(detail,effective);
             double skillCoverage=detail.Number("skill_coverage",double.NaN);
             bool coverageKnown=detail.Bool("skill_coverage_complete") && skillCoverage is >= 0 and <= 1;
@@ -559,7 +577,7 @@ public sealed class Inspector : Border
                 ? FormatTime(seconds) : "—";
             bool side=sideHeading!=null;
             metricLabels[0].Text=side && category=="healing" ? "总治疗"
-                : (bossScope ? "首领" : "")+(effective ? "有效伤害" : "总伤");
+                : (partialEffective ? "已观察" : "")+(bossScope ? "首领" : "")+(effective ? "有效伤害" : "总伤");
             string unit=category=="healing" ? "HPS" : "DPS";
             metricLabels[1].Text=category=="shield" ? "有效护盾"
                 : rateLabel.Length==0 ? DefaultLabels[1]
@@ -580,11 +598,28 @@ public sealed class Inspector : Border
             else
                 SetMetric(0,effective ? Number(detail.Get("effective_damage")) : Number(row.Get("damage")),
                     (bossScope ? "统计命中首领敌人的伤害。" : "")+
-                    (effective ? "总伤害减去过量伤害。"+(detail.Get("effective_damage").ValueKind!=JsonValueKind.Number
-                        ? "\n"+OverkillNote(row,view) : "") : "归属于该干员的累计结算伤害，含过量伤害。"));
+                    (effective ? WithNote("总伤害减去过量伤害。",
+                        partialEffective ? MetricCoverage.Detail(coverage,"effective_damage") :
+                        detail.Get("effective_damage").ValueKind!=JsonValueKind.Number ? OverkillNote(row,view) : "")
+                        : "归属于该干员的累计结算伤害，含过量伤害。"));
             string rateHint=category=="shield" ? "累计归属于该干员的实际护盾吸收量。"
                 : DescribeRate(config.Text("rate_basis"),category=="healing",effective);
-            SetMetric(1,category=="shield" ? Number(row.Get("shield_absorbed")) : rate,
+            string rateCoverage=(category,config.Text("rate_basis"),effective) switch
+            {
+                ("shield",_,_)=>"shield",
+                ("healing","engagement",_)=>"engagement_healing",
+                ("damage","engagement",true)=>"engagement_effective_damage",
+                ("damage","engagement",false)=>"engagement",
+                ("damage","recent_5s",true)=>"recent_effective_damage",
+                ("damage","full_cycle",true)=>"effective_damage",
+                _=>"",
+            };
+            if(rateCoverage.Length>0 && MetricCoverage.IsPartial(coverage,rateCoverage))
+            {
+                metricLabels[1].Text="已观察"+metricLabels[1].Text;
+                rateHint=WithNote(rateHint,MetricCoverage.Detail(coverage,rateCoverage));
+            }
+            SetMetric(1,category=="shield" ? Number(detail.Get("shield_absorbed")) : rate,
                 WithNote(rateHint,entry.Text("rate_note")));
             SetMetric(2,share,WithNote("该干员当前排行指标 ÷ 同口径指标合计。",shareInfo.Description));
             SetMetric(3,coverageKnown ? SkillCoverageText(skillCoverage) : "—",
@@ -600,9 +635,13 @@ public sealed class Inspector : Border
             overkill.Update(overflow,WithNote("过量伤害 ÷ 总伤害（含过量）。",overflowNote));
             var mitigationReading=MitigationReading(row);
             mitigation.Caption=mitigationReading.Label;
-            mitigation.Update(mitigationReading.Fraction,mitigationReading.Explanation);
+            mitigation.Update(mitigationReading.Fraction,WithNote(mitigationReading.Explanation,MetricCoverage.Detail(coverage,"mitigation")));
             skillShare.Caption=split.Label;
-            skillShare.Update(split.Fraction,split.Explanation);
+            skillShare.Update(split.Fraction,WithNote(split.Explanation,MetricCoverage.Detail(coverage,effective ? "skill_effective_damage" : "skill_damage")));
+            coverageNote.Text=MetricCoverage.Summary(coverage,shortForm:true);
+            coverageNote.ToolTip=MetricCoverage.Summary(coverage);
+            coverageNote.Visibility=coverageNote.Text.Length>0 ? Visibility.Visible : Visibility.Collapsed;
+            AutomationProperties.SetName(coverageNote,coverageNote.Text);
             SetComposition(effective,row,detail);
         }
 
@@ -789,9 +828,12 @@ public sealed class Inspector : Border
         _=>"—",
     };
 
-    private static string RateText(JsonElement row,JsonElement rate,string exact,
+    private static string RateText(JsonElement row,JsonElement rate,string exact,bool partial,
         JsonElement detail=default,string detailExact="")
     {
+        if(partial)
+            return rate.Get("value").ValueKind==JsonValueKind.Number ? Number(rate.Get("value")) :
+                rate.Text("text") is {Length:>0} observed ? observed : "—";
         bool effective=detailExact.Length>0;
         if(rate.Text("state")=="value")
             return effective ? detail.UiInt(detailExact) : row.UiInt(exact);

@@ -459,6 +459,46 @@ public partial class MainWindow
                 "complete zero mitigation did not take precedence over the observed subset");
     }
 
+    private void VerifyPartialMetricCoverage()
+    {
+        var original=Panels.Values.First().View;
+        var fixture=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
+        string owner=original.Get("entries").Items().First().Text("owner_id");
+        fixture["config"]!["effective_only"]=true;
+        fixture["source"]![owner]!["effective_damage"]=null;
+        fixture["details_by_owner"]![owner]!["effective_damage"]=4321;
+        var coverage=System.Text.Json.Nodes.JsonNode.Parse("""
+            {
+              "effective_damage":{"failed_share":0.31,"basis":"累计结算伤害","reason":"部分伤害缺少扣血证据"},
+              "shield":{"failed_share":null,"reason":"仅有已观察护盾"}
+            }
+            """)!;
+        fixture["details_by_owner"]![owner]!["coverage"]=coverage;
+        fixture["entries"]![0]!["coverage"]=coverage.DeepClone();
+        var packed=JsonSerializer.SerializeToElement(fixture);
+        var ranked=new RowItem {Entry=packed.Get("entries").Items().First()};
+        Require(ranked.DisplayName.StartsWith("* ") &&
+                ranked.Tooltip.Contains("统计失败占比 31%") &&
+                ranked.Tooltip.Contains("分母：累计结算伤害") &&
+                ranked.Tooltip.Contains("有效护盾 统计失败占比 未知"),
+                "ranking tooltip did not separate known and unknown coverage");
+        var inspector=new Inspector {CompactReference=true};
+        inspector.Pin(owner,packed);
+        Require(HasText(inspector,"已观察有效伤害") && HasText(inspector,"4,321") &&
+                HasText(inspector,"有效伤害 31%") && HasText(inspector,"有效护盾 未知"),
+                "inspector hid observed effective damage or displayed an unverified fraction");
+        var hudPanel=new StatisticPanel();
+        hudPanel.ConfigureHud();
+        hudPanel.Update(packed);
+        Require(hudPanel.PanelKind.Text.Contains("部分统计") &&
+                ((RowItem)hudPanel.Rows.Items[0]).DisplayName.StartsWith("* "),
+                "HUD did not mark partial ranking values");
+        var historyPanel=new StatisticPanel {IsHistory=true};
+        historyPanel.Update(packed);
+        Require(historyPanel.Coverage.Text.Contains("统计失败占比"),
+                "history ranking did not show partial coverage");
+    }
+
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
     {
         await Command("theme", new() { ["theme"] = Theme.LoneTrail });
@@ -1473,6 +1513,8 @@ public partial class MainWindow
         checks.Add("side mode follows emulator minimize and restore, honors manual minimize and recovers when the emulator exits");
         VerifyMitigationDisplay();
         checks.Add("mitigation distinguishes missing data, verified zero and small nonzero ratios");
+        VerifyPartialMetricCoverage();
+        checks.Add("observed values and failed share reach ranking, inspector, history and HUD");
         string fakeRoot=Path.Combine(output,"crashing-worker");Directory.CreateDirectory(fakeRoot);
         File.WriteAllLines(Path.Combine(fakeRoot,"desktop_bridge.py"),new[]{
             "import json,sys", "c=json.loads(sys.stdin.readline())",

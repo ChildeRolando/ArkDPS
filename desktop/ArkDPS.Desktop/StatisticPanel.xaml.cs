@@ -53,6 +53,9 @@ public sealed class RowItem : INotifyPropertyChanged
     internal void SetRank(int value) { if(rank!=value){rank=value;PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(Rank)));} }
     public string Id => Entry.Text("owner_id");
     public string Name => Entry.Text("name");
+    public string CoverageMarker => MetricCoverage.HasPartial(Entry.Get("coverage")) ? "*" : "";
+    public Visibility CoverageMarkerVisibility => CoverageMarker.Length>0 ? Visibility.Visible : Visibility.Collapsed;
+    public string DisplayName => CoverageMarker.Length>0 ? CoverageMarker+" "+Name : Name;
     public string Initial => Name.Length > 0 ? Name[..1] : "?";
     public string Total => Entry.Text("display_value");
     public string CumulativeTotal => Entry.Text("cumulative_display_value") is { Length: >0 } total ? total : Total;
@@ -62,6 +65,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public string MetricCategory { get; internal set; } = "";
     internal SharePresentation ShareInfo { get; set; }=new("占比","",false);
     public string Presence => Entry.Bool("portrait_muted") ? "已离场" : (Entry.Bool("incomplete") ? "部分覆盖" : "");
+    internal string CoverageDescription => MetricCoverage.Summary(Entry.Get("coverage"));
     public string BarTooltip
     {
         get
@@ -73,7 +77,7 @@ public sealed class RowItem : INotifyPropertyChanged
                 +"法术 "+Value("arts")+Environment.NewLine
                 +"元素 "+Value("elemental")+Environment.NewLine
                 +"真实 "+Value("true")+Environment.NewLine
-                +"过量 "+over;
+                +"过量 "+over+CoverageSuffix;
         }
     }
     public string RankedBarTooltip
@@ -81,7 +85,7 @@ public sealed class RowItem : INotifyPropertyChanged
         get
         {
             string value = Json.UiText(Entry.Text("exact_value"));
-            return MetricCategory switch
+            string description=MetricCategory switch
             {
                 "healing" => "治疗排行原值 " + value,
                 "shield" => "护盾吸收排行原值 " + value,
@@ -93,14 +97,16 @@ public sealed class RowItem : INotifyPropertyChanged
                        + (segment.Get("overkill").ValueKind == JsonValueKind.Number ? "（过量 " + segment.Ui("overkill") + "）" : ""))
                     .Prepend("伤害排行原值 " + value)),
             };
+            return description+CoverageSuffix;
         }
     }
+    private string CoverageSuffix => CoverageDescription is { Length:>0 } note ? Environment.NewLine+note : "";
     public string Tooltip => Name + Environment.NewLine + "排行原值 " + Json.UiText(Entry.Text("exact_value"))
         + Environment.NewLine + Entry.Text("rate_label") + "速率 " + Entry.Ui("rate")
         + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "")
         + Environment.NewLine + ShareInfo.Label + " " + Share
         + (ShareInfo.Details.Length>0 ? Environment.NewLine + ShareInfo.Details : "")
-        + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage");
+        + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + CoverageSuffix;
     public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
@@ -602,6 +608,24 @@ public partial class StatisticPanel : UserControl
             ? showFooter && !value.Bool("share_known") ? share.Label : ""
             : share.Description+(share.Available ? " · 点击干员固定明细" : "");
         Coverage.Visibility=sideRanking||IsHud||referenceStyle&&Coverage.Text.Length==0 ? Visibility.Collapsed : Visibility.Visible;
+        var partial=incoming.Where(entry=>MetricCoverage.HasPartial(entry.Get("coverage"))).ToArray();
+        if(partial.Length>0)
+        {
+            string marker=IsHud ? "* 部分统计" : "* 部分统计 · 查看统计失败占比";
+            const string hint="悬浮在带 * 的排行行上，查看各项的统计失败占比与统计口径。";
+            if(IsHud)
+            {
+                PanelKind.Text=knownShare ? share.Label+" · "+marker : marker;
+                PanelKind.ToolTip=share.Description+"\n"+hint;
+                PanelKind.Visibility=Visibility.Visible;
+            }
+            else
+            {
+                Coverage.Text=string.Join(" · ",new[]{Coverage.Text,marker}.Where(text=>text.Length>0));
+                Coverage.ToolTip=share.Description+"\n"+hint;
+                Coverage.Visibility=Visibility.Visible;
+            }
+        }
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
         foreach(var old in items.Where(x=>!ids.Contains(x.Id)).ToArray()) items.Remove(old);
         var map=items.ToDictionary(x=>x.Id);

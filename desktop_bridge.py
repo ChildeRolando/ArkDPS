@@ -243,6 +243,22 @@ class DesktopState:
             team_recent_dps=team_recent,
             team_average_dps=average if average is not None and math.isfinite(average) else None,
             observed_peak_dps=peak, team_total_damage=team_total, operators=operators)
+        rows = statistics.get('rows') or {}
+        if any('partial_damage' in row for row in rows.values()):
+            known_damage = [row['damage'] for row in rows.values()
+                            if row.get('counter_snapshot_complete') and type(row.get('damage')) in (int, float)
+                            and math.isfinite(row['damage']) and row['damage'] >= 0]
+            known_rates = [row['recent_dps'] for row in operators if row['recent_dps'] is not None]
+            if team_total is None and known_damage:
+                observed_total = sum(known_damage)
+                self.live_analysis['observed_team_total_damage'] = observed_total
+                if game_time > 0:
+                    self.live_analysis['observed_team_average_dps'] = observed_total / game_time
+            if team_recent is None and not terminal and known_rates:
+                windows = {tuple(rows[row['owner_id']]['recent_damage_window']) for row in operators
+                           if row['recent_dps'] is not None}
+                if len(windows) == 1:
+                    self.live_analysis['observed_team_recent_dps'] = sum(known_rates)
         boss_statistics = panel_statistics(PanelConfig(boss_only=True), statistics)
         if boss_statistics['boss_damage_available'] or self.boss_live_analysis is not None:
             boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
