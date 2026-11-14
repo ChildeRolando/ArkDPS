@@ -235,12 +235,13 @@ class LiveEventCapture:
             if drained.get('stopped'):
                 raise StreamGap('observer stopped')
             version = drained.get('partial_damage_version')
-            if type(version) is int and version in (1, 2, 3, 4):
+            if type(version) is int and version in (1, 2, 3, 4, 5):
                 self.adapter.statistics.partial_damage_enabled = True
                 if version >= 2:
                     self.adapter.statistics.reconcile_damage_scope = True
                 if version >= 3:
                     self.adapter.statistics.settlement_enabled = True
+                    self.adapter.statistics.damage_settlement_version = version
                     self.adapter.statistics.settlement_stream_incomplete |= (
                         drained.get('damage_settlement_ready', drained.get('enemy_damage_ready')) is not True
                         or bool(drained.get('damage_settlement_unknown', drained.get('enemy_damage_unknown'))))

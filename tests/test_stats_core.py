@@ -496,6 +496,63 @@ def test_friendly_self_damage_does_not_enter_engagement_dps(friendly_target):
     assert row['mitigation_rate'] == pytest.approx(20)
 
 
+@pytest.mark.parametrize('target', ['char_179_cgbird', 'token_friendly'])
+def test_friendly_lethal_overflow_does_not_invalidate_the_outgoing_damage_row(target):
+    owner = 'char_179_cgbird'
+    s = Statistics('friendly-overkill', 0, event_coverage=True)
+    s.damage_settlement_version = 5
+    s.register_source(owner, owner)
+    s.snapshot(0, {owner: {'damage': 0, 'healing': 0}})
+    s.snapshot(2, {owner: {'damage': 0, 'healing': 0}})
+    s.event('friendly', 1, owner, 'damage', 300, target=target, hp_before=60,
+            hp_after=0, real_delta=-60, killed=True, shield_absorbed=0, damage_type=3)
+    row = s.result()['rows'][owner]
+    assert row['damage'] == row['effective_damage'] == row['overkill_damage'] == 0
+    assert row['observed_damage'] == 0
+
+
+def test_inconsistent_legacy_overkill_is_unavailable_while_settled_hp_remains():
+    s = Statistics('settlement', 0, event_coverage=True)
+    s.damage_settlement_version = 5
+    s.settlement_enabled = s.settlement_sides_known = True
+    s.partial_damage_enabled = True
+    s.register_source('char_a', 'char_a')
+    s.snapshot(0, {'char_a': {'damage': 0, 'healing': 0}})
+    s.snapshot(2, {'char_a': {'damage': 10, 'healing': 0}})
+    s.event('old-event', 1, 'char_a', 'damage', 30, target='enemy_1506_patrt',
+            real_delta=-5, hp_before=5, hp_after=0, killed=True, shield_absorbed=0, damage_type=1)
+    s.record_damage_settlement(1, 'local', 'char_a', 7, 'char_a', 'enemy_1506_patrt', '77',
+                               'target', 5, 0, True, 1, 30, None, None)
+    s.mark_boss_watermark(2)
+    result = s.result()
+    row = result['rows']['char_a']
+    assert row['damage'] == 10
+    assert row['effective_damage'] is row['overkill_damage'] is row['overkill_damage_by_type'] is None
+    assert not result['overkill_coverage_complete'] and not row['overkill_coverage_complete']
+    assert row['settled_damage']['effective_damage'] == 5
+
+
+def test_nonlethal_elemental_cap_is_not_booked_as_overkill():
+    source = 'char_a'
+    target = 'enemy_1288_duskls'
+    s = Statistics('settlement', 0, event_coverage=True)
+    s.damage_settlement_version = 5
+    s.settlement_enabled = s.settlement_sides_known = s.partial_damage_enabled = True
+    s.register_source(source, source)
+    s.snapshot(0, {source: {'damage': 0, 'healing': 0}})
+    s.snapshot(5, {source: {'damage': 0, 'healing': 0}})
+    for time, killed in ((1, False), (2, True)):
+        s.record_settlement_bar('77', target, 'target', 'local', source, 7)
+        s.record_damage_settlement(time, 'unknown', None, None, None, target, '77',
+                                   'target', 1, 0, True, 5, 100, 100, 100, killed=killed)
+    s.mark_boss_watermark(5)
+    row = s.result()['rows'][source]
+    assert row['damage'] == 200
+    assert row['overkill_damage'] == 99
+    assert row['settled_damage']['effective_damage'] == 2
+    assert row['settled_damage']['unverified_hits'] == 0
+
+
 
 def test_incoming_hp_events_alone_do_not_prove_overkill():
     s = Statistics('hp', 0, event_coverage=True)

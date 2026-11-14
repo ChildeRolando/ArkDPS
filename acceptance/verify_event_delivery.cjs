@@ -570,20 +570,20 @@ function takeShield(mod,amount,{threadId=7,corrupt=false}={}){
 function actualHit({amount=17,hpLoss=17,shield=0,shieldThread=7,unmatched=false,
                     wrongModifier=false,corruptShield=false,uidChanges=false,secondShield=0,
                     settledAmount=amount,cancel=0,hasOutput=true,repeatDelta=null,sameFrame=false,
-                    receiver=null}={}){
+                    receiver=null,source=qiubai,type=2,hasTargetHit=true,reportedLoss=hpLoss}={}){
  const before=emitted.length;
  if(!sameFrame)clock={frame:clock.frame+1,game_time:clock.game_time+1/30};
  const enemy=receiver||entity('enemy_a',31,100);
- const mod=modifier(qiubai,enemy,amount,2);
+ const mod=modifier(source,enemy,amount,type);
  mod.formula={before:amount*2,after:amount};
  const leave=unmatched?null:enter('apply',mod);
- const leaveTake=enter('take',mod);
- if(shield>0)takeShield(wrongModifier?modifier(qiubai,enemy,amount,2):mod,shield,
+ const leaveTake=hasTargetHit?enter('take',mod):null;
+ if(shield>0)takeShield(wrongModifier?modifier(source,enemy,amount,type):mod,shield,
                         {threadId:shieldThread,corrupt:corruptShield});
  if(secondShield>0)takeShield(mod,secondShield,{corrupt:true});
  enemy.hp-=hpLoss;
- mod.real=-hpLoss;
- leaveTake();
+ mod.real=-reportedLoss;
+ leaveTake?.();
  mod.amount=settledAmount;
  mod.cancel=cancel;
  if(hasOutput)enter('output',mod)();
@@ -608,9 +608,44 @@ assert.equal(settled.length,1);
 assert.equal(settled[0].amount,10);
 assert.equal(settled[0].evidence.shield_absorbed,0);
 assert.equal(settled[0].evidence.settlement_complete,true);
+assert.equal(settled[0].evidence.killed,true);
 settled=actualHit({amount:30,hpLoss:10,shield:7,wrongModifier:true,receiver:entity('enemy_a',31,10)});
 assert.equal(settled.length,1);
 assert.equal(settled[0].amount,10);
+assert.equal(settled[0].evidence.shield_absorbed,null);
+assert.equal(settled[0].evidence.settlement_complete,false);
+const capped={amount:30,hpLoss:1};
+settled=actualHit({...capped,receiver:entity('enemy_a',31,5)});
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,1);
+assert.equal(settled[0].evidence.nominal_amount,30);
+assert.equal(settled[0].evidence.shield_absorbed,0);
+assert.equal(settled[0].evidence.settlement_complete,true);
+assert.equal(settled[0].evidence.killed,undefined);
+for(const source of [nil,blaze]){
+ settled=actualHit({...capped,source,type:5,hasOutput:false,receiver:entity('enemy_a',31,5)});
+ assert.equal(settled.length,1);
+ assert.equal(settled[0].source,source===nil?null:'char_blaze');
+ assert.equal(settled[0].amount,1);
+ assert.equal(settled[0].evidence.target_uid,'31');
+ assert.equal(settled[0].evidence.shield_absorbed,0);
+ assert.equal(settled[0].evidence.settlement_complete,true);
+ assert.equal(settled[0].evidence.killed,undefined);
+ settled=actualHit({...capped,source,type:5,hasOutput:false,receiver:entity('enemy_a',31,1)});
+ assert.equal(settled[0].evidence.killed,true);
+}
+for(const changes of [{shield:7,wrongModifier:true},{shield:7,shieldThread:8},
+                      {hasTargetHit:false},{hpLoss:2,reportedLoss:1}]){
+ settled=actualHit({...capped,...changes,receiver:entity('enemy_a',31,5)});
+ assert.equal(settled.length,1);
+ assert.equal(settled[0].amount,1);
+ assert.equal(settled[0].evidence.shield_absorbed,null);
+ assert.equal(settled[0].evidence.settlement_complete,false);
+}
+settled=actualHit({...capped,source:nil,type:5,hasOutput:false,shield:7,
+                   wrongModifier:true,receiver:entity('enemy_a',31,5)});
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,1);
 assert.equal(settled[0].evidence.shield_absorbed,null);
 assert.equal(settled[0].evidence.settlement_complete,false);
 settled=actualHit({hpLoss:10,shield:7});

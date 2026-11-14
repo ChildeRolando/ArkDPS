@@ -122,7 +122,8 @@ class EventStream:
                 state, owner, actor = settlement_identity or ('unknown', None, None)
                 self.statistics.record_damage_settlement(
                     game_time, state, owner, actor, source, target, target_uid, target_instance, amount, shield_absorbed,
-                    settlement_complete, damage_type, nominal_amount, mitigation_before, mitigation_after)
+                    settlement_complete, damage_type, nominal_amount, mitigation_before, mitigation_after,
+                    killed=killed)
             elif unresolved_source:
                 self.statistics.observe_unresolved_source(
                     kind, source, amount, target_instance, damage_type=damage_type)

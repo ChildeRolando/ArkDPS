@@ -352,6 +352,7 @@ class Statistics:
         # values. Current observers declare the stricter settlement policy.
         self.reconcile_damage_scope = False
         self.settlement_enabled = False
+        self.damage_settlement_version = 0
         self.settlement_sides_known = False
         self.settlement_stream_incomplete = False
         self.settled = {}
@@ -505,7 +506,7 @@ class Statistics:
             self.settlement_bars.pop(target_uid, None)
 
     def record_damage_settlement(self, when, state, owner, actor, source, target, target_uid, instance,
-                                 hp, shield, complete, kind, nominal, before, after):
+                                 hp, shield, complete, kind, nominal, before, after, *, killed=None):
         """Record each confirmed component, preserving independently verified neighbors."""
         valid_target = self._enemy_identity(target, target_uid) and target.startswith(('enemy_', 'trap_'))
         previous = self.enemy_damage.get(target_uid) if valid_target and self.enemy_damage is not None else None
@@ -546,7 +547,7 @@ class Statistics:
             before = after = None
         if source is None and element and nominal is not None:
             self.settlement_supplements[owner] = self.settlement_supplements.get(owner, 0.0) + nominal
-            if complete:
+            if complete and (self.damage_settlement_version < 5 or killed is True):
                 self.settlement_overkill[owner] = (
                     self.settlement_overkill.get(owner, 0.0) + max(0.0, nominal - hp - shield))
         skill = self._settlement_skill(owner, actor)
@@ -1270,6 +1271,9 @@ class Statistics:
             self.last_elemental[target_instance] = owner
             return
         if kind == 'elemental_burst':
+            friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
+            if self.damage_settlement_version >= 5 and friendly:
+                return
             if not target_instance or (self.partial_damage_enabled and not isinstance(target_instance, str)):
                 self._reject_burst_evidence('elemental burst needs a target instance', owner, target, amount,
                                             sourceless=source is None)
@@ -1292,7 +1296,6 @@ class Statistics:
                                             sourceless=source is None)
                 self.last_elemental.pop(target_instance, None)
                 return
-            friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
             if attributed is None:
                 self.burst_unknown = True
                 self.burst_unknown_reason = '元素爆条缺少可归属的最后元素损伤来源'
@@ -1347,6 +1350,9 @@ class Statistics:
                 self.incoming_damage_sources.add(source)
             return
         if kind == 'damage':
+            friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
+            if self.damage_settlement_version >= 5 and friendly:
+                return
             self.settled_damage_sources.add(source)
             # A modifier can still return its nominal amount for a target
             # already at zero HP or for a cancelled hit. These verified zero
@@ -1357,7 +1363,6 @@ class Statistics:
                     and hp_before == hp_after
                     and (hp_before == 0 and killed is True or cancel_reason == 1 or confirmed_miss)):
                 return
-            friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
             if not friendly and (amount > 0 or mitigation_before is not None
                                  or mitigation_after is not None):
                 self._record_mitigation(source, owner, amount, mitigation_before, mitigation_after)
@@ -1660,6 +1665,13 @@ class Statistics:
                 types = row['overkill_damage_by_type']
                 if types is not None:
                     types['elemental'] += burst_overkill
+            if (self.damage_settlement_version >= 5 and row['damage'] is not None
+                    and row['overkill_damage'] is not None and row['overkill_damage'] > row['damage']):
+                row.update(overkill_damage=None, overkill_damage_by_type=None,
+                           overkill_coverage_complete=False, overkill_type_complete=False,
+                           recent_overkill_damage=None, overkill_unknown_reason=DAMAGE_SCOPE_MISMATCH,
+                           damage_scope_reason=DAMAGE_SCOPE_MISMATCH)
+                overkill_known = False
             if row['damage'] is not None and row['overkill_damage'] is not None:
                 row['effective_damage'] = row['damage'] - row['overkill_damage']
             else:

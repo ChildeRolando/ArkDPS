@@ -395,7 +395,7 @@ class BattleStatisticsAdapter:
         if entry.cid != source and (source in self.mapping_conflicts
                                     or self.source_aliases.get(source) != actor.cid):
             return unknown
-        if self.settlement_version == 4:
+        if self.settlement_version in (4, 5):
             side = self.settlement_batch_side
         else:
             side = next(iter(self.settlement_sides)) if len(self.settlement_sides) == 1 else None
@@ -492,7 +492,7 @@ class BattleStatisticsAdapter:
             if type(settlement_version) is int:
                 self.settlement_version = settlement_version
             side = roster.local_player_side if type(roster.local_player_side) is int else None
-            if self.settlement_version == 4:
+            if self.settlement_version in (4, 5):
                 # Guard changes the controller's side while the previous round
                 # is still retiring. The side of a round is fixed at its first
                 # verified roster. Events in a contradicting batch stay unassigned.
