@@ -686,6 +686,7 @@ class PanelView:
     rate_action_label: str = ''
     # Present even when shares are known: names sources excluded from the team.
     share_note: str = ''
+    team_coverage_note: str = ''
     details_by_owner: dict[str, dict] = field(default_factory=dict)
     # team | known | unavailable; share_known retains the full-team meaning.
     share_scope: str = 'unavailable'
@@ -1219,6 +1220,9 @@ def render_panel(config: PanelConfig,
                  team_complete: bool = True,
                  team_reason: str = '',
                  team_note: str = '',
+                 team_coverage_note: str = '',
+                 team_total_complete: bool = True,
+                 team_rate_complete: bool = True,
                  event: EventAvailability | None = None,
                  number_units: str = DEFAULT_NUMBER_UNITS) -> PanelView:
     """Build one panel view; unknown metrics are omitted, never zero-filled."""
@@ -1406,7 +1410,8 @@ def render_panel(config: PanelConfig,
     known_total = sum(known_values.values())
     denominator = known_total if _finite(known_total) and known_total > 0 and len(windows) <= 1 else None
     missing_rows = len(known_values) != len(rows) or not all(complete.values())
-    share_known = denominator is not None and team_complete and not missing_rows
+    team_ranking_complete = team_rate_complete if ranking is Ranking.DPS else team_total_complete
+    share_known = denominator is not None and team_complete and team_ranking_complete and not missing_rows
     share_scope = ('team' if share_known else 'known' if denominator is not None else 'unavailable')
     reasons = [team_reason] if team_reason and not share_known else []
     if len(windows) > 1:
@@ -1424,7 +1429,7 @@ def render_panel(config: PanelConfig,
                            else '部分干员的有效伤害未知')
         else:
             reasons.append('部分干员的统计值未知或不完整')
-    if not team_complete and not reasons:
+    if not (team_complete and team_ranking_complete) and not reasons:
         reasons.append('队伍数据不完整')
     if denominator is None and not reasons:
         reasons.append('暂无可计算占比的输出')
@@ -1474,6 +1479,7 @@ def render_panel(config: PanelConfig,
                      share_known=share_known, share_reason=share_reason,
                      rate_supported=rate_supported, rate_label=rate_label,
                      metric_label=metric_label, share_note=team_note,
+                     team_coverage_note=team_coverage_note,
                      rate_available=rate_available, rate_reason=rate_reason,
                      rate_hint=rate_hint, rate_action=rate_action,
                      rate_action_label=rate_action_label, details_by_owner=details,
@@ -1481,9 +1487,9 @@ def render_panel(config: PanelConfig,
                      footer_total=footer_total, footer_rate=footer_rate,
                      footer_total_display=format_compact(footer_total, number_units),
                      footer_rate_display=f'{format_compact(footer_rate, number_units)}/s' if footer_rate is not None else '—',
-                     footer_total_complete=(footer_total is not None and team_complete
+                     footer_total_complete=(footer_total is not None and team_complete and team_total_complete
                                             and certified_totals == len(rows)),
-                     footer_rate_complete=(footer_rate is not None and team_complete
+                     footer_rate_complete=(footer_rate is not None and team_complete and team_rate_complete
                                            and certified_rates == len(rows)))
 
 

@@ -225,6 +225,58 @@ def test_retiring_settlement_round_does_not_adopt_the_next_round_side():
     assert adapter.settlement_batch_side == 1
 
 
+@pytest.mark.parametrize('other_host, expected_actor', [
+    (None, 1),
+    (replace(CHAR_A, unique_id=3), None),
+    (replace(CHAR_A, unique_id=3, player_side=1), 'unassigned'),
+    (replace(CHAR_B, unique_id=3), 'unassigned'),
+])
+def test_missing_token_uid_requires_consensus_of_verified_roster_hosts(other_host, expected_actor):
+    caster = CHAR_A
+    token_key = 'token_summon'
+    token = entry(token_key, 10, token=True, host_key=caster.cid, host_uid=caster.unique_id)
+    entries = [caster, CHAR_B, token]
+    if other_host:
+        entries += [other_host, replace(token, unique_id=11, host_key=other_host.cid,
+                                       host_uid=other_host.unique_id, player_side=other_host.player_side)]
+    players = replace(roster(entries, frame=10), local_player_side=0)
+    adapter = BattleStatisticsAdapter()
+    options = dict(source_attribution=True, settlement_version=6)
+    roster_rows = [row('char_a'), row('char_b'), row(token_key)]
+    adapter.update(sample(roster_rows, 0, 10), players, **options)
+    adapter.start_events(session='battle-1', frame=10, sequence=0)
+    stats = adapter.statistics
+    stats.settlement_enabled = stats.partial_damage_enabled = True
+    stats.damage_settlement_version = 6
+    adapter.update(sample([row('char_a', 100), row('char_b', 20), row(token_key)], 1, 11),
+                   paired(players, 11), **options)
+    context = dict(session='battle-1', frame=11, game_time=1)
+    adapter.accept_event(sequence=1, source=token_key, kind='skill_start', skill_key='summon_skill',
+                         amount=0, **context)
+    attack = dict(kind='damage_settlement', target='enemy_1506_patrt', target_uid='77',
+                  target_instance='target', damage_type=1, shield_absorbed=0, settlement_complete=True)
+    adapter.accept_event(sequence=2, source=caster.cid, source_character_uid=1, amount=10, **attack, **context)
+    adapter.accept_event(sequence=3, source=caster.cid, source_character_uid=1,
+                         kind='skill_start', skill_key='skill_a', amount=0, **context)
+    adapter.accept_event(sequence=4, source=token_key, amount=50, **attack, **context)
+    adapter.accept_event(sequence=5, source='char_b', source_character_uid=2, amount=20, **attack, **context)
+    adapter.event_stream.watermark(sequence=5, **context)
+    result = stats.result()
+    a = result['rows']['char_a']['settled_damage']
+    b = result['rows']['char_b']['settled_damage']
+    gaps = result['settlement_unassigned']
+    if expected_actor == 'unassigned':
+        assert gaps == {'hits': 1, 'hp': 50, 'shield': 0, 'boss_hits': 1, 'unscoped_hits': 1}
+    else:
+        assert gaps['hits'] == 0
+        assert a['effective_damage'] == 60
+        assert a['observed_skill_damage_effective'] == (50 if expected_actor == 1 else 0)
+        assert a['skill_effective_damage_unverified_share'] == (0 if expected_actor == 1 else .5)
+    assert a['observed_non_skill_damage_effective'] == 10
+    assert result['rows']['char_a']['skill_window_count'] == 1
+    assert b['effective_damage'] == 20 and b['complete'] and b['unverified_hits'] == 0
+
+
 def test_shared_prefab_for_player_and_map_character_stays_ambiguous():
     map_a = entry('char_a', 9, predefined=True)
     adapter = BattleStatisticsAdapter()

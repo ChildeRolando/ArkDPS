@@ -76,6 +76,13 @@ def team_totals(statistics):
     return result
 
 
+def team_unassigned_hits(statistics, *, boss_scope):
+    unassigned = statistics.get('settlement_unassigned') or {}
+    key = 'boss_hits' if boss_scope else 'unscoped_hits'
+    count = unassigned.get(key, unassigned.get('hits'))
+    return count if type(count) is int and count > 0 else 0
+
+
 def empty_text(config, source, complete, view):
     if config.boss_scope:
         if not view['boss_damage_available']:
@@ -279,7 +286,7 @@ class DesktopState:
         else:
             team_recent, operators = settled
             complete = team_recent is not None
-        if not complete or terminal or not covered:
+        if not complete or terminal or not covered or team_unassigned_hits(statistics, boss_scope=True):
             team_recent = None
         if terminal or not covered:
             for operator in operators:
@@ -332,18 +339,34 @@ class DesktopState:
             reason = statistics['boss_damage_reason'] or reason
             complete = complete and statistics['boss_damage_available']
             note = ''
-        unassigned = statistics.get('settlement_unassigned') or {}
-        if config.category.value == 'damage' and unassigned.get('hits', 0) > 0:
-            gap_note = f"{unassigned['hits']} 笔命中的来源或目标尚未确认，未分配给干员"
-            note = ' · '.join(filter(None, (note, gap_note)))
+        team_total_complete = team_rate_complete = True
+        coverage_note = ''
+        if config.category is Category.DAMAGE:
+            unassigned = team_unassigned_hits(statistics, boss_scope=config.boss_scope)
+            if unassigned:
+                team_total_complete = not (config.effective_only or config.boss_scope)
+                settlement = statistics.get('settlement_unassigned') or {}
+                team_rate_complete = team_total_complete and not (
+                    config.rate_basis is RateBasis.ENGAGEMENT and 'unscoped_hits' in settlement)
+                if config.boss_scope:
+                    coverage_note = f'首领伤害覆盖不完整 · {unassigned} 次命中的归属或目标待确认'
+                elif not team_total_complete or not team_rate_complete:
+                    scope = '有效伤害' if config.effective_only else '接敌伤害'
+                    pending = ('次伤害命中未归属' if 'unscoped_hits' in settlement
+                               else '次命中的归属或目标待确认')
+                    coverage_note = f'全队{scope}覆盖不完整 · {unassigned} {pending}'
         rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
-                                   team_note=note, event=event, number_units=number_units))
+                                   team_note=note, team_coverage_note=coverage_note,
+                                   team_total_complete=team_total_complete,
+                                   team_rate_complete=team_rate_complete,
+                                   event=event, number_units=number_units))
         if config.boss_scope:
             view['boss_damage_available'] = statistics['boss_damage_available']
             view['boss_damage_reason'] = statistics['boss_damage_reason']
-        view['empty_text'] = empty_text(config, source, complete, view)
+        ranking_complete = team_rate_complete if config.ranking is Ranking.DPS else team_total_complete
+        view['empty_text'] = empty_text(config, source, complete and ranking_complete, view)
         view['rates'] = detail_rates(
             rows, event, effective=config.effective_only and config.category is Category.DAMAGE,
             number_units=number_units)

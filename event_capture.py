@@ -235,7 +235,7 @@ class LiveEventCapture:
             if drained.get('stopped'):
                 raise StreamGap('observer stopped')
             version = drained.get('partial_damage_version')
-            if type(version) is int and version in (1, 2, 3, 4, 5):
+            if type(version) is int and version in (1, 2, 3, 4, 5, 6):
                 self.adapter.statistics.partial_damage_enabled = True
                 if version >= 2:
                     self.adapter.statistics.reconcile_damage_scope = True

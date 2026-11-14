@@ -527,6 +527,28 @@ public partial class MainWindow
                 historyPanel.Coverage.Text.Contains("查看命中核实情况"),
                 "verified damage coverage used the legacy failed-damage label for a hit count");
 
+        const string teamCoverage="全队有效伤害覆盖不完整 · 30 次伤害命中未归属";
+        fixture["team_coverage_note"]=teamCoverage;
+        fixture["entries"]![0]!["coverage"]=new System.Text.Json.Nodes.JsonObject();
+        fixture["share_scope"]="known";
+        fixture["share_known"]=false;
+        var teamView=JsonSerializer.SerializeToElement(fixture);
+        var sidePanel=new StatisticPanel();
+        sidePanel.ConfigureSideRanking();
+        foreach(var panel in new[] {historyPanel,sidePanel,hudPanel})
+        {
+            panel.Update(teamView);
+            var label=panel.IsHud ? panel.PanelKind : panel.Coverage;
+            var clean=(RowItem)panel.Rows.Items[0];
+            string visible=panel.IsHud ? "全队覆盖不完整" : teamCoverage;
+            Require(label.Visibility==Visibility.Visible && label.Text.Contains(visible) &&
+                    label.ToolTip is string tooltip && tooltip.Contains(teamCoverage) &&
+                    clean.CoverageMarker.Length==0 && !clean.Tooltip.Contains(teamCoverage),
+                    "team attribution gap must stay in the panel notice and outside operator coverage");
+            panel.Update(packed);
+            Require(!label.Text.Contains(visible), "cleared team notice remained visible");
+        }
+
         var row=fixture["source"]![owner]!;
         var detail=fixture["details_by_owner"]![owner]!;
         row["damage"]=300;

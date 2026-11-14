@@ -124,6 +124,9 @@ class EventStream:
                     game_time, state, owner, actor, source, target, target_uid, target_instance, amount, shield_absorbed,
                     settlement_complete, damage_type, nominal_amount, mitigation_before, mitigation_after,
                     killed=killed)
+            elif settlement_identity == ('summon', None, None):
+                # A proven summon skill never opens a host skill window.
+                pass
             elif unresolved_source:
                 self.statistics.observe_unresolved_source(
                     kind, source, amount, target_instance, damage_type=damage_type)
@@ -180,7 +183,7 @@ class EventStream:
                 state, owner, actor = settlement_identity
                 if kind == 'elemental_bar':
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor)
-                elif kind in ('skill_start', 'skill_end') and state == 'local':
+                elif kind in ('skill_start', 'skill_end') and state == 'local' and actor is not None:
                     self.statistics.record_settlement_skill(
                         owner, actor, source, kind, game_time, key=skill_key, skill_id=skill_id,
                         name=skill_name, method=skill_method or target_instance, reason=skill_reason)

@@ -13,9 +13,10 @@ from unittest.mock import patch
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
+from damage_settlement import DamageSettlement
 from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, empty_text, serve
 from layout_store import LayoutStore
-from panel_model import PanelConfig
+from panel_model import PanelConfig, Ranking, RateBasis
 from stats_core import Statistics
 from test_battle_history import record
 from test_battle_share import exported_record
@@ -369,6 +370,86 @@ def test_verified_boss_chart_keeps_observed_rates_separate_from_complete_rates(t
     effective = state.snapshot()['boss_effective_live_analysis']
     assert effective['team_recent_dps'] is None and effective['segment'] == 1
     assert all(row['recent_dps'] is None and row['observed_recent_dps'] is None for row in effective['operators'])
+
+
+def test_unassigned_hits_only_limit_team_metrics_in_the_affected_scope(tmp_path):
+    state = DesktopState(tmp_path)
+    data = boss_analysis_sample(21.)
+    stats = data['statistics']
+    stats['settlement_unassigned'] = dict(hits=2, hp=200., shield=0., unscoped_hits=2, boss_hits=0)
+    for owner, row in stats['rows'].items():
+        meter = DamageSettlement()
+        meter.hit(20., 90. if owner == 'a' else 60., 0., 'physical', True, False, 100., 150., 100.)
+        row['settled_damage'] = meter.result(16., 21., 21., stream_complete=True)
+        row['boss_damage']['settled_damage'] = meter.result(16., 21., 21., stream_complete=True, boss=True)
+    state.accept('sample', data)
+
+    raw = state.view(PanelConfig(), stats)
+    assert raw['team_coverage_note'] == ''
+    assert raw['share_known'] and raw['footer_total_complete'] and raw['footer_rate_complete']
+
+    raw_engagement = PanelConfig(rate_basis=RateBasis.ENGAGEMENT)
+    raw = state.view(raw_engagement, stats)
+    assert '2 次伤害命中未归属' in raw['team_coverage_note']
+    assert raw['share_known'] and raw['footer_total_complete'] and not raw['footer_rate_complete']
+    raw = state.view(replace(raw_engagement, ranking=Ranking.DPS), stats)
+    assert raw['share_scope'] == 'known'
+
+    for ranking in (Ranking.TOTAL, Ranking.RECENT, Ranking.DPS):
+        view = state.view(PanelConfig(effective_only=True, ranking=ranking), stats)
+        assert '2 次伤害命中未归属' in view['team_coverage_note']
+        assert '未归属' not in view['share_note']
+        assert view['share_scope'] == 'known'
+        assert not view['footer_total_complete'] and not view['footer_rate_complete']
+        assert all(not entry['incomplete'] and not entry['coverage'] for entry in view['entries'])
+
+    boss = PanelConfig(boss_only=True, effective_only=True)
+    assert state.view(boss, stats)['share_known']
+    assert state.snapshot()['boss_effective_live_analysis']['team_recent_dps'] == 30.
+    stats['settlement_unassigned']['boss_hits'] = 1
+    view = state.view(boss, stats)
+    assert '首领伤害覆盖不完整 · 1 次命中' in view['team_coverage_note']
+    assert not view['share_known']
+    assert all(not entry['incomplete'] and not entry['coverage'] for entry in view['entries'])
+    state.accept('sample', data)
+    trend = state.snapshot()['boss_effective_live_analysis']
+    assert trend['team_recent_dps'] is None
+    assert [operator['recent_dps'] for operator in trend['operators']] == [18., 12.]
+
+    stats['rows']['a']['settled_damage'].update(complete=False, reason='部分命中的扣盾证据不完整',
+                                             unverified_hits=1, unverified_share=1.)
+    view = state.view(PanelConfig(effective_only=True), stats)
+    assert view['entries'][0]['coverage']['effective_damage']['unverified_hits'] == 1
+    assert view['entries'][1]['coverage'] == {}
+
+
+@pytest.mark.parametrize('current', [True, False])
+def test_archived_team_coverage_preserves_recorded_personal_evidence(tmp_path, current):
+    archive = record().to_dict()
+    archive['event_status'] = 'finished'
+    stats = archive['statistics']
+    stats['settlement_unassigned'] = dict(hits=2, hp=50., shield=0.)
+    if current:
+        stats['settlement_unassigned'].update(unscoped_hits=2, boss_hits=0)
+    meter = DamageSettlement()
+    meter.hit(11., 190., 0., 'physical', True, False, 200., 250., 200.)
+    stats['rows']['a']['settled_damage'] = meter.result(6., 12., 12., stream_complete=current, live=False)
+    payload = BattleRecord.from_dict(archive)
+    BattleHistory(tmp_path / 'history').save(payload)
+
+    state = DesktopState(tmp_path)
+    cmd(state, 'history_config', config={'effective_only': True})
+    cmd(state, 'history_select', battle_id=payload.battle_id)
+    history = state.snapshot()['history_selected']['view']
+    assert history['share_scope'] == 'known' and history['footer_total'] == 190.
+    assert not history['footer_total_complete']
+    entry, = history['entries']
+    if current:
+        assert '2 次伤害命中未归属' in history['team_coverage_note']
+        assert not entry['incomplete'] and entry['coverage'] == {}
+    else:
+        assert '2 次命中的归属或目标待确认' in history['team_coverage_note']
+        assert entry['coverage']['effective_damage']['reason'] == '结算事件覆盖不完整'
 
 
 @pytest.mark.parametrize('basis,expected', [

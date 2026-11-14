@@ -124,7 +124,7 @@ def record_statistics(record, *, for_panel=False):
     """
     if for_panel:
         fields = ('rows', 'ended', 'totals_complete', 'non_team_sources', 'non_team_output',
-                  'boss_damage_available', 'boss_damage_reason',
+                  'boss_damage_available', 'boss_damage_reason', 'settlement_unassigned',
                   *(key for key, _ in DIAGNOSTIC_LABELS))
         stats = record.statistics_fields(fields)
     else:

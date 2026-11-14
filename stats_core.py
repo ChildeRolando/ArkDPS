@@ -363,6 +363,8 @@ class Statistics:
         self.settlement_supplements = {}
         self.settlement_overkill = {}
         self.settlement_unassigned = {'hits': 0, 'hp': 0.0, 'shield': 0.0}
+        self.settlement_boss_unassigned = 0
+        self.settlement_unscoped_hits = 0
         self.settlement_unscoped = False
         self.settlement_skill_active = {}
         self.settlement_skill_incomplete = set()
@@ -540,6 +542,11 @@ class Statistics:
                     self.settlement_missing[owner] = self.settlement_missing.get(owner, 0) + 1
                 else:
                     self.settlement_unscoped = True
+                    self.settlement_unscoped_hits += 1
+                if self.damage_settlement_version >= 6 and (not valid_target or classify_boss(target) is not False):
+                    self.settlement_boss_unassigned += 1
+                    if owner is not None:
+                        self.settlement_boss_missing[owner] = self.settlement_boss_missing.get(owner, 0) + 1
             return
         if hp > 0:
             self.record_enemy_damage(source, owner, kind, hp, target, target_uid, None, settled=True)
@@ -582,10 +589,11 @@ class Statistics:
         end = self.partial_watermark if self.partial_watermark is not None else self.start_time
         stream_complete = (self.event_coverage and not self.event_coverage_broken
                            and end == self.now and not self.settlement_stream_incomplete
-                           and not self.settlement_unscoped and self.settlement_sides_known)
+                           and (self.damage_settlement_version >= 6 or not self.settlement_unscoped)
+                           and self.settlement_sides_known)
         missing = self.settlement_missing.get(owner, 0)
         if boss:
-            missing += self.settlement_boss_missing.get(owner, 0)
+            missing = self.settlement_boss_missing.get(owner, 0) + (missing if self.damage_settlement_version < 6 else 0)
         row = meter.result(self.start_time, self.now, end, stream_complete=stream_complete,
                            missing_hits=missing, live=self.end_time is None, boss=boss)
         if not self.settlement_sides_known:
@@ -1765,6 +1773,10 @@ class Statistics:
             result['boss_damage_reason'] = ' · '.join(sorted(boss_reasons))
         if self.settlement_enabled:
             result['settlement_unassigned'] = dict(self.settlement_unassigned)
+            if self.damage_settlement_version >= 6:
+                result['settlement_unassigned'].update(
+                    boss_hits=self.settlement_boss_unassigned,
+                    unscoped_hits=self.settlement_unscoped_hits)
             result.setdefault('boss_damage_available', True)
         if self.enemy_entry_start_frame is not None:
             result['enemy_entry'] = {

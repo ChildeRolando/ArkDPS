@@ -633,6 +633,17 @@ public partial class StatisticPanel : UserControl
                 Coverage.Visibility=Visibility.Visible;
             }
         }
+        string teamCoverage=value.Text("team_coverage_note");
+        if(teamCoverage.Length>0)
+        {
+            var label=IsHud ? PanelKind : Coverage;
+            string prior=label.Visibility==Visibility.Visible ? label.Text : "";
+            string teamLabel=IsHud ? "全队覆盖不完整" : teamCoverage;
+            label.Text=prior.Length>0 ? teamLabel+" · "+prior : teamLabel;
+            string tooltip=label.ToolTip as string ?? share.Description;
+            label.ToolTip=teamCoverage+(tooltip.Length>0 ? Environment.NewLine+tooltip : "");
+            label.Visibility=Visibility.Visible;
+        }
         var ids=incoming.Select(e=>e.Text("owner_id")).ToHashSet();
         foreach(var old in items.Where(x=>!ids.Contains(x.Id)).ToArray()) items.Remove(old);
         var map=items.ToDictionary(x=>x.Id);
