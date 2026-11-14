@@ -14,7 +14,7 @@ import uuid
 
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
-                           acknowledge_event_batch, read_terminal_mark)
+                           acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
@@ -510,7 +510,9 @@ class BattleSessions:
             # Later same-frame revisions change native counters only.
             if final_adapter.statistics.end_time is None:
                 if observation.events:
-                    final_adapter.update(observation.sample, observation.roster)
+                    final_adapter.update(
+                        observation.sample, observation.roster,
+                        **self._source_attribution(observation, final_adapter.event_stream))
                     self.adapter = final_adapter
                     final_events = self._events(observation)
                 if not final_events:
@@ -546,6 +548,15 @@ class BattleSessions:
         if identity and tuple(identity) == tuple(self.latest_sample.get('battle_identity', ())):
             self._merge_metadata({'battle_metadata': observation.lifecycle.get('metadata') or {}})
 
+    @staticmethod
+    def _source_attribution(observation, stream=None):
+        evidence = observation.events or {}
+        through = evidence.get('sequence')
+        if type(through) is not int:
+            return {}
+        after = stream.sequence if stream is not None and not stream.closed else through
+        return source_attribution_batch(evidence.get('drain') or {}, after, through)
+
     def consume(self, observation):
         if (observation.feed != self.feed_id or
                 observation.sequence <= self.sequence or
@@ -574,7 +585,8 @@ class BattleSessions:
             if observation.generation > self.generation:
                 self._archive('new_battle', successor=observation)
                 adapter = BattleStatisticsAdapter()
-                adapter.update(observation.sample, observation.roster)
+                adapter.update(observation.sample, observation.roster,
+                               **self._source_attribution(observation))
                 self.adapter = adapter
                 self.capture = LiveEventCapture(None)
                 self.capture.adapter = adapter
@@ -589,7 +601,8 @@ class BattleSessions:
                 self.snapshot_intervals = []
                 self._snapshot_open = False
             else:
-                self.adapter.update(observation.sample, observation.roster)
+                self.adapter.update(observation.sample, observation.roster,
+                                    **self._source_attribution(observation, self.adapter.event_stream))
                 self._merge_metadata(observation.sample)
             self._events(observation)
             self.latest_sample = deepcopy(observation.sample)

@@ -119,6 +119,52 @@ assert.equal(queue.length,EVENT_BUFFER_LIMIT);
 `, {assert}, {filename: 'product-event-delivery'});
 
 vm.runInNewContext(`
+let sequence=0,fatal=null,stopped=false;
+const clock={frame:30,game_time:1};
+const coalesceEnemyHp=false;
+let sourceCharacterClasses=null;
+const sourceId='char_002_amiya'; // native alias for a roster CharacterData UID
+const charClass={equals:value=>value===charClass};
+const dataClass={equals:value=>value===dataClass};
+const otherClass={equals:()=>false};
+const pointer=(klass,fields={})=>({isNull:()=>false,readPointer:()=>klass,
+ add(offset){assert(Object.hasOwn(fields,offset));return fields[offset];}});
+const nullPtr={isNull:()=>true};
+const actor=(uid,klass=charClass,identityClass=dataClass)=>pointer(klass,{
+  0x538:{readPointer:()=>pointer(identityClass,{0x6c:{readU32:()=>uid}})}
+});
+const eventQuality=()=>({});
+${between('const EVENT_BUFFER_LIMIT', 'const stacks=')}
+${between('function sourceCharacterUid(', 'function time(')}
+${between('function own(', 'function refreshEnemyEntryFrame')}
+
+assert.equal(sourceCharacterUid(actor(1049037),sourceId),undefined);
+sourceCharacterClasses={character:charClass,data:dataClass};
+assert.equal(sourceCharacterUid(actor(1049037),sourceId),1049037);
+assert.equal(sourceCharacterUid(actor(476),sourceId),476); // same CID, different UID
+assert.equal(sourceCharacterUid(actor(4294967295),'token_a'),4294967295);
+assert.equal(sourceCharacterUid(actor(0),sourceId),undefined);
+assert.equal(sourceCharacterUid(actor(476,otherClass),sourceId),undefined);
+assert.equal(sourceCharacterUid(actor(476,charClass,otherClass),sourceId),undefined);
+assert.equal(sourceCharacterUid(actor(476),'trap_a'),undefined);
+assert.equal(sourceCharacterUid(pointer(charClass,{0x538:{readPointer:()=>nullPtr}}),sourceId),undefined);
+assert.equal(sourceCharacterUid(nullPtr,null),undefined);
+const details={hp_before:88};
+for (const kind of ['damage','healing','enemy_damage','hp_damage','elemental_bar',
+                    'elemental_burst','shield_absorbed','skill_start','skill_end']){
+ const event=record(sourceId,kind,1,clock,{},details,1049037);
+ assert.equal(event.source_character_uid,1049037);
+ assert.equal(event.hp_before,88);
+}
+assert.equal(Object.hasOwn(details,'source_character_uid'),false);
+assert.equal(Object.hasOwn(record(sourceId,'damage',1,clock,{},{}),'source_character_uid'),false);
+assert.equal(Object.hasOwn(record(null,'elemental_burst',1,clock,{},{},476),'source_character_uid'),false);
+const batch=readEvents(0,sequence);
+assert.deepEqual(readEvents(0,sequence),batch);
+assert.equal(batch.events.filter(event=>event.source_character_uid).length,9);
+`, {assert}, {filename: 'product-character-uid-evidence'});
+
+vm.runInNewContext(`
 let sequence=12,epoch=24,active=0,fatal=null,stopped=false;
 const coalesceEnemyHp=true;
 const enemyMaxHpReady=true;

@@ -647,6 +647,54 @@ def test_supplemental_hp_evidence_from_unmapped_source_keeps_events_open():
     assert result['observed_damage'] == 5
 
 
+def test_verified_character_uid_maps_alternate_counter_key_to_roster_form():
+    form = entry('char_form', 7)
+    a = BattleStatisticsAdapter()
+    a.update(sample([row('char_a')], 0, 1), roster([CHAR_A, form]), source_attribution=True)
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    event = dict(session='battle-1', sequence=1, frame=2, game_time=1, source='char_original',
+                 source_character_uid=7, kind='damage', amount=40,
+                 target='enemy_a', hp_before=100, hp_after=60, killed=False,
+                 real_delta=-40, target_type=0, damage_type=1, cancel_reason=0, shield_absorbed=0,
+                 mitigation_before=50, mitigation_after=40)
+    a.update(sample([row('char_a'), row('char_original', 40, physical=40)], 1, 2),
+             roster([CHAR_A, form], frame=2), source_events=[event])
+    a.accept_event(**event)
+    a.event_stream.watermark(session='battle-1', sequence=1, frame=2, game_time=1)
+    result = a.result()
+    assert result['totals_complete']
+    assert result['rows']['char_form']['effective_damage'] == 40
+    assert result['rows']['char_form']['observed_damage'] == 40
+    assert result['rows']['char_form']['mitigation_matched_hits'] == 1
+    assert 'char_original' not in result['rows']
+
+
+@pytest.mark.parametrize('uid', [None, 999])
+def test_unowned_or_colliding_source_keeps_the_rest_of_the_event_watermark(uid):
+    a = BattleStatisticsAdapter()
+    native = 'char_b' if uid is not None else 'char_unmapped'
+    roster_entries = [CHAR_A, CHAR_B]
+    a.update(sample([row('char_a'), row('char_b')], 0, 1),
+             roster(roster_entries), source_attribution=True)
+    a.start_events(session='battle-1', frame=1, sequence=0)
+    unknown = dict(session='battle-1', sequence=1, frame=2, game_time=1, source=native,
+                   source_character_uid=uid, kind='damage', amount=50)
+    known = dict(unknown, sequence=2, source='char_a', source_character_uid=CHAR_A.unique_id, amount=25,
+                 target='enemy_a', hp_before=100, hp_after=75, killed=False,
+                 real_delta=-25, target_type=0, damage_type=1, cancel_reason=0, shield_absorbed=0)
+    a.update(sample([row('char_a', 25), row(native, 50)], 1, 2),
+             roster(roster_entries, frame=2), source_events=[unknown, known])
+    a.accept_event(**unknown)
+    a.accept_event(**known)
+    a.event_stream.watermark(session='battle-1', sequence=2, frame=2, game_time=1)
+    result = a.result()
+    assert result['rows']['char_a']['effective_damage'] == 25
+    assert result['rows']['char_a']['event_coverage_complete']
+    assert not result['totals_complete']
+    assert native in result['unknown_sources']
+    assert not a.event_stream.closed
+
+
 def test_supplemental_hp_evidence_after_coverage_closed_is_dropped_quietly():
     unknown_token = entry('token_otter', 9, token=True)
     a = BattleStatisticsAdapter()

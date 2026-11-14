@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
-from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, serve
+from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, empty_text, serve
 from layout_store import LayoutStore
 from panel_model import PanelConfig
 from stats_core import Statistics
@@ -31,6 +31,12 @@ def test_worker_import_does_not_import_tk_or_frida():
         "import desktop_bridge, sys; assert 'tkinter' not in sys.modules; assert 'frida' not in sys.modules"],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_effective_panel_with_known_native_damage_does_not_call_unknown_effective_damage_zero():
+    config = PanelConfig(effective_only=True)
+    source = {'char_a': {'damage': 50, 'effective_damage': None, 'counter_snapshot_complete': True}}
+    assert empty_text(config, source, True, {}) == '当前有效伤害尚无可靠数据'
 
 
 def test_first_launch_and_default_model_ignores_legacy_projection(tmp_path):

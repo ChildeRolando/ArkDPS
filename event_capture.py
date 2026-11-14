@@ -30,6 +30,18 @@ def acknowledge_event_batch(observer, sequence):
         observer.commit_events(sequence)
 
 
+def source_attribution_batch(drained, after, through):
+    """Use identity evidence only from this battle's uncommitted, bounded prefix."""
+    version = drained.get('source_attribution_version')
+    if type(version) is not int or version != 1 or drained.get('error') or drained.get('stopped'):
+        return {}
+    return dict(source_attribution=True, source_events=(
+        event for event in drained.get('events', ())
+        if isinstance(event, dict) and type(event.get('sequence')) is int
+        and after < event['sequence'] <= through
+    ))
+
+
 def read_terminal_mark(observer):
     if hasattr(observer, 'read_terminal_mark'):
         return observer.read_terminal_mark()
@@ -141,7 +153,8 @@ class LiveEventCapture:
                 raise
             except Exception as exc:
                 raise StreamGap(f'observer event batch unavailable: {exc}') from exc
-            self.adapter.update(sample, roster)
+            self.adapter.update(sample, roster, **source_attribution_batch(
+                drained, self.adapter.event_stream.sequence if self.adapter.event_stream else sequence, sequence))
             self.audit('drain', drained)
             result = self.ingest(sample, roster, sequence, drained)
             acknowledge_event_batch(self.observer, sequence)

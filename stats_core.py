@@ -222,6 +222,7 @@ class Statistics:
         self.skill_seen = set()
         self.skill_unknown = False
         self.skill_incomplete = {}
+        self.unresolved_skill_sources = set()
         self.enemy_entry_start_frame = None
         self.enemy_entry_incomplete = False
         self.enemy_entries = {}
@@ -299,6 +300,8 @@ class Statistics:
             self.overkill_incomplete.add(owner)
         if source in self.unknown_engagement_sources:
             self.engagement_incomplete.add(owner)
+        if source in self.unresolved_skill_sources:
+            self.skill_incomplete[owner] = '技能事件的角色归属未确认'
 
     def mark_skill_unknown(self):
         self.skill_unknown = True
@@ -486,6 +489,33 @@ class Statistics:
     def mark_shields_unknown(self):
         """Shield events were incomplete; keep damage, overkill and engagement."""
         self.shield_unknown = True
+
+    def observe_unresolved_source(self, kind, source, amount, target_instance, *, damage_type):
+        """Keep independently owned observations when a record has no confirmed owner."""
+        self._amount(amount)
+        if kind in ('damage', 'healing'):
+            self.mark_engagement_unknown(source)
+        if kind in ('damage', 'elemental_burst'):
+            self.mark_overkill_unknown(source)
+        if kind == 'shield_absorbed':
+            self.mark_shields_unknown()
+        if kind == 'enemy_damage':
+            self.observe_enemy_damage(complete=False)
+        if kind in ('skill_start', 'skill_end'):
+            self.unresolved_skill_sources.add(source)
+            owner = self.owners.get(source)
+            if owner is not None:
+                self.skill_incomplete[owner] = '技能事件的角色归属未确认'
+        if (kind in ('elemental_bar', 'elemental_burst')
+                or kind == 'enemy_damage' and damage_type == 5) and target_instance:
+            self.last_elemental.pop(target_instance, None)
+
+    def invalidate_source_total(self, source):
+        state = self.sources.get(source)
+        if state is not None:
+            state['totals_valid'] = False
+            state['totals_time'] = None
+            state['continuous'] = False
 
     def advance(self, game_time):
         self._time(game_time)

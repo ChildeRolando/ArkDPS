@@ -88,6 +88,9 @@ def empty_text(config, source, complete, view):
         return '暂无首领伤害（已知为零）'
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
+    if config.category.value == 'damage' and config.effective_only and any(
+            row.get('effective_damage') is None for row in source.values()):
+        return '当前有效伤害尚无可靠数据'
     key = {'damage': 'damage', 'healing': 'healing', 'shield': 'shield_absorbed'}[config.category.value]
     if config.ranking is Ranking.RECENT or (
             config.ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S):

@@ -90,7 +90,8 @@ class EventStream:
                skill_method=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
                enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None,
-               mitigation_before=None, mitigation_after=None):
+               mitigation_before=None, mitigation_after=None,
+               source_character_uid=None, unresolved_source=False):
         if self.closed:
             raise StreamGap('event stream is closed')
         payload = (session, frame, game_time, source, kind, amount,
@@ -99,7 +100,8 @@ class EventStream:
                    target_instance, target_uid, enemy_damage_owner,
                    skill_key, skill_id, skill_name, skill_reason, skill_method,
                    phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
-                   finish_reason, enemy_max_hp, mitigation_before, mitigation_after)
+                   finish_reason, enemy_max_hp, mitigation_before, mitigation_after,
+                   source_character_uid, unresolved_source)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -114,7 +116,10 @@ class EventStream:
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
         try:
-            if kind == 'enemy_enter':
+            if unresolved_source:
+                self.statistics.observe_unresolved_source(
+                    kind, source, amount, target_instance, damage_type=damage_type)
+            elif kind == 'enemy_enter':
                 self.statistics.record_enemy_entry(
                     frame, game_time, source, amount, target, target_instance,
                     enemy_entry_attributes)

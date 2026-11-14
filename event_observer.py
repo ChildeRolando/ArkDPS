@@ -74,9 +74,12 @@ class FridaEventObserver:
                     pending.done.set()
         elif isinstance(payload, dict) and payload.get('ready'):
             self.probe_modes = {
-                key: payload[key] for key in ('coalesce_enemy_hp', 'trace_hp_context')
+                key: payload[key] for key in ('coalesce_enemy_hp', 'trace_hp_context',
+                                              'source_character_uid_ready')
                 if type(payload.get(key)) is bool
             }
+            if isinstance(payload.get('source_character_uid_error'), str):
+                self.probe_modes['source_character_uid_error'] = payload['source_character_uid_error']
             self.ready.set()
 
     def _detached(self, reason, *_args):
