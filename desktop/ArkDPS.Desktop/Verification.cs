@@ -379,7 +379,9 @@ public partial class MainWindow
             Require(WindowState == WindowState.Normal && player.WindowState == WindowState.Normal &&
                     NextFixture(playerHandle) == sideHandle && NextFixture(sideHandle) == coverHandle &&
                     GetForegroundWindow() == foreground,
-                    "side window stayed behind the cover when the emulator came forward without minimizing");
+                    "side window stayed behind the cover when the emulator came forward without minimizing: " +
+                    $"next player={NextFixture(playerHandle):X}, next side={NextFixture(sideHandle):X}, " +
+                    $"foreground before={foreground:X}, after={GetForegroundWindow():X}");
 
             Require(SetWindowPos(playerHandle, coverHandle, 0, 0, 0, 0, noMoveSizeOrActivate),
                     "could not set up a covering window in front of the emulator");

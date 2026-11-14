@@ -64,9 +64,16 @@ internal sealed class EmulatorAttachment
                 raisedToTopmost = false;
             return;
         }
-        if (GetAncestor(GetForegroundWindow(), RootOwner) == sideWindow ||
-            GetWindow(sideWindow, PreviousWindow) == player)
-            return;
+        nint previous = GetWindow(sideWindow, PreviousWindow);
+        if (previous == player) return;
+        if (GetAncestor(GetForegroundWindow(), RootOwner) == sideWindow)
+        {
+            // Keep an active sidebar in front of MuMu. If MuMu is already
+            // ahead of the sidebar, still close any gap between them.
+            for (int inspected = 0; previous != nint.Zero && previous != player && inspected < 256; inspected++)
+                previous = GetWindow(previous, PreviousWindow);
+            if (previous != player) return;
+        }
 
         // Follow the actual z-order. An unrelated window can sit between us
         // and MuMu even when neither window was minimized or changed bounds.
