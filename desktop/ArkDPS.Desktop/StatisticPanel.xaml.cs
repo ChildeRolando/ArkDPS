@@ -73,11 +73,13 @@ public sealed class RowItem : INotifyPropertyChanged
             var detail=Entry.Get("detail");var types=detail.Get("damage_by_type");
             string Value(string key) => types.ValueKind==JsonValueKind.Object ? types.UiInt(key) : "—";
             string over=detail.UiInt("overkill_damage");
-            return "物理 "+Value("physical")+Environment.NewLine
+            string compositionGap=MetricCoverage.Detail(detail.Get("coverage"),"damage_by_type");
+            string label=compositionGap.Length>0 ? "已观察溢出总伤属性" : "溢出总伤属性";
+            return label+Environment.NewLine+"物理 "+Value("physical")+Environment.NewLine
                 +"法术 "+Value("arts")+Environment.NewLine
                 +"元素 "+Value("elemental")+Environment.NewLine
                 +"真实 "+Value("true")+Environment.NewLine
-                +"过量 "+over+CoverageSuffix;
+                +"过量 "+over+(compositionGap.Length>0 ? Environment.NewLine+compositionGap : "")+CoverageSuffix;
         }
     }
     public string RankedBarTooltip
@@ -85,17 +87,19 @@ public sealed class RowItem : INotifyPropertyChanged
         get
         {
             string value = Json.UiText(Entry.Text("exact_value"));
+            var segments=Entry.Get("segments").Items();
             string description=MetricCategory switch
             {
                 "healing" => "治疗排行原值 " + value,
                 "shield" => "护盾吸收排行原值 " + value,
-                _ => string.Join(Environment.NewLine, Entry.Get("segments").Items().Select(segment =>
+                _ => string.Join(Environment.NewLine, segments.Select(segment =>
                     (segment.Text("kind") switch
                     {
                         "physical" => "物理", "arts" => "法术", "elemental" => "元素", "true" => "真实", _ => "其他",
                     }) + " " + segment.Ui("value")
                        + (segment.Get("overkill").ValueKind == JsonValueKind.Number ? "（过量 " + segment.Ui("overkill") + "）" : ""))
-                    .Prepend("伤害排行原值 " + value)),
+                    .Append(Entry.Bool("segments_complete") ? "" : "排行伤害属性未完整分型")
+                    .Prepend("伤害排行原值 " + value).Where(line=>line.Length>0)),
             };
             return description+CoverageSuffix;
         }
@@ -182,7 +186,8 @@ public sealed class ContributionBar : FrameworkElement
         if (segments.Length==0)
         {
             var color=Data.Text("bar_color");
-            var fill = Theme.IsPeople || Theme.IsBabel ? Theme.Resource(MetricCategory switch
+            var fill = MetricCategory=="damage" ? Theme.Resource("Muted") :
+                Theme.IsPeople || Theme.IsBabel ? Theme.Resource(MetricCategory switch
             {
                 "healing" => "Heal",
                 "shield" => "Shield",
@@ -212,7 +217,7 @@ public sealed class ContributionBar : FrameworkElement
             }
             x+=size;
         }
-        if (x<width) dc.DrawRectangle(track,null,new Rect(x,top,width-x,height));
+        if (x<width) dc.DrawRectangle(Theme.Resource("Muted"),null,new Rect(x,top,width-x,height));
     }
     private static Brush SegmentBrush(JsonElement segment) => segment.Text("kind") switch
     {

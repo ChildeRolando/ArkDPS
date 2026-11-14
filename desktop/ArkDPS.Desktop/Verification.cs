@@ -457,6 +457,21 @@ public partial class MainWindow
                 HasText(Ratio(),"被减伤率") &&
                 !HasText(Ratio(),"已观察减伤率"),
                 "complete zero mitigation did not take precedence over the observed subset");
+
+        fixture["details_by_owner"]![owner]!["settled_damage"]=System.Text.Json.Nodes.JsonNode.Parse("""
+            {"observed_mitigation_rate":23,"observed_mitigation_before":1000,
+             "observed_mitigation_after":770,"mitigation_matched_hits":3,"mitigation_complete":false,
+             "mitigation_reason":"仅核实三次命中"}
+            """);
+        Apply();
+        Require(HasText(Ratio(),"23%") && HasText(Ratio(),"已观察减伤率") &&
+                Ratio().ToolTip is ToolTip {Content:TextBlock perHitTip} &&
+                perHitTip.Text.Contains("已配对的 3 击") && perHitTip.Text.Contains("仅核实三次命中"),
+                "verified per-hit mitigation was replaced by aggregate mitigation");
+        fixture["details_by_owner"]![owner]!["settled_damage"]!["observed_mitigation_rate"]=null;
+        Apply();
+        Require(HasText(Ratio(),"—") && !HasText(Ratio(),"0%"),
+                "missing per-hit mitigation borrowed legacy data");
     }
 
     private void VerifyPartialMetricCoverage()
@@ -497,6 +512,57 @@ public partial class MainWindow
         historyPanel.Update(packed);
         Require(historyPanel.Coverage.Text.Contains("统计失败占比"),
                 "history ranking did not show partial coverage");
+
+        var row=fixture["source"]![owner]!;
+        var detail=fixture["details_by_owner"]![owner]!;
+        row["damage"]=300;
+        row["types_available"]=true;
+        row["types_stale"]=false;
+        row["damage_by_type"]=System.Text.Json.Nodes.JsonNode.Parse("""{"physical":100,"arts":200,"elemental":0,"true":0}""");
+        detail["effective_damage_by_type"]=null;
+        var historyInspector=new Inspector();
+        var liveFallback=JsonSerializer.SerializeToElement(fixture);
+        inspector.Update(liveFallback);
+        historyInspector.Pin(owner,liveFallback);
+        var composition=FindAutomationElement(inspector,"CompactOperatorComposition")
+            ?? throw new InvalidOperationException("missing damage composition");
+        Require(HasText(composition,"溢出总伤属性构成") && HasText(composition,"300") &&
+                HasText(composition,"33%") && HasText(composition,"67%") &&
+                !HasText(composition,"4,321") &&
+                HasText(historyInspector,"溢出总伤属性构成") && HasText(historyInspector,"33%") &&
+                HasText(historyInspector,"有效伤害属性未知"),
+                "missing effective breakdown hid or mislabeled the published raw damage types");
+
+        coverage["effective_damage_by_type"]=coverage["effective_damage"]!.DeepClone();
+        detail["effective_damage_by_type"]=System.Text.Json.Nodes.JsonNode.Parse("""{"physical":10,"arts":15}""");
+        void UpdateComposition()
+        {
+            var current=JsonSerializer.SerializeToElement(fixture);
+            inspector.Update(current);
+            historyInspector.Update(current);
+        }
+        UpdateComposition();
+        Require(HasText(composition,"已观察有效伤害属性构成") && HasText(composition,"25") &&
+                HasText(composition,"40%") && HasText(composition,"60%") &&
+                !HasText(composition,"溢出总伤属性构成") && !HasText(composition,"4,321") &&
+                HasText(historyInspector,"已观察有效伤害属性构成") && HasText(historyInspector,"60%"),
+                "known effective type subset did not replace the raw snapshot composition");
+
+        row["types_stale"]=true;
+        detail["effective_damage_by_type"]=null;
+        UpdateComposition();
+        Require(HasText(composition,"伤害属性未知") && !HasText(composition,"300") &&
+                !HasText(composition,"40%") && HasText(historyInspector,"伤害属性未知"),
+                "unknown effective types rendered a stale chart or borrowed the effective total");
+
+        fixture["config"]!["effective_only"]=false;
+        coverage["damage_by_type"]=coverage["effective_damage"]!.DeepClone();
+        detail["damage_by_type"]=System.Text.Json.Nodes.JsonNode.Parse("""{"arts":20,"elemental":30}""");
+        UpdateComposition();
+        Require(HasText(composition,"已观察溢出总伤属性构成") && HasText(composition,"50") &&
+                HasText(composition,"40%") && HasText(composition,"60%") &&
+                HasText(historyInspector,"已观察溢出总伤属性构成"),
+                "published partial raw types were replaced by stale native types");
     }
 
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
@@ -1290,6 +1356,12 @@ public partial class MainWindow
                 Require(HasText(OperatorTrend,"首领有效伤害 · 近 5 秒 DPS 趋势") && HasText(OperatorTrend,"123 DPS") &&
                         hud.Panel.Heading.Text.StartsWith("仅首领·有效伤害"),
                         "effective boss scope reused the raw or global trend");
+                scoped["boss_effective_live_analysis"]=ScopedTrend(87,observed:true);
+                ApplyState(JsonSerializer.SerializeToElement(scoped));
+                Require(HasText(OperatorTrend,"已观察 87 DPS") &&
+                        bossEffectiveTrendModel.Points[^1].Operators[owner]==87 &&
+                        bossEffectiveTrendModel.Points[^1].Team==null,
+                        "observed boss operator rate was mislabeled as a complete or team rate");
             }
             finally { ApplyState(unavailable); }
 
@@ -1312,10 +1384,11 @@ public partial class MainWindow
         Require(!panel.View.Get("config").Bool("boss_only") && panel.Rows.Items.Count>0 &&
                 OperatorTrend.Visibility==Visibility.Visible,"clearing boss scope did not restore the normal views");
 
-        System.Text.Json.Nodes.JsonNode ScopedTrend(int dps) => JsonSerializer.SerializeToNode(new
+        System.Text.Json.Nodes.JsonNode ScopedTrend(int dps,bool observed=false) => JsonSerializer.SerializeToNode(new
         {
             battle_id=State.Text("battle_id"), game_time=State.Number("game_time"), segment=1,
-            team_recent_dps=dps, operators=new[]{new{owner_id=owner,name="合成验收",recent_dps=dps}},
+            team_recent_dps=observed ? (int?)null : dps, operators=new[]{new{owner_id=owner,name="合成验收",
+                recent_dps=observed ? (int?)null : dps,observed_recent_dps=observed ? dps : (int?)null}},
         })!;
     }
     private static void Click(int x,int y)

@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Iterable, Mapping
 
 from source_classification import classify_unmapped_source
+from stats_core import DAMAGE_SCOPE_MISMATCH, exceeds_native_damage
 
 DAMAGE_COLORS = {
     'physical': '#e5484d',   # red
@@ -323,13 +324,16 @@ class PanelSourceRow:
     observed_healing: float | None = None
     source_complete: bool = True
     partial_damage: Mapping = field(default_factory=dict)
+    settled_damage: Mapping | None = None
+    damage_scope_reason: str | None = None
     mitigation_unknown_reason: str | None = None
     observed_mitigation_rate: float | None = None
 
     def total(self, category: Category) -> float | None:
         damage = self.damage
-        if damage is None and self.source_complete:
-            damage = self.partial_damage.get('observed_boss_damage')
+        if damage is None and (self.source_complete or self.settled_damage is not None):
+            damage = (self.settled_damage.get('observed_boss_damage') if self.settled_damage is not None
+                      else self.partial_damage.get('observed_boss_damage'))
         shield = self.shield
         if shield is None and self.source_complete:
             shield = self.partial_damage.get('observed_shield_absorbed')
@@ -339,14 +343,20 @@ class PanelSourceRow:
 
     def recent(self, category: Category) -> float | None:
         damage = self.recent_damage
-        if damage is None and self.source_complete:
-            damage = self.partial_damage.get('observed_boss_recent_damage')
+        if damage is None and (self.source_complete or self.settled_damage is not None):
+            damage = (self.settled_damage.get('observed_boss_recent_damage') if self.settled_damage is not None
+                      else self.partial_damage.get('observed_boss_recent_damage'))
         return {Category.DAMAGE: damage,
                 Category.HEALING: self.recent_healing,
                 Category.SHIELD: self.recent_shield}[category]
 
     def engagement(self, category: Category) -> float | None:
         if category is Category.DAMAGE:
+            if self.settled_damage is not None:
+                rate = self.settled_damage.get('engagement_damage')
+                return rate if _finite(rate) and rate >= 0 else None
+            if self.damage_scope_reason:
+                return None
             return (self.engagement_damage if self.engagement_damage is not None else
                     self.partial_damage.get('engagement_damage') if self.source_complete else None)
         if category is Category.HEALING:
@@ -363,6 +373,11 @@ class PanelSourceRow:
 
     def effective_recent(self) -> float | None:
         """近期有效 DPS：近期速率减去窗口内过量量摊到每秒。"""
+        if self.settled_damage is not None:
+            rate = self.settled_damage.get('recent_effective_damage')
+            return rate if _valid_window(self.effective_recent_window()) and _finite(rate) and rate >= 0 else None
+        if self.damage_scope_reason or self.partial_damage.get('recent_damage_scope_reason'):
+            return None
         window = self.recent_damage_window
         if (not _finite(self.recent_damage) or not _finite(self.recent_overkill)
                 or not self.overkill_complete or not _valid_window(window)):
@@ -372,11 +387,25 @@ class PanelSourceRow:
 
     def effective_observed(self) -> float | None:
         """接敌有效 DPS：有效事件量除以活跃秒数，不是把量直接当成每秒。"""
+        if self.settled_damage is not None:
+            rate = self.settled_damage.get('engagement_effective_damage')
+            return rate if _finite(rate) and rate >= 0 else None
+        if self.damage_scope_reason:
+            return None
         if (not _finite(self.observed_damage) or not _finite(self.overkill)
                 or not _finite(self.active_damage) or self.active_damage <= 0
                 or not self.overkill_complete):
             return self.partial_damage.get('engagement_effective_damage') if self.source_complete else None
         return max(0.0, self.observed_damage - self.overkill) / self.active_damage
+
+    def effective_recent_window(self):
+        if self.settled_damage is not None:
+            return self.settled_damage.get('recent_effective_damage_window')
+        return self.recent_damage_window
+
+    def settled_recent_complete(self) -> bool:
+        return self.settled_damage.get('recent_effective_damage_complete',
+                                       self.settled_damage.get('complete')) is True
 
     def skill_coverage(self) -> float | None:
         """Observed skill-on time divided by certified on-field time."""
@@ -399,7 +428,9 @@ class PanelSourceRow:
         # engagement interval is evidence that the owner was present, so it is
         # a lower bound for the full-cycle denominator. Without this guard a
         # slowly detected deployment makes full-cycle DPS exceed engagement DPS.
-        active = self.active(category)
+        active = (self.settled_damage.get('active_effective_damage')
+                  if effective and category is Category.DAMAGE and self.settled_damage is not None
+                  else self.active(category))
         denominator = max(self.presence_seconds,
                           active if _finite(active) else self.presence_seconds)
         if denominator <= 0:
@@ -431,19 +462,56 @@ class PanelSourceRow:
                 Category.SHIELD: self.recent_shield_window}[category]
 
 
+def damage_scope_reason(row: Mapping) -> str | None:
+    """Recognize incompatible evidence in both current and archived rows."""
+    if reason := row.get('damage_scope_reason'):
+        return reason
+    partial = row.get('partial_damage') or {}
+    total = row.get('damage')
+    if not _finite(total):
+        return None
+    # Old archives did not persist per-source reconciliation. The observed
+    # ordinary settlement sum excludes bursts; use only the known supplement.
+    observed = row.get('observed_damage')
+    credited_burst = row.get('burst_settlement') or row.get('burst_added_settlement') or 0.0
+    if (row.get('counter_snapshot_complete') and _finite(observed) and _finite(credited_burst)
+            and exceeds_native_damage(observed + credited_burst, total)):
+        return DAMAGE_SCOPE_MISMATCH
+    values = (row.get('effective_damage'), partial.get('effective_damage'))
+    if any(_finite(value) and value > total for value in values):
+        return DAMAGE_SCOPE_MISMATCH
+    return None
+
+
+def _settled_damage(row: Mapping) -> Mapping | None:
+    lane = row.get('settled_damage')
+    return lane if isinstance(lane, Mapping) else None
+
+
 def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = False) -> Mapping:
     """Select the panel's target scope before rendering or building details."""
     if not config.boss_scope:
         return result
     available = result.get('boss_damage_available') is True
     reason = result.get('boss_damage_reason') or ''
-    if not available and not reason:
-        reason = ('这局战绩未记录首领伤害' if history else
-                  '首领伤害尚无可靠数据，需要事件观察与目标身份')
+    unavailable_reason = reason or ('这局战绩未记录首领伤害' if history else
+                                    '首领伤害尚无可靠数据，需要事件观察与目标身份')
     rows = {}
     for owner, row in (result.get('rows') or {}).items():
         scoped = row.get('boss_damage')
-        if not isinstance(scoped, Mapping):
+        has_settled = _settled_damage(row) is not None
+        mismatch = None if has_settled else damage_scope_reason(row)
+        if has_settled:
+            lane = _settled_damage(scoped) if isinstance(scoped, Mapping) else None
+            # The legacy boss projection may use a different aggregate than
+            # the verified hit lane. Use only the latter for this target scope.
+            scoped = {'settled_damage': lane or {},
+                      'event_coverage_complete': lane is not None and lane.get('complete') is True,
+                      'counter_snapshot_complete': lane is not None and lane.get(
+                          'complete' if config.effective_only else 'observed_boss_damage_complete') is True}
+        elif mismatch:
+            scoped = {'damage_scope_reason': mismatch, 'overkill_unknown_reason': mismatch}
+        elif not isinstance(scoped, Mapping):
             scoped = {}
         elif not available:
             # Preserve the observed boss-only skill split when its full
@@ -451,9 +519,9 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
             scoped = {key: scoped.get(key) for key in (
                 'observed_skill_damage', 'observed_non_skill_damage',
                 'observed_skill_damage_effective', 'observed_non_skill_damage_effective',
-                'partial_damage',
+                'partial_damage', 'settled_damage',
             )}
-            scoped['skill_split_reason'] = reason
+            scoped['skill_split_reason'] = unavailable_reason
         # These values describe the operator, independent of whom they hit.
         identity = {key: row[key] for key in (
             'name', 'present', 'sources', 'presence_seconds', 'presence_complete',
@@ -468,6 +536,19 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
             # The legacy effective-damage fallback subtracts any present
             # overkill value; boss-only requires coverage of the same scope.
             rows[owner]['overkill_damage'] = None
+    lanes = [lane for row in rows.values() if (lane := _settled_damage(row)) is not None]
+    if lanes:
+        settled_key = 'effective_damage' if config.effective_only else 'observed_boss_damage'
+        complete_key = 'complete' if config.effective_only else 'observed_boss_damage_complete'
+        available = any(_finite(value := lane.get(settled_key)) and
+                        (value > 0 or value == 0 and lane.get(complete_key) is True) for lane in lanes)
+        if available:
+            reason = next((lane['reason'] for lane in lanes if lane.get('reason')), '')
+        else:
+            reason = next((lane['reason'] for lane in lanes if lane.get('reason')),
+                          '尚未核实首领有效伤害' if config.effective_only else '尚未核实首领结算总伤')
+    elif not available:
+        reason = unavailable_reason
     return {
         **result, 'rows': rows, 'boss_damage_available': available, 'boss_damage_reason': reason,
         'totals_complete': available and all(row['counter_snapshot_complete'] for row in rows.values()),
@@ -489,6 +570,9 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
                         row.get('observed_non_skill_damage_effective'))
             if all(_finite(value) and value >= 0 for value in observed) and sum(observed) > 0:
                 partial = {'effective_damage': sum(observed)}
+        settled = _settled_damage(row)
+        legacy_scope_reason = damage_scope_reason(row)
+        scope_reason = None if settled is not None else legacy_scope_reason
         rows.append(PanelSourceRow(
             owner_id=owner,
             name=row.get('name') or owner,
@@ -510,11 +594,11 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             observed_healing=row.get('observed_healing'),
             damage_by_type=row.get('damage_by_type') or {},
             recent_damage_by_type=row.get('recent_damage_by_type') or {},
-            overkill=row.get('overkill_damage'),
+            overkill=None if legacy_scope_reason else row.get('overkill_damage'),
             overkill_by_type=row.get('overkill_damage_by_type'),
-            overkill_complete=bool(row.get('overkill_coverage_complete', False)),
-            overkill_type_complete=bool(row.get('overkill_type_complete', False)),
-            overkill_unknown_reason=row.get('overkill_unknown_reason'),
+            overkill_complete=not legacy_scope_reason and bool(row.get('overkill_coverage_complete', False)),
+            overkill_type_complete=not legacy_scope_reason and bool(row.get('overkill_type_complete', False)),
+            overkill_unknown_reason=legacy_scope_reason or row.get('overkill_unknown_reason'),
             burst_damage=row.get('burst_damage'),
             burst_overkill=row.get('burst_overkill'),
             burst_settlement=row.get('burst_settlement'),
@@ -547,6 +631,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             sources=sources,
             source_complete=owner not in unresolved and unresolved.isdisjoint(sources),
             partial_damage=partial,
+            settled_damage=settled,
+            damage_scope_reason=scope_reason,
             mitigation_unknown_reason=row.get('mitigation_unknown_reason'),
             observed_mitigation_rate=row.get('observed_mitigation_rate'),
         ))
@@ -710,14 +796,23 @@ def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool 
     operators = []
     windows = []
     for owner, row in sorted((statistics.get('rows') or {}).items()):
+        settled = _settled_damage(row) if effective else None
         rate = row.get('recent_damage')
         window = row.get('recent_damage_window')
         certified = (row.get('counter_snapshot_complete') is True
                      and _valid_window(window) and 0 <= window[0] < window[1] == game_time
                      and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
-        if certified and effective:
+        if settled is not None:
+            rate = settled.get('recent_effective_damage')
+            window = settled.get('recent_effective_damage_window')
+            certified = (settled.get('recent_effective_damage_complete', settled.get('complete')) is True
+                         and _valid_window(window) and 0 <= window[0] < window[1] == game_time
+                         and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
+        elif certified and effective:
             excess = row.get('recent_overkill_damage')
             certified = (row.get('overkill_coverage_complete') is True
+                         and not damage_scope_reason(row)
+                         and not (row.get('partial_damage') or {}).get('recent_damage_scope_reason')
                          and _finite(excess) and not isinstance(excess, bool) and excess >= 0)
             if certified:
                 rate = max(0.0, rate - excess / (window[1] - window[0]))
@@ -731,15 +826,55 @@ def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool 
     return None, operators
 
 
+def settled_boss_damage_rates(statistics: Mapping, game_time: float, *, effective: bool):
+    """Return scoped rates for charting, with a separate observed subset."""
+    rows = sorted((statistics.get('rows') or {}).items())
+    if not any(_settled_damage(row) is not None for _, row in rows):
+        return None
+    rate_key, window_key, complete_key = (
+        ('recent_effective_damage', 'recent_effective_damage_window', 'recent_effective_damage_complete')
+        if effective else ('observed_boss_recent_damage', 'observed_boss_recent_window',
+                           'observed_boss_recent_damage_complete'))
+    operators, windows = [], set()
+    for owner, row in rows:
+        lane = _settled_damage(row) or {}
+        rate, window = lane.get(rate_key), lane.get(window_key)
+        valid = _valid_window(window) and 0 <= window[0] < window[1] == game_time and _finite(rate) and rate >= 0
+        complete = valid and lane.get(complete_key) is True
+        if valid:
+            windows.add(tuple(window))
+        operators.append(dict(owner_id=owner, name=row.get('name') or owner,
+                              recent_dps=rate if complete else None,
+                              observed_recent_dps=rate if valid and not complete else None))
+    team = sum(row['recent_dps'] for row in operators) if (
+        len(windows) == 1 and all(row['recent_dps'] is not None for row in operators)) else None
+    return (team if _finite(team) else None), operators
+
+
 def _effective_damage(row: PanelSourceRow) -> float | None:
+    if row.settled_damage is not None:
+        effective = row.settled_damage.get('effective_damage')
+        return effective if _finite(effective) and effective >= 0 else None
+    if row.damage_scope_reason:
+        return None
+    total = row.total(Category.DAMAGE)
     if _finite(row.effective_damage):
-        return float(row.effective_damage)
+        return float(row.effective_damage) if not _finite(total) or row.effective_damage <= total else None
     if _finite(row.damage) and _finite(row.overkill):
-        return max(0.0, float(row.damage) - float(row.overkill))
-    return row.partial_damage.get('effective_damage') if row.source_complete else None
+        if not 0 <= row.overkill <= row.damage:
+            return None
+        return float(row.damage) - float(row.overkill)
+    effective = row.partial_damage.get('effective_damage')
+    return effective if row.source_complete and _finite(effective) and (
+        not _finite(total) or effective <= total) else None
 
 
 def _effective_by_type(row: PanelSourceRow) -> dict | None:
+    total = _effective_damage(row)
+    if total is None:
+        return None
+    if row.settled_damage is not None:
+        return _observed_damage_types(row.settled_damage.get('effective_damage_by_type'), total)
     if not row.overkill_type_complete or row.overkill_by_type is None:
         # An untyped overkill event still has one possible damage type when the
         # operator's entire observed output is that type. This is evidence from
@@ -749,9 +884,30 @@ def _effective_by_type(row: PanelSourceRow) -> dict | None:
         if len(live_types) == 1 and _finite(row.overkill):
             kind = live_types[0]
             return {kind: max(0.0, float(row.damage_by_type[kind]) - float(row.overkill))}
-        return None
+        observed = row.partial_damage.get('effective_damage_by_type')
+        return _observed_damage_types(observed, total)
     return {kind: max(0.0, float(value) - float(row.overkill_by_type.get(kind, 0.0)))
             for kind, value in row.damage_by_type.items() if _finite(value)}
+
+
+def _damage_by_type(row: PanelSourceRow) -> Mapping:
+    if row.settled_damage is not None:
+        if row.damage is None:
+            observed = row.settled_damage.get('observed_boss_damage')
+            return _observed_damage_types(row.settled_damage.get('damage_by_type'), observed) or {}
+        return row.damage_by_type
+    if row.damage is None and not row.damage_scope_reason and row.source_complete:
+        return row.partial_damage.get('damage_by_type') or row.damage_by_type
+    return row.damage_by_type
+
+
+def _observed_damage_types(observed, total) -> dict | None:
+    if not isinstance(observed, Mapping) or not _finite(total):
+        return None
+    typed = {kind: value for kind, value in observed.items()
+             if kind in DAMAGE_ORDER and _finite(value) and value > 0}
+    return typed if typed and not exceeds_native_damage(sum(typed.values()), total) else None
+
 
 def _segments(row: PanelSourceRow, ranking: Ranking,
               effective: bool = False) -> tuple[tuple[dict, ...], bool]:
@@ -759,14 +915,14 @@ def _segments(row: PanelSourceRow, ranking: Ranking,
         total = _effective_damage(row)
         by_type = _effective_by_type(row)
         if by_type is None:
-            if not row.overkill_complete and row.partial_damage:
+            if row.settled_damage is not None or (not row.overkill_complete and row.partial_damage):
                 return (), False
             by_type = {kind: max(0.0, float(value) -
                                  float((row.overkill_by_type or {}).get(kind, 0.0)))
                        for kind, value in row.damage_by_type.items() if _finite(value)}
     else:
-        total = row.damage if ranking is Ranking.TOTAL else row.recent_damage
-        by_type = row.damage_by_type if ranking is Ranking.TOTAL else row.recent_damage_by_type
+        total = row.total(Category.DAMAGE) if ranking is Ranking.TOTAL else row.recent_damage
+        by_type = _damage_by_type(row) if ranking is Ranking.TOTAL else row.recent_damage_by_type
     if total is None or not _finite(total) or total <= 0:
         return (), False
     segments = []
@@ -788,7 +944,14 @@ def _segments(row: PanelSourceRow, ranking: Ranking,
                 segment['overkill'] = overkill
                 segment['overkill_ratio'] = min(1.0, overkill / value)
         segments.append(segment)
-    return tuple(segments), abs(known - total) <= max(0.01, total * 1e-6)
+    complete = abs(known - total) <= max(0.01, total * 1e-6)
+    if effective and row.settled_damage is not None:
+        complete &= row.settled_damage.get('complete') is True
+    elif effective and not row.overkill_type_complete and row.partial_damage.get('effective_damage_by_type'):
+        complete = False
+    if not effective and row.damage is None:
+        complete = False
+    return tuple(segments), complete
 
 
 def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
@@ -807,7 +970,10 @@ def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
     if not engagement:
         return 'unknown', '—', ''
     observed, active = row.observed(category), row.active(category)
-    if available and row.event_complete and observed == 0 and active == 0:
+    settled = row.settled_damage if category is Category.DAMAGE else None
+    no_events = (settled.get('complete') is True and settled.get('observed_hits') == 0
+                 if settled is not None else row.event_complete and observed == 0 and active == 0)
+    if available and no_events:
         return 'no_engagement', '无接敌', '已覆盖区间内未观察到接敌事件（可靠零）'
     if available:
         return 'unknown', '—', '该干员事件覆盖不完整，接敌数据未知'
@@ -835,15 +1001,36 @@ def detail_rates(rows: Iterable[PanelSourceRow],
             state, text, note = _rate_display(
                 row, category, raw if _finite(raw) else None, available,
                 number_units=number_units)
+            if category is Category.DAMAGE and row.damage_scope_reason:
+                note = row.damage_scope_reason
+            if category is Category.DAMAGE and row.settled_damage is not None:
+                note = row.settled_damage.get('reason') or note
             kinds[kind] = {'state': state, 'text': text, 'note': note, 'value': raw}
         result[row.owner_id] = kinds
     return result
 
 
 def _coverage(row: PanelSourceRow) -> dict:
-    if not row.partial_damage:
-        return {}
     partial = row.partial_damage
+    coverage = {}
+    if row.damage_scope_reason:
+        for key in ('effective_damage', 'recent_effective_damage', 'engagement_effective_damage',
+                    'engagement', 'mitigation', 'skill_damage', 'skill_effective_damage'):
+            coverage[key] = dict(failed_share=None, basis=None, reason=row.damage_scope_reason)
+    elif partial.get('recent_damage_scope_reason'):
+        coverage['recent_effective_damage'] = dict(failed_share=None, basis=None,
+                                                    reason=partial['recent_damage_scope_reason'])
+    if not partial:
+        return _settled_coverage(row, coverage)
+    reason = row.overkill_unknown_reason
+    if not row.damage_scope_reason:
+        if row.damage is None and _damage_by_type(row):
+            coverage['damage_by_type'] = dict(failed_share=None, basis=None,
+                                               reason=reason or '仅统计已观察且属性已确认的命中')
+        if (not row.overkill_type_complete and _effective_by_type(row)
+                and partial.get('effective_damage_by_type')):
+            coverage['effective_damage_by_type'] = dict(
+                failed_share=None, basis=None, reason=reason or '仅统计已核实有效伤害且属性已确认的命中')
     candidates = (
         ('boss_damage', partial.get('observed_boss_damage'), row.damage is not None,
          None, row.overkill_unknown_reason),
@@ -873,8 +1060,9 @@ def _coverage(row: PanelSourceRow) -> dict:
          row.skill_split_effective_complete, '累计结算伤害',
          row.skill_split_reason or row.overkill_unknown_reason),
     )
-    coverage = {}
     for key, value, complete, basis, reason in candidates:
+        if key in coverage or (row.damage_scope_reason and key in ('boss_damage', 'recent_boss_damage')):
+            continue
         share = partial.get(('engagement_damage' if key == 'engagement' else key) + '_unverified_share')
         if key == 'engagement_effective_damage' and share is None:
             share = partial.get('effective_damage_unverified_share')
@@ -887,6 +1075,53 @@ def _coverage(row: PanelSourceRow) -> dict:
         if not complete and (_finite(value) or _finite(share)):
             coverage[key] = dict(failed_share=share, basis=basis,
                                  reason=reason or '使用已核实的部分')
+    return _settled_coverage(row, coverage)
+
+
+def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
+    lane = row.settled_damage
+    if lane is None:
+        return coverage
+    complete = lane.get('complete') is True
+    reason = lane.get('reason') or '仅统计已核实的命中'
+    typed = _effective_by_type(row)
+    effective = _effective_damage(row)
+    for key in ('effective_damage', 'recent_effective_damage', 'engagement_effective_damage',
+                'effective_damage_by_type', 'engagement', 'skill_damage', 'skill_effective_damage', 'mitigation'):
+        coverage.pop(key, None)
+
+    def mark(key, share_key=None, *, basis=None, reason=reason):
+        share = lane.get(share_key) if share_key else None
+        if not _finite(share) or not 0 <= share <= 1:
+            share = basis = None
+        coverage[key] = dict(failed_share=share, basis=basis, reason=reason)
+
+    if not complete:
+        mark('effective_damage', 'unverified_share', basis='可对账的伤害命中数')
+        mark('engagement_effective_damage', 'engagement_effective_damage_unverified_share', basis='可对账的伤害命中数')
+    if not row.settled_recent_complete():
+        mark('recent_effective_damage', 'recent_effective_damage_unverified_share', basis='近 5 秒可对账的伤害命中数')
+    if lane.get('engagement_damage_complete', complete) is not True:
+        mark('engagement', 'engagement_damage_unverified_share', basis='接敌区间内可对账的伤害命中数')
+    if typed and (not complete or exceeds_native_damage(effective, sum(typed.values()))):
+        mark('effective_damage_by_type')
+    if lane.get('skill_split_complete') is not True:
+        mark('skill_damage', 'skill_damage_unverified_share', basis='可对账的伤害命中数')
+    if lane.get('skill_split_effective_complete') is not True:
+        mark('skill_effective_damage', 'skill_effective_damage_unverified_share', basis='可对账的伤害命中数')
+    if lane.get('mitigation_complete') is not True:
+        mark('mitigation', 'mitigation_unverified_share', basis='可对账的伤害命中数',
+             reason=lane.get('mitigation_reason') or reason)
+    if row.damage is None and _finite(lane.get('observed_boss_damage')):
+        if lane.get('observed_boss_damage_complete') is not True:
+            mark('boss_damage')
+        typed_nominal = _damage_by_type(row)
+        if typed_nominal and (lane.get('observed_boss_damage_complete') is not True
+                             or exceeds_native_damage(lane['observed_boss_damage'], sum(typed_nominal.values()))):
+            mark('damage_by_type')
+    if row.recent_damage is None and _finite(lane.get('observed_boss_recent_damage')):
+        if lane.get('observed_boss_recent_damage_complete') is not True:
+            mark('recent_boss_damage')
     return coverage
 
 
@@ -900,8 +1135,9 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                         + ' 游戏秒，之后未知')
     else:
         event_reason = '事件观察未建立覆盖'
-    return {'damage_by_type': dict(row.damage_by_type),
+    detail = {'damage_by_type': dict(_damage_by_type(row)),
             'damage': row.total(Category.DAMAGE), 'healing': row.healing,
+            'damage_scope_reason': row.damage_scope_reason,
             'shield_absorbed': row.total(Category.SHIELD),
             'overkill_damage': row.overkill,
             'overkill_damage_by_type': (dict(row.overkill_by_type)
@@ -922,7 +1158,7 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
             'observed_non_skill_damage_effective': row.observed_non_skill_damage_effective,
             'skill_split_complete': row.skill_split_complete,
             'skill_split_effective_complete': row.skill_split_effective_complete,
-            'skill_split_reason': row.skill_split_reason,
+            'skill_split_reason': row.damage_scope_reason or row.skill_split_reason,
             'skill_active_seconds': row.skill_active_seconds,
             'skill_coverage': row.skill_coverage(),
             'skill_coverage_complete': row.skill_coverage_complete,
@@ -945,6 +1181,21 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
             'observed_healing': row.observed_healing,
             'coverage': _coverage(row),
             'sources': list(row.sources)}
+    lane = row.settled_damage
+    if lane is not None:
+        detail['settled_damage'] = dict(lane)
+        detail['engagement_damage'] = row.engagement(Category.DAMAGE)
+        for suffix in ('', '_effective'):
+            complete_key = 'skill_split' + suffix + '_complete'
+            split = lane.get(complete_key) is True
+            detail[complete_key] = split
+            for kind in ('skill', 'non_skill'):
+                key = kind + '_damage' + suffix
+                observed = detail['observed_' + key] = lane.get('observed_' + key)
+                detail[key] = observed if split else None
+            if not split:
+                detail['skill_split' + suffix + '_reason'] = lane.get('skill_split_reason') or lane.get('reason')
+    return detail
 
 
 def render_panel(config: PanelConfig,
@@ -999,6 +1250,27 @@ def render_panel(config: PanelConfig,
 
     def metric_complete(row: PanelSourceRow, basis: RateBasis | None = None,
                         *, recent: bool = False) -> bool:
+        if category is Category.DAMAGE and basis is RateBasis.ENGAGEMENT and row.settled_damage is not None:
+            no_events = (row.settled_damage.get('complete') is True
+                         and row.settled_damage.get('observed_hits') == 0)
+            if effective:
+                return row.settled_damage.get('complete') is True and (row.effective_observed() is not None or no_events)
+            return (row.settled_damage.get('engagement_damage_complete', row.settled_damage.get('complete')) is True
+                    and (row.engagement(category) is not None or no_events))
+        if effective and row.settled_damage is not None:
+            if recent or basis is RateBasis.RECENT_5S:
+                return row.settled_recent_complete() and row.effective_recent() is not None
+            if row.settled_damage.get('complete') is not True:
+                return False
+            if basis is RateBasis.FULL_CYCLE:
+                return row.full_cycle(category, effective=True) is not None
+            return _effective_damage(row) is not None
+        if config.boss_scope and row.settled_damage is not None and category is Category.DAMAGE:
+            if (recent or basis is RateBasis.RECENT_5S) and row.recent_damage is None:
+                return row.settled_damage.get('observed_boss_recent_damage_complete') is True
+            if not recent and basis is not RateBasis.RECENT_5S and row.damage is None:
+                return (row.settled_damage.get('observed_boss_damage_complete') is True
+                        and (basis is not RateBasis.FULL_CYCLE or row.presence_complete))
         if not row.source_complete:
             return False
         if recent or basis is RateBasis.RECENT_5S:
@@ -1026,6 +1298,11 @@ def render_panel(config: PanelConfig,
                           engagement=config.rate_basis is RateBasis.ENGAGEMENT,
                           full_cycle=config.rate_basis is RateBasis.FULL_CYCLE,
                           number_units=number_units))
+        if rate is None and category is Category.DAMAGE:
+            if effective or config.rate_basis is RateBasis.ENGAGEMENT:
+                note = (row.settled_damage.get('reason') if row.settled_damage is not None else None) or row.damage_scope_reason or (
+                    row.partial_damage.get('recent_damage_scope_reason')
+                    if effective and config.rate_basis is RateBasis.RECENT_5S else None) or note
         return rate, state, text, note
 
     values: dict[str, float] = {}
@@ -1058,9 +1335,14 @@ def render_panel(config: PanelConfig,
             has_fallback_value = has_fallback_value or value is not None
         if recent_ranking:
             recent_windows[row.owner_id] = row.recent_window(category)
-            if ranking_gap in coverage:
+            if effective and row.settled_damage is not None:
+                recent_windows[row.owner_id] = row.effective_recent_window()
+            elif config.boss_scope and row.settled_damage is not None and row.recent_damage is None:
+                recent_windows[row.owner_id] = row.settled_damage.get('observed_boss_recent_window')
+            elif ranking_gap in coverage:
+                fallback = row.settled_damage if row.settled_damage is not None else row.partial_damage
                 window_key = ('recent_effective_damage_window' if effective else 'observed_boss_recent_window')
-                recent_windows[row.owner_id] = row.partial_damage.get(window_key)
+                recent_windows[row.owner_id] = fallback.get(window_key)
 
         # The footer aggregates the displayed columns independently of sorting.
         column_total = value if ranking is Ranking.RECENT else total_value(row)
@@ -1076,9 +1358,14 @@ def render_panel(config: PanelConfig,
                 certified_rates += int(rate_complete)
                 if config.rate_basis is RateBasis.RECENT_5S:
                     window = row.recent_window(category)
-                    if not rate_complete:
+                    if effective and row.settled_damage is not None:
+                        window = row.effective_recent_window()
+                    elif config.boss_scope and row.settled_damage is not None and row.recent_damage is None:
+                        window = row.settled_damage.get('observed_boss_recent_window')
+                    elif not rate_complete:
+                        fallback = row.settled_damage if row.settled_damage is not None else row.partial_damage
                         window_key = ('recent_effective_damage_window' if effective else 'observed_boss_recent_window')
-                        window = row.partial_damage.get(window_key)
+                        window = fallback.get(window_key)
                     if _valid_window(window):
                         rate_windows.add(tuple(window))
             elif state == 'no_engagement' and rate_complete:
@@ -1088,7 +1375,9 @@ def render_panel(config: PanelConfig,
     displayed = {owner: value for owner, value in values.items() if value > 0}
     known_values = {
         owner: value for owner, value in values.items() if value >= 0 and (
-            complete[owner] or row_by_owner[owner].source_complete
+            complete[owner] or (row_by_owner[owner].source_complete
+            or category is Category.DAMAGE and row_by_owner[owner].settled_damage is not None
+            and (effective or engagement_ranking or config.boss_scope))
             and ranking_gap in coverage_by_owner[owner]
             and (not recent_ranking or _valid_window(recent_windows[owner])))
     }
@@ -1114,7 +1403,8 @@ def render_panel(config: PanelConfig,
         elif full_cycle_ranking:
             reasons.append('部分干员的总量或在场时间未完整观察')
         elif effective:
-            reasons.append('有效伤害覆盖不完整，按已核实部分计算' if has_fallback_value
+            reasons.append(DAMAGE_SCOPE_MISMATCH if any(row.damage_scope_reason for row in rows)
+                           else '有效伤害覆盖不完整，按已核实部分计算' if has_fallback_value
                            else '部分干员的有效伤害未知')
         else:
             reasons.append('部分干员的统计值未知或不完整')

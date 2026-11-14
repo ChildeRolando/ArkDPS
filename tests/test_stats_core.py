@@ -1,6 +1,6 @@
 import pytest
 
-from stats_core import Statistics
+from stats_core import DAMAGE_SCOPE_MISMATCH, Statistics
 
 
 def test_mid_battle_baseline_and_short_window():
@@ -281,13 +281,14 @@ def test_lethal_hit_requires_a_verified_absorption_context():
 def test_partial_damage_tracks_only_verified_hits_across_a_gap():
     s = Statistics('battle', 0, event_coverage=True)
     s.partial_damage_enabled = True
+    s.reconcile_damage_scope = True
     s.register_source('a', 'a')
     s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
     s.snapshot(5, {'a': {'damage': 100, 'healing': 30}})
     s.event('skill', 1, 'a', 'skill_start', 1)
     s.event('confirmed', 2, 'a', 'damage', 75, target='enemy_1', killed=True,
             hp_before=40, hp_after=0, real_delta=-40, shield_absorbed=5,
-            mitigation_before=100, mitigation_after=75)
+            mitigation_before=100, mitigation_after=75, damage_type=2)
     s.event('uncertain', 3, 'a', 'damage', 25, target='enemy_1')
     s.event('heal', 3.5, 'a', 'healing', 20)
     s.event('shield', 4, 'a', 'shield_absorbed', 8)
@@ -296,6 +297,7 @@ def test_partial_damage_tracks_only_verified_hits_across_a_gap():
     partial = row['partial_damage']
     assert row['effective_damage'] is None
     assert partial['effective_damage'] == 45
+    assert partial['effective_damage_by_type'] == {'arts': 45}
     assert partial['effective_damage_unverified_share'] == .25
     assert partial['skill_damage_unverified_share'] == 0
     assert partial['skill_effective_damage_unverified_share'] == .25
@@ -320,6 +322,56 @@ def test_partial_damage_tracks_only_verified_hits_across_a_gap():
     assert partial['recent_effective_damage'] is None
     assert partial['recent_effective_damage_unverified_share'] is None
     assert partial['shield_observation_window'] == (0, 5)
+
+
+def test_out_of_scope_source_cannot_be_hidden_by_another_sources_missing_events():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.reconcile_damage_scope = True
+    s.observe_boss_damage(complete=True)
+    s.register_source('a', 'a')
+    s.register_source('token_a', 'a')
+    s.register_source('b', 'b')
+    s.snapshot(0, {key: {'damage': 0, 'healing': 0} for key in ('a', 'token_a', 'b')})
+    s.snapshot(5, {'a': {'damage': 100, 'healing': 30},
+                   'token_a': {'damage': 90, 'healing': 0}, 'b': {'damage': 50, 'healing': 0}})
+    s.event('foreign-same-key', 1, 'a', 'damage', 120, target='enemy_1',
+            hp_before=500, hp_after=380, real_delta=-120, killed=False, damage_type=2)
+    s.event('miss', 2, 'a', 'damage', 1000, target='enemy_1',
+            hp_before=380, hp_after=380, real_delta=0, killed=False, damage_type=2,
+            cancel_reason=2, shield_absorbed=0)
+    s.event('heal', 3, 'a', 'healing', 20)
+    s.event('shield', 3.5, 'a', 'shield_absorbed', 8)
+    s.event('valid', 4, 'b', 'damage', 50, target='enemy_1', hp_after=50, killed=False)
+    s.mark_boss_watermark(5)
+    rows = s.result()['rows']
+    row, partial = rows['a'], rows['a']['partial_damage']
+    assert row['damage'] == 190
+    assert row['observed_damage'] == 120
+    assert row['effective_damage'] is None
+    assert row['engagement_damage'] is None
+    assert row['damage_scope_reason'] == row['boss_damage']['damage_scope_reason'] == DAMAGE_SCOPE_MISMATCH
+    assert 'effective_damage' not in partial
+    assert partial['observed_shield_absorbed'] == 8
+    assert partial['engagement_healing'] == pytest.approx(20 / 1.5)
+    assert rows['b']['effective_damage'] == 50
+    assert rows['b']['event_coverage_complete']
+
+
+def test_miss_does_not_hide_a_shielded_hit_or_create_a_scope_conflict():
+    s = Statistics('battle', 0, event_coverage=True)
+    s.partial_damage_enabled = True
+    s.reconcile_damage_scope = True
+    s.register_source('a', 'a')
+    s.snapshot(0, {'a': {'damage': 0, 'healing': 0}})
+    s.snapshot(3, {'a': {'damage': 25, 'healing': 0}})
+    s.event('miss', 1, 'a', 'damage', 90, target='enemy_1', cancel_reason=2,
+            real_delta=0, hp_before=100, hp_after=100, killed=False, shield_absorbed=0)
+    s.event('shielded', 2, 'a', 'damage', 25, target='enemy_1', cancel_reason=2,
+            real_delta=0, hp_before=100, hp_after=100, killed=False, shield_absorbed=25)
+    row = s.result()['rows']['a']
+    assert row['observed_damage'] == row['effective_damage'] == 25
+    assert 'damage_scope_reason' not in row
 
 
 def test_partial_recent_share_needs_exactly_aligned_native_boundary():

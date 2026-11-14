@@ -191,15 +191,8 @@ def _replay_snapshots(lines):
             sessions = BattleSessions(value['header']['feed'])
         elif 'observation' in value:
             raw = value['observation']
-            roster = raw.get('roster')
-            if roster is not None:
-                raw['roster'] = RosterSnapshot(
-                    frame=roster['frame'],
-                    entries=tuple(CharacterEntry(**entry) for entry in roster['entries']),
-                    present_unique_ids=frozenset(roster['present_unique_ids']),
-                    present_known=roster['present_known'])
             try:
-                sessions.consume(BattleObservation(**raw))
+                sessions.consume(observation_from_json(raw))
             except MappingUnavailable:
                 if 'retry' not in value:
                     raise
@@ -229,7 +222,8 @@ def observation_from_json(raw):
     if roster is not None:
         raw['roster'] = RosterSnapshot(
             frame=roster['frame'], entries=tuple(CharacterEntry(**entry) for entry in roster['entries']),
-            present_unique_ids=frozenset(roster['present_unique_ids']), present_known=roster['present_known'])
+            present_unique_ids=frozenset(roster['present_unique_ids']),
+            present_known=roster['present_known'], local_player_side=roster.get('local_player_side'))
     return BattleObservation(**raw)
 
 

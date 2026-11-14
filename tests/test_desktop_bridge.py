@@ -332,6 +332,45 @@ def test_boss_trend_preserves_unknown_scopes_and_breaks_on_event_gaps(tmp_path):
     assert state.snapshot()['boss_effective_live_analysis'] is None
 
 
+def test_verified_boss_chart_keeps_observed_rates_separate_from_complete_rates(tmp_path):
+    state = DesktopState(tmp_path)
+    sample = boss_analysis_sample(21.)
+    rows = sample['statistics']['rows']
+    rows['a']['settled_damage'] = {}
+    rows['a']['boss_damage']['settled_damage'] = dict(
+        effective_damage=90., recent_effective_damage=18., recent_effective_damage_window=(16., 21.),
+        recent_effective_damage_complete=False)
+    rows['b']['settled_damage'] = {}
+    rows['b']['boss_damage']['settled_damage'] = {}
+    sample['statistics']['boss_damage_available'] = False
+    state.accept('sample', sample)
+    snapshot = state.snapshot()
+    assert snapshot['boss_live_analysis'] is None
+    effective = snapshot['boss_effective_live_analysis']
+    assert effective['team_recent_dps'] is None
+    assert [(row['recent_dps'], row['observed_recent_dps']) for row in effective['operators']] == [
+        (None, 18.), (None, None)]
+
+    rows['a']['boss_damage']['settled_damage'].update(
+        observed_boss_damage=100., observed_boss_recent_damage=20.,
+        observed_boss_recent_window=(16., 21.), observed_boss_recent_damage_complete=True,
+        recent_effective_damage_complete=True)
+    rows['b']['boss_damage']['settled_damage'].update(
+        observed_boss_damage=50., observed_boss_recent_damage=10.,
+        observed_boss_recent_window=(16., 21.), observed_boss_recent_damage_complete=True,
+        effective_damage=45., recent_effective_damage=9.,
+        recent_effective_damage_window=(16., 21.), recent_effective_damage_complete=True)
+    state.accept('sample', sample)
+    snapshot = state.snapshot()
+    assert snapshot['boss_live_analysis']['team_recent_dps'] == 30.
+    assert snapshot['boss_effective_live_analysis']['team_recent_dps'] == 27.
+
+    state.accept('sample', dict(sample, event_status='gap'))
+    effective = state.snapshot()['boss_effective_live_analysis']
+    assert effective['team_recent_dps'] is None and effective['segment'] == 1
+    assert all(row['recent_dps'] is None and row['observed_recent_dps'] is None for row in effective['operators'])
+
+
 @pytest.mark.parametrize('basis,expected', [
     ('recent_5s', 32.), ('engagement', 40.), ('full_cycle', 20.),
 ])

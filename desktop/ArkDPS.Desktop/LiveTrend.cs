@@ -29,7 +29,7 @@ internal static class ChartLine
 internal sealed record LiveTrendOperator(string Id, string Name, int ColorIndex);
 
 internal sealed record LiveTrendPoint(double Time, long Segment, bool StartsSegment,
-    double? Team, IReadOnlyDictionary<string, double?> Operators);
+    double? Team, IReadOnlyDictionary<string, double?> Operators, IReadOnlySet<string> ObservedOperators);
 
 internal sealed class LiveTrendModel
 {
@@ -96,6 +96,7 @@ internal sealed class LiveTrendModel
         }
 
         var rates = new Dictionary<string, double?>(StringComparer.Ordinal);
+        var observedOperators = new HashSet<string>(StringComparer.Ordinal);
         bool operatorChanged = false;
         foreach (var row in data.Get("operators").Items().OrderByDescending(item => Nonnegative(item.Get("recent_dps"))))
         {
@@ -108,7 +109,10 @@ internal sealed class LiveTrendModel
                 operators[id] = new(id, name, op?.ColorIndex ?? operators.Count);
                 operatorChanged = true;
             }
-            rates[id] = Nonnegative(row.Get("recent_dps"));
+            var complete = Nonnegative(row.Get("recent_dps"));
+            var observed = Nonnegative(row.Get("observed_recent_dps"));
+            rates[id] = complete ?? observed;
+            if (!complete.HasValue && observed.HasValue) observedOperators.Add(id);
         }
 
         double? team = Nonnegative(data.Get("team_recent_dps"));
@@ -122,18 +126,22 @@ internal sealed class LiveTrendModel
             var previous = points[^1];
             team ??= previous.Team;
             foreach (var (id, rate) in previous.Operators)
-                if (!rates.TryGetValue(id, out var latest) || !latest.HasValue) rates[id] = rate;
+                if (!rates.TryGetValue(id, out var latest) || !latest.HasValue)
+                {
+                    rates[id] = rate;
+                    if (previous.ObservedOperators.Contains(id)) observedOperators.Add(id);
+                }
         }
         if (replace) starts |= points[^1].StartsSegment;
         if (replace && !operatorChanged && !statusChanged)
         {
             var last = points[^1];
             if (last.Time == time && last.Segment == segment && last.StartsSegment == starts &&
-                last.Team == team && last.Operators.Count == rates.Count &&
+                last.Team == team && last.Operators.Count == rates.Count && last.ObservedOperators.SetEquals(observedOperators) &&
                 rates.All(pair => last.Operators.TryGetValue(pair.Key, out var value) && value == pair.Value)) return;
         }
 
-        var point = new LiveTrendPoint(time, segment, starts, team, rates);
+        var point = new LiveTrendPoint(time, segment, starts, team, rates, observedOperators);
         if (replace) points[^1] = point;
         else points.Add(point);
         breakPending = false;
@@ -411,7 +419,9 @@ public sealed class LiveTrendView : Border
             return;
         }
         var point = cursor is double time ? Nearest(points, time) : points[^1];
-        readout.Text = TimeLabel(point.Time) + " · " + Json.CompactAmount(Value(point)) + " DPS" + stateNote;
+        bool observed = Kind == LiveTrendKind.Operator && owner != null && point.ObservedOperators.Contains(owner);
+        readout.Text = TimeLabel(point.Time) + " · " + (observed ? "已观察 " : "") +
+            Json.CompactAmount(Value(point)) + " DPS" + stateNote;
         if (IsReferenceCompact && cursor.HasValue && point.Team is > 0)
         {
             var shares = Participation(point, SelectedOperators());

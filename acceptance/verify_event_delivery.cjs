@@ -150,7 +150,7 @@ assert.equal(sourceCharacterUid(actor(476),'trap_a'),undefined);
 assert.equal(sourceCharacterUid(pointer(charClass,{0x538:{readPointer:()=>nullPtr}}),sourceId),undefined);
 assert.equal(sourceCharacterUid(nullPtr,null),undefined);
 const details={hp_before:88};
-for (const kind of ['damage','healing','enemy_damage','hp_damage','elemental_bar',
+    for (const kind of ['damage','healing','damage_settlement','hp_damage','elemental_bar',
                     'elemental_burst','shield_absorbed','skill_start','skill_end']){
  const event=record(sourceId,kind,1,clock,{},details,1049037);
  assert.equal(event.source_character_uid,1049037);
@@ -362,7 +362,7 @@ const enemyDamageReady=true;
 const enemyEntryConfig={bObject:{},assignable:(_base,klass)=>klass===1};
 const emitted=[];
 const targetKey=target=>target?.eid;
-const own=source=>source.startsWith('char_')||source.startsWith('token_');
+const own=source=>!!source&&(source.startsWith('char_')||source.startsWith('token_'));
 const record=(source,kind,amount,when,proof,evidence)=>emitted.push({source,kind,amount,evidence});
 ${between('function enemyDamageIdentity(', 'function includeEnemyHp(')}
 ${between('function nonlethalSettlement(', 'function dynamic(')}
@@ -377,13 +377,15 @@ const target={
     return 123;
   }})
 };
-recordEnemyDamage({source:'char_a',real:-17,mod:mod(2),target},{frame:1});
-recordEnemyDamage({source:'char_a',real:0,mod:mod(2),target},{frame:1});
-recordEnemyDamage({source:'enemy_a',real:-17,mod:mod(2),target},{frame:1});
+damageSettlement({source:'char_a',mod:mod(2)},target,-17,{frame:1});
+damageSettlement({source:'char_a',mod:mod(2)},target,0,{frame:1});
+damageSettlement({source:'enemy_a',mod:mod(2)},target,-17,{frame:1});
 assert.equal(emitted.length,1);
-assert.equal(emitted[0].kind,'enemy_damage');
+assert.equal(emitted[0].kind,'damage_settlement');
 assert.equal(emitted[0].amount,17);
 assert.equal(emitted[0].evidence.target_uid,'123');
+assert.equal(emitted[0].evidence.shield_absorbed,null);
+assert.equal(emitted[0].evidence.settlement_complete,false);
 assert.equal(enemyDamageUnknown,false);
 
 const when={frame:2};
@@ -392,31 +394,29 @@ const sourceNull={source:null,nativeSourceNull:true,real:-7,mod:mod(5),target,
                   burstTarget:enemyDamageIdentity(target)};
 const sourceOwned={...sourceNull,source:'char_a',nativeSourceNull:false};
 const sourceEnemy={...sourceOwned,source:'enemy_a'};
-recordEnemyDamage(sourceNull,when);
-assert.equal(emitted.length,1);
-recordSourcelessEnemyBurst(sourceNull,burst,when);
+settleSourcelessBurst(sourceNull,burst,when,8);
 assert.equal(emitted.length,2);
 assert.equal(emitted[1].source,null);
 assert.equal(emitted[1].amount,7);
 assert.equal(emitted[1].evidence.target_uid,'123');
 assert.equal(emitted[1].evidence.damage_type,5);
-recordEnemyDamage(sourceOwned,when);
-recordSourcelessEnemyBurst(sourceOwned,burst,when);
-recordEnemyDamage(sourceEnemy,when);
-recordSourcelessEnemyBurst(sourceEnemy,burst,when);
+damageSettlement(sourceOwned,target,-7,when);
+settleSourcelessBurst(sourceOwned,burst,when,8);
+damageSettlement(sourceEnemy,target,-7,when);
+settleSourcelessBurst(sourceEnemy,burst,when,8);
 assert.equal(emitted.length,3);
 assert.equal(emitted[2].source,'char_a');
 assert.equal(enemyDamageUnknown,false);
 
-recordSourcelessEnemyBurst({...sourceNull,nativeSourceNull:false},burst,when);
+settleSourcelessBurst({...sourceNull,nativeSourceNull:false},burst,when,8);
 assert.equal(emitted.length,3);
 assert.equal(enemyDamageUnknown,true);
 enemyDamageUnknown=false;
-recordSourcelessEnemyBurst({...sourceNull,burstTarget:{...sourceNull.burstTarget,target_uid:'122'}},burst,when);
+settleSourcelessBurst({...sourceNull,burstTarget:{...sourceNull.burstTarget,target_uid:'122'}},burst,when,8);
 assert.equal(emitted.length,3);
 assert.equal(enemyDamageUnknown,true);
 enemyDamageUnknown=false;
-recordEnemyDamage({source:'char_a',real:-17,mod:mod(2),target:null},{frame:1});
+damageSettlement({source:'char_a',mod:mod(2)},null,-17,{frame:1});
 assert.equal(enemyDamageUnknown,true);
 assert.equal(nonlethalSettlement(target,30,-17,17).hp_after,13);
 assert.equal(nonlethalSettlement(target,17,-17,17),null);
@@ -427,17 +427,28 @@ let active=0,epoch=0,fatal=null,enemyDamageUnknown=false;
 let clock={frame:30,game_time:1};
 const activeHooks=new Map(),stacks=new Map(),shieldByFrame=new Map(),registered=new Map(),hooks=[];
 const cfg={methods:[['Entity','ApplyModifier','apply'],['Unit','OnTakeDamage','take'],
-                    ['Entity','OnAfterOutputDamage','output']].map(([owner,name,address])=>({owner,name,address}))};
+                    ['Entity','OnAfterOutputDamage','output'],['Buff','OnTakeDamage','buff'],
+                    ['Character','OnSkillStart','skillStart'],['Character','OnSkillFinish','skillEnd'],
+                    ['BattleController','OnCharacterFinished','withdraw'],
+                    ['BlockDamage','_AssignDynamicVar','shield']].map(([owner,name,address])=>({owner,name,address}))};
 const Interceptor={attach:(address,handlers)=>registered.set(address,handlers)};
 const ptr=address=>address,time=()=>clock,traceHpContext=false,enemyDamageReady=true;
 const enemyEntryConfig={bObject:{},assignable:()=>true};
-const emitted=[],record=(source,kind,amount,when,proof,evidence)=>{
- const event={source,kind,amount,when,proof,evidence};emitted.push(event);return event;
+const emitted=[],record=(source,kind,amount,when,proof,evidence,sourceUid)=>{
+ const event={source,kind,amount,when,proof,evidence,sourceUid};emitted.push(event);return event;
 };
-const sourceCharacterUid=()=>undefined,captureMitigation=()=>{},mitigationEvidence=()=>null,noteUnpairedDamage=()=>{};
-const own=source=>source.startsWith('char_')||source.startsWith('token_');
+const sourceCharacterUid=unit=>unit.uid,captureMitigation=scope=>{scope.mitigation=scope.mod.formula;},noteUnpairedDamage=()=>{};
+const mitigationEvidence=(scope,_type,amount,verifiedShield=false)=>scope.mitigation&&(scope.mod.cancel===0||verifiedShield)
+ ? {mitigation_before:scope.mitigation.before,mitigation_after:amount}:null;
+const shieldMitigationEvidence=(scope,type,incoming)=>scope.mitigation?.after===incoming
+ ? mitigationEvidence(scope,type,incoming,true):null;
+const own=source=>!!source&&(source.startsWith('char_')||source.startsWith('token_'));
 const entityId=unit=>{if(unit.isNull())throw new Error('null actor');return unit.id;};
 const targetKey=unit=>unit?.id||null,targetHp=unit=>unit?.hp??null,fp=slot=>slot.number;
+const buff=value=>value,dynamic=value=>value.hp,fixedArg=value=>value;
+const SKILL_START_METHODS=new Set(['OnSkillStart']),SKILL_END_METHODS=new Set(['OnSkillFinish']);
+const skillIdentity=()=>({skill_id:'verified_skill'});
+let shieldUnknown=false;
 const sameMitigationTime=(a,b)=>a.frame===b.frame&&a.game_time===b.game_time;
 const mitigationTargetId=unit=>unit?.id.startsWith('enemy_')?unit.id:null;
 ${between('const activeModifiers=new Map();', 'function dynamic(')}
@@ -458,8 +469,11 @@ function modifier(from,to,amount,type){
  return m;
 }
 function enter(method,mod,threadId=7){
+ return enterArgs(method,[mod.to,mod],threadId);
+}
+function enterArgs(method,args,threadId=7){
  const hook=registered.get(method),context={threadId};
- hook.onEnter.call(context,[mod.to,mod]);
+ hook.onEnter.call(context,args);
  return ()=>hook.onLeave.call(context);
 }
 function nestedKill({source=nil,parentDelta=0,cancel=0,uidChanges=false,childCancel=0,sourceChanges=false,
@@ -499,6 +513,11 @@ for(const source of [nil,blaze]){
  const events=nestedKill({source});
  const parent=events.find(event=>event.source==='char_qiubai'&&event.kind==='damage');
  const child=events.find(event=>event.kind==='elemental_burst');
+ const settlement=events.find(event=>event.kind==='damage_settlement');
+ assert.ok(settlement);
+ assert.ok(events.indexOf(settlement)<events.indexOf(child));
+ assert.equal(settlement.amount,10);
+ assert.equal(settlement.source,source===nil ? null : 'char_blaze');
  assert.equal(parent.amount,8);
  assert.equal(parent.evidence.settled_after_nested_kill,true);
  assert.equal(parent.evidence.real_delta,0);
@@ -508,7 +527,10 @@ for(const source of [nil,blaze]){
  assert.equal(child.evidence.real_delta,-10);
  assert.equal(child.evidence.hp_before,10);
  assert.equal(child.evidence.settled_after_nested_kill,undefined);
- assert.equal(events.some(event=>event.kind==='enemy_damage'&&event.source==='char_qiubai'),false);
+ const parentSettlement=events.find(event=>event.kind==='damage_settlement'&&event.source==='char_qiubai');
+ assert.equal(parentSettlement.amount,0);
+ assert.equal(parentSettlement.evidence.nominal_amount,8);
+ assert.equal(parentSettlement.evidence.settled_after_nested_kill,true);
 }
 for(const changes of [{parentDelta:-1},{cancel:1},{childCancel:1},{uidChanges:true},{sourceChanges:true},
                       {otherPointer:true},{otherThread:true},{extraParent:true},{shield:true},
@@ -516,6 +538,142 @@ for(const changes of [{parentDelta:-1},{cancel:1},{childCancel:1},{uidChanges:tr
  const events=nestedKill(changes);
  assert.equal(events.some(event=>event.evidence?.settled_after_nested_kill),false,JSON.stringify(changes));
 }
+function zeroHpSettlement(cancel,{absorbed=0,unknownShield=false,amount=8,loss=0}={}){
+ const before=emitted.length;
+ clock={frame:clock.frame+1,game_time:clock.game_time+1/30};
+ const unit=entity('enemy_a',31,10);
+ const mod=modifier(qiubai,unit,amount,2);
+ const leave=enter('apply',mod);
+ if(absorbed>0)noteShield(clock.frame,unit,absorbed);
+ if(unknownShield)markShieldUnknown(clock.frame,unit);
+ mod.cancel=cancel;
+ mod.real=-loss;
+ unit.hp-=loss;
+ leave();
+ return emitted.slice(before).filter(event=>event.kind==='damage');
+}
+assert.equal(zeroHpSettlement(2).length,0,'the nominal value of a proved MISS is not damage');
+assert.equal(zeroHpSettlement(2,{absorbed:8}).length,1,'a MISS code alone does not discard measured absorption');
+assert.equal(zeroHpSettlement(2,{unknownShield:true}).length,1,'keep damage evidence with an unverified shield');
+assert.equal(zeroHpSettlement(2,{loss:2}).length,1,'a MISS code cannot erase contradictory HP loss');
+assert.equal(zeroHpSettlement(0,{absorbed:8}).length,1,'fully absorbed ordinary hits remain credited');
+for(const reason of [3,4,5,6,7])
+ assert.equal(zeroHpSettlement(reason).length,1,'only confirmed MISS behavior changes');
+
+function takeShield(mod,amount,{threadId=7,corrupt=false}={}){
+ const blackboard={hp:100};
+ const endBuff=enterArgs('buff',[{key:'enemy_shield',hasShield:1,source:mod.to}],threadId);
+ const endShield=enterArgs('shield',[{},blackboard,mod,0,amount],threadId);
+ blackboard.hp-=amount+(corrupt?1:0);
+ endShield();endBuff();
+}
+function actualHit({amount=17,hpLoss=17,shield=0,shieldThread=7,unmatched=false,
+                    wrongModifier=false,corruptShield=false,uidChanges=false,secondShield=0,
+                    settledAmount=amount,cancel=0,hasOutput=true,repeatDelta=null,sameFrame=false,
+                    receiver=null}={}){
+ const before=emitted.length;
+ if(!sameFrame)clock={frame:clock.frame+1,game_time:clock.game_time+1/30};
+ const enemy=receiver||entity('enemy_a',31,100);
+ const mod=modifier(qiubai,enemy,amount,2);
+ mod.formula={before:amount*2,after:amount};
+ const leave=unmatched?null:enter('apply',mod);
+ const leaveTake=enter('take',mod);
+ if(shield>0)takeShield(wrongModifier?modifier(qiubai,enemy,amount,2):mod,shield,
+                        {threadId:shieldThread,corrupt:corruptShield});
+ if(secondShield>0)takeShield(mod,secondShield,{corrupt:true});
+ enemy.hp-=hpLoss;
+ mod.real=-hpLoss;
+ leaveTake();
+ mod.amount=settledAmount;
+ mod.cancel=cancel;
+ if(hasOutput)enter('output',mod)();
+ if(repeatDelta!==null){
+  mod.real=-repeatDelta;
+  enter('output',mod)();
+ }
+ if(uidChanges)enemy.uid++;
+ leave?.();
+ return emitted.slice(before).filter(event=>event.kind==='damage_settlement');
+}
+let settled=actualHit();
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,17);
+assert.equal(settled[0].sourceUid,1);
+assert.equal(settled[0].evidence.nominal_amount,17);
+assert.equal(settled[0].evidence.shield_absorbed,0);
+assert.equal(settled[0].evidence.settlement_complete,true);
+assert.equal(settled[0].evidence.mitigation_before,34);
+settled=actualHit({hpLoss:10,shield:7});
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,10);
+assert.equal(settled[0].evidence.shield_absorbed,7);
+assert.equal(settled[0].evidence.settlement_complete,true);
+settled=actualHit({hpLoss:0,shield:17});
+assert.equal(settled.length,1);
+assert.ok(settled[0].amount===0);
+assert.equal(settled[0].evidence.shield_absorbed,17);
+for(const hasOutput of [true,false]){
+ settled=actualHit({hpLoss:0,shield:17,settledAmount:0,cancel:3,hasOutput});
+ assert.equal(settled.length,1);
+ assert.equal(settled[0].amount,0);
+ assert.equal(settled[0].evidence.shield_absorbed,17);
+ assert.equal(settled[0].evidence.nominal_amount,17);
+ assert.equal(settled[0].evidence.mitigation_before,34);
+ assert.equal(settled[0].evidence.mitigation_after,17);
+ assert.equal(settled[0].evidence.settlement_complete,true);
+}
+settled=actualHit({hpLoss:10,shield:4,secondShield:3});
+assert.equal(settled[0].evidence.shield_absorbed,4);
+assert.equal(settled[0].evidence.settlement_complete,false);
+settled=actualHit({hpLoss:0,shield:17,wrongModifier:true,settledAmount:0,cancel:3,hasOutput:false});
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,0);
+assert.equal(settled[0].evidence.shield_absorbed,null);
+assert.equal(settled[0].evidence.nominal_amount,undefined);
+assert.equal(settled[0].evidence.settlement_complete,false);
+settled=actualHit({hpLoss:0,hasOutput:false});
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,0);
+assert.equal(settled[0].evidence.shield_absorbed,null);
+assert.equal(settled[0].evidence.nominal_amount,undefined);
+assert.equal(settled[0].evidence.settlement_complete,false);
+settled=actualHit({repeatDelta:17});
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,17);
+const repeatedTarget=entity('enemy_a',31,100);
+assert.equal(actualHit({receiver:repeatedTarget})[0].amount,17);
+assert.equal(actualHit({receiver:repeatedTarget,sameFrame:true})[0].amount,17);
+enemyDamageUnknown=false;
+settled=actualHit({repeatDelta:10});
+assert.equal(settled.length,1);
+assert.equal(settled[0].amount,0);
+assert.equal(settled[0].evidence.settlement_complete,false);
+assert.equal(settled[0].evidence.nominal_amount,undefined);
+assert.equal(enemyDamageUnknown,true);
+for(const options of [{shieldThread:8},{wrongModifier:true},{corruptShield:true}]){
+ settled=actualHit({hpLoss:10,shield:7,...options});
+ assert.equal(settled.length,1);
+ assert.equal(settled[0].amount,10);
+ assert.equal(settled[0].evidence.shield_absorbed,null);
+ assert.equal(settled[0].evidence.settlement_complete,false);
+}
+for(const options of [{unmatched:true},{uidChanges:true}]){
+ settled=actualHit(options);
+ assert.equal(settled.length,1);
+ assert.equal(settled[0].amount,17);
+ assert.equal(settled[0].evidence.target_uid,'31');
+ assert.equal(settled[0].evidence.nominal_amount,undefined);
+ assert.equal(settled[0].evidence.mitigation_before,undefined);
+ assert.equal(settled[0].evidence.settlement_complete,false);
+}
+const duplicateQiubai=entity('char_qiubai',20);
+const skillStartIndex=emitted.length;
+enterArgs('skillStart',[qiubai])();
+enterArgs('skillStart',[duplicateQiubai])();
+enterArgs('skillEnd',[duplicateQiubai])();
+enterArgs('withdraw',[{},qiubai,{toInt32:()=>2}])();
+assert.deepEqual(emitted.slice(skillStartIndex).map(item=>[item.kind,item.sourceUid]),
+ [['skill_start',1],['skill_start',20],['skill_end',20],['skill_end',1]]);
 `, {assert}, {filename: 'product-nested-elemental-settlement'});
 
 vm.runInNewContext(`
@@ -532,6 +690,7 @@ const Interceptor={attach(address,hook){
 const time=()=>{clockReads++;return {frame,game_time:gameTime};};
 const targetKey=pointer=>pointer.id;
 const entityId=pointer=>pointer.id;
+const damageTargetUid=pointer=>pointer.add(0x18).readU32();
 const own=id=>id.startsWith('char_')||id.startsWith('token_');
 const recorded=[];
 const record=(source,kind,amount,when,proof,evidence)=>recorded.push({source,kind,amount,when,evidence});

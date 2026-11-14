@@ -81,6 +81,112 @@ SKADI = entry('char_263_skadi', 22)
 SUMMON_ROSTER = roster([OTTER, SKADI], present=(11,), frame=10)
 
 
+def test_hit_settlement_retains_local_hp_and_shield_with_isolated_evidence_gaps():
+    same_side_copy = replace(CHAR_A, unique_id=3)
+    opponent = replace(CHAR_A, unique_id=4, player_side=1)
+    players = replace(roster([CHAR_A, same_side_copy, opponent, CHAR_B], frame=10),
+                      local_player_side=0)
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a'), row('char_b')], 0, 10), players, source_attribution=True)
+    adapter.start_events(session='battle-1', frame=10, sequence=0)
+    statistics = adapter.statistics
+    statistics.settlement_enabled = statistics.partial_damage_enabled = statistics.reconcile_damage_scope = True
+    statistics.observe_enemy_damage(complete=True)
+    adapter.update(sample([row('char_a', 100), row('char_b', 50)], 2, 12),
+                   paired(players, 12), source_attribution=True)
+    sequence = 0
+
+    def event(kind, source='char_a', uid=1, amount=0, **evidence):
+        nonlocal sequence
+        sequence += 1
+        adapter.accept_event(session='battle-1', sequence=sequence, frame=11, game_time=1,
+                             source=source, source_character_uid=uid, kind=kind, amount=amount, **evidence)
+
+    def hit(hp, *, uid=1, source='char_a', shield=None, complete=False, nominal=None, **evidence):
+        event('damage_settlement', source, uid, hp, target='enemy_1506_patrt',
+              target_uid='77', target_instance='opaque', damage_type=1,
+              shield_absorbed=shield, settlement_complete=complete, nominal_amount=nominal, **evidence)
+
+    event('skill_start', skill_key='skill_a', skill_method='Character.SwitchToSkillState')
+    hit(30, shield=10, complete=True, nominal=50, mitigation_before=100, mitigation_after=50)
+    hit(20, uid=3, shield=None, nominal=20)
+    hit(0, shield=15, complete=True, nominal=15, mitigation_before=30, mitigation_after=15)
+    hit(500, uid=4, shield=0, complete=True, nominal=500)
+    hit(0)
+    hit(0, shield=0, complete=True)
+    hit(10, uid=2, source='char_b', shield=0, complete=True)
+    event('damage', amount=200, target='enemy_1506_patrt', hp_after=15, killed=False)
+    adapter.event_stream.watermark(session='battle-1', sequence=sequence, frame=12, game_time=2)
+    adapter.last_result = statistics.result()
+    result = adapter.result()
+    a = result['rows']['char_a']
+    lane = a['settled_damage']
+    assert a['damage'] == 100
+    assert a['damage_scope_reason']
+    assert lane['effective_damage'] == 75
+    assert lane['effective_damage_by_type'] == {'physical': 75}
+    assert (lane['known_hp_damage'], lane['known_shield_damage']) == (50, 25)
+    assert lane['unverified_hits'] == 2 and lane['observed_hits'] == 4 and lane['unverified_share'] == .5
+    assert lane['observed_skill_damage_effective'] == 55
+    assert lane['observed_non_skill_damage_effective'] == 20
+    assert lane['observed_mitigation_rate'] == 50 and lane['mitigation_matched_hits'] == 2
+    assert a['boss_damage']['settled_damage']['effective_damage'] == 75
+    assert result['rows']['char_b']['settled_damage']['effective_damage'] == 10
+    assert result['enemy_damage']['by_uid']['77']['amount'] == 60
+    assert result['settlement_unassigned']['hits'] == 0
+
+    statistics.invalidate_events(2)
+    frozen = statistics.result()['rows']['char_a']['settled_damage']
+    assert frozen['effective_damage'] == 75 and frozen['unverified_share'] is None
+
+
+def test_unverified_hit_with_positive_independent_shield_or_hp_remains_visible():
+    adapter = BattleStatisticsAdapter()
+    player = replace(BASE, local_player_side=0)
+    adapter.update(sample([row('char_a')], 0, 10), player, source_attribution=True)
+    adapter.start_events(session='battle-1', frame=10, sequence=0)
+    stats = adapter.statistics
+    stats.settlement_enabled = stats.partial_damage_enabled = True
+    adapter.update(sample([row('char_a', 60)], 1, 11), paired(player, 11), source_attribution=True)
+    fields = dict(session='battle-1', frame=11, game_time=1, kind='damage_settlement',
+                  source='char_a', source_character_uid=1, target='enemy_1506_patrt',
+                  target_uid='5', target_instance='opaque', damage_type=1, settlement_complete=True)
+    adapter.accept_event(sequence=1, amount=40, shield_absorbed=-1, **fields)
+    adapter.accept_event(sequence=2, amount=30, shield_absorbed=10, **{**fields, 'source_character_uid': 99})
+    adapter.accept_event(sequence=3, amount=3, shield_absorbed=4, **fields)
+    adapter.accept_event(sequence=3, amount=3, shield_absorbed=4, **fields)
+    adapter.event_stream.watermark(session='battle-1', sequence=3, frame=11, game_time=1)
+    result = stats.result()
+    assert result['rows']['char_a']['settled_damage']['effective_damage'] == 47
+    assert result['rows']['char_a']['settled_damage']['unverified_hits'] == 1
+    assert result['settlement_unassigned'] == {'hits': 1, 'hp': 30, 'shield': 10}
+
+
+def test_source_null_burst_only_credits_its_target_uid_and_consumes_bar_once():
+    adapter = BattleStatisticsAdapter()
+    players = replace(BASE, local_player_side=0)
+    adapter.update(sample([row('char_a')], 0, 10), players, source_attribution=True)
+    adapter.start_events(session='battle-1', frame=10, sequence=0)
+    stats = adapter.statistics
+    stats.settlement_enabled = stats.partial_damage_enabled = True
+    stats.observe_enemy_damage(complete=True)
+    adapter.update(sample([row('char_a')], 1, 11), paired(players, 11), source_attribution=True)
+    context = dict(session='battle-1', frame=11, game_time=1, target='enemy_1506_patrt',
+                   target_instance='reused-pointer')
+    adapter.accept_event(sequence=1, kind='elemental_bar', source='char_a', amount=10,
+                         source_character_uid=1, target_uid='77',
+                         **{key: value for key, value in context.items() if key != 'target'})
+    for sequence, uid, amount in ((2, '78', 20), (3, '77', 30), (4, '77', 40)):
+        adapter.accept_event(sequence=sequence, kind='damage_settlement', source=None, amount=amount,
+                             target_uid=uid, damage_type=5, shield_absorbed=0, settlement_complete=True,
+                             **context)
+    adapter.event_stream.watermark(session='battle-1', sequence=4, frame=11, game_time=1)
+    result = stats.result()
+    assert result['rows']['char_a']['settled_damage']['effective_damage'] == 30
+    assert result['enemy_damage']['by_uid'] == {'77': {'eid': 'enemy_1506_patrt', 'amount': 30}}
+    assert result['settlement_unassigned'] == {'hits': 2, 'hp': 60, 'shield': 0}
+
+
 def test_shared_prefab_for_player_and_map_character_stays_ambiguous():
     map_a = entry('char_a', 9, predefined=True)
     adapter = BattleStatisticsAdapter()

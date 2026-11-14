@@ -165,6 +165,8 @@ class BattleStatisticsAdapter:
         self.source_uid_owners: dict[int, set[str]] = {}
         self.source_observed_uids: dict[str, set[int]] = {}
         self.source_aliases: dict[str, str] = {}
+        self.settlement_roster: dict[int, set[CharacterEntry]] = {}
+        self.settlement_sides: set[int] = set()
 
     @property
     def active(self) -> bool:
@@ -255,6 +257,8 @@ class BattleStatisticsAdapter:
         self.source_uid_owners.clear()
         self.source_observed_uids.clear()
         self.source_aliases.clear()
+        self.settlement_roster.clear()
+        self.settlement_sides.clear()
         self.last_roster_frame = roster.frame
         self.session_switches += 1
 
@@ -304,6 +308,14 @@ class BattleStatisticsAdapter:
             self.event_stream.accept(**event)
             return
         source = event.get('source')
+        if self.statistics.settlement_enabled:
+            if kind == 'damage_settlement':
+                self.event_stream.accept(settlement_identity=self._settlement_identity(
+                    source, event.get('source_character_uid')), **event)
+                return
+            if kind in ('elemental_bar', 'skill_start', 'skill_end'):
+                event['settlement_identity'] = self._settlement_identity(
+                    source, event.get('source_character_uid'))
         supplemental = kind in ('hp_damage', 'skill_start', 'skill_end', 'enemy_damage')
         if supplemental and self.event_stream.closed:
             # Supplemental evidence may still be in flight after authoritative
@@ -312,6 +324,12 @@ class BattleStatisticsAdapter:
         # Target-side HP evidence is supplemental. An unattributable HP record
         # must not tear down the authoritative damage/engagement stream; the
         # ordered receiver drops it while advancing the shared sequence.
+        legacy_damage = kind in ('damage', 'elemental_burst', 'elemental_bar')
+        if (self.statistics.settlement_enabled and legacy_damage and
+                (source is not None or kind != 'elemental_burst') and
+                (not isinstance(source, str) or not source)):
+            self.event_stream.accept(unresolved_source=True, **event)
+            return
         if not supplemental and kind != 'elemental_burst' and (
                 not isinstance(source, str) or not source):
             self.event_stream.stop()
@@ -349,6 +367,38 @@ class BattleStatisticsAdapter:
                 raise StreamGap('event source cannot be registered')
         self.event_stream.accept(verified_skill_end_owner, **event)
 
+    def _settlement_identity(self, source, uid):
+        """Resolve a hit using its UID and the battle's verified player side."""
+        unknown = ('unknown', None, None)
+        if not isinstance(source, str) or not source or type(uid) is not int or uid <= 0:
+            return unknown
+        if classify_unmapped_source(source) is not None:
+            return ('foreign', None, None)
+        entries = self.settlement_roster.get(uid)
+        if not entries or len(entries) != 1:
+            return unknown
+        entry, = entries
+        if entry.is_token:
+            hosts = self.settlement_roster.get(entry.host_uid) or ()
+            if len(hosts) != 1:
+                return unknown
+            actor, = hosts
+            if actor.is_token or actor.cid != entry.host_key or actor.player_side != entry.player_side:
+                return unknown
+        else:
+            actor = entry
+        if entry.cid != source and (source in self.mapping_conflicts
+                                    or self.source_aliases.get(source) != actor.cid):
+            return unknown
+        if len(self.settlement_sides) != 1:
+            # A roster entry proves identity, even when the active player
+            # side for this battle is not yet established.
+            return ('unknown', actor.cid, actor.unique_id)
+        side, = self.settlement_sides
+        if actor.player_side != side and not (actor.is_predefined and actor.player_side is None):
+            return ('foreign', None, None)
+        return ('local', actor.cid, actor.unique_id)
+
     def _register(self, cid: str, owner: str) -> bool:
         if cid in self.owner_map.owners and self.owner_map.owners[cid] != owner:
             self.mapping_conflicts.add(cid)
@@ -365,6 +415,7 @@ class BattleStatisticsAdapter:
         # Roles may disappear from the active roster on retreat. Preserve
         # verified ownership evidence within this generation.
         for entry in roster.entries:
+            self.settlement_roster.setdefault(entry.unique_id, set()).add(entry)
             owner = roster_map.owners.get(entry.cid)
             if owner is not None:
                 self.source_uid_owners.setdefault(entry.unique_id, set()).add(owner)
@@ -430,6 +481,9 @@ class BattleStatisticsAdapter:
         roster_map = build_owner_map(roster)
         self.source_attribution |= source_attribution
         if self.source_attribution:
+            if type(roster.local_player_side) is int:
+                self.settlement_sides.add(roster.local_player_side)
+            self.statistics.settlement_sides_known = len(self.settlement_sides) == 1
             self._bind_event_sources(roster, roster_map, source_events)
         # New roster evidence can map tokens that were not attributable when
         # the session started. Never change an existing mapping in-place.

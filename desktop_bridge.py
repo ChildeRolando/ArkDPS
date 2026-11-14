@@ -36,7 +36,7 @@ from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
-                         team_status)
+                         settled_boss_damage_rates, team_status)
 import stage_names
 
 PROTOCOL_VERSION = 1
@@ -259,33 +259,42 @@ class DesktopState:
                            if row['recent_dps'] is not None}
                 if len(windows) == 1:
                     self.live_analysis['observed_team_recent_dps'] = sum(known_rates)
-        boss_statistics = panel_statistics(PanelConfig(boss_only=True), statistics)
-        if boss_statistics['boss_damage_available'] or self.boss_live_analysis is not None:
-            boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
-            self.boss_live_analysis = self.boss_trend_point(
-                boss_statistics, battle_id, game_time, self.boss_live_analysis,
-                terminal=terminal, covered=boss_coverage)
-            self.boss_effective_live_analysis = self.boss_trend_point(
-                boss_statistics, battle_id, game_time, self.boss_effective_live_analysis,
-                terminal=terminal, covered=boss_coverage, effective=True)
+        boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
+        for effective, state_field in ((False, 'boss_live_analysis'), (True, 'boss_effective_live_analysis')):
+            config = PanelConfig(boss_only=True, effective_only=effective)
+            boss_statistics = panel_statistics(config, statistics)
+            previous_boss = getattr(self, state_field)
+            if boss_statistics['boss_damage_available'] or previous_boss is not None:
+                setattr(self, state_field, self.boss_trend_point(
+                    boss_statistics, battle_id, game_time, previous_boss,
+                    terminal=terminal, covered=boss_coverage, effective=effective))
         self.analysis_interrupted = False
 
     def boss_trend_point(self, statistics, battle_id, game_time, previous, *,
                          terminal, covered, effective=False):
-        team_recent, operators = live_damage_rates(statistics, game_time, effective=effective)
-        complete, _, _ = team_status(statistics)
+        settled = settled_boss_damage_rates(statistics, game_time, effective=effective)
+        if settled is None:
+            team_recent, operators = live_damage_rates(statistics, game_time, effective=effective)
+            complete, _, _ = team_status(statistics)
+        else:
+            team_recent, operators = settled
+            complete = team_recent is not None
         if not complete or terminal or not covered:
             team_recent = None
         if terminal or not covered:
             for operator in operators:
                 operator['recent_dps'] = None
+                if 'observed_recent_dps' in operator:
+                    operator['observed_recent_dps'] = None
         segment = 0
         if previous is not None:
             segment = previous['segment']
-            current_rates = {row['owner_id']: row['recent_dps'] for row in operators}
+            def operator_rate(row):
+                return row['recent_dps'] if row['recent_dps'] is not None else row.get('observed_recent_dps')
+            current_rates = {row['owner_id']: operator_rate(row) for row in operators}
             lost_coverage = not terminal and (
                 previous['team_recent_dps'] is not None and team_recent is None
-                or any(row['recent_dps'] is not None and current_rates.get(row['owner_id']) is None
+                or any(operator_rate(row) is not None and current_rates.get(row['owner_id']) is None
                        for row in previous['operators']))
             if self.analysis_interrupted or lost_coverage:
                 segment += 1
@@ -323,6 +332,10 @@ class DesktopState:
             reason = statistics['boss_damage_reason'] or reason
             complete = complete and statistics['boss_damage_available']
             note = ''
+        unassigned = statistics.get('settlement_unassigned') or {}
+        if config.category.value == 'damage' and unassigned.get('hits', 0) > 0:
+            gap_note = f"{unassigned['hits']} 笔命中的来源或目标尚未确认，未分配给干员"
+            note = ' · '.join(filter(None, (note, gap_note)))
         rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
