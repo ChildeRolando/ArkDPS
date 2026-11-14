@@ -268,7 +268,7 @@ public partial class MainWindow
             current = Native.Bounds(this);
             Require(current[0] == moved.Right && current[1] == moved.Top && current[3] == moved.Height,
                     "side window did not follow the fixture move and resize");
-            VerifySideZOrder(fixture, moved, current);
+            await VerifySideZOrder(fixture, moved, current);
             fixture.WindowState = WindowState.Minimized;
             await Settle();
             UpdateSidePlacement();
@@ -340,7 +340,7 @@ public partial class MainWindow
         enemyPin!.IsChecked = false;
     }
 
-    private void VerifySideZOrder(Window player, System.Drawing.Rectangle playerBounds, int[] sideBounds)
+    private async Task VerifySideZOrder(Window player, System.Drawing.Rectangle playerBounds, int[] sideBounds)
     {
         var side = new System.Drawing.Rectangle(sideBounds[0], sideBounds[1], sideBounds[2], sideBounds[3]);
         nint playerHandle = Native.Handle(player);
@@ -383,13 +383,22 @@ public partial class MainWindow
                     $"next player={NextFixture(playerHandle):X}, next side={NextFixture(sideHandle):X}, " +
                     $"foreground before={foreground:X}, after={GetForegroundWindow():X}");
 
-            // Switching to another window also transfers focus. Leaving the
-            // sidebar active here would model a user interacting with it.
-            Require(cover.Activate() && GetForegroundWindow() == coverHandle &&
-                    SetWindowPos(sideHandle, coverHandle, 0, 0, 0, 0, noMoveSizeOrActivate) &&
+            // Use input directed at our cover. Programmatic activation can
+            // be refused when the previous verification process has exited.
+            Require(SetWindowPos(coverHandle, 0, 0, 0, 0, 0, noMoveSizeOrActivate),
+                    "could not raise covering fixture");
+            int clickX = playerBounds.Left + 20;
+            int clickY = playerBounds.Top + 20;
+            Require(GetAncestor(WindowFromPoint(new PointNative { X = clickX, Y = clickY }), 2) == coverHandle,
+                    "covering fixture did not own the verification click position");
+            Click(clickX, clickY);
+            await WaitForClick(() => GetForegroundWindow() == coverHandle);
+            Require(GetForegroundWindow() == coverHandle, "covering fixture did not gain focus after the click");
+            Require(SetWindowPos(sideHandle, coverHandle, 0, 0, 0, 0, noMoveSizeOrActivate) &&
                     SetWindowPos(playerHandle, sideHandle, 0, 0, 0, 0, noMoveSizeOrActivate) &&
                     NextFixture(coverHandle) == sideHandle && NextFixture(sideHandle) == playerHandle,
-                    "could not activate a covering window in front of the emulator");
+                    $"could not place an active covering fixture: side={NextFixture(coverHandle):X}, " +
+                    $"player={NextFixture(sideHandle):X}, foreground={GetForegroundWindow():X}");
             UpdateSidePlacement();
             Require(NextFixture(coverHandle) == playerHandle && NextFixture(playerHandle) == sideHandle &&
                     GetForegroundWindow() == coverHandle,
