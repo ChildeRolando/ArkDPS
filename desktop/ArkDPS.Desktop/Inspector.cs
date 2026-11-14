@@ -158,8 +158,10 @@ public sealed class Inspector : Border
         string effectiveLabel=(partialEffective ? "已观察" : "")+(bossScope ? "首领有效伤害" : "有效伤害");
         AddStat(stats,effectiveLabel,Number(detail.Get("effective_damage")),showZero:partialEffective);
         string effectiveReason=detail.Text("effective_damage_reason");
-        AddStat(stats,"过量伤害",Number(detail.Get("overkill_damage")));
-        AddStat(stats,"溢出伤害率",scopeReason.Length==0 ? OverkillRate(row,detail) : "—");
+        var overflow=OverkillReading(row,detail,view);
+        AddStat(stats,overflow.Observed ? "已观察过量伤害" : "过量伤害",Number(overflow.Amount),
+            showZero:overflow.Observed || double.IsFinite(overflow.Fraction));
+        AddStat(stats,overflow.Label,Percentage(overflow.Fraction));
         if(!bossScope)
         {
             AddStat(stats,"治疗",row.UiInt("healing"));
@@ -169,8 +171,7 @@ public sealed class Inspector : Border
         }
         if(stats.Children.Count>0) body.Children.Add(stats);
         if(effectiveReason.Length>0) body.Children.Add(Text("有效伤害未知："+effectiveReason,10,false,"Muted"));
-        body.Children.Add(Text(scopeReason.Length>0 ? scopeReason : OverkillNote(row,detail,view),
-            10,false,"Muted",new Thickness(0,4,0,2)));
+        body.Children.Add(Text(overflow.Explanation,10,false,"Muted",new Thickness(0,4,0,2)));
         if(row.Get("burst_unknown_reason").ValueKind==JsonValueKind.String)
             body.Children.Add(Text("元素爆条归属未知："+row.Text("burst_unknown_reason"),10,false,"Muted",new Thickness(0,2,0,0)));
 
@@ -658,8 +659,9 @@ public sealed class Inspector : Border
                         scopeReason.Length>0 ? scopeReason :
                         partialEffective ? MetricCoverage.Detail(coverage,"effective_damage") :
                         effectiveReason.Length>0 ? effectiveReason :
-                        detail.Get("effective_damage").ValueKind!=JsonValueKind.Number ? OverkillNote(row,detail,view) : "")
-                        : "归属于该干员的累计结算伤害，含过量伤害。"));
+                        detail.Get("effective_damage").ValueKind!=JsonValueKind.Number ? LegacyOverkillNote(row,detail,view) : "")
+                        : bossScope ? "已归属于该干员的首领命中结算伤害，含过量伤害。"
+                        : "归属于该干员的原生累计总伤，含过量伤害。"));
             }
             string rateHint=category=="shield" ? "累计归属于该干员的实际护盾吸收量。"
                 : DescribeRate(config.Text("rate_basis"),category=="healing",effective);
@@ -688,11 +690,9 @@ public sealed class Inspector : Border
             SetMetric(4,presence,WithNote("累加干员确认在场的战斗时长。",
                 presence=="—" ? "在场时间覆盖不足。" : ""));
 
-            double overflow=scopeReason.Length>0 ? double.NaN : OverkillFraction(row,detail);
-            string overflowNote=double.IsFinite(overflow) ? ""
-                : row.Get("damage").TryNumber(double.NaN)==0 ? "累计总伤为零，无法计算占比。"
-                : scopeReason.Length>0 ? scopeReason : OverkillNote(row,detail,view);
-            overkill.Update(overflow,WithNote("过量伤害 ÷ 总伤害（含过量）。",overflowNote));
+            var overflow=OverkillReading(row,detail,view);
+            overkill.Caption=overflow.Label;
+            overkill.Update(overflow.Fraction,overflow.Explanation);
             var mitigationReading=MitigationReading(row,detail);
             mitigation.Caption=mitigationReading.Label;
             mitigation.Update(mitigationReading.Fraction,WithNote(mitigationReading.Explanation,MetricCoverage.Detail(coverage,"mitigation")));
@@ -898,13 +898,50 @@ public sealed class Inspector : Border
         if(text.Length>0) return text;
         return effective ? detail.UiInt(detailExact) : row.UiInt(exact);
     }
-    private static double OverkillFraction(JsonElement row,JsonElement detail)
+    private static (double Amount,double Fraction,bool Observed,string Label,string Explanation)
+        OverkillReading(JsonElement row,JsonElement detail,JsonElement view)
     {
+        const string label="伤害溢出率";
+        var matchedBase=detail.Get("overkill_base_damage");
+        if(matchedBase.ValueKind!=JsonValueKind.Undefined)
+        {
+            const string formula="过量伤害 ÷ 同一批已核实命中的（有效伤害 ＋ 过量伤害）。";
+            bool complete=detail.Bool("overkill_coverage_complete");
+            double amount=detail.Number(complete ? "overkill_damage" : "observed_overkill_damage",double.NaN);
+            double total=matchedBase.TryNumber(double.NaN);
+            double fraction=total>0 && amount>=0 && amount<=total ? amount/total : double.NaN;
+            bool observed=!complete && double.IsFinite(amount);
+            string explanation=formula;
+            double hits=detail.Number("overkill_matched_hits",0);
+            if(hits>0)
+                explanation+=$"\n已核实 {Number(hits)} 击。";
+            double missed=detail.Number("overkill_unverified_share",double.NaN);
+            if(!complete && missed is >=0 and <=1)
+                explanation+=$"\n未核实命中占比 {Percentage(missed)}。";
+            string reason=detail.Text("overkill_unknown_reason");
+            if(reason.Length>0)
+                explanation+="\n"+reason;
+            if(!double.IsFinite(fraction))
+            {
+                if(total==0)
+                    explanation+="\n同口径伤害为零，无法计算占比。";
+                else if(reason.Length==0)
+                    explanation+="\n尚缺少用于计算溢出率的命中证据。";
+            }
+            return (amount,fraction,observed,observed ? "已观察"+label : label,explanation);
+        }
+
         var evidence=detail.Get("settled_damage").ValueKind==JsonValueKind.Object ? detail : row;
-        double total=row.Get("damage").TryNumber(double.NaN);
-        return total>0 ? evidence.Get("overkill_damage").TryNumber(double.NaN)/total : double.NaN;
+        double legacyTotal=detail.Number("damage",row.Number("damage",double.NaN));
+        double legacyAmount=evidence.Number("overkill_damage",double.NaN);
+        string scopeReason=detail.Text("damage_scope_reason");
+        double legacyFraction=scopeReason.Length==0 && legacyTotal>0 ? legacyAmount/legacyTotal : double.NaN;
+        string legacyNote=scopeReason.Length>0 ? scopeReason
+            : legacyTotal==0 ? "累计总伤为零，无法计算占比。" : LegacyOverkillNote(row,detail,view);
+        string basis=StatisticPanel.IsBossScope(view.Get("config")) ? "首领总伤" : "原生累计总伤";
+        return (detail.Number("overkill_damage",double.NaN),legacyFraction,false,label,
+            $"过量伤害 ÷ {basis}（含过量）。\n{legacyNote}");
     }
-    private static string OverkillRate(JsonElement row,JsonElement detail)=>Percentage(OverkillFraction(row,detail));
 
     private static (double Skill,double NonSkill,double Fraction,bool Complete,bool Observed,
         string Label,string Reason,string Explanation) SkillSplitReading(JsonElement detail,bool effective)
@@ -996,7 +1033,7 @@ public sealed class Inspector : Border
         }
         return (double.NaN,"被减伤率",formula+"\n"+(reason.Length>0 ? reason : "尚无同一击的公式前伤害与结算伤害。"));
     }
-    private static string OverkillNote(JsonElement row,JsonElement detail,JsonElement view)
+    private static string LegacyOverkillNote(JsonElement row,JsonElement detail,JsonElement view)
     {
         if(detail.Get("settled_damage").ValueKind==JsonValueKind.Object)
         {

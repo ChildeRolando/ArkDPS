@@ -123,7 +123,7 @@ class EventStream:
                 self.statistics.record_damage_settlement(
                     game_time, state, owner, actor, source, target, target_uid, target_instance, amount, shield_absorbed,
                     settlement_complete, damage_type, nominal_amount, mitigation_before, mitigation_after,
-                    killed=killed)
+                    killed=killed, settled_after_nested_kill=settled_after_nested_kill)
             elif settlement_identity == ('summon', None, None):
                 # A proven summon skill never opens a host skill window.
                 pass

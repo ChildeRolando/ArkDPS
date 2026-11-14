@@ -517,6 +517,7 @@ for(const source of [nil,blaze]){
  assert.ok(settlement);
  assert.ok(events.indexOf(settlement)<events.indexOf(child));
  assert.equal(settlement.amount,10);
+ assert.equal(settlement.evidence.killed,true);
  assert.equal(settlement.source,source===nil ? null : 'char_blaze');
  assert.equal(parent.amount,8);
  assert.equal(parent.evidence.settled_after_nested_kill,true);
@@ -531,6 +532,7 @@ for(const source of [nil,blaze]){
  assert.equal(parentSettlement.amount,0);
  assert.equal(parentSettlement.evidence.nominal_amount,8);
  assert.equal(parentSettlement.evidence.settled_after_nested_kill,true);
+ assert.equal(parentSettlement.evidence.killed,undefined);
 }
 for(const changes of [{parentDelta:-1},{cancel:1},{childCancel:1},{uidChanges:true},{sourceChanges:true},
                       {otherPointer:true},{otherThread:true},{extraParent:true},{shield:true},
@@ -603,6 +605,7 @@ assert.equal(settled[0].evidence.nominal_amount,17);
 assert.equal(settled[0].evidence.shield_absorbed,0);
 assert.equal(settled[0].evidence.settlement_complete,true);
 assert.equal(settled[0].evidence.mitigation_before,34);
+assert.equal(settled[0].evidence.killed,false);
 settled=actualHit({amount:30,hpLoss:10,receiver:entity('enemy_a',31,10)});
 assert.equal(settled.length,1);
 assert.equal(settled[0].amount,10);
@@ -621,7 +624,7 @@ assert.equal(settled[0].amount,1);
 assert.equal(settled[0].evidence.nominal_amount,30);
 assert.equal(settled[0].evidence.shield_absorbed,0);
 assert.equal(settled[0].evidence.settlement_complete,true);
-assert.equal(settled[0].evidence.killed,undefined);
+assert.equal(settled[0].evidence.killed,false);
 for(const source of [nil,blaze]){
  settled=actualHit({...capped,source,type:5,hasOutput:false,receiver:entity('enemy_a',31,5)});
  assert.equal(settled.length,1);
@@ -630,7 +633,7 @@ for(const source of [nil,blaze]){
  assert.equal(settled[0].evidence.target_uid,'31');
  assert.equal(settled[0].evidence.shield_absorbed,0);
  assert.equal(settled[0].evidence.settlement_complete,true);
- assert.equal(settled[0].evidence.killed,undefined);
+ assert.equal(settled[0].evidence.killed,false);
  settled=actualHit({...capped,source,type:5,hasOutput:false,receiver:entity('enemy_a',31,1)});
  assert.equal(settled[0].evidence.killed,true);
 }
@@ -657,6 +660,24 @@ settled=actualHit({hpLoss:0,shield:17});
 assert.equal(settled.length,1);
 assert.ok(settled[0].amount===0);
 assert.equal(settled[0].evidence.shield_absorbed,17);
+assert.equal(settled[0].evidence.killed,false);
+const noConsumptionIndex=emitted.length;
+settled=actualHit({hpLoss:0,receiver:entity('enemy_a',31,121875)});
+assert.equal(settled.length,0,'verified no-consumption must not become a partial hit');
+const oldDamage=emitted.slice(noConsumptionIndex).find(event=>event.kind==='damage');
+assert.equal(oldDamage.amount,17);
+assert.equal(oldDamage.evidence.hp_before,121875);
+assert.equal(oldDamage.evidence.hp_after,121875);
+assert.equal(oldDamage.evidence.killed,false);
+assert.equal(oldDamage.evidence.shield_absorbed,0);
+assert.equal(oldDamage.proof.evidence_method,'Entity.OnAfterOutputDamage');
+for(const [changes,killed] of [[{hasTargetHit:false},undefined],[{hpLoss:1},undefined],
+                               [{shield:7,wrongModifier:true},false]]){
+ settled=actualHit({hpLoss:0,reportedLoss:0,...changes});
+ assert.equal(settled.length,1,'ambiguous no-consumption must stay partial');
+ assert.equal(settled[0].evidence.settlement_complete,false);
+ assert.equal(settled[0].evidence.killed,killed);
+}
 for(const hasOutput of [true,false]){
  settled=actualHit({hpLoss:0,shield:17,settledAmount:0,cancel:3,hasOutput});
  assert.equal(settled.length,1);

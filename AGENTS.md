@@ -28,10 +28,13 @@
 | --- | --- |
 | 源码运行 | `start.cmd` 或 `python app.py` |
 | 无界面采集 | `python app.py --capture-seconds <秒>`。连接和观察参数见 `python app.py --help` |
-| Python 回归 | `python -m pytest tests -q`。本机插件冲突时设置 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'` 并加 `--assert=plain` |
-| WPF 改动验收 | `python acceptance/verify_wpf.py --output runtime/wpf-source` |
-| 便携包构建与验收 | `python tools/package_windows.py --output runtime/packages`，然后 `python acceptance/verify_wpf_package.py <zip> --output runtime/package-validation` |
+| Python 专项回归 | `python -m pytest <相关测试文件或用例> -q`。本机插件冲突时设置 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'` 并加 `--assert=plain` |
+| WPF 构建 | `dotnet build desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj --nologo` |
+| 便携包构建 | `python tools/package_windows.py --output runtime/packages` |
+| 交互式 WPF 验收与发布门禁 | [Windows 验收](docs/windows-release.md#验收) |
 
+- 日常改动按影响范围运行最小相关回归。采集、统计和 worker 改动优先用相关测试、事件检查或日志回放，无关 UI 时跳过交互式 WPF 验收。全量回归留给用户明确要求、影响范围确实需要或隔离 CI 的发布门禁。
+- `verify_wpf.py`、`verify_wpf_package.py` 及调用它们的脚本会移动鼠标并发送点击或拖动。优先在隔离 CI 运行。只有用户明确安排本机交互验收并确认桌面可以交给测试时，才启动或重跑这些脚本。发现指针被用户操作时停止本轮交互检查，记录桌面输入冲突。
 - 保持 `tests/test_no_legacy_tk.py` 通过。不得删除测试、放宽断言或跳过归档范围之外的用例来制造通过。
 - 当前候选的 WPF 验收使用对应提交的 WPF 回执和截图。旧 Tk 截图、回执及 ARK-14 结论仅作历史材料，引用时注明已封存。离线合成数据与实机证据分别登记。
 - 实机结论记录游戏版本、候选提交、日期、证据路径和未覆盖机制。关卡数据记录来源及 SHA-256，MAA 坐标使用 `[列, 行]` 并说明原始坐标转换。

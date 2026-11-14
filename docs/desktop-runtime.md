@@ -63,15 +63,14 @@ Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新
 
 ## 可复核验收
 
+运行前按 [开发代理指南](../AGENTS.md#运行与验收) 选择检查范围。交互式验收的执行条件和命令见 [Windows 验收](windows-release.md#验收)。
+
 测试依赖由根目录 `requirements-test.txt` 固定，包含用于独立解码验证 PNG 的 Pillow；它不进入 Python worker 运行时。WPF 统计 PNG 由 .NET `PngBitmapEncoder` 生成；不能因测试导入 `PIL` 就把 Pillow 当作产品运行时依赖，也不能漏装测试依赖或跳过 PNG 断言。
 
 ```powershell
 python -m pip install -r requirements-test.txt
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
-python -m pytest tests -q --assert=plain
-python acceptance/verify_wpf.py --output runtime/wpf-source
-python acceptance/verify_wpf.py --bundle runtime/packages/<解压目录> --output runtime/wpf-bundle
-python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --output runtime/wpf-install-upgrade-rollback
+python -m pytest tests/test_desktop_bridge.py tests/test_wpf_contract.py -q --assert=plain
 ```
 
 单包脚本还在新目录验证清洁解压、全部文件摘要、缺少全局 Python/.NET 的运行、v1→v3 设置迁移以及 WPF 重启恢复；这只是便携 ZIP 的离线升级验收，不冒充 MSI/注册表安装或游戏验收。

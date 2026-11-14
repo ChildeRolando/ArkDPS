@@ -329,6 +329,10 @@ class PanelSourceRow:
     mitigation_unknown_reason: str | None = None
     observed_mitigation_rate: float | None = None
 
+    @property
+    def has_settled_overkill(self) -> bool:
+        return self.settled_damage is not None and 'overkill_coverage_complete' in self.settled_damage
+
     def total(self, category: Category) -> float | None:
         damage = self.damage
         if damage is None and (self.source_complete or self.settled_damage is not None):
@@ -478,7 +482,7 @@ def damage_scope_reason(row: Mapping) -> str | None:
             and exceeds_native_damage(observed + credited_burst, total)):
         return DAMAGE_SCOPE_MISMATCH
     values = (row.get('effective_damage'), partial.get('effective_damage'))
-    if any(_finite(value) and value > total for value in values):
+    if any(_finite(value) and exceeds_native_damage(value, total) for value in values):
         return DAMAGE_SCOPE_MISMATCH
     return None
 
@@ -936,9 +940,10 @@ def _segments(row: PanelSourceRow, ranking: Ranking,
         segment = {'kind': kind, 'value': value,
                    'ratio': min(1.0, value / total),
                    'color': DAMAGE_COLORS[kind]}
-        # Overkill is marked only on the totals basis: the five-second window
-        # does not derive a separate event-window overkill value.
+        # Only a legacy native-total overkill value shares this denominator.
+        # The verified-hit overkill base can differ even for the same owner.
         if (not effective and ranking is Ranking.TOTAL
+                and not row.has_settled_overkill
                 and row.overkill_type_complete and row.overkill_by_type):
             overkill = row.overkill_by_type.get(kind)
             if _finite(overkill) and overkill > 0:
@@ -1197,6 +1202,20 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
     lane = row.settled_damage
     if lane is not None:
         detail['settled_damage'] = dict(lane)
+        if row.has_settled_overkill:
+            complete = lane['overkill_coverage_complete'] is True
+            by_type = lane.get('overkill_damage_by_type') if complete else None
+            detail.update(
+                overkill_damage=lane.get('overkill_damage') if complete else None,
+                overkill_damage_by_type=dict(by_type) if isinstance(by_type, Mapping) else None,
+                overkill_type_complete=isinstance(by_type, Mapping),
+                overkill_coverage_complete=complete,
+                overkill_unknown_reason=lane.get('overkill_unknown_reason'),
+                observed_overkill_damage=lane.get('observed_overkill_damage'),
+                overkill_base_damage=lane.get('overkill_base_damage'),
+                overkill_matched_hits=lane.get('overkill_matched_hits'),
+                overkill_unverified_share=lane.get('overkill_unverified_share'),
+                recent_overkill_damage=None)
         detail['engagement_damage'] = row.engagement(Category.DAMAGE)
         if _effective_damage(row) is None and lane.get('reason'):
             detail['effective_damage_reason'] = lane['reason']

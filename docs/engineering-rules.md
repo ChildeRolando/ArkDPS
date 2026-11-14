@@ -15,17 +15,16 @@ Tk 验收脚本与 PyInstaller 构建链。这会让后续 agent 与测试重新
 | --- | --- |
 | 源码运行产品 | `start.cmd` 或 `python app.py`（WPF） |
 | 无界面采集 | `python app.py --capture-seconds <秒> ...` |
-| 回归基线 | `python -m pytest tests -q` |
-| UI 验收 | `python acceptance/verify_wpf.py --output <新目录>` |
+| 日常回归 | 按影响范围选择测试。[本地验收规则](../AGENTS.md#运行与验收) |
 | 打包 | `python tools/package_windows.py --output runtime/packages` |
-| 包验收 | `python acceptance/verify_wpf_package.py <zip> --output <新目录>` |
+| 交互式 UI 和包验收 | [Windows 验收](windows-release.md#验收) |
 
 `--legacy-tk`、`--acceptance-output`、`--acceptance-seconds`、`--acceptance-panels`、`--self-test`
 都会以退出码 2 明确报错并指向 WPF 验收命令；它们不是"暂时隐藏"的开关，不要尝试恢复。
 
 ## 证据规则
 
-- 只有 WPF 回执、WPF 截图、`verify_wpf*.py` 的输出可以作为当前候选证据。
+- UI 证据使用当前候选的 WPF 回执和截图。采集、统计和 worker 的证据按改动范围选用专项回归、事件检查或日志回放。
 - Tk 截图、Tk 自检回执、旧 ARK-14 候选结论属于历史材料，引用时必须标注"已封存，不作为当前证据"。
 - 离线回执只覆盖合成数据；实机、物理托盘、混合 DPI 仍需独立验收并在工单里如实标注未覆盖项。
 

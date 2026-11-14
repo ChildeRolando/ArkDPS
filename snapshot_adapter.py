@@ -321,7 +321,7 @@ class BattleStatisticsAdapter:
                     source, event.get('source_character_uid')), **event)
                 return
             if kind in ('elemental_bar', 'skill_start', 'skill_end'):
-                if (self.settlement_version == 6 and kind != 'elemental_bar'
+                if (self.settlement_version in (6, 7) and kind != 'elemental_bar'
                         and isinstance(source, str) and source in self.settlement_tokens):
                     # A summon can use its own skill. Its callbacks cannot
                     # start or end the summoning operator's skill window.
@@ -385,9 +385,9 @@ class BattleStatisticsAdapter:
         unknown = ('unknown', None, None)
         if not isinstance(source, str) or not source:
             return unknown
-        if self.settlement_version == 6 and classify_unmapped_source(source) is not None:
+        if self.settlement_version in (6, 7) and classify_unmapped_source(source) is not None:
             return ('foreign', None, None)
-        if uid is None and self.settlement_version == 6:
+        if uid is None and self.settlement_version in (6, 7):
             # A source key can be shared by several summons. Use it only if
             # their verified hosts agree on both operator and side.
             tokens = self.settlement_tokens.get(source)
@@ -430,7 +430,7 @@ class BattleStatisticsAdapter:
         return None
 
     def _settlement_owner(self, actor, *, actor_uid):
-        if self.settlement_version in (4, 5, 6):
+        if self.settlement_version in (4, 5, 6, 7):
             side = self.settlement_batch_side
         else:
             side = next(iter(self.settlement_sides)) if len(self.settlement_sides) == 1 else None
@@ -459,7 +459,7 @@ class BattleStatisticsAdapter:
         # verified ownership evidence within this generation.
         for entry in roster.entries:
             self.settlement_roster.setdefault(entry.unique_id, set()).add(entry)
-            if self.settlement_version == 6 and entry.is_token:
+            if self.settlement_version in (6, 7) and entry.is_token:
                 self.settlement_tokens.setdefault(entry.cid, set()).add(entry)
             owner = roster_map.owners.get(entry.cid)
             if owner is not None:
@@ -529,7 +529,7 @@ class BattleStatisticsAdapter:
             if type(settlement_version) is int:
                 self.settlement_version = settlement_version
             side = roster.local_player_side if type(roster.local_player_side) is int else None
-            if self.settlement_version in (4, 5, 6):
+            if self.settlement_version in (4, 5, 6, 7):
                 # Guard changes the controller's side while the previous round
                 # is still retiring. The side of a round is fixed at its first
                 # verified roster. Events in a contradicting batch stay unassigned.

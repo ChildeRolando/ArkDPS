@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -16,6 +18,12 @@ public partial class SideFriendlyView : UserControl
         RankingPanel.PinRequested = id => Details.Pin(id, RankingPanel.View);
         Details.UsePrimaryDataOnly();
     }
+
+    internal void ConfigureCommands(Func<string,Dictionary<string,object?>?,Task> command) =>
+        RankingPanel.Command=command;
+
+    internal void SetConfigurationAvailable(bool available) =>
+        RankingPanel.SetConfigurationAvailable(available);
 
     internal void Update(string currentBattleId, JsonElement ranking)
     {

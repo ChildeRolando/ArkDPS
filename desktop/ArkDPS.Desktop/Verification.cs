@@ -26,6 +26,9 @@ public partial class MainWindow
     [StructLayout(LayoutKind.Sequential)] private struct IconId {public uint Size;public IntPtr Window;public uint Id;public Guid Guid;}
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(PointNative point);
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window,uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window,uint command);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out PointNative point);
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x,int y);
     [DllImport("user32.dll",SetLastError=true)] private static extern uint SendInput(uint count,Input[] input,int size);
@@ -71,8 +74,7 @@ public partial class MainWindow
             Title = "ArkDPS side mode fixture",
             ResizeMode = ResizeMode.NoResize,
             WindowStyle = WindowStyle.None,
-            ShowActivated = false,
-            ShowInTaskbar = false
+            ShowActivated = false
         };
         var work = System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea;
         var originalPlayer = new System.Drawing.Rectangle(work.Left + 32, work.Top + 20,
@@ -132,25 +134,47 @@ public partial class MainWindow
 
             await Command("panel_update", new() { ["config"] = new
             {
-                panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle", effective_only = true
+                panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle", title = "侧栏口径验收"
             }});
+            var sideRanking = FindVisual<StatisticPanel>(SideFriendly, _ => true)
+                ?? throw new InvalidOperationException("missing side ranking");
+            var secondConfig = Panels[secondId].View.Get("config").Clone();
+            async Task SetSideFilter(ToggleButton button, bool enabled)
+            {
+                Require(button.IsVisible && button.IsEnabled, "side damage filter is not available");
+                button.IsChecked = enabled;
+                button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                for(int wait=0;wait<40 && commands>0;wait++) await Task.Delay(50);
+                var config = Panels[firstId].View.Get("config");
+                Require(JsonElement.DeepEquals(config, sideRanking.View.Get("config")) &&
+                        JsonElement.DeepEquals(config, hud.Panel.View.Get("config")) &&
+                        JsonElement.DeepEquals(secondConfig, Panels[secondId].View.Get("config")) &&
+                        config.Text("title") == "侧栏口径验收" && config.Text("ranking") == "dps" &&
+                        config.Text("rate_basis") == "full_cycle" && button.IsChecked == enabled,
+                        "side filter did not update its shared panel and HUD, or overwrote unrelated settings");
+            }
+            await SetSideFilter(sideRanking.EffectiveOnly, true);
+            Require(Panels[firstId].View.Get("config").Bool("effective_only"),
+                    "side effective filter did not reach the worker");
             await VerifySideRanking(Panels[firstId].View, "有效伤害", "全周期 DPS", expectedSegments: 4);
 
-            await Command("panel_update", new() { ["config"] = new
-            {
-                panel_id = firstId, category = "damage", ranking = "dps", rate_basis = "full_cycle",
-                effective_only = true, boss_only = true
-            }});
+            await SetSideFilter(sideRanking.BossOnly, true);
             await Settle();
             var scoped = Panels[firstId].View;
-            var sideRanking = FindVisual<StatisticPanel>(SideFriendly, _ => true);
-            Require(sideRanking is not null && StatisticPanel.IsBossScope(sideRanking.View.Get("config")) &&
+            Require(StatisticPanel.IsBossScope(sideRanking.View.Get("config")) &&
                     sideRanking.View.Get("config").Bool("effective_only") &&
                     sideRanking.Heading.Text.Contains("仅首领") &&
                     !sideRanking.View.Bool("boss_damage_available") &&
                     sideRanking.View.Get("entries").Items().Count() == 0 &&
                     sideRanking.RateNotice.IsVisible && sideRanking.RateNotice.Text == scoped.Text("boss_damage_reason"),
                     "side ranking lost the first panel's boss scope or used all-target fallback");
+            await SetSideFilter(sideRanking.EffectiveOnly, false);
+            Require(sideRanking.View.Get("config").Bool("boss_only") &&
+                    !sideRanking.View.Get("config").Bool("effective_only"),
+                    "side effective filter cleared the boss scope");
+            await SetSideFilter(sideRanking.BossOnly, false);
+            Require(!sideRanking.View.Get("config").Bool("boss_only") && sideRanking.Rows.Items.Count > 0,
+                    "side boss filter could not leave a scope with unavailable data");
 
             await Command("panel_update", new() { ["config"] = sourceConfig });
             await Settle();
@@ -173,6 +197,7 @@ public partial class MainWindow
             current = Native.Bounds(this);
             Require(current[0] == moved.Right && current[1] == moved.Top && current[3] == moved.Height,
                     "side window did not follow the fixture move and resize");
+            VerifySideZOrder(fixture, moved, current);
             fixture.WindowState = WindowState.Minimized;
             await Settle();
             UpdateSidePlacement();
@@ -242,6 +267,56 @@ public partial class MainWindow
                 normalGeometryBefore == JsonSerializer.Serialize(Native.Geometry(this)) && enemyPin?.IsChecked == true,
                 "returning to full mode did not restore the regular window");
         enemyPin!.IsChecked = false;
+    }
+
+    private void VerifySideZOrder(Window player, System.Drawing.Rectangle playerBounds, int[] sideBounds)
+    {
+        var side = new System.Drawing.Rectangle(sideBounds[0], sideBounds[1], sideBounds[2], sideBounds[3]);
+        nint playerHandle = Native.Handle(player);
+        nint sideHandle = Native.Handle(this);
+        const uint nextWindow = 2;
+        const uint noMoveSizeOrActivate = 0x0013;
+
+        var cover = new Window
+        {
+            Title = "ArkDPS side mode covering fixture",
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowActivated = false
+        };
+        try
+        {
+            // Use only our private windows to change the z-order. This models
+            // focus switches without depending on Windows granting foreground access.
+            cover.Show();
+            Native.Place(cover, System.Drawing.Rectangle.Union(playerBounds, side));
+            nint coverHandle = Native.Handle(cover);
+            nint NextFixture(nint window)
+            {
+                nint next = GetWindow(window, nextWindow);
+                while (next != 0 && next != sideHandle && next != coverHandle && next != playerHandle)
+                    next = GetWindow(next, nextWindow);
+                return next;
+            }
+            Require(SetWindowPos(coverHandle, playerHandle, 0, 0, 0, 0, noMoveSizeOrActivate) &&
+                    SetWindowPos(sideHandle, coverHandle, 0, 0, 0, 0, noMoveSizeOrActivate) &&
+                    NextFixture(playerHandle) == coverHandle && NextFixture(coverHandle) == sideHandle,
+                    $"could not set up an occluded side window: player={playerHandle:X} cover={coverHandle:X} " +
+                    $"side={sideHandle:X}, next player={NextFixture(playerHandle):X}, next cover={NextFixture(coverHandle):X}");
+            nint foreground = GetForegroundWindow();
+            UpdateSidePlacement();
+            Require(WindowState == WindowState.Normal && player.WindowState == WindowState.Normal &&
+                    NextFixture(playerHandle) == sideHandle && NextFixture(sideHandle) == coverHandle &&
+                    GetForegroundWindow() == foreground,
+                    "side window stayed behind the cover when the emulator came forward without minimizing");
+
+            Require(SetWindowPos(playerHandle, coverHandle, 0, 0, 0, 0, noMoveSizeOrActivate),
+                    "could not set up a covering window in front of the emulator");
+            UpdateSidePlacement();
+            Require(NextFixture(coverHandle) == playerHandle && NextFixture(playerHandle) == sideHandle,
+                    "side window rose above a window that covers the emulator");
+        }
+        finally { cover.Close(); }
     }
 
     private async Task VerifySideRanking(JsonElement source, string expectedMetric, string expectedRateLabel, int expectedSegments)
@@ -599,6 +674,27 @@ public partial class MainWindow
                 HasText(composition,"40%") && HasText(composition,"60%") &&
                 HasText(historyInspector,"已观察溢出总伤属性构成"),
                 "published partial raw types were replaced by stale native types");
+
+        detail["overkill_base_damage"]=100;
+        detail["overkill_coverage_complete"]=false;
+        detail["observed_overkill_damage"]=10;
+        detail["overkill_matched_hits"]=3;
+        detail["overkill_unverified_share"]=.25;
+        UpdateComposition();
+        var overflow=FindAutomationElement(inspector,"CompactOperatorRatioOverkill")
+            ?? throw new InvalidOperationException("missing operator overkill ratio");
+        Require(HasText(overflow,"已观察伤害溢出率") && HasText(overflow,"10%") &&
+                overflow.ToolTip is ToolTip {Content:TextBlock overflowTip} &&
+                overflowTip.Text.Contains("同一批已核实命中") && overflowTip.Text.Contains("25%") &&
+                HasText(historyInspector,"已观察过量伤害"),
+                "partial overflow did not use its own confirmed basis or show the evidence gap");
+        detail["overkill_coverage_complete"]=true;
+        detail["observed_overkill_damage"]=0;
+        detail["overkill_damage"]=0;
+        detail["overkill_unverified_share"]=0;
+        UpdateComposition();
+        Require(HasText(overflow,"0%") && !HasText(overflow,"已观察伤害溢出率"),
+                "confirmed zero overflow was hidden or presented as partial");
     }
 
     private async Task VerifyLoneTrailLayout(string output, List<string> checks)
@@ -1018,7 +1114,7 @@ public partial class MainWindow
     {
         var ratios=new[] { FindOperatorRatio("Overkill"), FindOperatorRatio("Mitigation"), FindOperatorRatio("SkillShare") };
         var values=new[] { "8%", "18%", "42%" };
-        var formulas=new[] { "过量伤害 ÷ 总伤害", "1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害",
+        var formulas=new[] { "过量伤害 ÷ 原生累计总伤", "1 − 经护甲/魔抗和物法减伤减少后的伤害 ÷ 原始伤害",
             "技能期伤害 ÷ 已拆分的总伤害" };
         var positions=ratios.Select(field=>field.TranslatePoint(new Point(),LiveInspector)).ToArray();
         var stats=FindAutomationElement(LiveInspector,"CompactOperatorStats")
@@ -1620,6 +1716,7 @@ public partial class MainWindow
         checks.Add("side mode follows a private emulator window, mirrors the first live ranking and restores the full GUI with HUD and enemy panel intact");
         checks.Add("hovering the side ranking does not delay snapshot order or change the pinned operator");
         checks.Add("side mode follows emulator minimize and restore, honors manual minimize and recovers when the emulator exits");
+        checks.Add("side mode follows emulator z-order without taking focus or staying above unrelated windows");
         VerifyMitigationDisplay();
         checks.Add("mitigation distinguishes missing data, verified zero and small nonzero ratios");
         VerifyPartialMetricCoverage();

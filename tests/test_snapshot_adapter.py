@@ -225,13 +225,14 @@ def test_retiring_settlement_round_does_not_adopt_the_next_round_side():
     assert adapter.settlement_batch_side == 1
 
 
+@pytest.mark.parametrize('version', [6, 7])
 @pytest.mark.parametrize('other_host, expected_actor', [
     (None, 1),
     (replace(CHAR_A, unique_id=3), None),
     (replace(CHAR_A, unique_id=3, player_side=1), 'unassigned'),
     (replace(CHAR_B, unique_id=3), 'unassigned'),
 ])
-def test_missing_token_uid_requires_consensus_of_verified_roster_hosts(other_host, expected_actor):
+def test_missing_token_uid_requires_consensus_of_verified_roster_hosts(other_host, expected_actor, version):
     caster = CHAR_A
     token_key = 'token_summon'
     token = entry(token_key, 10, token=True, host_key=caster.cid, host_uid=caster.unique_id)
@@ -241,13 +242,13 @@ def test_missing_token_uid_requires_consensus_of_verified_roster_hosts(other_hos
                                        host_uid=other_host.unique_id, player_side=other_host.player_side)]
     players = replace(roster(entries, frame=10), local_player_side=0)
     adapter = BattleStatisticsAdapter()
-    options = dict(source_attribution=True, settlement_version=6)
+    options = dict(source_attribution=True, settlement_version=version)
     roster_rows = [row('char_a'), row('char_b'), row(token_key)]
     adapter.update(sample(roster_rows, 0, 10), players, **options)
     adapter.start_events(session='battle-1', frame=10, sequence=0)
     stats = adapter.statistics
     stats.settlement_enabled = stats.partial_damage_enabled = True
-    stats.damage_settlement_version = 6
+    stats.damage_settlement_version = version
     adapter.update(sample([row('char_a', 100), row('char_b', 20), row(token_key)], 1, 11),
                    paired(players, 11), **options)
     context = dict(session='battle-1', frame=11, game_time=1)

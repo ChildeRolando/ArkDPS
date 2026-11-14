@@ -553,6 +553,41 @@ def test_nonlethal_elemental_cap_is_not_booked_as_overkill():
     assert row['settled_damage']['unverified_hits'] == 0
 
 
+def test_verified_overkill_has_the_same_hit_base_and_keeps_scoped_gaps():
+    owner, boss, ordinary = 'char_a', 'enemy_1506_patrt', 'enemy_2136_shcolo'
+    s = Statistics('settlement', 0, event_coverage=True)
+    s.damage_settlement_version = 7
+    s.settlement_enabled = s.settlement_sides_known = True
+    s.partial_damage_enabled = True
+    s.register_source(owner, owner)
+    s.snapshot(0, {owner: {'damage': 0, 'healing': 0}})
+    s.snapshot(8, {owner: {'damage': 500, 'healing': 0}})
+
+    def hit(time, target, uid, hp, shield, nominal, **evidence):
+        s.record_damage_settlement(time, 'local', owner, 7, owner, target, uid,
+                                   uid, hp, shield, True, 2, nominal, None, None, **evidence)
+
+    hit(1, boss, '77', 30, 10, 100, killed=True)
+    hit(2, boss, '77', 0, 0, 50, settled_after_nested_kill=True)
+    hit(3, boss, '78', 1, 0, 100, killed=False)
+    hit(4, boss, '78', 0, 25, 25)
+    hit(5, ordinary, '79', 4, 0, 10)  # Missing kill evidence, no inference from a residual.
+    hit(6, ordinary, '79', 4, None, 10, killed=True)  # Unknown shield.
+    hit(7, ordinary, '80', 5, 0, 5)  # Zero residual needs no kill flag.
+    s.mark_boss_watermark(8)
+
+    row = s.result()['rows'][owner]
+    lane = row['settled_damage']
+    assert row['damage'] == 500 and row['effective_damage'] == lane['effective_damage'] == 79
+    assert row['overkill_damage'] is None and not lane['overkill_coverage_complete']
+    assert lane['observed_overkill_damage'] == 110 and lane['overkill_base_damage'] == 181
+    assert lane['overkill_matched_hits'] == 5 and lane['overkill_unverified_share'] == pytest.approx(2/7)
+    boss_lane = row['boss_damage']['settled_damage']
+    assert boss_lane['effective_damage'] == 66 and boss_lane['observed_boss_damage'] == 275
+    assert boss_lane['overkill_coverage_complete'] and boss_lane['overkill_damage'] == 110
+    assert boss_lane['overkill_base_damage'] == 176 and boss_lane['overkill_damage_by_type'] == {'arts': 110}
+
+
 
 def test_incoming_hp_events_alone_do_not_prove_overkill():
     s = Statistics('hp', 0, event_coverage=True)

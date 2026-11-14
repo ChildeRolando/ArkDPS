@@ -596,7 +596,7 @@ function enemyDamageIdentity(target,confirmedUid) {
  if(!uid)throw new Error('missing settled target UID');
  return {target:key,target_uid:String(uid),target_instance:target.toString()};
 }
-function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed=false}={}) {
+function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed}={}) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
  try{
   const damageType=type??scope.mod.add(0x68).readS32();
@@ -612,7 +612,7 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   if(Number.isFinite(nominal)&&nominal+0.01>=-real+(shield??0))
    evidence.nominal_amount=nominal;
   if(nested)evidence.settled_after_nested_kill=true;
-  if(killed)evidence.killed=true;
+  if(typeof killed==='boolean')evidence.killed=killed;
   record(scope.source,'damage_settlement',real===0?0:-real,when,{method:scope.name},
          {...evidence,...reduction},scope.sourceCharacterUid);
  }catch(e){enemyDamageUnknown=true;}
@@ -651,6 +651,11 @@ function matchOutputSettlement(output,scope,source) {
  }else scope.outputSettlement=output;
  return true;
 }
+function verifiedNoConsumption(scope,output,evidence,killed,real) {
+ return !!output&&real===0&&killed===false&&
+        evidence.hp_before===evidence.hp_after&&evidence.shield_absorbed===0&&
+        !scope.numericShieldUnknown&&!scope.unmatchedShield&&!(scope.numericShield>0);
+}
 function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null) {
  if(!enemyDamageReady||!scope.tracksModifier||!target||target.isNull()||
     !scope.nativeModifierSource||!scope.nativeModifierSource.equals(scope.mod.readPointer())||
@@ -685,15 +690,23 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  // HP may be capped after the formula even while the target is alive. Use
  // measured HP endpoints and the numeric shield callbacks for this hit.
  const hit=scope.targetHit;
- const capturedHp=exact&&real<0&&cancel===0&&exactEvidence?.real_delta===real&&
+ const capturedHp=exact&&Number.isFinite(real)&&real<=0&&cancel===0&&exactEvidence?.real_delta===real&&
     Number.isFinite(exactEvidence.hp_before)&&Number.isFinite(exactEvidence.hp_after)&&
-    Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,-real*1e-6)&&
+    Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,Math.abs(real)*1e-6)&&
     (type===5&&exactEvidence.hp_before===scope.hpBefore||
      output&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
      !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===hit.hpBefore);
- const killed=capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0;
+ let killed;
+ if(capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0&&real<0)killed=true;
+ if(capturedHp&&exactEvidence.killed===false&&exactEvidence.hp_after>0)killed=false;
+ // A matched output can leave HP and shield unchanged during a target
+ // transition. Keep the ordinary damage event without adding a zero hit.
+ if(!nested&&verifiedNoConsumption(scope,output,exactEvidence,killed,real)){
+  scope.outputSettlement=null;
+  return true;
+ }
  const absorbed=shield>0?shield:!scope.numericShieldUnknown&&
-      (nested||capturedHp||exact&&real<0&&Math.abs(settledAmount+real)<=tolerance)?0:null;
+      (nested||real<0&&(capturedHp||exact&&Math.abs(settledAmount+real)<=tolerance))?0:null;
  const unverified=scope.settlementAmbiguous||scope.unmatchedShield&&!(settledAmount>0)&&!(shield>0)||
     amount>0&&cancel===0&&!nested&&(!Number.isFinite(real)||(real===0&&!(absorbed>0)));
  if(!exact&&!(absorbed>0)&&!unverified)return false;
@@ -1845,7 +1858,7 @@ function enemyEntryQuality(frame){
 function eventQuality(frame){
  return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   source_attribution_version:1,
-  partial_damage_version:6,
+  partial_damage_version:7,
   source_character_uid_ready:sourceCharacterClasses!==null,
   boss_damage_ready:true,boss_damage_unknown:bossDamageUnknown,
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
