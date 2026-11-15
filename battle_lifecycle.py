@@ -347,7 +347,8 @@ class BattleSessions:
             sequence = baseline_barrier(evidence['before'], observation.sample, evidence['after'])
             if sequence != evidence['sequence']:
                 raise StreamGap('event observation barrier was altered')
-            self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'])
+            self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'],
+                                mark=evidence['after'])
             self._last_event_mark = evidence['after']
             self.event_status = 'recording'
             return True

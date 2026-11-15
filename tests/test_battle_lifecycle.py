@@ -686,6 +686,7 @@ def test_confirmed_process_change_archives_without_waiting_for_a_new_battle(chan
 
     c.core.mc._pid_for_known_package = lookup
     c.core.mc.shell = shell
+    c._check_process_identity = Collector._check_process_identity.__get__(c)
     c.read_lifecycle = lambda: Collector.read_lifecycle(c)
     c.advance(damage=175.)
     if terminal:
@@ -714,6 +715,7 @@ def test_unconfirmed_process_read_failure_keeps_the_live_generation(monkeypatch)
     c.core.mc._pid_for_known_package = lambda: ('package', 10)
     c.core.mc.shell = lambda *args, **kwargs: ''
     with monkeypatch.context() as patch:
+        patch.setattr(c, '_check_process_identity', Collector._check_process_identity.__get__(c), raising=False)
         patch.setattr(c, 'read_lifecycle', lambda: Collector.read_lifecycle(c))
         with pytest.raises(CaptureRetry):
             r.poll(c)

@@ -1,6 +1,6 @@
 import pytest
 
-from event_stream import EventStream, StreamGap
+from event_stream import BarrierBusy, EventStream, StreamGap, baseline_barrier
 from stats_core import Statistics
 
 
@@ -22,6 +22,14 @@ def test_same_frame_after_barrier_and_replay_do_not_change_snapshot():
     receiver.accept(**event)
     assert stats.result()['rows']['host']['damage'] == 1000
     assert stats.result()['rows']['host']['observed_damage'] == 20
+
+
+def test_barrier_retries_when_the_native_battle_changes_without_a_clock_change():
+    before = dict(sequence=10, epoch=4, active=0, frame=1, game_time=0,
+                  damage_settlement_scope=3)
+    after = dict(before, damage_settlement_scope=4)
+    with pytest.raises(BarrierBusy):
+        baseline_barrier(before, dict(frame=1, game_time=0), after)
 
 
 @pytest.mark.parametrize('change', [dict(sequence=12), dict(frame=899),

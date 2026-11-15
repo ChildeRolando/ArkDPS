@@ -157,7 +157,7 @@ class LiveEventCapture:
             self.adapter.update(sample, roster, **source_attribution_batch(
                 drained, self.adapter.event_stream.sequence if self.adapter.event_stream else sequence, sequence))
             self.audit('drain', drained)
-            result = self.ingest(sample, roster, sequence, drained)
+            result = self.ingest(sample, roster, sequence, drained, mark=after)
             acknowledge_event_batch(self.observer, sequence)
             return result
         except CaptureRetry:
@@ -171,7 +171,7 @@ class LiveEventCapture:
             self.close()
             raise
 
-    def _apply_quality(self, payload):
+    def _apply_quality(self, payload, enemy_damage_quality):
         """Keep recoverable gaps scoped to their affected event metric."""
         statistics = self.adapter.statistics
         if statistics is None:
@@ -213,13 +213,13 @@ class LiveEventCapture:
             )
         elif statistics.enemy_state_start_frame is not None:
             statistics.mark_enemy_state_unknown()
-        if 'enemy_damage_ready' in payload or statistics.enemy_damage is not None:
+        if 'enemy_damage_ready' in enemy_damage_quality or statistics.enemy_damage is not None:
             statistics.observe_enemy_damage(complete=(
-                payload.get('enemy_damage_ready') is True
-                and payload.get('enemy_damage_unknown') is not True
+                enemy_damage_quality.get('enemy_damage_ready') is True
+                and enemy_damage_quality.get('enemy_damage_unknown') is not True
                 and (self.initial_drain or statistics.enemy_damage is not None)))
 
-    def ingest(self, sample, roster, sequence, drained):
+    def ingest(self, sample, roster, sequence, drained, *, mark=None):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.
 
         Acquisition has already bracketed the singleton and updated the native
@@ -234,6 +234,15 @@ class LiveEventCapture:
                 raise StreamGap(f"observer callback error: {drained['error']}")
             if drained.get('stopped'):
                 raise StreamGap('observer stopped')
+            # A replayable drain is bounded by sequence, but its diagnostic
+            # fields may come from a later round. Use the quiescent mark for
+            # round-scoped damage quality and retain the old journal contract.
+            damage_quality = drained
+            if mark is not None and mark.get('damage_settlement_quality_version') == 1:
+                damage_quality = {
+                    'enemy_damage_ready': mark.get('enemy_damage_ready') is True,
+                    'enemy_damage_unknown': mark.get('enemy_damage_unknown') is not False,
+                }
             version = drained.get('partial_damage_version')
             if type(version) is int and version in (1, 2, 3, 4, 5, 6, 7):
                 self.adapter.statistics.partial_damage_enabled = True
@@ -242,10 +251,11 @@ class LiveEventCapture:
                 if version >= 3:
                     self.adapter.statistics.settlement_enabled = True
                     self.adapter.statistics.damage_settlement_version = version
-                    self.adapter.statistics.settlement_stream_incomplete |= (
-                        drained.get('damage_settlement_ready', drained.get('enemy_damage_ready')) is not True
-                        or bool(drained.get('damage_settlement_unknown', drained.get('enemy_damage_unknown'))))
-            self._apply_quality(drained)
+                    ready = damage_quality.get('damage_settlement_ready', damage_quality.get('enemy_damage_ready'))
+                    unknown = damage_quality.get('damage_settlement_unknown',
+                                                 damage_quality.get('enemy_damage_unknown'))
+                    self.adapter.statistics.settlement_stream_incomplete |= (ready is not True or bool(unknown))
+            self._apply_quality(drained, damage_quality)
             self.pending.extend(drained['events'])
             while self.pending:
                 event = self.pending[0]
