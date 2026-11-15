@@ -4,7 +4,8 @@ import pytest
 
 from collection_session import CollectionSession
 from connection import VersionStatus
-from collector import BattleChanged, EnemyTelemetry, UnsupportedVersion, SampleUnavailable
+from collector import BattleChanged, EnemyTelemetry, ProcessChanged, UnsupportedVersion, SampleUnavailable
+from event_capture import CaptureRetry
 from test_event_capture import Collector as SnapshotCollector, Observer, event
 from test_enemy_lifecycle_telemetry import enemy
 
@@ -16,6 +17,9 @@ class Collector(SnapshotCollector):
         self.diagnostics = SimpleNamespace(connection_ok=True, version_status=VersionStatus.COMPATIBLE)
         self.core = SimpleNamespace(mc=SimpleNamespace(pid=123, process_instance=('boot', 1)))
         self.state = 2
+
+    def observer_boot_ready(self):
+        return True
 
     def locate_lifecycle(self):
         self.calls.append('lifecycle')
@@ -148,6 +152,68 @@ def test_default_entry_observes_after_certification_before_locating():
         assert current.read()['event_status'] == 'recording'
     finally:
         current.close()
+
+
+def test_lifecycle_waits_for_game_signal_then_attaches_once_before_battle(monkeypatch):
+    current, collector, calls = session()
+    current.enable_lifecycle()
+    records = []
+    current.audit = lambda kind, data: records.append((kind, data))
+    now, initialized = 0.0, False
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: now)
+
+    def boot_ready():
+        calls.append('check')
+        return initialized
+
+    monkeypatch.setattr(collector, 'observer_boot_ready', boot_ready)
+    lifecycle = collector.read_lifecycle
+    monkeypatch.setattr(collector, 'read_lifecycle', lambda: dict(lifecycle(), battle=None))
+    try:
+        current.connect()
+        assert current.event_status == 'waiting_game_init'
+        assert current.observer is None and current.capture is None
+        for now in (0.2, 3.0, 25.0):
+            with pytest.raises(CaptureRetry, match='等待游戏初始化'):
+                current.read()
+        assert calls == ['transport', 'check', 'check', 'check']
+        now, initialized = 26.0, True
+        with pytest.raises(CaptureRetry, match='lifecycle'):
+            current.read()
+        assert current.event_status == 'ready'
+        assert calls == ['transport', 'check', 'check', 'check', 'check', 'attach', 'lifecycle']
+        assert [kind for kind, _ in records if kind.startswith('observer_')] == [
+            'observer_waiting_game_init', 'observer_game_init_ready', 'observer_ready']
+        monkeypatch.setattr(collector, 'read_lifecycle', lifecycle)
+        assert current.read()['event_status'] == 'recording'
+        assert calls.count('attach') == 1
+    finally:
+        current.close()
+
+
+def test_game_replacement_during_initialization_never_attaches_to_stale_process(monkeypatch):
+    current, collector, calls = session()
+    current.enable_lifecycle()
+    records = []
+    current.audit = lambda kind, data: records.append(kind)
+    now = 0.0
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: now)
+    monkeypatch.setattr(collector, 'observer_boot_ready', lambda: False)
+    try:
+        current.connect()
+        now = 2.0
+
+        def process_replaced():
+            raise ProcessChanged('游戏进程已变化')
+
+        monkeypatch.setattr(collector, 'observer_boot_ready', process_replaced)
+        with pytest.raises(ProcessChanged):
+            current.read()
+        assert 'attach' not in calls
+    finally:
+        current.close()
+    assert not any(kind.startswith('lifecycle_') for kind in records)
+    assert calls[-1] == 'collector_close'
 
 
 @pytest.mark.parametrize('failure', [ModuleNotFoundError('optional frida missing'),

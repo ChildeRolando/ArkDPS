@@ -902,6 +902,20 @@ def test_preparing_status_keeps_last_verified_view_and_observer_status(tmp_path)
     assert result['panels'][0]['entries'][0]['value'] == 1230
 
 
+def test_pending_game_initialization_overrides_previous_event_label_only(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), event_status='finished'))
+    state.accept('lifecycle', 'ended')
+    state.accept('observer', ('waiting_game_init', None))
+
+    result = state.snapshot()
+    assert result['observer_status'] == 'waiting_game_init'
+    assert result['event_text'] == '等待游戏初始化'
+    assert result['status'] == 'ended'
+    assert result['event_status'] == 'finished'
+    assert result['panels'][0]['entries'][0]['value'] == 1230
+
+
 def test_lobby_signal_preserves_the_last_battle_and_terminal_status(tmp_path):
     state = DesktopState(tmp_path)
     state.accept('sample', dict(sample(), battle_metadata={'stage_id': 'Obt/Main/level_main_01-07'}))
@@ -1128,6 +1142,62 @@ def test_worker_paces_advancing_samples_and_preserves_retry_backoff(tmp_path, mo
     events = list(worker.events.queue)
     assert not any(kind == 'error' for kind, _ in events)
     assert [sample['frame'] for kind, sample in events if kind == 'sample'] == [10, 20, 20, 30]
+
+
+def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+
+    state = DesktopState(tmp_path/'state')
+    worker = CollectionWorker(state)
+    diagnostics = SimpleNamespace(as_dict=dict, selected_serial='serial', version_actual='test')
+    target = SimpleNamespace(adb_path='adb', serial='serial', diagnostics=diagnostics)
+
+    class Session:
+        cleanup_errors = {}
+        collector = SimpleNamespace(diagnostics=diagnostics)
+        observer = None
+        event_status = 'waiting_game_init'
+        event_error = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+
+        def connect(self):
+            pass
+
+        def read(self):
+            if self.observer is None:
+                self.observer = SimpleNamespace(status='ready', error=None)
+                self.event_status = 'ready'
+            else:
+                worker.stop.set()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', lambda *_args, **_kwargs: (True, 'ready'))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(worker.effective[0], True)
+    worker.run()
+
+    observer_states = []
+    while not worker.events.empty():
+        kind, value = worker.events.get_nowait()
+        assert kind not in ('sample', 'error')
+        state.accept(kind, value)
+        if kind == 'observer':
+            snapshot = state.snapshot()
+            observer_states.append((snapshot['status'], snapshot['observer_status'], snapshot['event_text']))
+    assert observer_states == [
+        ('waiting', 'waiting_game_init', '等待游戏初始化'),
+        ('waiting', 'ready', '事件已就绪 · 等待同帧基线'),
+    ]
 
 
 def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_path, monkeypatch):

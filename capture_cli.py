@@ -84,6 +84,9 @@ def run_capture(args, *, session_factory=CollectionSession):
         audit('metadata', metadata)
         try:
             session.connect()
+            if isinstance(session, CollectionSession):
+                session.wait_for_game_init(wait_seconds=args.wait_battle_seconds,
+                    cancelled=(lambda: args.stop_file.exists()) if args.stop_file else None)
             if args.require_events and session.event_status != 'ready':
                 raise RuntimeError(session.event_error or 'event coverage is unavailable')
             # Connection may have fallen back after an optional observer failure.

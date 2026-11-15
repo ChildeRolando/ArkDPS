@@ -335,6 +335,32 @@ class Collector:
     def read_lifecycle(self):
         if self._lifecycle_reader is None:
             raise SampleUnavailable('生命周期尚未连接')
+        self._check_process_identity()
+        try:
+            return self._lifecycle_reader.sample()
+        except ReadFailure as exc:
+            if exc.reason != 'binding_invalid' or self.last_pid_check - self._lifecycle_maps_refresh_at < 1:
+                raise
+            # Scene loads can allocate objects outside the process's cached
+            # readable ranges. Refresh the ranges, then repeat all identity checks.
+            self._lifecycle_maps_refresh_at = self.last_pid_check
+            self.core.mc.reload_maps()
+            return self._lifecycle_reader.sample()
+
+    def observer_boot_ready(self):
+        """Check the live game scene through the read-only channel before injection."""
+        from tools.enemy_health.battle_lifecycle import observer_boot_ready
+        mc = self.core.mc
+        self._check_process_identity()
+        # The first connection can precede the libil2cpp mapping and the heaps
+        # holding the scene controller. Refresh only during bounded boot polls.
+        mc.reload_maps()
+        if not observer_boot_ready(mc, self.core._chan):
+            return False
+        self._check_process_identity()
+        return True
+
+    def _check_process_identity(self):
         # This check brackets every paired acquisition, including menu polls.
         # Cached metadata must never be reused across PID/birth reuse.
         _package, pid = self.core.mc._pid_for_known_package()
@@ -350,16 +376,6 @@ class Collector:
         if identity != self.core.mc.process_instance:
             raise ProcessChanged('游戏进程出生标识已变化')
         self.last_pid_check = time.monotonic()
-        try:
-            return self._lifecycle_reader.sample()
-        except ReadFailure as exc:
-            if exc.reason != 'binding_invalid' or self.last_pid_check - self._lifecycle_maps_refresh_at < 1:
-                raise
-            # Scene loads can allocate objects outside the process's cached
-            # readable ranges. Refresh the ranges, then repeat all identity checks.
-            self._lifecycle_maps_refresh_at = self.last_pid_check
-            self.core.mc.reload_maps()
-            return self._lifecycle_reader.sample()
 
     def bind_battle(self, address):
         """Bind only the live singleton selected by the lifecycle reader."""

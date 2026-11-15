@@ -520,6 +520,7 @@ def test_process_exit_handoff_is_immediate_once_and_replayable(tmp_path):
         first = session.read()
         collector.core.mc._pid_for_known_package = lambda: ('', 0)
         collector._lifecycle_reader = SimpleNamespace(sample=lambda: None)
+        collector._check_process_identity = lambda: NativeCollector._check_process_identity(collector)
         collector.read_lifecycle = lambda: NativeCollector.read_lifecycle(collector)
         for _ in range(2):
             with pytest.raises(BattleChanged):

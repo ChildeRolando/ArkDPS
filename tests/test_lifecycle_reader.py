@@ -200,6 +200,56 @@ def test_lifecycle_uses_build_checked_classes_or_falls_back(monkeypatch, case):
     ])
 
 
+@pytest.mark.parametrize(('target', 'transiting', 'state', 'native_ptr', 'expected'), [
+    ('home', False, None, 5000, True),
+    ('home', False, None, 0, False),
+    ('home', True, None, 5000, False),
+    ('login', False, None, 5000, False),
+    ('battle_loader', False, None, 5000, False),
+    ('battle_loader', False, 1, 5000, False),
+    ('battle_loader', False, 2, 5000, True),
+])
+def test_observer_boot_requires_confirmed_home_or_live_battle(
+        monkeypatch, target, transiting, state, native_ptr, expected):
+    from tools.enemy_health import battle_lifecycle as native
+
+    memory = MemoryFixture(state=state or 0, battle=state is not None)
+    base = 0x7000000000
+    library = '/app/lib/arm64/libil2cpp.so'
+    memory.mc.regions = [
+        (base, base + 0xC515000, 'r--p', library),
+        (base + 0xC515000, base + 0xD34F000, 'rw-p', library),
+    ]
+    for name, address in (('GameFlowController', 2000), ('BattleController', 1000)):
+        memory.blocks[base + native._CLASS_SLOT_RVAS[name]] = struct.pack('<Q', address)
+    memory.read_code = lambda *_: native._BUILD_NOTE
+    flow = bytearray(memory.blocks[4000])
+    struct.pack_into('<Q', flow, 0x10, native_ptr)
+    flow[0x20] = transiting
+    struct.pack_into('<Q', flow, 0x30, 10000)
+    memory.blocks[4000] = bytes(flow)
+    memory.blocks[10000] = bytes(0x10) + struct.pack('<i', len(target)) + target.encode('utf-16-le')
+    monkeypatch.setattr(native, 'MemoryAccess', lambda *_: memory)
+
+    assert native.observer_boot_ready(memory.mc, object()) is expected
+
+
+def test_lifecycle_rejects_flow_native_pointer_disappearing_during_read(monkeypatch):
+    memory = MemoryFixture(battle=False)
+    original = memory.read_many
+
+    def read_many(requests, **kwargs):
+        if (4000, 0x18) in requests:
+            flow = bytearray(memory.blocks[4000])
+            struct.pack_into('<Q', flow, 0x10, 0)
+            memory.blocks[4000] = bytes(flow)
+        return original(requests, **kwargs)
+
+    monkeypatch.setattr(memory, 'read_many', read_many)
+    with pytest.raises(ReadFailure, match='binding_changed'):
+        LifecycleReader(memory, 1000, 2000).sample()
+
+
 @pytest.mark.parametrize('state', [0, 1, 2, 3])
 def test_native_state_is_preserved_separately_from_readiness(state):
     memory = MemoryFixture(state)

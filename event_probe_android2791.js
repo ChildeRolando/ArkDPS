@@ -21,7 +21,9 @@ function expectFields(k,expected){
  for(const [name,offset] of Object.entries(expected))if(seen[name]!==offset)throw new Error('unsupported layout '+className(k)+'.'+name);
 }
 const domain=api('il2cpp_domain_get','pointer',[])();
+if(domain.isNull())throw new Error('IL2CPP domain is not initialized');
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
+if(thread.isNull())throw new Error('IL2CPP thread could not attach');
 const cfg={methods:[]};let clock;let skillF=null;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;

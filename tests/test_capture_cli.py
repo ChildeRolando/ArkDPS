@@ -93,6 +93,30 @@ def test_cli_refuses_overwriting_evidence_before_connecting(tmp_path, monkeypatc
     assert previous.read_text() == 'earlier run' and len(Session.instances) == before
 
 
+def test_cli_writes_ready_only_after_cold_start_observer_attaches(tmp_path, monkeypatch):
+    stub_git_and_clock(monkeypatch)
+    args = options(tmp_path)
+    args.wait_battle_seconds = 5
+    collector = Collector([])
+    checks = iter((False, True))
+
+    def boot_ready():
+        assert not (args.output_dir / 'READY.json').exists()
+        return next(checks)
+
+    monkeypatch.setattr(collector, 'observer_boot_ready', boot_ready)
+
+    def factory(adb, serial, **kwargs):
+        return CollectionSession(adb, serial, collector=collector,
+                                 observer_factory=LiveObserver, **kwargs)
+
+    summary = capture_cli.run_capture(args, session_factory=factory)
+    ready = json.loads((args.output_dir / 'READY.json').read_text(encoding='utf-8'))
+    assert summary['samples'] == 1
+    assert ready['status'] == 'observer_ready'
+    assert collector.calls.count('attach') == 1
+
+
 @pytest.mark.parametrize('require_events', [False, True])
 def test_cli_start_failure_reports_readiness_and_optionally_continues_snapshots(tmp_path, monkeypatch,
                                                                             require_events):

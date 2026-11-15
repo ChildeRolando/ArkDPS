@@ -24,7 +24,7 @@ from battle_history import BattleHistory
 from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
-from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
+from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
                         resolve_configured)
@@ -54,6 +54,7 @@ BRIDGE_COMMANDS = frozenset((
 def event_label(status, error=None):
     labels = {'recording': '事件观察中 · 护盾仅含观察区间',
               'ready': '事件已就绪 · 等待同帧基线', 'attaching': '正在挂载事件观察',
+              WAITING_GAME_INIT: '等待游戏初始化',
               'gap': '事件中断 · 伤害/治疗快照继续',
               'failed': '事件不可用 · 使用伤害/治疗快照',
               'incompatible': '观察者与游戏版本不兼容 · 使用伤害/治疗快照',
@@ -399,7 +400,8 @@ class DesktopState:
         live_event = EventAvailability(status=sample.get('event_status', self.event_status),
                                        error=sample.get('event_error', self.event_error), live=True)
         event_status, event_error = self.event_status, self.event_error
-        if event_status is None or self.observer_status in ('disabled', 'failed', 'incompatible', 'stopped'):
+        if event_status is None or self.observer_status in (
+                WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped'):
             event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
@@ -641,8 +643,12 @@ class CollectionWorker:
                             observer_state = ('disabled', None)
                             if current_enabled:
                                 observer = self.session.observer
-                                observer_state = ((observer.status, observer.error) if observer is not None
-                                                  else ('failed', self.session.event_error))
+                                if getattr(self.session, 'event_status', None) == WAITING_GAME_INIT:
+                                    observer_state = (WAITING_GAME_INIT, self.session.event_error)
+                                elif observer is not None:
+                                    observer_state = (observer.status, observer.error)
+                                else:
+                                    observer_state = ('failed', self.session.event_error)
                             if observer_state != last_observer_state:
                                 last_observer_state = observer_state
                                 self.events.put(('observer', observer_state))
