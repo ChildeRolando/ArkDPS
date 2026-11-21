@@ -460,6 +460,7 @@ def test_extra_reader_runs_inside_the_same_guard_without_exposing_addresses(runt
     with battle.NativePcBattleProbe(root, api) as probe:
         def extra(read_bytes, context):
             assert context['battle_stats'] == p['stats']
+            assert context['level_data'] == p['level']
             assert struct.unpack('<f', read_bytes(p['stats'] + battle.STATS_TOTAL_DAMAGE, 4))[0] == -123.5
             return {'operator_rows': []}
         result = probe.sample(extra_reader=extra)

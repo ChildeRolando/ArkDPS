@@ -100,6 +100,16 @@
 
 我要核对同一个敌人的编号一直相同，并且在受击后的新一帧能读到较低的当前 HP。最大 HP、击杀原因和每次伤害的来源还需要其他证据。
 
+### H · 本关引用哪个等级的敌人，1-7 演习
+
+在关卡页用管理员 PowerShell 整条运行。看到 `recording` 后进 1-7 演习。等第一只敌人出现，再等约 5 秒，然后切回 PowerShell 按 **Ctrl+C**。采到开场即可。
+
+```powershell
+& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 50 --enemies --stage-enemies --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\stage-enemies-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
+```
+
+同一个敌人可能有多个配表等级。这里核对这关用了哪个等级、是否带覆盖，以及实际出现的敌人键。确认这些以后，才能决定哪些图鉴数据可用于对照本局。
+
 ## 等我发对应的采样命令再打
 
 下面也都是真实要做的验收。现有命令还记不到所需的目标 HP、护盾消费或逐次结算。现在跑会留下整局总数，缺少要对账的那一笔。我准备好相应字段后会直接发完整命令。

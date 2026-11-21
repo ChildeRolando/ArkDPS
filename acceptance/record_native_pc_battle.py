@@ -22,6 +22,19 @@ def _enemy_hp(sample):
             and row['hp'] is not None and row['hp'] >= 0}
 
 
+def _stage_enemy_references(sample):
+    if sample.get('stage_enemy_refs_status') != 'available' or not sample.get('stage_id'):
+        return None
+    reference = sample['stage_enemy_refs']
+    if reference['scope'] != 'current_stage_enemy_db_refs':
+        return None
+    entries = reference['entries']
+    if not entries or reference['collection_count'] != len(entries):
+        return None
+    return tuple((row['enemy_key'], row['variant_level'], row['use_db'], row['has_overwrite'])
+                 for row in entries)
+
+
 def record_samples(poll, seconds, emit):
     started = time.monotonic()
     deadline = started + seconds
@@ -37,6 +50,8 @@ def record_samples(poll, seconds, emit):
     actor_damage_change_observed = False
     enemy_hp_observed = False
     enemy_hp_change_observed = False
+    stage_enemy_refs_samples = 0
+    stage_refs_by_battle = {}
     interrupted = False
     try:
         while True:
@@ -53,6 +68,13 @@ def record_samples(poll, seconds, emit):
                     enemy_hp = _enemy_hp(sample)
                     actor_rows_observed |= bool(rows)
                     enemy_hp_observed |= bool(enemy_hp)
+                    refs = _stage_enemy_references(sample)
+                    if refs is not None:
+                        stage_enemy_refs_samples += 1
+                        key = (sample['battle_serial'], sample['stage_id'])
+                        frames, signatures = stage_refs_by_battle.setdefault(key, (set(), set()))
+                        frames.add(sample['frame'])
+                        signatures.add(refs)
                     if previous is not None and previous['battle_serial'] == sample['battle_serial']:
                         if (previous['frame'] < sample['frame']
                                 and previous['game_time'] < sample['game_time']):
@@ -96,6 +118,9 @@ def record_samples(poll, seconds, emit):
             'actor_damage_change_observed': actor_damage_change_observed,
             'enemy_hp_observed': enemy_hp_observed,
             'enemy_hp_change_observed': enemy_hp_change_observed,
+            'stage_enemy_refs_samples': stage_enemy_refs_samples,
+            'stage_enemy_refs_stable': any(len(frames) >= 2 and len(signatures) == 1
+                                           for frames, signatures in stage_refs_by_battle.values()),
             'status_counts': dict(counts), 'interrupted': interrupted}
 
 
@@ -109,6 +134,8 @@ def main(argv=None):
                         help='also record managed unit membership and retained manual actions')
     parser.add_argument('--enemies', action='store_true',
                         help='also investigate current enemy membership and HP in the same logical frame')
+    parser.add_argument('--stage-enemies', action='store_true',
+                        help='also investigate current-stage enemy keys, variant levels and override presence')
     args = parser.parse_args(argv)
     if not 1 <= args.seconds <= MAX_SECONDS:
         parser.error(f'--seconds must be between 1 and {MAX_SECONDS}')
@@ -128,10 +155,22 @@ def main(argv=None):
         from native_pc.probe_native_pc_enemies import capture_enemies
 
         captures.append(('enemies', capture_enemies))
+    if args.stage_enemies:
+        from native_pc.probe_native_pc_stage_enemies import capture_stage_enemy_refs
+
+        captures.append(('stage_enemy_refs', capture_stage_enemy_refs))
+
+    next_stage_read = float('-inf')
 
     def read_optional_fields(read, context):
+        nonlocal next_stage_read
         fields = {}
         for key, capture in captures:
+            if key == 'stage_enemy_refs':
+                now = time.monotonic()
+                if now < next_stage_read:
+                    continue
+                next_stage_read = now + HEARTBEAT_SECONDS
             try:
                 fields.update(capture(read, context))
             except (ApiFailure, ResearchFailure):
@@ -147,7 +186,8 @@ def main(argv=None):
 
         start = {'kind': 'start', 'source': 'native_pc_read_only', 'research_only': True,
                  'started_at_utc': datetime.now(timezone.utc).isoformat(),
-                 'duration_seconds': args.seconds, 'witnesses': args.witnesses, 'enemies': args.enemies}
+                 'duration_seconds': args.seconds, 'witnesses': args.witnesses, 'enemies': args.enemies,
+                 'stage_enemies': args.stage_enemies}
         emit(start)
         try:
             with NativePcBattleProbe(args.game_root) as probe:
@@ -164,6 +204,8 @@ def main(argv=None):
             return 2
         emit(summary)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
+        if args.stage_enemies:
+            return 0 if summary['stage_enemy_refs_stable'] else 2
         return 0 if summary['frame_progress_observed'] and summary['damage_change_observed'] else 2
 
 

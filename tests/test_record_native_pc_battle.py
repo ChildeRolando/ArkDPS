@@ -80,3 +80,23 @@ def test_enemy_hp_change_requires_the_same_observed_instance_and_battle(monkeypa
 
     summary, _ = run(monkeypatch, *reports, enemy(2, 31, 11, 200), None)
     assert summary['enemy_hp_change_observed']
+
+
+def test_stage_references_need_distinct_frames_in_one_battle_and_stable_values(monkeypatch):
+    def refs(battle, frame, level=0, overwritten=False):
+        evidence = sample(battle, frame, 0.0)
+        evidence['sample'].update(stage_id='Obt/Main/level_main_01-07',
+            stage_enemy_refs_status='available', stage_enemy_refs={
+                'scope': 'current_stage_enemy_db_refs', 'collection_count': 1,
+                'entries': [dict(enemy_key='enemy_1007_slime_2', variant_level=level,
+                                 use_db=True, has_overwrite=overwritten)],
+            })
+        return evidence
+
+    summary, _ = run(monkeypatch, refs(1, 30), refs(1, 60), None)
+    assert summary['stage_enemy_refs_samples'] == 2 and summary['stage_enemy_refs_stable']
+    assert not summary['damage_change_observed']
+
+    for other in (refs(1, 30, 1), refs(2, 60), refs(1, 60, 1), refs(1, 60, overwritten=True)):
+        summary, _ = run(monkeypatch, refs(1, 30), other, None)
+        assert not summary['stage_enemy_refs_stable']

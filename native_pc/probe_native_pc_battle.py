@@ -456,7 +456,7 @@ class NativePcBattleProbe:
         extra = {}
         if extra_reader is not None:
             extra = extra_reader(reader.read_optional, {'battle_controller': battle, 'battle_logger': logger,
-                                              'battle_stats': stats, 'frame': frame,
+                                              'battle_stats': stats, 'level_data': level, 'frame': frame,
                                               'game_time': game_time})
             _require(type(extra) is dict, 'invalid_extra_sample')
         # Every mutable source used above is re-read inside the same logic-clock bracket.
