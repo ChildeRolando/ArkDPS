@@ -152,12 +152,14 @@ class NativePcCollector:
                       if diagnostic else report.get('reason'))
             raise SnapshotGap(f'官服 PC 采样暂不可用（{detail}）')
         raw = report['sample']
-        roots = self.process.battle_identity
-        identity = hashlib.sha256(struct.pack(f'<{len(roots)}Q', *roots)).hexdigest()
+        # The probe can see a reset while the roster is unavailable. Keep that
+        # boundary even if the next publishable frame has caught up to the old one.
+        identity_words = (*self.process.battle_identity, raw['battle_serial'])
+        identity = hashlib.sha256(struct.pack(f'<{len(identity_words)}Q', *identity_words)).hexdigest()
         battle = (identity,)
         stage_id = raw.get('stage_id') if raw.get('stage_status') == 'available' else None
         flow = _flow(raw)
-        practice = self._battle_practice(raw, flow, (battle, raw['battle_serial']), stage_id)
+        practice = self._battle_practice(raw, flow, battle, stage_id)
         abandoned = (raw['battle_state'] == 2 and raw.get('battle_result') == 0
                      and finish_transition(flow, stage_id))
         evidence = 'native_pc_guarded_memory'
@@ -234,7 +236,7 @@ class NativePcCollector:
             if raw.get(f'{key}_status') != 'available' or raw.get(key) is None:
                 raise SnapshotGap(f'官服 PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
         rows = raw['actor_rows']
-        battle = (lifecycle['battle'], raw['battle_serial'])
+        battle = lifecycle['battle']
         if self._enemy_battle != battle:
             self._reset_enemy_observation()
             self._enemy_battle = battle

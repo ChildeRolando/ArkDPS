@@ -36,6 +36,7 @@ ENEMY_FIELDS = ((104, '<data>k__BackingField', ENEMY_DATA),)
 ENTITY_FIELDS = ((2, 'm_hp', ENTITY_HP),
                  (125, '__Hotfix0_get_hp', HP_GETTER_OVERRIDE))
 DATA_FIELDS = ((2, 'key', 0x20),)
+ENEMY_PREFIX_GUARDS = ((0, 8), (0x10, 0x27), (ENTITY_HP, ENTITY_HP + 8))
 LIMITATIONS = (
     'UnitManager.enemies membership is not the full planned enemy roster.',
     'Managed flags and native-reference presence do not prove Unity liveness.',
@@ -45,14 +46,18 @@ LIMITATIONS = (
 
 
 class EnemyRead(presence.CheckedRead):
+    def __init__(self, read):
+        super().__init__(read)
+        self.enemy_data = {}
+        self.enemy_prefixes = []
+
     def read(self, address, size):
         presence.require(self.calls < MAX_READ_CALLS and
                          self.bytes_requested + size <= MAX_READ_BYTES,
                          'enemy_read_budget_exhausted')
         return super().read(address, size)
 
-    def enemy_lineage(self, address):
-        klass = self.ref(address, guard=True)
+    def enemy_lineage(self, klass):
         if klass in self.lineages:
             return self.lineages[klass]
         original = klass
@@ -79,6 +84,36 @@ class EnemyRead(presence.CheckedRead):
                             guard=True) if statics else None
         self.lineages[original] = override
         return override
+
+    def enemy_values(self, address):
+        # Coalesce physical reads without guarding unrelated gaps in the
+        # object. validate() checks exactly the previously consumed bytes.
+        raw = self.read(address, ENTITY_HP + 8)
+        self.enemy_prefixes.append((address, raw))
+        klass = presence.pointer(struct.unpack_from('<Q', raw)[0])
+        override = self.enemy_lineage(klass)
+        native = presence.pointer(struct.unpack_from('<Q', raw, 0x10)[0], nullable=True)
+        flags = struct.unpack_from('<IiiBBB', raw, 0x18)
+        hp_raw, = struct.unpack_from('<q', raw, ENTITY_HP)
+        return override, native, flags, hp_raw
+
+    def validate(self):
+        super().validate()
+        for address, before in self.enemy_prefixes:
+            after = self.read(address, len(before))
+            presence.require(all(before[start:end] == after[start:end]
+                                 for start, end in ENEMY_PREFIX_GUARDS),
+                             'presence_changed_during_read')
+
+    def enemy_key(self, data):
+        # Many simultaneous instances share an immutable EnemyData. Cache its
+        # exact pointer only for this transaction; its class/key/string guards
+        # are still reread by validate(), and each instance's data ref is guarded.
+        if data not in self.enemy_data:
+            klass = self.expect_class(data, 'EnemyData', '')
+            self.fields(klass, 18, DATA_FIELDS)
+            self.enemy_data[data] = self.actor_id(self.ref(data + 0x20, guard=True))
+        return self.enemy_data[data]
 
 
 def capture_enemies(read, context):
@@ -115,19 +150,14 @@ def capture_enemies(read, context):
             presence.pointer(address)
             presence.require(address not in objects, 'enemy_duplicate_object')
             objects.add(address)
-            hp_override = reader.enemy_lineage(address)
-            native = reader.ref(address + 0x10, nullable=True, guard=True)
-            raw = reader.guarded(address + 0x18, 15)
-            uid, entity_side, player_side, inited, borned, disappeared = struct.unpack('<IiiBBB', raw)
+            hp_override, native, flags, hp_raw = reader.enemy_values(address)
+            uid, entity_side, player_side, inited, borned, disappeared = flags
             presence.require(uid not in uids, 'enemy_duplicate_instance_uid')
             uids.add(uid)
             presence.require(all(flag in (0, 1) for flag in (inited, borned, disappeared)),
                              'enemy_lifecycle_flags')
             data = reader.ref(address + ENEMY_DATA, guard=True)
-            klass = reader.expect_class(data, 'EnemyData', '')
-            reader.fields(klass, 18, DATA_FIELDS)
-            key = reader.actor_id(reader.ref(data + 0x20, guard=True))
-            hp_raw, = struct.unpack('<q', reader.guarded(address + ENTITY_HP, 8))
+            key = reader.enemy_key(data)
             hp = hp_raw / (1 << 32)
             hp_reason = ('hp_getter_storage_uninitialized' if hp_override is None else
                          'hp_getter_override_present' if hp_override else None)

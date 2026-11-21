@@ -3,8 +3,9 @@ from copy import deepcopy
 import pytest
 
 from battle_history import BattleHistory
+from battle_lifecycle import BattleRuntime
 from collection_session import CollectionSession
-from collector import SampleUnavailable, UnsupportedVersion
+from collector import ProcessChanged, SampleUnavailable, UnsupportedVersion
 from event_capture import CaptureRetry
 from native_pc.probe_native_pc_battle import ResearchFailure
 from native_pc_collector import BUILD_ID, NativePcCollector
@@ -213,6 +214,73 @@ def test_missing_roster_does_not_advance_or_archive_and_marks_gap(tmp_path):
     assert row['present'] is None
     assert row['presence_seconds'] is None
     session.close()
+
+
+def test_reused_native_roots_keep_new_battle_separate_after_missing_first_roster(tmp_path):
+    first = sample(30, 100.)
+    reset = sample(5, 0.)
+    reset['sample'].update(battle_serial=2, roster_status='unavailable', roster=None)
+    recovered = sample(45, 120.)
+    recovered['sample'].update(battle_serial=2)
+    probe = Probe([first, reset, recovered])
+    history = BattleHistory(tmp_path)
+    session = CollectionSession(None, None, collector=NativePcCollector(tmp_path, probe_factory=lambda _: probe),
+                                frida_remote=None, history=history)
+    session.enable_lifecycle()
+    session.connect()
+    old = session.read()
+    with pytest.raises(CaptureRetry):
+        session.read()
+    new = session.read()
+    assert new['battle_id'] != old['battle_id']
+    row = new['statistics']['rows'][OPERATOR]
+    assert row['damage'] == 120.
+    assert row['recent_damage'] is None
+    record, = history.list_recent().records
+    assert record.battle_id == old['battle_id']
+    assert record.statistics['rows'][OPERATOR]['damage'] == 100.
+    assert record.metadata['outcome'] == 'unknown'
+    session.close()
+
+
+def test_process_restart_archives_once_and_reuses_no_previous_practice(tmp_path):
+    first = sample(3, 50.)
+    first['sample'].update(flow('home', 'battle_loader', transiting=False))
+    old = Probe([opening(), first, {'status': 'process_changed'}])
+    new = Probe([sample(3, 0.)])
+    new.process_instance = (old.pid, old.process_instance[1] + 1)
+    history = BattleHistory(tmp_path)
+    runtime = BattleRuntime()
+
+    def connect(probe):
+        collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+        session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+        session.enable_lifecycle(runtime)
+        session.connect()
+        return session
+
+    original = connect(old)
+    with pytest.raises(CaptureRetry):
+        original.read()
+    first_update = original.read()
+    with pytest.raises(ProcessChanged):
+        original.read()
+    original.close()
+    assert old.closed
+    previous, = history.list_recent().records
+    assert previous.battle_id == first_update['battle_id']
+    assert previous.metadata['practice'] is True
+    assert previous.metadata['outcome'] == 'unknown'
+    assert previous.statistics['rows'][OPERATOR]['damage'] == 50.
+
+    replacement = connect(new)
+    next_update = replacement.read()
+    assert next_update['battle_id'] != first_update['battle_id']
+    assert next_update['battle_metadata']['practice'] is None
+    assert next_update['statistics']['rows'][OPERATOR]['damage'] == 0.
+    prior_only, = history.list_recent().records
+    assert prior_only.battle_id == previous.battle_id
+    replacement.close()
 
 
 def test_enemy_snapshot_retains_its_frame_and_clears_at_battle_boundary(tmp_path, monkeypatch):

@@ -2103,6 +2103,9 @@ public partial class MainWindow
         string eventStatus=frozenHistory.Text("event_status");
         Require(eventStatus.Length>0 && HasText(Screenshot.StatisticsDocument(frozenHistory,Theme.Key),"事件："+eventStatus),
                 "ranking PNG lost the selected archive's event status");
+        var babelRanking=Screenshot.StatisticsDocument(frozenHistory,Theme.Babel);
+        Require(FindAutomationElement(babelRanking,"ExportRank") is TextBlock rank && rank.Text=="1",
+                "ranking PNG did not number the first history row as 1");
         byte[] frozenPng=Screenshot.Statistics(frozenHistory,Theme.Key);
         string pngPath=Path.Combine(output,"frozen-history.png");
         await ExportHistory(frozenHistory,"png",pngPath,frozenPng);

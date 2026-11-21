@@ -38,6 +38,8 @@
 
 已收到 `summon-20261121-123256.jsonl`。小车的伤害已经对上。那次记录没给每台小车记编号，下方命令用于补读两台车的编号和撤退记录。
 
+补录 `scene-presence-20261121-151312.jsonl` 已验证两车同场、撤下一台和新车补位。命令留作复查。
+
 ```powershell
 & 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 300 --witnesses --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\scene-presence-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
 ```

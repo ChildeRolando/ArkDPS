@@ -98,9 +98,11 @@ internal static class Screenshot
         document.Children.Add(Inspector.Text(damageNote+(stripes ? " · 斜纹 = 过量伤害" : "")+
             " · 护盾仅实际吸收 · 未知为 —",12,false,"Muted",new Thickness(24,18,24,4)));
         document.Children.Add(Inspector.Text(view.Text("metric_label")+" / "+view.Text("rate_label")+"速率 · 原始值排序",12,false,"Muted",new Thickness(24,0,24,14)));
+        int rankNumber = 0;
         foreach(var entry in entries)
         {
             var item = new RowItem { Entry = entry };
+            item.SetRank(++rankNumber);
             string surface = people && item.Rank % 2 == 0 ? "ConsoleCard" : "Console";
             var row = new Grid { MinHeight = 72, Background = Theme.Resource(surface) };
             row.ColumnDefinitions.Add(new() { Width = new GridLength(babel ? 90 : 66) });
@@ -112,6 +114,7 @@ internal static class Screenshot
                 var identity = new StackPanel { Orientation = Orientation.Horizontal };
                 var rank = Inspector.Text(item.Rank.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     13, false, "ConsoleMuted");
+                System.Windows.Automation.AutomationProperties.SetAutomationId(rank,"ExportRank");
                 rank.SetResourceReference(TextBlock.FontFamilyProperty, "DataFont");
                 rank.Width = 28;
                 rank.TextAlignment = TextAlignment.Center;
