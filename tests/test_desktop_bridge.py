@@ -2193,6 +2193,30 @@ def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path)
     assert all(entry['rate_state'] != 'no_engagement' for entry in view['entries'])
 
 
+def test_native_engagement_explains_snapshot_only_without_an_observer_action(tmp_path):
+    from connection import ConnectionConfig
+
+    archived = record().to_dict()
+    archived['event_status'] = 'unavailable'
+    archived['metadata'].update(platform='native_pc', source_build='win-x64:verified')
+    BattleHistory(tmp_path / 'history').save(BattleRecord.from_dict(archived))
+    state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc', native_game_root='game')
+    state.accept('sample', dict(sample(), event_status='unavailable'))
+    cmd(state, 'panel_update', config=dict(state.layout.panels[0].to_dict(), rate_basis='engagement'))
+    state.history_config = PanelConfig.from_dict(dict(panel_id='history', rate_basis='engagement'))
+    live = state.snapshot()['panels'][0]
+
+    # The archived explanation follows the record's source after a platform switch.
+    state.effective_connection = ConnectionConfig(platform='mumu')
+    selected = state.snapshot()['history_selected']
+    assert selected['event_status'] == 'unavailable'
+    for view in (live, selected['view']):
+        assert '官服 PC' in view['rate_reason'] and '逐次事件' in view['rate_reason']
+        assert not view['rate_available'] and not view['rate_action'] and not view['rate_action_label']
+        assert view['entries'] and all(entry['rate'] is None for entry in view['entries'])
+
+
 def test_finished_history_record_publishes_team_shares(tmp_path):
     from battle_history import BattleHistory
     BattleHistory(tmp_path / 'history').save(record())

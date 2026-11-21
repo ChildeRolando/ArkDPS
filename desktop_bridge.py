@@ -434,12 +434,15 @@ class DesktopState:
             return None
         key = self.selected, self.history_config, self.layout.number_units
         if key != self._history_view_key:
-            event = EventAvailability(self.selected.event_status, self.selected.event_error, live=False)
+            event_status = self.selected.event_status
+            if self.selected.metadata.get('platform') == 'native_pc' and event_status == 'unavailable':
+                event_status = 'snapshot_only'
+            event = EventAvailability(event_status, self.selected.event_error, live=False)
             self._history_view = dict(
                 record_display(self.selected),
                 view=self.view(self.history_config, record_statistics(self.selected, for_panel=True),
                                event=event),
-                event_status=event.status, event_error=event.error)
+                event_status=self.selected.event_status, event_error=event.error)
             self._history_view_key = key
         return self._history_view
 
@@ -449,7 +452,10 @@ class DesktopState:
         status, label = self.status()
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
-        live_event = EventAvailability(status=sample.get('event_status', self.event_status),
+        live_event_status = sample.get('event_status', self.event_status)
+        if self.effective_connection.platform == 'native_pc' and live_event_status in (None, 'unavailable'):
+            live_event_status = 'snapshot_only'
+        live_event = EventAvailability(status=live_event_status,
                                        error=sample.get('event_error', self.event_error), live=True)
         event_status, event_error = self.event_status, self.event_error
         if event_status is None or self.observer_status in (

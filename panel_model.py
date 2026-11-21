@@ -85,11 +85,14 @@ def _error_summary(error: str | None, limit: int = 120) -> str:
 def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, str]:
     """Return ``(available, reason, hint, action, action_label)``.
 
-    Only a live or recorded event stream certifies engagement data. Every
-    other state carries a readable reason and a recovery entry.
+    Only a live or recorded event stream certifies engagement data. Missing
+    coverage carries a readable reason and an action when recovery applies.
     """
     if event is None or event.status in ('recording', 'finished'):
         return True, '', '', '', ''
+    if event.status == 'snapshot_only':
+        return (False, '官服 PC 缺少接敌速率所需的逐次事件',
+                '官服 PC 已提供累计量和有覆盖的近 5 秒速率。', '', '')
     error = _error_summary(event.error)
     detail = f'（{error}）' if error else ''
     if event.live:
