@@ -193,12 +193,12 @@ CE-5 复测共 13 次读取，固定波次配置均为 42。命令留作复查�
 
 ## ArkDPS 界面版
 
-已完成 1-7 演习正常入口的实时排行、胜利、退出、失败和战绩归档。下一轮用 `ce7c205` 测重启游戏、窗口和当前名单的 HP。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。
+已完成 1-7 演习正常入口的实时排行、胜利、退出、失败和战绩归档。下一轮用 `54f7bf8` 测重启游戏、窗口、当前名单 HP 和固定波次。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。
 
 ```powershell
-& 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ce7c205\ArkDPS-win-x64-udk_b3m0\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ce7c205\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+& 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-54f7bf8\ArkDPS-win-x64-sqfaqgan\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-54f7bf8\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 ```
 
-1. 在 ArkDPS 点「侧边吸附」。打 **1-7 演习**，让干员打几下。敌情页应显示当前名单的 HP 和可读人数。分别试一次最小化游戏和从任务栏恢复游戏，看侧栏有没有对应变化。
+1. 在 ArkDPS 点「侧边吸附」。打 **1-7 演习**，让干员打几下。敌情页应显示当前名单的 HP、可读人数和通过确认的固定波次计数。分别试一次最小化游戏和从任务栏恢复游戏，看侧栏有没有对应变化。
 2. 保持 ArkDPS 运行，正常关闭游戏，再从鹰角启动器重开。等 ArkDPS 连上后再进一局 1-7 演习，先空着几秒，再放干员。确认新局从自己的累计开始。
 3. 有一份战绩后，在 ArkDPS 的历史里选中它，点「完整排行 PNG」保存。HUD、平台切换和 MuMu 回归另做，以便将窗口和采集问题分开确认。
