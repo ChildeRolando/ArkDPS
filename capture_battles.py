@@ -14,7 +14,7 @@ import time
 
 from battle_lifecycle import BattleObservation, BattleRuntime, BattleSessions, MappingRetry
 from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL
-from desktop_audit import DesktopAuditReader
+from desktop_audit import CAPTURE_NAME, DesktopAuditReader
 from roster import CharacterEntry, RosterSnapshot
 from event_capture import CaptureRetry
 from snapshot_adapter import AdapterError, MappingUnavailable
@@ -168,12 +168,48 @@ def same_archive(actual, recorded):
 
 
 def replay(path):
-    with Path(path).open(encoding='utf-8') as stream:
+    path = Path(path)
+    match = CAPTURE_NAME.fullmatch(path.name)
+    if match and match['part'] is not None and path.is_file():
+        return _replay_segments(path, match['run'])
+    with path.open(encoding='utf-8') as stream:
         first = stream.readline()
         lines = chain((first,), stream) if first else ()
         if first and 'kind' in json.loads(first):
             return replay_product(lines)
         return _replay_snapshots(lines)
+
+
+def _replay_segments(path, run):
+    segments = []
+    for candidate in path.parent.glob(f'{run}-part-*.jsonl'):
+        match = CAPTURE_NAME.fullmatch(candidate.name)
+        if match and candidate.is_file():
+            segments.append((int(match['part']), candidate))
+    segments.sort()
+
+    def lines():
+        for _, segment in segments:
+            with segment.open(encoding='utf-8') as stream:
+                yield from stream
+
+    if all(number == expected for expected, (number, _) in enumerate(segments, start=1)):
+        return replay_product(lines())
+
+    # Each segment starts its own enemy delta prefix. A retained tail can be
+    # inspected even after the original lifecycle baseline has been removed.
+    last_publication = None
+    records = samples = 0
+    reader = DesktopAuditReader()
+    for line in lines():
+        record = reader.restore(json.loads(line))
+        records += 1
+        if record['kind'] == 'lifecycle_observation':
+            samples += record['data']['kind'] == 'sample'
+        elif record['kind'] == 'published':
+            last_publication = record['data']
+    return dict(coverage='retained_only', segments=[number for number, _ in segments],
+                records=records, samples=samples, last_publication=last_publication)
 
 
 def _replay_snapshots(lines):

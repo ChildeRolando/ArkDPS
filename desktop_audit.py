@@ -1,7 +1,128 @@
-"""Store the desktop journal's cumulative enemy state prefix once per battle."""
+"""Bound the desktop capture journal and encode cumulative enemy state as deltas."""
+
+from datetime import datetime, timezone
+import json
+import re
+import stat
+import time
+from uuid import uuid4
+
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
 ENEMY_STATE_RECORDS = frozenset(('published', 'lifecycle_summary', 'coverage_closed'))
+CAPTURE_SEGMENT_BYTES = 64 * 1024 ** 2
+CAPTURE_TOTAL_BYTES = 512 * 1024 ** 2
+CAPTURE_NAME = re.compile(
+    r'(?P<run>wpf-\d{8}-\d{6}-\d{6}-[0-9a-f]{32})(?:-part-(?P<part>\d{6,}))?\.jsonl',
+    re.ASCII)
+
+
+class DesktopCaptureJournal:
+    """Best-effort disk audit for the single live desktop worker."""
+
+    def __init__(self, directory, *, encoder, warn, segment_bytes=CAPTURE_SEGMENT_BYTES,
+                 total_bytes=CAPTURE_TOTAL_BYTES):
+        self.directory, self.encoder, self.warn = directory, encoder, warn
+        self.segment_bytes, self.total_bytes = segment_bytes, total_bytes
+        self.run = f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{uuid4().hex}'
+        self.segment = 0
+        self.stream = None
+        self.size = self.available = 0
+        self.retry_at = 0.
+        self.writer = DesktopAuditWriter(self._emit)
+
+    def __enter__(self):
+        try:
+            self._make_room(0)
+        except OSError as exc:
+            self._on_error(exc)
+        return self
+
+    def __exit__(self, *_exc):
+        try:
+            self._close_segment()
+        except OSError as exc:
+            self.warn(f'采集日志关闭失败：{exc}')
+
+    def _close_segment(self):
+        stream, self.stream = self.stream, None
+        self.size = 0
+        self.writer = DesktopAuditWriter(self._emit)
+        if stream is not None:
+            stream.close()
+
+    def _make_room(self, required):
+        self.directory.mkdir(parents=True, exist_ok=True)
+        files = []
+        for path in self.directory.iterdir():
+            if not CAPTURE_NAME.fullmatch(path.name):
+                continue
+            try:
+                metadata = path.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(metadata.st_mode):
+                files.append((metadata.st_mtime_ns, path, metadata.st_size))
+        available = self.total_bytes - sum(size for _, _, size in files)
+        for _, path, size in sorted(files, key=lambda item: (item[0], item[1].name)):
+            if available >= required:
+                break
+            if self.stream is not None and str(path) == self.stream.name:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # Windows can hold a log open while it is being inspected.
+                continue
+            available += size
+        if available < required:
+            raise OSError(f'采集日志目录无法腾出 {required} 字节（上限 {self.total_bytes} 字节）')
+        self.available = available
+
+    def _emit(self, record):
+        payload = (json.dumps(record, ensure_ascii=False, default=self.encoder,
+                              separators=(',', ':')) + '\n').encode('utf-8')
+        if len(payload) > self.total_bytes:
+            raise OSError('单条采集记录超出目录容量上限')
+        if self.stream is None or self.available < len(payload):
+            self._make_room(len(payload))
+        if self.stream is None:
+            self.segment += 1
+            path = self.directory / f'{self.run}-part-{self.segment:06d}.jsonl'
+            self.stream = path.open('xb', buffering=0)
+        try:
+            if self.stream.write(payload) != len(payload):
+                raise OSError('采集日志写入不完整')
+        except OSError:
+            try:
+                self.stream.truncate(self.size)
+            except OSError:
+                pass
+            raise
+        self.size += len(payload)
+        self.available -= len(payload)
+
+    def _on_error(self, exc):
+        # Leave a missing segment number so the replayer can detect lost records.
+        self.segment += 1
+        self.retry_at = time.monotonic() + 10.
+        try:
+            self._close_segment()
+        except OSError:
+            pass
+        self.warn(f'采集日志暂不可写，稍后重试：{exc}')
+
+    def write(self, kind, data):
+        if self.retry_at and time.monotonic() < self.retry_at:
+            return
+        try:
+            if self.size >= self.segment_bytes:
+                self._close_segment()
+            self.writer.write(kind, data)
+        except (OSError, TypeError, ValueError) as exc:
+            self._on_error(exc)
+        else:
+            self.retry_at = 0.
 
 
 def _statistics(kind, data):

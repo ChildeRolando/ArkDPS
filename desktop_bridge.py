@@ -28,7 +28,7 @@ from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
                         resolve_configured)
-from desktop_audit import DesktopAuditWriter
+from desktop_audit import DesktopCaptureJournal
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
 from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
@@ -572,19 +572,13 @@ class CollectionWorker:
 
     def run(self):
         try:
+            from capture_cli import json_value
+
             runtime = BattleRuntime()
             capture_dir = self.directory / 'captures'
-            capture_dir.mkdir(parents=True, exist_ok=True)
-            path = capture_dir / (
-                f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{uuid4().hex}.jsonl')
-            with path.open('x', encoding='utf-8') as stream:
-                from capture_cli import json_value
-
-                def write_audit(record):
-                    stream.write(json.dumps(record, ensure_ascii=False, default=json_value) + '\n')
-                    stream.flush()
-
-                audit = DesktopAuditWriter(write_audit).write
+            with DesktopCaptureJournal(capture_dir, encoder=json_value,
+                                       warn=lambda message: self.events.put(('warning', message))) as journal:
+                audit = journal.write
                 try:
                     usable = False
                     current_config, current_enabled, current_target = None, False, None

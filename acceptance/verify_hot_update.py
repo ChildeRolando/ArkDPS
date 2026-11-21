@@ -75,6 +75,10 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
     BattleHistory(state / 'history').save(record())
     history = {path.name: path.read_bytes() for path in (state / 'history').glob('*.json')}
     assert len(history) == 1
+    capture = state / 'captures' / 'wpf-20261121-000000-000001-0123456789abcdef0123456789abcdef-part-000001.jsonl'
+    capture.parent.mkdir()
+    capture_record = b'{"kind":"connected","data":{}}\n'
+    capture.write_bytes(capture_record)
 
     executable = bundle / 'ArkDPS.Desktop.exe'
     versions = bundle / '.arkdps-update' / 'versions'
@@ -124,6 +128,7 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
     assert LayoutStore(state / 'layout.json').load().layout.theme == 'babel'
     assert ConnectionConfigStore(state / 'connection.json').load().config == connection
     assert {path.name: path.read_bytes() for path in (state / 'history').glob('*.json')} == history
+    assert capture.read_bytes() == capture_record
     assert json.loads((bundle / 'metadata/release.json').read_text(encoding='utf-8')) == old
     for name, expected_digest in old['files'].items():
         assert digest(bundle / name) == expected_digest, name
@@ -161,7 +166,7 @@ def main():
         scenarios.update(verify_scenario(source, target, old, new, target_digest, output, scenario))
     result = dict(status='PASS_OFFLINE_HOT_UPDATE', source_version=old['version'], source_head=old['head'],
         source_archive_sha256=digest(source), target_version=new['version'], target_head=new['head'],
-        target_archive_sha256=target_digest, scenarios=scenarios,
+        target_archive_sha256=target_digest, shared_capture_log_verified=True, scenarios=scenarios,
         limitations=['Synthetic data and simulated GitHub responses. No game device is contacted.'])
     (output / 'receipt.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     print('PASS_OFFLINE_HOT_UPDATE', output)

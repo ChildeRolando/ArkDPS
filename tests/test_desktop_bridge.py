@@ -1064,14 +1064,47 @@ def test_worker_preserves_final_audit_failure_after_collection_close_retry(tmp_p
                for error in worker.retired_errors)
 
 
-def test_worker_startup_setup_error_is_reported(tmp_path):
+def test_unwritable_capture_directory_does_not_stop_live_worker(tmp_path, monkeypatch):
+    import desktop_bridge
+    from types import SimpleNamespace
+
     state_dir = tmp_path / 'state'
     state_dir.mkdir()
     (state_dir / 'captures').write_text('file blocks capture directory', encoding='utf-8')
-    worker = CollectionWorker(DesktopState(state_dir))
+    state = DesktopState(state_dir)
+    worker = CollectionWorker(state)
+    diagnostics = SimpleNamespace(as_dict=dict, selected_serial='serial', version_actual='test')
+    target = SimpleNamespace(adb_path='adb', serial='serial', diagnostics=diagnostics)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+
+    class Session:
+        cleanup_errors = {}
+        collector = SimpleNamespace(diagnostics=diagnostics)
+
+        def __init__(self, *_args, audit, **_kwargs):
+            self.audit = audit
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+
+        def connect(self):
+            self.audit('connected', {})
+
+        def read(self):
+            self.audit('published', {})
+            worker.stop.set()
+            return {'state': 2, 'battle_id': 'live', 'frame': 1}
+
+        def close(self):
+            self.audit('stopped', {})
+
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(state.connection, False)
     worker.run()
-    kind, error = worker.events.get_nowait()
-    assert kind == 'error' and error
+    events = dict(worker.events.queue)
+    assert '采集日志暂不可写' in events['warning']
+    assert events['sample']['frame'] == 1
+    assert 'error' not in events
     assert worker.session is None
 
 
@@ -1410,7 +1443,7 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
         def now(tz):
             return RealDateTime(2026, 11, 10, 9, 30, 0, tzinfo=tz)
 
-    monkeypatch.setattr(desktop_bridge, 'datetime', FixedDateTime)
+    monkeypatch.setattr('desktop_audit.datetime', FixedDateTime)
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     diagnostics = SimpleNamespace(
         as_dict=lambda: {'status': 'ready'},

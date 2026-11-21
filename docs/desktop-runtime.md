@@ -6,8 +6,8 @@
 
 - `desktop/ArkDPS.Desktop` 是 .NET 10 / C# / WPF 原生 UI：主窗、统计面板、历史页、连接表单、固定干员报告、HUD、托盘与 PNG 均由 WPF 绘制；不是 Tk 换皮，也没有 WebView。
 - WPF 启动一个 `desktop_bridge.py` 子进程。只有 Python 可以调用 `ConnectionConfig` / `CollectionSession` / `BattleRuntime` / `BattleHistory`；C# 不读游戏内存，不执行 ADB，不重新计算统计或占比。`DesktopState.view` 只调用既有 `render_panel`。
-- GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次；最终 `stopped` 审计写入失败纳入 `cleanup_errors`，即使资源已释放也必须报告。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
-- 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建唯一审计 JSONL 文件，不追加到先前运行的记录。
+- GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
+- 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建新的采集日志分段。
 - Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。Tk 面板已封存（[ADR 0005](adr/0005-seal-legacy-tk.md)），`app.py` 只路由到 WPF 或无界面 `--capture-seconds`；`--legacy-tk`、`--acceptance-output`、`--self-test` 等旧参数由 argparse 明确报错退出，不会回退到其他界面。
 
 关卡名称由 Python 统一解析：`stage_names.py` 读取随包的 `vendor/ark-source/game_data/catalogs/stage_names.json`，把原生 `stage_id`（如 `Obt/Main/level_main_01-07`）翻译成玩家可读名称（`1-7`）。实时 `stage`、历史 `labels[0]`、PNG 与导出的 `display.stage` 共用同一解析；原始 `stage_id` 原样保留在历史、`stage_raw`、`stage_detail` 与导出中，UI 不改写它。目录缺失、无法解析或与 manifest `data_version` 不一致时，`warnings`/`history_notice` 明确提示版本问题并退回可读短码（如 `rogue6_1-3`），不显示内部路径，也不影响战绩读取。
@@ -39,6 +39,10 @@ WPF 在后台按字节写入命令，并用独立线程读取回复。ADB 子进
 可选的 `live_analysis` 提供单个战局采样点、连续段标识、团队指标和各干员近期 DPS。团队近 5 秒 DPS 沿用含过量的近期速率，只有团队归属完整且可靠窗口一致时汇总。本局平均 DPS 使用已确认累计伤害除以游戏时间。观察峰值在本次采集内维护。WPF 按游戏秒保留最近 10 分钟，按连续段断开曲线，换局清空。该字段独立于历史记录和导出格式。
 
 stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。历史页是拉取式缓存：每次进入页面发送 `history_refresh`；采集会话每成功提交一条新战绩就推送一次 `history` 事件（仅 `result.written` 为真时），`serve` 在下一条 `snapshot` 前重新 `list_recent()`，所以打开的历史页也会自动出现新局。自动刷新保留当前选中副本、详情与筛选条件，不按轮询扫描目录；「刷新」按钮只作手动兜底。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
+
+桌面采集日志达到 64 MiB 后从下一条完整记录开始新分段。启动和写入需要空间时，按最后写入时间从旧到新清理自动生成的 `wpf-*.jsonl`，将日志总量限制为 512 MiB（含旧版单文件和当前分段）。占用中的文件会跳过。无法腾出空间或无法写入时，桌面 worker 发出日志告警并稍后重试，采集和战绩归档照常执行。手动采集的证据包和 `runtime/history` 使用独立的路径。
+
+`python capture_battles.py --replay <任一分段>` 按顺序读取同一次运行的分段。文件链完整时由原有对账器复算。分段缺失时输出 `coverage: retained_only` 和仍保留的最新发布统计，供诊断使用。每段的首条敌人状态增量都保存可独立解码的前缀。
 
 ## 同包分发
 
