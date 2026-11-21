@@ -98,7 +98,7 @@ public partial class MainWindow
                 EffectiveConnectionConfig);
             if (placement.State == EmulatorPlacementState.Minimized)
             {
-                // A taskbar or tray restore remains usable during the same MuMu minimize.
+                // A taskbar or tray restore remains usable during the same player minimize.
                 bool justMinimized = minimizedPlayer != placement.PlayerWindow;
                 minimizedPlayer = placement.PlayerWindow;
                 if (allowMinimize && justMinimized && WindowState == WindowState.Normal)
@@ -106,7 +106,7 @@ public partial class MainWindow
                     sideMinimizedWithPlayer = true;
                     WindowState = WindowState.Minimized;
                 }
-                SetSideAttachmentStatus("MuMu 已最小化");
+                SetSideAttachmentStatus(UsingNativePc ? "PC 游戏已最小化" : "MuMu 已最小化");
                 SideAttachment.FollowPlayerZOrder(default, window);
                 return;
             }

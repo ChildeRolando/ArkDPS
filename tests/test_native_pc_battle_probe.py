@@ -627,6 +627,22 @@ def test_acquisition_timing_uses_monotonic_wall_time_outside_sample(runtime, mon
     assert 'acquisition' not in result['sample']
 
 
+def test_optional_enemy_budget_leaves_the_closing_frame_guard_intact(runtime):
+    root, api, p = runtime
+
+    def exhausted(read, _context):
+        with pytest.raises(battle.ResearchFailure, match='optional_read_budget_exhausted'):
+            for _ in range(battle.MAX_READ_CALLS):
+                read(p['controller'], 8)
+        return {'enemies_status': 'unavailable', 'enemies': None}
+
+    with battle.NativePcBattleProbe(root, api) as probe:
+        result = probe.sample(extra_reader=exhausted)
+
+    assert result['status'] == 'sample_available'
+    assert result['sample']['enemies_status'] == 'unavailable'
+
+
 def test_confirmed_stage_change_increments_the_opaque_battle_serial(runtime):
     root, api, p = runtime
     with battle.NativePcBattleProbe(root, api) as probe:

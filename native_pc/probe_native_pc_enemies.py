@@ -148,8 +148,8 @@ def capture_enemies(read, context):
         reader.validate()
     except presence.PresenceError as error:
         reason = str(error).replace('presence_', 'enemy_', 1)
-    except presence.native.ResearchFailure:
-        reason = 'enemy_parent_reader_unavailable'
+    except presence.native.ResearchFailure as error:
+        reason = error.reason
     except (presence.native.access.ApiFailure, OSError):
         reason = 'enemy_read_failed'
     else:

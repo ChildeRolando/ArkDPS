@@ -102,6 +102,7 @@ public sealed class EnemyItem : INotifyPropertyChanged
             },
             "rebirthing" => "等待重生",
             "entered" => "已入场 · 状态未知",
+            "current" => "在场",
             _ => row.Bool("alive") ? "在场" : "状态未知",
         };
         string hpText=Int(row.Get("hp"));
@@ -454,6 +455,8 @@ public partial class MainWindow
             enemyGapStart??=EnemyChart.Points[^1].GameTime;
 
         bool hasReading=shownEnemy.ValueKind==JsonValueKind.Object;
+        bool nativeCurrentHp=enemy.Text("scope")=="native_pc_current_hp" ||
+            shownEnemy.Text("scope")=="native_pc_current_hp";
         var totals=shownEnemy.Get("totals");
         bool totalComplete=EnemyComplete(totals,"total_hp_complete");
         bool remainingComplete=EnemyComplete(totals,"remaining_hp_complete");
@@ -472,7 +475,7 @@ public partial class MainWindow
 
         string enemyStatus=status switch
         {
-            "ready" => enemy.Bool("enemy_state_complete") ? "事件更新" : "快照读取",
+            "ready" => nativeCurrentHp ? "当前在场快照" : enemy.Bool("enemy_state_complete") ? "事件更新" : "快照读取",
             "locating" => "正在定位敌人",
             "stale" => "敌情快照不完整",
             "unavailable" => "敌情遥测不可用",
@@ -493,6 +496,8 @@ public partial class MainWindow
 
         var hints=new List<string>();
         string error=enemy.Text("error");
+        if(nativeCurrentHp && error.Length>0)
+            error=error=="enemy_sample_stale" ? "敌情快照已过期。" : "等待下一份可靠的敌情快照。";
         if(error.Length>0) hints.Add(error);
         if(!ready && hasReading) hints.Add(battleStatus is "preparing" or "previous"
             ? "显示上一局最后一次可用的敌情。" : "显示本局最后一次可用的敌情。");
@@ -502,7 +507,9 @@ public partial class MainWindow
             JsonValueKind.False => "入场事件覆盖不完整，已入场人数为已确认下限。",
             _ => "已入场人数来自已观察的敌人快照。",
         };
-        if(hasReading)
+        if(nativeCurrentHp)
+            hints.Add("只显示采样时在场敌人的当前 HP。最大 HP、关卡总量和逐次结算暂缺数据。");
+        else if(hasReading)
         {
             hints.Add(entryHint+"已入场总血量含已记录的重生阶段。");
             if(!totalComplete || !remainingComplete || (last.Bool("our_damage_known") && !damageComplete))
@@ -531,7 +538,7 @@ public partial class MainWindow
         EnemyEmpty.Visibility=enemyRows.Count==0 ? Visibility.Visible : Visibility.Collapsed;
         EnemyEmpty.Text=status switch
         {
-            "ready" when ready => "当前未确认有敌人入场。",
+            "ready" when ready => nativeCurrentHp ? "这份快照中未确认有在场敌人。" : "当前未确认有敌人入场。",
             "locating" => "正在定位敌人。",
             "unavailable" => "敌人遥测不可用；干员统计不受影响。",
             "stale" => "没有可显示的可靠敌情。",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 import math
 import time
 
@@ -42,6 +43,74 @@ def _finite(value, default=0.0):
 
 def _text(value):
     return value if isinstance(value, str) else ''
+
+
+def native_enemy_view(raw, *, frame, game_time, catalog):
+    """Project guarded PC membership without claiming enemy history or capacity.
+
+    The caller owns build checks and the shared battle/frame bracket. This
+    pure projection has no reader, caches or event reducer. ``hp_known`` keeps
+    the existing UI meaning (maximum HP known); a numeric ``hp`` independently
+    preserves the verified current native value. Missing data never becomes 0.
+    """
+    valid_frame = type(frame) is int and frame >= 0
+    valid_time = (type(game_time) in (int, float) and math.isfinite(game_time)
+                  and game_time >= 0)
+    result = {
+        'scope': 'native_pc_current_hp', 'status': 'unavailable', 'ready': False,
+        'error': 'native_enemy_snapshot_unavailable',
+        'observed_frame': frame if valid_frame else None,
+        'observed_game_time': game_time if valid_time else None,
+        'rows': [], 'totals': {}, 'series': [],
+    }
+    if not valid_frame or not valid_time:
+        result['error'] = 'native_enemy_watermark_invalid'
+        return result
+    if not isinstance(raw, Mapping) or raw.get('enemies_status') != 'available':
+        if isinstance(raw, Mapping) and isinstance(raw.get('enemies_reason'), str):
+            result['error'] = raw['enemies_reason'] or result['error']
+        return result
+    snapshot = raw.get('enemies')
+    if not isinstance(snapshot, Mapping):
+        return result
+    entities, count = snapshot.get('entities'), snapshot.get('collection_count')
+    if (snapshot.get('scope') != 'unit_manager_enemies_membership'
+            or not isinstance(entities, list) or type(count) is not int
+            or not 0 <= count <= 128 or count != len(entities)):
+        result['error'] = 'native_enemy_snapshot_invalid'
+        return result
+
+    def uid_of(entity):
+        uid = entity.get('instance_uid') if isinstance(entity, Mapping) else None
+        return uid if type(uid) is int and 0 < uid <= 0xFFFFFFFF else None
+
+    counts = Counter(uid_of(entity) for entity in entities)
+    rows = []
+    for entity in entities:
+        uid = uid_of(entity)
+        if uid is None or counts[uid] != 1:
+            continue
+        if (entity.get('inited') is not True or entity.get('borned') is not True
+                or entity.get('is_disappeared') is not False
+                or entity.get('native_object_present') is not True):
+            continue
+        eid = _text(entity.get('enemy_key'))
+        if not eid or eid.strip() != eid:
+            continue
+        labels = catalog.get(eid, {}) if isinstance(catalog, Mapping) else {}
+        labels = labels if isinstance(labels, Mapping) else {}
+        hp = (_finite(entity.get('hp'), None)
+              if entity.get('hp_status') == 'available' else None)
+        rows.append({
+            'instance_uid': str(uid), 'eid': eid,
+            'name': _text(labels.get('name')) or eid,
+            'code': _text(labels.get('code')), 'lifecycle': 'current',
+            'hp': hp if hp is not None and hp >= 0 else None,
+            'max_hp': None, 'hp_ratio': None, 'hp_known': False,
+        })
+    rows.sort(key=lambda row: int(row['instance_uid']))
+    result.update(status='ready', ready=True, error=None, rows=rows)
+    return result
 
 
 def _hp_ratio(hp, max_hp):

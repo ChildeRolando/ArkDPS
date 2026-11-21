@@ -45,6 +45,8 @@ MAX_READ_CALLS = 1024
 MAX_READ_BYTES = 256 * 1024
 MAX_SINGLE_READ = 4096
 MAX_POINTER = 0x00007FFFFFFFFFFF
+GUARD_READ_RESERVE = 64
+GUARD_BYTE_RESERVE = 16 * 1024
 
 # Declared field indices and offsets come from the matching metadata v29 and
 # its GameAssembly field-offset table. Runtime FieldInfo records re-check them.
@@ -105,6 +107,13 @@ class BoundedReader:
         result = self.api.read(self.handle, address, size)
         _require(isinstance(result, bytes) and len(result) == size, 'short_read', 'read_failed')
         return result
+
+    def read_optional(self, address, size):
+        """Leave enough of the transaction budget for its closing checks."""
+        _require(self.calls + GUARD_READ_RESERVE < MAX_READ_CALLS
+                 and self.bytes_requested + size + GUARD_BYTE_RESERVE <= MAX_READ_BYTES,
+                 'optional_read_budget_exhausted')
+        return self.read(address, size)
 
     def u64(self, address):
         return struct.unpack('<Q', self.read(address, 8))[0]
@@ -446,7 +455,7 @@ class NativePcBattleProbe:
         _require(0 <= game_time <= 864000, 'invalid_logic_clock')
         extra = {}
         if extra_reader is not None:
-            extra = extra_reader(reader.read, {'battle_controller': battle, 'battle_logger': logger,
+            extra = extra_reader(reader.read_optional, {'battle_controller': battle, 'battle_logger': logger,
                                               'battle_stats': stats, 'frame': frame,
                                               'game_time': game_time})
             _require(type(extra) is dict, 'invalid_extra_sample')

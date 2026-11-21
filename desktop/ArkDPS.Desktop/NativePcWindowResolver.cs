@@ -9,13 +9,13 @@ using System.Text.Json;
 
 namespace ArkDPS.Desktop;
 
-internal enum NativePcWindowState { Unavailable, Available, Ambiguous }
+internal enum NativePcWindowState { Unavailable, Available, Minimized, Ambiguous }
 
 internal readonly record struct NativePcWindowSelection(NativePcWindowState State, nint Handle = default);
 
 internal readonly record struct NativePcWindowCandidate(nint Handle, uint ProcessId, bool Visible,
     bool Ownerless, bool RootWindow, bool Cloaked, bool ToolWindow, bool Minimized,
-    int ClientWidth, int ClientHeight);
+    int ClientWidth, int ClientHeight, int RestoreWidth = 0, int RestoreHeight = 0);
 
 /// <summary>Resolves only the process identity already verified by the collection worker.</summary>
 internal sealed class NativePcWindowResolver
@@ -59,15 +59,17 @@ internal sealed class NativePcWindowResolver
             var candidates = readWindows(pid).Where(window => window.Handle != nint.Zero &&
                 window.Handle != ownWindow && window.ProcessId == pid && window.Visible &&
                 window.Ownerless && window.RootWindow && !window.Cloaked && !window.ToolWindow &&
-                !window.Minimized && window.ClientWidth >= 250 && window.ClientHeight >= 180)
-                .Select(window => window.Handle).Distinct().ToArray();
+                (window.Minimized ? window.RestoreWidth >= 250 && window.RestoreHeight >= 180
+                    : window.ClientWidth >= 250 && window.ClientHeight >= 180))
+                .DistinctBy(window => window.Handle).ToArray();
 
             // Enumeration can race exit/PID reuse. Query again on every call,
             // including the ambiguous/empty result; no PID/HWND is cached.
             if (readCreatedFileTime(pid) != created) return default;
             return candidates.Length switch
             {
-                1 => new(NativePcWindowState.Available, candidates[0]),
+                1 => new(candidates[0].Minimized ? NativePcWindowState.Minimized : NativePcWindowState.Available,
+                    candidates[0].Handle),
                 > 1 => new(NativePcWindowState.Ambiguous),
                 _ => default,
             };
@@ -106,10 +108,17 @@ internal sealed class NativePcWindowResolver
             if (GetWindowThreadProcessId(window, out uint ownerPid) == 0 || ownerPid != pid) return true;
             bool hasClient = GetClientRect(window, out var client);
             bool hasCloak = DwmGetWindowAttribute(window, 14, out int cloaked, sizeof(int)) == 0;
+            bool minimized = IsIconic(window);
+            var placement = new WindowPlacement { Length = (uint)Marshal.SizeOf<WindowPlacement>() };
+            // Iconic windows can report a zero/tiny client rect. Their normal
+            // restore size identifies a usable game window without restoring it.
+            bool hasRestore = minimized && GetWindowPlacement(window, ref placement);
             windows.Add(new(window, ownerPid, IsWindowVisible(window), GetWindow(window, 4) == nint.Zero,
                 GetAncestor(window, 2) == window, !hasCloak || cloaked != 0,
-                (GetWindowLong(window, -20) & 0x00000080) != 0, IsIconic(window),
-                hasClient ? client.Right - client.Left : 0, hasClient ? client.Bottom - client.Top : 0));
+                (GetWindowLong(window, -20) & 0x00000080) != 0, minimized,
+                hasClient ? client.Right - client.Left : 0, hasClient ? client.Bottom - client.Top : 0,
+                hasRestore ? placement.NormalPosition.Right - placement.NormalPosition.Left : 0,
+                hasRestore ? placement.NormalPosition.Bottom - placement.NormalPosition.Top : 0));
             return true;
         }, nint.Zero))
             throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -118,6 +127,17 @@ internal sealed class NativePcWindowResolver
 
     [StructLayout(LayoutKind.Sequential)]
     private struct WindowRect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowPoint { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowPlacement
+    {
+        public uint Length, Flags, ShowCommand;
+        public WindowPoint MinPosition, MaxPosition;
+        public WindowRect NormalPosition;
+    }
 
     private delegate bool EnumWindowsCallback(nint window, nint data);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool EnumWindows(EnumWindowsCallback callback, nint data);
@@ -128,5 +148,6 @@ internal sealed class NativePcWindowResolver
     [DllImport("user32.dll")] private static extern nint GetAncestor(nint window, uint flags);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(nint window, int index);
     [DllImport("user32.dll")] private static extern bool GetClientRect(nint window, out WindowRect bounds);
+    [DllImport("user32.dll")] private static extern bool GetWindowPlacement(nint window, ref WindowPlacement placement);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint window, uint attribute, out int value, int size);
 }

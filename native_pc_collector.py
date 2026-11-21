@@ -7,8 +7,10 @@ import time
 
 from collector import ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
+from enemy_telemetry import _load_enemy_db, native_enemy_view
 from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
+from native_pc.probe_native_pc_enemies import capture_enemies
 from native_pc.probe_native_pc_presence import capture_presence
 from native_pc.probe_native_pc_roster import capture_roster
 from native_pc.probe_native_pc_rows import capture_character_rows
@@ -17,6 +19,8 @@ from roster import CharacterEntry, RosterSnapshot
 
 BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
 SNAPSHOT_ONLY = '官服 PC 当前提供累计统计。逐次伤害、技能期与护盾吸收暂无数据。'
+ENEMY_SAMPLE_INTERVAL = 1.0
+ENEMY_MAX_AGE = 2.5
 
 
 def _capture_fields(read, context):
@@ -25,9 +29,11 @@ def _capture_fields(read, context):
                          ('presence', capture_presence)):
         try:
             fields.update(capture(read, context))
-        except (ApiFailure, ResearchFailure):
+        except (ApiFailure, ResearchFailure) as error:
+            reason = (error.reason if isinstance(error, ResearchFailure)
+                      else f'{error.operation}({error.code})')
             fields.update({key: None, f'{key}_status': 'unavailable',
-                           f'{key}_reason': 'optional_read_failed'})
+                           f'{key}_reason': reason})
     return fields
 
 
@@ -53,11 +59,17 @@ def _roster(sample):
 class NativePcCollector:
     """Own the read handle and stage the pair acquired under one frame guard."""
 
+    enemy_frame_bound = True
+
     def __init__(self, game_root, *, probe_factory=None):
         self.game_root = Path(game_root).expanduser() if game_root else None
         self.probe_factory = probe_factory or NativePcBattleProbe
         self.process = None
         self._pending = None
+        self._enemy_battle = None
+        self._enemy_snapshot = None
+        self._enemy_catalog = None
+        self._next_enemy = float('-inf')
         self.event_capability = dict(status='unavailable', error=SNAPSHOT_ONLY)
         self.diagnostics = ConnectionDiagnostics(platform='native_pc', version_expected=BUILD_ID,
             native_game_root=str(self.game_root) if self.game_root is not None else None)
@@ -109,16 +121,20 @@ class NativePcCollector:
     def read_lifecycle(self):
         self._pending = None
         self.locate_lifecycle()
-        report = self.process.sample(extra_reader=_capture_fields)
+        report = self.process.sample(extra_reader=self._capture)
         status = report['status']
         if status == 'waiting_for_battle' and report.get('reason') == 'singleton_is_null':
+            self._reset_enemy_observation()
             return dict(battle=None, state=None, ready=False, transiting=False, source='', target='')
         if status in ('process_exited', 'process_changed'):
             raise ProcessChanged('官服 PC 游戏进程已变化，正在重新连接。')
         if status in ('waiting_game_init', 'battle_not_ready', 'sample_retry'):
             raise SampleUnavailable(f'官服 PC 战局正在准备或跨帧重试（{report.get("reason")}）')
         if status != 'sample_available':
-            raise SnapshotGap(f'官服 PC 采样暂不可用（{report.get("reason")}）')
+            diagnostic = report.get('diagnostic')
+            detail = (f'{diagnostic["api"]}({diagnostic["win32_error"]})'
+                      if diagnostic else report.get('reason'))
+            raise SnapshotGap(f'官服 PC 采样暂不可用（{detail}）')
         raw = report['sample']
         roots = self.process.battle_identity
         identity = hashlib.sha256(struct.pack(f'<{len(roots)}Q', *roots)).hexdigest()
@@ -131,6 +147,19 @@ class NativePcCollector:
         self._pending = (lifecycle, report)
         return lifecycle
 
+    def _capture(self, read, context):
+        fields = _capture_fields(read, context)
+        now = time.monotonic()
+        if now >= self._next_enemy:
+            self._next_enemy = now + ENEMY_SAMPLE_INTERVAL
+            fields.update(capture_enemies(read, context))
+        return fields
+
+    def _reset_enemy_observation(self):
+        self._enemy_battle = None
+        self._enemy_snapshot = None
+        self._next_enemy = float('-inf')
+
     def read_guarded_pair(self, lifecycle):
         pending, self._pending = self._pending, None
         if pending is None or pending[0] is not lifecycle:
@@ -141,6 +170,14 @@ class NativePcCollector:
             if raw.get(f'{key}_status') != 'available' or raw.get(key) is None:
                 raise SnapshotGap(f'官服 PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
         rows = raw['actor_rows']
+        battle = (lifecycle['battle'], raw['battle_serial'])
+        if self._enemy_battle != battle:
+            self._reset_enemy_observation()
+            self._enemy_battle = battle
+        if 'enemies_status' in raw:
+            observed = time.monotonic()
+            self._enemy_snapshot = (observed, raw['frame'], raw['game_time'], raw)
+            self._next_enemy = max(self._next_enemy, observed + ENEMY_SAMPLE_INTERVAL)
         sample = dict(session=':'.join(map(str, (*self.process.process_instance, *lifecycle['battle']))),
                       frame=raw['frame'], game_time=raw['game_time'], battle_identity=lifecycle['battle'],
                       state=raw['battle_state'], speed=raw.get('speed_level'), paused=raw.get('paused'),
@@ -152,8 +189,23 @@ class NativePcCollector:
                       observed_at=time.time(), captured_monotonic=time.monotonic())
         return sample, _roster(raw)
 
+    def read_enemies(self, *, game_time, frame=None, our_damage=None, **_events):
+        saved = self._enemy_snapshot
+        if saved is None:
+            return native_enemy_view({}, frame=None, game_time=None, catalog={})
+        observed, enemy_frame, enemy_time, raw = saved
+        if (frame is None or game_time is None or frame < enemy_frame or game_time < enemy_time
+                or time.monotonic() - observed > ENEMY_MAX_AGE):
+            return native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
+                                     frame=enemy_frame, game_time=enemy_time, catalog={})
+        if self._enemy_catalog is None and raw.get('enemies_status') == 'available':
+            self._enemy_catalog = _load_enemy_db() or {}
+        return native_enemy_view(raw, frame=enemy_frame, game_time=enemy_time,
+                                 catalog=self._enemy_catalog or {})
+
     def close(self):
         self._pending = None
+        self._reset_enemy_observation()
         if self.process is not None:
             self.process.close()
             self.process = None

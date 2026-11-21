@@ -21,7 +21,7 @@ internal static class Program
             native_game_root = root, process_pid = pid, process_created_filetime = birth });
 
     private static NativePcWindowCandidate Window(long handle = 100) =>
-        new(new nint(handle), Pid, true, true, true, false, false, false, 1280, 720);
+        new(new nint(handle), Pid, true, true, true, false, false, false, 1280, 720, 1280, 720);
 
     private static void Check(string name, bool condition)
     {
@@ -78,7 +78,9 @@ internal static class Program
             Window() with { RootWindow = false },
             Window() with { Cloaked = true },
             Window() with { ToolWindow = true },
-            Window() with { Minimized = true },
+            Window() with { Minimized = true, RestoreWidth = 0, RestoreHeight = 0 },
+            Window() with { Minimized = true, RestoreWidth = 249 },
+            Window() with { Minimized = true, RestoreHeight = 179 },
             Window() with { ClientWidth = 249 },
             Window() with { ClientHeight = 179 },
         })
@@ -91,6 +93,16 @@ internal static class Program
         Check("same handle is one candidate", duplicate.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Available);
         var ambiguous = new NativePcWindowResolver(_ => Birth, _ => new[] { Window(), Window(101) });
         Check("multiple suitable windows rejected", ambiguous.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Ambiguous);
+        var iconic = Window() with { Minimized = true, ClientWidth = 0, ClientHeight = 0 };
+        var minimizing = new NativePcWindowResolver(_ => Birth, _ => new[] { iconic });
+        Check("minimized window retains verified handle via restore bounds", minimizing.Resolve(Diagnostic(), Config(), 0) is
+            { State: NativePcWindowState.Minimized, Handle: 100 });
+        var mixed = new NativePcWindowResolver(_ => Birth, _ => new[] { iconic, Window(101) });
+        Check("minimized and normal candidates stay ambiguous", mixed.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Ambiguous);
+        var twoIconic = new NativePcWindowResolver(_ => Birth, _ => new[] { iconic, iconic with { Handle = 101 } });
+        Check("multiple minimized candidates stay ambiguous", twoIconic.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Ambiguous);
+        var reusedIconic = new NativePcWindowResolver(_ => Birth + 1, _ => new[] { iconic });
+        Check("minimized PID reuse rejected", reusedIconic.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Unavailable);
 
         bool minimized = false;
         long? currentBirth = Birth;
@@ -98,7 +110,8 @@ internal static class Program
             _ => new[] { Window() with { Minimized = minimized } });
         Check("initial attachment", changing.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Available);
         minimized = true;
-        Check("minimize invalidates next call", changing.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Unavailable);
+        Check("minimize retains identity next call", changing.Resolve(Diagnostic(), Config(), 0) is
+            { State: NativePcWindowState.Minimized, Handle: 100 });
         minimized = false;
         currentBirth = Birth + 1;
         Check("cached PID never reused", changing.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Unavailable);

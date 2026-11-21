@@ -122,6 +122,42 @@ def test_missing_roster_does_not_advance_or_archive_and_marks_gap(tmp_path):
     session.close()
 
 
+def test_enemy_snapshot_retains_its_frame_and_clears_at_battle_boundary(tmp_path, monkeypatch):
+    now = 10.0
+    monkeypatch.setattr('time.monotonic', lambda: now)
+    first = sample(30, 100.)
+    first['sample'].update(enemies_status='available', enemies={
+        'scope': 'unit_manager_enemies_membership', 'collection_count': 1,
+        'entities': [dict(instance_uid=103, enemy_key='enemy_1007_slime_2',
+                          inited=True, borned=True, is_disappeared=False,
+                          native_object_present=True, hp=731.4, hp_status='available')],
+    })
+    probe = Probe([first, sample(60, 150.), sample(90, 200.), ABSENT, sample(3, 0.)])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    session = CollectionSession(None, None, collector=collector, frida_remote=None)
+    session.enable_lifecycle()
+    session.connect()
+
+    view = session.read()['enemy']
+    assert view['status'] == 'ready' and view['observed_frame'] == 30
+    assert view['rows'][0]['instance_uid'] == '103'
+    assert view['rows'][0]['hp'] == 731.4 and view['rows'][0]['max_hp'] is None
+    assert view['totals'] == {} and view['series'] == []
+    assert not collector.read_enemies(frame=29, game_time=1)['ready']
+
+    now = 12.4
+    updated = session.read()
+    assert updated['frame'] == 60 and updated['enemy']['observed_frame'] == 30
+    now = 13.
+    expired = session.read()['enemy']
+    assert not expired['ready'] and expired['error'] == 'enemy_sample_stale'
+    with pytest.raises(CaptureRetry):
+        session.read()
+    next_battle = session.read()
+    assert not next_battle['enemy']['ready'] and next_battle['enemy']['rows'] == []
+    session.close()
+
+
 @pytest.mark.parametrize('status,diagnostic,code,error_type', [
     ('process_access_failed', {'win32_error': 5}, 'native_permission_denied', SampleUnavailable),
     ('unsupported_build', None, 'native_unsupported_build', UnsupportedVersion),

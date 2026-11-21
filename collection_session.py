@@ -282,14 +282,16 @@ class CollectionSession:
             return
         now = time.monotonic()
         poll_due = now - self._enemy_last_poll >= 1.0
+        frame_bound = getattr(self.collector, 'enemy_frame_bound', False)
         event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state', 'enemy_damage')
                       if key in stats}
         state = event_data.get('enemy_state')
-        if poll_due or (state is not None and state['complete']) or event_data != self._enemy_event_data:
+        if (frame_bound or poll_due or (state is not None and state['complete'])
+                or event_data != self._enemy_event_data):
             if poll_due:
                 self._enemy_last_poll = now
             try:
-                context = {'frame': sample.get('frame')} if state is not None else {}
+                context = {'frame': sample.get('frame')} if frame_bound or state is not None else {}
                 self._enemy_payload = read(game_time=sample.get('game_time'), our_damage=our_damage,
                                             **event_data, **context)
                 self._enemy_event_data = event_data

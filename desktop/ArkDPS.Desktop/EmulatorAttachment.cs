@@ -95,13 +95,13 @@ internal sealed class EmulatorAttachment
             var selected = nativePcWindows.Resolve(diagnostics, connection, ownWindow);
             if (selected.State == NativePcWindowState.Ambiguous)
                 return new(EmulatorPlacementState.Ambiguous);
+            if (selected.State == NativePcWindowState.Minimized)
+                return new(EmulatorPlacementState.Minimized) { PlayerWindow = selected.Handle };
             if (selected.State != NativePcWindowState.Available)
                 return new(EmulatorPlacementState.NoPlayer);
-            var placement = PlaceBeside(selected.Handle, width);
-            // Native PC falls back to the standalone sidebar when minimized,
-            // including a minimize that raced the selection above.
-            return placement.State == EmulatorPlacementState.Minimized
-                ? new(EmulatorPlacementState.NoPlayer) : placement;
+            // Keep a minimize that raced selection: SideMode owns automatic
+            // sidebar minimize/restore and preserves the user's manual choice.
+            return PlaceBeside(selected.Handle, width);
         }
 
         string serial = ResolveSerial(diagnostics, connection);
