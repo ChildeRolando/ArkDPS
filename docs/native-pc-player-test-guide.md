@@ -144,13 +144,7 @@
 
 这次采样会记录同一名干员的两次在场编号、游戏报告的离场原因和原始时钟。就算画面上看到了离场，也需要样本里有对应时标，才能把它用在全周期速率里。
 
-首轮取得了部署和手动撤退记录，原始时标校验未通过。先用下面这条做短测，顺便读 1-7 的固定波次。
-
-```powershell
-& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 60 --presence-lifetime char_122_beagle --stage-spawns --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\presence-lifetime-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
-```
-
-看到 `recording` 后进 **1-7 演习**。部署米格鲁，暂停 3 秒，恢复后手动撤退，再等 3 秒并按 **Ctrl+C**。如果看到画面上显示的敌人总数，记下来对照。
+首轮取得了部署和手动撤退记录，原始时标校验未通过。修正后的 CE-5 补采读到了构建时标和 `HP_ZERO`，也确认这次击倒的死亡时标仍是 `0`。这组采样已读完。
 
 ### K · 1× 治疗和多个在场敌人，CE-5 演习
 
@@ -165,6 +159,16 @@
 3. 恢复，再等闪灵治疗几次。按 **Ctrl+C** 停采样。
 
 一份记录分别核对两件事。闪灵在 1× 时的近五秒治疗，以及多个敌人同时在场时，能否持续读到各自的编号和当前 HP。
+
+K 实机记录已核对 1× 正治疗和同帧 9 个在场敌人的 HP，以上命令留作复查。
+
+### L · 固定波次，复用正在打的 1-7 或 CE-5
+
+在战斗中暂停，在管理员 PowerShell 整条运行。看到 `recording` 后恢复约 5 秒，再暂停。等命令自己结束。顺手记下界面显示的敌人总数，便于对照波次。
+
+```powershell
+& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 15 --stage-spawns --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\stage-spawns-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
+```
 
 ## 等我发对应的采样命令再打
 

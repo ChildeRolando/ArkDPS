@@ -303,7 +303,8 @@ def test_enemy_snapshot_retains_its_frame_and_clears_at_battle_boundary(tmp_path
     assert view['status'] == 'ready' and view['observed_frame'] == 30
     assert view['rows'][0]['instance_uid'] == '103'
     assert view['rows'][0]['hp'] == 731.4 and view['rows'][0]['max_hp'] is None
-    assert view['totals']['remaining_hp'] == 731.4 and not view['totals']['remaining_hp_complete']
+    assert view['totals']['remaining_hp'] == 731.4 and view['totals']['remaining_hp_complete']
+    assert view['totals']['current_count'] == view['totals']['current_hp_count'] == 1
     assert 'entered_total_hp' not in view['totals']
     assert not collector.read_enemies(frame=29, game_time=1)['ready']
 

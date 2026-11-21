@@ -168,9 +168,14 @@ class NativeEnemyObservations:
             self.truncated = True
 
         known_hp = [row['hp'] for row in current.values() if row['hp'] is not None]
-        totals = dict(entered_count=len(self.rows), remaining_hp=sum(known_hp) if known_hp else None,
-                      total_hp_complete=False, remaining_hp_complete=False)
-        point = dict(game_time=game_time, remaining_hp=totals['remaining_hp'], remaining_hp_complete=False)
+        # The native total is scoped to this snapshot's list. An empty list is
+        # evidence of zero; filtered entries or unreadable HP leave a lower bound.
+        remaining_complete = len(known_hp) == len(current) == len(entities)
+        remaining_hp = sum(known_hp) if known_hp or remaining_complete else None
+        totals = dict(entered_count=len(self.rows), current_count=len(current), current_hp_count=len(known_hp),
+                      remaining_hp=remaining_hp, total_hp_complete=False,
+                      remaining_hp_complete=remaining_complete)
+        point = dict(game_time=game_time, remaining_hp=remaining_hp, remaining_hp_complete=remaining_complete)
         if self.series and self.series[-1]['game_time'] == game_time:
             self.series[-1] = point
         else:

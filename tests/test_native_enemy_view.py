@@ -136,8 +136,9 @@ def test_native_history_retains_last_hp_only_after_verified_membership_change():
     assert previous['instance_uid'] == '1' and previous['lifecycle'] == 'departed'
     assert previous['hp'] is None and previous['last_observed_hp'] == 900
     assert 'end_reason' not in previous
-    assert departed['totals'] == dict(entered_count=2, remaining_hp=400,
-                                       total_hp_complete=False, remaining_hp_complete=False)
+    assert departed['totals'] == dict(entered_count=2, current_count=1, current_hp_count=1,
+                                      remaining_hp=400, total_hp_complete=False,
+                                      remaining_hp_complete=True)
     assert 'entered_total_hp' not in departed['series'][-1]
 
     returned = publish(snapshot(entity(1, hp=80), entity(2, hp=400)), 120)
@@ -155,6 +156,31 @@ def test_incomplete_membership_does_not_prove_departure():
     row, = uncertain['rows']
     assert row['instance_uid'] == '1' and row['lifecycle'] == 'entered'
     assert row['hp'] is None
+    assert uncertain['totals']['remaining_hp'] is None
+    assert not uncertain['totals']['remaining_hp_complete']
+
+
+def test_current_hp_total_distinguishes_partial_sum_verified_zero_and_missing_sample():
+    tracker = NativeEnemyObservations()
+
+    def publish(raw, frame):
+        return tracker.observe(raw, frame=frame, game_time=frame / 30, catalog={})
+
+    partial = publish(snapshot(entity(1, hp=100), entity(2, hp_status='unavailable')), 30)
+    assert partial['totals']['current_count'] == 2
+    assert partial['totals']['current_hp_count'] == 1
+    assert partial['totals']['remaining_hp'] == 100
+    assert partial['series'][-1]['remaining_hp_complete'] is False
+
+    gap = publish({'enemies_status': 'unavailable'}, 60)
+    assert not gap['ready'] and 'remaining_hp' not in gap['totals']
+
+    empty = publish(snapshot(), 90)
+    assert empty['totals']['entered_count'] == 2
+    assert empty['totals']['current_count'] == empty['totals']['current_hp_count'] == 0
+    assert empty['series'][-1]['remaining_hp'] == 0
+    assert empty['series'][-1]['remaining_hp_complete'] is True
+    assert not empty['totals']['total_hp_complete']
 
 
 def test_native_history_retains_current_instances_when_history_is_capped(monkeypatch):

@@ -472,6 +472,7 @@ public partial class MainWindow
         EnemyEntered.Text=EnemyReading(totals,"entered_count",entryComplete);
         EnemyTotalHp.Text=EnemyReading(totals,"entered_total_hp",totalComplete);
         EnemyRemaining.Text=EnemyReading(totals,"remaining_hp",remainingComplete);
+        EnemyRemainingScope.Text=nativeCurrentHp ? "当前快照名单" : "仅场上存活实例";
         EnemyOurDamageLabel.Text=scopedDamage ? "我方对敌扣血" : "我方有效伤害";
         EnemyOurDamage.Text=last.Bool("our_damage_known")
             ? EnemyReading(last,"our_effective_damage",damageComplete) : "—";
@@ -512,7 +513,11 @@ public partial class MainWindow
         };
         if(nativeCurrentHp)
         {
-            hints.Add("入场人数与剩余 HP 显示已观测下限。离场表示实例已从采样名单消失，原因未知。");
+            hints.Add("入场人数为已观测下限。离场表示实例已从采样名单消失，原因未知。");
+            if(totals.Get("current_count").ValueKind==JsonValueKind.Number &&
+                totals.Get("current_hp_count").ValueKind==JsonValueKind.Number)
+                hints.Add("确认在场 "+totals.UiInt("current_count")+" 个，可读 HP "+totals.UiInt("current_hp_count")+" 个。");
+            if(!remainingComplete) hints.Add("≥ 表示当前名单已读到的 HP 下限。");
             hints.Add("最大 HP、属性、关卡总血量及逐次结算暂缺数据。");
             if(shownEnemy.Bool("history_truncated")) hints.Add("敌人过多，早期观察记录已达到保留上限。");
         }
@@ -553,7 +558,7 @@ public partial class MainWindow
         };
         EnemyChartLegendTotal.Text = "已入场总血量  " + EnemyTotalHp.Text;
         EnemyChartLegendDamage.Text = EnemyOurDamageLabel.Text + "  " + EnemyOurDamage.Text;
-        EnemyChartLegendRemaining.Text = "敌方剩余  " + EnemyRemaining.Text;
+        EnemyChartLegendRemaining.Text = (nativeCurrentHp ? "当前名单 HP  " : "敌方剩余  ") + EnemyRemaining.Text;
     }
 
     private void UpdateEnemyRows(JsonElement data)
