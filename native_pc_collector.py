@@ -7,7 +7,7 @@ import time
 
 from collector import ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
-from enemy_telemetry import _load_enemy_db, native_enemy_view
+from enemy_telemetry import NativeEnemyObservations, _load_enemy_db, native_enemy_view
 from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
 from native_pc.probe_native_pc_enemies import capture_enemies
@@ -69,6 +69,7 @@ class NativePcCollector:
         self._enemy_battle = None
         self._enemy_snapshot = None
         self._enemy_catalog = None
+        self._enemy_observations = NativeEnemyObservations()
         self._next_enemy = float('-inf')
         self.event_capability = dict(status='unavailable', error=SNAPSHOT_ONLY)
         self.diagnostics = ConnectionDiagnostics(platform='native_pc', version_expected=BUILD_ID,
@@ -159,6 +160,7 @@ class NativePcCollector:
         self._enemy_battle = None
         self._enemy_snapshot = None
         self._next_enemy = float('-inf')
+        self._enemy_observations.reset()
 
     def read_guarded_pair(self, lifecycle):
         pending, self._pending = self._pending, None
@@ -200,8 +202,8 @@ class NativePcCollector:
                                      frame=enemy_frame, game_time=enemy_time, catalog={})
         if self._enemy_catalog is None and raw.get('enemies_status') == 'available':
             self._enemy_catalog = _load_enemy_db() or {}
-        return native_enemy_view(raw, frame=enemy_frame, game_time=enemy_time,
-                                 catalog=self._enemy_catalog or {})
+        return self._enemy_observations.observe(raw, frame=enemy_frame, game_time=enemy_time,
+                                                catalog=self._enemy_catalog or {})
 
     def close(self):
         self._pending = None

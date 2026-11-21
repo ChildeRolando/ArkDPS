@@ -26,7 +26,7 @@ internal sealed class NativePcWindowResolver
     internal NativePcWindowResolver() : this(ReadCreatedFileTime, ReadWindows) { }
 
     // The seam runs the real selection/identity checks with recorded window metadata,
-    // without opening a process, creating a window or loading WPF in offline tests.
+    // without querying a real process or enumerating desktop windows in tests.
     internal NativePcWindowResolver(Func<uint, long?> readCreatedFileTime,
         Func<uint, NativePcWindowCandidate[]> readWindows)
     {

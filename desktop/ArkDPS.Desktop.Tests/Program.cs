@@ -3,8 +3,8 @@ using System.ComponentModel;
 using System.Text.Json;
 using ArkDPS.Desktop;
 
-// Headless tests compile the production resolver and inject ordinary query results.
-// They never instantiate its Win32 provider, WPF, or a real target process/window.
+// Headless tests inject ordinary query results and instantiate WPF controls only.
+// They never query a real target, show a window, run the app or send input.
 internal static class Program
 {
     private const uint Pid = 24804;
@@ -29,6 +29,7 @@ internal static class Program
         passed++;
     }
 
+    [STAThread]
     private static void Main()
     {
         var normal = new NativePcWindowResolver(_ => Birth, _ => new[] { Window() });
@@ -118,5 +119,6 @@ internal static class Program
         currentBirth = Birth;
         Check("restored identity resolves again", changing.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Available);
         Console.WriteLine($"PASS_NATIVE_PC_WINDOW_RESOLVER {passed} assertions (headless, injected metadata only)");
+        LiveTargetSummaryTests.Run();
     }
 }

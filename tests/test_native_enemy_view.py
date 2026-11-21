@@ -7,7 +7,7 @@ import pytest
 # Use the existing offline vendor-path bootstrap before loading telemetry.
 # Importing Collector neither connects to a device nor creates a reader.
 import collector
-from enemy_telemetry import native_enemy_view
+from enemy_telemetry import NativeEnemyObservations, native_enemy_view
 
 
 def entity(uid=2115, **changes):
@@ -114,3 +114,54 @@ def test_missing_or_inconsistent_envelope_is_unavailable(raw):
 def test_invalid_watermark_is_unknown_instead_of_fabricating_a_frame(frame, game_time):
     result = view(snapshot(entity()), frame=frame, game_time=game_time)
     assert result['status'] == 'unavailable' and result['error'] == 'native_enemy_watermark_invalid'
+
+
+def test_native_history_retains_last_hp_only_after_verified_membership_change():
+    tracker = NativeEnemyObservations()
+
+    def publish(raw, frame):
+        return tracker.observe(raw, frame=frame, game_time=frame / 30, catalog={})
+
+    first = publish(snapshot(entity(1, hp=900)), 30)
+    assert publish(snapshot(), 30) == first
+    assert not publish({'enemies_status': 'unavailable'}, 40)['ready']
+    uncertain = publish(snapshot(entity(1, native_object_present=False, hp=3)), 60)
+    row, = uncertain['rows']
+    assert row['lifecycle'] == 'entered' and row['hp'] is None
+    assert row['last_observed_hp'] == 900
+
+    departed = publish(snapshot(entity(2, hp=400)), 90)
+    current, previous = departed['rows']
+    assert current['instance_uid'] == '2' and current['hp'] == 400
+    assert previous['instance_uid'] == '1' and previous['lifecycle'] == 'departed'
+    assert previous['hp'] is None and previous['last_observed_hp'] == 900
+    assert 'end_reason' not in previous
+    assert departed['totals'] == dict(entered_count=2, remaining_hp=400,
+                                       total_hp_complete=False, remaining_hp_complete=False)
+    assert 'entered_total_hp' not in departed['series'][-1]
+
+    returned = publish(snapshot(entity(1, hp=80), entity(2, hp=400)), 120)
+    assert returned['totals']['entered_count'] == 2
+    assert returned['rows'][0]['lifecycle'] == 'current'
+    assert returned['rows'][0]['hp'] == 80
+    tracker.reset()
+    assert publish(snapshot(entity(2, hp=100)), 30)['totals']['entered_count'] == 1
+
+
+def test_incomplete_membership_does_not_prove_departure():
+    tracker = NativeEnemyObservations()
+    tracker.observe(snapshot(entity(1)), frame=30, game_time=1, catalog={})
+    uncertain = tracker.observe(snapshot(entity(2), entity(2)), frame=60, game_time=2, catalog={})
+    row, = uncertain['rows']
+    assert row['instance_uid'] == '1' and row['lifecycle'] == 'entered'
+    assert row['hp'] is None
+
+
+def test_native_history_retains_current_instances_when_history_is_capped(monkeypatch):
+    monkeypatch.setattr('enemy_telemetry.MAX_NATIVE_ENEMY_HISTORY', 2)
+    tracker = NativeEnemyObservations()
+    tracker.observe(snapshot(entity(1)), frame=30, game_time=1, catalog={})
+    tracker.observe(snapshot(entity(2)), frame=60, game_time=2, catalog={})
+    view = tracker.observe(snapshot(entity(3)), frame=90, game_time=3, catalog={})
+    assert view['history_truncated'] and view['totals']['entered_count'] == 2
+    assert [row['instance_uid'] for row in view['rows']] == ['3', '2']

@@ -7,7 +7,7 @@ unavailable so the UI cannot render invented enemies or HP.
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Mapping
 import math
 import time
@@ -29,6 +29,7 @@ if _gs is not None:
 ENTERED_LIFECYCLES = ('active', 'departed', 'entered', 'rebirthing')
 MAX_TIMELINE_POINTS = 7200
 MAX_SERIES_POINTS = 360
+MAX_NATIVE_ENEMY_HISTORY = 512
 EVENT_CALIBRATION_INTERVAL = 5.0
 _LIVE_FIELDS = ('hp', 'alive', 'lifecycle', 'state_id', 'state', 'end_frame',
                 'end_reason', 'finish_reason')
@@ -43,6 +44,11 @@ def _finite(value, default=0.0):
 
 def _text(value):
     return value if isinstance(value, str) else ''
+
+
+def _native_enemy_uid(entity):
+    uid = entity.get('instance_uid') if isinstance(entity, Mapping) else None
+    return uid if type(uid) is int and 0 < uid <= 0xFFFFFFFF else None
 
 
 def native_enemy_view(raw, *, frame, game_time, catalog):
@@ -80,14 +86,10 @@ def native_enemy_view(raw, *, frame, game_time, catalog):
         result['error'] = 'native_enemy_snapshot_invalid'
         return result
 
-    def uid_of(entity):
-        uid = entity.get('instance_uid') if isinstance(entity, Mapping) else None
-        return uid if type(uid) is int and 0 < uid <= 0xFFFFFFFF else None
-
-    counts = Counter(uid_of(entity) for entity in entities)
+    counts = Counter(_native_enemy_uid(entity) for entity in entities)
     rows = []
     for entity in entities:
-        uid = uid_of(entity)
+        uid = _native_enemy_uid(entity)
         if uid is None or counts[uid] != 1:
             continue
         if (entity.get('inited') is not True or entity.get('borned') is not True
@@ -111,6 +113,73 @@ def native_enemy_view(raw, *, frame, game_time, catalog):
     rows.sort(key=lambda row: int(row['instance_uid']))
     result.update(status='ready', ready=True, error=None, rows=rows)
     return result
+
+
+class NativeEnemyObservations:
+    """Keep only verified current rows and observations from one battle."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.rows = {}
+        self.series = deque(maxlen=MAX_SERIES_POINTS)
+        self.view = None
+        self.truncated = False
+
+    def observe(self, raw, *, frame, game_time, catalog):
+        view = native_enemy_view(raw, frame=frame, game_time=game_time, catalog=catalog)
+        if not view['ready']:
+            return view
+        if self.view is not None:
+            if frame < self.view['observed_frame'] or game_time < self.view['observed_game_time']:
+                return native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
+                                         frame=frame, game_time=game_time, catalog={})
+            if frame == self.view['observed_frame']:
+                return self.view
+
+        entities = raw['enemies']['entities']
+        members = {str(uid): entity for entity in entities
+                   if (uid := _native_enemy_uid(entity)) is not None}
+        membership_complete = len(members) == len(entities)
+        current = {row['instance_uid']: row for row in view['rows']}
+        for uid, previous in self.rows.items():
+            if uid in current:
+                continue
+            member = members.get(uid)
+            gone = membership_complete and (member is None or (
+                member.get('enemy_key') == previous['eid'] and member.get('is_disappeared') is True))
+            lifecycle = 'departed' if gone else 'entered'
+            if member is None and previous['lifecycle'] == 'departed':
+                lifecycle = 'departed'
+            self.rows[uid] = dict(previous, lifecycle=lifecycle, hp=None)
+
+        for uid, row in current.items():
+            previous = self.rows.pop(uid, None)
+            last_hp = row['hp']
+            if last_hp is None and previous is not None and previous['eid'] == row['eid']:
+                last_hp = previous.get('last_observed_hp')
+            self.rows[uid] = dict(row, last_observed_hp=last_hp)
+
+        excess = len(self.rows) - MAX_NATIVE_ENEMY_HISTORY
+        if excess > 0:
+            for uid in [uid for uid in self.rows if uid not in current][:excess]:
+                del self.rows[uid]
+            self.truncated = True
+
+        known_hp = [row['hp'] for row in current.values() if row['hp'] is not None]
+        totals = dict(entered_count=len(self.rows), remaining_hp=sum(known_hp) if known_hp else None,
+                      total_hp_complete=False, remaining_hp_complete=False)
+        point = dict(game_time=game_time, remaining_hp=totals['remaining_hp'], remaining_hp_complete=False)
+        if self.series and self.series[-1]['game_time'] == game_time:
+            self.series[-1] = point
+        else:
+            self.series.append(point)
+        rows = sorted(self.rows.values(), key=lambda row: (
+            row['lifecycle'] != 'current', int(row['instance_uid'])))
+        self.view = dict(view, rows=rows, totals=totals, series=list(self.series),
+                         entry_events_complete=False, history_truncated=self.truncated)
+        return self.view
 
 
 def _hp_ratio(hp, max_hp):

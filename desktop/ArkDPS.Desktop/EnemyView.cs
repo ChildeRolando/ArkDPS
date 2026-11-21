@@ -111,7 +111,10 @@ public sealed class EnemyItem : INotifyPropertyChanged
         bool maxKnown=row.Bool("hp_known") && row.Number("max_hp",double.NaN)>0;
         string maxHp=hasFloor ? $"≥ {Int(row.Get("max_hp_lower_bound"))}"
             : maxKnown ? Int(row.Get("max_hp")) : "—";
-        string health=hpText=="—" && maxHp=="—" ? "HP 未知" : $"{hpText} / {maxHp}";
+        string lastObserved=Int(row.Get("last_observed_hp"));
+        bool rememberedHp=(departed || lifecycle=="entered") && lastObserved!="—";
+        string health=rememberedHp ? "最后 HP " + lastObserved
+            : hpText=="—" && maxHp=="—" ? "HP 未知" : $"{hpText} / {maxHp}";
         double hpRatio=row.Number("hp_ratio",double.NaN);
         bool ratioKnown=!hasFloor && maxKnown && hpText!="—" && hpRatio is >= 0 and <= 1;
         var phaseTotal = row.Get("phase_total_hp");
@@ -142,7 +145,7 @@ public sealed class EnemyItem : INotifyPropertyChanged
             eid.Length > 0 ? eid : null,
             code.Length > 0 ? "图鉴 " + code : null,
             "状态 " + row.Text("state"),
-            "当前 HP / 最大 HP " + health,
+            rememberedHp ? health : "当前 HP / 最大 HP " + health,
             phaseHp,
             row.Get("spawn_frame").ValueKind == JsonValueKind.Number ? "入场帧 " + Int(row.Get("spawn_frame")) : null,
             row.Get("end_frame").ValueKind == JsonValueKind.Number ? "离场帧 " + Int(row.Get("end_frame")) : null,
@@ -508,7 +511,11 @@ public partial class MainWindow
             _ => "已入场人数来自已观察的敌人快照。",
         };
         if(nativeCurrentHp)
-            hints.Add("只显示采样时在场敌人的当前 HP。最大 HP、关卡总量和逐次结算暂缺数据。");
+        {
+            hints.Add("入场人数与剩余 HP 显示已观测下限。离场表示实例已从采样名单消失，原因未知。");
+            hints.Add("最大 HP、属性、关卡总血量及逐次结算暂缺数据。");
+            if(shownEnemy.Bool("history_truncated")) hints.Add("敌人过多，早期观察记录已达到保留上限。");
+        }
         else if(hasReading)
         {
             hints.Add(entryHint+"已入场总血量含已记录的重生阶段。");

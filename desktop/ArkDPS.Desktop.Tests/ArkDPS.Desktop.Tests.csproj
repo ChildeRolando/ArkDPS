@@ -2,10 +2,11 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../ArkDPS.Desktop/NativePcWindowResolver.cs" Link="NativePcWindowResolver.cs" />
+    <ProjectReference Include="../ArkDPS.Desktop/ArkDPS.Desktop.csproj" />
   </ItemGroup>
 </Project>
