@@ -51,4 +51,8 @@ python acceptance/probe_native_pc.py --game-root 'D:\games\Hypergryph Launcher\g
 python acceptance/probe_arkhelper_feed.py
 ```
 
+录制已有发布端的实时变化时使用 `--watch-seconds 30`。该模式输出 JSON Lines，记录不同的有效快照和连接状态变化。汇总的 `frame_progress_observed` 只在同一局连续样本的逻辑帧与游戏时间同时增长时为真。换局或数据中断会重新建立基线。该标记只证明观察到推进，逐次事件的完整性仍需单独验证。
+
+独立 Windows 进程使用 v1.4.2 合成数据验证了持续采集。接收端在同一局读到第 309 帧实际扣血 `123.25` 和第 339 帧 `225.25`。本机真实发布名称连续轮询返回 `feed_missing`，没有产生有效样本。两份回执分别位于 `runtime/native-pc/arkhelper-v1.4.2-abi/watch-result.json` 和 `runtime/native-pc/2026-11-21-arkhelper-watch/live-check.jsonl`。
+
 本机回执位于 `runtime/native-pc/2026-11-21-ce5/receipt.json`，包含权限状态、构建身份及 `Player.log` 的比较结果。回执仅保存诊断与统计摘要。

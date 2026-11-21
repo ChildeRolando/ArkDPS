@@ -1,4 +1,4 @@
-"""Read one existing ArkHelper v1.4.2 battle snapshot as research telemetry.
+"""Read existing ArkHelper v1.4.2 battle snapshots as research telemetry.
 
 The public ABI is documented at
 https://github.com/zhengkanqin/ArkHelper/blob/v1.4.2/include/arkhelp/ipc.h
@@ -8,12 +8,14 @@ publisher's semantics and availability flags.
 """
 
 import argparse
+from collections import Counter
 import ctypes
 from ctypes import wintypes
 import json
 import math
 import struct
 import sys
+import time
 
 
 MAPPING_NAME = r'Local\ArkHelp.Battle.v1'
@@ -309,9 +311,61 @@ def probe(*, mapping_factory=None):
     return report
 
 
+def watch(seconds, emit):
+    """Record publications and interruptions without inferring event coverage."""
+    deadline = time.monotonic() + seconds
+    counts = Counter()
+    last_status = None
+    last_publication = None
+    previous = None
+    fresh_samples = 0
+    frame_progress_observed = False
+    while True:
+        report = probe()
+        status = report['status']
+        counts[status] += 1
+        if status == 'sample_available':
+            sample = report['sample']
+            publication = (sample['battle_serial'], sample['sequence'], sample['published_ms'])
+            if publication != last_publication:
+                fresh_samples += 1
+                if (previous is not None and previous['battle_serial'] == sample['battle_serial']
+                        and previous['frame'] < sample['frame']
+                        and previous['game_time'] < sample['game_time']):
+                    frame_progress_observed = True
+                emit({'kind': 'observation', **report})
+                last_publication = publication
+                previous = sample
+        else:
+            if status != last_status:
+                emit({'kind': 'observation', **report})
+            last_publication = previous = None
+        last_status = status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(remaining, 0.1))
+    summary = {'kind': 'summary', 'research_only': True, 'publisher_release': 'v1.4.2',
+               'ipc_version': VERSION, 'fresh_samples': fresh_samples,
+               'frame_progress_observed': frame_progress_observed, 'status_counts': dict(counts)}
+    emit(summary)
+    return summary
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args(argv)
+    parser.add_argument('--watch-seconds', type=int, metavar='N',
+                        help='write JSON Lines for a bounded observation, 1 to 600 seconds')
+    args = parser.parse_args(argv)
+    if args.watch_seconds is not None:
+        if not 1 <= args.watch_seconds <= 600:
+            parser.error('--watch-seconds must be between 1 and 600')
+
+        def emit(record):
+            print(json.dumps(record, ensure_ascii=False, allow_nan=False), flush=True)
+
+        summary = watch(args.watch_seconds, emit)
+        return 0 if summary['frame_progress_observed'] else 2
     report = probe()
     print(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
     return 0 if report['status'] in ('sample_available', 'publisher_idle') else 2

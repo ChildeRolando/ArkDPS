@@ -1,7 +1,10 @@
 """Synthetic ABI fixtures exercise only an independently owned IPC mapping."""
 
 import ctypes
+from collections import Counter
+from copy import deepcopy
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import subprocess
@@ -288,3 +291,165 @@ def test_cli_accepts_no_mapping_override(capsys):
         feed.main(['--mapping', 'anything'])
     assert error.value.code == 2
     assert 'unrecognized arguments' in capsys.readouterr().err
+
+
+def watch_sample(*, serial=7, frame=300, game_time=10.0, sequence=2, published_ms=1000):
+    value = snapshot()
+    value.battle_serial, value.frame, value.time_seconds = serial, frame, game_time
+    value.sequence, value.published_ms = sequence, published_ms
+    return {'status': 'sample_available', 'research_only': True,
+            'sample': feed.decode_snapshot(bytes(value), now_ms=published_ms + 100)}
+
+
+class WatchClock:
+    def __init__(self):
+        self.ticks = 0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.ticks / 10
+
+    def sleep(self, seconds):
+        assert 0 < seconds <= 0.1 + 1e-9
+        self.sleeps.append(seconds)
+        self.ticks += 1
+
+
+def run_watch(monkeypatch, reports):
+    clock, emitted, polled = WatchClock(), [], []
+
+    def poll():
+        report = deepcopy(reports[min(len(polled), len(reports) - 1)])
+        polled.append(report)
+        return report
+
+    monkeypatch.setattr(feed, 'probe', poll)
+    monkeypatch.setattr(feed.time, 'monotonic', clock.monotonic)
+    monkeypatch.setattr(feed.time, 'sleep', clock.sleep)
+    summary = feed.watch(1, emitted.append)
+    assert summary == emitted[-1]
+    assert summary['kind'] == 'summary'
+    assert summary['status_counts'] == dict(Counter(item['status'] for item in polled))
+    # A final poll at the deadline is allowed in addition to the ten intervals.
+    assert 10 <= len(polled) <= 11
+    assert 9 <= len(clock.sleeps) <= 10
+    assert clock.monotonic() <= 1
+    return summary, emitted[:-1]
+
+
+def test_watch_deduplicates_poll_age_but_retains_new_publications(monkeypatch):
+    first = watch_sample()
+    repeated = deepcopy(first)
+    repeated['sample']['age_ms'] = 200
+    second = watch_sample(sequence=4, published_ms=1100)
+    summary, observations = run_watch(monkeypatch, [first, repeated, second])
+    assert summary['fresh_samples'] == 2
+    assert summary['frame_progress_observed'] is False
+    assert [item['kind'] for item in observations] == ['observation', 'observation']
+    assert [item['sample']['sequence'] for item in observations] == [2, 4]
+    assert all(item['status'] == 'sample_available' for item in observations)
+    assert all(item['research_only'] for item in observations)
+
+
+def test_watch_counts_all_polls_and_emits_changed_unavailable_states(monkeypatch):
+    reports = [{'status': 'feed_missing'}, {'status': 'feed_missing'},
+               {'status': 'publisher_busy'}, {'status': 'publisher_busy'},
+               {'status': 'feed_access_denied'}]
+    summary, observations = run_watch(monkeypatch, reports)
+    assert summary['fresh_samples'] == 0
+    assert summary['frame_progress_observed'] is False
+    assert [item['status'] for item in observations] == [
+        'feed_missing', 'publisher_busy', 'feed_access_denied']
+    assert all(item['kind'] == 'observation' and 'sample' not in item for item in observations)
+
+
+@pytest.mark.parametrize('status', ['feed_missing', 'stale', 'publisher_idle'])
+def test_watch_never_reports_progress_from_unavailable_or_stale_publications(monkeypatch, status):
+    first, second = watch_sample(), watch_sample(frame=303, game_time=10.1, sequence=4)
+    for report in (first, second):
+        report['status'] = status
+        if status == 'stale':
+            report['sample']['fresh'] = False
+        elif status == 'publisher_idle':
+            report['sample']['in_battle'] = False
+        else:
+            del report['sample']
+    summary, _ = run_watch(monkeypatch, [first, second])
+    assert summary['fresh_samples'] == 0
+    assert summary['frame_progress_observed'] is False
+
+
+@pytest.mark.parametrize('frame,game_time,expected', [
+    (300, 10.0, False), (301, 10.0, False), (300, 10.1, False),
+    (299, 10.1, False), (301, 9.9, False), (301, 10.1, True),
+])
+def test_watch_requires_both_native_clocks_to_advance(monkeypatch, frame, game_time, expected):
+    summary, _ = run_watch(monkeypatch, [
+        watch_sample(), watch_sample(frame=frame, game_time=game_time, sequence=4)])
+    assert summary['frame_progress_observed'] is expected
+
+
+@pytest.mark.parametrize('status', ['feed_missing', 'publisher_busy', 'stale', 'publisher_idle'])
+def test_watch_does_not_bridge_progress_across_a_gap(monkeypatch, status):
+    gap = {'status': status}
+    summary, _ = run_watch(monkeypatch, [
+        watch_sample(), gap, watch_sample(frame=303, game_time=10.1, sequence=4)])
+    assert summary['fresh_samples'] == 2
+    assert summary['frame_progress_observed'] is False
+
+
+def test_watch_can_confirm_progress_after_a_gap_with_two_new_samples(monkeypatch):
+    summary, _ = run_watch(monkeypatch, [
+        watch_sample(), {'status': 'feed_missing'},
+        watch_sample(frame=303, game_time=10.1, sequence=4),
+        watch_sample(frame=306, game_time=10.2, sequence=6)])
+    assert summary['fresh_samples'] == 3
+    assert summary['frame_progress_observed'] is True
+
+
+def test_watch_does_not_compare_clocks_from_different_battles(monkeypatch):
+    summary, _ = run_watch(monkeypatch, [
+        watch_sample(serial=7),
+        watch_sample(serial=8, frame=303, game_time=10.1, sequence=4)])
+    assert summary['fresh_samples'] == 2
+    assert summary['frame_progress_observed'] is False
+
+
+def test_watch_can_confirm_progress_within_the_new_battle(monkeypatch):
+    summary, _ = run_watch(monkeypatch, [
+        watch_sample(serial=7), watch_sample(serial=8, frame=1, game_time=0, sequence=4),
+        watch_sample(serial=8, frame=4, game_time=0.1, sequence=6)])
+    assert summary['fresh_samples'] == 3
+    assert summary['frame_progress_observed'] is True
+
+
+@pytest.mark.parametrize('seconds', ['0', '-1', '601', '1.5', 'invalid'])
+def test_watch_cli_rejects_invalid_durations_before_observing(monkeypatch, seconds, capsys):
+    def forbidden(*args, **kwargs):
+        pytest.fail('invalid duration reached a live observer')
+    monkeypatch.setattr(feed, 'probe', forbidden)
+    monkeypatch.setattr(feed, 'watch', forbidden)
+    with pytest.raises(SystemExit) as error:
+        feed.main(['--watch-seconds', seconds])
+    assert error.value.code == 2
+    assert capsys.readouterr().out == ''
+
+
+@pytest.mark.parametrize('seconds', [1, 600])
+@pytest.mark.parametrize('progress', [True, False])
+def test_watch_cli_emits_json_lines_and_exits_on_verified_progress(
+        monkeypatch, seconds, progress, capsys):
+    summary = {'kind': 'summary', 'fresh_samples': 2,
+               'frame_progress_observed': progress, 'status_counts': {'sample_available': 2}}
+
+    def watch(duration, emit):
+        assert duration == seconds
+        emit({'kind': 'observation', **watch_sample()})
+        emit(summary)
+        return summary
+
+    monkeypatch.setattr(feed, 'watch', watch)
+    assert feed.main(['--watch-seconds', str(seconds)]) == (0 if progress else 2)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [record['kind'] for record in records] == ['observation', 'summary']
+    assert records[-1] == summary
