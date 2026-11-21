@@ -31,7 +31,7 @@ from connection import (ConnectionConfig, ConnectionConfigStore, detect_instance
 from desktop_audit import DesktopCaptureJournal
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
-from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
+from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
@@ -588,6 +588,18 @@ class CollectionWorker:
                     retries = 0
                     last_retry_audit = float('-inf')
                     last_live_frame = None
+                    bundled_observer = self.endpoint == DEFAULT_FRIDA_REMOTE and BUNDLED_SERVER_ARCHIVE.is_file()
+
+                    def bind_observer_endpoint(target):
+                        nonlocal endpoint_bound
+                        ok, detail = ensure_frida_endpoint(target.adb_path, target.serial, remote=self.endpoint)
+                        endpoint_bound = ok
+                        self.last_endpoint_check = time.monotonic()
+                        audit('frida_endpoint', {'ok': ok, 'detail': detail})
+                        if not ok:
+                            self.events.put(('warning', '事件端点：' + detail))
+                        return ok, detail
+
                     while not self.stop.is_set():
                         next_live_read = None
                         try:
@@ -609,16 +621,12 @@ class CollectionWorker:
                                     target = resolve_configured(config)
                                     current_target = target
                                     self.events.put(('diagnostic', target.diagnostics.as_dict()))
-                                    if enabled:
-                                        ok, detail = ensure_frida_endpoint(target.adb_path, target.serial,
-                                                                           remote=self.endpoint)
-                                        endpoint_bound = ok
-                                        self.last_endpoint_check = time.monotonic()
-                                        audit('frida_endpoint', {'ok': ok, 'detail': detail})
-                                        if not ok:
-                                            self.events.put(('warning', '事件端点：' + detail))
+                                    if enabled and not bundled_observer:
+                                        bind_observer_endpoint(target)
                                     self.session = CollectionSession(target.adb_path, target.serial,
                                         frida_remote=self.endpoint if enabled else None,
+                                        prepare_observer=(lambda target=target: bind_observer_endpoint(target))
+                                        if enabled and bundled_observer else None,
                                         history=self.history, audit=audit, state_dir=self.directory,
                                         on_history=lambda: self.events.put(('history', None)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
@@ -694,6 +702,7 @@ class CollectionWorker:
                                     last_battle_waiting = battle_waiting
                                     self.events.put(('battle_waiting', battle_waiting))
                         if (usable and current_enabled and current_target is not None
+                                and (not bundled_observer or self.session.event_status != WAITING_GAME_INIT)
                                 and time.monotonic() - self.last_endpoint_check >= 5):
                             started = time.monotonic()
                             observer = self.session.observer

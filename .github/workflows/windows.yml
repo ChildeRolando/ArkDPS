@@ -45,7 +45,9 @@ jobs:
           $base = Get-ChildItem runtime/ci-build/*.zip
           $pythonZip = (Get-ChildItem runtime/ci-build/inputs-*/python.zip).FullName
           $fridaWheel = (Get-ChildItem runtime/ci-build/inputs-*/frida-*.whl).FullName
-          python tools/package_windows.py --output runtime/ci-update-target --version 999.0.0 --python-zip $pythonZip --frida-wheel $fridaWheel
+          $fridaServer = (Get-ChildItem runtime/ci-build/inputs-*/frida-server-*.xz).FullName
+          $fridaServerLicense = (Get-ChildItem runtime/ci-build/inputs-*/frida-server-COPYING.txt).FullName
+          python tools/package_windows.py --output runtime/ci-update-target --version 999.0.0 --python-zip $pythonZip --frida-wheel $fridaWheel --frida-server $fridaServer --frida-server-license $fridaServerLicense
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $target = Get-ChildItem runtime/ci-update-target/*.zip
           python acceptance/verify_hot_update.py $base.FullName $target.FullName --output runtime/update-validation
