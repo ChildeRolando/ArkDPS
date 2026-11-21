@@ -18,8 +18,9 @@ _BOOT_POLL_PERIOD = 1.0
 
 class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
-                 collector=None, observer_factory=None, history=None, on_history=None):
-        self.collector = collector if collector is not None else Collector(adb, serial, log=log)
+                 collector=None, observer_factory=None, history=None, on_history=None, state_dir=None):
+        self.collector = (collector if collector is not None else
+                          Collector(adb, serial, log=log, state_dir=state_dir))
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
         self.observer = None

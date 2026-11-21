@@ -28,7 +28,7 @@ from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
                         resolve_configured)
-from desktop_audit import DesktopAuditWriter
+from desktop_audit import DesktopCaptureJournal
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
 from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
@@ -115,6 +115,7 @@ class DesktopState:
     """Single-threaded command owner; collector input is queued by its worker."""
     def __init__(self, directory=None):
         directory = Path(directory) if directory else ROOT / 'runtime'
+        self.directory = directory
         self.store = LayoutStore(directory / 'layout.json')
         loaded = self.store.load()
         self.layout = loaded.layout
@@ -535,6 +536,7 @@ class DesktopState:
 class CollectionWorker:
     """Owns the sole CollectionSession, never references WPF or pipe objects."""
     def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE):
+        self.directory = state.directory
         self.history, self.endpoint = state.history, endpoint
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
@@ -542,6 +544,7 @@ class CollectionWorker:
         self.session = None
         self.cleanup_error = ''
         self.retired_errors = []
+        self.pending_history_count = 0
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
@@ -569,19 +572,13 @@ class CollectionWorker:
 
     def run(self):
         try:
+            from capture_cli import json_value
+
             runtime = BattleRuntime()
-            capture_dir = ROOT / 'runtime' / 'captures'
-            capture_dir.mkdir(parents=True, exist_ok=True)
-            path = capture_dir / (
-                f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{uuid4().hex}.jsonl')
-            with path.open('x', encoding='utf-8') as stream:
-                from capture_cli import json_value
-
-                def write_audit(record):
-                    stream.write(json.dumps(record, ensure_ascii=False, default=json_value) + '\n')
-                    stream.flush()
-
-                audit = DesktopAuditWriter(write_audit).write
+            capture_dir = self.directory / 'captures'
+            with DesktopCaptureJournal(capture_dir, encoder=json_value,
+                                       warn=lambda message: self.events.put(('warning', message))) as journal:
+                audit = journal.write
                 try:
                     usable = False
                     current_config, current_enabled, current_target = None, False, None
@@ -622,7 +619,7 @@ class CollectionWorker:
                                             self.events.put(('warning', '事件端点：' + detail))
                                     self.session = CollectionSession(target.adb_path, target.serial,
                                         frida_remote=self.endpoint if enabled else None,
-                                        history=self.history, audit=audit,
+                                        history=self.history, audit=audit, state_dir=self.directory,
                                         on_history=lambda: self.events.put(('history', None)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
                                     self.session.enable_lifecycle(runtime)
@@ -729,14 +726,17 @@ class CollectionWorker:
                     # A transient cleanup failure gets one retry before the sink closes.
                     if not self.release():
                         self.release()
+                    self.pending_history_count = len(runtime.pending_history)
         except Exception as exc:
             self.events.put(('error', str(exc)))
             traceback.print_exc(file=sys.stderr)
 
-    def close(self):
+    def close(self, *, require_history_saved=False):
         self.stop.set()
         self.thread.join()  # Never orphan device cleanup on UI exit / pipe EOF.
         errors = self.retired_errors + ([self.cleanup_error] if self.cleanup_error else [])
+        if require_history_saved and self.pending_history_count:
+            errors.append(f'{self.pending_history_count} 局战绩尚未保存，更新未应用。')
         if errors:
             raise RuntimeError('；'.join(errors))
 
@@ -850,7 +850,12 @@ def serve(input_stream, output, state, worker=None):
             elif not handshake:
                 raise ValueError('必须先完成 hello 握手')
             elif op == 'quit':
-                if worker:
+                require_history_saved = cmd.get('require_history_saved', False)
+                if type(require_history_saved) is not bool:
+                    raise ValueError('require_history_saved 必须是布尔值')
+                if worker and require_history_saved:
+                    worker.close(require_history_saved=True)
+                elif worker:
                     worker.close()
                 result, kind, quit_requested = None, 'bye', True
             elif op == 'detect':

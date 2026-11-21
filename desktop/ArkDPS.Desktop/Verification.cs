@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1686,7 +1689,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task VerifyReleaseUpdates()
+    private async Task VerifyReleaseUpdates(string output)
     {
         if (App.InstalledVersion is { } installed)
             Require(ReleaseSettings.Visibility == Visibility.Visible && !CheckUpdateButton.IsEnabled &&
@@ -1697,7 +1700,7 @@ public partial class MainWindow
         const string releases = """
             [
               {"tag_name":"v1.0.0-rc.10","draft":false,"prerelease":true,"assets":[{"name":"ArkDPS-1.0.0-rc.10-win-x64.zip","state":"uploaded"}]},
-              {"tag_name":"v1.0.0","draft":false,"prerelease":false,"assets":[{"name":"ArkDPS-1.0.0-win-x64.zip","state":"uploaded"}]},
+              {"tag_name":"v1.0.0","draft":false,"prerelease":false,"assets":[{"name":"ArkDPS-1.0.0-win-x64.zip","state":"uploaded","id":123,"size":250,"digest":"sha256:ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"}]},
               {"tag_name":"v1.0.0-rc.9","draft":false,"prerelease":true,"assets":[{"name":"ArkDPS-1.0.0-rc.9-win-x64.zip","state":"uploaded"}]},
               {"tag_name":"v2.0.0-rc.1","draft":false,"prerelease":true,"assets":[{"name":"ArkDPS-2.0.0-rc.1-win-x64.zip","state":"uploaded"}]},
               {"tag_name":"v3.0.0","draft":false,"prerelease":false,"assets":[{"name":"ArkDPS-3.0.0-win-x64-snapshot.zip","state":"uploaded"}]},
@@ -1711,14 +1714,18 @@ public partial class MainWindow
         var stable = new ReleaseVersion(1, 0, 0, 0);
         var rc = new ReleaseVersion(1, 0, 0, 9);
         Require(await updates.Check(stable) == null && await updates.Check(new(1, 0, 1, 0)) == null &&
-                await updates.Check(new(0, 9, 0, 0)) == stable, "stable channel update filtering");
-        Require(await updates.Check(rc) == new ReleaseVersion(2, 0, 0, 1), "RC channel update filtering");
+                await updates.Check(new(0, 9, 0, 0)) is { CanDownload: true, AssetId: 123, Size: 250 } stableUpdate &&
+                stableUpdate.Version == stable &&
+                stableUpdate.Sha256 == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            "stable channel update filtering and digest");
+        Require(await updates.Check(rc) is { CanDownload: false } rcUpdate &&
+                rcUpdate.Version == new ReleaseVersion(2, 0, 0, 1), "RC channel update filtering and browser fallback");
         using var rcData = new HttpClient(new ReleaseFixture(() => Task.FromResult(ReleaseList(releases
             .Replace("v2.0.0-rc.1", "v0.2.0-rc.1").Replace("v1.0.0\"", "v0.1.0\"")))));
-        Require(await new ReleaseUpdates(rcData).Check(rc) == new ReleaseVersion(1, 0, 0, 10), "numeric RC precedence");
+        Require((await new ReleaseUpdates(rcData).Check(rc))?.Version == new ReleaseVersion(1, 0, 0, 10), "numeric RC precedence");
         using var stableData = new HttpClient(new ReleaseFixture(() => Task.FromResult(
             ReleaseList(releases.Replace("v2.0.0-rc.1", "v0.2.0-rc.1")))));
-        Require(await new ReleaseUpdates(stableData).Check(new(1, 0, 0, 10)) == stable, "RC to stable promotion");
+        Require((await new ReleaseUpdates(stableData).Check(new(1, 0, 0, 10)))?.Version == stable, "RC to stable promotion");
 
         var reply = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         var fixture = new ReleaseFixture(() => reply.Task);
@@ -1735,7 +1742,7 @@ public partial class MainWindow
                     UpdateDownload.Visibility == Visibility.Collapsed, "update check blocked or duplicated");
             reply.SetResult(ReleaseList(releases));
             await Task.WhenAll(automatic, manual);
-            Require(availableUpdate == stable && UpdateDownload.Visibility == Visibility.Visible &&
+            Require(availableUpdate?.Version == stable && UpdateDownload.Visibility == Visibility.Visible &&
                 ReleaseUpdates.DownloadPage(stable) == "https://github.com/ChildeRolando/ArkDPS/releases/tag/v1.0.0",
                 "missing or incorrect release download action");
 
@@ -1764,6 +1771,224 @@ public partial class MainWindow
             UpdateStatus.Text = "";
             CheckUpdateButton.IsEnabled = false;
         }
+        await VerifyUpdateStaging(output, stable);
+    }
+
+    private sealed class UpdateAssetFixture(byte[] bytes, string host = "release-assets.githubusercontent.com",
+        Func<HttpContent>? content = null) : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests++;
+            Require(request.Headers.Accept.ToString() == "application/octet-stream", "release asset media type");
+            if (Requests == 1)
+            {
+                Require(request.RequestUri?.AbsoluteUri == "https://api.github.com/repos/ChildeRolando/ArkDPS/releases/assets/123",
+                    "release asset URL must use the fixed repository");
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Redirect)
+                    { Headers = { Location = new Uri($"https://{host}/asset") } });
+            }
+            Require(request.RequestUri?.Host == "release-assets.githubusercontent.com", "unexpected asset redirect");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = content?.Invoke() ?? new ByteArrayContent(bytes) });
+        }
+    }
+
+    private sealed class InterruptedUpdateBody(byte[] bytes) : MemoryStream(bytes)
+    {
+        private readonly TaskCompletionSource waiting = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task WaitingForCancellation => waiting.Task;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Position == 0) return await base.ReadAsync(buffer[..Math.Min(64, buffer.Length)], cancellationToken);
+            waiting.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+    }
+
+    private static byte[] UpdateArchive(ReleaseVersion version, string? extraPath = null, bool badFileHash = false,
+        int updateProtocol = UpdatePackage.Protocol, bool linkedWorker = false, int workerProtocol = BridgeClient.Version)
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["ArkDPS.Desktop.exe"] = "desktop", ["README.txt"] = "readme", ["collector/desktop_bridge.py"] = "worker",
+            ["python/python.exe"] = "python", ["licenses/LICENSE"] = "license",
+        };
+        var hashes = files.ToDictionary(file => file.Key,
+            file => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(file.Value))));
+        if (badFileHash) hashes["ArkDPS.Desktop.exe"] = new string('0', 64);
+        files.Add("metadata/release.json", JsonSerializer.Serialize(new
+        {
+            format = 2, version = version.ToString(), protocol = workerProtocol, update_protocol = updateProtocol,
+            target_framework = "net11.0-windows10.0.19041.0", frida = "test", collector_sha256 = hashes["collector/desktop_bridge.py"],
+            files = hashes,
+        }));
+        using var buffer = new MemoryStream();
+        using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var file in files)
+            {
+                var entry = archive.CreateEntry("ArkDPS/" + file.Key);
+                if (linkedWorker && file.Key == "collector/desktop_bridge.py")
+                    entry.ExternalAttributes = unchecked((int)0xa0000000); // Unix symbolic link
+                using var stream = entry.Open();
+                stream.Write(Encoding.UTF8.GetBytes(file.Value));
+            }
+            if (extraPath != null) archive.CreateEntry(extraPath);
+        }
+        return buffer.ToArray();
+    }
+
+    private static async Task VerifyUpdateStaging(string output, ReleaseVersion version)
+    {
+        static ReleaseUpdate Asset(ReleaseVersion version, byte[] bytes) =>
+            new(version, 123, bytes.LongLength, Convert.ToHexStringLower(SHA256.HashData(bytes)));
+
+        string portable = Path.Combine(output, "mock-update");
+        Directory.CreateDirectory(portable);
+        Require(new PortableUpdateHost(portable + Path.DirectorySeparatorChar).Root == Path.GetFullPath(portable),
+            "the fixed portable entry must recognize a path ending with a separator");
+        byte[] archive = UpdateArchive(version, workerProtocol: BridgeClient.Version + 1);
+        ReleaseUpdate release = Asset(version, archive);
+        string destination = UpdatePackage.BundleDirectory(portable, release);
+        string abandoned = Path.Combine(Path.GetDirectoryName(destination)!, ".stage-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(abandoned);
+        var fixture = new UpdateAssetFixture(archive);
+        using var client = new HttpClient(fixture);
+        var updates = new ReleaseUpdates(client);
+        var staged = await updates.StageAsync(release, portable, null, CancellationToken.None);
+        Require(staged.Directory == destination && fixture.Requests == 2 && !Directory.Exists(abandoned) &&
+            File.ReadAllText(Path.Combine(staged.Directory, "collector", "desktop_bridge.py")) == "worker", "update staging and interrupted download cleanup");
+        UpdatePackage.VerifyStagedLaunch(release, staged.Directory);
+        Require(await updates.StageAsync(release, portable, null, CancellationToken.None) == staged && fixture.Requests == 2,
+            "verified staged package was not reused");
+        string receipt = staged.Directory + ".receipt";
+        File.WriteAllText(receipt, new string('0', 130));
+        var repair = new UpdateAssetFixture(archive);
+        using var repairClient = new HttpClient(repair);
+        Require(await new ReleaseUpdates(repairClient).StageAsync(release, portable, null, CancellationToken.None) == staged &&
+            repair.Requests == 2, "damaged inactive staged bundle was not downloaded again");
+        UpdatePackage.VerifyStaged(release, staged.Directory);
+
+        string selection = Path.Combine(portable, ".arkdps-update", "selection.json");
+        File.WriteAllText(selection, JsonSerializer.Serialize(new { Current = release }));
+        File.WriteAllText(receipt, new string('0', 130));
+        try
+        {
+            await updates.StageAsync(release, portable, null, CancellationToken.None);
+            throw new InvalidOperationException("updater accepted a damaged retained package");
+        }
+        catch (UpdateRequiresManualDownloadException)
+        {
+            Require(fixture.Requests == 2 && Directory.Exists(staged.Directory), "updater altered a retained bundle");
+        }
+        finally { File.Delete(selection); }
+
+        foreach (string path in new[]
+        {
+            "ArkDPS/collector/../../outside.txt", "ArkDPS/collector/COM1.txt", "ArkDPS/collector/layout:ads",
+            "ArkDPS/collector/runtime/settings.json", "ArkDPS/collector/Desktop_Bridge.py", "ArkDPS/collector/unlisted",
+        })
+        {
+            byte[] rejected = UpdateArchive(version, path);
+            await RequireRejected(Asset(version, rejected), rejected);
+        }
+        byte[] wrongManifest = UpdateArchive(version, badFileHash: true);
+        await RequireRejected(Asset(version, wrongManifest), wrongManifest);
+        byte[] oldManifest = UpdateArchive(version, updateProtocol: 0);
+        await RequireRejected(Asset(version, oldManifest), oldManifest);
+        byte[] linkedWorker = UpdateArchive(version, linkedWorker: true);
+        await RequireRejected(Asset(version, linkedWorker), linkedWorker);
+        await RequireRejected(release with { Sha256 = new string('f', 64) }, archive);
+
+        var unsafeRedirect = new UpdateAssetFixture(archive, "example.com");
+        using var redirectClient = new HttpClient(unsafeRedirect);
+        var unsafeAsset = release with { Sha256 = new string('e', 64) };
+        try
+        {
+            await new ReleaseUpdates(redirectClient).StageAsync(unsafeAsset, portable, null, CancellationToken.None);
+            throw new InvalidOperationException("updater accepted an untrusted redirect");
+        }
+        catch (HttpRequestException)
+        {
+            Require(unsafeRedirect.Requests == 1, "updater followed an untrusted redirect");
+            RequireNoStage(portable, unsafeAsset);
+        }
+
+        string interrupted = Path.Combine(output, "interrupted-update");
+        Directory.CreateDirectory(interrupted);
+        using var body = new InterruptedUpdateBody(archive);
+        var slowAsset = new UpdateAssetFixture(archive, content: () => new StreamContent(body));
+        using var slowClient = new HttpClient(slowAsset);
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var slowUpdates = new ReleaseUpdates(slowClient);
+        var pending = slowUpdates.StageAsync(release, interrupted, null, cancel.Token);
+        try
+        {
+            await body.WaitingForCancellation.WaitAsync(cancel.Token);
+            try
+            {
+                await slowUpdates.StageAsync(release, interrupted, null, cancel.Token);
+                throw new InvalidOperationException("updater allowed two staging operations for the same portable install");
+            }
+            catch (IOException) { Require(slowAsset.Requests == 2 && !pending.IsCompleted, "second staging operation reached HTTP"); }
+        }
+        finally { cancel.Cancel(); }
+        try
+        {
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            throw new InvalidOperationException("updater published an incomplete download");
+        }
+        catch (OperationCanceledException) { Require(pending.IsCanceled, "in-flight download did not cancel"); }
+        RequireNoStage(interrupted, release);
+
+        string writeBlocked = Path.Combine(output, "blocked-update-write");
+        Directory.CreateDirectory(writeBlocked);
+        string versions = Path.GetDirectoryName(UpdatePackage.BundleDirectory(writeBlocked, release))!;
+        var blockedAsset = new UpdateAssetFixture(archive, content: () =>
+        {
+            string inProgress = Directory.EnumerateDirectories(versions, ".stage-*").Single();
+            Directory.CreateDirectory(Path.Combine(inProgress, "download.zip"));
+            return new ByteArrayContent(archive);
+        });
+        using var blockedClient = new HttpClient(blockedAsset);
+        try
+        {
+            await new ReleaseUpdates(blockedClient).StageAsync(release, writeBlocked, null, CancellationToken.None);
+            throw new InvalidOperationException("updater ignored an unavailable download destination");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Require(blockedAsset.Requests == 2, "test did not reach the file write");
+            RequireNoStage(writeBlocked, release);
+        }
+
+        async Task RequireRejected(ReleaseUpdate rejected, byte[] bytes)
+        {
+            using var failed = new HttpClient(new UpdateAssetFixture(bytes));
+            try
+            {
+                await new ReleaseUpdates(failed).StageAsync(rejected, portable, null, CancellationToken.None);
+                throw new InvalidOperationException("invalid update package was accepted");
+            }
+            catch (Exception error) when (error is InvalidDataException or UpdateRequiresManualDownloadException)
+            {
+                RequireNoStage(portable, rejected);
+                Require(!File.Exists(Path.Combine(portable, "outside.txt")), "invalid update package changed the portable install");
+            }
+        }
+
+        static void RequireNoStage(string root, ReleaseUpdate target)
+        {
+            string bundle = UpdatePackage.BundleDirectory(root, target);
+            Require(!Directory.Exists(bundle) && !File.Exists(bundle + ".receipt") &&
+                !Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(bundle)!, ".stage-*").Any(),
+                "failed staging left a temporary archive, receipt or candidate");
+        }
     }
 
     internal async Task Verify(string output)
@@ -1774,8 +1999,8 @@ public partial class MainWindow
         var restoredLayout=State.Get("layout").Clone();
         var restoredConnection=State.Get("connection_config").Clone();
         await Settle();
-        await VerifyReleaseUpdates();
-        checks.Add("release version, channels, shared request and network failures verified with mock HTTP");
+        await VerifyReleaseUpdates(output);
+        checks.Add("release channel, shared request, network failures and verified update staging with mock HTTP");
         foreach(var placement in restoredLayout.Get("huds").Items())
         {
             Require(Huds.TryGetValue(placement.Text("panel_id"),out var hud) && hud is not null,

@@ -109,10 +109,31 @@ public partial class MainWindow : Window
     {
         try
         {
-            bridge=new BridgeClient(App.Root,App.Python,App.BridgeArguments.ToArray());
+            bridge=new BridgeClient(App.Root,App.Python,App.BridgeArguments.ToArray(),App.StateDirectory);
             await bridge.ConnectAsync();
             var reply=await bridge.RequestAsync("snapshot");ApplyState(reply.Get("state"));
-            CreateTray();poll.Start();
+            if (App.UpdateLaunch is { Kind: PortableLaunchKind.Probe } probe)
+            {
+                await PortableUpdateHost.ReportReadyAsync(probe);
+                await Quit();
+                return;
+            }
+            if (App.UpdateVerification == null) CreateTray();
+            if (App.UpdateLaunch is { ReadyPipe: not null } activation)
+            {
+                if (App.UpdateVerification?.Scenario == "failure")
+                    throw new IOException("Offline fixture rejected candidate startup.");
+                await PortableUpdateHost.ReportReadyAsync(activation);
+                IsEnabled = true;
+            }
+            poll.Start();
+            if (App.UpdateVerification is { } fixture)
+            {
+                await VerifyPortableUpdateAsync(fixture);
+                return;
+            }
+            if (App.InstalledVersion is { } version && !App.BridgeArguments.Contains("--offline"))
+                _ = CheckForUpdates(ReleaseUpdates.Public, version, manual: false);
             if(App.Verification!=null) await Verify(App.Verification);
         }
         catch(Exception ex)
@@ -123,12 +144,14 @@ public partial class MainWindow : Window
                 File.WriteAllText(Path.Combine(App.Verification,"failure.txt"),ex.ToString());
                 await Quit(1);
             }
+            else if (App.UpdateLaunch?.ReadyPipe != null) { RecordUiError(ex); await Quit(1); }
+            else if (App.UpdateVerification is { } fixture) { fixture.WriteFailure(ex); await Quit(1); }
             else {MessageBox.Show(this,ex.Message,"ArkDPS 启动失败");await Quit(1);}
         }
     }
     private async Task Poll()
     {
-        if(closingRequested || quitting || workerUnavailable) return;
+        if(closingRequested || quitting || workerUnavailable || updateShutdownPreparing) return;
         if(initialized && !responseStale && Stopwatch.GetElapsedTime(lastResponse)>TimeSpan.FromSeconds(2))
         {
             MarkDataStale("stale","数据已过期 · 等待 worker 响应 · 保留最后有效记录");
@@ -153,7 +176,7 @@ public partial class MainWindow : Window
     internal async Task Command(string op,Dictionary<string,object?>? fields=null)
     {
         if(bridge is not { CanSend:true } source || workerUnavailable || quitting ||
-           (closingRequested && op!="placement") ||
+           (closingRequested && op!="placement") || updateShutdownPreparing ||
            recoveryTask is { IsCompleted:false }) return;
         commands++;
         try
@@ -181,8 +204,8 @@ public partial class MainWindow : Window
         LastUiError=ex.ToString();
         try
         {
-            Directory.CreateDirectory(Path.Combine(App.Root,"runtime"));
-            File.AppendAllText(Path.Combine(App.Root,"runtime","ui-errors.log"),
+            Directory.CreateDirectory(App.StateDirectory);
+            File.AppendAllText(Path.Combine(App.StateDirectory,"ui-errors.log"),
                 DateTime.Now.ToString("O")+Environment.NewLine+LastUiError+Environment.NewLine);
         }
         catch(IOException){}
@@ -692,7 +715,7 @@ public partial class MainWindow : Window
     }
     private void ScheduleSave()
     {
-        if (!initialized || applying || quitting || closingRequested) return;
+        if (!initialized || applying || quitting || closingRequested || updateShutdownPreparing) return;
         RememberNormalGeometry();
         save.Stop();
         save.Start();
@@ -705,9 +728,13 @@ public partial class MainWindow : Window
     internal async Task SavePlacement()
     {
         if(!initialized || bridge==null) return;
+        await Command("placement",PlacementFields());
+    }
+    private Dictionary<string,object?> PlacementFields()
+    {
         RememberNormalGeometry();
-        await Command("placement",new(){["gui"]=normalGeometry??Native.Geometry(this),
-            ["huds"]=Huds.Values.Select(h=>h.Placement()).ToArray(),["side_mode"]=sideMode});
+        return new(){["gui"]=normalGeometry??Native.Geometry(this),
+            ["huds"]=Huds.Values.Select(h=>h.Placement()).ToArray(),["side_mode"]=sideMode};
     }
     internal void OpenHud(string id,JsonElement placement=default)
     {
@@ -921,7 +948,7 @@ public partial class MainWindow : Window
     private async void Rescan(object sender,RoutedEventArgs e)=>await ReconnectObserver();
     private Task ReconnectObserver()
     {
-        if(closingRequested || quitting) return Task.CompletedTask;
+        if(closingRequested || quitting || updateShutdownPreparing) return Task.CompletedTask;
         if(recoveryTask is {IsCompleted:false}) return recoveryTask;
         if(bridge is {CanSend:true} && !workerUnavailable) return Command("rescan");
         return recoveryTask=RecoverWorker(automatic:false);
@@ -981,7 +1008,7 @@ public partial class MainWindow : Window
             catch(Exception ex){RecordUiError(ex);}
         }
         stop.ThrowIfCancellationRequested();
-        var replacement=new BridgeClient(App.Root,App.Python,App.BridgeArguments.ToArray());
+        var replacement=new BridgeClient(App.Root,App.Python,App.BridgeArguments.ToArray(),App.StateDirectory);
         bridge=replacement;
         var timeout=TimeSpan.FromSeconds(5);
         await replacement.ConnectAsync(timeout);
@@ -1150,7 +1177,7 @@ public partial class MainWindow : Window
     private async void Detect(object sender,RoutedEventArgs e)
     {
         if(bridge is not {CanSend:true} source || workerUnavailable ||
-           recoveryTask is {IsCompleted:false} || closingRequested) return;
+           recoveryTask is {IsCompleted:false} || closingRequested || updateShutdownPreparing) return;
         DetectButton.IsEnabled=false;commands++;
         try
         {
@@ -1212,21 +1239,24 @@ public partial class MainWindow : Window
     internal void ShowGui(){if(closingRequested || quitting)return;Show();WindowState=WindowState.Normal;UpdateSidePlacement(allowMinimize: false);Activate();}
     private void OnClosing(object? sender,CancelEventArgs e)
     {
-        if(quitting)return;e.Cancel=true;ScheduleSave();
+        if(quitting)return;e.Cancel=true;
+        if(updateShutdownPreparing)return;
+        ScheduleSave();
         sideMinimizedWithPlayer = false;
         if(tray?.Visible==true)Hide();else WindowState=WindowState.Minimized;
     }
     private async void QuitClick(object sender,RoutedEventArgs e)=>await Quit();
-    internal async Task Quit(int code=0)
+    internal async Task Quit(int code=0,bool forUpdate=false)
     {
-        if(quitting || closingRequested)return;closingRequested=true;
+        if(quitting || closingRequested || (updateShutdownPreparing && !forUpdate))return;closingRequested=true;
         recoveryCancellation.Cancel();
+        updateDownloadCancellation?.Cancel();
         poll.Stop();save.Stop();SideAttachmentTimer.Stop();
         // Exit must never depend on a healthy worker or on a dialog. Every step is
         // bounded and failures are logged; the window closes even if cleanup stalls.
         try
         {
-            var cleanup=Release(code);
+            var cleanup=Release(code,forUpdate);
             if(await Task.WhenAny(cleanup,Task.Delay(TimeSpan.FromSeconds(20)))!=cleanup)
             {
                 code=1;WriteQuitLog("退出清理超过 20 秒，强制结束界面");
@@ -1236,17 +1266,25 @@ public partial class MainWindow : Window
         catch(Exception ex){code=1;WriteQuitLog("退出流程异常："+ex);}
         System.Windows.Application.Current.Shutdown(code);
     }
-    private async Task<int> Release(int code)
+    private async Task<int> Release(int code,bool forUpdate)
     {
         if(recoveryTask is {IsCompleted:false} recovery) await recovery;
-        if(code==0 && commands==0 && !polling && !workerUnavailable && bridge is {CanSend:true})
+        if(!forUpdate && code==0 && commands==0 && !polling && !workerUnavailable && bridge is {CanSend:true})
         {
             try{await SavePlacement();}catch(Exception ex){code=1;WriteQuitLog("保存布局失败："+ex.Message);}
         }
         quitting=true;
         foreach(var hud in Huds.Values.ToArray()){hud.SuppressClose=true;hud.Close();}Huds.Clear();
         tray?.Dispose();tray=null;Footer.Text="正在释放 Python 采集会话…";
-        try{if(bridge!=null)await bridge.DisposeAsync();}
+        try
+        {
+            if(forUpdate)
+            {
+                if(bridge is null) throw new IOException("worker 无法确认已清理，更新未应用");
+                await bridge.DisposeForUpdateAsync();
+            }
+            else if(bridge!=null) await bridge.DisposeAsync();
+        }
         catch(Exception ex)
         {
             code=1;WriteQuitLog("退出清理未确认："+ex.Message);
@@ -1259,7 +1297,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            string directory=Path.Combine(App.Root,"runtime");Directory.CreateDirectory(directory);
+            string directory=App.StateDirectory;Directory.CreateDirectory(directory);
             File.AppendAllText(Path.Combine(directory,"wpf-quit.log"),DateTime.Now.ToString("O")+" "+message+Environment.NewLine);
         }
         catch(IOException){}

@@ -1,11 +1,13 @@
 """Round-trip desktop journal deltas without changing acceptance journals."""
 import json
+import os
+from pathlib import Path
 
 import pytest
 
 from capture_battles import replay
 from capture_cli import json_value
-from desktop_audit import DesktopAuditReader, DesktopAuditWriter, ENEMY_STATE_DELTA
+from desktop_audit import DesktopAuditReader, DesktopAuditWriter, DesktopCaptureJournal, ENEMY_STATE_DELTA
 from test_lifecycle_events import connected
 
 
@@ -97,3 +99,91 @@ def test_desktop_delta_replay_checks_enemy_state_in_restored_statistics(tmp_path
     save()
     with pytest.raises(ValueError, match='published statistics differ'):
         replay(path)
+
+
+def test_capture_rotation_keeps_newest_and_only_prunes_managed_files(tmp_path):
+    oldest = tmp_path / f'wpf-20260101-000000-000000-{"0" * 32}.jsonl'
+    recent = tmp_path / f'wpf-20260101-000001-000000-{"0" * 32}.jsonl'
+    other = tmp_path / 'capture.jsonl'
+    history = tmp_path.parent / 'history.json'
+    for path, size, stamp in ((oldest, 200, 1), (recent, 85, 2), (other, 300, 3), (history, 300, 4)):
+        path.write_bytes(b'x' * size)
+        os.utime(path, (stamp, stamp))
+
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               segment_bytes=50, total_bytes=260) as journal:
+        assert not oldest.exists() and recent.exists()
+        for index in range(5):
+            journal.write('sample', {'index': index, 'text': '字' * 14})
+            managed = sorted(tmp_path.glob('wpf-*.jsonl'))
+            assert sum(path.stat().st_size for path in managed) <= 260
+            assert json.loads(managed[-1].read_bytes())['data']['index'] == index
+
+    assert not recent.exists()
+    assert [json.loads(path.read_bytes())['data']['index'] for path in managed] == [3, 4]
+    assert other.stat().st_size == history.stat().st_size == 300
+
+
+def test_capture_rotation_replays_complete_chain_and_inspects_retained_tail(tmp_path):
+    session, collector, _, captured = connected()
+    observer = session.observer
+    drain = observer.drain
+    observer.drain = lambda: dict(drain(), enemy_state_ready=True,
+                                  enemy_entry_ready=True, enemy_phase_ready=True)
+    try:
+        session.read()
+        collector.frame, collector.game_time = 2, 1.
+        observer.sequence = observer.epoch = 1
+        observer.events = [dict(sequence=1, frame=2, game_time=1., kind='enemy_enter',
+                                source=None, target='enemy_a', target_instance='12',
+                                amount=0, hp_after=60_000,
+                                enemy_entry_attributes={'max_hp': 60_000})]
+        session.read()
+    finally:
+        session.close()
+
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               segment_bytes=1) as journal:
+        for kind, data in captured:
+            journal.write(kind, data)
+
+    parts = sorted(tmp_path.glob('wpf-*.jsonl'))
+    assert len(parts) == len(captured)
+    replayed = replay(parts[-1])
+    assert replayed['samples'] == 2
+    assert replayed['last_state']['statistics']['enemy_state']['events'][0]['hp_after'] == 60_000
+
+    parts[0].unlink()
+    retained = replay(parts[-1])
+    assert retained['coverage'] == 'retained_only'
+    assert retained['segments'][0] == 2
+    assert retained['last_publication']['statistics']['enemy_state']['events'][0]['hp_after'] == 60_000
+
+
+def test_capture_retention_retries_after_locked_file_is_released(tmp_path, monkeypatch):
+    old = tmp_path / f'wpf-20260101-000000-000000-{"0" * 32}.jsonl'
+    old.write_bytes(b'x' * 100)
+    unlink = Path.unlink
+    locked = True
+    now = 0.
+    warnings = []
+
+    def unlink_if_available(path, **kwargs):
+        if path == old and locked:
+            raise PermissionError('log is open')
+        unlink(path, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', unlink_if_available)
+    monkeypatch.setattr('desktop_audit.time.monotonic', lambda: now)
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=warnings.append,
+                               segment_bytes=50, total_bytes=100) as journal:
+        journal.write('sample', {'frame': 1})
+        journal.write('sample', {'frame': 2})
+        assert old.exists() and len(warnings) == 1
+        locked, now = False, 11.
+        journal.write('sample', {'frame': 3})
+
+    log, = tmp_path.glob('wpf-*.jsonl')
+    assert not old.exists()
+    assert json.loads(log.read_bytes())['data'] == {'frame': 3}
+    assert replay(log)['coverage'] == 'retained_only'

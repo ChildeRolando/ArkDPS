@@ -108,9 +108,10 @@ internal sealed class BridgeClient : IAsyncDisposable
     public bool Connected => !process.HasExited;
     public bool CanSend => !closing && firstFault == null && Connected;
 
-    public BridgeClient(string root, string python, string[] arguments)
+    public BridgeClient(string root, string python, string[] arguments, string? stateDirectory = null)
     {
-        string directory = Path.Combine(root, "runtime"); Directory.CreateDirectory(directory);
+        string directory = stateDirectory ?? Path.Combine(root, "runtime");
+        Directory.CreateDirectory(directory);
         LogPath = Path.Combine(directory, "wpf-collector-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + ".log");
         log = new(LogPath, false, new UTF8Encoding(false)) { AutoFlush = true };
         var start = new ProcessStartInfo(python)
@@ -120,6 +121,7 @@ internal sealed class BridgeClient : IAsyncDisposable
             StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        start.ArgumentList.Add("-B");
         start.ArgumentList.Add("-X"); start.ArgumentList.Add("utf8");
         start.ArgumentList.Add(Path.Combine(root, "desktop_bridge.py"));
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
@@ -298,7 +300,11 @@ internal sealed class BridgeClient : IAsyncDisposable
             throw fault;
         }
     }
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => DisposeAsync(requireAcknowledgement: false);
+
+    internal ValueTask DisposeForUpdateAsync() => DisposeAsync(requireAcknowledgement: true);
+
+    private async ValueTask DisposeAsync(bool requireAcknowledgement)
     {
         Exception? error=null;
         closing = true;
@@ -308,10 +314,17 @@ internal sealed class BridgeClient : IAsyncDisposable
             {
                 try
                 {
-                    var bye=await ExchangeAsync("quit",null,TimeSpan.FromSeconds(QuitSeconds)).ConfigureAwait(false);
+                    Dictionary<string,object?>? fields = requireAcknowledgement
+                        ? new() { ["require_history_saved"] = true }
+                        : null;
+                    var bye=await ExchangeAsync("quit",fields,TimeSpan.FromSeconds(QuitSeconds)).ConfigureAwait(false);
                     if(bye.Text("kind")!="bye") error=new IOException("worker 退出确认缺失");
                 }
                 finally { gate.Release(); }
+            }
+            else if (requireAcknowledgement)
+            {
+                error=new IOException("worker 无法确认已清理，更新未应用");
             }
         }
         catch(Exception ex){error=ex;}

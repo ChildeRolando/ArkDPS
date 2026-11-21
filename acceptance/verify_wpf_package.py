@@ -17,7 +17,7 @@ import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT),str(ROOT/'tests'),str(ROOT/'acceptance')]
-from tools.package_windows import PACKAGE_ROOT, archive_name, digest
+from tools.package_windows import PACKAGE_ROOT, UPDATE_PROTOCOL, archive_name, digest
 
 
 def main():
@@ -37,6 +37,10 @@ def main():
     manifest_path = bundle / 'metadata/release.json'
     manifest=json.loads(manifest_path.read_text('utf-8'))
     assert manifest['format'] == 2
+    if manifest['frida'] is None:
+        assert 'update_protocol' not in manifest
+    else:
+        assert manifest['update_protocol'] == UPDATE_PROTOCOL
     assert args.archive.name == archive_name(manifest['version'], manifest['frida'] is not None)
     assert manifest['target_framework']=='net10.0-windows'
     files = {path.relative_to(bundle).as_posix(): digest(path) for path in bundle.rglob('*')
