@@ -193,6 +193,16 @@ CE-5 复测共 13 次读取，固定波次配置均为 42。命令留作复查�
 
 ## ArkDPS 界面版
 
+### 官服 PC 1-7 正式行动
+
+先从托盘退出旧 ArkDPS。让游戏停在关卡页，把整条命令粘贴到管理员 PowerShell。
+
+```powershell
+& 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-f81f6e3\ArkDPS-win-x64-e8snteah\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-f81f6e3\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+```
+
+等 ArkDPS 连上。进 **1-7**，点「开始行动」，正常打到胜利并回关卡页。打完告诉我一声。我核对这一局的「正式」标记、胜利和归档次数。
+
 ### CE-5 全周期 HPS 和治疗战绩 PNG
 
 先从托盘退出旧 ArkDPS，游戏留在关卡页。把整条命令粘贴到管理员 PowerShell。
@@ -206,6 +216,8 @@ CE-5 复测共 13 次读取，固定波次配置均为 42。命令留作复查�
 3. 从游戏内放弃演习并回关卡页。打开 ArkDPS 历史，选择该局，把历史面板设成「治疗」，速率选「全周期」，点「完整排行 PNG」保存。回报实时 HPS 是否出现、PNG 是否保存成功，日志和战绩由我直接核对。
 
 ### PC 与 MuMu 双向切换
+
+两端各打 CE-5 的实测已验证各局从零累计和各保存一次。以下步骤供复查 HUD。
 
 在 MuMu 能正常进入游戏时，复用上面命令启动的 ArkDPS。PC 和 MuMu 各进 **1-7 演习**。每局放一个能打到敌人的干员，打几下即可。
 
@@ -224,4 +236,4 @@ CE-5 固定波次 `42`、游戏重启后 1-7 从零开始、CE-5 自动演习标
 2. 最小化游戏，再从任务栏恢复。看 ArkDPS 侧栏是否跟着收起和回来。
 3. 从游戏内主动放弃，回到关卡页。告诉我侧栏的表现，演习标记和归档我直接查日志。
 
-已有战绩时，可以在历史里选中它并点「完整排行 PNG」保存。HUD 和 MuMu 平台实机切换另测。
+已有战绩时，可以在历史里选中它并点「完整排行 PNG」保存。HUD 可按上面的双向切换步骤复查。

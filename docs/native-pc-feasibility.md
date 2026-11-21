@@ -2,6 +2,8 @@
 
 评估日期 2026-11-21。目标是鹰角启动器国服 Windows x64 客户端，验收基线为 ArkDPS rc.8 的 MuMu 功能。**原生只读累计采集已实机验证可行**，覆盖伤害、非零治疗、稀音召唤伤害、干员撤退再部署、倍速、暂停、同图重开及胜负结算。Windows 的逐事件来源仍有缺口，现有证据支持接入累计统计，完整数值齐平仍取决于逐事件和产品验收。[MuMu 产品基线](v1-design.md) · [PC 实验记录](native-pc-research.md)
 
+便携候选 `f81f6e3ec88bc218e8134d18b3c790ee29c53017` 增加新战绩来源和历史标签。在包内离线 worker 连续切换 PC、MuMu、PC，每种连接下分别选中两份实机 CE-5 战绩，旧 Android 档稳定显示「来源未记录」，PC 档稳定显示「官服 PC」，两份原档的哈希保持一致。新增 Android 战绩的来源来自已通过版本校验的采集器，显示「Android（ADB）」。WPF 无窗口断言共 131 项通过，源码隔离回归 126 项通过。打包时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `e9e09e09646a12e9b8b769d8a42111fc8bd93228636ffc916152e2ac6ff92bde`。[便携候选](../runtime/native-pc/product-f81f6e3/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内历史来源回执](../runtime/native-pc/product-f81f6e3/history-platform-offline-93d7f75e/receipt.json)
+
 便携候选 `38af2cdd5778b83f1beafb3cb2f4040113ca98a3` 接入 PC 全周期 DPS/HPS，并按类别显示治疗和护盾 PNG 的统计说明。1258 项 Python 相关回归、121 项无窗口 C# 断言和 WPF 构建通过。包内 Python 复算了真实来源记录和缺口对照，三款主题的治疗 PNG 使用真实 CE-5 战绩离屏核对。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `b7e951df6c6583efe15024013543d3850cbf611d05a54bb9fcba628d614c46ec`。[实机测试使用的便携候选](../runtime/native-pc/product-38af2cd/ArkDPS-1.0.0-rc.8-win-x64.zip) · [全周期包内回执](../runtime/native-pc/product-38af2cd/full-cycle-replay-74c5588b61/receipt.json) · [三主题 PNG 对照](../runtime/native-pc/png-category-ce5/receipt.json)
 
 便携候选 `ba9d4574187dbb84f2acdaca2a07707da6152f51` 修复资源关卡和开局演习标记，HUD 增加连接中断或保留快照的提示，接敌面板说明 PC 的逐次事件覆盖。1225 项 Python 相关回归、94 项无窗口 C# 断言和 WPF 构建通过。包内 Python 用 CE-5 真实累计帧及合成转场证据核对 `true`、`false` 和关卡不匹配三种选择，用原样的 I 实机记录重放 207 份样本及两次归档。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `9c56f975efb973958927e8be3d4283bf079285c8fd814b752c4f665095a9e765`。[演习实测候选](../runtime/native-pc/product-ba9d457/ArkDPS-1.0.0-rc.8-win-x64.zip) · [CE-5 开局对照](../runtime/native-pc/product-ba9d457/ce5-opening-matcher.verified.json) · [I 包内回放](../runtime/native-pc/product-ba9d457/I-package-replay-f843048842bc/receipt.json)
@@ -173,6 +175,8 @@ PC 产品现接入基于相邻样本的全周期 DPS/HPS，沿用 MuMu 的本体
 
 2026-11-21 的 `38af2cd` 桌面日志记录了一局 CE-5 演习，Windows 构建为 `win-x64:cf7956bf88a61986859ef55c026d231713e2d12cf69ffd9a19779ab491cf76ff`。首个有效样本是第 3 帧，累计为 0。主动放弃时第 1821 帧结束，共发布 290 份有效样本，只保存一份战绩。闪灵累计治疗 `14559.002930`，采样在场 `55.299947` 游戏秒，战绩复算为 `263.273360 HPS`。原包 worker 的历史协议返回相同的速率和排行值。worker 日志记录了导出回包。玩家的界面显示和 PNG 保存反馈仍待与指定测试场次对应。[桌面日志核对回执](../runtime/native-pc/product-38af2cd/desktop-review-20261121-174041/ce5-full-cycle.verified.json) · [包内历史投影回执](../runtime/native-pc/product-38af2cd/ce5-history-display-offline-d64f4641/receipt.json)
 
+同日用 `38af2cd` 在同一个 ArkDPS 会话实测先打 MuMu CE-5，再切回官服 PC 打 CE-5。MuMu Android `2.7.91` 首份有效样本为第 26 帧，分类累计为 0，最后可靠分类累计 `75652.551514`。官服 PC 第 0 帧累计为 0，主动放弃时累计 `2046.279541`。两个战局 ID 独立，同一历史目录各写入一次。MuMu 本轮归档缺最终事件水位，结局与演习字段仍是未知，HUD 行为待单独确认。[双端切换实测回执](../runtime/native-pc/product-38af2cd/desktop-review-20261121-174824/ce5-platform-switch.verified.json)
+
 ## MuMu 功能齐平矩阵
 
 | 能力 | Windows 现状 | 达到齐平的证据 |
@@ -182,7 +186,7 @@ PC 产品现接入基于相邻样本的全周期 DPS/HPS，沿用 MuMu 的本体
 | 召唤物与离场输出、全周期速率 | 1-7 实机验证稀音双车同场、撤退和补位，回放确认共享小车累计只归一次。缄默德克萨斯多次撤退及换实例再部署的来源累计延续。全周期 DPS/HPS 已通过真实 PC 记录的离线正负对照，CE-5 桌面战绩在场时长与独立积分对账一致。 | 确认指定实测的实时、HUD 和历史界面显示，以及施放者离场后仍有正输出的边界。 |
 | 敌情、首领、有效伤害、过量和减伤 | 已实测当前 HP 受击下降、暂停冻结、正常入口显示、同局离场保留及 9 个在场敌人的同帧 HP。CE-5 实机界面显示固定波次 42，观察到的 42 个实例逐种与固定配置相符。实例已观测最高 HP 已离线复核。 | 最大 HP 和属性还需验证资源版本及配置。首领输出与过量还需逐次来源、目标、HP 前后、结算值和盾上下文。 |
 | 有效护盾、接敌 DPS/HPS、技能期拆分 | 现有 Windows 只读来源未提供完整有序的逐次事件。可读的盾剩余量或技能状态只能支持进一步验证。 | 实际盾吸收量与施盾人，逐次伤害与治疗帧，技能起止及输出归属。丢失短时事件时应报告覆盖缺口。 |
-| 战局生命周期、HUD、侧栏、历史和导出 | 1-7 正常桌面入口已实机验证胜利、自然失败、主动放弃、演习标记、各局仅归档一次及 PC 历史来源标识。CE-5 至 1-7 已验证换进程自动重连、新局从 0 起步和各自归档。CE-5 短测确认演习标记、主动放弃及窗口跟随。两种结算的真实战绩 JSON 导出已通过包内离线复核。 | 通过正常桌面入口验证普通行动开局、PC 与 MuMu 平台切换、HUD 状态和 PNG 保存，并完成 MuMu 实机回归。 |
+| 战局生命周期、HUD、侧栏、历史和导出 | 1-7 正常桌面入口已实机验证胜利、自然失败、主动放弃、演习标记、各局仅归档一次及 PC 历史来源标识。CE-5 至 1-7 已验证换进程自动重连。两端各打一局 CE-5，实机验证切换后按局累计、同一历史保留两份战绩。短测确认窗口跟随，两种结算的真实战绩 JSON 导出已通过包内离线复核。 | 验证正式行动开局、HUD 状态和 PNG 保存。MuMu 本轮切换实测的最终事件水位仍有缺口。 |
 
 MuMu 的事件来源与精度见[事件采集约定](event-capture.md)和[统计核心](statistics-core.md)。Windows 的开源 ArkHelper 快照公开了逻辑帧、行累计及覆盖标记。其发布端使用进程内观测，目前机器上没有该发布端，独立只读接收器已通过合成数据验证。公开快照还缺少 ArkDPS 所需的逐笔结算契约。[ArkHelper 快照接口](https://github.com/zhengkanqin/ArkHelper/blob/v1.4.2/include/arkhelp/ipc.h)
 
