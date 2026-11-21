@@ -42,6 +42,8 @@ stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 
 
 官服 PC 复用同一 worker、采集会话和战局归档。连接配置 v1 增加 `platform`（缺省 `mumu`）和 `native_game_root`。`connection_config` 保留已保存设置，`effective_connection_config` 表示本次启动实际选择。`--platform` 和 `--native-game-root` 覆盖本次启动，显式 Apply 才写入设置。官服 PC 通过 Windows 读权限、三个文件哈希和模块字节校验后发布同帧累计与编队。逐事件覆盖不可用。战绩保留 `metadata.platform` 与 `metadata.source_build`，旧版战绩仍可读取。[官服 PC 适配报告](native-pc-feasibility.md)
 
+连接请求带版本号。自动重连仅重试仍有效的选择，新的显式应用会使排队中的旧请求失效。切换平台时清除上一平台的实时战况，待采集线程确认最新请求后才接收实时数据。历史归档通知照常处理。设置页的 MuMu 实例检测与发出时的平台和 ADB 路径绑定。平台、ADB 路径或已应用的连接设置变化后，旧检测结果失效。
+
 ## 同包分发
 
 长期目标为 `net10.0-windows` / .NET 10 LTS（官方支持至 2028-11-14），不以 2026-11-10 结束支持的 .NET 8 作为长期基线。支持周期依据 [Microsoft 官方策略](https://dotnet.microsoft.com/en-us/platform/support/policy)。`global.json` 要求 10.0 稳定 SDK 并允许同系列最新 feature band；本轮全局 SDK 仅到 8.0.423，因此使用 SHA-512 核对过的任务本地 SDK 10.0.403 / runtime 10.0.14 构建，没有改写全局 SDK。可用 `ARKDPS_DOTNET` 显式指定 SDK 的 dotnet.exe；不兼容工具链构建失败，不静默降回 net8。
