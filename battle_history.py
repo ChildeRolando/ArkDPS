@@ -304,7 +304,18 @@ class BattleRecord:
         return self._data['event_error']
 
     def display_metadata(self):
-        return dict(metadata=self.metadata, duration=self._data['duration'],
+        metadata = self.metadata
+        evidence = [metadata.get('evidence')]
+        sources = metadata.get('evidence_sources')
+        if isinstance(sources, (list, tuple)):
+            evidence.extend(sources)
+        # This old PC hint also reported True for ordinary actions. Retain the
+        # archival evidence, but do not label its mode as an established fact.
+        if (metadata.get('platform') == 'native_pc' and any(
+                isinstance(value, str) and 'native_pc_squad_loader' in value.split('+')
+                for value in evidence)):
+            metadata['practice'] = None
+        return dict(metadata=metadata, duration=self._data['duration'],
                     recorded_at=self._data['recorded_at'], observed_at=self._data['observed_at'])
 
     @property

@@ -28,6 +28,7 @@ class Probe:
         self.closed = False
 
     def sample(self, *, extra_reader, idle_reader=None):
+        assert idle_reader is None
         self.reads += 1
         return deepcopy(next(self.reports))
 
@@ -66,25 +67,16 @@ def opening(practice=True, stage='main_01-07'):
                 practice_selection_status='available', practice_selection=dict(stage_id=stage, practice=practice))
 
 
-@pytest.mark.parametrize('loader_stays_open', [True, False])
-def test_idle_choice_requires_same_loader_before_and_after_read(tmp_path, monkeypatch, loader_stays_open):
-    loading = flow('home', 'battle_loader', transiting=True)
-    after = loading if loader_stays_open else flow('home', 'battle_loader', transiting=False)
-    flows = iter((loading, after))
-    monkeypatch.setattr('native_pc_collector.capture_game_flow', lambda *_: next(flows))
-    monkeypatch.setattr('native_pc_collector.capture_practice_selection', lambda *_: {
-        'practice_selection_status': 'available', 'practice_selection': dict(stage_id='main_01-07', practice=True)})
-    fields = NativePcCollector(tmp_path)._capture_idle(None, {})
-    assert ('practice_selection' in fields) is loader_stays_open
-
-
 @pytest.mark.parametrize(('state', 'result', 'outcome'), [(2, 0, 'abandoned'), (3, 2, 'defeat')])
-def test_opening_mode_and_finish_outcome_reach_history_once(tmp_path, state, result, outcome):
+@pytest.mark.parametrize('opening_hint', [True, False])
+def test_finish_outcome_reaches_history_without_publishing_opening_hint(
+        tmp_path, state, result, outcome, opening_hint):
     start = sample(6, 5.)
     start['sample'].update(flow('home', 'battle_loader', transiting=False))
     finish = sample(6, 7., state=state)
     finish['sample'].update(flow('level_main_01-07', 'battle_finish', transiting=True), battle_result=result)
-    probe = Probe([opening(), dict(ABSENT, game_flow_status='unavailable'), start, finish, ABSENT, ABSENT])
+    probe = Probe([opening(opening_hint), dict(ABSENT, game_flow_status='unavailable'),
+                   start, finish, ABSENT, ABSENT])
     history = BattleHistory(tmp_path)
     session = CollectionSession(None, None, collector=NativePcCollector(tmp_path, probe_factory=lambda _: probe),
                                 frida_remote=None, history=history)
@@ -96,38 +88,12 @@ def test_opening_mode_and_finish_outcome_reach_history_once(tmp_path, state, res
         except CaptureRetry:
             pass
     record, = history.list_recent().records
-    assert record.metadata['practice'] is True
+    assert record.metadata['practice'] is None
+    assert 'native_pc_squad_loader' not in record.metadata['evidence']
     assert record.metadata['outcome'] == outcome
     assert record.metadata['platform'] == 'native_pc'
     assert record.statistics['rows'][OPERATOR]['damage'] == 7.
     session.close()
-
-
-@pytest.mark.parametrize(('choice', 'frame', 'wait', 'expected'), [
-    (None, 6, 0, None),
-    (opening(False), 6, 4, False),
-    (opening(False, 'main_01-08'), 6, 4, None),
-    (opening(), 151, 4, None),
-    (opening(), 6, 16, None),
-    (dict(opening(), **flow('battle_finish', 'home', transiting=False)), 6, 4, None),
-])
-def test_practice_requires_fresh_matching_opening_and_does_not_carry_over(
-        tmp_path, monkeypatch, choice, frame, wait, expected):
-    now = 0.
-    monkeypatch.setattr('native_pc_collector.time.monotonic', lambda: now)
-    start = sample(frame, 5.)
-    start['sample'].update(flow('home', 'battle_loader', transiting=False))
-    restart = deepcopy(start)
-    restart['sample'].update(battle_serial=2)
-    probe = Probe([*([choice] if choice is not None else []), start, restart])
-    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    collector.connect()
-    if choice is not None:
-        assert collector.read_lifecycle()['battle'] is None
-    now += wait
-    assert collector.read_lifecycle()['metadata']['practice'] is expected
-    assert collector.read_lifecycle()['metadata']['practice'] is None
-    collector.close()
 
 
 @pytest.mark.parametrize('incomplete', [
@@ -135,7 +101,7 @@ def test_practice_requires_fresh_matching_opening_and_does_not_carry_over(
     dict(stage_id=None, stage_status='unavailable', **flow('home', 'battle_loader', transiting=False)),
     flow('home', 'battle_loader', transiting=True),
 ])
-def test_retry_opening_witness_for_the_same_battle_before_archiving(tmp_path, incomplete):
+def test_recovered_opening_still_has_no_battle_mode_evidence(tmp_path, incomplete):
     first, recovered = sample(4, 0.), sample(8, 0.)
     first['sample'].update(incomplete)
     recovered['sample'].update(flow('home', 'battle_loader', transiting=False))
@@ -148,21 +114,21 @@ def test_retry_opening_witness_for_the_same_battle_before_archiving(tmp_path, in
     with pytest.raises(CaptureRetry):
         session.read()
     assert session.read()['battle_metadata']['practice'] is None
-    assert session.read()['battle_metadata']['practice'] is True
+    assert session.read()['battle_metadata']['practice'] is None
     session.read()
     with pytest.raises(CaptureRetry):
         session.read()
     record, = history.list_recent().records
-    assert record.metadata['practice'] is True
+    assert record.metadata['practice'] is None
     session.close()
 
 
-@pytest.mark.parametrize(('stage_key', 'mode', 'expected'), [
-    ('wk_melee_5', True, True),
-    ('wk_melee_5', False, False),
-    ('wk_melee_6', True, None),
+@pytest.mark.parametrize(('stage_key', 'mode'), [
+    ('wk_melee_5', True),
+    ('wk_melee_5', False),
+    ('wk_melee_6', True),
 ])
-def test_weekly_opening_matches_the_catalog_stage_key(tmp_path, stage_key, mode, expected):
+def test_weekly_stage_stays_known_with_unverified_opening_hint(tmp_path, stage_key, mode):
     start = sample(4, 0.)
     level = 'Obt/Weekly/level_weekly_melee_5'
     start['sample'].update(stage_id=level, **flow('home', 'battle_loader', transiting=False))
@@ -172,54 +138,7 @@ def test_weekly_opening_matches_the_catalog_stage_key(tmp_path, stage_key, mode,
     assert collector.read_lifecycle()['battle'] is None
     metadata = collector.read_lifecycle()['metadata']
     assert metadata['stage_id'] == level
-    assert metadata['practice'] is expected
-    collector.close()
-
-
-def test_weekly_alias_requires_a_validated_catalog(tmp_path, monkeypatch):
-    from dataclasses import replace
-    from stage_names import resolve
-
-    level = 'Obt/Weekly/level_weekly_melee_5'
-    entry = replace(resolve(level), warning='catalog version mismatch')
-    monkeypatch.setattr('native_pc_collector.resolve_stage', lambda _: entry)
-    start = sample(4, 0.)
-    start['sample'].update(stage_id=level, **flow('home', 'battle_loader', transiting=False))
-    probe = Probe([opening(True, 'wk_melee_5'), start])
-    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    collector.connect()
-    assert collector.read_lifecycle()['battle'] is None
-    assert collector.read_lifecycle()['metadata']['practice'] is None
-    collector.close()
-
-
-@pytest.mark.parametrize('boundary', ['new_battle', 'singleton_absent', 'expired', 'late_frame', 'other_scene'])
-def test_pending_opening_cannot_survive_a_boundary(tmp_path, monkeypatch, boundary):
-    now = 0.
-    monkeypatch.setattr('native_pc_collector.time.monotonic', lambda: now)
-    first, end = sample(4, 0.), sample(8, 0.)
-    end['sample'].update(flow('home', 'battle_loader', transiting=False))
-    middle = []
-    if boundary == 'new_battle':
-        end['sample']['battle_serial'] = 2
-    elif boundary == 'singleton_absent':
-        middle.append(ABSENT)
-    elif boundary == 'late_frame':
-        end['sample']['frame'] = 151
-    elif boundary == 'other_scene':
-        incompatible = sample(6, 0.)
-        incompatible['sample'].update(flow('battle_finish', 'home', transiting=False))
-        middle.append(incompatible)
-    probe = Probe([opening(), first, *middle, end])
-    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    collector.connect()
-    assert collector.read_lifecycle()['battle'] is None
-    assert collector.read_lifecycle()['metadata']['practice'] is None
-    if middle:
-        collector.read_lifecycle()
-    if boundary == 'expired':
-        now += 16.
-    assert collector.read_lifecycle()['metadata']['practice'] is None
+    assert metadata['practice'] is None
     collector.close()
 
 
@@ -452,7 +371,7 @@ def test_reused_native_roots_keep_new_battle_separate_after_missing_first_roster
     session.close()
 
 
-def test_process_restart_archives_once_and_reuses_no_previous_practice(tmp_path):
+def test_process_restart_archives_once_without_publishing_unreliable_practice(tmp_path):
     first = sample(3, 50.)
     first['sample'].update(flow('home', 'battle_loader', transiting=False))
     old = Probe([opening(), first, {'status': 'process_changed'}])
@@ -478,7 +397,7 @@ def test_process_restart_archives_once_and_reuses_no_previous_practice(tmp_path)
     assert old.closed
     previous, = history.list_recent().records
     assert previous.battle_id == first_update['battle_id']
-    assert previous.metadata['practice'] is True
+    assert previous.metadata['practice'] is None
     assert previous.metadata['outcome'] == 'unknown'
     assert previous.statistics['rows'][OPERATOR]['damage'] == 50.
 

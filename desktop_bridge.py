@@ -100,12 +100,21 @@ def empty_text(config, source, complete, view):
         return '暂无首领伤害（已知为零）'
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
+    if config.ranking is Ranking.DPS:
+        # A known cumulative counter cannot certify a missing rate denominator
+        # or event stream. Recent/full-cycle rates do not require events.
+        if config.rate_basis is RateBasis.ENGAGEMENT and view.get('rate_available') is False:
+            return view.get('rate_reason') or '当前指标尚无可靠数据 · 未知不记零'
+        if view.get('footer_rate') is None:
+            return view.get('share_reason') or '当前指标尚无可靠数据 · 未知不记零'
+        if not complete or view.get('footer_rate_complete') is not True:
+            return '已观察输出为零 · 未覆盖部分仍未知'
+        return '暂无输出（已知为零）'
     if config.category.value == 'damage' and config.effective_only and any(
             row.get('effective_damage') is None for row in source.values()):
         return '当前有效伤害尚无可靠数据'
     key = {'damage': 'damage', 'healing': 'healing', 'shield': 'shield_absorbed'}[config.category.value]
-    if config.ranking is Ranking.RECENT or (
-            config.ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S):
+    if config.ranking is Ranking.RECENT:
         key = 'recent_' + config.category.value
     if any(row.get(key) is None for row in source.values()):
         return '当前指标尚无可靠数据 · 未知不记零'

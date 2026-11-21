@@ -13,14 +13,12 @@ from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
 from native_pc.probe_native_pc_enemies import capture_enemies
 from native_pc.probe_native_pc_flow import capture_game_flow, finish_transition
-from native_pc.probe_native_pc_practice import capture_practice_selection
 from native_pc.probe_native_pc_presence import capture_presence
 from native_pc.probe_native_pc_roster import capture_roster
 from native_pc.probe_native_pc_rows import capture_character_rows
 from native_pc.probe_native_pc_stage_spawns import capture_stage_spawns
 from roster import CharacterEntry, RosterSnapshot
 from source_classification import classify_unmapped_source
-from stage_names import resolve as resolve_stage
 
 
 BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
@@ -29,26 +27,10 @@ ENEMY_SAMPLE_INTERVAL = 1.0
 ENEMY_MAX_AGE = 2.5
 STAGE_PLAN_RETRY_INTERVAL = 1.0
 STAGE_PLAN_RECHECK_INTERVAL = 5.0
-OPENING_MAX_AGE = 15.0
-OPENING_MAX_FRAME = 150
 
 
 def _flow(report):
     return report.get('game_flow') if report.get('game_flow_status') == 'available' else None
-
-
-def _battle_loader(flow):
-    return flow and flow['source_scene'] == 'home' and flow['target_scene'] == 'battle_loader'
-
-
-def _opening_stage_matches(selection, level_id):
-    short_level = level_id.rsplit('/', 1)[-1].casefold().removeprefix('level_')
-    if selection == short_level:
-        return True
-    # Resource stages can use a different key on the squad page, such as
-    # wk_melee_5 for Obt/Weekly/level_weekly_melee_5.
-    stage = resolve_stage(level_id)
-    return stage.known and not stage.warning and selection == stage.stage_id.casefold()
 
 
 def _capture_fields(read, context):
@@ -125,8 +107,6 @@ class NativePcCollector:
         self._enemy_catalog = None
         self._enemy_observations = NativeEnemyObservations()
         self._next_enemy = float('-inf')
-        self._opening_choice = None
-        self._practice_battle = None
         self._stage_plan_scope = None
         self._stage_plan_candidate = None
         self._stage_plan_confirmed = None
@@ -182,10 +162,9 @@ class NativePcCollector:
     def read_lifecycle(self):
         self._pending = None
         self.locate_lifecycle()
-        report = self.process.sample(extra_reader=self._capture, idle_reader=self._capture_idle)
+        report = self.process.sample(extra_reader=self._capture)
         status = report['status']
         if status == 'waiting_for_battle' and report.get('reason') == 'singleton_is_null':
-            self._observe_opening(report)
             self._reset_enemy_observation()
             self._reset_stage_plan()
             return dict(battle=None, state=None, ready=False, transiting=False, source='', target='')
@@ -214,16 +193,15 @@ class NativePcCollector:
         if ('stage_spawns_status' in raw and raw['stage_spawns_status'] != 'available'):
             self._invalidate_stage_plan()
         flow = _flow(raw)
-        practice = self._battle_practice(raw, flow, battle, stage_id)
         abandoned = (raw['battle_state'] == 2 and raw.get('battle_result') == 0
                      and finish_transition(flow, stage_id))
         evidence = 'native_pc_guarded_memory'
-        if practice is not None:
-            evidence += '+native_pc_squad_loader'
         if abandoned:
             evidence += '+native_pc_game_flow'
+        # The squad page hint also read True during a confirmed ordinary action.
+        # Keep mode unknown until it can be established for the actual battle.
         metadata = dict(evidence=evidence, platform='native_pc', source_build=BUILD_ID,
-                        stage_id=stage_id, practice=practice,
+                        stage_id=stage_id, practice=None,
                         outcome='abandoned' if abandoned else raw.get('outcome'))
         lifecycle = dict(battle=battle, state=raw['battle_state'], ready=True, transiting=abandoned,
                          source=flow['source_scene'].casefold() if abandoned else '',
@@ -300,47 +278,6 @@ class NativePcCollector:
                 and frame >= confirmed[0] else None)
         return dict(view, stage_plan=plan)
 
-    def _capture_idle(self, read, context):
-        fields = capture_game_flow(read, context)
-        flow = _flow(fields)
-        if _battle_loader(flow) and flow['transiting']:
-            selection = capture_practice_selection(read, context)
-            if (selection['practice_selection_status'] == 'available'
-                    and _flow(capture_game_flow(read, context)) == flow):
-                fields.update(selection)
-        return fields
-
-    def _observe_opening(self, report):
-        self._practice_battle = None
-        flow = _flow(report)
-        if (self._opening_choice is not None and self._opening_choice[3] is not None
-                or flow is not None and not _battle_loader(flow)):
-            self._opening_choice = None
-        if (_battle_loader(flow) and flow['transiting']
-                and report.get('practice_selection_status') == 'available'):
-            raw = report['practice_selection']
-            self._opening_choice = (raw['stage_id'].casefold(), raw['practice'], time.monotonic(), None)
-
-    def _battle_practice(self, raw, flow, identity, stage):
-        choice, self._opening_choice = self._opening_choice, None
-        if self._practice_battle is not None and self._practice_battle[0] != identity:
-            self._practice_battle = None
-        if choice is not None:
-            chosen_stage, practice, observed_at, bound_battle = choice
-            if ((bound_battle is None or bound_battle == identity)
-                    and raw['battle_state'] == 2 and raw['frame'] <= OPENING_MAX_FRAME
-                    and time.monotonic() - observed_at <= OPENING_MAX_AGE
-                    and (stage is None or _opening_stage_matches(chosen_stage, stage))
-                    and (flow is None or _battle_loader(flow))):
-                if stage is not None and flow is not None and not flow['transiting']:
-                    self._practice_battle = (identity, stage, practice)
-                else:
-                    # Missing evidence can recover only inside this same opening.
-                    self._opening_choice = (chosen_stage, practice, observed_at, identity)
-        if self._practice_battle is not None and self._practice_battle[:2] == (identity, stage):
-            return self._practice_battle[2]
-        return None
-
     def _reset_enemy_observation(self):
         self._enemy_battle = None
         self._enemy_snapshot = None
@@ -394,7 +331,6 @@ class NativePcCollector:
 
     def close(self):
         self._pending = None
-        self._opening_choice = self._practice_battle = None
         self._reset_stage_plan()
         self._reset_enemy_observation()
         if self.process is not None:

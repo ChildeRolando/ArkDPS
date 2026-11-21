@@ -195,6 +195,8 @@ CE-5 复测共 13 次读取，固定波次配置均为 42。命令留作复查�
 
 ### 官服 PC 1-7 正式行动
 
+该测试已完成。玩家选择正式行动，日志通过零开局、胜利和单次归档的核对，并复现旧版误报演习。以下旧包命令供复查原始结果。
+
 先从托盘退出旧 ArkDPS。让游戏停在关卡页，把整条命令粘贴到管理员 PowerShell。
 
 ```powershell
@@ -226,7 +228,7 @@ CE-5 复测共 13 次读取，固定波次配置均为 42。命令留作复查�
 
 ### 既有重连和窗口短测
 
-CE-5 固定波次 `42`、游戏重启后 1-7 从零开始、CE-5 自动演习标记和侧栏跟随均已实测。以下 `ba9d457` 命令留作复查。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。游戏照常启动。
+CE-5 固定波次 `42`、游戏重启后 1-7 从零开始和侧栏跟随均已实测。以下 `ba9d457` 命令留作复查。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。游戏照常启动。
 
 ```powershell
 & 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ba9d457\ArkDPS-win-x64-ga0e5sr1\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ba9d457\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"

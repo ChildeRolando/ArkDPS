@@ -16,7 +16,7 @@ from battle_history import BattleHistory, BattleRecord
 from damage_settlement import DamageSettlement
 from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, empty_text, serve
 from layout_store import LayoutStore
-from panel_model import PanelConfig, Ranking, RateBasis
+from panel_model import Category, EventAvailability, PanelConfig, Ranking, RateBasis
 from stats_core import Statistics
 from test_battle_history import record
 from test_battle_share import exported_record
@@ -38,6 +38,94 @@ def test_effective_panel_with_known_native_damage_does_not_call_unknown_effectiv
     config = PanelConfig(effective_only=True)
     source = {'char_a': {'damage': 50, 'effective_damage': None, 'counter_snapshot_complete': True}}
     assert empty_text(config, source, True, {}) == '当前有效伤害尚无可靠数据'
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+@pytest.mark.parametrize('basis', [RateBasis.ENGAGEMENT, RateBasis.FULL_CYCLE])
+def test_unknown_rate_empty_state_does_not_call_known_cumulative_output_zero(tmp_path, category, basis):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(presence_seconds=None, presence_complete=False)
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=basis)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only', live=False))
+    assert sum(row[category.value] for row in statistics['rows'].values()) > 0
+    assert view['entries'] == [] and view['footer_rate'] is None
+    assert '已知为零' not in view['empty_text']
+    assert view['empty_text'] == (view['rate_reason'] if basis is RateBasis.ENGAGEMENT
+                                  else view['share_reason'])
+    if basis is RateBasis.ENGAGEMENT:
+        assert '逐次事件' in view['empty_text']
+    else:
+        assert '在场时间' in view['empty_text']
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+@pytest.mark.parametrize('basis', [RateBasis.RECENT_5S, RateBasis.FULL_CYCLE])
+def test_snapshot_rate_empty_state_preserves_certified_zero_without_events(tmp_path, category, basis):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(damage=0., healing=0., recent_damage=0., recent_healing=0.,
+                   presence_seconds=10., presence_complete=True)
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=basis)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert view['rate_available'] is False  # Event capability is irrelevant to these bases.
+    assert view['entries'] == [] and view['footer_rate'] == 0
+    assert view['footer_rate_complete'] is True
+    assert view['empty_text'] == '暂无输出（已知为零）'
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+def test_full_cycle_zero_without_observed_presence_is_unknown(tmp_path, category):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(damage=0., healing=0., presence_seconds=0., presence_complete=True)
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert view['entries'] == [] and view['footer_rate'] is None
+    assert '已知为零' not in view['empty_text']
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+def test_engagement_empty_state_preserves_verified_no_engagement(tmp_path, category):
+    statistics = Statistics('covered', 0, event_coverage=True)
+    statistics.register_source('a', 'a')
+    statistics.snapshot(0, {'a': {'damage': 100., 'healing': 50.}})
+    statistics.snapshot(3, {'a': {'damage': 100., 'healing': 50.}})
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=RateBasis.ENGAGEMENT)
+    view = DesktopState(tmp_path).view(config, statistics.result(), event=EventAvailability('recording'))
+    assert view['entries'] == [] and view['footer_rate'] == 0
+    assert view['footer_rate_complete'] is True
+    assert view['rates']['a'][category.value]['state'] == 'no_engagement'
+    assert view['rates']['a'][category.value]['text'] == '无接敌'
+    assert view['empty_text'] == '暂无输出（已知为零）'
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+@pytest.mark.parametrize('basis', [RateBasis.ENGAGEMENT, RateBasis.FULL_CYCLE])
+def test_total_ranking_keeps_cumulative_data_when_selected_rate_is_unknown(tmp_path, category, basis):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    config = PanelConfig(category=category, ranking=Ranking.TOTAL, rate_basis=basis)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert sum(entry['value'] for entry in view['entries']) == sum(
+        row[category.value] for row in statistics['rows'].values())
+    assert view['footer_total_complete'] is True
+    assert view['footer_total'] > 0 and view['footer_rate'] is None
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+def test_total_empty_state_keeps_certified_zero_with_missing_events(tmp_path, category):
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(damage=0., healing=0.)
+    config = PanelConfig(category=category, ranking=Ranking.TOTAL, rate_basis=RateBasis.ENGAGEMENT)
+    view = DesktopState(tmp_path).view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert view['entries'] == [] and view['footer_total'] == 0
+    assert view['footer_total_complete'] is True
+    assert view['empty_text'] == '暂无输出（已知为零）'
 
 
 def test_first_launch_and_default_model_ignores_legacy_projection(tmp_path):
