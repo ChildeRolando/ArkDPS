@@ -55,10 +55,13 @@ def run_capture(args, *, session_factory=CollectionSession):
     if any((dest / name).exists() for name in ('capture.jsonl', 'READY.json', 'summary.json',
                                              'maa-job.json', 'maa-callbacks.jsonl')):
         raise RuntimeError('capture evidence already exists; choose a fresh output directory')
+    platform = getattr(args, 'platform', 'mumu')
     metadata = {'head': head, 'stage': args.stage, 'frida_remote': args.frida_remote,
                 'adb': args.adb, 'serial': args.serial, 'started_at': time.time(),
                 'capture_seconds_after_baseline': args.capture_seconds,
                 'require_events': args.require_events}
+    if platform == 'native_pc':
+        metadata.update(platform=platform, native_game_root=args.native_game_root)
     if args.maa_job:
         job = args.maa_job.read_bytes()
         metadata['maa_job_sha256'] = hashlib.sha256(job).hexdigest()
@@ -77,7 +80,11 @@ def run_capture(args, *, session_factory=CollectionSession):
             journal.write(json.dumps(record, ensure_ascii=False, default=json_value, allow_nan=False) + '\n')
             journal.flush()
 
-        session = session_factory(args.adb, args.serial, frida_remote=args.frida_remote, audit=audit)
+        session_options = dict(frida_remote=args.frida_remote, audit=audit)
+        if platform == 'native_pc':
+            from native_pc_collector import NativePcCollector
+            session_options.update(collector=NativePcCollector(args.native_game_root), frida_remote=None)
+        session = session_factory(args.adb, args.serial, **session_options)
         if isinstance(session, CollectionSession):
             session.history = BattleHistory(root / 'runtime' / 'history')
             session.enable_lifecycle()
@@ -125,7 +132,10 @@ def run_capture(args, *, session_factory=CollectionSession):
                 raise RuntimeError('capture contains no observed battle progression')
         except BaseException as exc:
             failure = f'{type(exc).__name__}: {exc}'
-            audit('failure', {'reason': failure})
+            failure_data = {'reason': failure}
+            if platform == 'native_pc':
+                failure_data['diagnostics'] = session.collector.diagnostics.as_dict()
+            audit('failure', failure_data)
         finally:
             try:
                 session.close()

@@ -24,7 +24,9 @@ internal sealed class HistoryItem
     public string StageDescription=>Data.Text("stage_description");
     public string Outcome=>Data.Text("outcome");
     public string Practice=>Data.Get("labels").Items().ElementAtOrDefault(1).Text();
-    public string Summary=>string.Join(" · ",Outcome,Data.Text("duration"));
+    public string Summary=>Data.Text("platform")=="native_pc"
+        ?string.Join(" · ","官服 PC",Outcome,Data.Text("duration"))
+        :string.Join(" · ",Outcome,Data.Text("duration"));
     public string Date=>Data.Text("date");
 }
 
@@ -71,6 +73,10 @@ public partial class MainWindow : Window
     private HistoryItem? cachedHistorySelection;
     private string? historySelectionInFlight;
     private bool HistoryCacheOnly=>workerUnavailable || bridge is not {CanSend:true};
+    private JsonElement EffectiveConnectionConfig=>State.Get("effective_connection_config").ValueKind==JsonValueKind.Object
+        ? State.Get("effective_connection_config") : State.Get("connection_config");
+    private bool UsingNativePc=>EffectiveConnectionConfig.Text("platform")=="native_pc";
+    private string SelectedConnectionPlatform=>(ConnectionPlatform.SelectedItem as ComboBoxItem)?.Tag as string ?? "mumu";
     private string HistorySelectionId=>cachedHistorySelection?.Id ?? State.Get("history_selected").Text("battle_id");
     private JsonElement HistoryRecoveryConfig=>State.Get("history_selected").Get("view").Get("config");
     private string route="live";
@@ -161,6 +167,11 @@ public partial class MainWindow : Window
             var reply=await source.RequestAsync(op,fields);
             if(bridge!=source || workerUnavailable || closingRequested || quitting) return;
             ApplyState(reply.Get("state"));
+            if(op=="connection_apply")
+            {
+                App.ClearConnectionOverrides();
+                UpdateConnectionForm();
+            }
             if(reply.Get("result").ValueKind==JsonValueKind.String) Footer.Text=reply.Text("result");
         }
         catch(BridgeTransportException ex){ReportTransportFailure(source,ex);}
@@ -227,8 +238,9 @@ public partial class MainWindow : Window
         poll.Stop();
         workerUnavailable=true;
         ErrorText.Text=message;
-        MarkDataStale("disconnected",label+" · 点击重连观察者");
-        HistoryNotice.Text="显示已载入的战绩 · 点击重连观察者恢复更新";
+        string reconnect=UsingNativePc ? "重新连接" : "重连观察者";
+        MarkDataStale("disconnected",label+" · 点击"+reconnect);
+        HistoryNotice.Text="显示已载入的战绩 · 点击"+reconnect+"恢复更新";
         ConnectionDiagnostics.Text=Status.Text+"\n"+message;
     }
     internal void ApplyState(JsonElement state)
@@ -284,8 +296,14 @@ public partial class MainWindow : Window
         }
         UpdateHistory();
         var diag=state.Get("diagnostic");
-        ConnectionDiagnostics.Text=state.Text("connection_text")+"\n"+state.Text("event_text")+"\n"+
-            "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected")+"\n"+diag.Text("message")+"\n"+diag.Text("error");
+        ConnectionDiagnostics.Text=string.Join("\n",new[] {
+            state.Text("connection_text"),state.Text("event_text"),
+            "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected"),
+            diag.Text("message"),diag.Text("error"),diag.Text("code")
+        }.Where(text=>text.Length>0));
+        EnterSideMode.ToolTip=UsingNativePc ? "PC 版使用独立侧边窗口" : "将主窗口吸附在 MuMu 一侧";
+        string reconnectLabel=UsingNativePc ? "重新连接" : "重连观察者";
+        LiveReconnectButton.Content=SubpageReconnectButton.Content=reconnectLabel;
         applying=false;
         if (panelLayoutChanged || changed) ArrangePanels();
         UpdateEnemies(state.Get("enemy"),DisplayedBattleId,previousBattle ? "previous" : state.Text("status"));
@@ -362,7 +380,7 @@ public partial class MainWindow : Window
         string title, subtitle;
         if(waiting)
         {
-            title=observing ? "观察中" : "观察停止";
+            title=UsingNativePc ? "PC 版快照" : observing ? "观察中" : "观察停止";
             subtitle="等待进入战斗";
         }
         else
@@ -430,7 +448,14 @@ public partial class MainWindow : Window
             "degraded" => "快照统计",
             _ => workerLabel,
         };
-        (string label,Brush light) = status switch
+        (string label,Brush light) = UsingNativePc ? status switch
+        {
+            "stale" or "disconnected" => (workerLabel,StatusRed),
+            "reconnecting" or "locating" => (workerLabel,StatusAmber),
+            "waiting" => ("PC 版 · 等待进入战斗",StatusAmber),
+            "live" or "degraded" => ("PC 版 · 累计统计",StatusGreen),
+            _ => (workerLabel,StatusGray),
+        } : status switch
         {
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" => (workerLabel,StatusAmber),
@@ -460,7 +485,34 @@ public partial class MainWindow : Window
     {
         var config=State.Get("connection_config");AutoDetect.IsChecked=config.Bool("auto_detect");
         AdbPath.Text=config.Text("adb_path");Serial.Text=config.Text("serial");EventsEnabled.IsChecked=State.Get("layout").Bool("event_observation");
-        DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events" or "--frida-remote") ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。" : "多实例不会自动选择任意目标；请选择检测结果。";
+        NativeGameRoot.Text=config.Text("native_game_root");
+        ConnectionPlatform.SelectedIndex=config.Text("platform")=="native_pc" ? 1 : 0;
+        UpdateConnectionForm();
+    }
+    private void ConnectionPlatformChanged(object sender,SelectionChangedEventArgs e)
+    {
+        if(MumuConnectionFields is null || NativeConnectionFields is null || EventsEnabled is null) return;
+        UpdateConnectionForm();
+    }
+    private void UpdateConnectionForm()
+    {
+        bool native=SelectedConnectionPlatform=="native_pc";
+        MumuConnectionFields.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
+        NativeConnectionFields.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
+        MumuEventNotes.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
+        NativeEventNote.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
+        EventsEnabled.IsEnabled=!native;
+        EventsEnabled.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
+        DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
+            or "--frida-remote" or "--platform" or "--native-game-root")
+            ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。"
+            : native ? "PC 版使用独立侧边窗口。" : "多实例不会自动选择任意目标；请选择检测结果。";
+    }
+    private void ChooseNativeGameRoot(object sender,RoutedEventArgs e)
+    {
+        var dialog=new Microsoft.Win32.OpenFolderDialog {Title="选择明日方舟 PC 游戏目录"};
+        if(Directory.Exists(NativeGameRoot.Text)) dialog.InitialDirectory=NativeGameRoot.Text;
+        if(dialog.ShowDialog(this)==true) NativeGameRoot.Text=dialog.FolderName;
     }
     private void OnResize(object sender, SizeChangedEventArgs e)
     {
@@ -850,7 +902,7 @@ public partial class MainWindow : Window
         bool live=page=="live";
         SubpageHeader.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
         PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","settings"=>"设置",_=>"实时战况"};
-        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","settings"=>"显示与 MuMu 连接",_=>"团队输出与干员详情"};
+        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
         SetNavState(page);
         AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         ArrangePanels();
@@ -939,7 +991,8 @@ public partial class MainWindow : Window
             do
             {
                 int attempt=automatic ? ++automaticRecoveryAttempts : 1;
-                string progress=automatic ? $"正在自动重连观察者 · {attempt}/{MaxAutomaticRecoveryAttempts}" : "正在重连观察者";
+                string reconnect=UsingNativePc ? "连接采集器" : "连接观察者";
+                string progress=automatic ? $"正在自动重{reconnect} · {attempt}/{MaxAutomaticRecoveryAttempts}" : "正在重"+reconnect;
                 MarkDataStale("reconnecting",progress+" · 保留最后有效记录");
                 HistoryNotice.Text=Status.Text;
                 ConnectionDiagnostics.Text=Status.Text+"\n"+ErrorText.Text;
@@ -1149,12 +1202,13 @@ public partial class MainWindow : Window
     }
     private async void Detect(object sender,RoutedEventArgs e)
     {
+        if(SelectedConnectionPlatform=="native_pc") return;
         if(bridge is not {CanSend:true} source || workerUnavailable ||
            recoveryTask is {IsCompleted:false} || closingRequested) return;
         DetectButton.IsEnabled=false;commands++;
         try
         {
-            var reply=await source.RequestAsync("detect",new(){["adb"]=AdbPath.Text.Trim()});
+            var reply=await source.RequestAsync("detect",new(){["adb"]=AdbPath.Text.Trim(),["platform"]=SelectedConnectionPlatform});
             if(bridge!=source || workerUnavailable || closingRequested) return;
             ApplyState(reply.Get("state"));
             var diag=reply.Get("result");DetectionNote.Text=diag.Text("message")+" "+diag.Text("error");
@@ -1173,7 +1227,9 @@ public partial class MainWindow : Window
     private async void ApplySettings(object sender,RoutedEventArgs e)
     {
         if(closingRequested || quitting) return;
-        var config=new{adb_path=AdbPath.Text.Trim(),serial=Serial.Text.Trim(),auto_detect=AutoDetect.IsChecked==true};
+        var config=new{adb_path=AdbPath.Text.Trim(),serial=Serial.Text.Trim(),auto_detect=AutoDetect.IsChecked==true,
+            platform=SelectedConnectionPlatform,
+            native_game_root=string.IsNullOrWhiteSpace(NativeGameRoot.Text) ? null : NativeGameRoot.Text.Trim()};
         bool events=EventsEnabled.IsChecked==true;
         if(bridge is not {CanSend:true} || workerUnavailable)
         {

@@ -26,8 +26,8 @@ from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
 from collector import BattleChanged, ROOT
-from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
-                        resolve_configured)
+from connection import (ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
+                        DetectionStatus, detect_instances, resolve_configured)
 from desktop_audit import DesktopAuditWriter
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
@@ -44,6 +44,9 @@ MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
+NATIVE_ACTION_REQUIRED_CODES = frozenset((
+    'native_permission_denied', 'native_root_required', 'native_unsupported_build',
+))
 BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
@@ -62,6 +65,7 @@ def event_label(status, error=None):
               'disabled': '事件已关闭 · 使用伤害/治疗快照',
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
               'finished': '事件观察结束 · 保留已覆盖区间'}
+    labels['snapshot_only'] = '官服 PC 累计快照 · 逐事件不可用'
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
 
@@ -121,6 +125,7 @@ class DesktopState:
         self.connection_store = ConnectionConfigStore(directory / 'connection.json')
         config = self.connection_store.load()
         self.connection = config.config
+        self.effective_connection = self.connection
         self.warnings = [x for x in (loaded.warning, config.warning,
                                      stage_names.catalog().warning) if x]
         self.history = BattleHistory(directory / 'history')
@@ -324,7 +329,8 @@ class DesktopState:
             return 'stale', '数据已过期 · 等待下一次可靠采样 · 保留最后有效记录'
         if time.monotonic() - self.last_progress > .8:
             return 'paused', '暂停 / 等待战斗推进'
-        if self.event_status in ('gap', 'failed', 'unavailable'):
+        if (self.event_status in ('gap', 'failed', 'unavailable')
+                and self.effective_connection.platform != 'native_pc'):
             return 'degraded', '正在统计 · 事件降级'
         return 'live', '正在统计'
 
@@ -401,10 +407,11 @@ class DesktopState:
                                        error=sample.get('event_error', self.event_error), live=True)
         event_status, event_error = self.event_status, self.event_error
         if event_status is None or self.observer_status in (
-                WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped'):
+                WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped', 'snapshot_only'):
             event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
+                    effective_connection_config=self.effective_connection.to_dict(),
                     totals=team_totals(stats),
                     status=status, status_text=label, error=self.error,
                     battle_waiting=self.battle_waiting,
@@ -508,7 +515,7 @@ class DesktopState:
             return '已保存：' + Path(cmd['path']).name
         elif op == 'connection_apply':
             config = ConnectionConfig.from_dict(cmd['config'])
-            if not config.auto_detect and not config.serial:
+            if config.platform == 'mumu' and not config.auto_detect and not config.serial:
                 raise ValueError('自动检测关闭时必须填写实例地址')
             enabled = cmd['events']
             if not isinstance(enabled, bool):
@@ -527,6 +534,7 @@ class DesktopState:
                 raise
             self.layout = candidate_layout
             self.connection = config
+            self.effective_connection = config
         else:
             raise ValueError('未知命令：' + str(op))
         return None
@@ -584,6 +592,7 @@ class CollectionWorker:
                 audit = DesktopAuditWriter(write_audit).write
                 try:
                     usable = False
+                    retry_allowed = True
                     current_config, current_enabled, current_target = None, False, None
                     last_battle_waiting = None
                     last_observer_state = None
@@ -599,7 +608,9 @@ class CollectionWorker:
                             config = None
                         if config is not None:
                             current_config, current_enabled = config, enabled
+                            current_target = None
                             usable = False
+                            retry_allowed = True
                             last_observer_state = None
                             endpoint_bound = False
                             retries = 0
@@ -609,19 +620,27 @@ class CollectionWorker:
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
-                                    target = resolve_configured(config)
-                                    current_target = target
-                                    self.events.put(('diagnostic', target.diagnostics.as_dict()))
-                                    if enabled:
-                                        ok, detail = ensure_frida_endpoint(target.adb_path, target.serial,
-                                                                           remote=self.endpoint)
-                                        endpoint_bound = ok
-                                        self.last_endpoint_check = time.monotonic()
-                                        audit('frida_endpoint', {'ok': ok, 'detail': detail})
-                                        if not ok:
-                                            self.events.put(('warning', '事件端点：' + detail))
-                                    self.session = CollectionSession(target.adb_path, target.serial,
-                                        frida_remote=self.endpoint if enabled else None,
+                                    session_kwargs = {}
+                                    if config.platform == 'native_pc':
+                                        from native_pc_collector import NativePcCollector
+                                        session_kwargs['collector'] = NativePcCollector(config.native_game_root)
+                                        adb, serial, remote = None, None, None
+                                    else:
+                                        target = resolve_configured(config)
+                                        current_target = target
+                                        self.events.put(('diagnostic', target.diagnostics.as_dict()))
+                                        if enabled:
+                                            ok, detail = ensure_frida_endpoint(target.adb_path, target.serial,
+                                                                               remote=self.endpoint)
+                                            endpoint_bound = ok
+                                            self.last_endpoint_check = time.monotonic()
+                                            audit('frida_endpoint', {'ok': ok, 'detail': detail})
+                                            if not ok:
+                                                self.events.put(('warning', '事件端点：' + detail))
+                                        adb, serial = target.adb_path, target.serial
+                                        remote = self.endpoint if enabled else None
+                                    self.session = CollectionSession(adb, serial,
+                                        frida_remote=remote, **session_kwargs,
                                         history=self.history, audit=audit,
                                         on_history=lambda: self.events.put(('history', None)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
@@ -629,19 +648,28 @@ class CollectionWorker:
                                     self.session.connect()
                                     diag = self.session.collector.diagnostics
                                     self.events.put(('diagnostic', diag.as_dict()))
-                                    self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}'))
+                                    text = (diag.message or '已连接官服 PC · 累计快照'
+                                            if config.platform == 'native_pc' else
+                                            f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}')
+                                    self.events.put(('connection', text))
                                     usable = True
                                 except Exception as exc:
                                     diag = getattr(exc, 'diagnostics', None)
+                                    if diag is None and self.session is not None:
+                                        diag = getattr(self.session.collector, 'diagnostics', None)
                                     if diag:
                                         self.events.put(('diagnostic', diag.as_dict()))
+                                    retry_allowed = not (
+                                        config.platform == 'native_pc'
+                                        and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
                                     self.events.put(('error', str(exc)))
                                     self.release()
                             self.events.put(('scanning', False))
                         if usable and self.session is not None:
                             # Attachment can be confirmed in the lobby, before any battle sample.
-                            observer_state = ('disabled', None)
-                            if current_enabled:
+                            observer_state = (('snapshot_only', None) if current_config.platform == 'native_pc'
+                                              else ('disabled', None))
+                            if current_enabled and current_config.platform == 'mumu':
                                 observer = self.session.observer
                                 if getattr(self.session, 'event_status', None) == WAITING_GAME_INIT:
                                     observer_state = (WAITING_GAME_INIT, self.session.event_error)
@@ -690,6 +718,14 @@ class CollectionWorker:
                                       'reason': str(exc).partition('\n')[0][:200],
                                       'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
+                                diag = getattr(exc, 'diagnostics', None)
+                                if diag is None:
+                                    diag = getattr(self.session.collector, 'diagnostics', None)
+                                if diag is not None:
+                                    self.events.put(('diagnostic', diag.as_dict()))
+                                retry_allowed = not (
+                                    current_config.platform == 'native_pc'
+                                    and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
                                 usable = False
                             if usable:
                                 battle_waiting = runtime.feed.battle_waiting
@@ -714,7 +750,7 @@ class CollectionWorker:
                                   'monotonic': finished})
                             if not ok:
                                 self.events.put(('warning', '事件端点保活：' + detail))
-                        if (not usable and current_config is not None
+                        if (not usable and retry_allowed and current_config is not None
                                 and time.monotonic() - self.last_connect_attempt >= 5):
                             self.last_connect_attempt = time.monotonic()
                             self.request(current_config, current_enabled)
@@ -854,7 +890,22 @@ def serve(input_stream, output, state, worker=None):
                     worker.close()
                 result, kind, quit_requested = None, 'bye', True
             elif op == 'detect':
-                result = detect_instances(cmd.get('adb') or None).diagnostics().as_dict()
+                effective = getattr(worker, 'effective', None)
+                config = effective[0] if effective is not None else state.effective_connection
+                platform = cmd.get('platform', config.platform)
+                if platform == 'native_pc':
+                    native_root = cmd.get('native_game_root', config.native_game_root)
+                    ConnectionConfig.from_dict({'platform': platform, 'native_game_root': native_root})
+                    result = ConnectionDiagnostics(
+                        status=DetectionStatus.NO_INSTANCE, platform='native_pc',
+                        native_game_root=native_root,
+                        code='native_root_required' if not native_root else 'native_unavailable',
+                        message='官服 PC 无需 ADB 检测；请填写游戏目录并应用连接设置以检查构建和读取权限。',
+                        version_expected=None).as_dict()
+                elif platform == 'mumu':
+                    result = detect_instances(cmd.get('adb') or None).diagnostics().as_dict()
+                else:
+                    raise ValueError('platform 必须是 mumu 或 native_pc')
                 kind = 'state'
             elif op == 'rescan':
                 if worker:
@@ -866,6 +917,8 @@ def serve(input_stream, output, state, worker=None):
                     worker.request(state.connection, state.layout.event_observation)
                 kind = 'snapshot' if op == 'snapshot' else 'state'
             advance('snapshot')
+            if getattr(worker, 'effective', None) is not None:
+                state.effective_connection = worker.effective[0]
             reply = dict(version=PROTOCOL_VERSION, id=request_id, kind=kind, ok=True,
                          result=result, state=state.snapshot())
         except Exception as exc:
@@ -902,6 +955,8 @@ def main():
     parser.add_argument('--fixture', type=Path)
     parser.add_argument('--adb')
     parser.add_argument('--serial')
+    parser.add_argument('--platform', choices=('mumu', 'native_pc'))
+    parser.add_argument('--native-game-root')
     parser.add_argument('--no-events', action='store_true')
     parser.add_argument('--frida-remote')
     args = parser.parse_args()
@@ -920,13 +975,20 @@ def main():
     output = sys.stdout
     sys.stdout = sys.stderr  # stdout is exclusively the protocol stream
     state = DesktopState(args.state_dir)
+    effective_config = replace(
+        state.connection, adb_path=args.adb or state.connection.adb_path,
+        serial=args.serial or state.connection.serial,
+        auto_detect=False if args.serial else state.connection.auto_detect,
+        platform=args.platform or ('native_pc' if args.native_game_root is not None
+                                   else state.connection.platform),
+        native_game_root=(args.native_game_root if args.native_game_root is not None
+                          else state.connection.native_game_root))
+    state.effective_connection = effective_config
     if args.fixture:
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))
     worker = None if args.offline else CollectionWorker(state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE)
     if worker:
-        worker.request(replace(state.connection, adb_path=args.adb or state.connection.adb_path,
-                               serial=args.serial or state.connection.serial,
-                               auto_detect=False if args.serial else state.connection.auto_detect),
+        worker.request(effective_config,
                        False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))
         worker.thread.start()
     try:

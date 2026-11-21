@@ -248,6 +248,8 @@ class BattleStatisticsAdapter:
         self.last_frame = None
         self.last_game_time = None
         self.last_result = None
+        if sample.get('presence_duration_supported') is False:
+            self.presence_complete = False
         self.last_types = {}
         self.types_current = set()
         self.unknown_sources = set(mapping.unknown_token_cids)

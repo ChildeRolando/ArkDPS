@@ -37,7 +37,7 @@ BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'bat
            'frida_provision.py',
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
-           'stage_names.py', 'stats_core.py',
+           'stage_names.py', 'stats_core.py', 'native_pc_collector.py',
            'event_probe_android2791.js')
 
 
@@ -116,7 +116,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     collector.mkdir()
     for name in BACKEND:
         shutil.copy2(ROOT / name, collector / name)
-    for name in ('assets', 'vendor'):
+    for name in ('assets', 'vendor', 'native_pc'):
         shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     notices = bundle / 'licenses'
     notices.mkdir()
@@ -135,7 +135,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     (bundle / 'README.txt').write_text(
         f'ArkDPS {version} · Windows x64\n\n'
         '解压到可写目录，双击 ArkDPS.Desktop.exe。无需安装 Python 或 .NET。\n'
-        '实时统计需要开启 Root 的 MuMu 12 和已适配的安卓游戏 2.7.91。\n'
+        '在设置中选择 MuMu 或官服 PC。MuMu 需要开启 Root，并使用已适配的安卓游戏 2.7.91。\n'
+        '官服 PC 请填写 Arknights.exe 所在目录。当前支持匹配构建的只读累计统计。\n'
         '包内不含 ADB、模拟器或 Frida server。\n\n'
         '更新可在设置页检查。发现新版后点击「查看下载」打开 GitHub Release。\n'
         '升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
@@ -155,7 +156,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
     environment=dict(os.environ, PYTHONHOME='Z:/not-a-python', PYTHONPATH='Z:/not-a-python', DOTNET_MULTILEVEL_LOOKUP='0')
-    script='import desktop_bridge, sys; assert "tkinter" not in sys.modules; print(sys.version); print(sys.executable)'
+    script=('import desktop_bridge, native_pc_collector, sys; '
+            'assert "tkinter" not in sys.modules; print(sys.version); print(sys.executable)')
     if with_events:
         script += '; import frida; assert frida.__version__ == "17.26.1"; print(frida.__version__)'
     subprocess.run([str(bundle/'python/python.exe'), '-I', '-B', '-c', script], cwd=ROOT,env=environment,check=True)

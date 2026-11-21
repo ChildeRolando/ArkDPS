@@ -35,10 +35,15 @@ def record_display(record):
     except (ValueError, OverflowError, OSError):
         # Older valid archives can predate the operating system's time zone table.
         pass
-    return dict(battle_id=record.battle_id, stage=stage.label, stage_description=stage.description,
+    platform = metadata.get('platform')
+    source_labels = ('官服 PC',) if platform == 'native_pc' else ()
+    display = dict(battle_id=record.battle_id, stage=stage.label, stage_description=stage.description,
                 stage_detail=stage.detail, stage_raw=stage.raw, outcome=outcome, duration=duration,
                 date=f'{observed_date:%Y-%m-%d %H:%M}', labels=(stage.label, practice, outcome,
-                    f'{duration}（最后可靠游戏时刻）', f'{date_label} {date}'))
+                    f'{duration}（最后可靠游戏时刻）', f'{date_label} {date}', *source_labels))
+    if source_labels:
+        display['platform'] = platform
+    return display
 
 
 def record_stage(record):

@@ -255,6 +255,51 @@ def test_config_rejects_invalid_values():
         conn.ConnectionConfig.from_dict([])
 
 
+def test_v1_config_defaults_to_mumu_and_preserves_native_settings(tmp_path):
+    old = {'version': 1, 'adb_path': 'my-adb', 'serial': 'manual:1', 'auto_detect': False}
+    migrated = conn.ConnectionConfig.from_dict(old)
+    assert migrated.platform == 'mumu' and migrated.native_game_root is None
+    assert all(migrated.to_dict()[key] == value for key, value in old.items())
+    native = conn.ConnectionConfig.from_dict({**old, 'platform': 'native_pc',
+                                             'native_game_root': r'D:\games\Arknights'})
+    store = conn.ConnectionConfigStore(tmp_path / 'connection.json')
+    store.save(native)
+    assert store.load().config == native
+    assert store.load().config.serial == 'manual:1'  # MuMu preference survives switching.
+    assert store.load().config.to_dict()['version'] == 1
+
+
+@pytest.mark.parametrize('extra', [{'platform': None}, {'platform': 'other'},
+                                  {'platform': True}, {'native_game_root': 42},
+                                  {'native_game_root': []}])
+def test_native_config_rejects_invalid_new_field_types(extra):
+    with pytest.raises(ValueError):
+        conn.ConnectionConfig.from_dict(extra)
+
+
+def test_native_diagnostics_are_additive_and_legacy_mumu_shape_is_unchanged():
+    legacy = conn.ConnectionDiagnostics().as_dict()
+    assert not {'platform', 'native_game_root', 'process_pid', 'code', 'details'} & legacy.keys()
+    diagnostic = conn.ConnectionDiagnostics(
+        status=conn.DetectionStatus.ERROR, platform='native_pc', native_game_root='game',
+        process_pid=42, code='native_permission_denied', details={'win32_error': 5})
+    encoded = diagnostic.as_dict()
+    assert encoded['platform'] == 'native_pc' and encoded['code'] == 'native_permission_denied'
+    assert encoded['details'] == {'win32_error': 5} and encoded['process_pid'] == 42
+    assert set(legacy) <= set(encoded)
+
+
+@pytest.mark.parametrize('resolver', [conn.resolve_configured, conn.resolve_target])
+def test_adb_resolvers_refuse_native_config_before_running_any_command(resolver, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail('native connection must not probe ADB')
+    monkeypatch.setattr(conn, 'resolve_adb_path', forbidden)
+    monkeypatch.setattr(conn, 'detect_instances', forbidden)
+    with pytest.raises(conn.ConnectionUnavailable) as caught:
+        resolver(conn.ConnectionConfig(platform='native_pc', native_game_root='game'))
+    assert caught.value.diagnostics.as_dict()['platform'] == 'native_pc'
+
+
 def test_unsafe_adb_commands_are_refused():
     for args in (['adb', 'kill-server'], ['adb', '-s', 'x', 'reboot'],
                  ['adb', 'emu', 'kill'], ['adb', 'forward', '--remove-all']):

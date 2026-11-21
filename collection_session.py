@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 from battle_history import BattleRecord, HistoryError
 
-from collector import Collector, SampleUnavailable, BattleChanged, UnsupportedVersion
+from collector import Collector, SampleUnavailable, BattleChanged, UnsupportedVersion, collector_process
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
 from event_stream import StreamGap
@@ -58,10 +58,13 @@ class CollectionSession:
 
     def connect(self):
         self.collector.connect(locate=False)
+        process = collector_process(self.collector)
         self.audit('connected', {'diagnostics': vars(self.collector.diagnostics),
-                                 'pid': self.collector.core.mc.pid,
-                                 'process_instance': getattr(self.collector.core.mc, 'process_instance', None)})
+                                 'pid': process.pid,
+                                 'process_instance': getattr(process, 'process_instance', None)})
         if not self.frida_remote:
+            capability = getattr(self.collector, 'event_capability', {})
+            self.event_error = capability.get('error')
             self._finish_connect()
             return
         self.event_status, self.event_error = WAITING_GAME_INIT, None

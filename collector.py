@@ -38,6 +38,10 @@ class SampleUnavailable(RuntimeError):
     pass
 
 
+class SnapshotGap(SampleUnavailable):
+    """A verified observation is missing, with snapshot coverage interrupted."""
+
+
 class BattleChanged(SampleUnavailable):
     pass
 
@@ -57,6 +61,12 @@ class UnsupportedVersion(SampleUnavailable):
     def __init__(self, message, diagnostics=None):
         super().__init__(message)
         self.diagnostics = diagnostics
+
+
+def collector_process(collector):
+    """Resolve the process owner without requiring the Android transport on PC."""
+    process = getattr(collector, 'process', None)
+    return process if process is not None else collector.core.mc
 
 
 def check_battle_ownership(bc, native, managed_reference, logger_owner):

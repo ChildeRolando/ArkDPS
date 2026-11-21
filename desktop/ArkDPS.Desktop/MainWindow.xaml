@@ -146,7 +146,7 @@
      <TextBlock Text="ORCU / DPS LAB" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="0,2,0,0"/>
     </StackPanel>
     <Button x:Name="EnterSideMode" Content="侧边吸附" Click="ToggleSideMode" Style="{StaticResource ChromeButton}"
-            Width="Auto" Padding="9,3" Margin="0,0,6,0" ToolTip="将主窗口吸附在 MuMu 一侧"/>
+            Width="Auto" Padding="9,3" Margin="0,0,6,0" ToolTip="切换为侧边模式"/>
     <Button Click="MinimizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最小化"><Path Data="M 0 5 H 10" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
     <Button Click="ToggleMaximizeWindow" Style="{StaticResource ChromeButton}" AutomationProperties.Name="最大化或还原"><Path Data="M 0 0 H 9 V 9 H 0 Z" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
     <Button Click="QuitClick" Style="{StaticResource ChromeButton}" AutomationProperties.Name="退出 ArkDPS"><Path Data="M 0 0 L 9 9 M 9 0 L 0 9" Stroke="{DynamicResource ChromeInk}" StrokeThickness="1.2"/></Button>
@@ -460,22 +460,41 @@
       </Border>
       <Border x:Name="ConnectionForm" Grid.Row="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,12,12">
        <StackPanel>
-        <TextBlock Text="连接到 MuMu" Style="{StaticResource CardTitle}" FontSize="20"/>
-        <TextBlock Text="UI 不访问游戏进程和 ADB；连接与只读采集由独立 Python 进程负责。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,14"/>
-        <CheckBox x:Name="AutoDetect" Content="自动检测认证的 MuMu 实例（多实例时需明确选择）"/>
-        <TextBlock Text="ADB 路径 · 留空自动查找" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="AdbPath" AutomationProperties.Name="ADB 路径"/>
-        <TextBlock Text="实例地址" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="Serial" ToolTip="多实例时选择检测结果或输入地址；明确地址不会被自动替换" AutomationProperties.Name="实例地址"/>
-        <Button x:Name="DetectButton" Content="检测实例" Click="Detect" HorizontalAlignment="Left" Margin="0,12,0,8"/>
-        <ListBox x:Name="Instances" MinHeight="46" MaxHeight="140" SelectionChanged="ChooseInstance"/>
-        <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,0"/>
+        <TextBlock Text="连接设置" Style="{StaticResource CardTitle}" FontSize="20"/>
+        <TextBlock Text="采集来源" Style="{StaticResource FieldLabel}" Margin="0,12,0,4"/>
+        <ComboBox x:Name="ConnectionPlatform" SelectedIndex="0" AutomationProperties.Name="采集来源" SelectionChanged="ConnectionPlatformChanged">
+         <ComboBoxItem Content="MuMu 模拟器" Tag="mumu"/>
+         <ComboBoxItem Content="明日方舟官方 PC 版" Tag="native_pc"/>
+        </ComboBox>
+        <StackPanel x:Name="MumuConnectionFields" Margin="0,12,0,0">
+         <CheckBox x:Name="AutoDetect" Content="自动检测认证的 MuMu 实例（多实例时需明确选择）"/>
+         <TextBlock Text="ADB 路径 · 留空自动查找" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="AdbPath" AutomationProperties.Name="ADB 路径"/>
+         <TextBlock Text="实例地址" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="Serial" ToolTip="多实例时选择检测结果或输入地址；明确地址不会被自动替换" AutomationProperties.Name="实例地址"/>
+         <Button x:Name="DetectButton" Content="检测实例" Click="Detect" HorizontalAlignment="Left" Margin="0,12,0,8"/>
+         <ListBox x:Name="Instances" MinHeight="46" MaxHeight="140" SelectionChanged="ChooseInstance"/>
+        </StackPanel>
+        <StackPanel x:Name="NativeConnectionFields" Visibility="Collapsed" Margin="0,12,0,0">
+         <TextBlock Text="PC 游戏目录" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+         <DockPanel>
+          <Button Content="选择目录" DockPanel.Dock="Right" Click="ChooseNativeGameRoot" Margin="8,0,0,0"/>
+          <TextBox x:Name="NativeGameRoot" AutomationProperties.Name="PC 游戏目录" ToolTip="选择包含 Arknights.exe 的目录"/>
+         </DockPanel>
+         <TextBlock Text="选择包含 Arknights.exe 的目录。先在鹰角启动器中启动游戏，再应用设置。"
+                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
+        </StackPanel>
+        <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
        </StackPanel>
       </Border>
       <Border x:Name="ConnectionEventForm" Grid.Row="1" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12">
-       <StackPanel><TextBlock Text="观察者与连接诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
+       <StackPanel><TextBlock Text="采集能力与诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
         <CheckBox x:Name="EventsEnabled" Content="启用观察者"/>
-        <TextBlock Text="连接后，可按游戏事件统计有效伤害、伤害溢出、被减伤率、技能期伤害与覆盖率、接敌 DPS 和护盾实际吸收，并追踪敌人入场、血量变化、重生与离场。"
-                   Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>
-        <TextBlock Text="关闭或连接失败时，继续使用伤害与治疗累计快照。事件未覆盖的统计显示为未知。"
+        <StackPanel x:Name="MumuEventNotes">
+         <TextBlock Text="连接后，可按游戏事件统计有效伤害、伤害溢出、被减伤率、技能期伤害与覆盖率、接敌 DPS 和护盾实际吸收，并追踪敌人入场、血量变化、重生与离场。"
+                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>
+         <TextBlock Text="关闭或连接失败时，继续使用伤害与治疗累计快照。事件未覆盖的统计显示为未知。"
+                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+        </StackPanel>
+        <TextBlock x:Name="NativeEventNote" Visibility="Collapsed" Text="PC 版当前提供伤害与治疗累计快照。护盾吸收、有效伤害、技能期和接敌统计显示为未知。"
                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
         <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         <Button Content="应用设置并重连" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,16,0,0"/>

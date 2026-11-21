@@ -95,7 +95,7 @@ public partial class MainWindow
         try
         {
             var placement = SideAttachment.GetPlacement(State.Get("diagnostic"), window, SideWidth,
-                State.Get("connection_config"));
+                EffectiveConnectionConfig);
             if (placement.State == EmulatorPlacementState.Minimized)
             {
                 // A taskbar or tray restore remains usable during the same MuMu minimize.
@@ -128,7 +128,7 @@ public partial class MainWindow
                 EmulatorPlacementState.Attached => "",
                 EmulatorPlacementState.NoRoom => "侧边空间不足，暂靠屏幕边缘",
                 EmulatorPlacementState.Ambiguous => "请在设置中选择要吸附的 MuMu 实例",
-                _ => "等待 MuMu 窗口"
+                _ => UsingNativePc ? "PC 版 · 独立侧边窗口" : "等待 MuMu 窗口"
             });
             SideAttachment.FollowPlayerZOrder(placement, window);
             lastAttachmentError = null;
@@ -137,7 +137,7 @@ public partial class MainWindow
         {
             if (lastAttachmentError != error.Message) RecordUiError(error);
             lastAttachmentError = error.Message;
-            SetSideAttachmentStatus("无法吸附 MuMu 窗口");
+            SetSideAttachmentStatus(UsingNativePc ? "PC 版 · 独立侧边窗口" : "无法吸附 MuMu 窗口");
         }
     }
 

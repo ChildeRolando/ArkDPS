@@ -40,6 +40,8 @@ WPF 在后台按字节写入命令，并用独立线程读取回复。ADB 子进
 
 stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。历史页是拉取式缓存：每次进入页面发送 `history_refresh`；采集会话每成功提交一条新战绩就推送一次 `history` 事件（仅 `result.written` 为真时），`serve` 在下一条 `snapshot` 前重新 `list_recent()`，所以打开的历史页也会自动出现新局。自动刷新保留当前选中副本、详情与筛选条件，不按轮询扫描目录；「刷新」按钮只作手动兜底。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
 
+官服 PC 复用同一 worker、采集会话和战局归档。连接配置 v1 增加 `platform`（缺省 `mumu`）和 `native_game_root`。`connection_config` 保留已保存设置，`effective_connection_config` 表示本次启动实际选择。`--platform` 和 `--native-game-root` 覆盖本次启动，显式 Apply 才写入设置。官服 PC 通过 Windows 读权限、三个文件哈希和模块字节校验后发布同帧累计与编队。逐事件覆盖不可用。战绩保留 `metadata.platform` 与 `metadata.source_build`，旧版战绩仍可读取。[官服 PC 适配报告](native-pc-feasibility.md)
+
 ## 同包分发
 
 长期目标为 `net10.0-windows` / .NET 10 LTS（官方支持至 2028-11-14），不以 2026-11-10 结束支持的 .NET 8 作为长期基线。支持周期依据 [Microsoft 官方策略](https://dotnet.microsoft.com/en-us/platform/support/policy)。`global.json` 要求 10.0 稳定 SDK 并允许同系列最新 feature band；本轮全局 SDK 仅到 8.0.423，因此使用 SHA-512 核对过的任务本地 SDK 10.0.403 / runtime 10.0.14 构建，没有改写全局 SDK。可用 `ARKDPS_DOTNET` 显式指定 SDK 的 dotnet.exe；不兼容工具链构建失败，不静默降回 net8。

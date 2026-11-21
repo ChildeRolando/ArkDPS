@@ -89,6 +89,9 @@ internal sealed class EmulatorAttachment
         if (App.Verification != null || App.BridgeArguments.Contains("--offline"))
             return PlaceBeside(FixtureWindow, width);
 
+        if (connection.Text("platform") == "native_pc" || diagnostics.Text("platform") == "native_pc")
+            return new(EmulatorPlacementState.NoPlayer);
+
         string serial = ResolveSerial(diagnostics, connection);
         if (serial.Length == 0 && diagnostics.Text("status") == "needs_selection")
             return new(EmulatorPlacementState.Ambiguous);

@@ -192,3 +192,38 @@ def test_app_rejects_disabled_events_in_event_acceptance(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         app.main()
     assert exc.value.code == 2
+
+
+def test_native_headless_entry_uses_saved_platform_and_never_starts_observer(tmp_path, monkeypatch):
+    import app
+    from connection import ConnectionConfig, ConnectionConfigStore
+
+    game_root = str(tmp_path / 'PC game')
+    ConnectionConfigStore(tmp_path / 'runtime' / 'connection.json').save(
+        ConnectionConfig(platform='native_pc', native_game_root=game_root))
+    received = []
+    monkeypatch.setattr(app, 'ROOT', tmp_path)
+    monkeypatch.setattr(app.sys, 'argv', ['app.py', '--capture-seconds', '1'])
+    monkeypatch.setattr(capture_cli, 'run_capture', received.append)
+
+    class Lock:
+        def bind(self, _address):
+            pass
+
+        def listen(self, _backlog):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(app.socket, 'socket', Lock)
+    app.main()
+    assert received[0].platform == 'native_pc'
+    assert received[0].native_game_root == game_root
+    assert received[0].frida_remote is received[0].adb is received[0].serial is None
+
+    monkeypatch.setattr(app.sys, 'argv', ['app.py', '--capture-seconds', '1', '--require-events'])
+    with pytest.raises(SystemExit) as exc:
+        app.main()
+    assert exc.value.code == 2
+    assert len(received) == 1

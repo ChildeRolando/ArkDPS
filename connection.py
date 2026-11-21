@@ -178,9 +178,14 @@ class ConnectionDiagnostics:
     version_status: VersionStatus = VersionStatus.UNKNOWN
     version_expected: str | None = EXPECTED_GAME_VERSION
     version_actual: str | None = None
+    platform: str = 'mumu'
+    native_game_root: str | None = None
+    process_pid: int | None = None
+    code: str | None = None
+    details: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
-        return {
+        result = {
             'status': self.status.value,
             'adb_path': self.adb_path,
             'selected_serial': self.selected_serial,
@@ -193,6 +198,11 @@ class ConnectionDiagnostics:
             'version_expected': self.version_expected,
             'version_actual': self.version_actual,
         }
+        if (self.platform != 'mumu' or self.native_game_root is not None
+                or self.process_pid is not None or self.code is not None or self.details):
+            result.update(platform=self.platform, native_game_root=self.native_game_root,
+                          process_pid=self.process_pid, code=self.code, details=self.details)
+        return result
 
 
 @dataclass
@@ -261,10 +271,13 @@ class ConnectionConfig:
     adb_path: str | None = None
     serial: str | None = None
     auto_detect: bool = True
+    platform: str = 'mumu'
+    native_game_root: str | None = None
 
     def to_dict(self) -> dict:
         return {'version': CONFIG_VERSION, 'adb_path': self.adb_path,
-                'serial': self.serial, 'auto_detect': bool(self.auto_detect)}
+                'serial': self.serial, 'auto_detect': bool(self.auto_detect),
+                'platform': self.platform, 'native_game_root': self.native_game_root}
 
     @classmethod
     def from_dict(cls, raw: object) -> 'ConnectionConfig':
@@ -273,13 +286,20 @@ class ConnectionConfig:
         adb = raw.get('adb_path')
         serial = raw.get('serial')
         auto = raw.get('auto_detect', True)
+        platform = raw.get('platform', 'mumu')
+        native_root = raw.get('native_game_root')
         if adb is not None and not isinstance(adb, str):
             raise ValueError('adb_path 必须是字符串或 null')
         if serial is not None and not isinstance(serial, str):
             raise ValueError('serial 必须是字符串或 null')
         if not isinstance(auto, bool):
             raise ValueError('auto_detect 必须是布尔值')
-        return cls(adb_path=adb or None, serial=serial or None, auto_detect=auto)
+        if platform not in ('mumu', 'native_pc'):
+            raise ValueError('platform 必须是 mumu 或 native_pc')
+        if native_root is not None and not isinstance(native_root, str):
+            raise ValueError('native_game_root 必须是字符串或 null')
+        return cls(adb_path=adb or None, serial=serial or None, auto_detect=auto,
+                   platform=platform, native_game_root=native_root or None)
 
 
 @dataclass
@@ -537,9 +557,19 @@ class ConnectionUnavailable(RuntimeError):
         self.diagnostics = diagnostics
 
 
+def _require_mumu(config: ConnectionConfig) -> None:
+    if config.platform != 'mumu':
+        diag = ConnectionDiagnostics(
+            status=DetectionStatus.ERROR, platform=config.platform,
+            native_game_root=config.native_game_root, code='native_unavailable',
+            version_expected=None, message='官服 PC 连接需使用原生采集器，无需 ADB 检测。')
+        raise ConnectionUnavailable(diag.message, diag)
+
+
 def resolve_target(config: ConnectionConfig,
                    runner: Runner | None = None) -> ConnectionTarget:
     """Resolve a concrete adb path and serial from config and auto-detection."""
+    _require_mumu(config)
     run = runner or SubprocessRunner()
     if config.serial:
         adb = resolve_adb_path(config.adb_path)
@@ -581,6 +611,7 @@ def resolve_configured(config: ConnectionConfig,
     stored address is used only when it still names one of the candidates,
     otherwise the caller must ask the player to choose.
     """
+    _require_mumu(config)
     if not config.auto_detect:
         if not config.serial:
             adb = resolve_adb_path(config.adb_path)

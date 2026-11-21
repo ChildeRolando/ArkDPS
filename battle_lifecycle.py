@@ -64,6 +64,7 @@ class BattleFeed:
         self.generation = 0
         self.identity = None
         self.clock = None
+        self.frame = None
         self.retired = None
         self.retired_clock = None
         self.retired_session = None
@@ -100,7 +101,7 @@ class BattleFeed:
         self.retired, self.retired_clock = self.identity, self.clock
         self.retired_session = self.native_session
         self.retired_stage = self.stage
-        self.identity = self.clock = self.native_session = None
+        self.identity = self.clock = self.frame = self.native_session = None
         self.stage = None
         self.terminal = False
         return self._emit('end', sample, roster, reason=reason, events=events)
@@ -148,20 +149,24 @@ class BattleFeed:
         return sample, roster, events
 
     def _read_pair(self, collector, before, observer=None):
-        collector.bind_battle(before['battle'][0])
-        # A busy frame is normal at 2x speed. Retry within the original
-        # lifecycle bracket before paying for another process lookup and poll.
-        deadline = time.monotonic() + .04
-        for attempt in range(3):
-            try:
-                sample, roster, events = self._read_marked_snapshot(collector, observer)
-                break
-            except BarrierBusy as exc:
-                if attempt == 2 or time.monotonic() >= deadline:
-                    raise CaptureRetry(str(exc)) from exc
+        guarded_pair = getattr(collector, 'read_guarded_pair', None)
+        if guarded_pair is not None and observer is None:
+            sample, roster = guarded_pair(before)
+            after, events = before, None
+        else:
+            collector.bind_battle(before['battle'][0])
+            # Retry a busy frame within the original lifecycle bracket.
+            deadline = time.monotonic() + .04
+            for attempt in range(3):
+                try:
+                    sample, roster, events = self._read_marked_snapshot(collector, observer)
+                    break
+                except BarrierBusy as exc:
+                    if attempt == 2 or time.monotonic() >= deadline:
+                        raise CaptureRetry(str(exc)) from exc
+            after = collector.read_lifecycle()
         if hasattr(collector, 'event_capability'):
             sample['event_capability'] = deepcopy(collector.event_capability)
-        after = collector.read_lifecycle()
         self.current_lifecycle = after
         if before != after or sample['frame'] != roster.frame:
             raise FrameMismatch('生命周期或累计/编队帧在读取期间变化')
@@ -207,8 +212,9 @@ class BattleFeed:
             self.retired = self.retired_clock = None
             self.retired_session = None
             return observation
-        identity = (*collector.core.mc.process_instance,
-                    collector.core.mc.pid, *battle)
+        from collector import collector_process
+        process = collector_process(collector)
+        identity = (*process.process_instance, process.pid, *battle)
         exiting = (before['transiting'] and before['source'].startswith('level_')
                    and before['target'] == 'battle_finish')
         if before.get('state') == 3 or exiting:
@@ -234,6 +240,7 @@ class BattleFeed:
                     sample['session'] = f'{self.id}:{self.generation}'
                     self.terminal = True
                     self.clock = sample['game_time']
+                    self.frame = sample['frame']
                     return self._emit('terminal', sample, roster, events=events)
             if self.identity == identity and not stage_changed:
                 return self._end('finished', observer=observer)
@@ -267,7 +274,9 @@ class BattleFeed:
                 return self._emit('waiting', reason='retired_battle')
         same_native = (self.identity == identity and not stage_changed
                        and self.native_session == sample['session'])
-        clock_reset = same_native and self.clock is not None and now < self.clock
+        frame_reset = (metadata.get('platform') == 'native_pc' and self.frame is not None
+                       and sample['frame'] < self.frame)
+        clock_reset = same_native and self.clock is not None and (now < self.clock or frame_reset)
         changed = not same_native or clock_reset
         generation = self.generation + int(changed)
         preparing = (generation > published_generation and roster.present_known
@@ -288,7 +297,7 @@ class BattleFeed:
             self.stage = stage
         elif stage:
             self.stage = stage
-        self.identity, self.clock = identity, now
+        self.identity, self.clock, self.frame = identity, now, sample['frame']
         self.native_session = sample['session']
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
@@ -337,8 +346,9 @@ class BattleSessions:
     def _events(self, observation):
         evidence = observation.events
         capability = (observation.sample or {}).get('event_capability', {})
-        if not evidence and self.event_status == 'unavailable' and capability.get('status') == 'failed':
-            self.event_status, self.event_error = 'failed', capability.get('error')
+        status = capability.get('status')
+        if not evidence and self.event_status == 'unavailable' and status in ('failed', 'unavailable'):
+            self.event_status, self.event_error = status, capability.get('error')
         if not evidence or self.capture.closed:
             return
         try:
@@ -362,7 +372,7 @@ class BattleSessions:
         metadata = sample.get('battle_metadata', {})
         outcome = metadata.get('outcome', 'unknown')
         confirmed = isinstance(metadata.get('evidence'), str) and bool(metadata['evidence'].strip())
-        return {
+        result = {
             'stage_id': metadata.get('stage_id') if confirmed else None,
             'practice': metadata.get('practice') if confirmed and
                         isinstance(metadata.get('practice'), bool) else None,
@@ -370,6 +380,10 @@ class BattleSessions:
                        ('victory', 'defeat', 'abandoned') else 'unknown',
             'evidence': metadata.get('evidence') if confirmed else None,
         }
+        build = metadata.get('source_build')
+        if confirmed and metadata.get('platform') == 'native_pc' and isinstance(build, str) and build:
+            result.update(platform='native_pc', source_build=build)
+        return result
 
     def _merge_metadata(self, sample):
         incoming = self._metadata(sample)
@@ -708,7 +722,7 @@ class BattleRuntime:
 
     def poll(self, collector, observer=None, *, prepare_observer=None):
         """Prepare event recovery only after the feed confirms a new battle."""
-        from collector import SampleUnavailable, BattleChanged, ProcessChanged
+        from collector import SampleUnavailable, BattleChanged, ProcessChanged, SnapshotGap
         from roster import RosterUnavailable
         from tools.stage_global_state.memory import ReadFailure
         try:
@@ -742,6 +756,8 @@ class BattleRuntime:
             if isinstance(exc, BattleChanged):
                 self._consume(self.feed.gap('process_changed'))
                 raise
+            if isinstance(exc, SnapshotGap):
+                self._consume(self.feed.gap('read_unavailable'))
             raise CaptureRetry(str(exc)) from exc
         except Exception:
             self._consume(self.feed.gap('read_unavailable'))

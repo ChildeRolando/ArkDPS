@@ -34,10 +34,10 @@ def launch(args=None):
                 raise RuntimeError(f'WPF 构建失败（退出码 {result.returncode}）；详情见 runtime/wpf-build.log。')
         command = [str(EXECUTABLE), '--repo', str(ROOT), '--python', worker_python(sys.executable)]
         if args is not None:
-            for name in ('adb', 'serial'):
+            for name in ('adb', 'serial', 'platform', 'native_game_root'):
                 value = getattr(args, name, None)
                 if value:
-                    command += ['--' + name, value]
+                    command += ['--' + name.replace('_', '-'), value]
             endpoint = getattr(args, 'frida_remote', None)
             if endpoint == '':
                 command.append('--no-events')

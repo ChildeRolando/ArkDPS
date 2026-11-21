@@ -1527,6 +1527,304 @@ def test_rescan_retains_effective_cli_target_until_explicit_settings_apply(tmp_p
     assert state.connection != override
 
 
+def test_native_connection_apply_keeps_mumu_preferences_and_replaces_cli_source(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    override = ConnectionConfig(platform='mumu', serial='cli-target')
+    class Worker:
+        events = queue.Queue()
+        effective = (override, False)
+        requests = []
+        def request(self, config, enabled):
+            self.effective = (config, enabled)
+            self.requests.append(self.effective)
+        def close(self):
+            pass
+    worker = Worker()
+    native = dict(version=1, platform='native_pc', native_game_root='game',
+                  adb_path='saved-adb', serial=None, auto_detect=False)
+    commands = [dict(version=1, op='hello'),
+                dict(version=1, op='connection_apply', config=native, events=True),
+                dict(version=1, op='rescan'), dict(version=1, op='quit')]
+    output = io.StringIO()
+    serve(io.StringIO(''.join(json.dumps(c)+'\n' for c in commands)), output, state, worker)
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert all(reply['ok'] for reply in replies)
+    config = ConnectionConfig.from_dict(native)
+    assert worker.requests == [(config, True), (config, True)]
+    snapshot = replies[1]['state']
+    assert snapshot['connection_config'] == native
+    assert snapshot['effective_connection_config'] == native
+    assert DesktopState(tmp_path).connection == config
+    assert DesktopState(tmp_path).layout.event_observation is True
+
+
+def test_native_detect_is_configuration_only_and_does_not_probe_adb(tmp_path, monkeypatch):
+    import desktop_bridge
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
+    def forbidden(*args, **kwargs):
+        pytest.fail('native detect must not run emulator setup')
+    monkeypatch.setattr(desktop_bridge, 'detect_instances', forbidden)
+    output = io.StringIO()
+    serve(io.StringIO('{"version":1,"op":"hello"}\n{"version":1,"op":"detect"}\n'),
+          output, state)
+    reply = json.loads(output.getvalue().splitlines()[-1])
+    assert reply['ok'] and reply['result']['code'] == 'native_root_required'
+    assert reply['result']['platform'] == 'native_pc'
+
+
+@pytest.mark.parametrize('denied', [False, True])
+def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed_status(
+        tmp_path, monkeypatch, denied):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from collector import SampleUnavailable
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus, VersionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state)
+    calls = []
+    diagnostic = ConnectionDiagnostics(
+        status=DetectionStatus.ERROR if denied else DetectionStatus.READY_UNIQUE,
+        platform='native_pc', native_game_root='game', connection_ok=not denied,
+        version_status=VersionStatus.UNKNOWN if denied else VersionStatus.COMPATIBLE,
+        version_actual='pc-build', message='PC read-only status',
+        code='native_permission_denied' if denied else None,
+        details={'win32_error': 5} if denied else {})
+    class NativeCollector:
+        diagnostics = diagnostic
+        def __init__(self, root):
+            calls.append(('collector', root))
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, adb, serial, *, collector, frida_remote, **kwargs):
+            assert adb is serial is frida_remote is None
+            self.collector = collector
+            calls.append(('session',))
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+            runtime.sessions.state = 'playing'
+        def connect(self):
+            if denied:
+                worker.stop.set()
+                raise SampleUnavailable('permission denied')
+        def read(self):
+            worker.stop.set()
+            return {'state': 2, 'battle_id': 'pc-battle', 'frame': 1}
+        def close(self):
+            calls.append(('close',))
+    def forbidden(*args, **kwargs):
+        pytest.fail('native worker must not invoke ADB or Frida provisioning')
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', forbidden)
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', forbidden)
+    monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', forbidden)
+    worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), True)
+    worker.run()
+    events = list(worker.events.queue)
+    assert calls == [('collector', 'game'), ('session',), ('close',)]
+    assert next(value for kind, value in events if kind == 'diagnostic') == diagnostic.as_dict()
+    if denied:
+        assert any(kind == 'error' for kind, _ in events)
+        assert not any(kind == 'sample' for kind, _ in events)
+    else:
+        assert ('observer', ('snapshot_only', None)) in events
+        state.effective_connection = worker.effective[0]
+        for kind, value in events:
+            state.accept(kind, value)
+        assert state.snapshot()['event_text'] == '官服 PC 累计快照 · 逐事件不可用'
+
+
+@pytest.mark.parametrize('first_platform', ['mumu', 'native_pc'])
+def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
+        tmp_path, monkeypatch, first_platform):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state)
+    calls, sessions = [], []
+    configs = {
+        'mumu': ConnectionConfig(adb_path='adb', serial='mumu-serial', auto_detect=False),
+        'native_pc': ConnectionConfig(platform='native_pc', native_game_root='game'),
+    }
+    def diagnostic(platform):
+        return ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform=platform,
+                                     selected_serial='mumu-serial', version_actual='build')
+    class NativeCollector:
+        diagnostics = diagnostic('native_pc')
+        def __init__(self, root):
+            calls.append(('native_collector', root))
+    class Session:
+        cleanup_errors = {}
+        event_status, event_error = 'ready', None
+        def __init__(self, adb, serial, *, frida_remote, collector=None, **kwargs):
+            self.platform = 'native_pc' if collector is not None else 'mumu'
+            self.collector = collector or SimpleNamespace(diagnostics=diagnostic('mumu'))
+            self.observer = (SimpleNamespace(status=desktop_bridge.ObserverStatus.READY, error=None)
+                             if self.platform == 'mumu' else None)
+            assert (adb, serial, frida_remote) == ((None, None, None) if collector is not None
+                                                  else ('adb', 'mumu-serial', worker.endpoint))
+            calls.append(('session', self.platform))
+            sessions.append(self)
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            pass
+        def read(self):
+            if len(sessions) == 1:
+                other = 'native_pc' if self.platform == 'mumu' else 'mumu'
+                worker.request(configs[other], True)
+            else:
+                worker.stop.set()
+        def close(self):
+            calls.append(('closed', self.platform))
+    def resolve(config):
+        calls.append(('adb_resolve', config.platform))
+        assert config.platform == 'mumu'
+        return SimpleNamespace(adb_path='adb', serial='mumu-serial', diagnostics=diagnostic('mumu'))
+    def endpoint(adb, serial, **kwargs):
+        assert (adb, serial) == ('adb', 'mumu-serial')
+        calls.append(('frida', 'mumu'))
+        return True, 'ready'
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', resolve)
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', endpoint)
+    monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', endpoint)
+    monkeypatch.setattr(worker.stop, 'wait', lambda delay: None)
+    worker.request(configs[first_platform], True)
+    worker.run()
+    other = 'native_pc' if first_platform == 'mumu' else 'mumu'
+    assert calls.index(('closed', first_platform)) < calls.index(('session', other))
+    assert ('closed', other) == calls[-1]
+    assert calls.count(('adb_resolve', 'mumu')) == calls.count(('frida', 'mumu')) == 1
+    assert not any(kind == 'error' for kind, _ in worker.events.queue)
+
+
+@pytest.mark.parametrize('code,explicit_retry,expected_attempts', [
+    ('native_permission_denied', False, 1),
+    ('native_root_required', False, 1),
+    ('native_unsupported_build', False, 1),
+    ('native_permission_denied', True, 2),
+    ('native_root_required', True, 2),
+    ('native_unsupported_build', True, 2),
+    ('native_unavailable', False, 2),
+])
+def test_native_permanent_connect_failures_wait_for_user_but_absence_recovers(
+        tmp_path, monkeypatch, code, explicit_retry, expected_attempts):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from collector import SampleUnavailable
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state)
+    config = ConnectionConfig(platform='native_pc', native_game_root='game')
+    clock, attempts, explicit = [0.0], [], []
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    class NativeCollector:
+        def __init__(self, root):
+            attempts.append(clock[0])
+            failed = len(attempts) == 1
+            self.diagnostics = ConnectionDiagnostics(
+                status=DetectionStatus.ERROR if failed else DetectionStatus.READY_UNIQUE,
+                platform='native_pc', code=code if failed else None)
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, _adb, _serial, *, collector, **kwargs):
+            self.collector = collector
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            if self.collector.diagnostics.code:
+                raise SampleUnavailable('typed native failure')
+        def read(self):
+            worker.stop.set()
+        def close(self):
+            pass
+    def wait(delay):
+        clock[0] += delay
+        if explicit_retry and not explicit and clock[0] >= 6:
+            explicit.append(True)
+            worker.request(config, False)  # Same path used by explicit Rescan.
+        if clock[0] >= 12:
+            worker.stop.set()
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    worker.request(config, False)
+    worker.run()
+    assert len(attempts) == expected_attempts
+    if len(attempts) == 2:
+        assert attempts[1] >= (6 if explicit_retry else 5)
+    assert worker.session is None
+
+
+def test_native_process_change_releases_old_handle_and_reconnects(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from collector import ProcessChanged
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    worker = CollectionWorker(DesktopState(tmp_path / 'state'))
+    calls = []
+    class NativeCollector:
+        diagnostics = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform='native_pc')
+        def __init__(self, root):
+            calls.append('open')
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, _adb, _serial, *, collector, **kwargs):
+            self.collector = collector
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            pass
+        def read(self):
+            if calls.count('open') == 1:
+                raise ProcessChanged('process creation identity changed')
+            worker.stop.set()
+        def close(self):
+            calls.append('close')
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(worker.stop, 'wait', lambda delay: None)
+    worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), False)
+    worker.run()
+    assert calls == ['open', 'close', 'open', 'close']
+
+
+@pytest.mark.parametrize('saved_platform,args,expected', [
+    ('mumu', ['--native-game-root', 'override-game'], 'native_pc'),
+    ('native_pc', [], 'native_pc'),
+    ('native_pc', ['--platform', 'mumu'], 'mumu'),
+    ('native_pc', ['--platform', 'mumu', '--native-game-root', 'override-game'], 'mumu'),
+])
+def test_worker_cli_source_overrides_are_effective_only(tmp_path, monkeypatch, saved_platform, args, expected):
+    import desktop_bridge
+    from connection import ConnectionConfig, ConnectionConfigStore
+    saved = ConnectionConfig(adb_path='saved-adb', serial='saved-serial', auto_detect=False,
+                             platform=saved_platform, native_game_root='saved-game')
+    ConnectionConfigStore(tmp_path / 'connection.json').save(saved)
+    captured = []
+    monkeypatch.setattr(sys, 'argv', ['desktop_bridge.py', '--offline', '--state-dir', str(tmp_path), *args])
+    monkeypatch.setattr(desktop_bridge, 'serve', lambda _input, _output, state, worker:
+                        captured.append((state.connection, state.effective_connection, worker)))
+    with monkeypatch.context() as context:
+        context.setattr(sys, 'stdout', io.StringIO())
+        desktop_bridge.main()
+    assert captured[0][0] == saved and captured[0][2] is None
+    effective = captured[0][1]
+    assert effective.platform == expected and effective.adb_path == 'saved-adb'
+    assert effective.native_game_root == ('override-game' if '--native-game-root' in args else 'saved-game')
+    assert ConnectionConfigStore(tmp_path / 'connection.json').load().config == saved
+
+
 @pytest.mark.parametrize('flag,args,needle', [
     ('--legacy-tk', [], '--legacy-tk'),
     ('--self-test', ['out'], 'verify_wpf'),

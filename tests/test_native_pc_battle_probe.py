@@ -24,6 +24,11 @@ class FakeApi:
         self.fail_open = False
         self.fail_read = False
         self.next_address = 0x200000000
+        self.created = 123456789
+        self.exited = 0
+        self.time_error = None
+        self.exit_error = None
+        self.exit_value = None
 
     def allocate(self, size=4096):
         result = self.next_address
@@ -47,6 +52,18 @@ class FakeApi:
 
     def image_path(self, handle):
         return self.path
+
+    def process_times(self, handle):
+        if self.time_error is not None:
+            raise battle.access.ApiFailure('GetProcessTimes', self.time_error)
+        return self.created, self.exited
+
+    def exit_code(self, handle):
+        if self.exit_error is not None:
+            raise battle.access.ApiFailure('GetExitCodeProcess', self.exit_error)
+        if self.exit_value is not None:
+            return self.exit_value
+        return 0 if self.exited else battle.access.STILL_ACTIVE
 
     def modules(self, handle):
         return [(self.module_path, self.base, 0x10000000)]
@@ -138,9 +155,14 @@ def runtime(monkeypatch, tmp_path):
 
 
 def test_stable_native_sample_preserves_raw_counter_sign_and_closes_handle(runtime):
-    root, api, _ = runtime
+    root, api, p = runtime
     with battle.NativePcBattleProbe(root, api) as probe:
+        assert probe.pid == 42
+        assert probe.process_instance == (42, api.created)
+        assert probe.battle_identity is None
         result = probe.sample()
+        assert probe.battle_identity == tuple(p[key] for key in (
+            'controller', 'native', 'logger', 'stats', 'level'))
         assert result['status'] == 'sample_available'
         sample = result['sample']
         assert {key: sample[key] for key in ('battle_serial', 'frame', 'game_time', 'battle_state',
@@ -158,6 +180,94 @@ def test_stable_native_sample_preserves_raw_counter_sign_and_closes_handle(runti
     assert probe.sample()['status'] == 'closed'
 
 
+@pytest.mark.parametrize('exit_code', [0, 1, 0xFFFFFFFF])
+def test_confirmed_exit_before_poll_performs_no_memory_reads(runtime, exit_code):
+    root, api, _ = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.reads.clear()
+        api.exit_value = exit_code
+        result = probe.sample()
+        assert result['status'] == 'process_exited'
+        assert result['reason'] == 'owned_process_exited'
+        assert api.reads == []
+        assert 'sample' not in result
+    assert api.opens == [(42, 0x1000), (42, 0x410)]
+
+
+@pytest.mark.parametrize('null_singleton', [False, True])
+def test_exit_during_acquisition_overrides_sample_or_confirmed_null(runtime, null_singleton):
+    root, api, p = runtime
+    if null_singleton:
+        api.put(p['singleton'], '<Q', 0)
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.on_read = lambda _address, _size: setattr(api, 'exit_value', 0)
+        result = probe.sample()
+    assert result['status'] == 'process_exited'
+    assert 'sample' not in result
+
+
+@pytest.mark.parametrize('query', ['creation', 'exit'])
+@pytest.mark.parametrize('during_read', [False, True])
+def test_lifetime_query_failure_never_fabricates_process_exit(runtime, query, during_read):
+    root, api, _ = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        def fail_query(*_args):
+            setattr(api, 'time_error' if query == 'creation' else 'exit_error', 5)
+        if during_read:
+            api.on_read = fail_query
+        else:
+            fail_query()
+        result = probe.sample()
+    assert result['status'] == 'read_failed'
+    assert result['diagnostic'] == {
+        'api': 'GetProcessTimes' if query == 'creation' else 'GetExitCodeProcess',
+        'win32_error': 5}
+    assert 'sample' not in result
+
+
+def test_reserved_exit_code_and_undefined_exit_time_do_not_confirm_departure(runtime):
+    root, api, _ = runtime
+    # Windows leaves GetProcessTimes.exitTime undefined while running. Even a
+    # positive value must be ignored when termination status is STILL_ACTIVE.
+    api.exited = 987654321
+    api.exit_value = battle.access.STILL_ACTIVE
+    with battle.NativePcBattleProbe(root, api) as probe:
+        assert probe.sample()['status'] == 'sample_available'
+        api.fail_read = True
+        assert probe.sample()['status'] == 'read_failed'
+
+
+@pytest.mark.parametrize('during_read', [False, True])
+def test_owned_process_creation_identity_is_checked_before_and_after(runtime, during_read):
+    root, api, _ = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        def change_identity(*_args):
+            api.created += 1
+        if during_read:
+            api.on_read = change_identity
+        else:
+            change_identity()
+        result = probe.sample()
+    assert result['status'] == 'process_changed'
+    assert result['reason'] == 'process_creation_time_changed'
+    assert 'sample' not in result
+
+
+def test_pid_reuse_between_discovery_and_owned_handle_never_reads_memory(runtime, monkeypatch):
+    root, api, _ = runtime
+    original_open = api.open_process
+    def open_reused(pid, rights):
+        handle = original_open(pid, rights)
+        if rights == battle.access.READ_ACCESS:
+            api.created += 1
+        return handle
+    monkeypatch.setattr(api, 'open_process', open_reused)
+    with pytest.raises(battle.ResearchFailure, match='process_creation_time_changed'):
+        battle.NativePcBattleProbe(root, api)
+    assert api.reads == []
+    assert api.closes == [0x1000, 0x410]
+
+
 def test_verbose_recorder_presence_exposes_only_the_boolean(runtime):
     root, api, p = runtime
     recorder = api.allocate()
@@ -168,10 +278,27 @@ def test_verbose_recorder_presence_exposes_only_the_boolean(runtime):
     assert str(recorder) not in repr(result)
 
 
-def test_unsupported_build_never_discovers_or_opens_a_process(monkeypatch, tmp_path):
+def test_unsupported_build_closes_query_handles_before_any_module_or_memory_read(monkeypatch, tmp_path):
     monkeypatch.setattr(battle.access, 'verify_build', lambda root: ({'known_build': False}, None))
+    api = FakeApi(tmp_path)
+    def forbidden_modules(_handle):
+        pytest.fail('unsupported build must not query modules')
+    monkeypatch.setattr(api, 'modules', forbidden_modules)
     with pytest.raises(battle.ResearchFailure, match='build_fingerprint_mismatch'):
-        battle.NativePcBattleProbe(tmp_path, object())
+        battle.NativePcBattleProbe(tmp_path, api)
+    assert api.reads == []
+    assert api.closes == [0x1000, 0x410]
+
+
+def test_no_matching_process_reconnect_avoids_expensive_build_hashes(monkeypatch, tmp_path):
+    api = FakeApi(tmp_path)
+    monkeypatch.setattr(api, 'named_processes', lambda: [])
+    def forbidden_hashes(_root):
+        pytest.fail('absent process must not repeatedly hash game files')
+    monkeypatch.setattr(battle.access, 'verify_build', forbidden_hashes)
+    with pytest.raises(battle.ResearchFailure, match='process_not_unique'):
+        battle.NativePcBattleProbe(tmp_path, api)
+    assert api.opens == api.reads == []
 
 
 def test_denial_and_module_mismatch_do_not_read_game_memory(runtime):
@@ -211,6 +338,46 @@ def test_null_roots_wait_without_fabricating_aggregate_zero(runtime, missing):
         result = probe.sample()
     assert result['status'] in ('waiting_game_init', 'waiting_for_battle', 'battle_not_ready')
     assert 'sample' not in result
+
+
+@pytest.mark.parametrize('change', ['class', 'parent', 'singleton_storage', 'clock_storage', 'battle'])
+def test_null_singleton_must_keep_the_whole_binding_stable(runtime, change):
+    root, api, p = runtime
+    api.put(p['singleton'], '<Q', 0)
+    class_reads = 0
+    def rebind(address, _size):
+        nonlocal class_reads
+        if address != api.base + battle.BATTLE_CLASS_SLOT_RVA:
+            return
+        class_reads += 1
+        if class_reads == 2:
+            changes = {
+                'class': (api.base + battle.BATTLE_CLASS_SLOT_RVA, '<Q', 0),
+                'parent': (p['klass'] + battle.CLASS_PARENT, '<Q', api.allocate()),
+                'singleton_storage': (p['parent'] + battle.CLASS_STATICS, '<Q', api.allocate()),
+                'clock_storage': (p['klass'] + battle.CLASS_STATICS, '<Q', api.allocate()),
+                'battle': (p['singleton'], '<Q', p['controller']),
+            }
+            api.put(*changes[change])
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.on_read = rebind
+        result = probe.sample()
+    assert result['status'] == 'sample_retry'
+    assert result['reason'] == 'frame_or_lifecycle_changed'
+    assert 'sample' not in result
+
+
+def test_confirmed_null_clears_only_the_in_process_battle_identity(runtime):
+    root, api, p = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        assert probe.sample()['status'] == 'sample_available'
+        assert probe.battle_identity is not None
+        api.put(p['singleton'], '<Q', 0)
+        result = probe.sample()
+        assert probe.battle_identity is None
+    assert result['status'] == 'waiting_for_battle'
+    assert result['reason'] == 'singleton_is_null'
+    assert 'battle_identity' not in result
 
 
 def test_unresolved_class_usage_uses_only_the_checked_definition_table(runtime):

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from collector import DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from collection_session import DEFAULT_FRIDA_REMOTE
+from connection import ConnectionConfigStore
 
 WPF_LAUNCH = 'python app.py（或 start.cmd）启动 WPF'
 WPF_ACCEPTANCE = 'python acceptance/verify_wpf.py'
@@ -67,6 +68,10 @@ def parser_for():
                         help='override the saved adb path for this launch')
     parser.add_argument('--serial', default=None,
                         help='override the saved instance address for this launch')
+    parser.add_argument('--platform', choices=('mumu', 'native_pc'),
+                        help='select the game platform for this launch')
+    parser.add_argument('--native-game-root',
+                        help='set the directory containing the official PC client Arknights.exe')
     parser.add_argument('--capture-seconds', type=float, default=0)
     events = parser.add_mutually_exclusive_group()
     events.add_argument('--frida-remote', default=None,
@@ -112,15 +117,26 @@ def main():
         # saved event-observation default; this entry never opens a window.
         from desktop_launcher import launch
         return launch(args)
-    if args.frida_remote is None:
+    saved = ConnectionConfigStore(ROOT / 'runtime' / 'connection.json').load().config
+    args.platform = args.platform or ('native_pc' if args.native_game_root else saved.platform)
+    if args.platform == 'native_pc':
+        args.native_game_root = args.native_game_root or saved.native_game_root
+        if not args.native_game_root:
+            parser.error('官服 PC 采集需要 --native-game-root，或已保存的游戏目录')
+        if args.require_events or args.frida_remote:
+            parser.error('官服 PC 当前仅支持累计采集；逐事件参数只支持 MuMu')
+        args.frida_remote = None
+        args.adb, args.serial = None, None
+    elif args.frida_remote is None:
         # Headless capture has no settings window; keep the documented default.
         args.frida_remote = DEFAULT_FRIDA_REMOTE
     elif args.frida_remote == '':
         args.frida_remote = None
     if args.require_events and not args.frida_remote:
         parser.error('--require-events cannot be combined with --no-events')
-    args.adb = args.adb or DEFAULT_ADB
-    args.serial = args.serial or DEFAULT_SERIAL
+    if args.platform == 'mumu':
+        args.adb = args.adb or DEFAULT_ADB
+        args.serial = args.serial or DEFAULT_SERIAL
     (ROOT / 'runtime').mkdir(exist_ok=True)
     # One owner for the device channel. A second launch cannot tear it down.
     instance_lock = socket.socket()
@@ -130,11 +146,20 @@ def main():
     except OSError:
         instance_lock.close()
         raise SystemExit('统计窗已在运行，请先关闭后进行命令行采集')
-    log = (ROOT / 'runtime' / f'app-{timestamp():%Y%m%d-%H%M%S}.log').open(
-        'a', encoding='utf-8', buffering=1)
-    sys.stdout = sys.stderr = log
     from capture_cli import run_capture
-    run_capture(args)
+    if args.platform == 'native_pc':
+        try:
+            run_capture(args)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        finally:
+            instance_lock.close()
+    else:
+        log = (ROOT / 'runtime' / f'app-{timestamp():%Y%m%d-%H%M%S}.log').open(
+            'a', encoding='utf-8', buffering=1)
+        sys.stdout = sys.stderr = log
+        run_capture(args)
     return None
 
 
