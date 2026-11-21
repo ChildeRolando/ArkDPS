@@ -98,10 +98,11 @@ def decode_character(key, summary, type_head, types, names):
 
 
 class Collector:
-    def __init__(self, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL, log=print):
+    def __init__(self, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL, log=print, *, state_dir=None):
         self.log = log
+        runtime = Path(state_dir) if state_dir is not None else ROOT / 'runtime'
         self.core = EnemyReader(adb_path=adb, adb_serial=serial,
-            cache_file=str(ROOT / 'runtime' / 'unused.pkl'), log=log)
+            cache_file=str(runtime / 'unused.pkl'), log=log)
         self.forward_registry = ForwardRegistry()
         self.core.mc.forward_registry = self.forward_registry
         self.core.shared_channel = True
@@ -109,7 +110,7 @@ class Collector:
         # Dedicated port: do not share the upstream app's stream.
         self.names = load_character_names()
         self.last_pid_check = 0.0
-        self.cache_path = ROOT / 'runtime' / 'address_hint.json'
+        self.cache_path = runtime / 'address_hint.json'
         self._roster_reader = None
         self._lifecycle_reader = None
         self._lifecycle_maps_refresh_at = float('-inf')

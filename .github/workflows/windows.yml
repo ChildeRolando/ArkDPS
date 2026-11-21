@@ -39,6 +39,16 @@ jobs:
         run: |
           $zip = (Get-ChildItem runtime/ci-build/*.zip | Select-Object -First 1).FullName
           python acceptance/verify_wpf_package.py $zip --output runtime/package-validation
+      - name: Verify native hot update and rollback between portable packages
+        shell: pwsh
+        run: |
+          $base = Get-ChildItem runtime/ci-build/*.zip
+          $pythonZip = (Get-ChildItem runtime/ci-build/inputs-*/python.zip).FullName
+          $fridaWheel = (Get-ChildItem runtime/ci-build/inputs-*/frida-*.whl).FullName
+          python tools/package_windows.py --output runtime/ci-update-target --version 999.0.0 --python-zip $pythonZip --frida-wheel $fridaWheel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $target = Get-ChildItem runtime/ci-update-target/*.zip
+          python acceptance/verify_hot_update.py $base.FullName $target.FullName --output runtime/update-validation
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -49,4 +59,8 @@ jobs:
             runtime/ci-build/ArkDPS-win-x64-*/metadata/release.json
             runtime/wpf-source/
             runtime/package-validation/
+            runtime/update-validation/receipt.json
+            runtime/update-validation/*/process-*.json
+            runtime/update-validation/*/process-*.json.interrupted
+            runtime/update-validation/*/package/ArkDPS/collector/runtime/wpf-update.log
           if-no-files-found: warn

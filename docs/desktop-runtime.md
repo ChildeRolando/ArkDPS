@@ -59,7 +59,7 @@ python tools/package_windows.py --output runtime/packages
 
 Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新的隔离目录；ZIP 拒绝路径穿越/符号链接/超大展开。Python `._pth` 仅白名单包内目录，不读系统 Python、用户 site-packages 或 `PYTHONPATH`。没有全局 pip install。
 
-`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本；两端不一致明确拒绝。升级时解压新版到新目录，退出旧版后复制 `collector/runtime` 中的用户配置和历史。运行目录必须可写。
+`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本。支持应用内更新的标准便携版将校验完成的完整程序保存于 `.arkdps-update/versions/`。用户确认重启后，旧版先退出采集器并保存设置，原启动入口切换到新版 WPF 及与它匹配的 worker。两个版本共用原启动目录的 `collector/runtime/`。首次从旧版迁移时可通过手动解压并复制该目录保留设置和战绩。便携包需要解压到可写目录。
 
 ## 可复核验收
 

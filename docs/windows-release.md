@@ -8,13 +8,13 @@
 
 Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](https://github.com/ChildeRolando/ArkDPS/releases)。
 
-便携包的清单位于 `metadata/release.json`。清单记录发行版本、源提交 `head`、载荷文件的逐文件 SHA-256、协议和运行时版本。复核时记录源提交、ZIP 摘要、命令、原始日志和截图。
+便携包的清单位于 `metadata/release.json`。清单记录发行版本、源提交 `head`、载荷文件的逐文件 SHA-256、协议和运行时版本。启用应用内更新的标准包还包含 `update_protocol: 1`。复核时记录源提交、ZIP 摘要、命令、原始日志和截图。
 
 ## 下载与更新
 
 适配环境、解压与启动步骤见 [README](../README.md#下载与启动)。可用 `Get-FileHash <zip> -Algorithm SHA256` 对比随包发布的 `.zip.sha256` 文件。验证未发布的候选时，从对应提交的 CI 运行下载 `windows-wpf-candidate-<sha>`。
 
-从 Releases 下载的便携版在设置页提供「检查更新」。启动后会在后台检查一次，发现新版时可点击「查看下载」打开对应的 GitHub Release。
+支持应用内更新的标准便携版启动后会在后台检查并下载新版，设置页也提供「检查更新」。下载完成后，用户可点击「重启并更新」确认切换。下载使用 GitHub Release 的完整 Windows x64 ZIP，先按 GitHub API 提供的 SHA-256 校验 ZIP，再按包内清单校验解包后的文件。稳定版只接收稳定版本，预发行版可接收更新的预发行版或稳定版。手动下载入口仍指向对应的 GitHub Release。
 
 ### 观察者
 
@@ -24,10 +24,9 @@ Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](http
 
 ### 升级与回退
 
-退出旧程序并备份 `collector/runtime/`；把新 ZIP 解压到新目录，复制备份的 `collector/runtime/` 后启动。
-只迁移数据，不混用两版 worker；保留原备份可回退。布局与连接格式迁移由现有 store 处理，
-损坏/未来版本诊断见[设置与布局](settings-and-layout.md)。游戏升级到非 2.7.91 时拒绝实时统计，
-诊断说明实际/期望版本；仍可浏览已有历史。
+应用内更新沿用原来的 `ArkDPS.Desktop.exe` 启动入口。新版本使用独立的程序目录，继续读写原目录的 `collector/runtime/`。新版本启动校验失败时，程序恢复至上一个可用版本。
+
+首次从旧版迁移或需要手动更新时，退出旧程序并备份 `collector/runtime/`。把新 ZIP 解压到新目录，复制备份的整个 `collector/runtime/` 后启动。需要手动回退时可重新启动保留的旧目录。布局与连接格式迁移由现有 store 处理，损坏或未来版本的诊断见[设置与布局](settings-and-layout.md)。游戏升级到非 2.7.91 时拒绝实时统计，仍可浏览已有历史。
 
 ## 构建候选
 
@@ -65,14 +64,16 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 `verify_wpf_package.py` 在新目录验证清洁解压、载荷摘要、使用包内 Python/.NET 运行、v1 → WPF v3 布局迁移和 WPF 重启恢复。
 WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 
+`verify_hot_update.py <当前ZIP> <新版ZIP> --output <目录>` 使用两个实际构建的标准便携包。在模拟 GitHub 响应下验证正常更新、经原入口再次启动、新版启动失败或旧版退出失败时回退、切换中断后仍启动旧版，以及拒绝摘要不匹配的 ZIP。检查包括运行版本、worker 握手、设置与战绩、原程序文件和新版载荷摘要。CI 中两份 ZIP 均由打包器从已提交的工作区构建，第二份使用更高的验收版本号。
+
 **这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确
 `NOT VERIFIED`。混合 DPI 与实机项仍以独立验收为准，不得把离线回执当作实机通过证据。
 
 ## CI
 
 `.github/workflows/windows.yml` 在 Windows runner 上：安装固定依赖 → `tools/prepare_windows_ci.py` 设定隔离桌面 →
-全量 pytest → 构建 WPF → `tools/package_windows.py` 产出唯一候选 ZIP → `verify_wpf.py` → `verify_wpf_package.py` →
-上传私有候选 artifact。CI 不再构建 `ArkDPS.exe`，也不再运行 `--self-test` 等 Tk 路径。
+全量 pytest → 构建 WPF → 生成便携候选 ZIP → `verify_wpf.py` → `verify_wpf_package.py` →
+用第二份仅供验收的 ZIP 运行 `verify_hot_update.py` → 上传私有候选 artifact。第二份 ZIP 留在 CI 工作目录，候选 artifact 只包含正式候选 ZIP 及验收回执。
 
 ## 许可与分发边界
 

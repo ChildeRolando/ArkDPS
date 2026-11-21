@@ -1064,13 +1064,11 @@ def test_worker_preserves_final_audit_failure_after_collection_close_retry(tmp_p
                for error in worker.retired_errors)
 
 
-def test_worker_startup_setup_error_is_reported(tmp_path, monkeypatch):
-    import desktop_bridge
-
-    blocked_root = tmp_path / 'not-a-directory'
-    blocked_root.write_text('file blocks runtime directory', encoding='utf-8')
-    monkeypatch.setattr(desktop_bridge, 'ROOT', blocked_root)
-    worker = CollectionWorker(DesktopState(tmp_path/'state'))
+def test_worker_startup_setup_error_is_reported(tmp_path):
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    (state_dir / 'captures').write_text('file blocks capture directory', encoding='utf-8')
+    worker = CollectionWorker(DesktopState(state_dir))
     worker.run()
     kind, error = worker.events.get_nowait()
     assert kind == 'error' and error
@@ -1286,7 +1284,7 @@ def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_pa
                 assert 'observer detached' in snapshot['event_text']
             observer_states.append((snapshot['status'], snapshot['observer_status']))
     assert observer_states[:3] == [('waiting', 'ready'), ('waiting', 'failed'), ('waiting', 'ready')]
-    path, = (tmp_path/'runtime'/'captures').glob('wpf-*.jsonl')
+    path, = (tmp_path/'state'/'captures').glob('wpf-*.jsonl')
     journal = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
     assert [item['data']['duration_ms'] for item in journal if item['kind'] == 'frida_keepalive'] == [0, 0, 0, 0]
     retries = [item['data'] for item in journal if item['kind'] == 'capture_retry']
@@ -1340,7 +1338,7 @@ def test_worker_retries_final_cleanup_before_closing_audit_stream(tmp_path, monk
     worker.run()
 
     assert worker.session is None and worker.cleanup_error == ''
-    audit_path = next((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    audit_path = next((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
     events = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
     assert events == [
         {'kind': 'cleanup_attempt', 'data': {'attempt': 1}},
@@ -1398,7 +1396,7 @@ def test_worker_retains_and_reports_session_after_final_cleanup_retries_fail(tmp
     assert 'persistent cleanup failure' in worker.cleanup_error
     with pytest.raises(RuntimeError, match='persistent cleanup failure'):
         worker.close()
-    audit_path = next((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    audit_path = next((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
     assert len(audit_path.read_text('utf-8').splitlines()) == 2
 
 
@@ -1454,7 +1452,7 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
         assert worker.cleanup_error == ''
         assert worker.session is None
 
-    paths = list((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    paths = list((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
     assert len(paths) == 2
     assert len({path.name for path in paths}) == 2
     for audit_path in paths:
@@ -1477,6 +1475,25 @@ def test_quit_ack_is_after_collector_cleanup(tmp_path):
             return super().write(data)
     serve(io.StringIO('{"version":1,"op":"hello"}\n{"version":1,"op":"quit"}\n'), Output(), DesktopState(tmp_path), Worker())
     assert order == ['close']
+
+
+def test_update_quit_rejects_pending_history_after_cleanup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+
+    state = DesktopState(tmp_path / 'state')
+    runtime = SimpleNamespace(pending_history=[object()])
+    monkeypatch.setattr(desktop_bridge, 'BattleRuntime', lambda: runtime)
+    worker = CollectionWorker(state)
+    worker.stop.set()
+    worker.thread.start()
+    output = io.StringIO()
+    serve(io.StringIO('{"version":1,"op":"hello"}\n'
+                      '{"version":1,"op":"quit","require_history_saved":true}\n'
+                      '{"version":1,"op":"quit"}\n'), output, state, worker)
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [reply['kind'] for reply in replies] == ['hello', 'error', 'bye']
+    assert '1 局战绩尚未保存' in replies[1]['error']
 
 
 def test_default_app_entry_routes_to_wpf_not_tk(monkeypatch):
@@ -1588,9 +1605,10 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
 
     class Session:
         cleanup_errors = {}
-        def __init__(self, *_args, audit=None, on_history=None, **_kwargs):
+        def __init__(self, *_args, audit=None, on_history=None, state_dir=None, **_kwargs):
             self.audit = audit
             self.on_history = on_history
+            self.state_dir = state_dir
             self.collector = SimpleNamespace(diagnostics=diagnostics)
             self.runtime = None
             sessions.append(self)
@@ -1608,6 +1626,7 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
     worker.thread.start()
     worker.thread.join()
     assert len(sessions) == 1
+    assert sessions[0].state_dir == tmp_path / 'state'
     sessions[0].on_history()
     events = []
     while True:

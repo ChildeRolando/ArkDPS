@@ -21,7 +21,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from release_identity import candidate_head
-DEFAULT_VERSION = '1.0.0-rc.8'
+DEFAULT_VERSION = '1.0.0-rc.9'
+UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
 PYTHON_URL = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip'
@@ -132,15 +133,19 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     # Python LICENSE.txt and Frida dist-info/licenses/COPYING stay in their archives.
     metadata = bundle / 'metadata'
     metadata.mkdir()
+    update_instructions = (
+        '程序启动后会在后台检查并下载更新。也可从设置页手动检查。\n'
+        '下载完成后，在设置页选择「重启并更新」。软件会保留设置和战绩。\n\n'
+    ) if with_events else ''
     (bundle / 'README.txt').write_text(
         f'ArkDPS {version} · Windows x64\n\n'
         '解压到可写目录，双击 ArkDPS.Desktop.exe。无需安装 Python 或 .NET。\n'
         '实时统计需要开启 Root 的 MuMu 12 和已适配的安卓游戏 2.7.91。\n'
         '包内不含 ADB、模拟器或 Frida server。\n\n'
-        '更新可在设置页检查。发现新版后点击「查看下载」打开 GitHub Release。\n'
-        '升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
+        f'{update_instructions}'
+        '首次从旧版迁移或需要手动升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
         '如果旧版有 collector/runtime，将整个 runtime 目录复制到新版的 collector 后再启动。\n'
-        '保留旧目录。需要回退时，先退出新版，再启动旧目录中的程序。\n',
+        '保留旧目录与备份。需要手动回退时，先退出新版，再启动旧目录中的程序。\n',
         encoding='utf-8-sig')
     if {entry.name for entry in bundle.iterdir()} != PACKAGE_ROOT:
         raise RuntimeError('Unexpected files in portable package root')
@@ -151,6 +156,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         python_source=PYTHON_URL, python_archive_sha256=PYTHON_SHA256,
         frida=FRIDA_VERSION if with_events else None, frida_wheel_sha256=FRIDA_SHA256 if with_events else None,
         files={str(p.relative_to(bundle)).replace('\\','/'):digest(p) for p in sorted(bundle.rglob('*')) if p.is_file()})
+    if with_events:
+        manifest['update_protocol'] = UPDATE_PROTOCOL
     assert_no_tk_files(manifest['files'])
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
