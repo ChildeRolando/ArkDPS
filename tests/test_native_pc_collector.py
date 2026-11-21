@@ -421,7 +421,10 @@ def test_enemy_snapshot_retains_its_frame_and_clears_at_battle_boundary(tmp_path
                           inited=True, borned=True, is_disappeared=False,
                           native_object_present=True, hp=731.4, hp_status='available')],
     })
-    probe = Probe([first, sample(60, 150.), sample(90, 200.), ABSENT, sample(3, 0.)])
+    recovered = sample(120, 250.)
+    recovered['sample'].update(enemies_status='available', enemies=deepcopy(first['sample']['enemies']))
+    recovered['sample']['enemies']['entities'][0]['hp'] = 300.
+    probe = Probe([first, sample(60, 150.), sample(90, 200.), recovered, ABSENT, sample(3, 0.)])
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
     session = CollectionSession(None, None, collector=collector, frida_remote=None)
     session.enable_lifecycle()
@@ -442,6 +445,13 @@ def test_enemy_snapshot_retains_its_frame_and_clears_at_battle_boundary(tmp_path
     now = 13.
     expired = session.read()['enemy']
     assert not expired['ready'] and expired['error'] == 'enemy_sample_stale'
+    now = 13.2
+    resumed = session.read()['enemy']
+    assert resumed['status'] == 'ready' and resumed['observed_frame'] == 120
+    assert resumed['series'] == [
+        dict(game_time=1., remaining_hp=731.4, remaining_hp_complete=True),
+        dict(game_time=4., remaining_hp=300., remaining_hp_complete=True, break_before=True),
+    ]
     with pytest.raises(CaptureRetry):
         session.read()
     next_battle = session.read()

@@ -322,6 +322,7 @@ class NativePcCollector:
         observed, enemy_frame, enemy_time, raw = saved
         if (frame is None or game_time is None or frame < enemy_frame or game_time < enemy_time
                 or time.monotonic() - observed > ENEMY_MAX_AGE):
+            self._enemy_observations.note_gap()
             return self._with_stage_plan(native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
                                          frame=enemy_frame, game_time=enemy_time, catalog={}), frame)
         if self._enemy_catalog is None and raw.get('enemies_status') == 'available':

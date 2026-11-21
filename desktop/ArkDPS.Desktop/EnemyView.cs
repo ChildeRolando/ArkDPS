@@ -622,21 +622,28 @@ public partial class MainWindow
             enemyGapStart=null;
         }
         enemyGaps.RemoveAll(gap=>gap.End<samples[0].Number("game_time"));
+        EnemyChart.SetData(ProjectEnemyPoints(samples,enemyGaps));
+    }
+
+    internal static IReadOnlyList<EnemyPoint> ProjectEnemyPoints(JsonElement[] samples,
+        IReadOnlyList<(double Start,double End)> gaps)
+    {
         var next=new List<EnemyPoint>(samples.Length);
         foreach(var sample in samples)
         {
             double time=sample.Number("game_time");
-            if(enemyGaps.Any(gap=>time>gap.Start && time<gap.End)) continue;
+            if(gaps.Any(gap=>time>gap.Start && time<gap.End)) continue;
             bool totalComplete=EnemyComplete(sample,"total_hp_complete");
             bool remainingComplete=EnemyComplete(sample,"remaining_hp_complete");
             bool damageComplete=sample.Get("our_damage_complete").ValueKind!=JsonValueKind.False;
-            bool breaks=next.Count>0 && enemyGaps.Any(gap=>next[^1].GameTime<=gap.Start && time>=gap.End);
+            bool breaks=next.Count>0 && (sample.Bool("break_before") ||
+                gaps.Any(gap=>next[^1].GameTime<=gap.Start && time>=gap.End));
             next.Add(new EnemyPoint(time,EnemyNumber(sample,"entered_total_hp",totalComplete),totalComplete,
                 EnemyNumber(sample,"remaining_hp",remainingComplete),remainingComplete,
                 sample.Bool("our_damage_known") ? EnemyNumber(sample,"our_effective_damage",damageComplete) : null,
                 damageComplete,breaks));
         }
-        EnemyChart.SetData(next);
+        return next;
     }
 
     private static bool EnemyComplete(JsonElement data,string key) =>

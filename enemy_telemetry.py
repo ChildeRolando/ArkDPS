@@ -126,16 +126,25 @@ class NativeEnemyObservations:
         self.series = deque(maxlen=MAX_SERIES_POINTS)
         self.view = None
         self.truncated = False
+        self._series_gap = False
+
+    def note_gap(self):
+        if self.series:
+            self._series_gap = True
 
     def observe(self, raw, *, frame, game_time, catalog):
         view = native_enemy_view(raw, frame=frame, game_time=game_time, catalog=catalog)
         if not view['ready']:
+            self.note_gap()
             return view
         if self.view is not None:
             if frame < self.view['observed_frame'] or game_time < self.view['observed_game_time']:
+                self.note_gap()
                 return native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
                                          frame=frame, game_time=game_time, catalog={})
             if frame == self.view['observed_frame']:
+                if game_time == self.view['observed_game_time']:
+                    self._series_gap = False
                 return self.view
 
         entities = raw['enemies']['entities']
@@ -182,9 +191,14 @@ class NativeEnemyObservations:
                       remaining_hp_complete=remaining_complete)
         point = dict(game_time=game_time, remaining_hp=remaining_hp, remaining_hp_complete=remaining_complete)
         if self.series and self.series[-1]['game_time'] == game_time:
+            if self.series[-1].get('break_before'):
+                point['break_before'] = True
             self.series[-1] = point
         else:
+            if self._series_gap:
+                point['break_before'] = True
             self.series.append(point)
+        self._series_gap = False
         rows = sorted(self.rows.values(), key=lambda row: (
             row['lifecycle'] != 'current', int(row['instance_uid'])))
         self.view = dict(view, rows=rows, totals=totals, series=list(self.series),

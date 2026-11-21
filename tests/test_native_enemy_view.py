@@ -212,6 +212,29 @@ def test_current_hp_total_distinguishes_partial_sum_verified_zero_and_missing_sa
     assert empty['series'][-1]['remaining_hp'] == 0
     assert empty['series'][-1]['remaining_hp_complete'] is True
     assert not empty['totals']['total_hp_complete']
+    assert empty['series'][-1]['break_before'] is True
+
+
+def test_enemy_gap_survives_repeated_recovery_points_without_inventing_a_pause_gap():
+    tracker = NativeEnemyObservations()
+
+    def publish(frame, game_time):
+        return tracker.observe(snapshot(entity()), frame=frame, game_time=game_time, catalog={})
+
+    publish(30, 1)
+    tracker.note_gap()
+    assert not publish(30, 1)['series'][-1].get('break_before')
+    assert not publish(60, 2)['series'][-1].get('break_before')
+
+    tracker.note_gap()
+    assert publish(90, 3)['series'][-1]['break_before'] is True
+    assert publish(90, 3)['series'][-1]['break_before'] is True
+    assert publish(91, 3)['series'][-1]['break_before'] is True
+    assert not publish(120, 4)['series'][-1].get('break_before')
+
+    tracker.note_gap()
+    tracker.reset()
+    assert not publish(30, 1)['series'][-1].get('break_before')
 
 
 def test_native_history_retains_current_instances_when_history_is_capped(monkeypatch):

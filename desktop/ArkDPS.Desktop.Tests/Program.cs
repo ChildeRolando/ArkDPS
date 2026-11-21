@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Linq;
 using System.Text.Json;
 using ArkDPS.Desktop;
 
@@ -124,5 +125,19 @@ internal static class Program
         HudStatusNoticeTests.Run();
         ScreenshotCategoryTests.Run();
         HistorySourceLabelTests.Run();
+        using var recovery = JsonDocument.Parse("""
+            [{"game_time":11,"remaining_hp":900,"remaining_hp_complete":true},
+             {"game_time":17,"remaining_hp":500,"remaining_hp_complete":true,"break_before":true},
+             {"game_time":18,"remaining_hp":200,"remaining_hp_complete":true}]
+            """);
+        var samples = recovery.RootElement.EnumerateArray().ToArray();
+        var points = MainWindow.ProjectEnemyPoints(samples, Array.Empty<(double, double)>());
+        Check("the producer gap is visible even without an unavailable UI reply",
+            !points[0].BreakBefore && points[1].BreakBefore && !points[2].BreakBefore);
+        Check("gap keeps the observed HP values", points[0].RemainingHp == 900 && points[1].RemainingHp == 500);
+        var legacyPoints = MainWindow.ProjectEnemyPoints(samples, new[] { (11d, 18d) });
+        Check("the UI fallback still skips old points inside a gap",
+            legacyPoints.Count == 2 && legacyPoints[1].BreakBefore);
+        Console.WriteLine("PASS_ENEMY_CHART_GAPS 3 assertions (projection only; no windows/input)");
     }
 }
