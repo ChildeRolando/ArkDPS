@@ -18,6 +18,20 @@ class BarrierBusy(StreamGap):
     """Valid producer marks surround a changing frame; retry without draining."""
 
 
+def validate_event_binding(sample, *payloads):
+    """Bind native marks and batches to the collector's build and battle session."""
+    metadata = sample.get('battle_metadata') if isinstance(sample, dict) else None
+    if not isinstance(metadata, dict) or metadata.get('platform') != 'native_pc':
+        return
+    session = sample.get('native_session', sample.get('session'))
+    build = metadata.get('source_build')
+    if not isinstance(session, str) or not session or not isinstance(build, str) or not build:
+        raise StreamGap('missing native PC battle or build identity')
+    if any(not isinstance(payload, dict) or payload.get('native_session') != session
+           or payload.get('source_build') != build for payload in payloads):
+        raise StreamGap('observer data belongs to a different or unverified native PC battle or build')
+
+
 def baseline_barrier(before, sample, after):
     """Validate two producer marks surrounding one frame-guarded baseline.
 
@@ -25,6 +39,8 @@ def baseline_barrier(before, sample, after):
     track callbacks until return, and return marks in the same serialization
     domain as those callbacks. Equal sequence alone does not prove quiescence.
     """
+    validate_event_binding(sample, before, after)
+
     def valid_integer(value):
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 

@@ -16,7 +16,7 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_stream import StreamGap, BarrierBusy, baseline_barrier
+from event_stream import StreamGap, BarrierBusy, baseline_barrier, validate_event_binding
 from panel_model import team_status
 
 
@@ -53,6 +53,19 @@ def _terminal_boundary(observer):
         return None
     boundary = mark.get('terminal_boundary')
     return {'terminal_boundary': boundary} if isinstance(boundary, dict) else None
+
+
+def _observer_mark(observer):
+    mark = observer.mark()
+    if not isinstance(mark, dict):
+        raise StreamGap('invalid observer mark')
+    if mark.get('error'):
+        raise StreamGap(f"observer callback error: {mark['error']}")
+    if mark.get('stopped'):
+        raise StreamGap('observer stopped')
+    if mark.get('retry'):
+        raise CaptureRetry('observer clock advanced')
+    return mark
 
 
 class BattleFeed:
@@ -111,13 +124,7 @@ class BattleFeed:
         mark = None
         if observer is not None:
             try:
-                mark = observer.mark()
-                if mark.get('error'):
-                    raise StreamGap(f"observer callback error: {mark['error']}")
-                if mark.get('stopped'):
-                    raise StreamGap('observer stopped')
-                if mark.get('retry'):
-                    raise CaptureRetry('observer clock advanced')
+                mark = _observer_mark(observer)
             except (CaptureRetry, ObserverReadRetry) as exc:
                 raise CaptureRetry(str(exc)) from exc
             except Exception as exc:
@@ -148,9 +155,25 @@ class BattleFeed:
                 events = {'error': str(exc)}
         return sample, roster, events
 
-    def _read_pair(self, collector, before, observer=None):
+    @staticmethod
+    def _guarded_events(observer, opening, sample):
+        mark, opening_error = opening
+        if isinstance(opening_error, (CaptureRetry, ObserverReadRetry)):
+            raise CaptureRetry(str(opening_error)) from opening_error
+        if opening_error is not None:
+            return {'error': str(opening_error)}
+        try:
+            end_mark = _observer_mark(observer)
+            sequence = baseline_barrier(mark, sample, end_mark)
+            return dict(before=mark, after=end_mark, sequence=sequence)
+        except (BarrierBusy, CaptureRetry, ObserverReadRetry) as exc:
+            raise CaptureRetry(str(exc)) from exc
+        except Exception as exc:
+            return {'error': str(exc)}
+
+    def _read_pair(self, collector, before, observer=None, opening=None):
         guarded_pair = getattr(collector, 'read_guarded_pair', None)
-        if guarded_pair is not None and observer is None:
+        if guarded_pair is not None:
             sample, roster = guarded_pair(before)
             after, events = before, None
         else:
@@ -179,13 +202,20 @@ class BattleFeed:
         now = sample['game_time']
         if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
             raise FrameMismatch('游戏时间无效')
+        if opening is not None and observer is not None:
+            events = self._guarded_events(observer, opening, sample)
         return sample, roster, events
 
     @staticmethod
-    def _drain(observer, evidence):
+    def _drain(observer, evidence, sample):
         if evidence is not None and 'error' not in evidence:
             try:
+                if ((sample.get('battle_metadata') or {}).get('platform') == 'native_pc'
+                        and not (callable(getattr(observer, 'read_through', None))
+                                 and callable(getattr(observer, 'commit_events', None)))):
+                    raise StreamGap('native PC observer must support bounded reads and commit acknowledgements')
                 evidence['drain'] = read_event_batch(observer, evidence['sequence'])
+                validate_event_binding(sample, evidence['drain'])
             except CaptureRetry:
                 raise
             except Exception as exc:
@@ -201,6 +231,14 @@ class BattleFeed:
         battle. No polling timeout, empty unit list or transport error does.
         """
         self.current_lifecycle = None
+        opening = None
+        if getattr(collector, 'read_guarded_pair', None) is not None and observer is not None:
+            # The native backend captures the pair in read_lifecycle(). A mark
+            # taken while retrieving its cached result would be too late.
+            try:
+                opening = (_observer_mark(observer), None)
+            except Exception as exc:
+                opening = (None, exc)
         before = collector.read_lifecycle()
         self.current_lifecycle = before
         metadata = before.get('metadata') or {}
@@ -230,14 +268,14 @@ class BattleFeed:
                 from tools.stage_global_state.memory import ReadFailure
                 try:
                     sample, roster, events = self._read_pair(
-                        collector, before, observer if not self.terminal else None)
+                        collector, before, observer if not self.terminal else None, opening)
                 except ProcessChanged:
                     raise
                 except (SampleUnavailable, RosterUnavailable, AdapterError, ReadFailure):
                     self.current_lifecycle = before
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
-                    events = self._drain(observer, events)
+                    events = self._drain(observer, events, sample)
                     sample['native_session'] = sample['session']
                     sample['session'] = f'{self.id}:{self.generation}'
                     self.terminal = True
@@ -255,7 +293,7 @@ class BattleFeed:
                 return observation
             return self.gap('scene_transition')
         try:
-            sample, roster, events = self._read_pair(collector, before, observer)
+            sample, roster, events = self._read_pair(collector, before, observer, opening)
         except FrameMismatch:
             after = self.current_lifecycle
             exit_metadata = (after.get('metadata') or {}) if after else {}
@@ -287,7 +325,7 @@ class BattleFeed:
         # leave the previous prefix for the next accepted combat watermark.
         # A same-controller round reset can still prove the old stream ended
         # at its last accepted watermark, without draining preparation events.
-        events = events if preparing else self._drain(observer, events)
+        events = events if preparing else self._drain(observer, events, sample)
         round_reset = None
         if clock_reset and events is not None and 'sequence' in events:
             drained = events.get('drain') or {}
@@ -474,19 +512,21 @@ class BattleSessions:
         boundary = (observation.events or {}).get('terminal_boundary')
         if not isinstance(boundary, dict):
             return False
+        sample = self.latest_sample
         try:
-            controller, native = self.latest_sample['battle_identity']
-            session_controller, stats, level = map(int, self.latest_sample['native_session'].rsplit(':', 3)[-3:])
-            if session_controller != controller:
-                return False
-            for key, expected in (('controller', controller), ('native', native),
-                                  ('stats', stats), ('level', level)):
-                if expected <= 0 or int(boundary[key], 16) != expected:
+            if self.metadata.get('platform') != 'native_pc':
+                controller, native = sample['battle_identity']
+                session_controller, stats, level = map(int, sample['native_session'].rsplit(':', 3)[-3:])
+                if session_controller != controller:
                     return False
-            if int(boundary['logger'], 16) <= 0:
-                return False
+                for key, expected in (('controller', controller), ('native', native),
+                                      ('stats', stats), ('level', level)):
+                    if expected <= 0 or int(boundary[key], 16) != expected:
+                        return False
+                if int(boundary['logger'], 16) <= 0:
+                    return False
             mark = self._last_event_mark
-            if (baseline_barrier(mark, self.latest_sample, boundary) != stream.sequence or
+            if (baseline_barrier(mark, sample, boundary) != stream.sequence or
                     stream.frame != boundary['frame'] or stream.game_time != boundary['game_time']):
                 return False
         except (KeyError, ValueError, TypeError):
@@ -572,8 +612,17 @@ class BattleSessions:
         through = evidence.get('sequence')
         if type(through) is not int:
             return {}
+        sample = observation.sample
+        drained = evidence.get('drain') or {}
+        if (sample.get('battle_metadata') or {}).get('platform') == 'native_pc':
+            try:
+                if baseline_barrier(evidence['before'], sample, evidence['after']) != through:
+                    return {}
+                validate_event_binding(sample, drained)
+            except (KeyError, StreamGap):
+                return {}
         after = stream.sequence if stream is not None and not stream.closed else through
-        return source_attribution_batch(evidence.get('drain') or {}, after, through)
+        return source_attribution_batch(drained, after, through)
 
     def consume(self, observation):
         if (observation.feed != self.feed_id or

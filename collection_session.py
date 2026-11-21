@@ -56,12 +56,29 @@ class CollectionSession:
         self._pending_history = self.runtime.pending_history
         self.runtime.record = lambda observation: self.audit('lifecycle_observation', observation)
 
+    def _is_native_pc(self):
+        return getattr(self.collector.diagnostics, 'platform', None) == 'native_pc'
+
+    def _observer_requested(self):
+        if self._is_native_pc():
+            # PC providers are explicitly supplied by a trusted caller. A
+            # Frida endpoint never selects the Android observer for this route.
+            return (self.runtime is not None and self.observer_factory is not None
+                    and self.frida_remote is None)
+        return bool(self.frida_remote)
+
     def connect(self):
         self.collector.connect(locate=False)
         process = collector_process(self.collector)
         self.audit('connected', {'diagnostics': vars(self.collector.diagnostics),
                                  'pid': process.pid,
                                  'process_instance': getattr(process, 'process_instance', None)})
+        if self._is_native_pc():
+            self.event_error = getattr(self.collector, 'event_capability', {}).get('error')
+            if self.observer_factory is not None and not self._observer_requested():
+                self.event_error = '官服 PC 观察者需要生命周期模式及 frida_remote=None'
+            self._finish_connect()
+            return
         if not self.frida_remote:
             capability = getattr(self.collector, 'event_capability', {})
             self.event_error = capability.get('error')
@@ -86,7 +103,7 @@ class CollectionSession:
         return True
 
     def _finish_connect(self):
-        if self.frida_remote:
+        if self._observer_requested():
             self._attach_observer()
         if self.runtime is not None:
             self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
@@ -145,7 +162,7 @@ class CollectionSession:
         error = (observation.events or {}).get('error')
         observer_ready = (self.observer is not None
                           and getattr(self.observer, 'status', ObserverStatus.READY) == ObserverStatus.READY)
-        if (previous is None or previous == generation or not self.frida_remote or
+        if (previous is None or previous == generation or not self._observer_requested() or
                 (observer_ready and not error)):
             return False, self.observer
         # The feed has confirmed a different battle. A failed attempt belongs

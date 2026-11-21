@@ -8,7 +8,7 @@ from collections import deque
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
 from roster import RosterUnavailable
-from event_stream import StreamGap, BarrierBusy, baseline_barrier
+from event_stream import StreamGap, BarrierBusy, baseline_barrier, validate_event_binding
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 
@@ -171,7 +171,7 @@ class LiveEventCapture:
             self.close()
             raise
 
-    def _apply_quality(self, payload, enemy_damage_quality):
+    def _apply_quality(self, payload, enemy_damage_quality, *, native_pc=False):
         """Keep recoverable gaps scoped to their affected event metric."""
         statistics = self.adapter.statistics
         if statistics is None:
@@ -180,15 +180,24 @@ class LiveEventCapture:
             statistics.mark_overkill_unknown(source)
         for source in payload.get('engagement_unknown_sources') or ():
             statistics.mark_engagement_unknown(source)
-        if payload.get('damage_unknown'):
+        # The existing Android producer certifies these families as part of
+        # its observer contract. Native event inputs must affirm each family
+        # explicitly; missing or non-boolean JSON values cannot certify zero.
+        def unknown(key):
+            return payload.get(key) is not False if native_pc else bool(payload.get(key))
+
+        if unknown('damage_unknown'):
             statistics.mark_all_overkill_unknown()
-        if payload.get('engagement_unknown'):
+        if unknown('engagement_unknown'):
             statistics.mark_all_engagement_unknown()
-        if payload.get('shield_unknown'):
+        if unknown('shield_unknown'):
             statistics.mark_shields_unknown()
-        if payload.get('skill_unknown'):
+        if unknown('skill_unknown'):
             statistics.mark_skill_unknown()
-        if payload.get('mitigation_ready') is False or payload.get('mitigation_unknown'):
+        if ((native_pc and (payload.get('mitigation_ready') is not True
+                            or unknown('mitigation_unknown')))
+                or (not native_pc and (payload.get('mitigation_ready') is False
+                                       or payload.get('mitigation_unknown')))):
             statistics.mark_mitigation_unknown()
         if 'boss_damage_ready' in payload or statistics.boss_damage is not None:
             statistics.observe_boss_damage(complete=payload.get('boss_damage_ready') is True
@@ -226,6 +235,7 @@ class LiveEventCapture:
         baseline. The observation generation is checked before reaching here.
         """
         try:
+            validate_event_binding(sample, mark, drained)
             if self.baseline_sequence is None:
                 self.baseline_sequence = sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],
@@ -255,7 +265,8 @@ class LiveEventCapture:
                     unknown = damage_quality.get('damage_settlement_unknown',
                                                  damage_quality.get('enemy_damage_unknown'))
                     self.adapter.statistics.settlement_stream_incomplete |= (ready is not True or bool(unknown))
-            self._apply_quality(drained, damage_quality)
+            self._apply_quality(drained, damage_quality, native_pc=(
+                (sample.get('battle_metadata') or {}).get('platform') == 'native_pc'))
             self.pending.extend(drained['events'])
             while self.pending:
                 event = self.pending[0]
