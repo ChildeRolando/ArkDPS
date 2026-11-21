@@ -122,5 +122,6 @@ internal static class Program
         LiveTargetSummaryTests.Run();
         ConnectionDetectionTests.Run();
         HudStatusNoticeTests.Run();
+        ScreenshotCategoryTests.Run();
     }
 }

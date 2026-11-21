@@ -45,6 +45,8 @@ internal static class Screenshot
     internal static StackPanel StatisticsDocument(JsonElement selected,string theme)
     {
         var view=selected.Get("view");var document=new StackPanel{Width=900,Background=Theme.Resource("Card")};
+        string category=view.Get("config").Text("category");
+        bool damage=category is not ("healing" or "shield");
         bool people = theme == Theme.People;
         bool babel = theme == Theme.Babel;
         string? emblem = theme switch
@@ -95,9 +97,16 @@ internal static class Screenshot
         bool stripes=entries.Any(entry=>entry.Get("segments").Items().Any(segment=>segment.Number("overkill_ratio")>0));
         string damageNote=settled ? "有效伤害按实际扣血与扣盾统计 · 过量按结算证据统计"
             : "有效伤害 = 总伤害 − 过量伤害 · 过量来自事件派生";
-        document.Children.Add(Inspector.Text(damageNote+(stripes ? " · 斜纹 = 过量伤害" : "")+
-            " · 护盾仅实际吸收 · 未知为 —",12,false,"Muted",new Thickness(24,18,24,4)));
-        document.Children.Add(Inspector.Text(view.Text("metric_label")+" / "+view.Text("rate_label")+"速率 · 原始值排序",12,false,"Muted",new Thickness(24,0,24,14)));
+        string metricNote=category switch
+        {
+            "healing" => "治疗量与 HPS 按所选口径显示 · 未知为 —",
+            "shield" => "护盾仅统计实际吸收 · 未知为 —",
+            _ => damageNote+(stripes ? " · 斜纹 = 过量伤害" : "")+" · 护盾仅实际吸收 · 未知为 —",
+        };
+        document.Children.Add(Inspector.Text(metricNote,12,false,"Muted",new Thickness(24,18,24,4)));
+        string rateLabel=view.Text("rate_label");
+        string rateDescription=rateLabel.Length==0 ? "" : " / "+rateLabel+(category=="healing" ? " HPS" : "速率");
+        document.Children.Add(Inspector.Text(view.Text("metric_label")+rateDescription+" · 原始值排序",12,false,"Muted",new Thickness(24,0,24,14)));
         int rankNumber = 0;
         foreach(var entry in entries)
         {
@@ -130,8 +139,13 @@ internal static class Screenshot
             var values=new StackPanel{Margin=new Thickness(0,8,12,16),HorizontalAlignment=HorizontalAlignment.Right};
             var exact=Inspector.Text(Json.UiText(entry.Text("exact_value")),18,true,"ConsoleInk");exact.SetResourceReference(TextBlock.FontFamilyProperty,"DisplayFont");exact.TextWrapping=TextWrapping.NoWrap;exact.TextAlignment=TextAlignment.Right;
             var secondary=Inspector.Text(item.Share+(item.Rate.Length>0 ? "   "+item.Rate : ""),12,false,"ConsoleMuted");secondary.TextAlignment=TextAlignment.Right;
-            var overkill=Inspector.Text(OverkillText(entry),11,false,"ConsoleMuted");overkill.TextAlignment=TextAlignment.Right;
-            values.Children.Add(exact);values.Children.Add(secondary);values.Children.Add(overkill);Grid.SetColumn(values,2);row.Children.Add(values);
+            values.Children.Add(exact);values.Children.Add(secondary);
+            if(damage)
+            {
+                var overkill=Inspector.Text(OverkillText(entry),11,false,"ConsoleMuted");overkill.TextAlignment=TextAlignment.Right;
+                values.Children.Add(overkill);
+            }
+            Grid.SetColumn(values,2);row.Children.Add(values);
             var bar=new ContributionBar{Data=entry,MetricCategory=view.Get("config").Text("category"),Height=8,VerticalAlignment=VerticalAlignment.Bottom,Margin=new Thickness(0,0,12,9)};Grid.SetColumn(bar,1);Grid.SetColumnSpan(bar,2);row.Children.Add(bar);
             document.Children.Add(new Border
             {
@@ -149,7 +163,8 @@ internal static class Screenshot
             Theme.Babel => "物理红 / 法术蓝 / 元素紫 / 真实浅灰",
             _ => "物理红 / 法术蓝 / 元素紫 / 真实白",
         };
-        document.Children.Add(Inspector.Text("分型："+damageLegend+"；精确构成见原始 JSON。",11,false,"Muted",new Thickness(24,16,24,4)));
+        if(damage)
+            document.Children.Add(Inspector.Text("分型："+damageLegend+"；精确构成见原始 JSON。",11,false,"Muted",new Thickness(24,16,24,4)));
         document.Children.Add(Inspector.Text(SharePresentation.From(view).Description,12,false,"Muted",new Thickness(24,0,24,5)));
         document.Children.Add(Inspector.Text("事件："+selected.Text("event_status")+" · "+selected.Text("event_error"),11,false,"Muted",new Thickness(24,0,24,4)));
         document.Children.Add(Inspector.Text("冻结战绩 "+selected.Text("battle_id")+" · "+theme+" · 完整排行（非可见区域截图）",10,false,"Muted",new Thickness(24,0,24,22)));
