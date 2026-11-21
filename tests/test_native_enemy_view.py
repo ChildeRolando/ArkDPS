@@ -160,6 +160,37 @@ def test_incomplete_membership_does_not_prove_departure():
     assert not uncertain['totals']['remaining_hp_complete']
 
 
+def test_observed_peak_is_per_enemy_and_does_not_certify_max_hp():
+    tracker = NativeEnemyObservations()
+
+    def read(frame, *entities):
+        return tracker.observe(snapshot(*entities), frame=frame, game_time=frame / 30, catalog={})['rows']
+
+    row, = read(30, entity(1, hp=900))
+    assert row['peak_observed_hp'] == 900
+    row, = read(30, entity(1, hp=999))
+    assert row['peak_observed_hp'] == 900
+
+    row, = read(60, entity(1, hp=600))
+    assert row['last_observed_hp'] == 600 and row['peak_observed_hp'] == 900
+    row, = read(90, entity(1, hp=1000))
+    assert row['peak_observed_hp'] == 1000
+    row, = read(120, entity(1, hp_status='unavailable', hp=1100))
+    assert row['hp'] is None and row['peak_observed_hp'] == 1000
+    assert row['max_hp'] is None and row['hp_ratio'] is None and not row['hp_known']
+
+    row, = read(150)
+    assert row['lifecycle'] == 'departed' and row['peak_observed_hp'] == 1000
+    row, = read(180, entity(1, enemy_key='enemy_different', hp_status='unavailable'))
+    assert row['last_observed_hp'] is None and row['peak_observed_hp'] is None
+    row, = read(210, entity(1, enemy_key='enemy_different', hp=0))
+    assert row['peak_observed_hp'] == 0
+
+    tracker.reset()
+    row, = read(30, entity(1, hp=80))
+    assert row['peak_observed_hp'] == 80
+
+
 def test_current_hp_total_distinguishes_partial_sum_verified_zero_and_missing_sample():
     tracker = NativeEnemyObservations()
 

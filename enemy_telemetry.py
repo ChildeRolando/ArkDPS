@@ -156,10 +156,15 @@ class NativeEnemyObservations:
 
         for uid, row in current.items():
             previous = self.rows.pop(uid, None)
+            if previous is not None and previous['eid'] != row['eid']:
+                previous = None
             last_hp = row['hp']
-            if last_hp is None and previous is not None and previous['eid'] == row['eid']:
-                last_hp = previous.get('last_observed_hp')
-            self.rows[uid] = dict(row, last_observed_hp=last_hp)
+            peak_hp = previous['peak_observed_hp'] if previous is not None else None
+            if last_hp is not None and (peak_hp is None or last_hp > peak_hp):
+                peak_hp = last_hp
+            if last_hp is None and previous is not None:
+                last_hp = previous['last_observed_hp']
+            self.rows[uid] = dict(row, last_observed_hp=last_hp, peak_observed_hp=peak_hp)
 
         excess = len(self.rows) - MAX_NATIVE_ENEMY_HISTORY
         if excess > 0:

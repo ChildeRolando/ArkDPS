@@ -112,9 +112,13 @@ public sealed class EnemyItem : INotifyPropertyChanged
         string maxHp=hasFloor ? $"≥ {Int(row.Get("max_hp_lower_bound"))}"
             : maxKnown ? Int(row.Get("max_hp")) : "—";
         string lastObserved=Int(row.Get("last_observed_hp"));
+        var peakReading=row.Get("peak_observed_hp");
+        bool currentHpOnly=peakReading.ValueKind!=JsonValueKind.Undefined && maxHp=="—";
+        string peakObserved=Int(peakReading);
         bool rememberedHp=(departed || lifecycle=="entered") && lastObserved!="—";
         string health=rememberedHp ? "最后 HP " + lastObserved
-            : hpText=="—" && maxHp=="—" ? "HP 未知" : $"{hpText} / {maxHp}";
+            : hpText=="—" && maxHp=="—" ? "HP 未知"
+            : currentHpOnly ? "当前 HP " + hpText : $"{hpText} / {maxHp}";
         double hpRatio=row.Number("hp_ratio",double.NaN);
         bool ratioKnown=!hasFloor && maxKnown && hpText!="—" && hpRatio is >= 0 and <= 1;
         var phaseTotal = row.Get("phase_total_hp");
@@ -129,6 +133,8 @@ public sealed class EnemyItem : INotifyPropertyChanged
         string phaseFloor=Int(row.Get("phase_max_hp_lower_bound"));
         if(phaseFloor!="—")
             phaseHp=(phaseHp==null ? "" : phaseHp+" · ")+"本阶段 HP 容量 ≥ "+phaseFloor;
+        if(peakObserved!="—")
+            phaseHp=(phaseHp==null ? "" : phaseHp+" · ")+"已观测最高 HP "+peakObserved;
         double speed = row.Get("move_speed").TryNumber(double.NaN);
         string moveSpeed = double.IsFinite(speed) ? speed.ToString("0.##", CultureInfo.InvariantCulture) : "—";
         bool entryAttributes = lifecycle == "entered" || row.Bool("attributes_from_entry");
@@ -145,7 +151,7 @@ public sealed class EnemyItem : INotifyPropertyChanged
             eid.Length > 0 ? eid : null,
             code.Length > 0 ? "图鉴 " + code : null,
             "状态 " + row.Text("state"),
-            rememberedHp ? health : "当前 HP / 最大 HP " + health,
+            rememberedHp || currentHpOnly ? health : "当前 HP / 最大 HP " + health,
             phaseHp,
             row.Get("spawn_frame").ValueKind == JsonValueKind.Number ? "入场帧 " + Int(row.Get("spawn_frame")) : null,
             row.Get("end_frame").ValueKind == JsonValueKind.Number ? "离场帧 " + Int(row.Get("end_frame")) : null,
