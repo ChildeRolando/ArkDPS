@@ -181,6 +181,7 @@ class ConnectionDiagnostics:
     platform: str = 'mumu'
     native_game_root: str | None = None
     process_pid: int | None = None
+    process_created_filetime: int | None = None
     code: str | None = None
     details: dict = field(default_factory=dict)
 
@@ -199,9 +200,11 @@ class ConnectionDiagnostics:
             'version_actual': self.version_actual,
         }
         if (self.platform != 'mumu' or self.native_game_root is not None
-                or self.process_pid is not None or self.code is not None or self.details):
+                or self.process_pid is not None or self.process_created_filetime is not None
+                or self.code is not None or self.details):
             result.update(platform=self.platform, native_game_root=self.native_game_root,
-                          process_pid=self.process_pid, code=self.code, details=self.details)
+                          process_pid=self.process_pid, process_created_filetime=self.process_created_filetime,
+                          code=self.code, details=self.details)
         return result
 
 

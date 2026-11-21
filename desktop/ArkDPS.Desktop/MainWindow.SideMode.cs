@@ -127,7 +127,7 @@ public partial class MainWindow
             {
                 EmulatorPlacementState.Attached => "",
                 EmulatorPlacementState.NoRoom => "侧边空间不足，暂靠屏幕边缘",
-                EmulatorPlacementState.Ambiguous => "请在设置中选择要吸附的 MuMu 实例",
+                EmulatorPlacementState.Ambiguous => UsingNativePc ? "PC 窗口不唯一 · 独立侧边窗口" : "请在设置中选择要吸附的 MuMu 实例",
                 _ => UsingNativePc ? "PC 版 · 独立侧边窗口" : "等待 MuMu 窗口"
             });
             SideAttachment.FollowPlayerZOrder(placement, window);

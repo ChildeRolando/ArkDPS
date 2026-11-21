@@ -61,3 +61,22 @@ def test_heartbeat_records_a_frozen_clock_without_treating_it_as_movement(monkey
     assert events[1]['elapsed_seconds'] >= 1
     assert events[1]['frame'] == 30 and events[1]['game_time'] == 1
     assert summary['stable_samples'] == 1 and not summary['frame_progress_observed']
+
+
+def test_enemy_hp_change_requires_the_same_observed_instance_and_battle(monkeypatch):
+    def enemy(battle, frame, uid, hp, *, state='available'):
+        capture = sample(battle, frame, 10.0)
+        capture['sample'].update(enemies_status=state, enemies={'entities': [dict(
+            instance_uid=uid, hp=hp, inited=True, borned=True, is_disappeared=False,
+            native_object_present=True)]})
+        return capture
+
+    reports = (enemy(1, 30, 10, 500), enemy(1, 31, 11, 400), enemy(2, 30, 11, 350))
+    summary, _ = run(monkeypatch, *reports, enemy(2, 31, 11, 200, state='unavailable'), None)
+    assert summary['enemy_hp_observed'] and not summary['enemy_hp_change_observed']
+
+    summary, _ = run(monkeypatch, *reports, enemy(2, 30, 11, 200), None)
+    assert not summary['enemy_hp_change_observed']
+
+    summary, _ = run(monkeypatch, *reports, enemy(2, 31, 11, 200), None)
+    assert summary['enemy_hp_change_observed']

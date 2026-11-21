@@ -96,7 +96,9 @@ class NativePcCollector:
         diag.connection_ok = True
         diag.version_status = VersionStatus.COMPATIBLE
         diag.version_actual = BUILD_ID
+        diag.native_game_root = str(self.game_root.resolve())
         diag.process_pid = self.process.pid
+        diag.process_created_filetime = self.process.process_instance[1]
         diag.message = '官服 PC 已连接 · 只读累计统计'
         diag.details = {'build': self.process.build, 'fixed_module_bytes_match': True}
 

@@ -88,6 +88,16 @@
 
 我要看同一角色离场时如何保留累计，再部署后有没有接着增加。这项帮我们核对「全周期 DPS」的分母，也就是该干员自己在场多久。
 
+### G · 同一个敌人受击前后的当前 HP，1-7 演习
+
+在关卡页启动下面的命令，看到 `recording` 后进 **1-7 演习**。开 1×，用米格鲁一类普攻伤害较低的干员拦第一波敌人。让同一个敌人挨几下。看到它还活着时暂停等 3 秒，再继续打。结算回到关卡页后停采样。
+
+```powershell
+& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 180 --enemies --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\enemy-hp-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
+```
+
+我要核对同一个敌人的编号一直相同，并且在受击后的新一帧能读到较低的当前 HP。最大 HP、击杀原因和每次伤害的来源还需要其他证据。
+
 ## 等我发对应的采样命令再打
 
 下面也都是真实要做的验收。现有命令还记不到所需的目标 HP、护盾消费或逐次结算。现在跑会留下整局总数，缺少要对账的那一笔。我准备好相应字段后会直接发完整命令。

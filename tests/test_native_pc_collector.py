@@ -63,6 +63,9 @@ def test_guarded_pair_publishes_and_archives_once_across_same_stage_restart(tmp_
                                 history=history, on_history=lambda: updates.append(True))
     session.enable_lifecycle()
     session.connect()
+    diagnostics = collector.diagnostics.as_dict()
+    assert diagnostics['process_pid'] == probe.pid
+    assert diagnostics['process_created_filetime'] == probe.process_instance[1]
     with pytest.raises(CaptureRetry):
         session.read()
     first = session.read()

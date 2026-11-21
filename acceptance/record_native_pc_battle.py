@@ -13,6 +13,15 @@ MAX_SECONDS = 300
 HEARTBEAT_SECONDS = 1.0
 
 
+def _enemy_hp(sample):
+    if sample.get('enemies_status') != 'available':
+        return {}
+    return {row['instance_uid']: row['hp'] for row in sample['enemies']['entities']
+            if row['instance_uid'] > 0 and row['inited'] and row['borned']
+            and row['native_object_present'] and not row['is_disappeared']
+            and row['hp'] is not None and row['hp'] >= 0}
+
+
 def record_samples(poll, seconds, emit):
     started = time.monotonic()
     deadline = started + seconds
@@ -26,6 +35,8 @@ def record_samples(poll, seconds, emit):
     healing_change_observed = False
     actor_rows_observed = False
     actor_damage_change_observed = False
+    enemy_hp_observed = False
+    enemy_hp_change_observed = False
     interrupted = False
     try:
         while True:
@@ -39,11 +50,16 @@ def record_samples(poll, seconds, emit):
                 if sample != previous:
                     stable_samples += 1
                     rows = sample.get('actor_rows') or []
+                    enemy_hp = _enemy_hp(sample)
                     actor_rows_observed |= bool(rows)
+                    enemy_hp_observed |= bool(enemy_hp)
                     if previous is not None and previous['battle_serial'] == sample['battle_serial']:
                         if (previous['frame'] < sample['frame']
                                 and previous['game_time'] < sample['game_time']):
                             frame_progress_observed = True
+                            previous_hp = _enemy_hp(previous)
+                            enemy_hp_change_observed |= any(
+                                previous_hp[uid] != hp for uid, hp in enemy_hp.items() if uid in previous_hp)
                         if previous['frame'] <= sample['frame'] and previous['game_time'] <= sample['game_time']:
                             damage_change_observed |= previous['total_damage'] != sample['total_damage']
                             healing_change_observed |= previous['total_heal'] != sample['total_heal']
@@ -78,6 +94,8 @@ def record_samples(poll, seconds, emit):
             'healing_change_observed': healing_change_observed,
             'actor_rows_observed': actor_rows_observed,
             'actor_damage_change_observed': actor_damage_change_observed,
+            'enemy_hp_observed': enemy_hp_observed,
+            'enemy_hp_change_observed': enemy_hp_change_observed,
             'status_counts': dict(counts), 'interrupted': interrupted}
 
 
@@ -89,6 +107,8 @@ def main(argv=None):
                         help=f'maximum observation time, 1 to {MAX_SECONDS} seconds')
     parser.add_argument('--witnesses', action='store_true',
                         help='also record managed unit membership and retained manual actions')
+    parser.add_argument('--enemies', action='store_true',
+                        help='also investigate current enemy membership and HP in the same logical frame')
     args = parser.parse_args(argv)
     if not 1 <= args.seconds <= MAX_SECONDS:
         parser.error(f'--seconds must be between 1 and {MAX_SECONDS}')
@@ -104,6 +124,10 @@ def main(argv=None):
         from probe_native_pc_presence import capture_presence
 
         captures.extend((('actions', capture_actions), ('presence', capture_presence)))
+    if args.enemies:
+        from native_pc.probe_native_pc_enemies import capture_enemies
+
+        captures.append(('enemies', capture_enemies))
 
     def read_optional_fields(read, context):
         fields = {}
@@ -123,7 +147,7 @@ def main(argv=None):
 
         start = {'kind': 'start', 'source': 'native_pc_read_only', 'research_only': True,
                  'started_at_utc': datetime.now(timezone.utc).isoformat(),
-                 'duration_seconds': args.seconds, 'witnesses': args.witnesses}
+                 'duration_seconds': args.seconds, 'witnesses': args.witnesses, 'enemies': args.enemies}
         emit(start)
         try:
             with NativePcBattleProbe(args.game_root) as probe:

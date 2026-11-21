@@ -506,7 +506,7 @@ public partial class MainWindow : Window
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
             or "--frida-remote" or "--platform" or "--native-game-root")
             ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。"
-            : native ? "PC 版使用独立侧边窗口。" : "多实例不会自动选择任意目标；请选择检测结果。";
+            : native ? "侧边模式跟随已连接的 PC 游戏窗口；无法确认窗口时独立显示。" : "多实例不会自动选择任意目标；请选择检测结果。";
     }
     private void ChooseNativeGameRoot(object sender,RoutedEventArgs e)
     {

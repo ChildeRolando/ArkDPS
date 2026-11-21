@@ -50,6 +50,7 @@ internal sealed class EmulatorAttachment
     private string rememberedAlias = "";
     private bool completedLookup;
     private bool raisedToTopmost;
+    private readonly NativePcWindowResolver nativePcWindows = new();
 
     internal nint FixtureWindow { get; set; }
 
@@ -68,7 +69,7 @@ internal sealed class EmulatorAttachment
         if (previous == player) return;
         if (GetAncestor(GetForegroundWindow(), RootOwner) == sideWindow)
         {
-            // Keep an active sidebar in front of MuMu. If MuMu is already
+            // Keep an active sidebar in front of the player. If it is already
             // ahead of the sidebar, still close any gap between them.
             for (int inspected = 0; previous != nint.Zero && previous != player && inspected < 256; inspected++)
                 previous = GetWindow(previous, PreviousWindow);
@@ -76,7 +77,7 @@ internal sealed class EmulatorAttachment
         }
 
         // Follow the actual z-order. An unrelated window can sit between us
-        // and MuMu even when neither window was minimized or changed bounds.
+        // and the player even when neither window was minimized or changed bounds.
         if (SetWindowPos(sideWindow, player, 0, 0, 0, 0, noMoveSizeOrActivate))
             raisedToTopmost = IsTopmost(sideWindow);
     }
@@ -90,7 +91,18 @@ internal sealed class EmulatorAttachment
             return PlaceBeside(FixtureWindow, width);
 
         if (connection.Text("platform") == "native_pc" || diagnostics.Text("platform") == "native_pc")
-            return new(EmulatorPlacementState.NoPlayer);
+        {
+            var selected = nativePcWindows.Resolve(diagnostics, connection, ownWindow);
+            if (selected.State == NativePcWindowState.Ambiguous)
+                return new(EmulatorPlacementState.Ambiguous);
+            if (selected.State != NativePcWindowState.Available)
+                return new(EmulatorPlacementState.NoPlayer);
+            var placement = PlaceBeside(selected.Handle, width);
+            // Native PC falls back to the standalone sidebar when minimized,
+            // including a minimize that raced the selection above.
+            return placement.State == EmulatorPlacementState.Minimized
+                ? new(EmulatorPlacementState.NoPlayer) : placement;
+        }
 
         string serial = ResolveSerial(diagnostics, connection);
         if (serial.Length == 0 && diagnostics.Text("status") == "needs_selection")
