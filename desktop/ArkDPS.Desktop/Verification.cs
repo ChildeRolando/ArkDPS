@@ -2010,7 +2010,8 @@ public partial class MainWindow
             model = "Synthetic MuMu", primary_serial = serial,
             accessible = true, certified = true, problem = ""
         };
-        const string firstAdb = @"C:\fixture-a\adb.exe", secondAdb = @"C:\fixture-b\adb.exe";
+        const string firstAdb = @"C:\fixture-a\android-bridge.exe", secondAdb = @"C:\fixture-b\android-bridge.exe";
+        const string manualAdb = @"C:\manual\android-bridge.exe";
         const string firstSerial = "127.0.0.1:16384", secondSerial = "127.0.0.1:16416";
         try
         {
@@ -2034,10 +2035,10 @@ public partial class MainWindow
             Require(automatic.ConfiguredAdbPath.Length == 0 && automatic.ConfiguredSerial == secondSerial,
                     "manual instance mode lost its displayed target or fixed the automatically found adb");
             automatic.AutoDetect.IsChecked = true;
-            automatic.AdbPath.Text = @"C:\manual\adb.exe";
+            automatic.AdbPath.Text = manualAdb;
             automatic.Serial.Text = "127.0.0.1:16512";
             automatic.UpdateConnectionFromWorker(Diagnostic(firstAdb, firstSerial));
-            Require(automatic.AdbPath.Text == @"C:\manual\adb.exe" && automatic.Serial.Text == "127.0.0.1:16512" &&
+            Require(automatic.AdbPath.Text == manualAdb && automatic.Serial.Text == "127.0.0.1:16512" &&
                     automatic.ConfiguredAdbPath == automatic.AdbPath.Text && automatic.ConfiguredSerial == automatic.Serial.Text,
                     "worker diagnostics replaced manually entered connection settings");
 
