@@ -144,6 +144,20 @@
 
 这次采样会记录同一名干员的两次在场编号、游戏报告的离场原因和原始时钟。就算画面上看到了离场，也需要样本里有对应时标，才能把它用在全周期速率里。
 
+### K · 1× 治疗和多个在场敌人，CE-5 演习
+
+这项单独录。回关卡页，在管理员 PowerShell 整条运行。看到 `recording` 再进 **CE-5 演习**，保持 1×。
+
+```powershell
+& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 180 --enemies --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\ce5-dense-heal-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
+```
+
+1. 放一名重装挡在敌人经过的路上。放**闪灵**给她治疗。先不放会快速清掉敌人的输出干员。
+2. 看到闪灵连续治疗几次、场上有多名敌人后，暂停约 3 秒。
+3. 恢复，再等闪灵治疗几次。按 **Ctrl+C** 停采样。
+
+一份记录分别核对两件事。闪灵在 1× 时的近五秒治疗，以及多个敌人同时在场时，能否持续读到各自的编号和当前 HP。
+
 ## 等我发对应的采样命令再打
 
 下面也都是真实要做的验收。现有命令还记不到所需的目标 HP、护盾消费或逐次结算。现在跑会留下整局总数，缺少要对账的那一笔。我准备好相应字段后会直接发完整命令。
