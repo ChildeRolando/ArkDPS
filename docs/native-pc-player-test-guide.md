@@ -110,6 +110,22 @@
 
 同一个敌人可能有多个配表等级。这里核对这关用了哪个等级、是否带覆盖，以及实际出现的敌人键。确认这些以后，才能决定哪些图鉴数据可用于对照本局。
 
+`stage-enemies-20261121-143120.jsonl` 已通过 1-7 的关卡引用实测。命令留作复查。
+
+### I · 演习标记、主动放弃和正常失败，1-7
+
+在关卡页用管理员 PowerShell 整条运行下面命令。以下三步共用这一次采样。
+
+```powershell
+& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 240 --game-flow --practice-selection --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\game-flow-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
+```
+
+1. 看到 `recording` 后打开 **1-7 普通行动**的编队页。停约 3 秒，返回关卡页。
+2. 打开 **1-7 演习**，也在编队页停约 3 秒。进战斗，放一名干员打几次，再用暂停菜单里的「放弃行动」回来。关卡页等约 3 秒。
+3. 再进 **1-7 演习**，让敌人走进蓝门直到出现「战斗失败」。回到关卡页等约 3 秒，然后按 **Ctrl+C**。
+
+我会对照两局进入结算时的场景和结果字段。这个探针把两者分别记下来，便于检查游戏能否区分主动放弃和普通失败。
+
 ## 等我发对应的采样命令再打
 
 下面也都是真实要做的验收。现有命令还记不到所需的目标 HP、护盾消费或逐次结算。现在跑会留下整局总数，缺少要对账的那一笔。我准备好相应字段后会直接发完整命令。

@@ -367,6 +367,27 @@ def test_null_singleton_must_keep_the_whole_binding_stable(runtime, change):
     assert 'sample' not in result
 
 
+def test_idle_flow_does_not_escape_if_battle_appears_during_the_read(runtime):
+    root, api, p = runtime
+    api.put(p['singleton'], '<Q', 0)
+    witness = {'game_flow_status': 'available', 'game_flow': {'transiting': True,
+               'source_scene': 'home', 'target_scene': 'battle_loader'}}
+
+    def idle(_read, context):
+        assert context['class_definition_table_slot'] == api.base + battle.CLASS_DEFINITION_TABLE_RVA
+        return witness
+
+    def crossing(read, context):
+        api.put(p['singleton'], '<Q', p['controller'])
+        return idle(read, context)
+
+    with battle.NativePcBattleProbe(root, api) as probe:
+        stable = probe.sample(idle_reader=idle)
+        changed = probe.sample(idle_reader=crossing)
+    assert stable['status'] == 'waiting_for_battle' and stable['game_flow'] == witness['game_flow']
+    assert changed['status'] == 'sample_retry' and 'game_flow' not in changed
+
+
 def test_confirmed_null_clears_only_the_in_process_battle_identity(runtime):
     root, api, p = runtime
     with battle.NativePcBattleProbe(root, api) as probe:
@@ -461,6 +482,7 @@ def test_extra_reader_runs_inside_the_same_guard_without_exposing_addresses(runt
         def extra(read_bytes, context):
             assert context['battle_stats'] == p['stats']
             assert context['level_data'] == p['level']
+            assert context['class_definition_table_slot'] == api.base + battle.CLASS_DEFINITION_TABLE_RVA
             assert struct.unpack('<f', read_bytes(p['stats'] + battle.STATS_TOTAL_DAMAGE, 4))[0] == -123.5
             return {'operator_rows': []}
         result = probe.sample(extra_reader=extra)

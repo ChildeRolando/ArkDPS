@@ -100,3 +100,44 @@ def test_stage_references_need_distinct_frames_in_one_battle_and_stable_values(m
     for other in (refs(1, 30, 1), refs(2, 60), refs(1, 60, 1), refs(1, 60, overwritten=True)):
         summary, _ = run(monkeypatch, refs(1, 30), other, None)
         assert not summary['stage_enemy_refs_stable']
+
+
+def test_game_flow_witness_only_flags_unresolved_finish_for_the_sampled_stage(monkeypatch):
+    def flow(**changes):
+        capture = sample(1, 60, 120.0)
+        capture['sample'].update(stage_id='Obt/Main/level_main_01-07', battle_result=0,
+            game_flow_status='available', game_flow=dict(transiting=True,
+                source_scene='level_main_01-07', target_scene='battle_finish'))
+        capture['sample'].update(changes)
+        return capture
+
+    summary, _ = run(monkeypatch, flow(), None)
+    assert summary['game_flow_samples'] == 1 and summary['unresolved_finish_transition_observed']
+    for other in (flow(battle_state=3, battle_result=2),
+                  flow(stage_id='Obt/Main/level_main_01-08'),
+                  flow(game_flow_status='unavailable', game_flow=None)):
+        summary, _ = run(monkeypatch, other, None)
+        assert not summary['unresolved_finish_transition_observed']
+
+
+def test_lobby_flow_changes_are_recorded_without_a_battle_or_duplicate_snapshot(monkeypatch):
+    def idle(transiting, target):
+        return dict(status='waiting_for_battle', game_flow_status='available',
+                    game_flow=dict(transiting=transiting, source_scene='home', target_scene=target))
+
+    before, transition = idle(False, 'home'), idle(True, 'battle_loader')
+    summary, events = run(monkeypatch, before, before, transition, transition, None)
+    assert len(events) == summary['idle_game_flow_observations'] == 2
+    assert summary['game_flow_samples'] == 0 and not summary['unresolved_finish_transition_observed']
+
+
+def test_practice_selection_records_both_raw_values_without_assigning_a_battle_mode(monkeypatch):
+    def selection(practice):
+        return dict(status='waiting_for_battle', practice_selection_status='available',
+                    practice_selection=dict(stage_id='main_01-07', practice=practice))
+
+    first, second = selection(False), selection(True)
+    summary, events = run(monkeypatch, first, first, second, second, sample(1, 3, 0), None)
+    assert summary['practice_selection_observations'] == 2
+    assert summary['practice_selection_values'] == [False, True]
+    assert 'practice' not in events[-1]['sample']

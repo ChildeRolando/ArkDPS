@@ -408,11 +408,17 @@ class NativePcBattleProbe:
         }
         return metadata, guards
 
-    def _read_sample(self, extra_reader):
+    def _read_sample(self, extra_reader, idle_reader):
         reader = self.reader
         klass, parent, singleton_fields, clock_fields = self._binding()
         battle = reader.pointer(singleton_fields)
+        class_table_slot = self.base + CLASS_DEFINITION_TABLE_RVA
         if not battle:
+            extra = {}
+            if idle_reader is not None:
+                extra = idle_reader(reader.read_optional, {'class_definition_table_slot': class_table_slot})
+            _require(type(extra) is dict and not extra.keys() & {'status', 'reason', 'research_only'},
+                     'invalid_idle_sample')
             # A null singleton ends a battle only after its complete binding
             # still agrees. Initialization/rebinding can cross this poll.
             after_class = self._resolve_battle_class()
@@ -425,7 +431,8 @@ class NativePcBattleProbe:
                      after_clock_fields == clock_fields and after_battle == 0,
                      'frame_or_lifecycle_changed', 'sample_retry')
             self._identity = self._last_clock = None
-            raise ResearchFailure('waiting_for_battle', 'singleton_is_null')
+            return {'status': 'waiting_for_battle', 'reason': 'singleton_is_null',
+                    'research_only': True, **extra}
         clock_before = reader.read(clock_fields + CLOCK_FRAME, 12)
         raw = reader.read(battle, BATTLE_READ_SIZE)
         actual_class, native, logger, level, state = self._battle_fields(raw)
@@ -457,7 +464,8 @@ class NativePcBattleProbe:
         if extra_reader is not None:
             extra = extra_reader(reader.read_optional, {'battle_controller': battle, 'battle_logger': logger,
                                               'battle_stats': stats, 'level_data': level, 'frame': frame,
-                                              'game_time': game_time})
+                                              'game_time': game_time,
+                                              'class_definition_table_slot': class_table_slot})
             _require(type(extra) is dict, 'invalid_extra_sample')
         # Every mutable source used above is re-read inside the same logic-clock bracket.
         after_raw = reader.read(battle, BATTLE_READ_SIZE)
@@ -502,7 +510,7 @@ class NativePcBattleProbe:
         return {'status': 'sample_available', 'research_only': True,
                 'sample': sample, 'limitations': list(LIMITATIONS)}
 
-    def sample(self, extra_reader=None):
+    def sample(self, extra_reader=None, *, idle_reader=None):
         if self.handle is None:
             return {'status': 'closed', 'reason': 'probe_is_closed', 'research_only': True}
         self.reader.reset_budget()
@@ -510,7 +518,7 @@ class NativePcBattleProbe:
         try:
             self._require_process_alive()
             try:
-                report = self._read_sample(extra_reader)
+                report = self._read_sample(extra_reader, idle_reader)
             finally:
                 self._require_process_alive()
         except ResearchFailure as error:

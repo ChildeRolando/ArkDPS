@@ -52,6 +52,12 @@ def record_samples(poll, seconds, emit):
     enemy_hp_change_observed = False
     stage_enemy_refs_samples = 0
     stage_refs_by_battle = {}
+    game_flow_samples = 0
+    idle_flow_changes = 0
+    last_idle_fields = None
+    practice_selection_observations = 0
+    practice_flag_values = set()
+    unresolved_finish_transition_observed = False
     interrupted = False
     try:
         while True:
@@ -75,6 +81,15 @@ def record_samples(poll, seconds, emit):
                         frames, signatures = stage_refs_by_battle.setdefault(key, (set(), set()))
                         frames.add(sample['frame'])
                         signatures.add(refs)
+                    if sample.get('game_flow_status') == 'available':
+                        game_flow_samples += 1
+                        flow = sample['game_flow']
+                        stage = (sample.get('stage_id') or '').rsplit('/', 1)[-1].casefold()
+                        unresolved_finish_transition_observed |= (
+                            sample['battle_state'] == 2 and sample.get('battle_result') == 0
+                            and flow['transiting'] and stage.startswith('level_')
+                            and flow['source_scene'].casefold() == stage
+                            and flow['target_scene'].casefold() == 'battle_finish')
                     if previous is not None and previous['battle_serial'] == sample['battle_serial']:
                         if (previous['frame'] < sample['frame']
                                 and previous['game_time'] < sample['game_time']):
@@ -100,8 +115,18 @@ def record_samples(poll, seconds, emit):
                           'paused': sample.get('paused'), 'speed_level': sample.get('speed_level')})
                     last_heartbeat = observed
             else:
-                if status != last_status:
+                idle_fields = (report.get('game_flow_status'), report.get('game_flow_reason'), report.get('game_flow'),
+                               report.get('practice_selection_status'), report.get('practice_selection_reason'),
+                               report.get('practice_selection'))
+                if status != last_status or (status == 'waiting_for_battle' and idle_fields != last_idle_fields):
                     emit({'kind': 'observation', 'elapsed_seconds': elapsed, **report})
+                    if status == 'waiting_for_battle':
+                        if report.get('game_flow_status') == 'available':
+                            idle_flow_changes += 1
+                        if report.get('practice_selection_status') == 'available':
+                            practice_selection_observations += 1
+                            practice_flag_values.add(report['practice_selection']['practice'])
+                last_idle_fields = idle_fields
                 previous = None
             last_status = status
             remaining = deadline - observed
@@ -121,6 +146,11 @@ def record_samples(poll, seconds, emit):
             'stage_enemy_refs_samples': stage_enemy_refs_samples,
             'stage_enemy_refs_stable': any(len(frames) >= 2 and len(signatures) == 1
                                            for frames, signatures in stage_refs_by_battle.values()),
+            'game_flow_samples': game_flow_samples,
+            'idle_game_flow_observations': idle_flow_changes,
+            'practice_selection_observations': practice_selection_observations,
+            'practice_selection_values': sorted(practice_flag_values),
+            'unresolved_finish_transition_observed': unresolved_finish_transition_observed,
             'status_counts': dict(counts), 'interrupted': interrupted}
 
 
@@ -136,6 +166,10 @@ def main(argv=None):
                         help='also investigate current enemy membership and HP in the same logical frame')
     parser.add_argument('--stage-enemies', action='store_true',
                         help='also investigate current-stage enemy keys, variant levels and override presence')
+    parser.add_argument('--game-flow', action='store_true',
+                        help='also record guarded scene transitions without classifying the battle outcome')
+    parser.add_argument('--practice-selection', action='store_true',
+                        help='also record the top squad page selection before entering a battle')
     args = parser.parse_args(argv)
     if not 1 <= args.seconds <= MAX_SECONDS:
         parser.error(f'--seconds must be between 1 and {MAX_SECONDS}')
@@ -146,6 +180,7 @@ def main(argv=None):
     from probe_native_pc_roster import capture_roster
 
     captures = [('actor_rows', capture_character_rows), ('roster', capture_roster)]
+    idle_captures = []
     if args.witnesses:
         from probe_native_pc_actions import capture_actions
         from probe_native_pc_presence import capture_presence
@@ -159,13 +194,22 @@ def main(argv=None):
         from native_pc.probe_native_pc_stage_enemies import capture_stage_enemy_refs
 
         captures.append(('stage_enemy_refs', capture_stage_enemy_refs))
+    if args.game_flow:
+        from native_pc.probe_native_pc_flow import capture_game_flow
+
+        captures.append(('game_flow', capture_game_flow))
+        idle_captures.append(('game_flow', capture_game_flow))
+    if args.practice_selection:
+        from native_pc.probe_native_pc_practice import capture_practice_selection
+
+        idle_captures.append(('practice_selection', capture_practice_selection))
 
     next_stage_read = float('-inf')
 
-    def read_optional_fields(read, context):
+    def read_fields(read, context, requests):
         nonlocal next_stage_read
         fields = {}
-        for key, capture in captures:
+        for key, capture in requests:
             if key == 'stage_enemy_refs':
                 now = time.monotonic()
                 if now < next_stage_read:
@@ -178,6 +222,12 @@ def main(argv=None):
                                f'{key}_reason': 'optional_read_failed'})
         return fields
 
+    def read_optional_fields(read, context):
+        return read_fields(read, context, captures)
+
+    def read_idle_fields(read, context):
+        return read_fields(read, context, idle_captures)
+
     with args.output.open('x', encoding='utf-8') as stream:
         def emit(record):
             json.dump(record, stream, ensure_ascii=False, allow_nan=False)
@@ -187,13 +237,15 @@ def main(argv=None):
         start = {'kind': 'start', 'source': 'native_pc_read_only', 'research_only': True,
                  'started_at_utc': datetime.now(timezone.utc).isoformat(),
                  'duration_seconds': args.seconds, 'witnesses': args.witnesses, 'enemies': args.enemies,
-                 'stage_enemies': args.stage_enemies}
+                 'stage_enemies': args.stage_enemies, 'game_flow': args.game_flow,
+                 'practice_selection': args.practice_selection}
         emit(start)
         try:
             with NativePcBattleProbe(args.game_root) as probe:
                 emit({'kind': 'build_verified', 'build': probe.build, 'fixed_module_bytes_match': True})
                 print(json.dumps({'status': 'recording', 'duration_seconds': args.seconds}), flush=True)
-                summary = record_samples(lambda: probe.sample(extra_reader=read_optional_fields),
+                idle_reader = read_idle_fields if idle_captures else None
+                summary = record_samples(lambda: probe.sample(read_optional_fields, idle_reader=idle_reader),
                                          args.seconds, emit)
         except ResearchFailure as error:
             report = {'kind': 'failure', 'status': error.status, 'reason': error.reason}
@@ -204,8 +256,11 @@ def main(argv=None):
             return 2
         emit(summary)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
-        if args.stage_enemies:
-            return 0 if summary['stage_enemy_refs_stable'] else 2
+        if args.stage_enemies or args.game_flow or args.practice_selection:
+            completed = ((not args.stage_enemies or summary['stage_enemy_refs_stable'])
+                         and (not args.game_flow or summary['game_flow_samples'] > 0)
+                         and (not args.practice_selection or summary['practice_selection_observations'] > 0))
+            return 0 if completed else 2
         return 0 if summary['frame_progress_observed'] and summary['damage_change_observed'] else 2
 
 
