@@ -144,6 +144,14 @@
 
 这次采样会记录同一名干员的两次在场编号、游戏报告的离场原因和原始时钟。就算画面上看到了离场，也需要样本里有对应时标，才能把它用在全周期速率里。
 
+首轮取得了部署和手动撤退记录，原始时标校验未通过。先用下面这条做短测，顺便读 1-7 的固定波次。
+
+```powershell
+& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 60 --presence-lifetime char_122_beagle --stage-spawns --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\presence-lifetime-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
+```
+
+看到 `recording` 后进 **1-7 演习**。部署米格鲁，暂停 3 秒，恢复后手动撤退，再等 3 秒并按 **Ctrl+C**。如果看到画面上显示的敌人总数，记下来对照。
+
 ### K · 1× 治疗和多个在场敌人，CE-5 演习
 
 这项单独录。回关卡页，在管理员 PowerShell 整条运行。看到 `recording` 再进 **CE-5 演习**，保持 1×。
@@ -179,4 +187,12 @@
 
 ## ArkDPS 界面版
 
-候选 `cef8a72` 的 1-7 演习已通过实时排行和胜利归档验收。下一轮需要一次**关游戏再开**及剩余界面操作。关游戏前打一段，正常退出，重新开游戏后再进一局。我会核对旧局只归档一次、新局统计没有串进去。界面操作包括连接平台切换、HUD、侧栏、PNG／JSON 导出和设置恢复，最后用同一候选复查 MuMu。每次实测使用对应候选的完整运行命令。
+已完成 1-7 演习正常入口的实时排行、胜利、退出、失败和战绩归档。下一轮用 `4a07f1a` 测重启游戏和窗口。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。
+
+```powershell
+& 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-4a07f1a\ArkDPS-win-x64-8paf8q8s\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-4a07f1a\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+```
+
+1. 在 ArkDPS 点「侧边吸附」。打 **1-7 演习**，让干员打几下。分别试一次最小化游戏和从任务栏恢复游戏，看侧栏有没有对应变化。
+2. 保持 ArkDPS 运行，正常关闭游戏，再从鹰角启动器重开。等 ArkDPS 连上后再进一局 1-7 演习，先空着几秒，再放干员。确认新局从自己的累计开始。
+3. 有一份战绩后，在 ArkDPS 的历史里选中它，点「完整排行 PNG」保存。HUD、平台切换和 MuMu 回归另做，以便将窗口和采集问题分开确认。

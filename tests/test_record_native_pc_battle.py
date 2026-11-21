@@ -155,3 +155,20 @@ def test_lifetime_summary_counts_instances_within_each_battle(monkeypatch):
     summary, _ = run(monkeypatch, before, live, live, replacement, None)
     assert summary['presence_lifetime_samples'] == 2
     assert summary['presence_lifetime_instances'] == 2
+
+
+def test_stage_spawn_structure_requires_matching_frames_in_one_battle(monkeypatch):
+    def report(serial, frame, count):
+        result = sample(serial, frame, 0.)
+        result['sample'].update(stage_id='level_01', stage_spawns_status='available',
+                                stage_spawns={'scheduled_spawn_count': count})
+        return result
+
+    first = report(1, 30, 13)
+    unrelated = report(2, 60, 13)
+    summary, _ = run(monkeypatch, first, first, unrelated, None)
+    assert summary['stage_spawns_samples'] == 2 and not summary['stage_spawns_stable']
+    summary, _ = run(monkeypatch, first, report(1, 60, 13), None)
+    assert summary['stage_spawns_stable']
+    summary, _ = run(monkeypatch, first, report(1, 60, 14), None)
+    assert not summary['stage_spawns_stable']

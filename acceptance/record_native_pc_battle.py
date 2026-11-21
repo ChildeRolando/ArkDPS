@@ -54,6 +54,8 @@ def record_samples(poll, seconds, emit):
     enemy_hp_change_observed = False
     stage_enemy_refs_samples = 0
     stage_refs_by_battle = {}
+    stage_spawns_samples = 0
+    stage_spawns_by_battle = {}
     game_flow_samples = 0
     idle_flow_changes = 0
     last_idle_fields = None
@@ -90,6 +92,12 @@ def record_samples(poll, seconds, emit):
                         frames, signatures = stage_refs_by_battle.setdefault(key, (set(), set()))
                         frames.add(sample['frame'])
                         signatures.add(refs)
+                    if sample.get('stage_spawns_status') == 'available' and sample.get('stage_id'):
+                        stage_spawns_samples += 1
+                        key = (sample['battle_serial'], sample['stage_id'])
+                        frames, signatures = stage_spawns_by_battle.setdefault(key, (set(), set()))
+                        frames.add(sample['frame'])
+                        signatures.add(json.dumps(sample['stage_spawns'], sort_keys=True, allow_nan=False))
                     if sample.get('game_flow_status') == 'available':
                         game_flow_samples += 1
                         flow = sample['game_flow']
@@ -155,6 +163,9 @@ def record_samples(poll, seconds, emit):
             'stage_enemy_refs_samples': stage_enemy_refs_samples,
             'stage_enemy_refs_stable': any(len(frames) >= 2 and len(signatures) == 1
                                            for frames, signatures in stage_refs_by_battle.values()),
+            'stage_spawns_samples': stage_spawns_samples,
+            'stage_spawns_stable': any(len(frames) >= 2 and len(signatures) == 1
+                                       for frames, signatures in stage_spawns_by_battle.values()),
             'game_flow_samples': game_flow_samples,
             'idle_game_flow_observations': idle_flow_changes,
             'practice_selection_observations': practice_selection_observations,
@@ -177,6 +188,8 @@ def main(argv=None):
                         help='also investigate current enemy membership and HP in the same logical frame')
     parser.add_argument('--stage-enemies', action='store_true',
                         help='also investigate current-stage enemy keys, variant levels and override presence')
+    parser.add_argument('--stage-spawns', action='store_true',
+                        help='also investigate the static spawn actions in the current stage waves')
     parser.add_argument('--game-flow', action='store_true',
                         help='also record guarded scene transitions without classifying the battle outcome')
     parser.add_argument('--practice-selection', action='store_true',
@@ -212,6 +225,10 @@ def main(argv=None):
         from native_pc.probe_native_pc_stage_enemies import capture_stage_enemy_refs
 
         captures.append(('stage_enemy_refs', capture_stage_enemy_refs))
+    if args.stage_spawns:
+        from native_pc.probe_native_pc_stage_spawns import capture_stage_spawns
+
+        captures.append(('stage_spawns', capture_stage_spawns))
     if args.game_flow:
         from native_pc.probe_native_pc_flow import capture_game_flow
 
@@ -222,17 +239,16 @@ def main(argv=None):
 
         idle_captures.append(('practice_selection', capture_practice_selection))
 
-    next_stage_read = float('-inf')
+    next_stage_read = {}
 
     def read_fields(read, context, requests):
-        nonlocal next_stage_read
         fields = {}
         for key, capture in requests:
-            if key == 'stage_enemy_refs':
+            if key in ('stage_enemy_refs', 'stage_spawns'):
                 now = time.monotonic()
-                if now < next_stage_read:
+                if now < next_stage_read.get(key, float('-inf')):
                     continue
-                next_stage_read = now + HEARTBEAT_SECONDS
+                next_stage_read[key] = now + HEARTBEAT_SECONDS
             try:
                 fields.update(capture(read, context))
             except (ApiFailure, ResearchFailure):
@@ -255,7 +271,8 @@ def main(argv=None):
         start = {'kind': 'start', 'source': 'native_pc_read_only', 'research_only': True,
                  'started_at_utc': datetime.now(timezone.utc).isoformat(),
                  'duration_seconds': args.seconds, 'witnesses': witnesses, 'enemies': args.enemies,
-                 'stage_enemies': args.stage_enemies, 'game_flow': args.game_flow,
+                 'stage_enemies': args.stage_enemies, 'stage_spawns': args.stage_spawns,
+                 'game_flow': args.game_flow,
                  'practice_selection': args.practice_selection,
                  'presence_lifetime_subject': args.presence_lifetime}
         emit(start)
@@ -275,12 +292,14 @@ def main(argv=None):
             return 2
         emit(summary)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
-        if args.stage_enemies or args.game_flow or args.practice_selection or args.presence_lifetime:
-            completed = ((not args.stage_enemies or summary['stage_enemy_refs_stable'])
-                         and (not args.game_flow or summary['game_flow_samples'] > 0)
-                         and (not args.practice_selection or summary['practice_selection_observations'] > 0)
-                         and (not args.presence_lifetime or summary['presence_lifetime_samples'] > 0))
-            return 0 if completed else 2
+        checks = ((args.stage_enemies, 'stage_enemy_refs_stable'),
+                  (args.stage_spawns, 'stage_spawns_stable'),
+                  (args.game_flow, 'game_flow_samples'),
+                  (args.practice_selection, 'practice_selection_observations'),
+                  (args.presence_lifetime, 'presence_lifetime_samples'))
+        requested = [summary[key] for enabled, key in checks if enabled]
+        if requested:
+            return 0 if all(requested) else 2
         return 0 if summary['frame_progress_observed'] and summary['damage_change_observed'] else 2
 
 
