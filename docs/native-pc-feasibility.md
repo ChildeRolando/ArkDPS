@@ -2,11 +2,13 @@
 
 评估日期 2026-11-21。目标是鹰角启动器国服 Windows x64 客户端，验收基线为 ArkDPS rc.8 的 MuMu 功能。**原生只读累计采集已实机验证可行**，覆盖伤害、非零治疗、稀音召唤伤害、干员撤退再部署、倍速、暂停、同图重开及胜负结算。Windows 的逐事件来源仍有缺口，现有证据支持接入累计统计，完整数值齐平仍取决于逐事件和产品验收。[MuMu 产品基线](v1-design.md) · [PC 实验记录](native-pc-research.md)
 
-当前便携候选 `65f545ab070ecf09b24c8ea220f568787e6a7688` 修正 PC 模式误判和速率空态。干净源码的 1167 项 Python 相关回归、131 项无窗口 C# 断言和 WPF 发布构建通过。用同包离线 worker 重载正式行动 1-7 与旧 CE-5 战绩，核对 1-7 的模式展示、胜利与原始 JSON，并核对 CE-5 的四个缺速率场景和两个累计对照。包内修改文件与 ZIP 内容一致。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `316968f0b214c2dff3525a67732666478955e3885ca250278d3016543c9d02ff`。[当前便携候选](../runtime/native-pc/product-65f545a/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内战绩对照](../runtime/native-pc/product-65f545a/history-evidence-offline-a28886fe/receipt.json)
+当前便携候选 `41c24e0362ea43187535a51964c3378f6de4cb00` 在 PC 敌情曲线保留采样中断，并统一治疗速率排行的 HPS 标题。干净源码的 358 项 Python 相关回归、134 项无窗口 C# 断言和 WPF 发布构建通过。包内回放核对三份实机日志的 114 个 HP 观测点和六段曲线中断。实际 CE-5 样本的实时及历史投影都使用 HPS，三种主题的 12 张离屏 PNG 核对了标题、缺数说明和累计治疗。正常界面和保存对话框仍待验收。验证了 ZIP 完整性及修改模块与包内清单的一致性。ZIP SHA-256 为 `cdc02d8a39da14d202bd28a2d2fb782aaf94fdc4ebd301493c7c2dda75913541`。构建时 NuGet 漏洞元数据源不可用。[当前便携候选](../runtime/native-pc/product-41c24e0/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内敌情中断回执](../runtime/native-pc/product-41c24e0/enemy-chart-gaps.verified.json) · [HPS 导出回执](../runtime/native-pc/product-41c24e0/hps-heading-offscreen-103f70bf/receipt.json)
+
+便携候选 `65f545ab070ecf09b24c8ea220f568787e6a7688` 修正 PC 模式误判和速率空态。干净源码的 1167 项 Python 相关回归、131 项无窗口 C# 断言和 WPF 发布构建通过。用同包离线 worker 重载正式行动 1-7 与旧 CE-5 战绩，核对 1-7 的模式展示、胜利与原始 JSON，并核对 CE-5 的四个缺速率场景和两个累计对照。生产渲染器离屏通过三主题的 21 张 PNG，12 张缺数图保留具体原因。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `316968f0b214c2dff3525a67732666478955e3885ca250278d3016543c9d02ff`。[便携候选](../runtime/native-pc/product-65f545a/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内战绩对照](../runtime/native-pc/product-65f545a/history-evidence-offline-a28886fe/receipt.json) · [离屏导出回执](../runtime/native-pc/product-65f545a/png-unavailable-offscreen-21a4c387/receipt.json)
 
 玩家确认在 `f81f6e3` 中用「开始行动」打完官服 PC 1-7。日志从第 2 帧的零累计到第 3737 帧标记胜利，终点分类伤害 `73442.419189`，归档成功一次。旧版把编队页的模式提示绑定到开局，误标为演习。产品已停止据该提示判定战局模式，历史界面也将仅凭这项证据的旧标记显示为「演习状态未知」。原档保留采集证据。自动区分正式和演习仍需要实际战局的可靠来源。[正式行动实测回执](../runtime/native-pc/product-f81f6e3/desktop-review-20261121-175902/1-7-victory.verified.json)
 
-这局没有保存游戏原生结算截图。若结算仍在，可用游戏明示的演习状态或本局实际报酬作人工对照。官方已调整演习券消耗和作战失败、放弃时的理智返还，票券变化或失败后的理智差额无法区分模式。[鹰角官方演习及理智规则更新](https://ak.hypergryph.com/news/6277.html)
+这局现有材料只有 ArkDPS 记录和玩家确认。游戏明示的演习状态或本局实际报酬可以提供独立的人工对照。官方已调整演习券消耗和作战失败、放弃时的理智返还，票券变化或失败后的理智差额无法区分模式。[鹰角官方演习及理智规则更新](https://ak.hypergryph.com/news/6277.html)
 
 真实旧 CE-5 战绩在全周期和接敌口径曾把缺失时段显示为「已知为零」。速率空态现在使用所选口径的可用性和覆盖情况，存在有效零值时仍显示零。分类伤害和治疗的累计可在总量排行查看。[四种速率对照](../runtime/native-pc/empty-rate-known-zero-verified-34e42c6a.json)
 
