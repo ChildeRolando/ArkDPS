@@ -1,9 +1,8 @@
 """Connection configuration and MuMu instance detection.
 
-The product only auto-selects the certified MuMu baseline. Detection is
-read-only apart from starting the ordinary adb server and creating forwards
-owned by this tool; it never reboots an emulator, kills an adb server or
-touches forwards owned by another program (for example MAA).
+The product only auto-selects the certified MuMu baseline. Detection may
+register a local MuMu transport reported by its instance manager. It never
+reboots an emulator, kills the adb server or modifies existing forwards.
 
 GUI code consumes :class:`ConnectionDiagnostics`; the JSON config store keeps
 user choices across launches. Detection and statistics compatibility are
@@ -356,6 +355,86 @@ def resolve_adb_path(explicit: str | None = None) -> str | None:
     return None
 
 
+def _mumu_manager_tools(adb: str) -> Iterable[tuple[Path, Path]]:
+    visited = set()
+    for candidate in dict.fromkeys((adb, *MUMU_ADB_CANDIDATES)):
+        directory = Path(candidate).parent
+        if directory.name.lower() not in ('nx_main', 'shell'):
+            continue
+        root = directory.parent
+        if root.parent.name.lower() == 'nx_device':
+            root = root.parent.parent
+        # A custom adb path is accepted separately from the MuMu manager.
+        # Look beside it only when the installation also contains MuMu itself.
+        if candidate not in MUMU_ADB_CANDIDATES and not (root / 'nx_main' / 'MuMuNxMain.exe').is_file():
+            continue
+        if root in visited:
+            continue
+        visited.add(root)
+        for folder in (root / 'nx_main', root / 'shell', root):
+            for name in ('mumu-cli.exe', 'MuMuManager.exe'):
+                tool = folder / name
+                if tool.is_file():
+                    yield root, tool
+
+
+def _loopback_serial(host: object, port: str) -> str | None:
+    if not re.fullmatch(r'[0-9]{1,5}', port) or not 0 < int(port) <= 65535:
+        return None
+    if host in ('127.0.0.1', 'localhost', '0.0.0.0'):
+        return f'127.0.0.1:{int(port)}'
+    if host in ('::1', '[::1]'):
+        return f'[::1]:{int(port)}'
+    return None
+
+
+def _running_mumu_serials(run: Runner, adb: str) -> set[str]:
+    serials = set()
+    queried = set()
+    for root, tool in _mumu_manager_tools(adb):
+        if root in queried:
+            continue
+        try:
+            reply = _run(run, [str(tool), 'info', '-v', 'all'], 2.0)
+            if reply.returncode != 0:
+                continue
+            instances = json.loads(reply.stdout.lstrip('\ufeff \t\r\n'))
+        except (CommandError, ValueError):
+            continue
+        # Use the formats supported by the MuMu window lookup as well.
+        for name in ('data', 'players'):
+            if isinstance(instances, dict) and isinstance(instances.get(name), (list, dict)):
+                instances = instances[name]
+        if isinstance(instances, dict):
+            instances = [instances] if 'index' in instances else list(instances.values())
+        if not isinstance(instances, list):
+            continue
+        known = [item for item in instances if isinstance(item, dict) and 'index' in item]
+        if instances and not known:
+            continue
+        queried.add(root)
+        for instance in known:
+            if instance.get('is_process_started') is not True:
+                continue
+            serial = _loopback_serial(instance.get('adb_host_ip') or '127.0.0.1',
+                                      str(instance.get('adb_port', '')))
+            if serial:
+                serials.add(serial)
+    return serials
+
+
+def _listed_loopback(serial: str) -> str | None:
+    host, _, port = serial.rpartition(':')
+    return _loopback_serial(host, port)
+
+
+def _local_adb_server() -> bool:
+    endpoint = os.environ.get('ADB_SERVER_SOCKET')
+    if endpoint:
+        return bool(re.fullmatch(r'tcp:(?:(?:localhost|127\.0\.0\.1|\[::1\]):)?[0-9]+', endpoint))
+    return os.environ.get('ANDROID_ADB_SERVER_ADDRESS', '') in ('', 'localhost', '127.0.0.1', '::1')
+
+
 def _parse_devices(stdout: str) -> list[AdbDevice]:
     devices: list[AdbDevice] = []
     for line in stdout.splitlines():
@@ -441,12 +520,12 @@ def _merge_devices(devices: Iterable[AdbDevice]) -> list[MuMuInstance]:
     return instances
 
 
-def detect_instances(adb_path: str | None = None,
-                     runner: Runner | None = None) -> DetectionResult:
+def detect_instances(adb_path: str | None = None, runner: Runner | None = None, *,
+                     register_mumu: bool = True) -> DetectionResult:
     """Enumerate accessible devices and return certified MuMu instances.
 
-    The function is deterministic and side-effect free beyond adb's normal
-    server startup; no emulator or other tool is restarted.
+    Only running local endpoints reported by the MuMu manager are eligible
+    for registration. The refreshed device list still decides availability.
     """
     run = runner or SubprocessRunner()
     adb = resolve_adb_path(adb_path)
@@ -463,9 +542,25 @@ def detect_instances(adb_path: str | None = None,
         return DetectionResult(DetectionStatus.ADB_INACCESSIBLE, adb, error=detail,
                                message='adb devices 失败：' + (detail or '未知错误'))
     devices = _parse_devices(listing.stdout)
+    reported = _running_mumu_serials(run, adb) if register_mumu and _local_adb_server() else set()
+    missing = reported.difference(_listed_loopback(device.serial) for device in devices)
+    if missing:
+        for serial in sorted(missing):
+            try:
+                _run(run, [adb, 'connect', serial], 2.0)
+            except CommandError:
+                # Try other running instances and use the final adb inventory.
+                pass
+        try:
+            refreshed = _run(run, [adb, 'devices', '-l'], 5.0)
+        except CommandError:
+            refreshed = None
+        if refreshed is not None and refreshed.returncode == 0:
+            devices = _parse_devices(refreshed.stdout)
     if not devices:
         return DetectionResult(DetectionStatus.NO_INSTANCE, adb,
-                               message='未发现任何安卓设备。请先启动 MuMu 并开启 ADB 调试。')
+                               message=('已发现运行中的 MuMu，ADB 尚未识别设备。请检查模拟器的 ADB 调试设置。'
+                                        if reported else '未发现任何安卓设备。请先启动 MuMu 并开启 ADB 调试。'))
     enriched: list[AdbDevice] = []
     for device in devices:
         if not device.accessible:
@@ -475,7 +570,7 @@ def detect_instances(adb_path: str | None = None,
             continue
         identity, problem = _query_identity(run, adb, device.serial)
         emulator_serial = bool(_MUMU_PORT.match(device.serial)) or             device.serial.startswith('emulator-')
-        certified = (_is_mumu_serial(device.serial) or
+        certified = (_listed_loopback(device.serial) in reported or _is_mumu_serial(device.serial) or
                      (_adb_is_mumu(adb) and emulator_serial) or
                      any('mumu' in identity.get(k, '').lower() or
                          'netease' in identity.get(k, '').lower()

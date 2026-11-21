@@ -859,7 +859,8 @@ def serve(input_stream, output, state, worker=None):
                     worker.close()
                 result, kind, quit_requested = None, 'bye', True
             elif op == 'detect':
-                result = detect_instances(cmd.get('adb') or None).diagnostics().as_dict()
+                result = detect_instances(cmd.get('adb') or None,
+                                          register_mumu=worker is not None).diagnostics().as_dict()
                 kind = 'state'
             elif op == 'rescan':
                 if worker:

@@ -10,23 +10,29 @@ class FakeAdb:
     """Small deterministic adb double; records every command it receives."""
 
     def __init__(self, devices="", identities=None, versions=None,
-                 list_error=None, shell_error=None):
+                 list_error=None, shell_error=None, manager_report=None, register=()):
         self.devices_output = devices
         self.identities = identities or {}
         self.versions = versions or {}
         self.list_error = list_error
         self.shell_error = shell_error
+        self.manager_report = manager_report
+        self.register = register
         self.calls = []
         self.forwards = {}
 
     def __call__(self, args, timeout=None):
         args = list(args)
         self.calls.append(args)
+        if args[1:] == ['info', '-v', 'all']:
+            return conn.CommandResult(0, json.dumps(self.manager_report))
         if 'devices' in args:
             if self.list_error:
                 return conn.CommandResult(1, '', self.list_error)
             return conn.CommandResult(0, self.devices_output, '')
         if 'connect' in args:
+            if args[-1] in self.register:
+                self.devices_output += device_line(args[-1])
             return conn.CommandResult(0, 'connected', '')
         if 'forward' in args and '--list' in args:
             return conn.CommandResult(0, ''.join(
@@ -80,6 +86,25 @@ def adb_path(monkeypatch):
     return 'C:\\MuMu\\adb.exe'
 
 
+@pytest.fixture(autouse=True)
+def no_local_manager(monkeypatch):
+    monkeypatch.delenv('ADB_SERVER_SOCKET', raising=False)
+    monkeypatch.delenv('ANDROID_ADB_SERVER_ADDRESS', raising=False)
+    monkeypatch.setattr(conn, '_mumu_manager_tools', lambda adb: ())
+
+
+@pytest.fixture
+def manager(monkeypatch):
+    tool = Path('MuMuManager.exe')
+    monkeypatch.setattr(conn, '_mumu_manager_tools', lambda adb: ((tool.parent, tool),))
+    return str(tool)
+
+
+def manager_instance(index, port, *, host='127.0.0.1', started=True):
+    return dict(index=str(index), adb_port=port, adb_host_ip=host,
+                is_process_started=started, is_android_started=False)
+
+
 def identity(android_id='mu-1', model='HBP-AL00'):
     return (model, 'HapburnP', 'HapburnP', '', android_id)
 
@@ -90,6 +115,98 @@ def test_zero_instances(adb_path):
     assert result.status is conn.DetectionStatus.NO_INSTANCE
     assert result.selected_serial is None
     assert not result.candidates
+
+
+@pytest.mark.parametrize('automatic', [False, True])
+def test_detects_unregistered_running_mumu_using_manager_port(monkeypatch, manager, automatic):
+    adb = r'C:\platform-tools\adb.exe'
+    target = '127.0.0.1:16385'
+    monkeypatch.setattr(conn, 'resolve_adb_path', lambda explicit=None: adb)
+    fake = FakeAdb('List of devices attached\n', identities={target: identity()},
+                   manager_report={'0': manager_instance(0, 16385)}, register=(target,))
+    if automatic:
+        result = conn.resolve_configured(conn.ConnectionConfig(), fake)
+        assert result.serial == target
+        assert result.source == 'auto'
+    else:
+        result = conn.detect_instances(runner=fake)
+        assert result.selected_serial == target
+        assert result.status is conn.DetectionStatus.READY_UNIQUE
+    assert fake.calls[:4] == [[adb, 'devices', '-l'], [manager, 'info', '-v', 'all'],
+                              [adb, 'connect', target], [adb, 'devices', '-l']]
+
+
+def test_detects_second_mumu_even_with_a_registered_instance(adb_path, manager):
+    first, second = '127.0.0.1:16384', '127.0.0.1:16416'
+    fake = FakeAdb(device_line(first), identities={first: identity('a'), second: identity('b')},
+                   manager_report={'data': {'players': [manager_instance(0, 16384), manager_instance(1, 16416)]}},
+                   register=(second,))
+    result = conn.detect_instances(runner=fake)
+    assert result.status is conn.DetectionStatus.NEEDS_SELECTION
+    assert result.selected_serial is None
+    assert {instance.primary_serial for instance in result.candidates} == {first, second}
+    assert [call for call in fake.calls if 'connect' in call] == [[adb_path, 'connect', second]]
+
+
+def test_manager_registration_preserves_alias_deduplication(adb_path, manager):
+    target, alias = '127.0.0.1:16384', 'emulator-5554'
+    fake = FakeAdb(device_line(alias), identities={alias: identity(), target: identity()},
+                   manager_report=[manager_instance(0, 16384)], register=(target,))
+    result = conn.detect_instances(runner=fake)
+    assert result.selected_serial == target
+    assert result.candidates[0].serials == (target, alias)
+
+
+def test_registration_ignores_nonlocal_stopped_invalid_and_listed_targets(adb_path, manager):
+    target = 'localhost:16384'
+    fake = FakeAdb(device_line(target, 'offline'), manager_report=[
+        manager_instance(0, 16384), manager_instance(1, 16416, started=False),
+        manager_instance(2, 16448, host='192.0.2.2'), manager_instance(3, 65536),
+    ])
+    result = conn.detect_instances(runner=fake)
+    assert result.devices[0].state == 'offline'
+    assert result.status is conn.DetectionStatus.NO_INSTANCE
+    assert fake.calls == [[adb_path, 'devices', '-l'], [manager, 'info', '-v', 'all']]
+
+
+def test_adb_connect_response_alone_is_not_device_availability(adb_path, manager):
+    fake = FakeAdb('List of devices attached\n', manager_report=[manager_instance(0, 16384)])
+    result = conn.detect_instances(runner=fake)
+    assert result.status is conn.DetectionStatus.NO_INSTANCE
+    assert '已发现运行中的 MuMu' in result.message
+    assert result.selected_serial is None
+    assert [call[1] for call in fake.calls] == ['devices', 'info', 'connect', 'devices']
+
+
+def test_detection_can_run_without_registering_mumu(adb_path, manager):
+    fake = FakeAdb(manager_report=[manager_instance(0, 16384)])
+    assert conn.detect_instances(runner=fake, register_mumu=False).status is conn.DetectionStatus.NO_INSTANCE
+    assert fake.calls == [[adb_path, 'devices', '-l']]
+
+
+def test_local_mumu_ports_are_not_sent_to_a_remote_adb_server(adb_path, manager, monkeypatch):
+    monkeypatch.setenv('ADB_SERVER_SOCKET', 'tcp:192.0.2.2:5037')
+    fake = FakeAdb(manager_report=[manager_instance(0, 16384)])
+    assert conn.detect_instances(runner=fake).status is conn.DetectionStatus.NO_INSTANCE
+    assert fake.calls == [[adb_path, 'devices', '-l']]
+
+
+def test_reads_each_mumu_installation_once(adb_path, monkeypatch):
+    root_a, root_b = Path('install-a'), Path('install-b')
+    cli_a, fallback_a = root_a/'mumu-cli.exe', root_a/'MuMuManager.exe'
+    cli_b = root_b/'mumu-cli.exe'
+    monkeypatch.setattr(conn, '_mumu_manager_tools', lambda adb: (
+        (root_a, cli_a), (root_a, fallback_a), (root_b, cli_b)))
+    reports = {str(cli_a): [], str(cli_b): [manager_instance(0, 16385)]}
+    target = '127.0.0.1:16385'
+    fake = FakeAdb(identities={target: identity()}, register=(target,))
+
+    def run(args, timeout=None):
+        if args[1:] == ['info', '-v', 'all']:
+            return conn.CommandResult(0, json.dumps(reports[args[0]]))
+        return fake(args, timeout)
+
+    assert conn.detect_instances(runner=run).selected_serial == target
 
 
 def test_unique_mumu_auto_selected_and_aliases_deduplicated(adb_path):

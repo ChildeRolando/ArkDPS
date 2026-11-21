@@ -1991,6 +1991,78 @@ public partial class MainWindow
         }
     }
 
+    private static void VerifyConnectionSettings()
+    {
+        // These forms are never shown or connected to a worker. Exercise the real
+        // controls without changing the running verifier's form or tracking state.
+        var automatic = new MainWindow();
+        var detected = new MainWindow();
+        static JsonElement Diagnostic(string adb, string serial, string status = "ready_unique") =>
+            JsonSerializer.SerializeToElement(new
+            {
+                adb_path = adb, selected_serial = serial, status, message = "", error = "",
+                instances = status == "needs_selection"
+                    ? new[] { Instance("127.0.0.1:16384"), Instance("127.0.0.1:16416") }
+                    : new[] { Instance(serial) }
+            });
+        static object Instance(string serial) => new
+        {
+            model = "Synthetic MuMu", primary_serial = serial,
+            accessible = true, certified = true, problem = ""
+        };
+        const string firstAdb = @"C:\fixture-a\android-bridge.exe", secondAdb = @"C:\fixture-b\android-bridge.exe";
+        const string manualAdb = @"C:\manual\android-bridge.exe";
+        const string firstSerial = "127.0.0.1:16384", secondSerial = "127.0.0.1:16416";
+        try
+        {
+            automatic.AutoDetect.IsChecked = true;
+            automatic.ShowDetection(Diagnostic("", "", "needs_selection"));
+            Require(automatic.Instances.Items.Count == 2 && automatic.Instances.SelectedItem is null &&
+                    automatic.Serial.Text.Length == 0 && automatic.ConfiguredSerial.Length == 0,
+                    "multiple detected instances guessed or saved a target");
+            automatic.UpdateConnectionFromWorker(Diagnostic(firstAdb, firstSerial));
+            automatic.UpdateConnectionFromWorker(Diagnostic(secondAdb, secondSerial));
+            Require(automatic.AdbPath.Text == secondAdb && automatic.Serial.Text == secondSerial &&
+                    automatic.ConfiguredAdbPath.Length == 0 && automatic.ConfiguredSerial.Length == 0,
+                    "automatic connection target did not refresh or became a permanent preference");
+            automatic.UpdateConnectionFromWorker(JsonSerializer.SerializeToElement(new { }));
+            Require(automatic.AdbPath.Text == secondAdb && automatic.Serial.Text == secondSerial,
+                    "missing worker target fields cleared the displayed connection");
+            automatic.UpdateConnectionFromWorker(JsonSerializer.SerializeToElement(new { adb_path = firstAdb }));
+            Require(automatic.AdbPath.Text == firstAdb && automatic.Serial.Text == secondSerial,
+                    "a partial worker target cleared an unavailable connection field");
+            automatic.AutoDetect.IsChecked = false;
+            Require(automatic.ConfiguredAdbPath.Length == 0 && automatic.ConfiguredSerial == secondSerial,
+                    "manual instance mode lost its displayed target or fixed the automatically found adb");
+            automatic.AutoDetect.IsChecked = true;
+            automatic.AdbPath.Text = manualAdb;
+            automatic.Serial.Text = "127.0.0.1:16512";
+            automatic.UpdateConnectionFromWorker(Diagnostic(firstAdb, firstSerial));
+            Require(automatic.AdbPath.Text == manualAdb && automatic.Serial.Text == "127.0.0.1:16512" &&
+                    automatic.ConfiguredAdbPath == automatic.AdbPath.Text && automatic.ConfiguredSerial == automatic.Serial.Text,
+                    "worker diagnostics replaced manually entered connection settings");
+
+            detected.AutoDetect.IsChecked = true;
+            var oldWorker = Diagnostic(firstAdb, firstSerial);
+            detected.UpdateConnectionFromWorker(oldWorker);
+            detected.ShowDetection(Diagnostic(secondAdb, secondSerial));
+            Require(detected.Instances.Items.Count == 1 && detected.AdbPath.Text == secondAdb && detected.Serial.Text == secondSerial,
+                    "explicit detection did not fill the resolved connection target");
+            detected.UpdateConnectionFromWorker(oldWorker);
+            Require(detected.AdbPath.Text == secondAdb && detected.Serial.Text == secondSerial,
+                    "repeated old worker diagnostics replaced an explicit detection result");
+        }
+        finally
+        {
+            foreach (var form in new[] { automatic, detected })
+            {
+                form.quitting = true;
+                form.Close();
+                form.recoveryCancellation.Dispose();
+            }
+        }
+    }
+
     internal async Task Verify(string output)
     {
         Directory.CreateDirectory(output);poll.Stop();save.Stop();
@@ -1999,6 +2071,8 @@ public partial class MainWindow
         var restoredLayout=State.Get("layout").Clone();
         var restoredConnection=State.Get("connection_config").Clone();
         await Settle();
+        VerifyConnectionSettings();
+        checks.Add("connection form fills resolved targets, preserves manual input and avoids stale detection or permanent auto-target preferences");
         await VerifyReleaseUpdates(output);
         checks.Add("release channel, shared request, network failures and verified update staging with mock HTTP");
         foreach(var placement in restoredLayout.Get("huds").Items())
