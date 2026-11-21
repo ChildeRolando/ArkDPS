@@ -76,12 +76,15 @@ python acceptance/probe_arkhelper_feed.py
 
 ## 2026-11-21 · Mon4terTeam ArkFramework 接口
 
-用户提供的 Mon4terTeam fork 明确声明适配 Windows x64 的《明日方舟》PC 客户端，并在上游 ABI 1 之外提供 V2 逐次战斗记录。以下结论来自公开契约和导出格式。当前环境没有该 fork 产出的 PC 战斗事件样本。[仓库说明](https://github.com/Mon4terTeam/ArkFramework)
+用户提供的 Mon4terTeam fork 明确声明适配 Windows x64 的《明日方舟》PC 客户端，并在上游 ABI 1 之外提供 V2 逐次战斗记录。以下结论来自公开契约、导出格式和仓库中的回放快照。尚未找到该 fork 对外输出的 PC 逐次结算样本。[仓库说明](https://github.com/Mon4terTeam/ArkFramework)
 
 | 可见接口 | 对 ArkDPS 的用途与缺口 |
 | --- | --- |
 | 战斗事件 V2 | 每条记录带全局序号、战局、逻辑帧、帧内顺序、来源、宿主和目标。伤害记录区分计算伤害与实际扣血，类型中含治疗。读取状态带部分覆盖、缓冲溢出与结束标志。公开字段没有明确的施盾人与实际吸收量、技能起止，也没有将该单条记录与 ArkDPS 同帧累计绑定的外部契约。该接口由框架在进程内提供。[战斗事件头文件](https://github.com/Mon4terTeam/ArkFramework/blob/main/include/ark/battle.h) |
 | 外部 WebView 数据 | 每个 topic 只保留最新负载，战斗状态每 500 ms 发布一份快照。桥接消息序号用于这些发布，不能证明期间的逐次事件完整。[外部桥接说明](https://github.com/Mon4terTeam/ArkFramework/blob/main/docs/ExternalBridge.md) |
+| Web 文件导出 | 核对提交 `a2ae65f37282c9ba2d64b759ce918ecaa82be87d` 的序列化代码。`_snapshot.json` 可包含伤害、治疗、承伤的统计和按帧汇总的曲线，另有单位当前盾量与技能状态。`damage.events` 是事件数量，`damage.sequence` 是统计快照附带的序号。可用作累计和状态对账，缺少逐次结算字段和同帧事件顺序。[Web 导出字段](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/plugins/BetterBattle/plugin.cpp#L702) |
 | CSV 和回放文件 | 伤害 CSV 按干员导出累计计算和实际扣血，可作对账。回放 JSON 保存按逻辑帧排序的玩家操作。另有逐帧状态日志，技能字段可供离线核对技能状态变化，具体覆盖需查实际文件。[伤害 CSV 字段](https://github.com/Mon4terTeam/ArkFramework/blob/main/plugins/damage_meter/csv_export.cpp) · [BetterBattle 回放约定](https://github.com/Mon4terTeam/ArkFramework/blob/main/plugins/BetterBattle/README.md) |
 
-可对现成 PC CSV 和逐帧日志做独立对账。要让 ArkDPS 发布连续观察者统计，仍需有序的外部记录、同局同帧绑定，以及对每类事件覆盖的明确证据。受控自定义关卡的记录只验证其实际覆盖的机制。
+同一提交下公开的 SK-5 数据含 11 份快照，来自时间轴标注的一次 PC 录像回放，覆盖逻辑帧 42 至 6,927。相邻快照相隔 88 至 1,216 帧，每秒 30 帧。11 份均提供技能状态，逐次事件和当前实现新增的 `damage` 汇总块均未随该批文件公开。最后一份已结束，记录了 50 次操作的回放完成。样本可供核对回放状态字段，无法定位技能生效或终止的精确逻辑帧。[SK-5 时间轴](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/webview/ui/fixtures/sk5-9op-live-20261103/timeline.json) · [SK-5 快照](https://github.com/Mon4terTeam/ArkFramework/tree/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/webview/ui/fixtures/sk5-9op-live-20261103/snapshots)
+
+要让 ArkDPS 发布连续观察者统计，仍需有序的外部记录、同局同帧绑定，以及对每类事件覆盖的明确证据。受控自定义关卡的记录只验证其实际覆盖的机制。

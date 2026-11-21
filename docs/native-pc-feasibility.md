@@ -214,7 +214,7 @@ MuMu 的事件来源与精度见[事件采集约定](event-capture.md)和[统计
 
 在迁移 PC 事件消费前，核对了 rc.8 发布提交 `1ce748582a9dcf8c6d072837ea6462d36149eb32` 的包内清单。rc.8 已支持技能期与非技能期输出拆分，合成事件的 WPF 验收也覆盖了该项。完整齐平仍需 PC 提供可对账的技能边界。累计模式可独立使用。[rc.8 WPF 回执](../../arkdps-observer-cold-start/runtime/rc8-release/1ce748582a9dcf8c6d072837ea6462d36149eb32/wpf-source/receipt.json)
 
-另核查了 Mon4terTeam 的 ArkFramework fork。V2 为 PC 提供带逻辑帧和序号的进程内伤害记录。已公开的外部桥接不提供连续事件队列。现成的伤害 CSV 和逐帧状态日志可用来补充离线对照，现阶段没有来自该 fork 的实机数据用于验收。[接口核查](native-pc-research.md#2026-11-21--mon4terteam-arkframework-接口)
+另核查了 Mon4terTeam 的 ArkFramework fork。V2 为 PC 提供带逻辑帧和序号的进程内伤害记录。当前 Web 文件可导出累计和按帧汇总的曲线，外部桥接发布最新快照。公开的 11 份 SK-5 回放快照只有状态字段，保留为离线对照，逐次结算仍缺实机源。[接口核查](native-pc-research.md#2026-11-21--mon4terteam-arkframework-接口)
 
 再次核对匹配构建的 `BattleVerboseRecorder`，确实声明了 `m_detailLogs`，记录项含帧、来源、目标和修饰器。五份普通战斗录制的 1831 个有效样本里，该记录器均为空。已核对的 ArkHelper `BattleSnapshot` 序号用于避免读到写入一半的快照，接口提供分类累计与覆盖标记，没有逐笔结算或技能开始和结束队列。普通模式的有效伤害、盾吸收及技能期因此仍缺可独立核实的连续事件源。其他模式是否会提供完整记录须单独采样。[普通战斗采样回执](../runtime/native-pc/2026-11-21-battle/ordinary-battles-verbose-recorder.verified.json)
 
