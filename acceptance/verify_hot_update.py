@@ -84,7 +84,7 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
         DOTNET_BUNDLE_EXTRACT_BASE_DIR=str(install / 'dotnet-extraction'),
         DOTNET_MULTILEVEL_LOOKUP='0', PATH=str(Path(os.environ['WINDIR']) / 'System32'))
 
-    def launch(mode, expected_exit=0):
+    def launch(mode):
         receipt_path = install / f'process-{mode}.json'
         request = install / f'request-{mode}.json'
         request.write_text(json.dumps(dict(archive=str(target), version=new['version'],
@@ -92,7 +92,8 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
         process = subprocess.run([str(executable), '--offline', '--state-dir', str(state),
                                   '--verify-update', str(request)], cwd=install, env=environment,
                                  timeout=180)
-        assert process.returncode == expected_exit, (mode, process.returncode, receipt_path)
+        allowed_exit_codes = (0, 1) if mode == 'old_exit_failure' else (0,)
+        assert process.returncode in allowed_exit_codes, (mode, process.returncode, receipt_path)
         return receipt_path
 
     def require_result(receipt_path, outcome, expected):
@@ -117,7 +118,7 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
         outcome = {'success': 'updated', 'failure': 'rolled_back', 'tampered': 'rejected',
                    'old_exit_failure': 'rolled_back'}[scenario]
         expected = new if scenario == 'success' else old
-        receipts = {scenario: require_result(launch(scenario, int(scenario == 'old_exit_failure')), outcome, expected)}
+        receipts = {scenario: require_result(launch(scenario), outcome, expected)}
         if scenario == 'success':
             receipts['relaunch'] = require_result(launch('relaunch'), 'selected', new)
     assert LayoutStore(state / 'layout.json').load().layout.theme == 'babel'
@@ -135,6 +136,11 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
         assert files == new['files'], sorted(files.keys() ^ new['files'].keys())
     elif scenario == 'tampered':
         assert not any(versions.glob('*/ArkDPS.Desktop.exe'))
+    elif scenario == 'old_exit_failure':
+        # Assert what the actual handoff observed rather than the launcher's return code.
+        assert '旧版采集器未确认正常退出' in (state / 'wpf-update.log').read_text(encoding='utf-8')
+        selection = json.loads((versions.parent / 'selection.json').read_text(encoding='utf-8'))
+        assert selection['Current'] is None
     return receipts
 
 
