@@ -468,11 +468,15 @@
         <TextBlock Text="连接到 MuMu" Style="{StaticResource CardTitle}" FontSize="20"/>
         <TextBlock Text="UI 不访问游戏进程和 ADB；连接与只读采集由独立 Python 进程负责。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,14"/>
         <CheckBox x:Name="AutoDetect" Content="自动检测认证的 MuMu 实例（多实例时需明确选择）"/>
-        <TextBlock Text="ADB 路径 · 留空自动查找" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="AdbPath" AutomationProperties.Name="ADB 路径"/>
-        <TextBlock Text="实例地址" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="Serial" ToolTip="多实例时选择检测结果或输入地址；明确地址不会被自动替换" AutomationProperties.Name="实例地址"/>
+        <TextBlock Text="ADB 路径 · 留空自动查找" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/>
+        <TextBox x:Name="AdbPath" TextChanged="ConnectionInputEdited" AutomationProperties.Name="ADB 路径"
+                 ToolTip="自动查找到的路径会填在这里。编辑后应用可指定路径。"/>
+        <TextBlock Text="实例地址" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/>
+        <TextBox x:Name="Serial" TextChanged="ConnectionInputEdited" AutomationProperties.Name="实例地址"
+                 ToolTip="检测到唯一实例时自动填入。多实例时可选择检测结果或输入地址。"/>
         <Button x:Name="DetectButton" Content="检测实例" Click="Detect" HorizontalAlignment="Left" Margin="0,12,0,8"/>
         <ListBox x:Name="Instances" MinHeight="46" MaxHeight="140" SelectionChanged="ChooseInstance"/>
-        <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,0"/>
+        <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
        </StackPanel>
       </Border>
       <Border x:Name="ConnectionEventForm" Grid.Row="1" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12">

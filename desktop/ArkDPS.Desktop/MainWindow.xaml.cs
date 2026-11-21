@@ -54,6 +54,8 @@ public partial class MainWindow : Window
     internal JsonElement State;
     private Forms.NotifyIcon? tray;
     private bool initialized,applying,polling,quitting,historyUpdating,historyHidden;
+    private bool adbPathDetected,serialDetected;
+    private (string? AdbPath,string? Serial)? workerConnectionTarget;
     private bool syncingHudFooter;
     private object? normalGeometry;
     private bool closingRequested;
@@ -307,6 +309,7 @@ public partial class MainWindow : Window
         }
         UpdateHistory();
         var diag=state.Get("diagnostic");
+        UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=state.Text("connection_text")+"\n"+state.Text("event_text")+"\n"+
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected")+"\n"+diag.Text("message")+"\n"+diag.Text("error");
         applying=false;
@@ -484,6 +487,33 @@ public partial class MainWindow : Window
         var config=State.Get("connection_config");AutoDetect.IsChecked=config.Bool("auto_detect");
         AdbPath.Text=config.Text("adb_path");Serial.Text=config.Text("serial");EventsEnabled.IsChecked=State.Get("layout").Bool("event_observation");
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events" or "--frida-remote") ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。" : "多实例不会自动选择任意目标；请选择检测结果。";
+    }
+    private string ConfiguredAdbPath => adbPathDetected ? "" : AdbPath.Text.Trim();
+    private string ConfiguredSerial => serialDetected && AutoDetect.IsChecked==true ? "" : Serial.Text.Trim();
+
+    private void ConnectionInputEdited(object sender,TextChangedEventArgs e)
+    {
+        if(sender==AdbPath) adbPathDetected=false;
+        if(sender==Serial) serialDetected=false;
+    }
+    private static void FillDetectedValue(TextBox field,ref bool detected,string value)
+    {
+        if(!detected && !string.IsNullOrWhiteSpace(field.Text)) return;
+        if(field.Text!=value) field.Text=value;
+        detected=value.Length>0;
+    }
+    private void UpdateConnectionFromWorker(JsonElement diag)
+    {
+        var adb=diag.Get("adb_path");
+        var serial=diag.Get("selected_serial");
+        var target=(AdbPath:adb.ValueKind==JsonValueKind.Undefined ? null : adb.Text(),
+                    Serial:serial.ValueKind==JsonValueKind.Undefined ? null : serial.Text());
+        if(target is (null,null)) return;
+        // Polls can repeat an earlier worker target after an explicit scan.
+        if(workerConnectionTarget==target) return;
+        workerConnectionTarget=target;
+        if(target.AdbPath is { } adbValue) FillDetectedValue(AdbPath,ref adbPathDetected,adbValue);
+        if(target.Serial is { } serialValue) FillDetectedValue(Serial,ref serialDetected,serialValue);
     }
     private void OnResize(object sender, SizeChangedEventArgs e)
     {
@@ -1178,36 +1208,61 @@ public partial class MainWindow : Window
     {
         if(bridge is not {CanSend:true} source || workerUnavailable ||
            recoveryTask is {IsCompleted:false} || closingRequested || updateShutdownPreparing) return;
+        string requestedAdb=ConfiguredAdbPath;
         DetectButton.IsEnabled=false;commands++;
+        DetectionNote.Text="正在检测 ADB 和 MuMu 实例…";
         try
         {
-            var reply=await source.RequestAsync("detect",new(){["adb"]=AdbPath.Text.Trim()});
+            var reply=await source.RequestAsync("detect",new(){["adb"]=requestedAdb});
             if(bridge!=source || workerUnavailable || closingRequested) return;
             ApplyState(reply.Get("state"));
-            var diag=reply.Get("result");DetectionNote.Text=diag.Text("message")+" "+diag.Text("error");
-            Instances.Items.Clear();
-            foreach(var instance in diag.Get("instances").Items())
-                Instances.Items.Add(new ListBoxItem{Content=instance.Text("model")+" · "+instance.Text("primary_serial")+" · "+instance.Text("problem"),Tag=instance.Text("primary_serial"),IsEnabled=instance.Bool("accessible")&&instance.Bool("certified")});
+            if(requestedAdb==ConfiguredAdbPath) ShowDetection(reply.Get("result"));
+            else
+            {
+                Instances.Items.Clear();
+                DetectionNote.Text="ADB 路径已修改，请重新检测。";
+            }
         }
         catch(BridgeTransportException ex){ReportTransportFailure(source,ex);DetectionNote.Text=Status.Text;}
         catch(Exception ex){DetectionNote.Text=ex.Message;}
         finally{DetectButton.IsEnabled=true;commands--;}
     }
+    private void ShowDetection(JsonElement diag)
+    {
+        FillDetectedValue(AdbPath,ref adbPathDetected,diag.Text("adb_path"));
+        FillDetectedValue(Serial,ref serialDetected,diag.Text("selected_serial"));
+        DetectionNote.Text=string.Join(" · ",new[]{diag.Text("message"),diag.Text("error")}.Where(text=>text.Length>0));
+        Instances.Items.Clear();
+        foreach(var instance in diag.Get("instances").Items())
+        {
+            string serial=instance.Text("primary_serial");
+            Instances.Items.Add(new ListBoxItem
+            {
+                Content=string.Join(" · ",new[]{instance.Text("model"),serial,instance.Text("problem")}.Where(text=>text.Length>0)),
+                Tag=serial,
+                IsEnabled=instance.Bool("accessible")&&instance.Bool("certified"),
+            });
+        }
+    }
     private void ChooseInstance(object sender,SelectionChangedEventArgs e)
     {
-        if(Instances.SelectedItem is ListBoxItem item){Serial.Text=(string)item.Tag;AutoDetect.IsChecked=false;}
+        if(Instances.SelectedItem is ListBoxItem item)
+        {
+            Serial.Text=(string)item.Tag;
+            serialDetected=false;
+            AutoDetect.IsChecked=false;
+        }
     }
     private async void ApplySettings(object sender,RoutedEventArgs e)
     {
         if(closingRequested || quitting) return;
-        var config=new{adb_path=AdbPath.Text.Trim(),serial=Serial.Text.Trim(),auto_detect=AutoDetect.IsChecked==true};
-        bool events=EventsEnabled.IsChecked==true;
         if(bridge is not {CanSend:true} || workerUnavailable)
         {
             await ReconnectObserver();
             if(workerUnavailable) return;
         }
-        await Command("connection_apply",new(){["config"]=config,["events"]=events});
+        var config=new{adb_path=ConfiguredAdbPath,serial=ConfiguredSerial,auto_detect=AutoDetect.IsChecked==true};
+        await Command("connection_apply",new(){["config"]=config,["events"]=EventsEnabled.IsChecked==true});
     }
     private async void SaveJson(object sender,RoutedEventArgs e)=>await Export("json");
     private async void SavePng(object sender,RoutedEventArgs e)=>await Export("png");
