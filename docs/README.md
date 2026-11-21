@@ -22,6 +22,7 @@
 
 - [官服 PC 采集预研](native-pc-research.md) — CE-5 演习的日志与只读访问结果、复现命令和剩余验证项。
 - [官服 PC 只读适配可行性报告](native-pc-feasibility.md) — 与 MuMu 的能力差距、实机证据与验收条件。
+- [官服 PC 实机验收手册](native-pc-player-test-guide.md) — 玩家操作、完整采样命令及待准备的实验。
 - [同类 DPS 工具架构调研](dps-tool-prior-art.md) — Details!/Skada/ACT/Deucalion/ArcDPS 的可借鉴设计与 ArkDPS 差距。
 
 ## 发布

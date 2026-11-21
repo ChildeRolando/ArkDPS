@@ -87,6 +87,8 @@ def main(argv=None):
     parser.add_argument('--output', required=True, type=Path, help='new JSON Lines evidence file')
     parser.add_argument('--seconds', type=int, default=120,
                         help=f'maximum observation time, 1 to {MAX_SECONDS} seconds')
+    parser.add_argument('--witnesses', action='store_true',
+                        help='also record managed unit membership and retained manual actions')
     args = parser.parse_args(argv)
     if not 1 <= args.seconds <= MAX_SECONDS:
         parser.error(f'--seconds must be between 1 and {MAX_SECONDS}')
@@ -96,9 +98,16 @@ def main(argv=None):
     from probe_native_pc_rows import capture_character_rows
     from probe_native_pc_roster import capture_roster
 
+    captures = [('actor_rows', capture_character_rows), ('roster', capture_roster)]
+    if args.witnesses:
+        from probe_native_pc_actions import capture_actions
+        from probe_native_pc_presence import capture_presence
+
+        captures.extend((('actions', capture_actions), ('presence', capture_presence)))
+
     def read_optional_fields(read, context):
         fields = {}
-        for key, capture in (('actor_rows', capture_character_rows), ('roster', capture_roster)):
+        for key, capture in captures:
             try:
                 fields.update(capture(read, context))
             except (ApiFailure, ResearchFailure):
@@ -114,7 +123,7 @@ def main(argv=None):
 
         start = {'kind': 'start', 'source': 'native_pc_read_only', 'research_only': True,
                  'started_at_utc': datetime.now(timezone.utc).isoformat(),
-                 'duration_seconds': args.seconds}
+                 'duration_seconds': args.seconds, 'witnesses': args.witnesses}
         emit(start)
         try:
             with NativePcBattleProbe(args.game_root) as probe:
