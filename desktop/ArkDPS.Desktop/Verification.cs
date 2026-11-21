@@ -1850,6 +1850,8 @@ public partial class MainWindow
 
         string portable = Path.Combine(output, "mock-update");
         Directory.CreateDirectory(portable);
+        Require(new PortableUpdateHost(portable + Path.DirectorySeparatorChar).Root == Path.GetFullPath(portable),
+            "the fixed portable entry must recognize a path ending with a separator");
         byte[] archive = UpdateArchive(version, workerProtocol: BridgeClient.Version + 1);
         ReleaseUpdate release = Asset(version, archive);
         string destination = UpdatePackage.BundleDirectory(portable, release);

@@ -27,7 +27,7 @@ internal sealed class PortableUpdateHost(string root)
     private static readonly TimeSpan OldProcessTimeout = TimeSpan.FromSeconds(35);
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan ChildExitTimeout = TimeSpan.FromSeconds(25);
-    internal string Root { get; } = root;
+    internal string Root { get; } = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
     internal string StateDirectory => Path.Combine(Root, "collector", "runtime");
     private string ControlDirectory => Path.Combine(Root, ControlFolder);
     private string SelectionFile => Path.Combine(ControlDirectory, "selection.json");
