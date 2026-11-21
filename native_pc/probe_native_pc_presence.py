@@ -45,13 +45,24 @@ FINISH_REASON_TYPE_INDEX = 10311
 TYPE_I4 = 0x08
 TYPE_I8 = 0x0A
 TYPE_VALUETYPE = 0x11
+FIELD_TYPE_TABLE_RVA = 0x7F16AC0
+CREATED_DEAD_FIELD_TYPE = 54452
+FINISH_REASON_FIELD_TYPE = 98015
+FP_VALUE_FIELD_TYPE = 60349
+ENUM_VALUE_FIELD_TYPE = 60333
+FIELD_TYPE_RVAS = {
+    CREATED_DEAD_FIELD_TYPE: 0x8D60CE8,
+    FINISH_REASON_FIELD_TYPE: 0x8D4A1D8,
+    FP_VALUE_FIELD_TYPE: 0x8D98088,
+    ENUM_VALUE_FIELD_TYPE: 0x8D96048,
+}
 LIFETIME_CHARACTER_FIELDS = (
-    (42, 'm_createdTime', CHARACTER_CREATED_TIME, TYPE_VALUETYPE, FP_TYPE_INDEX),
-    (43, 'm_deadTime', CHARACTER_DEAD_TIME, TYPE_VALUETYPE, FP_TYPE_INDEX),
+    (42, 'm_createdTime', CHARACTER_CREATED_TIME, TYPE_VALUETYPE, CREATED_DEAD_FIELD_TYPE),
+    (43, 'm_deadTime', CHARACTER_DEAD_TIME, TYPE_VALUETYPE, CREATED_DEAD_FIELD_TYPE),
 )
 LIFETIME_ENTITY_FIELDS = (
     (39, '<finishReason>k__BackingField', ENTITY_FINISH_REASON,
-     TYPE_VALUETYPE, FINISH_REASON_TYPE_INDEX),
+     TYPE_VALUETYPE, FINISH_REASON_FIELD_TYPE),
 )
 
 # Exact same hash-gated disk pair as above: metadata v29 typedef11491 Character
@@ -274,13 +285,14 @@ class LifetimeRead(CheckedRead):
             self.known_classes[klass] = tuple(parts)
         return self.known_classes[klass]
 
-    def typed_fields(self, klass, expected_count, fields):
+    def typed_fields(self, klass, expected_count, fields, module):
         key = klass, expected_count, fields
         if key in self.known_fields:
             return
         count, = struct.unpack('<H', self.guarded(klass + CLASS_FIELD_COUNT, 2))
         require(count == expected_count, 'presence_lifetime_field_count')
         table = self.ref(klass + CLASS_FIELDS, guard=True)
+        base, module_size = module
         for index, name, expected_offset, code, type_index in fields:
             require(0 <= index < count, 'presence_lifetime_field_index')
             name_ref, type_ref, owner, offset, _ = struct.unpack(
@@ -288,13 +300,19 @@ class LifetimeRead(CheckedRead):
             require(owner == klass and offset == expected_offset and
                     self.guarded(name_ref, len(name) + 1) == name.encode('ascii') + b'\0',
                     'presence_lifetime_field_layout')
-            data, bits = struct.unpack('<QI', self.guarded(pointer(type_ref), 12))
-            # Exact nominal value-type indices come from the accepted disk
-            # Il2CppType entries. An unresolved/different representation fails
-            # closed; it is never decoded or resolved by invoking game code.
-            require((bits >> 16) & 0xFF == code and not bits & 0x10 and
-                    (type_index is None or data == type_index),
-                    'presence_lifetime_field_type')
+            slot_rva = FIELD_TYPE_TABLE_RVA + type_index * 8
+            type_rva = FIELD_TYPE_RVAS[type_index]
+            require(slot_rva + 8 <= module_size and type_rva + 12 <= module_size,
+                    'presence_lifetime_module_range')
+            # The matched FieldDef's registered Il2CppType preserves its
+            # identity after loading. Its mutable union data need not contain
+            # the static metadata index anymore.
+            registered = self.ref(base + slot_rva, nullable=True, guard=True)
+            require(registered == type_ref == base + type_rva,
+                    f'presence_lifetime_field_binding_{type_index}')
+            _data, bits = struct.unpack('<QI', self.guarded(registered, 12))
+            require((bits >> 16) & 0xFF == code and not bits & 0x10,
+                    f'presence_lifetime_field_kind_{type_index}')
         self.known_fields.add(key)
 
 
@@ -310,30 +328,38 @@ def _capture_lifetime(read, context, subject, candidates, membership_guards):
         if candidates:
             require(isinstance(context, dict) and 'class_definition_table_slot' in context,
                     'presence_lifetime_class_table_slot_missing')
-            table = reader.ref(pointer(context['class_definition_table_slot']),
-                               nullable=True, guard=True)
+            module = context.get('game_assembly_range')
+            require(isinstance(module, tuple) and len(module) == 2 and type(module[1]) is int,
+                    'presence_lifetime_module_range')
+            base, module_size = module
+            pointer(base)
+            class_slot = context['class_definition_table_slot']
+            require(class_slot == base + native.CLASS_DEFINITION_TABLE_RVA and
+                    native.CLASS_DEFINITION_TABLE_RVA + 8 <= module_size,
+                    'presence_lifetime_module_range')
+            table = reader.ref(class_slot, nullable=True, guard=True)
             require(table != 0, 'presence_lifetime_class_table_uninitialized')
             for index, name, namespace, count, fields, parent_name in (
                 (FP_TYPE_INDEX, 'FP', 'Torappu', 42,
-                 ((0, '_serializedValue', 0x10, TYPE_I8, None),), 'ValueType'),
+                 ((0, '_serializedValue', 0x10, TYPE_I8, FP_VALUE_FIELD_TYPE),), 'ValueType'),
                 (FINISH_REASON_TYPE_INDEX, 'FinishReason', '', 14,
-                 ((0, 'value__', 0x10, TYPE_I4, None),), 'Enum'),
+                 ((0, 'value__', 0x10, TYPE_I4, ENUM_VALUE_FIELD_TYPE),), 'Enum'),
             ):
                 klass = reader.ref(table + index * 8, nullable=True, guard=True)
                 require(klass != 0, 'presence_lifetime_class_uninitialized')
                 require(reader.is_class(klass, name, namespace), 'presence_lifetime_class_identity')
-                reader.typed_fields(klass, count, fields)
+                reader.typed_fields(klass, count, fields, module)
                 parent = reader.ref(klass + CLASS_PARENT, guard=True)
                 require(reader.is_class(parent, parent_name, 'System'),
                         'presence_lifetime_value_inheritance')
             for address, uid, character in candidates:
                 require(reader.is_class(character, 'Character'), 'presence_lifetime_class_identity')
-                reader.typed_fields(character, 356, LIFETIME_CHARACTER_FIELDS)
+                reader.typed_fields(character, 356, LIFETIME_CHARACTER_FIELDS, module)
                 unit = reader.ref(character + CLASS_PARENT, guard=True)
                 require(reader.is_class(unit, 'Unit'), 'presence_lifetime_character_inheritance')
                 entity = reader.ref(unit + CLASS_PARENT, guard=True)
                 require(reader.is_class(entity, 'Entity'), 'presence_lifetime_character_inheritance')
-                reader.typed_fields(entity, 410, LIFETIME_ENTITY_FIELDS)
+                reader.typed_fields(entity, 410, LIFETIME_ENTITY_FIELDS, module)
                 finish_reason, = struct.unpack('<i', reader.guarded(address + ENTITY_FINISH_REASON, 4))
                 created, dead = struct.unpack('<qq', reader.guarded(address + CHARACTER_CREATED_TIME, 16))
                 witnesses.append({'instance_uid': uid, 'finish_reason': finish_reason,

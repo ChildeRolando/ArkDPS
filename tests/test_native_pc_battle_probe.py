@@ -483,6 +483,7 @@ def test_extra_reader_runs_inside_the_same_guard_without_exposing_addresses(runt
             assert context['battle_stats'] == p['stats']
             assert context['level_data'] == p['level']
             assert context['class_definition_table_slot'] == api.base + battle.CLASS_DEFINITION_TABLE_RVA
+            assert context['game_assembly_range'] == (api.base, probe.module_size)
             assert struct.unpack('<f', read_bytes(p['stats'] + battle.STATS_TOTAL_DAMAGE, 4))[0] == -123.5
             return {'operator_rows': []}
         result = probe.sample(extra_reader=extra)

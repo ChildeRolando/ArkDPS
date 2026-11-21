@@ -274,12 +274,16 @@ def test_near_cap_synthetic_collection_stays_bounded(fixture):
 @pytest.fixture
 def lifetime_fixture(fixture):
     mem, context, p = fixture
+    module_base = 0x100000000
+    context['game_assembly_range'] = (module_base, 0x9000000)
 
-    def typed_field(klass, field, type_ref=None):
+    def typed_field(klass, field):
         index, name, offset, code, type_index = field
-        if type_ref is None:
-            type_ref = mem.allocate()
-            mem.put(type_ref, '<QI', type_index or 0, 0x80000001 | code << 16)
+        type_ref = module_base + presence.FIELD_TYPE_RVAS[type_index]
+        type_slot = module_base + presence.FIELD_TYPE_TABLE_RVA + type_index * 8
+        mem.put(type_slot, '<Q', type_ref)
+        # Memory registration can replace a disk metadata index with a handle.
+        mem.put(type_ref, '<QI', 0x123400000000 | type_index, 0x80000001 | code << 16)
         table, = struct.unpack('<Q', mem.read(klass + presence.CLASS_FIELDS, 8))
         mem.put(table + index * 32, '<QQQiI', mem.text(name), type_ref, klass, offset, 0)
         return type_ref
@@ -288,15 +292,15 @@ def lifetime_fixture(fixture):
     enum = mem.klass('Enum', namespace='System')
     fp = mem.klass('FP', 42, parent=value, namespace='Torappu')
     finish = mem.klass('FinishReason', 14, parent=enum, namespace='')
-    typed_field(fp, (0, '_serializedValue', 0x10, presence.TYPE_I8, None))
-    typed_field(finish, (0, 'value__', 0x10, presence.TYPE_I4, None))
+    typed_field(fp, (0, '_serializedValue', 0x10, presence.TYPE_I8, presence.FP_VALUE_FIELD_TYPE))
+    typed_field(finish, (0, 'value__', 0x10, presence.TYPE_I4, presence.ENUM_VALUE_FIELD_TYPE))
     mem.put(p['classes']['entity'] + presence.CLASS_FIELD_COUNT, '<H', 410)
     fp_type = None
     for field in presence.LIFETIME_CHARACTER_FIELDS:
-        fp_type = typed_field(p['classes']['character'], field, fp_type)
+        fp_type = typed_field(p['classes']['character'], field)
     finish_type = typed_field(p['classes']['entity'], presence.LIFETIME_ENTITY_FIELDS[0])
     class_table = mem.allocate((presence.FP_TYPE_INDEX + 1) * 8)
-    class_slot = mem.allocate()
+    class_slot = module_base + presence.native.CLASS_DEFINITION_TABLE_RVA
     mem.put(class_slot, '<Q', class_table)
     mem.put(class_table + presence.FP_TYPE_INDEX * 8, '<Q', fp)
     mem.put(class_table + presence.FINISH_REASON_TYPE_INDEX * 8, '<Q', finish)
@@ -309,7 +313,7 @@ def lifetime_fixture(fixture):
         mem.put(address + presence.ENTITY_FINISH_REASON, '<i', index * 4)
         mem.put(address + presence.CHARACTER_CREATED_TIME, '<qq',
                 (index + 1) << 32, -(index + 2) << 32)
-    p.update(fp=fp, finish=finish, fp_type=fp_type, finish_type=finish_type,
+    p.update(fp=fp, finish=finish, fp_type=fp_type, finish_type=finish_type, module_base=module_base,
              class_table=class_table, class_slot=class_slot, subject='char_336_folivo')
     return mem, context, p
 
@@ -412,6 +416,7 @@ def test_lifetime_four_instances_are_bounded_and_overflow_is_not_truncated(lifet
 
 @pytest.mark.parametrize('fault,reason', [
     ('missing_slot', 'class_table_slot_missing'),
+    ('missing_module', 'module_range'),
     ('null_table', 'class_table_uninitialized'),
     ('null_class', 'class_uninitialized'),
     ('class_name', 'class_identity'),
@@ -422,17 +427,19 @@ def test_lifetime_four_instances_are_bounded_and_overflow_is_not_truncated(lifet
     ('field_offset', 'field_layout'),
     ('field_owner', 'field_layout'),
     ('field_name', 'field_layout'),
-    ('field_primitive', 'field_type'),
-    ('field_nominal', 'field_type'),
-    ('field_static', 'field_type'),
-    ('fp_underlying', 'field_type'),
-    ('enum_underlying', 'field_type'),
+    ('field_primitive', 'field_kind_54452'),
+    ('field_registration', 'field_binding_98015'),
+    ('field_static', 'field_kind_54452'),
+    ('fp_underlying', 'field_kind_60349'),
+    ('enum_underlying', 'field_kind_60333'),
 ])
 def test_lifetime_rejects_unverified_layout_without_invalidating_presence(lifetime_fixture, fault, reason):
     mem, context, p = lifetime_fixture
     table, = struct.unpack('<Q', mem.read(p['classes']['character'] + presence.CLASS_FIELDS, 8))
     if fault == 'missing_slot':
         del context['class_definition_table_slot']
+    elif fault == 'missing_module':
+        del context['game_assembly_range']
     elif fault == 'null_table':
         mem.put(p['class_slot'], '<Q', 0)
     elif fault == 'null_class':
@@ -452,8 +459,9 @@ def test_lifetime_rejects_unverified_layout_without_invalidating_presence(lifeti
         mem.put(table + 42 * 32 + offset, fmt, value)
     elif fault == 'field_primitive':
         mem.put(p['fp_type'] + 8, '<I', presence.TYPE_I8 << 16)
-    elif fault == 'field_nominal':
-        mem.put(p['finish_type'], '<Q', presence.FP_TYPE_INDEX)
+    elif fault == 'field_registration':
+        type_slot = p['module_base'] + presence.FIELD_TYPE_TABLE_RVA + presence.FINISH_REASON_FIELD_TYPE * 8
+        mem.put(type_slot, '<Q', p['fp_type'])
     elif fault == 'field_static':
         mem.put(p['fp_type'] + 8, '<I', presence.TYPE_VALUETYPE << 16 | 0x10)
     elif fault in ('fp_underlying', 'enum_underlying'):
@@ -468,7 +476,7 @@ def test_lifetime_rejects_unverified_layout_without_invalidating_presence(lifeti
     assert result['presence_lifetime'] is None
 
 
-@pytest.mark.parametrize('changed', ['time', 'finish', 'field', 'nominal', 'membership'])
+@pytest.mark.parametrize('changed', ['time', 'finish', 'field', 'type_descriptor', 'type_registration', 'membership'])
 def test_lifetime_rereads_values_metadata_and_base_selection(lifetime_fixture, changed):
     mem, context, p = lifetime_fixture
     if changed == 'time':
@@ -478,8 +486,11 @@ def test_lifetime_rereads_values_metadata_and_base_selection(lifetime_fixture, c
     elif changed == 'field':
         table, = struct.unpack('<Q', mem.read(p['classes']['character'] + presence.CLASS_FIELDS, 8))
         target = table + 42 * 32, 32, 2, '<Q', 0
-    elif changed == 'nominal':
+    elif changed == 'type_descriptor':
         target = p['fp_type'], 12, 3, '<Q', 0  # shared FP type used by two fields
+    elif changed == 'type_registration':
+        type_slot = p['module_base'] + presence.FIELD_TYPE_TABLE_RVA + presence.FINISH_REASON_FIELD_TYPE * 8
+        target = type_slot, 8, 2, '<Q', p['fp_type']
     else:
         target = p['cameras'][0] + 0x18, 15, 3, '<I', 999
     counts = {}
