@@ -193,7 +193,7 @@ CE-5 复测共 13 次读取，固定波次配置均为 42。命令留作复查�
 
 ## ArkDPS 界面版
 
-CE-5 固定波次 `42` 和游戏重启后 1-7 从零开始已实测通过。用 `ba9d457` 复查 CE-5 的自动演习标记和侧栏。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。游戏照常启动。
+CE-5 固定波次 `42`、游戏重启后 1-7 从零开始、CE-5 自动演习标记和侧栏跟随均已实测。以下 `ba9d457` 命令留作复查。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。游戏照常启动。
 
 ```powershell
 & 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ba9d457\ArkDPS-win-x64-ga0e5sr1\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ba9d457\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
