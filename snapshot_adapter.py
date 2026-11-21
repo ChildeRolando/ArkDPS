@@ -160,6 +160,7 @@ class BattleStatisticsAdapter:
         self.presence_seconds: dict[str, float] = {}
         self.presence_complete = True
         self.presence_gap = False
+        self._native_presence = False
         self.finished_session: str | None = None
         self.source_attribution = False
         self.source_uid_owners: dict[int, set[str]] = {}
@@ -248,8 +249,18 @@ class BattleStatisticsAdapter:
         self.last_frame = None
         self.last_game_time = None
         self.last_result = None
-        if sample.get('presence_duration_supported') is False:
-            self.presence_complete = False
+        self.presence_seconds = {}
+        self.presence_gap = False
+        self.presence_complete = sample.get('presence_duration_supported') is not False
+        self._native_presence = (sample.get('battle_metadata') or {}).get('platform') == 'native_pc'
+        if self._native_presence:
+            # PC counters are whole-battle values. Start the presence integral
+            # before deployment and output, inside the first game second.
+            self.presence_complete = (sample.get('presence_duration_supported') is True
+                and roster.present_known and sample.get('state') == 2 and 0 <= start <= 1
+                and 0 <= sample['frame'] <= 30 and sample.get('global_total') == sample.get('global_heal') == 0
+                and not any(entry.unique_id in roster.present_unique_ids for entry in roster.entries)
+                and all(row.get('damage') == row.get('healing') == 0 for row in sample.get('rows', ())))
         self.last_types = {}
         self.types_current = set()
         self.unknown_sources = set(mapping.unknown_token_cids)
@@ -628,16 +639,21 @@ class BattleStatisticsAdapter:
             changed = True
         if (self.last_roster is not None and self.last_game_time is not None
                 and game_time > self.last_game_time and not settling):
+            delta = game_time - self.last_game_time
             if self.presence_gap:
                 self.presence_gap = False
                 self.presence_complete = False
+            elif self._native_presence and delta > 5:
+                # A span larger than a full recent window cannot represent
+                # continuous sampling of deployments and removals.
+                self.presence_complete = False
             elif self.last_roster.present_known and roster.present_known:
-                delta = game_time - self.last_game_time
-                for owner in self._present_owners(self.last_roster):
-                    self.presence_seconds[owner] = self.presence_seconds.get(owner, 0.0) + delta
+                if self.presence_complete:
+                    for owner in self._present_owners(self.last_roster):
+                        self.presence_seconds[owner] = self.presence_seconds.get(owner, 0.0) + delta
             else:
                 self.presence_complete = False
-        if not roster.present_known:
+        if not roster.present_known or sample.get('presence_duration_supported') is False:
             self.presence_complete = False
         if (changed or roster != self.last_roster
                 or any(self.last_types.get(cid) != values for cid, values in types_update.items())):

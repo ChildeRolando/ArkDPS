@@ -19,6 +19,7 @@ from native_pc.probe_native_pc_roster import capture_roster
 from native_pc.probe_native_pc_rows import capture_character_rows
 from native_pc.probe_native_pc_stage_spawns import capture_stage_spawns
 from roster import CharacterEntry, RosterSnapshot
+from source_classification import classify_unmapped_source
 from stage_names import resolve as resolve_stage
 
 
@@ -81,6 +82,32 @@ def _roster(sample):
                                     player_side=entry['side']) for entry in raw['entries']),
         present_unique_ids=present, present_known=present_known,
     )
+
+
+def _duration_membership_verified(raw, roster):
+    if not roster.present_known or type(roster.local_player_side) is not int:
+        return False
+    side = roster.local_player_side
+    local = {}
+    for entry in roster.entries:
+        if entry.player_side == side:
+            previous = local.setdefault(entry.unique_id, entry)
+            if previous != entry:
+                return False
+    for unit in raw['presence']['entities']:
+        if unit['player_side'] != side or not unit['borned'] or unit['is_disappeared']:
+            continue
+        entry = local.get(unit['data_uid'])
+        if unit.get('inited') is not True:
+            return False
+        if entry is None:
+            # Known map devices do not contribute to a squad operator's time.
+            if not classify_unmapped_source(unit.get('id')):
+                return False
+        elif (unit.get('id'), unit.get('is_token'), unit.get('is_predefined')) != (
+                entry.cid, entry.is_token, entry.is_predefined):
+            return False
+    return True
 
 
 class NativePcCollector:
@@ -339,16 +366,17 @@ class NativePcCollector:
             observed = time.monotonic()
             self._enemy_snapshot = (observed, raw['frame'], raw['game_time'], raw)
             self._next_enemy = max(self._next_enemy, observed + ENEMY_SAMPLE_INTERVAL)
+        roster = _roster(raw)
         sample = dict(session=':'.join(map(str, (*self.process.process_instance, *lifecycle['battle']))),
                       frame=raw['frame'], game_time=raw['game_time'], battle_identity=lifecycle['battle'],
                       state=raw['battle_state'], speed=raw.get('speed_level'), paused=raw.get('paused'),
-                      presence_duration_supported=False,
+                      presence_duration_supported=_duration_membership_verified(raw, roster),
                       rows=rows, global_total=raw['total_damage'], global_heal=raw['total_heal'],
                       sum_damage=sum(row['damage'] for row in rows),
                       damage_basis='client character counters; includes overkill; excludes healing',
                       read_ms=report.get('acquisition', {}).get('duration_ms'),
                       observed_at=time.time(), captured_monotonic=time.monotonic())
-        return sample, _roster(raw)
+        return sample, roster
 
     def read_enemies(self, *, game_time, frame=None, our_damage=None, **_events):
         saved = self._enemy_snapshot

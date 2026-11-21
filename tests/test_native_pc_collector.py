@@ -9,6 +9,7 @@ from collector import ProcessChanged, SampleUnavailable, UnsupportedVersion
 from event_capture import CaptureRetry
 from native_pc.probe_native_pc_battle import ResearchFailure
 from native_pc_collector import BUILD_ID, NativePcCollector
+from panel_model import Category, PanelConfig, Ranking, RateBasis, render_panel, rows_from_statistics
 
 
 OPERATOR = 'char_336_folivo'
@@ -48,7 +49,8 @@ def sample(frame, damage, *, state=2, presence=True):
         roster_status='available', roster={'local_side': 0, 'entries': [operator, token]},
         presence_status='available' if presence else 'unavailable',
         presence={'local_side': 0, 'entities': [dict(
-            data_uid=10, player_side=0, side=1, borned=True, is_disappeared=False)]} if presence else None)}
+            data_uid=10, player_side=0, side=1, inited=True, borned=True, is_disappeared=False,
+            id=OPERATOR, is_token=False, is_predefined=False)]} if presence else None)}
 
 
 ABSENT = {'status': 'waiting_for_battle', 'reason': 'singleton_is_null'}
@@ -283,6 +285,120 @@ def test_guarded_pair_publishes_and_archives_once_across_same_stage_restart(tmp_
     assert probe.reads == 7
     session.close()
     assert probe.closed
+
+
+def full_cycle_sample(frame, damage=0., healing=0., *, owner_present=True, state=2):
+    report = sample(frame, damage, state=state)
+    raw = report['sample']
+    raw['total_heal'] = healing
+    raw['actor_rows'][0]['healing'] = healing
+    if not owner_present:
+        raw['presence']['entities'] = [dict(data_uid=1, player_side=0, inited=True, borned=True,
+                                           is_disappeared=False, id='trap_002_emp', is_token=True,
+                                           is_predefined=True)]
+    return report
+
+
+def test_native_full_cycle_integrates_owner_presence_and_survives_history(tmp_path):
+    start = full_cycle_sample(4, owner_present=False)
+    start['sample']['actor_rows'] = []
+    bench = full_cycle_sample(60, 90., 11., owner_present=False)
+    # A summon remains active after its host leaves. Its output still belongs
+    # to the host, while the host's own on-field clock is stopped.
+    bench['sample']['presence']['entities'].append(dict(data_uid=20, player_side=0, inited=True,
+        borned=True, is_disappeared=False, id=TOKEN, is_token=True, is_predefined=False))
+    same_frame = full_cycle_sample(150, 140., 27.)
+    probe = Probe([start, full_cycle_sample(30, 30., 5.), bench,
+                   full_cycle_sample(90, 120., 17., owner_present=False),
+                   full_cycle_sample(120, 130., 20.), same_frame, deepcopy(same_frame),
+                   full_cycle_sample(180, 180., 30., state=3),
+                   full_cycle_sample(180, 210., 33., state=3), ABSENT])
+    history = BattleHistory(tmp_path)
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+    session.enable_lifecycle()
+    session.connect()
+    assert session.read()['statistics']['rows'] == {}
+    session.read()
+    session.read()
+    on_bench = session.read()['statistics']['rows'][OPERATOR]
+    assert on_bench['damage'] == 120. and on_bench['presence_seconds'] == 1.
+    assert on_bench['presence_complete'] and on_bench['present'] is False
+    for _ in range(6):
+        try:
+            session.read()
+        except CaptureRetry:
+            pass
+    record, = history.list_recent().records
+    row, = rows_from_statistics(record.statistics)
+    assert row.presence_complete and row.presence_seconds == 3.
+    assert row.full_cycle(Category.DAMAGE) == 70.
+    assert row.full_cycle(Category.HEALING) == 11.
+    assert row.full_cycle(Category.DAMAGE, effective=True) is None
+    display = render_panel(PanelConfig(category=Category.HEALING, ranking=Ranking.DPS,
+                                        rate_basis=RateBasis.FULL_CYCLE), [row])
+    assert display.metric_label == '治疗 · HPS' and display.rate_label == '全周期'
+    assert display.entries[0].value == display.entries[0].rate == 11.
+    session.close()
+
+
+@pytest.mark.parametrize('problem', ['late_start', 'already_deployed', 'nonzero_source',
+                                     'unknown_member', 'missing_membership', 'gap', 'wide_interval'])
+def test_native_full_cycle_requires_a_zero_opening_and_contiguous_membership(tmp_path, problem):
+    start = full_cycle_sample(4, owner_present=problem == 'already_deployed')
+    later = full_cycle_sample(30, 30., 5.)
+    extra = []
+    if problem == 'late_start':
+        start = full_cycle_sample(60, owner_present=False)
+        later = full_cycle_sample(90, 30., 5.)
+    elif problem == 'nonzero_source':
+        start['sample']['actor_rows'][0].update(healing=1.)
+    elif problem == 'unknown_member':
+        later['sample']['presence']['entities'][0]['id'] = 'char_wrong'
+    elif problem == 'missing_membership':
+        later['sample'].update(presence_status='unavailable', presence=None)
+    elif problem == 'gap':
+        extra.append({'status': 'unsupported_layout', 'reason': 'real gap'})
+    elif problem == 'wide_interval':
+        later = full_cycle_sample(210, 30., 5.)
+    finish_frame = later['sample']['frame'] + 30
+    probe = Probe([start, *extra, later, full_cycle_sample(finish_frame, 60., 15.)])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    session = CollectionSession(None, None, collector=collector, frida_remote=None)
+    session.enable_lifecycle()
+    session.connect()
+    session.read()
+    if extra:
+        with pytest.raises(CaptureRetry):
+            session.read()
+    session.read()
+    current = session.read()['statistics']
+    row, = rows_from_statistics(current)
+    assert row.damage == 60. and row.healing == 15.
+    assert row.presence_seconds is None and not row.presence_complete
+    assert row.full_cycle(Category.DAMAGE) is row.full_cycle(Category.HEALING) is None
+    session.close()
+
+
+def test_native_full_cycle_does_not_divide_a_retained_counter_by_new_presence(tmp_path):
+    missing = full_cycle_sample(90, 30., 15.)
+    missing['sample']['actor_rows'] = []
+    probe = Probe([full_cycle_sample(4, owner_present=False), full_cycle_sample(30, 0., 0.),
+                   full_cycle_sample(60, 30., 15.), missing, full_cycle_sample(120, 60., 30.)])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    session = CollectionSession(None, None, collector=collector, frida_remote=None)
+    session.enable_lifecycle()
+    session.connect()
+    for _ in range(3):
+        session.read()
+    row, = rows_from_statistics(session.read()['statistics'])
+    assert (row.damage, row.healing, row.presence_seconds) == (30., 15., 2.)
+    assert row.presence_complete and not row.counter_complete
+    assert row.full_cycle(Category.DAMAGE) is row.full_cycle(Category.HEALING) is None
+    row, = rows_from_statistics(session.read()['statistics'])
+    assert row.full_cycle(Category.DAMAGE) == 20.
+    assert row.full_cycle(Category.HEALING) == 10.
+    session.close()
 
 
 def test_missing_roster_does_not_advance_or_archive_and_marks_gap(tmp_path):
