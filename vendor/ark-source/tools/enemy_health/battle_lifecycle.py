@@ -311,8 +311,17 @@ def _bind_lifecycle(memory, battle_klass, locator, classes):
     return LifecycleReader(memory, battle_klass, flows[0], squad_lookup)
 
 
-def observer_boot_ready(mc, channel):
-    """Confirm a stable logged-in home scene or live battle before attaching."""
+def observer_scene_reason(sample):
+    """Return the reason a validated lifecycle sample cannot permit attach."""
+    if sample['transiting']:
+        return 'scene_transition'
+    if sample['target'] == 'home' or sample['ready']:
+        return None
+    return 'scene_not_ready'
+
+
+def observer_boot_reason(mc, channel):
+    """Check the verified class slots without scanning the heap."""
     memory = MemoryAccess(mc, channel)
     try:
         # Boot polls can precede runtime initialization. Check just these
@@ -321,9 +330,16 @@ def observer_boot_ready(mc, channel):
             'GameFlowController': 'Torappu', 'BattleController': 'Torappu.Battle',
         })
         sample = _bind_lifecycle(memory, None, None, classes).sample()
-    except (ReadFailure, UnicodeError):
-        return False
-    return not sample['transiting'] and (sample['target'] == 'home' or sample['ready'])
+    except ReadFailure as exc:
+        return exc.reason
+    except UnicodeError:
+        return 'scene_decode_failed'
+    return observer_scene_reason(sample)
+
+
+def observer_boot_ready(mc, channel):
+    """Confirm a stable logged-in home scene or live battle before attaching."""
+    return observer_boot_reason(mc, channel) is None
 
 
 def locate_lifecycle(mc, battle_klass, locator, *, channel=None):

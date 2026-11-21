@@ -234,6 +234,41 @@ def test_observer_boot_requires_confirmed_home_or_live_battle(
     assert native.observer_boot_ready(memory.mc, object()) is expected
 
 
+@pytest.mark.parametrize(('sample', 'reason'), [
+    (dict(transiting=False, target='home', ready=False), None),
+    (dict(transiting=False, target='battle_loader', ready=True), None),
+    (dict(transiting=True, target='battle_loader', ready=True), 'scene_transition'),
+    (dict(transiting=False, target='login', ready=False), 'scene_not_ready'),
+])
+def test_observer_lifecycle_probe_reuses_validated_reader(sample, reason):
+    value = collector.Collector.__new__(collector.Collector)
+    calls = []
+    value.core = SimpleNamespace(
+        mc=SimpleNamespace(regions=[], reload_maps=lambda: calls.append('maps')), _chan=object())
+    value._check_process_identity = lambda: calls.append('identity')
+    value._lifecycle_reader = SimpleNamespace(sample=lambda: sample)
+    assert not value.observer_boot_ready()
+    assert value.observer_boot_reason == 'class_slot_image_unavailable'
+    assert value.observer_lifecycle_ready() is (reason is None)
+    assert value.observer_boot_reason == reason
+    assert calls == ['identity', 'maps', 'identity'] + (['identity'] if reason is None else [])
+
+
+def test_observer_lifecycle_probe_rejects_process_replacement_after_positive_sample():
+    value = collector.Collector.__new__(collector.Collector)
+    value._lifecycle_reader = SimpleNamespace(
+        sample=lambda: dict(transiting=False, target='home', ready=False))
+    identities = iter(('original', 'replacement'))
+
+    def check_identity():
+        if next(identities) != 'original':
+            raise collector.ProcessChanged('changed')
+
+    value._check_process_identity = check_identity
+    with pytest.raises(collector.ProcessChanged, match='changed'):
+        value.observer_lifecycle_ready()
+
+
 def test_lifecycle_rejects_flow_native_pointer_disappearing_during_read(monkeypatch):
     memory = MemoryFixture(battle=False)
     original = memory.read_many

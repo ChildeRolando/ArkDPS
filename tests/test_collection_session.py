@@ -11,6 +11,8 @@ from test_enemy_lifecycle_telemetry import enemy
 
 
 class Collector(SnapshotCollector):
+    observer_boot_reason = None
+
     def __init__(self, calls):
         super().__init__()
         self.calls = calls
@@ -20,6 +22,9 @@ class Collector(SnapshotCollector):
 
     def observer_boot_ready(self):
         return True
+
+    def observer_lifecycle_ready(self):
+        return False
 
     def locate_lifecycle(self):
         self.calls.append('lifecycle')
@@ -179,19 +184,96 @@ def test_lifecycle_waits_for_game_signal_then_attaches_once_before_battle(monkey
         assert current.event_status == 'waiting_game_init'
         assert current.observer is None and current.capture is None
         for now in (0.2, 3.0, 25.0):
-            with pytest.raises(CaptureRetry, match='等待游戏初始化'):
+            with pytest.raises(CaptureRetry, match='lifecycle'):
                 current.read()
-        assert calls == ['transport', 'check', 'check', 'check']
+        assert calls == ['transport', 'check', 'lifecycle', 'check', 'check']
         now, initialized = 26.0, True
         with pytest.raises(CaptureRetry, match='lifecycle'):
             current.read()
         assert current.event_status == 'ready'
-        assert calls == ['transport', 'check', 'check', 'check', 'check', 'prepare', 'attach', 'lifecycle']
-        assert [kind for kind, _ in records if kind.startswith('observer_')] == [
+        assert calls == ['transport', 'check', 'lifecycle', 'check', 'check', 'check', 'prepare', 'attach']
+        assert [kind for kind, _ in records if kind.startswith('observer_')
+                and kind != 'observer_game_init_probe'] == [
             'observer_waiting_game_init', 'observer_game_init_ready', 'observer_ready']
         monkeypatch.setattr(collector, 'read_lifecycle', lifecycle)
         assert current.read()['event_status'] == 'recording'
         assert calls.count('attach') == 1
+    finally:
+        current.close()
+
+
+def test_lifecycle_fallback_starts_observer_during_same_battle_without_losing_snapshots(monkeypatch):
+    current, collector, calls = session()
+    current.enable_lifecycle()
+    records = []
+    current.audit = lambda kind, data: records.append((kind, data))
+    now = 0.0
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: now)
+    monkeypatch.setattr(collector, 'observer_boot_ready', lambda: False)
+    collector.observer_boot_reason = 'class_slot_build_mismatch'
+    monkeypatch.setattr(collector, 'observer_lifecycle_ready', lambda: now >= 2.0)
+
+    def prepare_observer():
+        calls.append('prepare')
+        return True, 'ready'
+
+    current.prepare_observer = prepare_observer
+    try:
+        current.connect()
+        first = current.read()
+        assert first['event_status'] == 'waiting_game_init'
+        assert first['statistics']['rows']['char_a']['damage'] == 100
+        assert first['event_watermark'] is None
+        assert calls == ['transport', 'lifecycle']
+
+        now = 2.0
+        collector.frame, collector.game_time, collector.damage = 2, 1, 120
+        baseline = current.read()
+        assert baseline['battle_id'] == first['battle_id']
+        assert baseline['event_status'] == 'recording'
+        assert baseline['event_watermark']['frame'] == 2
+        assert baseline['statistics']['coverage_start'] == first['statistics']['coverage_start'] == 0
+        assert baseline['statistics']['rows']['char_a']['shield_coverage_start'] == 1
+        assert baseline['statistics']['rows']['char_a']['damage'] == 120
+        assert ('observer_game_init_ready', {'pid': 123, 'source': 'lifecycle'}) in records
+        assert calls == ['transport', 'lifecycle', 'prepare', 'attach']
+
+        collector.frame, collector.game_time, collector.damage = 3, 2, 150
+        current.observer.sequence = current.observer.epoch = 1
+        current.observer.events = [event(1, frame=3, game_time=2, amount=30)]
+        result = current.read()
+        assert result['event_status'] == 'recording'
+        assert result['statistics']['rows']['char_a']['damage'] == 150
+        assert result['statistics']['rows']['char_a']['observed_damage'] == 30
+        assert calls.count('attach') == 1
+    finally:
+        current.close()
+
+
+def test_lifecycle_locate_retries_are_bounded_during_game_start(monkeypatch):
+    current, collector, calls = session()
+    current.enable_lifecycle()
+    now = 0.0
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: now)
+    monkeypatch.setattr(collector, 'observer_boot_ready', lambda: False)
+    locate = collector.locate_lifecycle
+
+    def locate_lifecycle():
+        if now < 5:
+            calls.append('locate_pending')
+            raise SampleUnavailable('游戏场景暂未可读')
+        locate()
+
+    monkeypatch.setattr(collector, 'locate_lifecycle', locate_lifecycle)
+    try:
+        current.connect()
+        for now in (0.2, 1.0, 5.0):
+            with pytest.raises(CaptureRetry, match='等待游戏初始化'):
+                current.read()
+        assert calls == ['transport', 'locate_pending']
+        now = 5.3
+        assert current.read()['event_status'] == 'waiting_game_init'
+        assert calls == ['transport', 'locate_pending', 'lifecycle']
     finally:
         current.close()
 
@@ -235,6 +317,30 @@ def test_game_replacement_during_initialization_never_attaches_to_stale_process(
         current.close()
     assert not any(kind.startswith('lifecycle_') for kind in records)
     assert calls[-1] == 'collector_close'
+
+
+def test_process_change_after_native_fallback_ends_existing_lifecycle(monkeypatch):
+    current, collector, calls = session()
+    current.enable_lifecycle()
+    now = 0.0
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: now)
+    monkeypatch.setattr(collector, 'observer_boot_ready', lambda: False)
+    try:
+        current.connect()
+        assert current.read()['state'] == 2
+
+        def process_replaced():
+            raise ProcessChanged('游戏进程已变化')
+
+        now = 2.0
+        monkeypatch.setattr(collector, 'observer_boot_ready', process_replaced)
+        with pytest.raises(ProcessChanged):
+            current.read()
+        assert current.runtime.sessions.state == 'ended'
+        assert current.runtime.sessions.connection == 'disconnected'
+        assert 'attach' not in calls
+    finally:
+        current.close()
 
 
 @pytest.mark.parametrize('failure', [ModuleNotFoundError('optional frida missing'),

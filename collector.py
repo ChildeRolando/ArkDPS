@@ -114,6 +114,7 @@ class Collector:
         self._roster_reader = None
         self._lifecycle_reader = None
         self._lifecycle_maps_refresh_at = float('-inf')
+        self.observer_boot_reason = None
         self.adb_path = adb
         self.serial = serial
         self.diagnostics = ConnectionDiagnostics(
@@ -151,6 +152,7 @@ class Collector:
     def connect(self, force=False, *, locate=True, lifecycle=False):
         self.log('正在连接 MuMu…')
         self._lifecycle_reader = None
+        self.observer_boot_reason = None
         self.core.bc_addr = 0
         if not hasattr(self, 'enemy_telemetry'):
             self.enemy_telemetry = EnemyTelemetry(self.core, log=self.log)
@@ -350,13 +352,34 @@ class Collector:
 
     def observer_boot_ready(self):
         """Check the live game scene through the read-only channel before injection."""
-        from tools.enemy_health.battle_lifecycle import observer_boot_ready
+        from tools.enemy_health.battle_lifecycle import observer_boot_reason
         mc = self.core.mc
         self._check_process_identity()
         # The first connection can precede the libil2cpp mapping and the heaps
         # holding the scene controller. Refresh only during bounded boot polls.
         mc.reload_maps()
-        if not observer_boot_ready(mc, self.core._chan):
+        self.observer_boot_reason = observer_boot_reason(mc, self.core._chan)
+        if self.observer_boot_reason is not None:
+            return False
+        self._check_process_identity()
+        return True
+
+    def observer_lifecycle_ready(self):
+        """Check the same attach condition using the existing lifecycle reader."""
+        from tools.enemy_health.battle_lifecycle import observer_scene_reason
+        if self._lifecycle_reader is None:
+            self.observer_boot_reason = 'lifecycle_unbound'
+            return False
+        try:
+            sample = self.read_lifecycle()
+        except ReadFailure as exc:
+            self.observer_boot_reason = exc.reason
+            return False
+        except UnicodeError:
+            self.observer_boot_reason = 'scene_decode_failed'
+            return False
+        self.observer_boot_reason = observer_scene_reason(sample)
+        if self.observer_boot_reason is not None:
             return False
         self._check_process_identity()
         return True
