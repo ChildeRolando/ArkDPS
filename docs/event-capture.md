@@ -4,7 +4,7 @@
 
 ## 官服 PC 观察者接入
 
-已验证来源可以通过 `CollectionSession` 的 `observer_factory` 注入观察者，启用战局生命周期并传入 `frida_remote=None`。桌面 worker 也接受内部的 `native_pc_observer_factory`，只在选择 PC 且启用事件观察时传入会话。工厂、启动、失败后的资源释放、下一局重试及状态仍由会话管理。当前 PC 产品使用原生累计快照，应用入口尚未配置可验收的 Windows 逐次事件来源。
+已验证来源可以通过 `CollectionSession` 的 `observer_factory` 注入观察者，启用战局生命周期并传入 `frida_remote=None`。无界面采集入口 `app.main` 和桌面桥接入口 `desktop_bridge.main` 都接受可信调用方显式传入的 `native_pc_observer_factory`，只在选择 PC 且启用事件观察时传入会话。无界面采集沿用 `--require-events` 验收。观察者启动失败时不写就绪文件，事件流失效时保留失败证据。工厂、启动、失败后的资源释放、下一局重试及状态仍由会话管理。当前 PC 产品使用原生累计快照，发行入口尚未配置可验收的 Windows 逐次事件来源。
 
 PC 的原生累计和编队在 `read_lifecycle()` 的一次事务中采集。`BattleFeed` 在这次事务前后分别取观察者水位。两次水位必须同帧、同游戏时间、同序号和同回调世代，且没有正在执行的事件。两个水位、批次以及可选的终局水位必须携带相同的 `native_session` 与 `source_build`，也必须与快照一致。原生战局身份作为不透明值比较，统计与归档继续使用 `feed:generation`。
 

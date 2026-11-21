@@ -1,5 +1,6 @@
 """Worker source routing with injected in-memory sessions; no PC, ADB or feed."""
 import sys
+from io import StringIO
 from types import SimpleNamespace
 
 import pytest
@@ -159,3 +160,56 @@ def test_native_factory_does_not_change_android_endpoint_or_observer_path(tmp_pa
     assert ('resolve_android',) in calls
     assert (('android_endpoint', 'expert-android-endpoint') in calls) is enabled
     assert state.snapshot()['observer_status'] == ('ready' if enabled else 'disabled')
+
+
+@pytest.mark.parametrize('factory,flags', [
+    (trusted_factory, []), (None, []),
+    (trusted_factory, ['--no-events']), (trusted_factory, ['--offline']),
+])
+def test_bridge_main_forwards_explicit_factory_and_preserves_entry_modes(tmp_path, monkeypatch, factory, flags):
+    calls = []
+
+    class Lock:
+        def bind(self, address):
+            calls.append(('bind', address))
+
+        def listen(self, _backlog):
+            pass
+
+        def close(self):
+            calls.append(('lock_closed',))
+
+    class Worker:
+        def __init__(self, state, *, endpoint, native_pc_observer_factory=None):
+            calls.append(('worker', endpoint, native_pc_observer_factory))
+            self.thread = SimpleNamespace(start=lambda: calls.append(('started',)))
+
+        def request(self, config, enabled):
+            calls.append(('request', config.platform, enabled))
+            return 7
+
+        def close(self):
+            calls.append(('closed',))
+
+    def serve(_input, _output, state, worker):
+        assert state.effective_connection.platform == 'native_pc'
+        calls.append(('served', worker is not None))
+
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    monkeypatch.setattr(desktop_bridge.socket, 'socket', Lock)
+    monkeypatch.setattr(desktop_bridge, 'CollectionWorker', Worker)
+    monkeypatch.setattr(desktop_bridge, 'serve', serve)
+    monkeypatch.setattr(desktop_bridge.sys, 'stdout', StringIO())
+    monkeypatch.setattr(desktop_bridge.sys, 'stderr', StringIO())
+    monkeypatch.setattr(desktop_bridge.sys, 'argv', [
+        'desktop_bridge.py', '--state-dir', str(tmp_path / 'state'),
+        '--platform', 'native_pc', '--native-game-root', 'recorded-game-root', *flags])
+    desktop_bridge.main(native_pc_observer_factory=factory)
+
+    if '--offline' in flags:
+        assert calls == [('served', False)]
+    else:
+        assert ('worker', desktop_bridge.DEFAULT_FRIDA_REMOTE, factory) in calls
+        assert ('request', 'native_pc', '--no-events' not in flags) in calls
+        assert ('started',) in calls and ('served', True) in calls
+        assert calls[-2:] == [('closed',), ('lock_closed',)]

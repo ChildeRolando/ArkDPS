@@ -33,7 +33,7 @@ def write_json(path, value):
         json.dump(value, out, ensure_ascii=False, indent=2, default=json_value, allow_nan=False)
 
 
-def run_capture(args, *, session_factory=CollectionSession):
+def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_factory=None):
     root = Path(__file__).resolve().parent
     frozen = getattr(sys, 'frozen', False)
     if frozen:
@@ -84,6 +84,8 @@ def run_capture(args, *, session_factory=CollectionSession):
         if platform == 'native_pc':
             from native_pc_collector import NativePcCollector
             session_options.update(collector=NativePcCollector(args.native_game_root), frida_remote=None)
+            if native_pc_observer_factory is not None and args.frida_remote is None:
+                session_options['observer_factory'] = native_pc_observer_factory
         session = session_factory(args.adb, args.serial, **session_options)
         if isinstance(session, CollectionSession):
             session.history = BattleHistory(root / 'runtime' / 'history')

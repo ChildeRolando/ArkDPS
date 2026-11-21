@@ -1056,7 +1056,7 @@ def serve(input_stream, output, state, worker=None):
             return
 
 
-def main():
+def main(*, native_pc_observer_factory=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--state-dir', type=Path)
     parser.add_argument('--offline', action='store_true')
@@ -1094,7 +1094,9 @@ def main():
     state.effective_connection = effective_config
     if args.fixture:
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))
-    worker = None if args.offline else CollectionWorker(state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE)
+    worker = None if args.offline else CollectionWorker(
+        state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE,
+        native_pc_observer_factory=native_pc_observer_factory)
     if worker:
         revision = worker.request(effective_config,
             False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))

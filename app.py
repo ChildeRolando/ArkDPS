@@ -103,7 +103,7 @@ def _utf8_streams():
             pass
 
 
-def main():
+def main(*, native_pc_observer_factory=None):
     _utf8_streams()
     parser = parser_for()
     args = parser.parse_args()
@@ -119,12 +119,17 @@ def main():
         return launch(args)
     saved = ConnectionConfigStore(ROOT / 'runtime' / 'connection.json').load().config
     args.platform = args.platform or ('native_pc' if args.native_game_root else saved.platform)
+    capture_options = {}
     if args.platform == 'native_pc':
         args.native_game_root = args.native_game_root or saved.native_game_root
         if not args.native_game_root:
             parser.error('官服 PC 采集需要 --native-game-root，或已保存的游戏目录')
-        if args.require_events or args.frida_remote:
-            parser.error('官服 PC 当前仅支持累计采集；逐事件参数只支持 MuMu')
+        if args.frida_remote:
+            parser.error('--frida-remote 只支持 MuMu')
+        if args.require_events and native_pc_observer_factory is None:
+            parser.error('当前构建未接入官服 PC 逐次事件来源')
+        if native_pc_observer_factory is not None and args.frida_remote is None:
+            capture_options['native_pc_observer_factory'] = native_pc_observer_factory
         args.frida_remote = None
         args.adb, args.serial = None, None
     elif args.frida_remote is None:
@@ -132,7 +137,7 @@ def main():
         args.frida_remote = DEFAULT_FRIDA_REMOTE
     elif args.frida_remote == '':
         args.frida_remote = None
-    if args.require_events and not args.frida_remote:
+    if args.require_events and args.platform == 'mumu' and not args.frida_remote:
         parser.error('--require-events cannot be combined with --no-events')
     if args.platform == 'mumu':
         args.adb = args.adb or DEFAULT_ADB
@@ -149,7 +154,7 @@ def main():
     from capture_cli import run_capture
     if args.platform == 'native_pc':
         try:
-            run_capture(args)
+            run_capture(args, **capture_options)
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 2

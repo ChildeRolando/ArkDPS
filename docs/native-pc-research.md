@@ -73,3 +73,15 @@ python acceptance/probe_arkhelper_feed.py
 独立 Windows 进程使用 v1.4.2 合成数据验证了持续采集。接收端在同一局读到第 309 帧实际扣血 `123.25` 和第 339 帧 `225.25`。本机真实发布名称连续轮询返回 `feed_missing`，没有产生有效样本。两份回执分别位于 `runtime/native-pc/arkhelper-v1.4.2-abi/watch-result.json` 和 `runtime/native-pc/2026-11-21-arkhelper-watch/live-check.jsonl`。
 
 本机回执位于 `runtime/native-pc/2026-11-21-ce5/receipt.json`，包含权限状态、构建身份及 `Player.log` 的比较结果。回执仅保存诊断与统计摘要。
+
+## 2026-11-21 · Mon4terTeam ArkFramework 接口
+
+用户提供的 Mon4terTeam fork 明确声明适配 Windows x64 的《明日方舟》PC 客户端，并在上游 ABI 1 之外提供 V2 逐次战斗记录。以下结论来自公开契约和导出格式。当前环境没有该 fork 产出的 PC 战斗事件样本。[仓库说明](https://github.com/Mon4terTeam/ArkFramework)
+
+| 可见接口 | 对 ArkDPS 的用途与缺口 |
+| --- | --- |
+| 战斗事件 V2 | 每条记录带全局序号、战局、逻辑帧、帧内顺序、来源、宿主和目标。伤害记录区分计算伤害与实际扣血，类型中含治疗。读取状态带部分覆盖、缓冲溢出与结束标志。公开字段没有明确的施盾人与实际吸收量、技能起止，也没有将该单条记录与 ArkDPS 同帧累计绑定的外部契约。该接口由框架在进程内提供。[战斗事件头文件](https://github.com/Mon4terTeam/ArkFramework/blob/main/include/ark/battle.h) |
+| 外部 WebView 数据 | 每个 topic 只保留最新负载，战斗状态每 500 ms 发布一份快照。桥接消息序号用于这些发布，不能证明期间的逐次事件完整。[外部桥接说明](https://github.com/Mon4terTeam/ArkFramework/blob/main/docs/ExternalBridge.md) |
+| CSV 和回放文件 | 伤害 CSV 按干员导出累计计算和实际扣血，可作对账。回放 JSON 保存按逻辑帧排序的玩家操作。另有逐帧状态日志，技能字段可供离线核对技能状态变化，具体覆盖需查实际文件。[伤害 CSV 字段](https://github.com/Mon4terTeam/ArkFramework/blob/main/plugins/damage_meter/csv_export.cpp) · [BetterBattle 回放约定](https://github.com/Mon4terTeam/ArkFramework/blob/main/plugins/BetterBattle/README.md) |
+
+可对现成 PC CSV 和逐帧日志做独立对账。要让 ArkDPS 发布连续观察者统计，仍需有序的外部记录、同局同帧绑定，以及对每类事件覆盖的明确证据。受控自定义关卡的记录只验证其实际覆盖的机制。

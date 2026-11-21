@@ -7,6 +7,8 @@ import capture_cli
 from collection_session import CollectionSession
 from event_capture import CaptureRetry
 from test_collection_session import Collector, LiveObserver
+from test_event_capture import event
+from test_lifecycle_events import native_connection
 
 
 def options(tmp_path):
@@ -56,6 +58,7 @@ def stub_git_and_clock(monkeypatch):
     monkeypatch.setattr(capture_cli.subprocess, 'check_output',
                         lambda command, **kwargs: 'candidate\n' if command[1] == 'rev-parse' else '')
     Session.failed = False
+    return clock
 
 
 def test_cli_retries_and_writes_ready_raw_journal_and_summary(tmp_path, monkeypatch):
@@ -227,3 +230,74 @@ def test_native_headless_entry_uses_saved_platform_and_never_starts_observer(tmp
         app.main()
     assert exc.value.code == 2
     assert len(received) == 1
+
+
+@pytest.mark.parametrize('mode', ['ready', 'failed', 'disabled'])
+def test_headless_pc_observer_uses_the_event_acceptance_path(tmp_path, monkeypatch, mode):
+    import app
+    import native_pc_collector
+
+    clock = stub_git_and_clock(monkeypatch)
+    _, collector, observer, snapshot, _, events, calls, committed = native_connection()
+
+    class Diagnostics(SimpleNamespace):
+        def as_dict(self):
+            return vars(self)
+
+    collector.diagnostics = Diagnostics(platform='native_pc', version_actual='fixture')
+    collector.event_capability = {'status': 'unavailable', 'error': 'no observer'}
+    collector.connect = lambda **_: None
+    collector.close = lambda: calls.append('collector closed')
+    collector.locate_lifecycle = lambda: None
+    observer.start = lambda: calls.append('observer started')
+    observer.stop = lambda: calls.append('observer stopped')
+    evidence = tmp_path / 'evidence'
+
+    def provider(connected, remote):
+        assert connected is collector and remote is None
+        assert not (evidence / 'READY.json').exists()
+        calls.append('provider requested')
+        if mode == 'failed':
+            raise RuntimeError('fixture observer unavailable')
+        return observer
+
+    def advance(seconds):
+        clock.now += seconds
+        snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1., 20.
+        events.queue = [event(1, 2, 1., 20)]
+
+    monkeypatch.setattr(capture_cli.time, 'sleep', advance)
+    monkeypatch.setattr(native_pc_collector, 'NativePcCollector', lambda _: collector)
+    monkeypatch.setattr(app, 'ROOT', tmp_path)
+    monkeypatch.setattr(app.socket, 'socket', lambda: SimpleNamespace(
+        bind=lambda _: None, listen=lambda _: None, close=lambda: None))
+    monkeypatch.setattr(app.sys, 'argv', [
+        'app.py', '--platform', 'native_pc', '--native-game-root', str(tmp_path / 'game'),
+        '--capture-seconds', '0.11', '--output-dir', str(evidence), '--require-progress',
+        '--no-events' if mode == 'disabled' else '--require-events',
+    ])
+
+    result = app.main(native_pc_observer_factory=provider)
+    summary = json.loads((evidence / 'summary.json').read_text(encoding='utf-8'))
+    assert summary['platform'] == 'native_pc' and summary['frida_remote'] is None
+    assert 'collector closed' in calls
+    if mode == 'failed':
+        assert result == 2 and summary['samples'] == 0
+        assert 'fixture observer unavailable' in summary['error']
+        assert not (evidence / 'READY.json').exists()
+        assert committed == []
+        return
+
+    ready = json.loads((evidence / 'READY.json').read_text(encoding='utf-8'))
+    assert result is None and summary['error'] is None and summary['samples'] == 2
+    row = summary['last_sample']['statistics']['rows']['char_a']
+    assert row['damage'] == 20
+    if mode == 'ready':
+        assert ready['status'] == 'observer_ready'
+        assert summary['last_sample']['event_status'] == 'recording'
+        assert row['observed_damage'] == 20 and committed == [0, 1]
+        assert calls.count('observer started') == calls.count('observer stopped') == 1
+    else:
+        assert ready['status'] == 'connected'
+        assert summary['last_sample']['event_status'] == 'unavailable'
+        assert 'provider requested' not in calls and committed == []
