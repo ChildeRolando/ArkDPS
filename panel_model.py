@@ -56,6 +56,8 @@ def ranking_label(category: Category, ranking: Ranking) -> str:
     if ranking is Ranking.TOTAL:
         return {Category.DAMAGE: '总伤', Category.HEALING: '总治疗',
                 Category.SHIELD: '总护盾'}[category]
+    if category is Category.HEALING and ranking is Ranking.DPS:
+        return 'HPS'
     return RANKING_LABELS[ranking]
 
 RATE_LABELS = {RateBasis.RECENT_5S: '近 5 秒', RateBasis.ENGAGEMENT: '接敌',
