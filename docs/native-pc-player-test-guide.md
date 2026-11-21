@@ -36,6 +36,8 @@
 
 ### C · 两台小车、撤下再补，1-7 演习
 
+已收到 `summon-20261121-123256.jsonl`。小车的伤害已经对上。那次记录没给每台小车记编号，下方命令用于补读两台车的编号和撤退记录。
+
 ```powershell
 & 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 300 --witnesses --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\scene-presence-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
 ```
@@ -48,6 +50,8 @@
 
 ### D · 打到一半才打开采样，1-7 演习
 
+已收到 `midbattle-20261121-130509.jsonl`。打开采样时已有伤害，这项已对上。打开后的这段没读到新伤害，后续只需补这一步。
+
 1. 先进入战斗。用一名干员打几次，确认已经有伤害。然后**暂停**。
 2. 保持暂停，运行下面这条。等 `recording` 出现后再等约 3 秒。
 
@@ -59,6 +63,8 @@
 
 ### E · 正常的失败结算，1-7 演习
 
+已收到 `defeat-20261121-130606.jsonl`。游戏给出了失败结果，回到关卡页后战斗也已结束。命令留作复查。
+
 ```powershell
 & 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 300 --witnesses --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\defeat-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
 ```
@@ -69,6 +75,8 @@
 我要对比游戏明确给出的失败结果与 B 的主动放弃。
 
 ### F · 本体撤退后再部署，1-7 演习
+
+已收到 `operator-redeploy-20261121-130807.jsonl`。缄默德克萨斯每次上场都有新编号，伤害仍一直接在同一行。命令留作复查。
 
 ```powershell
 & 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 300 --witnesses --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\operator-redeploy-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
