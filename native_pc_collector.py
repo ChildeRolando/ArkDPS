@@ -19,6 +19,7 @@ from native_pc.probe_native_pc_roster import capture_roster
 from native_pc.probe_native_pc_rows import capture_character_rows
 from native_pc.probe_native_pc_stage_spawns import capture_stage_spawns
 from roster import CharacterEntry, RosterSnapshot
+from stage_names import resolve as resolve_stage
 
 
 BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
@@ -37,6 +38,16 @@ def _flow(report):
 
 def _battle_loader(flow):
     return flow and flow['source_scene'] == 'home' and flow['target_scene'] == 'battle_loader'
+
+
+def _opening_stage_matches(selection, level_id):
+    short_level = level_id.rsplit('/', 1)[-1].casefold().removeprefix('level_')
+    if selection == short_level:
+        return True
+    # Resource stages can use a different key on the squad page, such as
+    # wk_melee_5 for Obt/Weekly/level_weekly_melee_5.
+    stage = resolve_stage(level_id)
+    return stage.known and not stage.warning and selection == stage.stage_id.casefold()
 
 
 def _capture_fields(read, context):
@@ -275,24 +286,30 @@ class NativePcCollector:
     def _observe_opening(self, report):
         self._practice_battle = None
         flow = _flow(report)
-        if flow is not None and not _battle_loader(flow):
+        if (self._opening_choice is not None and self._opening_choice[3] is not None
+                or flow is not None and not _battle_loader(flow)):
             self._opening_choice = None
         if (_battle_loader(flow) and flow['transiting']
                 and report.get('practice_selection_status') == 'available'):
             raw = report['practice_selection']
-            self._opening_choice = (raw['stage_id'].casefold(), raw['practice'], time.monotonic())
+            self._opening_choice = (raw['stage_id'].casefold(), raw['practice'], time.monotonic(), None)
 
     def _battle_practice(self, raw, flow, identity, stage):
         choice, self._opening_choice = self._opening_choice, None
         if self._practice_battle is not None and self._practice_battle[0] != identity:
             self._practice_battle = None
-        if not stage:
-            return None
-        short_stage = stage.rsplit('/', 1)[-1].casefold().removeprefix('level_')
-        if (choice and choice[0] == short_stage and _battle_loader(flow) and not flow['transiting']
-                and raw['battle_state'] == 2 and raw['frame'] <= OPENING_MAX_FRAME
-                and time.monotonic() - choice[2] <= OPENING_MAX_AGE):
-            self._practice_battle = (identity, stage, choice[1])
+        if choice is not None:
+            chosen_stage, practice, observed_at, bound_battle = choice
+            if ((bound_battle is None or bound_battle == identity)
+                    and raw['battle_state'] == 2 and raw['frame'] <= OPENING_MAX_FRAME
+                    and time.monotonic() - observed_at <= OPENING_MAX_AGE
+                    and (stage is None or _opening_stage_matches(chosen_stage, stage))
+                    and (flow is None or _battle_loader(flow))):
+                if stage is not None and flow is not None and not flow['transiting']:
+                    self._practice_battle = (identity, stage, practice)
+                else:
+                    # Missing evidence can recover only inside this same opening.
+                    self._opening_choice = (chosen_stage, practice, observed_at, identity)
         if self._practice_battle is not None and self._practice_battle[:2] == (identity, stage):
             return self._practice_battle[2]
         return None

@@ -128,6 +128,99 @@ def test_practice_requires_fresh_matching_opening_and_does_not_carry_over(
     collector.close()
 
 
+@pytest.mark.parametrize('incomplete', [
+    dict(game_flow_status='unavailable'),
+    dict(stage_id=None, stage_status='unavailable', **flow('home', 'battle_loader', transiting=False)),
+    flow('home', 'battle_loader', transiting=True),
+])
+def test_retry_opening_witness_for_the_same_battle_before_archiving(tmp_path, incomplete):
+    first, recovered = sample(4, 0.), sample(8, 0.)
+    first['sample'].update(incomplete)
+    recovered['sample'].update(flow('home', 'battle_loader', transiting=False))
+    probe = Probe([opening(), first, recovered, sample(120, 7., state=3), ABSENT])
+    history = BattleHistory(tmp_path)
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+    session.enable_lifecycle()
+    session.connect()
+    with pytest.raises(CaptureRetry):
+        session.read()
+    assert session.read()['battle_metadata']['practice'] is None
+    assert session.read()['battle_metadata']['practice'] is True
+    session.read()
+    with pytest.raises(CaptureRetry):
+        session.read()
+    record, = history.list_recent().records
+    assert record.metadata['practice'] is True
+    session.close()
+
+
+@pytest.mark.parametrize(('stage_key', 'mode', 'expected'), [
+    ('wk_melee_5', True, True),
+    ('wk_melee_5', False, False),
+    ('wk_melee_6', True, None),
+])
+def test_weekly_opening_matches_the_catalog_stage_key(tmp_path, stage_key, mode, expected):
+    start = sample(4, 0.)
+    level = 'Obt/Weekly/level_weekly_melee_5'
+    start['sample'].update(stage_id=level, **flow('home', 'battle_loader', transiting=False))
+    probe = Probe([opening(mode, stage_key), start])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    collector.connect()
+    assert collector.read_lifecycle()['battle'] is None
+    metadata = collector.read_lifecycle()['metadata']
+    assert metadata['stage_id'] == level
+    assert metadata['practice'] is expected
+    collector.close()
+
+
+def test_weekly_alias_requires_a_validated_catalog(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from stage_names import resolve
+
+    level = 'Obt/Weekly/level_weekly_melee_5'
+    entry = replace(resolve(level), warning='catalog version mismatch')
+    monkeypatch.setattr('native_pc_collector.resolve_stage', lambda _: entry)
+    start = sample(4, 0.)
+    start['sample'].update(stage_id=level, **flow('home', 'battle_loader', transiting=False))
+    probe = Probe([opening(True, 'wk_melee_5'), start])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    collector.connect()
+    assert collector.read_lifecycle()['battle'] is None
+    assert collector.read_lifecycle()['metadata']['practice'] is None
+    collector.close()
+
+
+@pytest.mark.parametrize('boundary', ['new_battle', 'singleton_absent', 'expired', 'late_frame', 'other_scene'])
+def test_pending_opening_cannot_survive_a_boundary(tmp_path, monkeypatch, boundary):
+    now = 0.
+    monkeypatch.setattr('native_pc_collector.time.monotonic', lambda: now)
+    first, end = sample(4, 0.), sample(8, 0.)
+    end['sample'].update(flow('home', 'battle_loader', transiting=False))
+    middle = []
+    if boundary == 'new_battle':
+        end['sample']['battle_serial'] = 2
+    elif boundary == 'singleton_absent':
+        middle.append(ABSENT)
+    elif boundary == 'late_frame':
+        end['sample']['frame'] = 151
+    elif boundary == 'other_scene':
+        incompatible = sample(6, 0.)
+        incompatible['sample'].update(flow('battle_finish', 'home', transiting=False))
+        middle.append(incompatible)
+    probe = Probe([opening(), first, *middle, end])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    collector.connect()
+    assert collector.read_lifecycle()['battle'] is None
+    assert collector.read_lifecycle()['metadata']['practice'] is None
+    if middle:
+        collector.read_lifecycle()
+    if boundary == 'expired':
+        now += 16.
+    assert collector.read_lifecycle()['metadata']['practice'] is None
+    collector.close()
+
+
 @pytest.mark.parametrize(('source', 'target', 'transiting', 'result'), [
     ('level_main_01-08', 'battle_finish', True, 0),
     ('level_main_01-07', 'home', True, 0),
