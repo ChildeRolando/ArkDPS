@@ -513,6 +513,14 @@ public partial class MainWindow
         };
         if(nativeCurrentHp)
         {
+            var plan=enemy.Get("stage_plan");
+            if(!blocked && battleId.Length>0 && plan.Get("fixed_count").TryNumber() is double fixedCount && fixedCount>=0)
+            {
+                hints.Add("固定波次计数 "+plan.UiInt("fixed_count")+" 个。");
+                if(plan.Get("conditional_actions").TryNumber()>0)
+                    hints.Add("另有 "+plan.UiInt("conditional_actions")+" 条条件出怪动作。");
+                if(plan.Bool("branches_present")) hints.Add("检测到关卡分支引用。");
+            }
             hints.Add("入场人数为已观测下限。离场表示实例已从采样名单消失，原因未知。");
             if(totals.Get("current_count").ValueKind==JsonValueKind.Number &&
                 totals.Get("current_hp_count").ValueKind==JsonValueKind.Number)

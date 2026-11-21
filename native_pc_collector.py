@@ -1,6 +1,7 @@
 """Publish verified Windows counters through the shared battle lifecycle."""
 
 import hashlib
+import json
 from pathlib import Path
 import struct
 import time
@@ -16,6 +17,7 @@ from native_pc.probe_native_pc_practice import capture_practice_selection
 from native_pc.probe_native_pc_presence import capture_presence
 from native_pc.probe_native_pc_roster import capture_roster
 from native_pc.probe_native_pc_rows import capture_character_rows
+from native_pc.probe_native_pc_stage_spawns import capture_stage_spawns
 from roster import CharacterEntry, RosterSnapshot
 
 
@@ -23,6 +25,8 @@ BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
 SNAPSHOT_ONLY = '官服 PC 当前提供累计统计。逐次伤害、技能期与护盾吸收暂无数据。'
 ENEMY_SAMPLE_INTERVAL = 1.0
 ENEMY_MAX_AGE = 2.5
+STAGE_PLAN_RETRY_INTERVAL = 1.0
+STAGE_PLAN_RECHECK_INTERVAL = 5.0
 OPENING_MAX_AGE = 15.0
 OPENING_MAX_FRAME = 150
 
@@ -85,6 +89,10 @@ class NativePcCollector:
         self._next_enemy = float('-inf')
         self._opening_choice = None
         self._practice_battle = None
+        self._stage_plan_scope = None
+        self._stage_plan_candidate = None
+        self._stage_plan_confirmed = None
+        self._next_stage_plan = float('-inf')
         self.event_capability = dict(status='unavailable', error=SNAPSHOT_ONLY)
         self.diagnostics = ConnectionDiagnostics(platform='native_pc', version_expected=BUILD_ID,
             native_game_root=str(self.game_root) if self.game_root is not None else None)
@@ -141,12 +149,15 @@ class NativePcCollector:
         if status == 'waiting_for_battle' and report.get('reason') == 'singleton_is_null':
             self._observe_opening(report)
             self._reset_enemy_observation()
+            self._reset_stage_plan()
             return dict(battle=None, state=None, ready=False, transiting=False, source='', target='')
         if status in ('process_exited', 'process_changed'):
+            self._reset_stage_plan()
             raise ProcessChanged('官服 PC 游戏进程已变化，正在重新连接。')
         if status in ('waiting_game_init', 'battle_not_ready', 'sample_retry'):
             raise SampleUnavailable(f'官服 PC 战局正在准备或跨帧重试（{report.get("reason")}）')
         if status != 'sample_available':
+            self._reset_stage_plan()
             diagnostic = report.get('diagnostic')
             detail = (f'{diagnostic["api"]}({diagnostic["win32_error"]})'
                       if diagnostic else report.get('reason'))
@@ -158,6 +169,12 @@ class NativePcCollector:
         identity = hashlib.sha256(struct.pack(f'<{len(identity_words)}Q', *identity_words)).hexdigest()
         battle = (identity,)
         stage_id = raw.get('stage_id') if raw.get('stage_status') == 'available' else None
+        plan_scope = ((battle, stage_id) if isinstance(stage_id, str) and stage_id
+                      and stage_id.strip() == stage_id else None)
+        if plan_scope != self._stage_plan_scope:
+            self._reset_stage_plan(plan_scope)
+        if ('stage_spawns_status' in raw and raw['stage_spawns_status'] != 'available'):
+            self._invalidate_stage_plan()
         flow = _flow(raw)
         practice = self._battle_practice(raw, flow, battle, stage_id)
         abandoned = (raw['battle_state'] == 2 and raw.get('battle_result') == 0
@@ -179,11 +196,71 @@ class NativePcCollector:
     def _capture(self, read, context):
         fields = _capture_fields(read, context)
         now = time.monotonic()
-        if now >= self._next_enemy:
+        enemy_due = now >= self._next_enemy
+        if enemy_due:
             self._next_enemy = now + ENEMY_SAMPLE_INTERVAL
             fields.update(capture_enemies(read, context))
         fields.update(capture_game_flow(read, context))
+        # Never combine the two expensive optional witnesses. Keep the existing
+        # counters, roster, presence and flow ahead of configuration work.
+        if not enemy_due and now >= self._next_stage_plan:
+            interval = (STAGE_PLAN_RECHECK_INTERVAL if self._stage_plan_confirmed
+                        else STAGE_PLAN_RETRY_INTERVAL)
+            self._next_stage_plan = now + interval
+            try:
+                fields.update(capture_stage_spawns(read, context))
+            except (ApiFailure, ResearchFailure):
+                fields.update(stage_spawns_status='unavailable', stage_spawns=None,
+                              stage_spawns_reason='optional_stage_plan_read_failed')
         return fields
+
+    def _reset_stage_plan(self, scope=None):
+        self._stage_plan_scope = scope
+        self._stage_plan_candidate = self._stage_plan_confirmed = None
+        self._next_stage_plan = float('-inf')
+
+    def _invalidate_stage_plan(self, candidate=None):
+        self._stage_plan_candidate = candidate
+        self._stage_plan_confirmed = None
+        self._next_stage_plan = min(self._next_stage_plan,
+                                    time.monotonic() + STAGE_PLAN_RETRY_INTERVAL)
+
+    def _observe_stage_plan(self, raw):
+        if self._stage_plan_scope is None or 'stage_spawns_status' not in raw:
+            return
+        payload = raw.get('stage_spawns')
+        try:
+            if (raw['stage_spawns_status'] != 'available' or not isinstance(payload, dict)
+                    or type(payload.get('schema_version')) is not int or payload['schema_version'] != 1
+                    or payload.get('scope') != 'current_stage_waves_spawn_structure'
+                    or not isinstance(payload.get('spawn_actions'), list)):
+                raise ValueError('unavailable stage structure')
+            plan = dict(fixed_count=payload.get('scheduled_counted_spawn_count'),
+                        conditional_actions=payload.get('conditional_spawn_action_count'),
+                        branches_present=payload.get('branch_container_present'))
+            if (any(type(plan[key]) is not int or plan[key] < 0
+                    for key in ('fixed_count', 'conditional_actions'))
+                    or type(plan['branches_present']) is not bool):
+                raise ValueError('invalid stage structure counters')
+            # Include all action positions, IDs and flags, not just the total.
+            # The independent read-cost field is deliberately outside this hash.
+            signature = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        except (ValueError, TypeError):
+            self._invalidate_stage_plan()
+            return
+        previous = self._stage_plan_candidate
+        if previous is None or previous[0] != signature:
+            self._invalidate_stage_plan((signature, raw['frame']))
+        elif raw['frame'] > previous[1]:
+            self._stage_plan_confirmed = (raw['frame'], plan)
+            self._next_stage_plan = max(self._next_stage_plan,
+                                        time.monotonic() + STAGE_PLAN_RECHECK_INTERVAL)
+
+    def _with_stage_plan(self, view, frame):
+        confirmed = self._stage_plan_confirmed
+        plan = (dict(confirmed[1]) if confirmed is not None and type(frame) is int
+                and frame >= confirmed[0] else None)
+        return dict(view, stage_plan=plan)
 
     def _capture_idle(self, read, context):
         fields = capture_game_flow(read, context)
@@ -235,6 +312,7 @@ class NativePcCollector:
         for key in ('actor_rows', 'roster'):
             if raw.get(f'{key}_status') != 'available' or raw.get(key) is None:
                 raise SnapshotGap(f'官服 PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
+        self._observe_stage_plan(raw)
         rows = raw['actor_rows']
         battle = lifecycle['battle']
         if self._enemy_battle != battle:
@@ -258,20 +336,21 @@ class NativePcCollector:
     def read_enemies(self, *, game_time, frame=None, our_damage=None, **_events):
         saved = self._enemy_snapshot
         if saved is None:
-            return native_enemy_view({}, frame=None, game_time=None, catalog={})
+            return self._with_stage_plan(native_enemy_view({}, frame=None, game_time=None, catalog={}), frame)
         observed, enemy_frame, enemy_time, raw = saved
         if (frame is None or game_time is None or frame < enemy_frame or game_time < enemy_time
                 or time.monotonic() - observed > ENEMY_MAX_AGE):
-            return native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
-                                     frame=enemy_frame, game_time=enemy_time, catalog={})
+            return self._with_stage_plan(native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
+                                         frame=enemy_frame, game_time=enemy_time, catalog={}), frame)
         if self._enemy_catalog is None and raw.get('enemies_status') == 'available':
             self._enemy_catalog = _load_enemy_db() or {}
-        return self._enemy_observations.observe(raw, frame=enemy_frame, game_time=enemy_time,
-                                                catalog=self._enemy_catalog or {})
+        return self._with_stage_plan(self._enemy_observations.observe(
+            raw, frame=enemy_frame, game_time=enemy_time, catalog=self._enemy_catalog or {}), frame)
 
     def close(self):
         self._pending = None
         self._opening_choice = self._practice_battle = None
+        self._reset_stage_plan()
         self._reset_enemy_observation()
         if self.process is not None:
             self.process.close()

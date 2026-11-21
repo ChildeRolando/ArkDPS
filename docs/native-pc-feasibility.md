@@ -4,6 +4,8 @@
 
 本地候选 `4a07f1a97680c0ff8688b72fecd2d29531081d5f` 基于 rc.8，1050 项相关回归通过。便携包包含战局序号隔离、密集敌情读预算和战绩 PNG 排名修正。包内 Python 重放 I 的 207 个有效样本，两局各归档一次，演习、退出、失败及末份计数均一致。构建完成，NuGet 漏洞元数据源不可用。包 SHA-256 为 `b2beacda5cc11645d594f4a65b32132d3e12493320d57b662efa7e83a88e8d80`。[本地便携包](../runtime/native-pc/product-4a07f1a/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内回放回执](../runtime/native-pc/product-4a07f1a/I-package-replay-5ca39121b95c/receipt.json)
 
+新便携候选 `ce7c205a072d5aa12df045060ef6ebeecc7f4c5e` 已接入 PC 当前名单的 HP 合计与覆盖人数。1088 项相关回归通过，包内 Python 离线复核了 K 的两帧原始数据。构建完成，NuGet 漏洞元数据源不可用。包 SHA-256 为 `fab3d97758d5667d575663c9461dbaea9c89ff72c10393823ac2b65d9b185465`。[新便携包](../runtime/native-pc/product-ce7c205/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内回执](../runtime/native-pc/product-ce7c205/current-hp-package-replay.verified.json)
+
 ## 实机结论
 
 | 检查 | 结论 | 证据边界 |
@@ -107,6 +109,14 @@ K 实机补采 `ce5-dense-heal-20261121-160135.jsonl` 的 183 份同帧样本全
 同一份 K 记录经正常统计会话离线回放，136 个可用近期 HPS 逐点重算一致。其中有 80 个完整五秒窗口处于标准速度且有正治疗。第 `434` 帧的五秒新增约 `1455.9001`，对应 `291.1800 HPS`。暂停时第 `762` 帧累计和 HPS 保持不变。唯一正治疗来源是闪灵 `char_147_shining`，最终来源累计 `9463.3515625`。[K 治疗与敌情回执](../runtime/native-pc/2026-11-21-battle/ce5-dense-heal-20261121-160135.normal-session.verified.json)
 
 `--stage-spawns` 的研究读取器沿当前 `LevelData.waves` 检查波次、片段、动作和有效 `SPAWN` 配置。共享对象按动作在结构中出现的位置计数，隐藏或随机条件单列，`notCountInTotal` 单列。分支只记录引用是否存在，不计入固定波次计划。研究结果不包含运行时追加的单位、实际入场或击杀数，也不用于推算全图 HP。读取器已通过合成布局验收，仍需与实际界面总数和原生波次对账。[短测命令](native-pc-player-test-guide.md)
+
+L 首次实机补采 `stage-spawns-20261121-160953.jsonl` 在 CE-5 取得 58 份正常战局样本。波次读取尝试 12 次，均触及预算，未发布数量。原始 SHA-256 为 `c906ed16f840c08720e9f5d3ca740746d6b148cb1965da338a3a0c2c7f873953`。[L 首轮回执](../runtime/native-pc/2026-11-21-battle/stage-spawns-20261121-160953.verified.json)
+
+随后将动作、数组和相邻字段的物理读取合并，收尾仍逐项复核被读取的字段。每帧原有 512 次和 64 KiB 上限保持。含 54、72、96 个动作的合成布局分别使用 337、393、461 次调用，均与旧逐字段实现的离线对照一致。旧实现按原生产预算均无法完成这三个布局。采样现会记录实际调用和字节数。[预算对照回执](../runtime/native-pc/2026-11-21-battle/stage-wave-budget-synthetic.verified.json)
+
+优化后 `stage-spawns-20261121-161803.jsonl` 的 13 次波次读取全部通过，12 个不同逻辑帧报告相同配置，每次使用 263 次调用和 15534 字节。CE-5 这份配置包含 1 个波次、4 个片段、21 个有效出怪动作，展开为 8 类、42 个计数位。采样未观察到条件动作、分支引用或 `notCountInTotal` 项。42 是固定配置数，实测覆盖限于采样时的关卡结构。[L 复测回执](../runtime/native-pc/2026-11-21-battle/stage-spawns-20261121-161803.verified.json)
+
+产品在同一战局、同一关卡的两个不同逻辑帧确认完整配置一致后，在敌情页显示「固定波次计数」。该计数取有效、无条件、参与关卡计数的固定出怪动作。确认后每五秒复核，和当前敌人 HP 读取错开。同局配置不同或确认失效时清除显示，再等两份新读数一致。战绩与已入场统计各沿用自身证据口径。
 
 ### 演习标记、主动放弃与全周期速率
 

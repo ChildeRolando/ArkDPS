@@ -334,3 +334,194 @@ def test_attach_errors_have_native_diagnostics(tmp_path, status, diagnostic, cod
         collector.connect()
     assert collector.diagnostics.as_dict()['code'] == code
     assert not collector.diagnostics.connection_ok
+
+
+def stage_structure(*, fixed=42, conditional_actions=0, branches=False):
+    return dict(schema_version=1, scope='current_stage_waves_spawn_structure',
+                wave_count=1, fragment_occurrences=1, action_occurrences=1,
+                scheduled_spawn_count=fixed, scheduled_counted_spawn_count=fixed,
+                conditional_spawn_count=0, conditional_spawn_action_count=conditional_actions,
+                not_count_in_total_spawn_count=0, branch_container_present=branches,
+                branches_counted=False, dynamic_spawns_counted=False,
+                spawn_actions=[dict(kind='scheduled', enemy_key='enemy_1007_slime_2', count=fixed,
+                                    wave_index=0, fragment_index=0, action_index=0,
+                                    not_count_in_total=False)])
+
+
+def planned_sample(frame, structure=None):
+    report = sample(frame, 100.)
+    report['sample'].update(stage_spawns_status='available',
+                            stage_spawns=deepcopy(structure if structure is not None else stage_structure()),
+                            stage_spawns_read_cost=dict(calls=263, bytes=15534),
+                            enemies_status='available', enemies=dict(
+                                scope='unit_manager_enemies_membership', collection_count=0, entities=[]))
+    return report
+
+
+def stage_collector(tmp_path, reports):
+    probe = Probe(reports)
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    collector.connect()
+    return collector
+
+
+def stage_view(collector):
+    lifecycle = collector.read_lifecycle()
+    pair, _ = collector.read_guarded_pair(lifecycle)
+    return collector.read_enemies(frame=pair['frame'], game_time=pair['game_time'])
+
+
+def test_stage_plan_needs_two_distinct_frames_ignores_cost_and_returns_copy(tmp_path):
+    structure = stage_structure(conditional_actions=2, branches=True)
+    # fixed_count is the counted scheduled subset, not all configured entries.
+    structure.update(scheduled_spawn_count=43, not_count_in_total_spawn_count=1)
+    first, duplicate, second, skipped = [planned_sample(f, structure) for f in (3, 3, 6, 9)]
+    duplicate['sample']['stage_spawns_read_cost']['calls'] = 280
+    second['sample']['stage_spawns_read_cost']['bytes'] = 17000
+    for key in ('stage_spawns_status', 'stage_spawns', 'stage_spawns_read_cost'):
+        skipped['sample'].pop(key)
+    collector = stage_collector(tmp_path, [first, duplicate, second, skipped])
+    assert stage_view(collector)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan'] is None
+    confirmed = stage_view(collector)['stage_plan']
+    expected = dict(fixed_count=42, conditional_actions=2, branches_present=True)
+    assert confirmed == expected
+    confirmed['fixed_count'] = 999  # A consumer cannot mutate the stored view.
+    assert stage_view(collector)['stage_plan'] == expected
+    assert collector.read_enemies(frame=5, game_time=1)['stage_plan'] is None
+    collector.close()
+    assert collector.read_enemies(frame=9, game_time=1)['stage_plan'] is None
+
+
+def test_verified_empty_fixed_structure_is_zero_but_failed_read_is_unknown(tmp_path):
+    empty = stage_structure(fixed=0)
+    empty.update(wave_count=0, fragment_occurrences=0, action_occurrences=0, spawn_actions=[])
+    failed = planned_sample(9, empty)
+    failed['sample'].update(stage_spawns_status='unavailable', stage_spawns=None)
+    collector = stage_collector(tmp_path, [planned_sample(3, empty), planned_sample(6, empty), failed])
+    assert stage_view(collector)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan'] == dict(fixed_count=0, conditional_actions=0, branches_present=False)
+    assert stage_view(collector)['stage_plan'] is None
+    collector.close()
+
+
+@pytest.mark.parametrize('change', ['enemy_key', 'action_index', 'hidden_group', 'failure'])
+def test_stage_plan_changes_and_failure_clear_then_require_two_new_frames(tmp_path, monkeypatch, change):
+    now = [0.]
+    monkeypatch.setattr('native_pc_collector.time.monotonic', lambda: now[0])
+    changed = stage_structure()
+    if change != 'failure':
+        changed['spawn_actions'][0][change] = 9 if change == 'action_index' else 'different'
+    third = planned_sample(9, changed)
+    if change == 'failure':
+        third['sample'].update(stage_spawns_status='unavailable', stage_spawns=None)
+    collector = stage_collector(tmp_path, [planned_sample(3), planned_sample(6), third,
+                                           planned_sample(9, changed), planned_sample(12, changed)])
+    assert stage_view(collector)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan']['fixed_count'] == 42
+    assert collector._next_stage_plan == 5.
+    now[0] = 1.
+    assert stage_view(collector)['stage_plan'] is None
+    assert collector._next_stage_plan <= 2.  # Drop the former five-second delay.
+    # A changed payload may recover, but one same-frame repeat is not confirmation.
+    assert stage_view(collector)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan']['fixed_count'] == 42
+    collector.close()
+
+
+@pytest.mark.parametrize('change', ['serial', 'stage', 'unknown_stage'])
+def test_stage_plan_scope_does_not_leak_across_reset_or_unknown_stage(tmp_path, change):
+    third, fourth, fifth = [planned_sample(frame) for frame in (90, 93, 96)]
+    if change == 'serial':
+        for report in (third, fourth, fifth): report['sample']['battle_serial'] = 2
+    elif change == 'stage':
+        for report in (third, fourth, fifth): report['sample']['stage_id'] = 'Obt/Main/level_main_01-08'
+    else:
+        third['sample'].update(stage_status='unavailable', stage_id=None)
+    collector = stage_collector(tmp_path, [planned_sample(3), planned_sample(6), third, fourth, fifth])
+    assert stage_view(collector)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan']['fixed_count'] == 42
+    assert stage_view(collector)['stage_plan'] is None
+    next_view = stage_view(collector)
+    assert (next_view['stage_plan'] is None) is (change == 'unknown_stage')
+    assert stage_view(collector)['stage_plan']['fixed_count'] == 42
+    collector.close()
+
+
+@pytest.mark.parametrize('field,value', [('scheduled_counted_spawn_count', True),
+                                      ('conditional_spawn_action_count', -1),
+                                      ('branch_container_present', 0), ('spawn_actions', None)])
+def test_malformed_plan_is_unknown_without_losing_core_sample(tmp_path, field, value):
+    malformed = stage_structure()
+    malformed[field] = value
+    collector = stage_collector(tmp_path, [planned_sample(3), planned_sample(6), planned_sample(9, malformed)])
+    assert stage_view(collector)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan']['fixed_count'] == 42
+    view = stage_view(collector)
+    assert view['ready'] and view['stage_plan'] is None
+    collector.close()
+
+
+def test_stage_plan_process_change_and_failed_core_clear_old_value(tmp_path):
+    failed_core = planned_sample(9)
+    failed_core['sample'].update(roster_status='unavailable', roster=None,
+                                stage_spawns_status='unavailable', stage_spawns=None)
+    collector = stage_collector(tmp_path, [planned_sample(3), planned_sample(6), failed_core,
+                                           planned_sample(12), planned_sample(15), {'status': 'process_changed'}])
+    stage_view(collector)
+    assert stage_view(collector)['stage_plan']['fixed_count'] == 42
+    with pytest.raises(SampleUnavailable): stage_view(collector)
+    assert collector.read_enemies(frame=9, game_time=3)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan'] is None
+    assert stage_view(collector)['stage_plan']['fixed_count'] == 42
+    with pytest.raises(ProcessChanged): collector.read_lifecycle()
+    assert collector.read_enemies(frame=15, game_time=5)['stage_plan'] is None
+    collector.close()
+
+
+def test_stage_plan_only_reaches_enemy_view_not_statistics_or_history(tmp_path):
+    history = BattleHistory(tmp_path / 'history')
+    probe = Probe([planned_sample(3), planned_sample(6), ABSENT])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+    session.enable_lifecycle()
+    session.connect()
+    first, confirmed = session.read(), session.read()
+    assert first['enemy']['stage_plan'] is None
+    assert confirmed['enemy']['stage_plan'] == dict(fixed_count=42, conditional_actions=0, branches_present=False)
+    assert 'stage_plan' not in confirmed and 'stage_spawns' not in confirmed
+    assert 'stage_plan' not in repr(confirmed['statistics'])
+    with pytest.raises(CaptureRetry): session.read()
+    record, = history.list_recent().records
+    assert 'stage_plan' not in repr(record.to_dict()) and 'stage_spawns' not in repr(record.to_dict())
+    session.close()
+
+
+def test_stage_capture_is_separate_from_enemy_and_after_existing_fields(tmp_path, monkeypatch):
+    import native_pc_collector as native
+    calls, now = [], [0.]
+    monkeypatch.setattr(native.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(native, '_capture_fields', lambda *_: calls.append('core') or {'core': True})
+    monkeypatch.setattr(native, 'capture_enemies', lambda *_: calls.append('enemies') or {'enemies_status': 'available'})
+    monkeypatch.setattr(native, 'capture_game_flow', lambda *_: calls.append('flow') or {'game_flow_status': 'available'})
+    def stage(*_):
+        calls.append('stage')
+        raise ResearchFailure('unsupported_layout', 'optional_read_budget_exhausted')
+    monkeypatch.setattr(native, 'capture_stage_spawns', stage)
+    collector = NativePcCollector(tmp_path)
+    first = collector._capture(None, {})
+    assert calls == ['core', 'enemies', 'flow'] and 'stage_spawns_status' not in first
+    calls.clear()
+    now[0] = .2
+    optional = collector._capture(None, {})
+    assert calls == ['core', 'flow', 'stage']
+    assert optional['core'] and optional['game_flow_status'] == 'available'
+    assert optional['stage_spawns_status'] == 'unavailable'
+    calls.clear()
+    now[0] = 1.2
+    collector._capture(None, {})  # Both are due; enemy retains its existing priority.
+    assert calls == ['core', 'enemies', 'flow']
+    calls.clear()
+    now[0] = 1.3
+    collector._capture(None, {})
+    assert calls == ['core', 'flow', 'stage']

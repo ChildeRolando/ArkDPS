@@ -170,6 +170,8 @@ K 实机记录已核对 1× 正治疗和同帧 9 个在场敌人的 HP，以上�
 & 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 15 --stage-spawns --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\stage-spawns-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
 ```
 
+CE-5 复测共 13 次读取，固定波次配置均为 42。命令留作复查。
+
 ## 等我发对应的采样命令再打
 
 下面也都是真实要做的验收。现有命令还记不到所需的目标 HP、护盾消费或逐次结算。现在跑会留下整局总数，缺少要对账的那一笔。我准备好相应字段后会直接发完整命令。
@@ -191,12 +193,12 @@ K 实机记录已核对 1× 正治疗和同帧 9 个在场敌人的 HP，以上�
 
 ## ArkDPS 界面版
 
-已完成 1-7 演习正常入口的实时排行、胜利、退出、失败和战绩归档。下一轮用 `4a07f1a` 测重启游戏和窗口。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。
+已完成 1-7 演习正常入口的实时排行、胜利、退出、失败和战绩归档。下一轮用 `ce7c205` 测重启游戏、窗口和当前名单的 HP。先从托盘退出旧 ArkDPS，在管理员 PowerShell 整条运行。
 
 ```powershell
-& 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-4a07f1a\ArkDPS-win-x64-8paf8q8s\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-4a07f1a\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+& 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ce7c205\ArkDPS-win-x64-udk_b3m0\ArkDPS.Desktop.exe' --platform native_pc --native-game-root 'D:\games\Hypergryph Launcher\games\Arknights' --state-dir "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\product-ce7c205\desktop-review-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 ```
 
-1. 在 ArkDPS 点「侧边吸附」。打 **1-7 演习**，让干员打几下。分别试一次最小化游戏和从任务栏恢复游戏，看侧栏有没有对应变化。
+1. 在 ArkDPS 点「侧边吸附」。打 **1-7 演习**，让干员打几下。敌情页应显示当前名单的 HP 和可读人数。分别试一次最小化游戏和从任务栏恢复游戏，看侧栏有没有对应变化。
 2. 保持 ArkDPS 运行，正常关闭游戏，再从鹰角启动器重开。等 ArkDPS 连上后再进一局 1-7 演习，先空着几秒，再放干员。确认新局从自己的累计开始。
 3. 有一份战绩后，在 ArkDPS 的历史里选中它，点「完整排行 PNG」保存。HUD、平台切换和 MuMu 回归另做，以便将窗口和采集问题分开确认。
