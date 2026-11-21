@@ -36,8 +36,8 @@ def fixture():
         return obj
 
     p['level_class'] = typed('LevelData', 23, spawns.LEVEL_FIELDS, 'Torappu')
-    wave_class = typed('WaveData', 5, spawns.WAVE_FIELDS)
-    fragment_class = typed('FragmentData', 2, spawns.FRAGMENT_FIELDS)
+    wave_class = p['wave_class'] = typed('WaveData', 5, spawns.WAVE_FIELDS)
+    fragment_class = p['fragment_class'] = typed('FragmentData', 2, spawns.FRAGMENT_FIELDS)
     p['action_class'] = typed('ActionData', 24, spawns.ACTION_FIELDS)
     p['string_class'] = mem.klass('String', namespace='System')
     p['key'] = mem.string('enemy_1007_slime_2', p['string_class'])
@@ -67,6 +67,90 @@ def fixture():
     mem.put(p['level'] + 0x80, '<QQ', p['waves'], p['branches'])
     mem.reads.clear()
     return mem, {'level_data': p['level']}, p
+
+
+def fragmented_fixture(fixture):
+    """Representative workload, not a claim about the real CE-5 action count."""
+    mem, context, p = fixture
+    arrays = {name: mem.klass(name, namespace='')
+              for name in ('WaveData[]', 'FragmentData[]', 'ActionData[]')}
+
+    def array(name, values):
+        address = mem.obj(arrays[name])
+        mem.put(address + 0x18, '<Q', len(values))
+        mem.put(address + 0x20, '<' + 'Q' * len(values), *values)
+        return address
+
+    keys = [mem.string('enemy_fragmented_' + str(i), p['string_class']) for i in range(12)]
+    waves = []
+    index = 0
+    for _wi in range(3):
+        fragments = []
+        for _fi in range(3):
+            actions = []
+            for _ai in range(6):
+                action = mem.obj(p['action_class'])
+                mem.put(action + 0x10, '<i', 0)
+                mem.put(action + 0x14, '<B', 1)
+                mem.put(action + 0x18, '<Qi', keys[index % 12], index % 3 + 1)
+                mem.put(action + 0x38, '<QQQ', p['hidden'] if index % 6 == 5 else 0, 0, 0)
+                mem.put(action + 0x5E, '<BB', 1, int(index % 7 == 0))
+                actions.append(action)
+                index += 1
+            fragment = mem.obj(p['fragment_class'])
+            mem.put(fragment + 0x18, '<Q', array('ActionData[]', actions))
+            fragments.append(fragment)
+        wave = mem.obj(p['wave_class'])
+        mem.put(wave + 0x20, '<Q', array('FragmentData[]', fragments))
+        waves.append(wave)
+    mem.put(p['level'] + 0x80, '<Q', array('WaveData[]', waves))
+    mem.reads.clear()
+    return mem, context, p
+
+
+def test_fragmented_representative_plan_fits_unchanged_budget_without_dropping_actions(fixture):
+    mem, context, _ = fragmented_fixture(fixture)
+    report = spawns.capture_stage_spawns(mem.read, context)
+    assert report['stage_spawns_status'] == 'available'
+    result = report['stage_spawns']
+    assert result['wave_count'] == 3 and result['fragment_occurrences'] == 9
+    assert result['action_occurrences'] == result['valid_spawn_action_occurrences'] == 54
+    assert len(result['spawn_actions']) == 54
+    assert result['scheduled_spawn_count'] == 81 and result['conditional_spawn_count'] == 27
+    assert result['conditional_spawn_action_count'] == 9
+    assert result['scheduled_counted_spawn_count'] == 69
+    assert result['not_count_in_total_spawn_count'] == 15
+    assert len({(row['wave_index'], row['fragment_index'], row['action_index'])
+                for row in result['spawn_actions']}) == 54
+    assert [row['enemy_key'] for row in result['spawn_actions']] == [
+        'enemy_fragmented_' + str(i % 12) for i in range(54)]
+    assert report['stage_spawns_read_cost'] == {'calls': len(mem.reads),
+                                               'bytes': sum(size for _, size in mem.reads)}
+    assert len(mem.reads) <= 512 and sum(size for _, size in mem.reads) <= 64 * 1024
+    assert spawns.MAX_READ_CALLS == 512 and spawns.MAX_READ_BYTES == 64 * 1024
+
+
+@pytest.mark.parametrize('object_key,offset', [('scheduled', 0x08), ('scheduled', 0x15),
+    ('scheduled', 0x24), ('scheduled', 0x50), ('scheduled', 0x5C), ('wave', 0x10),
+    ('fragment', 0x10), ('waves', 0x08), ('waves', 0x10), ('key', 0x08), ('action_class', 0x90)])
+def test_coalescing_does_not_guard_previously_unconsumed_bytes(fixture, object_key, offset):
+    mem, context, p = fixture
+    baseline = spawns.capture_stage_spawns(mem.read, context)
+    changed = p[object_key] + offset
+    reads = 0
+
+    def mutate(where, count):
+        nonlocal reads
+        if where <= changed < where + count:
+            reads += 1
+            if reads == 2:
+                mem.put(changed, '<B', 1)
+
+    mem.on_read = mutate
+    report = spawns.capture_stage_spawns(mem.read, context)
+    assert reads == 2
+    assert report['stage_spawns_status'] == 'available'
+    assert report['stage_spawns'] == baseline['stage_spawns']
 
 
 def test_counts_occurrences_not_distinct_pointers_and_never_adds_branches(fixture):
@@ -196,7 +280,7 @@ def test_same_frame_mutation_rejects_the_whole_witness(fixture, field):
 
     def mutate(where, count):
         nonlocal reads
-        if (where, count) == (address, size):
+        if where <= changed and changed + struct.calcsize(encoding) <= where + count:
             reads += 1
             if reads == 2:
                 mem.put(changed, encoding, value)
