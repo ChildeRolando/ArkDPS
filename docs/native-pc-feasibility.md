@@ -2,7 +2,9 @@
 
 评估日期 2026-11-21。目标是鹰角启动器国服 Windows x64 客户端，验收基线为 ArkDPS rc.8 的 MuMu 功能。**原生只读累计采集已实机验证可行**，覆盖伤害、非零治疗、稀音召唤伤害、干员撤退再部署、倍速、暂停、同图重开及胜负结算。Windows 的逐事件来源仍有缺口，现有证据支持接入累计统计，完整数值齐平仍取决于逐事件和产品验收。[MuMu 产品基线](v1-design.md) · [PC 实验记录](native-pc-research.md)
 
-当前便携候选为 `b02dd4065351815585663c4102a42c245e108324`。切换 PC 与 MuMu 时，过期的实例检测和自动重连无法覆盖新设置，旧平台的实时战况在新源上线前清空，历史保留。用旧包可复现切换回包中仍带有旧 PC 战局；相同 1-7 实机快照通过新包的离线 stdio 协议回放，切换后战局标识为空。新包也复核了敌人已观测最高 HP 和 CE-5 固定波次 42。1194 项 Python 相关回归、72 项无窗口 C# 断言和 WPF 构建通过。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `fff9938e724fb11f6cb5f9b04b9e234e7bf2db27d0681ca35273d1fc03e034d9`。[当前便携候选](../runtime/native-pc/product-b02dd40/ArkDPS-1.0.0-rc.8-win-x64.zip) · [平台切换回执](../runtime/native-pc/product-b02dd40/offline-platform-apply-3x90cqe1/receipt.json) · [敌情回放](../runtime/native-pc/product-b02dd40/enemy-observed-peak.verified.json) · [WPF 敌情离屏回执](../runtime/native-pc/product-b02dd40/enemy-observed-peak-wpf.verified.json) · [波次回放](../runtime/native-pc/product-b02dd40/ce5-fixed-wave-product.verified.json)
+当前便携候选 `ba9d4574187dbb84f2acdaca2a07707da6152f51` 修复资源关卡和开局演习标记，HUD 增加连接中断或保留快照的提示，接敌面板说明 PC 的逐次事件覆盖。1225 项 Python 相关回归、94 项无窗口 C# 断言和 WPF 构建通过。包内 Python 用 CE-5 真实累计帧及合成转场证据核对 `true`、`false` 和关卡不匹配三种选择，用原样的 I 实机记录重放 207 份样本及两次归档。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `9c56f975efb973958927e8be3d4283bf079285c8fd814b752c4f665095a9e765`。[当前便携候选](../runtime/native-pc/product-ba9d457/ArkDPS-1.0.0-rc.8-win-x64.zip) · [CE-5 开局对照](../runtime/native-pc/product-ba9d457/ce5-opening-matcher.verified.json) · [I 包内回放](../runtime/native-pc/product-ba9d457/I-package-replay-f843048842bc/receipt.json)
+
+便携候选 `b02dd4065351815585663c4102a42c245e108324` 修复 PC 与 MuMu 切换时旧检测和自动重连覆盖新选择的问题。用旧包可复现切换回包中仍带有旧 PC 战局；相同 1-7 实机快照通过此包的离线 stdio 协议回放，切换后战局标识为空。该包也复核了敌人已观测最高 HP 和 CE-5 固定波次 42。1194 项 Python 相关回归、72 项无窗口 C# 断言和 WPF 构建通过。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `fff9938e724fb11f6cb5f9b04b9e234e7bf2db27d0681ca35273d1fc03e034d9`。[实机重连使用的候选](../runtime/native-pc/product-b02dd40/ArkDPS-1.0.0-rc.8-win-x64.zip) · [平台切换回执](../runtime/native-pc/product-b02dd40/offline-platform-apply-3x90cqe1/receipt.json) · [敌情回放](../runtime/native-pc/product-b02dd40/enemy-observed-peak.verified.json) · [WPF 敌情离屏回执](../runtime/native-pc/product-b02dd40/enemy-observed-peak-wpf.verified.json) · [波次回放](../runtime/native-pc/product-b02dd40/ce5-fixed-wave-product.verified.json)
 
 本地候选 `4a07f1a97680c0ff8688b72fecd2d29531081d5f` 基于 rc.8，1050 项相关回归通过。便携包包含战局序号隔离、密集敌情读预算和战绩 PNG 排名修正。包内 Python 重放 I 的 207 个有效样本，两局各归档一次，演习、退出、失败及末份计数均一致。构建完成，NuGet 漏洞元数据源不可用。包 SHA-256 为 `b2beacda5cc11645d594f4a65b32132d3e12493320d57b662efa7e83a88e8d80`。[本地便携包](../runtime/native-pc/product-4a07f1a/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内回放回执](../runtime/native-pc/product-4a07f1a/I-package-replay-5ca39121b95c/receipt.json)
 
@@ -134,6 +136,8 @@ L 首次实机补采 `stage-spawns-20261121-160953.jsonl` 在 CE-5 取得 58 份
 | 重启后的 1-7 | 279 份，第 4 至 3775 帧 | 原生伤害、治疗和来源伤害均为 0；第 292 帧首次观察到正伤害 `615.599976` | 原生伤害 `60749.988281`，归属来源伤害 `77005.859375`。演习、胜利，保存一次。 |
 
 CE-5 从第 40 帧开始发布固定波次计数 `42`，共 560 份；玩家确认界面显示 `42`，游戏顶部总数至少 `42`。整局确认过的 42 个实例按 8 种敌人分组后，与早先固定计划逐种相符。重启后的 1-7 独立发布固定波次 `41`，名单实际观察到 39 个实例。两局下限和计划仍分别保留，游戏顶部精确总数及侧栏最小化和恢复未得到本轮复测结果。
+
+CE-5 正常桌面日志中，闪灵的 445 个带明确时间窗口的 HPS 均可按同帧原生治疗累计重新算出，其中 136 个为正的完整五秒窗口，309 个为已核对的完整零窗口。第 `839` 帧为 `291.180017 HPS`。另有 10 个数值无明确时间窗口，未纳入对账。[产品治疗回执](../runtime/native-pc/product-b02dd40/live-ce5-hps.verified.json)
 
 回执绑定日志截至第二次 `history_saved` 的前 `23008139` 字节，SHA-256 为 `09ad04f8802c1cba0c4118af749510aace293e282f875e0ced7b6e8fd80c2e20`，并记录两份战绩的文件摘要。[实机重连回执](../runtime/native-pc/product-b02dd40/live-ce5-1-7-reconnect.verified.json)
 
