@@ -222,7 +222,7 @@ class WindowsApi:
         return buffer.raw
 
 
-def probe(game_root, api=None):
+def probe(game_root, api=None, *, handle_only=False):
     root = Path(game_root)
     report = {
         'schema_version': 1,
@@ -273,6 +273,9 @@ def probe(game_root, api=None):
         if not same_path(api.image_path(handle), root / 'Arknights.exe'):
             report['status'] = 'process_identity_changed'
             return report
+        if handle_only:
+            report['status'] = 'read_handle_available'
+            return report
         modules = api.modules(handle)
         report['module'] = {'named': len(modules), 'path_matches': False}
         if len(modules) != 1:
@@ -316,14 +319,16 @@ def probe(game_root, api=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game-root', required=True, type=Path)
+    parser.add_argument('--handle-only', action='store_true',
+                        help='check and close the handle without any process memory reads')
     args = parser.parse_args(argv)
     try:
-        report = probe(args.game_root)
+        report = probe(args.game_root, handle_only=args.handle_only)
     except Exception as error:
         # Exception messages may contain a personal path. Retain only the type.
         report = {'schema_version': 1, 'status': 'probe_error', 'error_type': type(error).__name__}
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if report['status'] == 'read_gate_passed' else 2
+    return 0 if report['status'] in ('read_gate_passed', 'read_handle_available') else 2
 
 
 if __name__ == '__main__':

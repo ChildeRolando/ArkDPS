@@ -182,3 +182,13 @@ def test_success_requires_both_fixed_comparisons(gate, monkeypatch):
     assert report['status'] == 'read_gate_passed'
     assert api.reads == [(0x100000, 6), (0x100000 + probe.CODE_RVA, 6)]
     assert report['memory']['reads_completed'] == 2
+
+
+def test_handle_only_does_not_enumerate_modules_or_read_memory(gate):
+    root, api = gate
+    api.module_error = 5
+    report = probe.probe(root, api, handle_only=True)
+    assert report['status'] == 'read_handle_available'
+    assert api.closes == [probe.PROCESS_QUERY_LIMITED_INFORMATION, probe.READ_ACCESS]
+    assert report['memory']['attempted'] is False
+    assert api.reads == []
