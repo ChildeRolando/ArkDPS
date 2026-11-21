@@ -2,7 +2,9 @@
 
 评估日期 2026-11-21。目标是鹰角启动器国服 Windows x64 客户端，验收基线为 ArkDPS rc.8 的 MuMu 功能。**原生只读累计采集已实机验证可行**，覆盖伤害、非零治疗、稀音召唤伤害、干员撤退再部署、倍速、暂停、同图重开及胜负结算。Windows 的逐事件来源仍有缺口，现有证据支持接入累计统计，完整数值齐平仍取决于逐事件和产品验收。[MuMu 产品基线](v1-design.md) · [PC 实验记录](native-pc-research.md)
 
-当前便携候选 `ba9d4574187dbb84f2acdaca2a07707da6152f51` 修复资源关卡和开局演习标记，HUD 增加连接中断或保留快照的提示，接敌面板说明 PC 的逐次事件覆盖。1225 项 Python 相关回归、94 项无窗口 C# 断言和 WPF 构建通过。包内 Python 用 CE-5 真实累计帧及合成转场证据核对 `true`、`false` 和关卡不匹配三种选择，用原样的 I 实机记录重放 207 份样本及两次归档。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `9c56f975efb973958927e8be3d4283bf079285c8fd814b752c4f665095a9e765`。[当前便携候选](../runtime/native-pc/product-ba9d457/ArkDPS-1.0.0-rc.8-win-x64.zip) · [CE-5 开局对照](../runtime/native-pc/product-ba9d457/ce5-opening-matcher.verified.json) · [I 包内回放](../runtime/native-pc/product-ba9d457/I-package-replay-f843048842bc/receipt.json)
+当前便携候选 `38af2cdd5778b83f1beafb3cb2f4040113ca98a3` 接入 PC 全周期 DPS/HPS，并按类别显示治疗和护盾 PNG 的统计说明。1258 项 Python 相关回归、121 项无窗口 C# 断言和 WPF 构建通过。包内 Python 复算了真实来源记录和缺口对照。三款主题的治疗 PNG 使用真实 CE-5 战绩离屏核对，正常保存对话框待玩家验证。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `b7e951df6c6583efe15024013543d3850cbf611d05a54bb9fcba628d614c46ec`。[当前便携候选](../runtime/native-pc/product-38af2cd/ArkDPS-1.0.0-rc.8-win-x64.zip) · [全周期包内回执](../runtime/native-pc/product-38af2cd/full-cycle-replay-74c5588b61/receipt.json) · [三主题 PNG 对照](../runtime/native-pc/png-category-ce5/receipt.json)
+
+便携候选 `ba9d4574187dbb84f2acdaca2a07707da6152f51` 修复资源关卡和开局演习标记，HUD 增加连接中断或保留快照的提示，接敌面板说明 PC 的逐次事件覆盖。1225 项 Python 相关回归、94 项无窗口 C# 断言和 WPF 构建通过。包内 Python 用 CE-5 真实累计帧及合成转场证据核对 `true`、`false` 和关卡不匹配三种选择，用原样的 I 实机记录重放 207 份样本及两次归档。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `9c56f975efb973958927e8be3d4283bf079285c8fd814b752c4f665095a9e765`。[演习实测候选](../runtime/native-pc/product-ba9d457/ArkDPS-1.0.0-rc.8-win-x64.zip) · [CE-5 开局对照](../runtime/native-pc/product-ba9d457/ce5-opening-matcher.verified.json) · [I 包内回放](../runtime/native-pc/product-ba9d457/I-package-replay-f843048842bc/receipt.json)
 
 便携候选 `b02dd4065351815585663c4102a42c245e108324` 修复 PC 与 MuMu 切换时旧检测和自动重连覆盖新选择的问题。用旧包可复现切换回包中仍带有旧 PC 战局；相同 1-7 实机快照通过此包的离线 stdio 协议回放，切换后战局标识为空。该包也复核了敌人已观测最高 HP 和 CE-5 固定波次 42。1194 项 Python 相关回归、72 项无窗口 C# 断言和 WPF 构建通过。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `fff9938e724fb11f6cb5f9b04b9e234e7bf2db27d0681ca35273d1fc03e034d9`。[实机重连使用的候选](../runtime/native-pc/product-b02dd40/ArkDPS-1.0.0-rc.8-win-x64.zip) · [平台切换回执](../runtime/native-pc/product-b02dd40/offline-platform-apply-3x90cqe1/receipt.json) · [敌情回放](../runtime/native-pc/product-b02dd40/enemy-observed-peak.verified.json) · [WPF 敌情离屏回执](../runtime/native-pc/product-b02dd40/enemy-observed-peak-wpf.verified.json) · [波次回放](../runtime/native-pc/product-b02dd40/ce5-fixed-wave-product.verified.json)
 
@@ -165,7 +167,9 @@ J 首轮 CE-5 有 518 份有效样本，普通在场和手动操作日志可用�
 
 修正后补采的实际关卡也是 CE-5。193 份有效样本中，87 份读到米格鲁的本体字段，覆盖两个实例，类型校验无失败。实例 `3304` 的构建时标为 `10.466657` 游戏秒，与手动部署命令相符。手动撤退发生时只看到最后在场帧 `539` 和首次缺席帧 `545`，区间约 `0.200` 秒，未读到 `WITHDRAW`。实例 `3348` 在 `1012→1024` 帧之间变为 `HP_ZERO`，之后连续三份样本读到该原因，但原生死亡时标始终为 `0`。这些记录验证了击倒类别和离场区间，尚不足以给出精确在场时长。采样没有请求固定波次。[J 补采实测回执](../runtime/native-pc/2026-11-21-battle/presence-lifetime-20261121-155848-verified-d253d742.json)
 
-PC 产品现接入基于相邻样本的全周期 DPS/HPS，沿用 MuMu 的本体在场采样公式。原生重部署 F 通过正式采集会话离线回放，缄默德克萨斯累计 `58722.867188`，采样在场 `39.699962` 游戏秒，归档 `1479.166831 DPS`。中途接入 D 和开场相邻有效样本间隔 `10.066657` 秒的 E 均保留累计，全周期速率为未知。旧版 CE-5 桌面日志保留完整的采样配对，离线以已归一化且身份全匹配的编队证据驱动统计，闪灵 `10919.251953 ÷ 102.266569 = 106.772448 HPS`，煌 `728.014472 DPS`。同一日志中的 1-7 有一个未收录在编队的在场 UID，旧日志无法验证其身份，该回放保持未知。新包的实际实时排行和归档待短测。[独立输入审计](../runtime/native-pc/full-cycle-input-audit-20261121/receipt-d3c0a3636a.json) · [产品离线回放](../runtime/native-pc/full-cycle-replay-t17nu93t/receipt.json)
+PC 产品现接入基于相邻样本的全周期 DPS/HPS，沿用 MuMu 的本体在场采样公式。原生重部署 F 通过正式采集会话离线回放，缄默德克萨斯累计 `58722.867188`，采样在场 `39.699962` 游戏秒，归档后重算 `1479.166831 DPS`。中途接入 D 和开场相邻有效样本间隔 `10.066657` 秒的 E 均保留累计，全周期速率为未知。旧版 CE-5 桌面日志保留完整的采样配对，离线以已归一化且身份全匹配的编队证据驱动统计，闪灵 `10919.251953 ÷ 102.266569 = 106.772448 HPS`，煌 `728.014472 DPS`。同一日志中的 1-7 有一个未收录在编队的在场 UID，旧日志无法验证其身份，该回放保持未知。新包的实际实时排行和归档待短测。[独立输入审计](../runtime/native-pc/full-cycle-input-audit-20261121/receipt-d3c0a3636a.json) · [包内产品回放](../runtime/native-pc/product-38af2cd/full-cycle-replay-74c5588b61/receipt.json)
+
+便携版 worker 通过实际历史协议对同一份 F 回放战绩排序，缄默德克萨斯的全周期排行值与速率列同为 `1479.166831`。经 JSON 导出回读，采样在场时长、完整性和累计伤害均与存档相符。[历史及 JSON 回执](../runtime/native-pc/product-38af2cd/history-full-cycle-offline-c5ba93f1/receipt.json)
 
 ## MuMu 功能齐平矩阵
 
@@ -173,7 +177,7 @@ PC 产品现接入基于相邻样本的全周期 DPS/HPS，沿用 MuMu 的本体
 | --- | --- | --- |
 | 分类总伤害、近 5 秒 DPS | 分类计数、逻辑帧、1×、2× 和暂停已通过实机对照。中途接入复测验证了同一干员的非零基线和之后新增的五秒分子。本体退场再部署时累计得到保留。 | 跨帧或归属缺失时保持未知。接敌和全周期速率各需自己的覆盖证据。 |
 | 治疗累计、近 5 秒 HPS | CE-5 实机和正常会话回放已对账闪灵的累计与近期 HPS，覆盖 1×、高速、暂停、零窗口与缺字段。两端产品口径均为客户端累计治疗，含过疗。 | 用正常桌面入口复核离场治疗、自然回血及停手归零。逐次实际回复 HP 属于独立对账。 |
-| 召唤物与离场输出、全周期速率 | 1-7 实机验证稀音双车同场、撤退和补位，回放确认共享小车累计只归一次。缄默德克萨斯多次撤退及换实例再部署的来源累计延续。全周期 DPS/HPS 已通过真实 PC 记录的离线正副对照。 | 实机核对新包的实时、HUD 和历史显示，以及施放者离场后仍有正输出的边界。 |
+| 召唤物与离场输出、全周期速率 | 1-7 实机验证稀音双车同场、撤退和补位，回放确认共享小车累计只归一次。缄默德克萨斯多次撤退及换实例再部署的来源累计延续。全周期 DPS/HPS 已通过真实 PC 记录的离线正负对照。 | 实机核对新包的实时、HUD 和历史显示，以及施放者离场后仍有正输出的边界。 |
 | 敌情、首领、有效伤害、过量和减伤 | 已实测当前 HP 受击下降、暂停冻结、正常入口显示、同局离场保留及 9 个在场敌人的同帧 HP。CE-5 实机界面显示固定波次 42，观察到的 42 个实例逐种与固定配置相符。实例已观测最高 HP 已离线复核。 | 最大 HP 和属性还需验证资源版本及配置。首领输出与过量还需逐次来源、目标、HP 前后、结算值和盾上下文。 |
 | 有效护盾、接敌 DPS/HPS、技能期拆分 | 现有 Windows 只读来源未提供完整有序的逐次事件。可读的盾剩余量或技能状态只能支持进一步验证。 | 实际盾吸收量与施盾人，逐次伤害与治疗帧，技能起止及输出归属。丢失短时事件时应报告覆盖缺口。 |
 | 战局生命周期、HUD、侧栏、历史和导出 | 1-7 正常桌面入口已实机验证胜利、自然失败、主动放弃、演习标记、各局仅归档一次及历史来源标识。CE-5 至 1-7 已验证换进程自动重连、新局从 0 起步和各自归档。CE-5 短测确认演习标记、主动放弃及窗口跟随。两种结算的真实战绩 JSON 导出已通过包内离线复核。 | 通过正常桌面入口验证普通行动开局、PC 与 MuMu 平台切换、HUD 状态和 PNG 保存，并完成 MuMu 实机回归。 |
