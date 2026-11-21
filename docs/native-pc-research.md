@@ -19,6 +19,8 @@ ArkDPS 基于 rc.8 候选 `ee7cf86b61642108db8c832c0fc9994c4ff76747`。实机使
 
 `GetProcessInformation` 返回 `PROTECTION_LEVEL_NONE`。`OpenProcessToken(TOKEN_QUERY)` 返回 `5`，无法直接核对目标令牌。磁盘上已签名的 `Arknights.exe` 和启动器的 `Games.exe` 都声明了 `requireAdministrator`。这将调查集中到游戏与采集进程的权限差异，但还无法确定是哪条访问控制规则拒绝了请求，也无证据将拒绝归因于 ACE。[Windows 进程保护级别](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_protection_level_information) · [Windows 应用清单](https://learn.microsoft.com/en-us/windows/desktop/sbscs/application-manifests)
 
+用户随后在管理员 PowerShell 运行同一构建的 `--handle-only` 探针。北京时间 11:41:36 的输出为 `read_handle_available`，三个构建哈希一致，目标路径唯一，`OpenProcess(0x410)` 成功，读取次数为 `0`。本机对照证实运行权限差异影响句柄取得。读取内容和战斗字段仍待独立验证。用户提供的输出存为 `runtime/native-pc/2026-11-21-access/administrator-handle-user-report.json`。
+
 | 来源 | 已核查的能力 |
 | --- | --- |
 | [ArknightsCostBarRuler](https://github.com/ZeroAd-06/ArknightsCostBarRuler) | 从官服 Windows 窗口的费用条估算逻辑时间，提供本地 API。费用满、禁止自然回费或锁费时，无法靠这个方法推进计时。 |
@@ -44,6 +46,8 @@ python acceptance/probe_native_pc.py --game-root 'D:\games\Hypergryph Launcher\g
 探针按三个文件的哈希、进程与模块路径限定目标。如 Windows 授予读取权限，探针会比较 `GameAssembly.dll` 中两个固定位置的 96 个字节。`read_gate_passed` 表示固定字节比较通过，仍需用实机战局验证游戏时钟、编队归属与累计数据。
 
 用 `--handle-only` 可以只核对 Windows 是否授予读取句柄，随后立即关闭。`read_handle_available` 只表示句柄申请通过，该模式不枚举游戏模块或读取游戏内存。
+
+`record_native_pc_battle.py` 复用一个已验证的只读句柄。它先校验匹配构建的模块字节，再在战局对象和逻辑帧的前后检查都通过时记录样本。实验 JSON Lines 含原始团队累计、逐干员分类累计的可用状态，以及详细记录器指针是否非空的布尔值。全局计数与逐干员分类计数来自不同的结算字段，保留各自口径。运行时使用 `--game-root`、`--output` 和 `--seconds`，输出必须是一个新文件。当前 Windows 实时数值尚待实机结果。
 
 外部实时快照探针可以检查当前 Windows 会话是否已有兼容的 ArkHelper 快照发布端，并将其当前快照输出为 JSON。
 
