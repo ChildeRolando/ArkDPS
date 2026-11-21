@@ -329,6 +329,57 @@ def test_subround_with_unmapped_roster_preserves_observer_and_archives(tmp_path,
     assert result['archives'] == 2
 
 
+def test_settlement_quality_stays_with_its_round_and_paired_watermark():
+    session, collector, calls, _ = connected()
+    observer = session.observer
+    scoped_mark, read_batch = observer.mark, observer.drain
+    read_roster = collector.read_roster
+    collector.read_roster = lambda: replace(read_roster(), local_player_side=0)
+    round_unknown = False
+    drain_unknown = True
+    observer.mark = lambda: dict(scoped_mark(), damage_settlement_quality_version=1,
+                                 enemy_damage_ready=True, enemy_damage_unknown=round_unknown)
+    observer.drain = lambda: dict(read_batch(), partial_damage_version=7,
+                                  source_attribution_version=1,
+                                  enemy_damage_ready=True, enemy_damage_unknown=drain_unknown)
+
+    def hit(sequence, frame, time, amount, *, complete=True):
+        collector.frame, collector.game_time = frame, time
+        collector.damage += amount
+        observer.sequence = observer.epoch = sequence
+        observer.events = [dict(event(sequence, frame=frame, game_time=time, amount=amount),
+                                kind='damage_settlement', source_character_uid=1,
+                                target='enemy_a', target_uid='77', damage_type=1,
+                                shield_absorbed=0, settlement_complete=complete,
+                                nominal_amount=amount, killed=False)]
+        return session.read()['statistics']['rows']['char_a']['settled_damage']
+
+    try:
+        first = session.read()
+        # A later batch can report an unrelated quality value. The paired
+        # mark is the authority at the exact frame being applied.
+        assert hit(1, 30, 1, 20)['complete']
+        round_unknown, drain_unknown = True, False
+        affected = hit(2, 60, 2, 25)
+        assert not affected['complete']
+        assert affected['unverified_hits'] == 0
+        assert affected['effective_damage'] == 45
+
+        collector.frame, collector.game_time, collector.damage = 0, 0, 0
+        round_unknown, drain_unknown = False, True
+        successor = session.read()
+        assert successor['battle_id'] != first['battle_id']
+        healthy = hit(3, 30, 1, 30)
+        assert healthy['complete'] and healthy['effective_damage'] == 30
+        assert healthy['unverified_hits'] == 0
+        partial = hit(4, 60, 2, 10, complete=False)
+        assert not partial['complete'] and partial['unverified_hits'] == 1
+        assert partial['effective_damage'] == 40
+        assert calls.count('attach') == 1
+    finally:
+        session.close()
+
+
 def test_empty_preparation_preserves_observer_and_has_no_archive(monkeypatch):
     session, collector, calls, records = connected()
     try:
@@ -520,6 +571,7 @@ def test_process_exit_handoff_is_immediate_once_and_replayable(tmp_path):
         first = session.read()
         collector.core.mc._pid_for_known_package = lambda: ('', 0)
         collector._lifecycle_reader = SimpleNamespace(sample=lambda: None)
+        collector._check_process_identity = lambda: NativeCollector._check_process_identity(collector)
         collector.read_lifecycle = lambda: NativeCollector.read_lifecycle(collector)
         for _ in range(2):
             with pytest.raises(BattleChanged):

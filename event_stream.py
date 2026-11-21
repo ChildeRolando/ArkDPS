@@ -40,7 +40,9 @@ def baseline_barrier(before, sample, after):
                 hooks = mark.get('active_hooks') or []
                 detail = ', '.join(str(name) for name in hooks[:4])
                 raise BarrierBusy('callback is in flight' + (': ' + detail if detail else ''))
+        shared_scope = 'damage_settlement_scope' in before and 'damage_settlement_scope' in after
         if (any(before[k] != after[k] for k in ('sequence', 'epoch', 'frame', 'game_time'))
+                or (shared_scope and before['damage_settlement_scope'] != after['damage_settlement_scope'])
                 or sample['frame'] != after['frame']
                 or sample['game_time'] != after['game_time']):
             raise BarrierBusy('baseline crossed an event or game frame')

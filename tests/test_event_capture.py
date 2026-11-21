@@ -527,7 +527,7 @@ def test_probe_records_hp_evidence_only_after_onleave():
     enter, leave = production.split('onLeave(){', 1)
     assert 'hp_damage' not in enter
     assert 'recordHpContext(' not in enter
-    clock_guard = 'if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)'
+    clock_guard = 'if(!sameMitigationTime(end,this.when))'
     assert leave.index(clock_guard) < leave.index("record(this.source,'hp_damage'")
     assert leave.index(clock_guard) < leave.index('recordHpContext(')
     assert 'if(traceHpContext){\n      const hpAfter=' in leave

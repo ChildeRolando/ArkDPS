@@ -211,8 +211,10 @@ class LifecycleReader:
             # Reject teardown/rebinding while reading readiness roots.
             if m.read(bc, 0x18) != block[:0x18]:
                 raise ReadFailure('binding_changed')
-        after = m.read_many([(self.battle_slot, 8), (self.flow_slot, 8), (flow + 0x20, 0x18)], structural_check=True)
-        if after[:2] != slots or after[2] != raw[0x20:0x38]:
+        flow_roots = [(self.battle_slot, 8), (self.flow_slot, 8),
+                      (flow, 0x18), (flow + 0x20, 0x18)]
+        expected = [*slots, raw[:0x18], raw[0x20:0x38]]
+        if m.read_many(flow_roots, structural_check=True) != expected:
             raise ReadFailure('binding_changed')
         if not battle:
             self.practice = None
@@ -229,9 +231,7 @@ class LifecycleReader:
                     self.practice = (battle, stage, practice)
             # The optional page scan can take longer than a battle frame.
             if self.practice:
-                verified = m.read_many([(self.battle_slot, 8), (self.flow_slot, 8),
-                                        (flow + 0x20, 0x18)], structural_check=True)
-                if verified != after:
+                if m.read_many(flow_roots, structural_check=True) != expected:
                     self.practice = None
                     raise ReadFailure('binding_changed')
         if self.practice and self.practice[:2] == (battle, stage):
@@ -307,7 +307,23 @@ def _bind_lifecycle(memory, battle_klass, locator, classes):
         finally:
             locator._channel = None
 
-    return LifecycleReader(memory, battle_klass, flows[0], locate_squads if squads else None)
+    squad_lookup = locate_squads if squads and locator is not None else None
+    return LifecycleReader(memory, battle_klass, flows[0], squad_lookup)
+
+
+def observer_boot_ready(mc, channel):
+    """Confirm a stable logged-in home scene or live battle before attaching."""
+    memory = MemoryAccess(mc, channel)
+    try:
+        # Boot polls can precede runtime initialization. Check just these
+        # versioned class slots and let the caller retry without a heap scan.
+        classes = _read_lifecycle_class_slots(memory, {
+            'GameFlowController': 'Torappu', 'BattleController': 'Torappu.Battle',
+        })
+        sample = _bind_lifecycle(memory, None, None, classes).sample()
+    except (ReadFailure, UnicodeError):
+        return False
+    return not sample['transiting'] and (sample['target'] == 'home' or sample['ready'])
 
 
 def locate_lifecycle(mc, battle_klass, locator, *, channel=None):

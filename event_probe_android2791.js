@@ -21,7 +21,9 @@ function expectFields(k,expected){
  for(const [name,offset] of Object.entries(expected))if(seen[name]!==offset)throw new Error('unsupported layout '+className(k)+'.'+name);
 }
 const domain=api('il2cpp_domain_get','pointer',[])();
+if(domain.isNull())throw new Error('IL2CPP domain is not initialized');
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
+if(thread.isNull())throw new Error('IL2CPP thread could not attach');
 const cfg={methods:[]};let clock;let skillF=null;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;
@@ -229,6 +231,7 @@ let enemyMaxHpReady=false;
 const enemyDamageReady=!!enemyEntryConfig
  &&cfg.methods.filter(m=>m.owner==='Entity'&&m.name==='OnAfterOutputDamage').length===1;
 let enemyDamageUnknown=false;
+let damageSettlementClock=null,damageSettlementScope=0,damageSettlementIssue=null,damageSettlementController=null;
 const enemyHpWrites=new Map();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
@@ -260,6 +263,38 @@ function sourceCharacterUid(source,sourceId){
   if(uid>0)return uid;
  }catch(e){/* Native identity unavailable; keep the original event. */}
 }
+function resetDamageSettlementScope(){
+ damageSettlementClock=null;
+ damageSettlementScope++;
+ enemyDamageUnknown=false;
+ damageSettlementIssue=null;
+ damageSettlementController=null;
+}
+function damageSettlementStamp(frame,game_time){
+ // A Defense Protocol round can reuse the whole Unity battle object. Check
+ // both clock readings before any callback can report uncertainty for it.
+ if(damageSettlementClock&&frame<damageSettlementClock.frame&&game_time<damageSettlementClock.game_time)
+  resetDamageSettlementScope();
+ const sample={frame,game_time,settlementScope:damageSettlementScope};
+ damageSettlementClock=sample;
+ return sample;
+}
+function observeDamageSettlementController(identity,{starting=false}={}){
+ const key=[identity.controller,identity.native,identity.stats,identity.level].join(':');
+ if(starting&&damageSettlementController!==null&&damageSettlementController!==key)
+  resetDamageSettlementScope();
+ damageSettlementController??=key;
+}
+function markDamageSettlementUnknown(when,reason){
+ if(when.settlementScope!==damageSettlementScope)return;
+ enemyDamageUnknown=true;
+ damageSettlementIssue??={frame:when.frame,game_time:when.game_time,sequence,reason};
+}
+function damageSettlementQuality(){
+ return {damage_settlement_quality_version:1,enemy_damage_ready:enemyDamageReady,
+  damage_settlement_scope:damageSettlementScope,enemy_damage_unknown:enemyDamageUnknown,
+  damage_settlement_first_issue:damageSettlementIssue};
+}
 function time(allowRetry = false) {
  const frame = clock.readU32();
  const game_time = fp(clock.add(4));
@@ -268,7 +303,7 @@ function time(allowRetry = false) {
   throw new Error('unstable callback clock');
  }
  if (!Number.isFinite(game_time) || game_time < 0) throw new Error('invalid clock');
- return {frame, game_time};
+  return damageSettlementStamp(frame,game_time);
 }
 function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer(),hasShield:p.add(0x27c).readU8()};}
 // Modifier callbacks receive a pointer to m_source; the remaining fields follow
@@ -596,6 +631,10 @@ function enemyDamageIdentity(target,confirmedUid) {
  if(!uid)throw new Error('missing settled target UID');
  return {target:key,target_uid:String(uid),target_instance:target.toString()};
 }
+function knownNonEnemyTarget(target){
+ const key=targetKey(target);
+ return key&&!key.startsWith('enemy_')&&!key.startsWith('trap_');
+}
 function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed}={}) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
  try{
@@ -615,7 +654,7 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   if(typeof killed==='boolean')evidence.killed=killed;
   record(scope.source,'damage_settlement',real===0?0:-real,when,{method:scope.name},
          {...evidence,...reduction},scope.sourceCharacterUid);
- }catch(e){enemyDamageUnknown=true;}
+ }catch(e){markDamageSettlementUnknown(when,String(e));}
 }
 function flushOutputSettlement(scope,when) {
  const output=scope.outputSettlement;
@@ -633,7 +672,7 @@ function matchOutputSettlement(output,scope,source) {
   output.settlementType=output.mod.add(0x68).readS32();
   output.settlementIdentity=enemyDamageIdentity(output.target,uid);
  }
- catch(e){enemyDamageUnknown=true;return false;}
+ catch(e){markDamageSettlementUnknown(output.when,String(e));return false;}
  if(!output.settlementIdentity)return false;
  if(scope.settlementAmbiguous)return true;
  const previous=scope.outputSettlement;
@@ -646,7 +685,7 @@ function matchOutputSettlement(output,scope,source) {
      output.sourceCharacterUid!==previous.sourceCharacterUid){
    scope.outputSettlement=null;
    scope.settlementAmbiguous=true;
-   enemyDamageUnknown=true;
+   markDamageSettlementUnknown(output.when,'ambiguous output for one modifier');
   }
  }else scope.outputSettlement=output;
  return true;
@@ -662,7 +701,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
     !scope.target?.equals(target)||!scope.settlementTargetUid||
     damageTargetUid(target)!==scope.settlementTargetUid)return false;
  if(scope.mitigationModifierReused){
-  enemyDamageUnknown=true;
+  if(!knownNonEnemyTarget(target))markDamageSettlementUnknown(when,'reused damage modifier');
   return false;
  }
  const output=scope.outputSettlement;
@@ -735,7 +774,7 @@ function settleSourcelessBurst(scope,evidence,when,amount,reduction) {
   // The host must attribute the HP deduction before the burst consumes its
   // elemental bar owner. Both records stay within this callback's barrier.
   damageSettlement(scope,scope.target,real,when,{identity:target});
- }catch(e){enemyDamageUnknown=true;}
+ }catch(e){markDamageSettlementUnknown(when,String(e));}
 }
 // One optional observation joins the existing ApplyModifier damage event.
 let mitigationReady=false,mitigationNoEventReady=false,mitigationFactoryReady=false;
@@ -769,7 +808,9 @@ function mitigationDiagnostics(){return {...mitigationCounts,
 function sameFormulaHit(scope,attack){
  return scope&&(scope.attack.equals(attack)||scope.internalAttack?.equals(attack));
 }
-function sameMitigationTime(a,b){return a.frame===b.frame&&a.game_time===b.game_time;}
+function sameMitigationTime(a,b){
+ return a.frame===b.frame&&a.game_time===b.game_time&&a.settlementScope===b.settlementScope;
+}
 function mitigationTargetId(target){
  const id=targetKey(target);
  return id&&!id.startsWith('char_')&&!id.startsWith('token_')?id:null;
@@ -1517,10 +1558,12 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      this.modifierScope=damageModifier(this.tid,this.mod);
      if(this.name==='Entity.OnAfterOutputDamage'&&enemyDamageReady){
-      if(this.sourceReadFailed)enemyDamageUnknown=true;
+      if(this.sourceReadFailed&&!knownNonEnemyTarget(this.target))
+       markDamageSettlementUnknown(this.when,'missing output source identity');
       if(this.source&&own(this.source)){
-       if(this.modifierScope?.mitigationModifierReused)enemyDamageUnknown=true;
-       else if(!matchOutputSettlement(this,this.modifierScope,this.nativeModifierSource))
+       if(this.modifierScope?.mitigationModifierReused){
+        if(!knownNonEnemyTarget(this.target))markDamageSettlementUnknown(this.when,'reused output modifier');
+       }else if(!matchOutputSettlement(this,this.modifierScope,this.nativeModifierSource))
         damageSettlement(this,this.target,this.real,this.when);
       }
      }
@@ -1640,7 +1683,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{record(this.source,this.skillStart?'skill_start':'skill_end',1,end,{method:this.name},evidence,this.sourceCharacterUid);}catch(e){skillUnknown=true;}
      return;
     }
-    if(end.frame!==this.when.frame||end.game_time!==this.when.game_time)throw new Error('callback crossed frame');
+     if(!sameMitigationTime(end,this.when))throw new Error('callback crossed frame');
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
      if(!this.target||this.target.isNull())return;
@@ -1775,7 +1818,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      if(this.outputSettlement){
       if(endStamp&&sameMitigationTime(endStamp,this.when)&&!this.mitigationModifierReused)
        flushOutputSettlement(this,endStamp);
-      else enemyDamageUnknown=true;
+      else markDamageSettlementUnknown(this.when,'output did not share the modifier clock');
      }
      leaveModifier(this);
     }
@@ -1806,7 +1849,7 @@ function terminalIdentity(controller,controllerClass){
 }
 function currentTerminalBoundary(candidate=terminalBoundary){
  return candidate&&!active&&!fatal&&!stopped&&candidate.sequence===sequence
-  &&candidate.epoch===epoch?candidate:null;
+   &&candidate.epoch===epoch&&candidate.damage_settlement_scope===damageSettlementScope?candidate:null;
 }
 function installTerminalHooks(){
  if(!terminalMethods)return;
@@ -1817,6 +1860,10 @@ function installTerminalHooks(){
     if(state===1||state===2){
      resetEnemyHpCoalescing();
      terminalGeneration++;terminalBoundary=null;
+      try{
+       const identity=terminalIdentity(args[0],terminalMethods.controller);
+       if(identity)observeDamageSettlementController(identity,{starting:true});
+      }catch(e){/* The checked battle clock can still establish a new round. */}
     }
    }
   }));
@@ -1828,7 +1875,11 @@ function installTerminalHooks(){
     if(coalesceEnemyHp)flushCoalescedEnemyHp();
     try{
      const identity=terminalIdentity(args[0],terminalMethods.controller),stamp=time(true);
-     if(identity&&stamp)this.boundary={...identity,...stamp,sequence,epoch,active};
+     if(identity&&stamp){
+      observeDamageSettlementController(identity);
+      this.boundary={...identity,frame:stamp.frame,game_time:stamp.game_time,sequence,epoch,active,
+        damage_settlement_scope:stamp.settlementScope};
+     }
     }catch(e){/* A partially destroyed object cannot certify an endpoint. */}
    },
    onLeave(){
@@ -1837,7 +1888,8 @@ function installTerminalHooks(){
     if(!candidate)return;
     try{
      const stamp=time(true);
-     if(stamp?.frame===candidate.frame&&stamp.game_time===candidate.game_time)terminalBoundary=candidate;
+     if(stamp?.frame===candidate.frame&&stamp.game_time===candidate.game_time&&
+        stamp.settlementScope===candidate.damage_settlement_scope)terminalBoundary=candidate;
     }catch(e){/* The clock disappeared during teardown. */}
    }
   }));
@@ -1863,7 +1915,7 @@ function eventQuality(frame){
   boss_damage_ready:true,boss_damage_unknown:bossDamageUnknown,
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
   skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
-  enemy_damage_ready:enemyDamageReady,enemy_damage_unknown:enemyDamageUnknown,
+  ...damageSettlementQuality(),
   mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
   mitigation_diagnostics:mitigationDiagnostics(),...enemyEntryQuality(frame)};
 }
@@ -1873,9 +1925,10 @@ function markEvents(){
  let current;
  try{current=time(true);}
  catch(e){if(!terminal_boundary)throw e;current=null;}
- const quality={...eventQuality(current?.frame),terminal_boundary};
+ const quality={...eventQuality(current?.frame),terminal_boundary:currentTerminalBoundary(terminal_boundary)};
  if(current===null)return {retry:true,error:fatal,stopped,...quality};
- return {...current,sequence,epoch,active,active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
+ return {frame:current.frame,game_time:current.game_time,sequence,epoch,active,
+  active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
 }
 function receiveEventRequest(){
  // Frida recv is one-shot. Rearm before dispatch; a late reply can be safely

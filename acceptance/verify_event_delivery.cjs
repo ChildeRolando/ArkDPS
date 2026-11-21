@@ -11,6 +11,8 @@ function between(first, last) {
   assert(start >= 0 && end > start, `missing product section: ${first}`);
   return source.slice(start, end);
 }
+const settlementScope = between('let enemyDamageUnknown=', 'const enemyHpWrites=') +
+  between('function resetDamageSettlementScope(', 'function time(');
 
 for (const traceHpContext of [false, true]) {
   vm.runInNewContext(`
@@ -119,6 +121,56 @@ assert.equal(queue.length,EVENT_BUFFER_LIMIT);
 `, {assert}, {filename: 'product-event-delivery'});
 
 vm.runInNewContext(`
+const enemyDamageReady=true,coalesceEnemyHp=false;
+let sequence=10,epoch=0,active=0,fatal=null,stopped=false,frame=120,gameTime=4;
+const clock={readU32:()=>frame,add:()=>gameTime},fp=value=>value;
+const activeHooks=new Map(),currentTerminalBoundary=()=>null;
+const eventQuality=()=>damageSettlementQuality();
+${settlementScope}
+${between('function time(', 'function buff(')}
+${between('const EVENT_BUFFER_LIMIT', 'const stacks=')}
+${between('function record(source', 'function refreshEnemyEntryFrame')}
+${between('function markEvents()', 'function receiveEventRequest()')}
+
+const oldClock=time();
+markDamageSettlementUnknown(oldClock,'old battle issue');
+const oldMark=markEvents();
+assert.equal(oldMark.enemy_damage_unknown,true);
+assert.equal(oldMark.damage_settlement_quality_version,1);
+assert.equal(oldMark.damage_settlement_first_issue.reason,'old battle issue');
+
+// Consecutive rounds may share the same native object and event sequence.
+frame=0;gameTime=0;
+const firstNewCallback=time();
+markDamageSettlementUnknown(firstNewCallback,'first callback in next round');
+markDamageSettlementUnknown(firstNewCallback,'another issue');
+const newMark=markEvents();
+assert.equal(newMark.sequence,oldMark.sequence);
+assert.notEqual(newMark.damage_settlement_scope,oldMark.damage_settlement_scope);
+assert.equal(newMark.damage_settlement_first_issue.reason,'first callback in next round');
+assert.equal(readEvents(10,10).damage_settlement_scope,newMark.damage_settlement_scope);
+assert.equal(newMark.settlementScope,undefined);
+
+frame=60;gameTime=2;
+assert.equal(markEvents().enemy_damage_unknown,true);
+frame=0;gameTime=0;
+const cleanRound=markEvents();
+markDamageSettlementUnknown(firstNewCallback,'late callback of the previous round');
+assert.equal(markEvents().enemy_damage_unknown,false);
+assert.equal(readEvents(10,10).damage_settlement_first_issue,null);
+assert.notEqual(cleanRound.damage_settlement_scope,newMark.damage_settlement_scope);
+assert.equal(oldMark.damage_settlement_first_issue.reason,'old battle issue');
+
+const owner={controller:'1',native:'2',stats:'3',level:'4'};
+observeDamageSettlementController(owner,{starting:true});
+markDamageSettlementUnknown(time(),'same battle issue');
+observeDamageSettlementController(owner,{starting:true});
+assert.equal(markEvents().enemy_damage_unknown,true);
+observeDamageSettlementController({...owner,stats:'5'},{starting:true});
+assert.equal(markEvents().enemy_damage_unknown,false);
+`, {assert}, {filename: 'product-damage-settlement-scope'});
+
+vm.runInNewContext(`
 let sequence=0,fatal=null,stopped=false;
 const clock={frame:30,game_time:1};
 const coalesceEnemyHp=false;
@@ -169,7 +221,10 @@ let sequence=12,epoch=24,active=0,fatal=null,stopped=false;
 const coalesceEnemyHp=true;
 const enemyMaxHpReady=true;
 let clock={frame:60,game_time:2};
-const time=()=>{if(clock instanceof Error)throw clock;return clock;};
+const time=()=>{
+ if(clock instanceof Error)throw clock;
+ return damageSettlementStamp(clock.frame,clock.game_time);
+};
 const eventQuality=()=>({});
 const activeHooks=new Map(),hooks=[];
 const installed={};
@@ -183,6 +238,7 @@ const ptr=(address,fields={})=>({
 const className=klass=>klass;
 const controllerClass=ptr('0x100');
 const terminalMethods={state:'state',destroy:'destroy',controller:controllerClass};
+${settlementScope}
 ${between('const EVENT_BUFFER_LIMIT', 'const stacks=')}
 ${between('function record(source', 'function refreshEnemyEntryFrame')}
 ${between('let terminalBoundary=', 'const enemyStateError=')}
@@ -195,7 +251,7 @@ const loggerFields={0:'BattleLogger',0x18:controller,0x30:ptr('0x500',{0:'Battle
 const logger=ptr('0x400',loggerFields);
 Object.assign(controllerFields,{0x10:native,0xd8:logger,0x158:ptr('0x600',{0:'LevelData'})});
 const expected={controller:'0x200',native:'0x300',logger:'0x400',stats:'0x500',level:'0x600',
-  frame:60,game_time:2,sequence:12,epoch:24,active:0};
+  frame:60,game_time:2,sequence:12,epoch:24,active:0,damage_settlement_scope:0};
 const destroy=installed.destroy;
 function enter(){
   const call={};
@@ -225,6 +281,10 @@ finish();
 assert.equal(markEvents().terminal_boundary,null);
 finish=enter();
 clock={frame:61,game_time:2.03};
+finish();
+assert.equal(markEvents().terminal_boundary,null);
+finish=enter();
+resetDamageSettlementScope();
 finish();
 assert.equal(markEvents().terminal_boundary,null);
 finish=enter();
@@ -357,8 +417,9 @@ for (const coalesceEnemyHp of [false, true]) {
 }
 
 vm.runInNewContext(`
-let enemyDamageUnknown=false;
+let sequence=0;
 const enemyDamageReady=true;
+${settlementScope}
 const enemyEntryConfig={bObject:{},assignable:(_base,klass)=>klass===1};
 const emitted=[];
 const targetKey=target=>target?.eid;
@@ -388,7 +449,7 @@ assert.equal(emitted[0].evidence.shield_absorbed,null);
 assert.equal(emitted[0].evidence.settlement_complete,false);
 assert.equal(enemyDamageUnknown,false);
 
-const when={frame:2};
+const when=damageSettlementStamp(2,2/30);
 const burst={target:target.eid,real_delta:-7};
 const sourceNull={source:null,nativeSourceNull:true,real:-7,mod:mod(5),target,
                   burstTarget:enemyDamageIdentity(target)};
@@ -416,15 +477,16 @@ settleSourcelessBurst({...sourceNull,burstTarget:{...sourceNull.burstTarget,targ
 assert.equal(emitted.length,3);
 assert.equal(enemyDamageUnknown,true);
 enemyDamageUnknown=false;
-damageSettlement({source:'char_a',mod:mod(2)},null,-17,{frame:1});
+damageSettlement({source:'char_a',mod:mod(2)},null,-17,when);
 assert.equal(enemyDamageUnknown,true);
 assert.equal(nonlethalSettlement(target,30,-17,17).hp_after,13);
 assert.equal(nonlethalSettlement(target,17,-17,17),null);
 `, {assert}, {filename: 'product-enemy-settlement'});
 
 vm.runInNewContext(`
-let active=0,epoch=0,fatal=null,enemyDamageUnknown=false;
+let active=0,epoch=0,sequence=0,fatal=null;
 let clock={frame:30,game_time:1};
+${settlementScope}
 const activeHooks=new Map(),stacks=new Map(),shieldByFrame=new Map(),registered=new Map(),hooks=[];
 const cfg={methods:[['Entity','ApplyModifier','apply'],['Unit','OnTakeDamage','take'],
                     ['Entity','OnAfterOutputDamage','output'],['Buff','OnTakeDamage','buff'],
@@ -432,7 +494,7 @@ const cfg={methods:[['Entity','ApplyModifier','apply'],['Unit','OnTakeDamage','t
                     ['BattleController','OnCharacterFinished','withdraw'],
                     ['BlockDamage','_AssignDynamicVar','shield']].map(([owner,name,address])=>({owner,name,address}))};
 const Interceptor={attach:(address,handlers)=>registered.set(address,handlers)};
-const ptr=address=>address,time=()=>clock,traceHpContext=false,enemyDamageReady=true;
+const ptr=address=>address,time=()=>damageSettlementStamp(clock.frame,clock.game_time),traceHpContext=false,enemyDamageReady=true;
 const enemyEntryConfig={bObject:{},assignable:()=>true};
 const emitted=[],record=(source,kind,amount,when,proof,evidence,sourceUid)=>{
  const event={source,kind,amount,when,proof,evidence,sourceUid};emitted.push(event);return event;
@@ -476,6 +538,13 @@ function enterArgs(method,args,threadId=7){
  hook.onEnter.call(context,args);
  return ()=>hook.onLeave.call(context);
 }
+const unreadableSource={isNull:()=>false,get id(){throw new Error('read failed');}};
+enter('output',modifier(unreadableSource,entity('char_ally',7,30),5,1))();
+assert.equal(enemyDamageUnknown,false);
+enter('output',modifier(unreadableSource,entity('enemy_target',8,30),5,1))();
+assert.equal(enemyDamageUnknown,true);
+resetDamageSettlementScope();
+
 function nestedKill({source=nil,parentDelta=0,cancel=0,uidChanges=false,childCancel=0,sourceChanges=false,
                      otherPointer=false,otherThread=false,extraParent=false,shield=false,
                      unverifiedShield=false,noTargetHit=false}={}){

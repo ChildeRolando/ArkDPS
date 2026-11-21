@@ -436,6 +436,7 @@ public partial class MainWindow : Window
             "reconnecting" => (workerLabel,StatusAmber),
             "locating" => (disabled ? workerLabel : "正在连接观察者",StatusAmber),
             _ when disabled => ($"观察已关闭·{phase}",StatusGray),
+            _ when observer=="waiting_game_init" => ("等待游戏初始化",StatusAmber),
             _ when (observer is "failed" or "incompatible" or "stopped") ||
                    ((status is "waiting" or "live" or "degraded") && (coverage is "failed" or "gap"))
                 => ($"观察中断·{phase}",StatusRed),

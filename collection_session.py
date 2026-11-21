@@ -6,12 +6,14 @@ from dataclasses import asdict
 from battle_history import BattleRecord, HistoryError
 
 from collector import Collector, SampleUnavailable, BattleChanged, UnsupportedVersion
-from event_capture import LiveEventCapture
+from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
 from event_stream import StreamGap
 
 
 DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
+WAITING_GAME_INIT = 'waiting_game_init'
+_BOOT_POLL_PERIOD = 1.0
 
 
 class CollectionSession:
@@ -26,6 +28,7 @@ class CollectionSession:
         self.audit = audit or (lambda *_args: None)
         self.event_status = 'unavailable'
         self.event_error = None
+        self._next_boot_check = float('-inf')
         self._enemy_session = None
         self._enemy_last_poll = float('-inf')
         self._enemy_payload = None
@@ -58,13 +61,48 @@ class CollectionSession:
         self.audit('connected', {'diagnostics': vars(self.collector.diagnostics),
                                  'pid': self.collector.core.mc.pid,
                                  'process_instance': getattr(self.collector.core.mc, 'process_instance', None)})
+        if not self.frida_remote:
+            self._finish_connect()
+            return
+        self.event_status, self.event_error = WAITING_GAME_INIT, None
+        self._next_boot_check = float('-inf')
+        if not self._finish_when_game_ready():
+            self.audit('observer_waiting_game_init', {'pid': self.collector.core.mc.pid})
+
+    def _finish_when_game_ready(self):
+        if self.event_status != WAITING_GAME_INIT:
+            return True
+        now = time.monotonic()
+        if now < self._next_boot_check:
+            return False
+        if not self.collector.observer_boot_ready():
+            self._next_boot_check = now + _BOOT_POLL_PERIOD
+            return False
+        self.audit('observer_game_init_ready', {'pid': self.collector.core.mc.pid})
+        self._finish_connect()
+        return True
+
+    def _finish_connect(self):
         if self.frida_remote:
             self._attach_observer()
-        self.capture = LiveEventCapture(self.collector, self.observer, audit=self.audit)
         if self.runtime is not None:
             self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
             self.collector.locate_lifecycle()
             self.audit('lifecycle_header', {'feed': self.runtime.feed.id})
+        self.capture = LiveEventCapture(self.collector, self.observer, audit=self.audit)
+
+    def wait_for_game_init(self, *, wait_seconds, cancelled=None):
+        """Bound the CLI readiness wait, using the same probe as live collection."""
+        deadline = time.monotonic() + wait_seconds
+        while self.event_status == WAITING_GAME_INIT:
+            if cancelled is not None and cancelled():
+                raise InterruptedError('collection cancelled before game initialization')
+            if self._finish_when_game_ready():
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SampleUnavailable('等待游戏初始化超时')
+            time.sleep(min(0.2, remaining))
 
     def _attach_observer(self):
         self.event_status, self.event_error = 'attaching', None
@@ -122,6 +160,7 @@ class CollectionSession:
         if self.runtime is not None:
             return
         deadline = time.monotonic() + wait_seconds
+        self.wait_for_game_init(wait_seconds=wait_seconds, cancelled=cancelled)
         while True:
             if cancelled is not None and cancelled():
                 raise InterruptedError('collection cancelled before battle')
@@ -138,6 +177,8 @@ class CollectionSession:
                 time.sleep(.2)
 
     def read(self):
+        if not self._finish_when_game_ready():
+            raise CaptureRetry('等待游戏初始化')
         if self.capture is None:
             raise RuntimeError('collection session is not connected')
         if self.runtime is not None:
@@ -178,7 +219,6 @@ class CollectionSession:
         return sample
 
     def _read_lifecycle(self):
-        from event_capture import CaptureRetry
         from snapshot_adapter import FrameMismatch
         from roster import RosterUnavailable
         try:
@@ -300,8 +340,9 @@ class CollectionSession:
             try:
                 if self.runtime is not None:
                     self._drain_archives()
-                    self.runtime.disconnected('capture_stopped')
-                    self.audit('lifecycle_summary', self.runtime.sessions.live())
+                    if self.capture is not None:
+                        self.runtime.disconnected('capture_stopped')
+                        self.audit('lifecycle_summary', self.runtime.sessions.live())
                 if self.capture is not None:
                     self.capture.close()
                     self.audit('coverage_closed', self.capture.adapter.result())
