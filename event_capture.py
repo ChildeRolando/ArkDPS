@@ -8,7 +8,8 @@ from collections import deque
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
 from roster import RosterUnavailable
-from event_stream import StreamGap, BarrierBusy, baseline_barrier, validate_event_binding
+from event_stream import (StreamGap, BarrierBusy, baseline_barrier, validate_event_binding,
+                          validate_native_event_batch)
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 
@@ -26,8 +27,20 @@ def read_event_batch(observer, sequence):
 
 
 def acknowledge_event_batch(observer, sequence):
+    """Confirm a host-owned prefix, returning False for an uncertain response.
+
+    The producer must bind commits to their stream, or never reuse sequence
+    numbers within an observer lifetime. A separate mark is not a transaction
+    that can bind a later integer-only commit across a producer-side reset.
+    """
     if hasattr(observer, 'commit_events'):
-        observer.commit_events(sequence)
+        try:
+            observer.commit_events(sequence)
+        except ObserverReadRetry:
+            # The host already accepted this prefix. The producer may also
+            # have accepted the ack before its response was lost.
+            return False
+    return True
 
 
 def source_attribution_batch(drained, after, through):
@@ -235,7 +248,10 @@ class LiveEventCapture:
         baseline. The observation generation is checked before reaching here.
         """
         try:
-            validate_event_binding(sample, mark, drained)
+            validate_event_binding(sample, mark)
+            stream = self.adapter.event_stream
+            after = stream.sequence if stream is not None else sequence
+            validate_native_event_batch(sample, after, sequence, drained)
             if self.baseline_sequence is None:
                 self.baseline_sequence = sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],

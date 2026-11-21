@@ -16,7 +16,8 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_stream import StreamGap, BarrierBusy, baseline_barrier, validate_event_binding
+from event_stream import (StreamGap, BarrierBusy, baseline_barrier, validate_event_binding,
+                          validate_native_event_batch)
 from panel_model import team_status
 
 
@@ -614,14 +615,14 @@ class BattleSessions:
             return {}
         sample = observation.sample
         drained = evidence.get('drain') or {}
+        after = stream.sequence if stream is not None and not stream.closed else through
         if (sample.get('battle_metadata') or {}).get('platform') == 'native_pc':
             try:
                 if baseline_barrier(evidence['before'], sample, evidence['after']) != through:
                     return {}
-                validate_event_binding(sample, drained)
+                validate_native_event_batch(sample, after, through, drained)
             except (KeyError, StreamGap):
                 return {}
-        after = stream.sequence if stream is not None and not stream.closed else through
         return source_attribution_batch(drained, after, through)
 
     def consume(self, observation):
@@ -757,6 +758,7 @@ class BattleRuntime:
         # Frozen handoffs outlive the transport session during in-process rescans.
         self.pending_history = deque()
         self.record = lambda observation: None
+        self._pending_event_ack = None
 
     def _consume(self, observation):
         self.record(observation)
@@ -771,6 +773,47 @@ class BattleRuntime:
         return self.feed.acquire(collector, observer,
                                  published_generation=self.sessions.generation,
                                  preparing_generation=self.sessions.preparing_generation)
+
+    def _acknowledge_observation(self, observation, observer, consumed):
+        """Release accepted data without turning a lost ack response into a gap."""
+        pending_ack = self._pending_event_ack
+        identity_sample = observation.sample or self.sessions.latest_sample or {}
+        metadata = identity_sample.get('battle_metadata') or {}
+        ack_binding = (observation.generation,
+                       identity_sample.get('native_session', identity_sample.get('session')),
+                       metadata.get('source_build'))
+        if pending_ack is not None and (pending_ack[0] is not observer
+                                        or pending_ack[2] != ack_binding):
+            # An integer-only ack must never cross a replacement observer,
+            # battle identity or a generation whose sequence can restart.
+            pending_ack = None
+        current_ack = False
+        if consumed and observer is not None and self.sessions.event_status in ('recording', 'finished'):
+            evidence = observation.events or {}
+            stream = self.sessions.adapter.event_stream
+            if ('drain' in evidence and stream is not None
+                    and stream.sequence == evidence['sequence']
+                    and stream.frame == observation.sample['frame']):
+                pending_ack = (observer, stream.sequence, ack_binding)
+                current_ack = True
+        retry_ack = pending_ack is not None
+        if retry_ack and not current_ack and metadata.get('platform') == 'native_pc':
+            try:
+                # Guard a retained terminal ack against an already observed
+                # producer reset; commit itself must still be stream-bound.
+                mark = _observer_mark(observer)
+                validate_event_binding(identity_sample, mark)
+                if type(mark.get('sequence')) is not int or mark['sequence'] < pending_ack[1]:
+                    pending_ack = None
+                    retry_ack = False
+            except (CaptureRetry, ObserverReadRetry):
+                retry_ack = False
+            except Exception:
+                pending_ack = None
+                retry_ack = False
+        if retry_ack and acknowledge_event_batch(pending_ack[0], pending_ack[1]):
+            pending_ack = None
+        self._pending_event_ack = pending_ack
 
     def poll(self, collector, observer=None, *, prepare_observer=None):
         """Prepare event recovery only after the feed confirms a new battle."""
@@ -791,21 +834,17 @@ class BattleRuntime:
                     self._consume(replace(observation, sample=native, events=None))
                     observation = self._acquire(collector, observer)
             consumed = self._consume(observation)
-            if consumed and observer is not None and self.sessions.event_status in ('recording', 'finished'):
-                evidence = observation.events or {}
-                stream = self.sessions.adapter.event_stream
-                if ('drain' in evidence and stream is not None
-                        and stream.sequence == evidence['sequence']
-                        and stream.frame == observation.sample['frame']):
-                    acknowledge_event_batch(observer, stream.sequence)
+            self._acknowledge_observation(observation, observer, consumed)
         except CaptureRetry:
             raise
         except (SampleUnavailable, RosterUnavailable, FrameMismatch, ReadFailure) as exc:
             if isinstance(exc, ProcessChanged):
+                self._pending_event_ack = None
                 self.feed.current_lifecycle = None
                 self._consume(self.feed._end('process_changed'))
                 raise
             if isinstance(exc, BattleChanged):
+                self._pending_event_ack = None
                 self._consume(self.feed.gap('process_changed'))
                 raise
             if isinstance(exc, SnapshotGap):
@@ -817,6 +856,7 @@ class BattleRuntime:
         return observation
 
     def disconnected(self, reason):
+        self._pending_event_ack = None
         observation = self.feed.gap(reason)
         self._consume(observation)
         self.sessions.connection = 'disconnected'

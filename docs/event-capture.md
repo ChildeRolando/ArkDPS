@@ -8,7 +8,9 @@
 
 PC 的原生累计和编队在 `read_lifecycle()` 的一次事务中采集。`BattleFeed` 在这次事务前后分别取观察者水位。两次水位必须同帧、同游戏时间、同序号和同回调世代，且没有正在执行的事件。两个水位、批次以及可选的终局水位必须携带相同的 `native_session` 与 `source_build`，也必须与快照一致。原生战局身份作为不透明值比较，统计与归档继续使用 `feed:generation`。
 
-PC 观察者须实现 `read_through(sequence)` 和 `commit_events(sequence)`，前者只提供该水位和之前的事件，后者在统计接收成功后才确认可释放的前缀。跨帧或回调未结束时重试，批次身份不符或事件证据失效时仍可发布该局原生累计。伤害、接敌、护盾和技能分别以 `damage_unknown`、`engagement_unknown`、`shield_unknown`、`skill_unknown` 的明确布尔 `false` 表示该项覆盖可用。减伤须同时声明 `mitigation_ready=true` 和 `mitigation_unknown=false`。缺声明的指标保持未知，已验证的部分观测值仍可保留。
+PC 观察者须实现 `read_through(sequence)` 和 `commit_events(sequence)`，前者只提供该水位和之前的事件，后者在统计接收成功后才确认可释放的前缀。跨帧或回调未结束时重试。批次有断号、乱序、同批冲突的重复记录，或有记录超出水位的序号、逻辑帧或游戏时间时，整批都不能用于来源归属或入账，也不确认该水位。批次身份不符或事件证据失效时，保留之前已验证的事件并继续发布该局原生累计。伤害、接敌、护盾和技能分别以 `damage_unknown`、`engagement_unknown`、`shield_unknown`、`skill_unknown` 的明确布尔 `false` 表示该项覆盖可用。减伤须同时声明 `mitigation_ready=true` 和 `mitigation_unknown=false`。缺声明的指标保持未知，已验证的部分观测值仍可保留。
+
+确认响应超时后，消费端保留已经入账的事件和已完成的归档。后续可以确认同一战局新入账的水位，或在确认观察者身份、战局和水位后重试原确认。发布端确认操作必须可重复，并且只能释放对应战局中已确认的前缀。
 
 PC 敌情使用已验证的敌人名单作为起点，复用同一个事件归并器处理 HP 变化、重生、最大 HP 和离场。合格事件仍可更新敌情，过期的名单快照单独保留观测时间和状态。敌人事件发生缺口后回退到原生名单和 HP。只有从零帧、空名单开始且入场和状态事件完整、各实例容量明确时，才能认证已入场总 HP。关卡计划仍使用独立证据。
 

@@ -143,6 +143,61 @@ def test_busy_native_opening_keeps_events_pending_for_the_next_guarded_pair():
     assert runtime.sessions.adapter.result()['rows']['char_a']['observed_damage'] == 20
 
 
+@pytest.mark.parametrize('clock', [
+    {'sequence': 3},
+    {'frame': 4},
+    {'game_time': 3},
+    {'game_time': 1.5},
+])
+def test_native_batch_cannot_publish_or_acknowledge_events_beyond_its_watermark(clock):
+    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1, 20
+    first = event(1, 2, 1, 20)
+    events.queue = [first]
+    runtime.poll(collector, observer)
+
+    snapshot.frame, snapshot.game_time, snapshot.damage = 3, 2, 60
+    second = event(2, 3, 2, 40)
+    events.queue.append(second)
+    bad_events = [first, second, second | clock] if 'sequence' in clock else [first, second | clock]
+    events.claims['batch'] = dict(events=bad_events, source_attribution_version=1,
+                                  partial_damage_version=7, damage_settlement_ready=True)
+    runtime.poll(collector, observer)
+
+    result = runtime.display_sample()
+    assert result['event_status'] == 'gap'
+    assert 'bounded watermark' in result['event_error']
+    row = result['statistics']['rows']['char_a']
+    assert row['damage'] == 60
+    assert row['observed_damage'] == 20
+    assert result['event_watermark']['sequence'] == 1
+    assert not runtime.sessions.adapter.statistics.settlement_enabled
+    assert commits == [0, 1]
+
+
+def test_native_batch_with_a_sequence_gap_cannot_change_source_attribution():
+    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1, 20
+    events.queue = [event(1, 2, 1, 20)]
+    runtime.poll(collector, observer)
+
+    snapshot.frame, snapshot.game_time, snapshot.damage = 3, 2, 50
+    events.queue = [dict(event(3, 3, 2, 30), source_character_uid=77)]
+    events.claims['batch'] = dict(source_attribution_version=1)
+    runtime.poll(collector, observer)
+
+    result = runtime.display_sample()
+    assert result['event_status'] == 'gap'
+    assert 'event sequence gap' in result['event_error']
+    row = result['statistics']['rows']['char_a']
+    assert row['damage'] == 50
+    assert row['observed_damage'] == 20
+    assert 'char_a' not in runtime.sessions.adapter.mapping_conflicts
+    assert commits == [0, 1]
+
+
 def test_native_observer_requires_ordered_read_and_acknowledgement_before_reading():
     runtime, collector, observer, snapshot, _, _, calls, _ = native_connection()
     del observer.commit_events

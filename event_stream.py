@@ -32,6 +32,40 @@ def validate_event_binding(sample, *payloads):
         raise StreamGap('observer data belongs to a different or unverified native PC battle or build')
 
 
+def validate_native_event_batch(sample, after, through, batch):
+    """Verify the native prefix from the last accepted sequence to the barrier."""
+    if (sample.get('battle_metadata') or {}).get('platform') != 'native_pc':
+        return
+    validate_event_binding(sample, batch)
+    if batch.get('error') or batch.get('stopped'):
+        return
+    events = batch.get('events')
+    if not isinstance(events, (list, tuple)):
+        raise StreamGap('invalid native PC event batch')
+    last_record = None
+    verified = after
+    for event in events:
+        if not isinstance(event, dict):
+            raise StreamGap('invalid native PC event record')
+        number, frame, time = event.get('sequence'), event.get('frame'), event.get('game_time')
+        if (type(number) is not int or not 0 <= number <= through
+                or type(frame) is not int or not 0 <= frame <= sample['frame']
+                or type(time) not in (int, float) or not 0 <= time <= sample['game_time']
+                or (frame == sample['frame'] and time != sample['game_time'])):
+            raise StreamGap('native PC event record does not match the bounded watermark')
+        if last_record is not None:
+            previous = last_record['sequence']
+            if number < previous or (number == previous and event != last_record):
+                raise StreamGap('native PC event batch is out of order or has a conflicting replay')
+        if number > verified:
+            if number != verified + 1:
+                raise StreamGap('native PC event sequence gap')
+            verified = number
+        last_record = event
+    if verified != through:
+        raise StreamGap('native PC event sequence does not reach the bounded watermark')
+
+
 def baseline_barrier(before, sample, after):
     """Validate two producer marks surrounding one frame-guarded baseline.
 
