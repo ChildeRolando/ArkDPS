@@ -20,6 +20,7 @@
 
 ## 调研与对标
 
+- [官服 PC 采集预研](native-pc-research.md) — CE-5 演习的日志与只读访问结果、复现命令和剩余验证项。
 - [同类 DPS 工具架构调研](dps-tool-prior-art.md) — Details!/Skada/ACT/Deucalion/ArcDPS 的可借鉴设计与 ArkDPS 差距。
 
 ## 发布
