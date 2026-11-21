@@ -9,13 +9,17 @@ import time
 
 
 POLL_SECONDS = 0.2
+MAX_SECONDS = 300
+HEARTBEAT_SECONDS = 1.0
 
 
 def record_samples(poll, seconds, emit):
-    deadline = time.monotonic() + seconds
+    started = time.monotonic()
+    deadline = started + seconds
     counts = Counter()
     last_status = None
     previous = None
+    last_heartbeat = 0.0
     stable_samples = 0
     frame_progress_observed = False
     damage_change_observed = False
@@ -26,6 +30,8 @@ def record_samples(poll, seconds, emit):
     try:
         while True:
             report = poll()
+            observed = time.monotonic()
+            elapsed = round(observed - started, 6)
             status = report['status']
             counts[status] += 1
             if status == 'sample_available':
@@ -46,14 +52,21 @@ def record_samples(poll, seconds, emit):
                             actor_damage_change_observed |= any(
                                 row['id'] in previous_damage and previous_damage[row['id']] < row['damage']
                                 for row in rows)
-                    emit({'kind': 'observation', **report})
+                    emit({'kind': 'observation', 'elapsed_seconds': elapsed, **report})
+                    last_heartbeat = observed
                     previous = sample
+                elif observed - last_heartbeat >= HEARTBEAT_SECONDS:
+                    emit({'kind': 'heartbeat', 'elapsed_seconds': elapsed,
+                          'battle_serial': sample['battle_serial'], 'frame': sample['frame'],
+                          'game_time': sample['game_time'], 'battle_state': sample['battle_state'],
+                          'paused': sample.get('paused'), 'speed_level': sample.get('speed_level')})
+                    last_heartbeat = observed
             else:
                 if status != last_status:
-                    emit({'kind': 'observation', **report})
+                    emit({'kind': 'observation', 'elapsed_seconds': elapsed, **report})
                 previous = None
             last_status = status
-            remaining = deadline - time.monotonic()
+            remaining = deadline - observed
             if remaining <= 0:
                 break
             time.sleep(min(remaining, POLL_SECONDS))
@@ -72,22 +85,26 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game-root', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path, help='new JSON Lines evidence file')
-    parser.add_argument('--seconds', type=int, default=120, help='maximum observation time, 1 to 180 seconds')
+    parser.add_argument('--seconds', type=int, default=120,
+                        help=f'maximum observation time, 1 to {MAX_SECONDS} seconds')
     args = parser.parse_args(argv)
-    if not 1 <= args.seconds <= 180:
-        parser.error('--seconds must be between 1 and 180')
+    if not 1 <= args.seconds <= MAX_SECONDS:
+        parser.error(f'--seconds must be between 1 and {MAX_SECONDS}')
 
     from probe_native_pc import ApiFailure
     from probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
     from probe_native_pc_rows import capture_character_rows
+    from probe_native_pc_roster import capture_roster
 
-    def read_optional_rows(read, context):
-        try:
-            return capture_character_rows(read, context)
-        except (ApiFailure, ResearchFailure):
-            # Keep the bounded global sample when an optional character counter cannot be read.
-            return {'actor_rows_status': 'unavailable', 'actor_rows_reason': 'counter_read_failed',
-                    'actor_rows': None}
+    def read_optional_fields(read, context):
+        fields = {}
+        for key, capture in (('actor_rows', capture_character_rows), ('roster', capture_roster)):
+            try:
+                fields.update(capture(read, context))
+            except (ApiFailure, ResearchFailure):
+                fields.update({key: None, f'{key}_status': 'unavailable',
+                               f'{key}_reason': 'optional_read_failed'})
+        return fields
 
     with args.output.open('x', encoding='utf-8') as stream:
         def emit(record):
@@ -103,7 +120,7 @@ def main(argv=None):
             with NativePcBattleProbe(args.game_root) as probe:
                 emit({'kind': 'build_verified', 'build': probe.build, 'fixed_module_bytes_match': True})
                 print(json.dumps({'status': 'recording', 'duration_seconds': args.seconds}), flush=True)
-                summary = record_samples(lambda: probe.sample(extra_reader=read_optional_rows),
+                summary = record_samples(lambda: probe.sample(extra_reader=read_optional_fields),
                                          args.seconds, emit)
         except ResearchFailure as error:
             report = {'kind': 'failure', 'status': error.status, 'reason': error.reason}

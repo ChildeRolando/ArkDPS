@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 import struct
 import sys
+import time
 
 try:
     import probe_native_pc as access
@@ -27,6 +28,15 @@ CLASS_FIELD_COUNT = 0x124
 BATTLE_LOGGER = 0xE0
 BATTLE_LEVEL = 0x160
 BATTLE_STATE = 0x228
+BATTLE_RESULT = 0x22C
+BATTLE_SPEED = 0x230
+BATTLE_SLOW_FLAG = 0x234
+BATTLE_PAUSE = 0x280
+BATTLE_ORIGIN_TIME_SCALE = 0x288
+BATTLE_READ_SIZE = BATTLE_ORIGIN_TIME_SCALE + 4
+PAUSE_GETTER_OVERRIDE = 0x490
+SPEED_GETTER_OVERRIDE = 0x498
+LEVEL_ID = 0x18
 LOGGER_CONTROLLER = 0x18
 LOGGER_STATS = 0x30
 LOGGER_VERBOSE = 0x38
@@ -44,8 +54,18 @@ MAX_POINTER = 0x00007FFFFFFFFFFF
 BATTLE_FIELDS = (
     (5, 's_fixedFrameCnt', CLOCK_FRAME), (6, 's_fixedPlayTime', CLOCK_TIME),
     (42, 'm_logger', BATTLE_LOGGER), (58, 'm_levelData', BATTLE_LEVEL),
-    (80, 'm_state', BATTLE_STATE),
+    (80, 'm_state', BATTLE_STATE), (81, 'm_result', BATTLE_RESULT),
+    (82, 'm_speedLevel', BATTLE_SPEED), (83, 'm_speedLevelSlowFlag', BATTLE_SLOW_FLAG),
+    (89, 'm_pauseState', BATTLE_PAUSE), (90, 'm_originTimeScale', BATTLE_ORIGIN_TIME_SCALE),
+    (242, '__Hotfix0_get_isPaused', PAUSE_GETTER_OVERRIDE),
+    (243, '__Hotfix0_get_speedLevel', SPEED_GETTER_OVERRIDE),
 )
+LEVEL_FIELDS = ((1, 'levelId', LEVEL_ID),)
+PAUSE_FIELDS = ((0, 'm_keys', 0x10),)
+KEY_SET_FIELDS = ((0, 'm_items', 0x10),)
+KEY_LIST_FIELDS = ((2, '_size', 0x18), (3, '_version', 0x1C))
+STATE_NAMES = {0: 'NONE', 1: 'INITED_BUT_NOT_START', 2: 'PLAYING', 3: 'FINISHED'}
+SPEED_NAMES = {0: 'SLOW_MOTION', 1: 'STANDARD', 2: 'FAST', 3: 'SUPER_FAST'}
 LOGGER_FIELDS = ((4, 'm_controller', LOGGER_CONTROLLER), (7, 'm_stats', LOGGER_STATS),
                  (8, 'm_verboseRecorder', LOGGER_VERBOSE))
 STATS_FIELDS = ((5, 'charAdvancedStats', 0x30),
@@ -143,6 +163,7 @@ class NativePcBattleProbe:
         self.base = self.module_size = 0
         self._battle_class = None
         self._identity = self._last_clock = None
+        self._stage_id = None
         self._serial = 0
         root = Path(game_root)
         try:
@@ -230,6 +251,118 @@ class NativePcBattleProbe:
                 struct.unpack_from('<Q', raw, BATTLE_LEVEL)[0],
                 struct.unpack_from('<i', raw, BATTLE_STATE)[0])
 
+    def _stage(self, level):
+        """Keep optional stage evidence separate from the checked counter roots."""
+        reader = self.reader
+        try:
+            klass = reader.pointer(level)
+            reader.require_class(klass, 'LevelData', 'Torappu')
+            reader.verify_fields(klass, 23, LEVEL_FIELDS)
+            pointer_bytes = reader.read(level + LEVEL_ID, 8)
+            pointer, = struct.unpack('<Q', pointer_bytes)
+            guards = [(level, struct.pack('<Q', klass)), (level + LEVEL_ID, pointer_bytes)]
+            if not pointer:
+                return None, 'level_id_missing', guards
+            header = reader.read(pointer, 0x14)
+            reader.require_class(struct.unpack_from('<Q', header)[0], 'String', 'System')
+            length, = struct.unpack_from('<i', header, 0x10)
+            _require(0 < length <= 512, 'invalid_level_id_length')
+            value = reader.read(pointer + 0x14, length * 2)
+            try:
+                stage_id = value.decode('utf-16-le', errors='strict')
+            except UnicodeDecodeError:
+                raise ResearchFailure('unsupported_layout', 'invalid_level_id_utf16') from None
+            guards.extend(((pointer, header), (pointer + 0x14, value)))
+            return stage_id, None, guards
+        except ResearchFailure as error:
+            return None, error.reason, []
+        except access.ApiFailure:
+            return None, 'level_id_read_failed', []
+
+    def _pause(self, raw, clock_fields):
+        # Stock get_isPaused (RVA 0x6714B0) negates ListSet.IsEmpty through
+        # EnableStateWithKey<BattlePauseKey>. Delegate overrides remain unknown.
+        reader = self.reader
+        try:
+            override_bytes = reader.read(clock_fields + PAUSE_GETTER_OVERRIDE, 8)
+            guards = [(clock_fields + PAUSE_GETTER_OVERRIDE, override_bytes)]
+            if struct.unpack('<Q', override_bytes)[0]:
+                return None, None, 'pause_getter_override_present', guards
+            wrapper, = struct.unpack_from('<Q', raw, BATTLE_PAUSE)
+            if not wrapper:
+                return None, None, 'pause_state_missing', guards
+            klass = reader.pointer(wrapper)
+            wrapper_class = klass
+            reader.require_class(klass, 'EnableStateWithKey`1', 'Torappu')
+            reader.verify_fields(klass, 1, PAUSE_FIELDS)
+            set_bytes = reader.read(wrapper + 0x10, 8)
+            key_set, = struct.unpack('<Q', set_bytes)
+            _require(key_set != 0, 'pause_key_set_missing')
+            klass = reader.pointer(key_set)
+            set_class = klass
+            reader.require_class(klass, 'ListSet`1', 'Torappu')
+            reader.verify_fields(klass, 1, KEY_SET_FIELDS)
+            list_bytes = reader.read(key_set + 0x10, 8)
+            key_list, = struct.unpack('<Q', list_bytes)
+            _require(key_list != 0, 'pause_key_list_missing')
+            klass = reader.pointer(key_list)
+            list_class = klass
+            reader.require_class(klass, 'List`1', 'System.Collections.Generic')
+            reader.verify_fields(klass, 6, KEY_LIST_FIELDS)
+            count_bytes = reader.read(key_list + 0x18, 8)
+            count, _version = struct.unpack('<ii', count_bytes)
+            _require(0 <= count <= 128, 'invalid_pause_key_count')
+            guards.extend(((wrapper, struct.pack('<Q', wrapper_class)),
+                           (key_set, struct.pack('<Q', set_class)),
+                           (key_list, struct.pack('<Q', list_class)),
+                           (wrapper + 0x10, set_bytes), (key_set + 0x10, list_bytes),
+                           (key_list + 0x18, count_bytes)))
+            return count > 0, count, None, guards
+        except ResearchFailure as error:
+            return None, None, error.reason, []
+        except access.ApiFailure:
+            return None, None, 'pause_state_read_failed', []
+
+    def _metadata(self, raw, level, state, clock_fields):
+        stage_id, stage_reason, guards = self._stage(level)
+        paused, pause_count, pause_reason, pause_guards = self._pause(raw, clock_fields)
+        guards.extend(pause_guards)
+        result, speed = struct.unpack_from('<ii', raw, BATTLE_RESULT)
+        slow = raw[BATTLE_SLOW_FLAG]
+        speed_reason = None
+        try:
+            override = self.reader.read(clock_fields + SPEED_GETTER_OVERRIDE, 8)
+            guards.append((clock_fields + SPEED_GETTER_OVERRIDE, override))
+            if struct.unpack('<Q', override)[0]:
+                speed_reason = 'speed_getter_override_present'
+        except (ResearchFailure, access.ApiFailure):
+            speed_reason = 'speed_override_read_failed'
+        if speed not in SPEED_NAMES or slow not in (0, 1):
+            speed_reason = 'invalid_speed_field'
+        effective_speed = None if speed_reason else (0 if slow else speed)
+        outcome = {1: 'victory', 2: 'defeat'}.get(result) if state == 3 else None
+        outcome_reason = None if outcome else (
+            'battle_not_finished' if state != 3 else 'result_not_yet' if result == 0
+            else 'unrecognized_result')
+        origin_scale, = struct.unpack_from('<f', raw, BATTLE_ORIGIN_TIME_SCALE)
+        origin_reason = None
+        if not math.isfinite(origin_scale) or origin_scale < 0:
+            origin_scale, origin_reason = None, 'invalid_origin_time_scale'
+        metadata = {
+            'stage_id': stage_id, 'stage_status': 'available' if stage_id else 'unavailable',
+            'stage_reason': stage_reason, 'battle_state_name': STATE_NAMES[state],
+            'battle_result': result, 'outcome': outcome, 'outcome_reason': outcome_reason,
+            'speed_level_raw': speed, 'speed_level': effective_speed,
+            'speed_name': SPEED_NAMES.get(effective_speed),
+            'slow_motion_override': bool(slow) if slow in (0, 1) else None,
+            'speed_status': 'unavailable' if speed_reason else 'available',
+            'speed_reason': speed_reason, 'paused': paused, 'pause_key_count': pause_count,
+            'pause_status': 'unavailable' if pause_reason else 'available',
+            'pause_reason': pause_reason, 'origin_time_scale': origin_scale,
+            'origin_time_scale_reason': origin_reason,
+        }
+        return metadata, guards
+
     def _read_sample(self, extra_reader):
         reader = self.reader
         klass, parent, singleton_fields, clock_fields = self._binding()
@@ -238,13 +371,13 @@ class NativePcBattleProbe:
             self._identity = self._last_clock = None
             raise ResearchFailure('waiting_for_battle', 'singleton_is_null')
         clock_before = reader.read(clock_fields + CLOCK_FRAME, 12)
-        raw = reader.read(battle, BATTLE_STATE + 4)
+        raw = reader.read(battle, BATTLE_READ_SIZE)
         actual_class, native, logger, level, state = self._battle_fields(raw)
         _require(actual_class == klass, 'battle_object_class_mismatch')
         if state not in (2, 3) or not native or not logger or not level:
             self._identity = self._last_clock = None
             raise ResearchFailure('battle_not_ready', 'battle_roots_not_ready')
-        reader.require_class(reader.pointer(level), 'LevelData', 'Torappu')
+        metadata, metadata_guards = self._metadata(raw, level, state, clock_fields)
         logger_raw = reader.read(logger, 0x40)
         logger_class = struct.unpack_from('<Q', logger_raw)[0]
         reader.require_class(logger_class, 'BattleLogger', 'Torappu.Battle')
@@ -271,7 +404,7 @@ class NativePcBattleProbe:
                                               'game_time': game_time})
             _require(type(extra) is dict, 'invalid_extra_sample')
         # Every mutable source used above is re-read inside the same logic-clock bracket.
-        after_raw = reader.read(battle, BATTLE_STATE + 4)
+        after_raw = reader.read(battle, BATTLE_READ_SIZE)
         after_logger = reader.read(logger, 0x40)
         after_stats = reader.read(stats, 8)
         after_counters = reader.read(stats + STATS_TOTAL_HEAL, 8)
@@ -280,22 +413,34 @@ class NativePcBattleProbe:
         after_parent = reader.pointer(klass + CLASS_PARENT)
         after_singleton_fields = reader.pointer(parent + CLASS_STATICS)
         after_clock_fields = reader.pointer(klass + CLASS_STATICS)
+        metadata_unchanged = all(reader.read(address, len(expected)) == expected
+                                 for address, expected in metadata_guards)
         clock_after = reader.read(clock_fields + CLOCK_FRAME, 12)
         _require(clock_after == clock_before and after_singleton == battle and after_class == klass
                  and after_parent == parent and after_singleton_fields == singleton_fields
                  and after_clock_fields == clock_fields
                  and self._battle_fields(after_raw) == self._battle_fields(raw)
+                 and after_raw[BATTLE_STATE:BATTLE_SLOW_FLAG + 1]
+                 == raw[BATTLE_STATE:BATTLE_SLOW_FLAG + 1]
+                 and after_raw[BATTLE_PAUSE:BATTLE_READ_SIZE] == raw[BATTLE_PAUSE:BATTLE_READ_SIZE]
+                 and metadata_unchanged
                  and after_logger == logger_raw and after_stats == stats_raw[:8]
                  and after_counters == stats_raw[STATS_TOTAL_HEAL:STATS_TOTAL_DAMAGE + 4],
                  'frame_or_lifecycle_changed', 'sample_retry')
         identity = (battle, native, logger, stats, level)
-        if identity != self._identity or (self._last_clock is not None
+        identity_changed = identity != self._identity
+        stage_changed = (not identity_changed and metadata['stage_id'] is not None and self._stage_id is not None
+                         and metadata['stage_id'] != self._stage_id)
+        if identity_changed or stage_changed or (self._last_clock is not None
                 and (frame < self._last_clock[0] or fixed_time < self._last_clock[1])):
             self._serial += 1
         self._identity, self._last_clock = identity, (frame, fixed_time)
+        if identity_changed or metadata['stage_id'] is not None:
+            self._stage_id = metadata['stage_id']
         sample = {'battle_serial': self._serial, 'frame': frame, 'game_time': game_time,
                   'battle_state': state, 'total_damage': damage, 'total_heal': heal,
                   'verbose_recorder_present': bool(struct.unpack_from('<Q', logger_raw, LOGGER_VERBOSE)[0])}
+        sample.update(metadata)
         _require(not sample.keys() & extra.keys(), 'reserved_extra_field')
         sample.update(extra)
         return {'status': 'sample_available', 'research_only': True,
@@ -305,13 +450,18 @@ class NativePcBattleProbe:
         if self.handle is None:
             return {'status': 'closed', 'reason': 'probe_is_closed', 'research_only': True}
         self.reader.reset_budget()
+        started = time.monotonic()
         try:
-            return self._read_sample(extra_reader)
+            report = self._read_sample(extra_reader)
         except ResearchFailure as error:
-            return {'status': error.status, 'reason': error.reason, 'research_only': True}
+            report = {'status': error.status, 'reason': error.reason, 'research_only': True}
         except access.ApiFailure as error:
-            return {'status': 'read_failed', 'reason': 'windows_api_failed',
-                    'diagnostic': error.diagnostic(), 'research_only': True}
+            report = {'status': 'read_failed', 'reason': 'windows_api_failed',
+                      'diagnostic': error.diagnostic(), 'research_only': True}
+        finished = time.monotonic()
+        report['acquisition'] = {'started_monotonic': started, 'finished_monotonic': finished,
+                                 'duration_ms': (finished - started) * 1000}
+        return report
 
     def close(self):
         if self.handle is not None:

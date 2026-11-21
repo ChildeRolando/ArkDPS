@@ -68,12 +68,20 @@ class FakeApi:
         return address
 
     def klass(self, name, namespace, count=0, fields=()):
-        address, table = self.allocate(), self.allocate()
+        address, table = self.allocate(), self.allocate(max(4096, count * 32))
         self.put(address + 0x10, '<QQ', self.text(name), self.text(namespace))
         self.put(address + battle.CLASS_FIELDS, '<Q', table)
         self.put(address + battle.CLASS_FIELD_COUNT, '<H', count)
         for index, field, offset in fields:
             self.put(table + index * 32, '<QQQiI', self.text(field), 0, address, offset, 0)
+        return address
+
+    def ustring(self, value, klass):
+        address = self.allocate()
+        raw = value.encode('utf-16-le')
+        self.put(address, '<Q', klass)
+        self.put(address + 0x10, '<i', len(raw) // 2)
+        self.write(address + 0x14, raw)
         return address
 
 
@@ -87,7 +95,11 @@ def runtime(monkeypatch, tmp_path):
     parent = api.klass('SingletonMonoBehaviour`1', 'Torappu')
     logger_class = api.klass('BattleLogger', 'Torappu.Battle', 46, battle.LOGGER_FIELDS)
     stats_class = api.klass('BattleStats', '', 44, battle.STATS_FIELDS)
-    level_class = api.klass('LevelData', 'Torappu')
+    level_class = api.klass('LevelData', 'Torappu', 23, battle.LEVEL_FIELDS)
+    string_class = api.klass('String', 'System')
+    pause_class = api.klass('EnableStateWithKey`1', 'Torappu', 1, battle.PAUSE_FIELDS)
+    key_set_class = api.klass('ListSet`1', 'Torappu', 1, battle.KEY_SET_FIELDS)
+    key_list_class = api.klass('List`1', 'System.Collections.Generic', 6, battle.KEY_LIST_FIELDS)
     singleton, clock = api.allocate(), api.allocate()
     controller, native, logger, stats, level = [api.allocate() for _ in range(5)]
     api.put(api.base + battle.BATTLE_CLASS_SLOT_RVA, '<Q', klass)
@@ -100,7 +112,18 @@ def runtime(monkeypatch, tmp_path):
     api.put(controller + battle.BATTLE_LOGGER, '<Q', logger)
     api.put(controller + battle.BATTLE_LEVEL, '<Q', level)
     api.put(controller + battle.BATTLE_STATE, '<i', 2)
+    api.put(controller + battle.BATTLE_SPEED, '<i', 1)
+    api.put(controller + battle.BATTLE_ORIGIN_TIME_SCALE, '<f', 1)
     api.put(level, '<Q', level_class)
+    stage = api.ustring('Obt/Main/level_main_01-07', string_class)
+    api.put(level + battle.LEVEL_ID, '<Q', stage)
+    pause, key_set, key_list = [api.allocate() for _ in range(3)]
+    api.put(controller + battle.BATTLE_PAUSE, '<Q', pause)
+    api.put(pause, '<Q', pause_class)
+    api.put(pause + 0x10, '<Q', key_set)
+    api.put(key_set, '<Q', key_set_class)
+    api.put(key_set + 0x10, '<Q', key_list)
+    api.put(key_list, '<Q', key_list_class)
     api.put(logger, '<Q', logger_class)
     api.put(logger + battle.LOGGER_CONTROLLER, '<Q', controller)
     api.put(logger + battle.LOGGER_STATS, '<Q', stats)
@@ -110,7 +133,8 @@ def runtime(monkeypatch, tmp_path):
     return tmp_path, api, dict(klass=klass, parent=parent, logger_class=logger_class,
                               stats_class=stats_class, singleton=singleton, clock=clock,
                               controller=controller, native=native, logger=logger,
-                              stats=stats, level=level)
+                              stats=stats, level=level, stage=stage, string_class=string_class,
+                              pause=pause, key_set=key_set, key_list=key_list)
 
 
 def test_stable_native_sample_preserves_raw_counter_sign_and_closes_handle(runtime):
@@ -118,9 +142,15 @@ def test_stable_native_sample_preserves_raw_counter_sign_and_closes_handle(runti
     with battle.NativePcBattleProbe(root, api) as probe:
         result = probe.sample()
         assert result['status'] == 'sample_available'
-        assert result['sample'] == {'battle_serial': 1, 'frame': 30, 'game_time': 1,
-                                    'battle_state': 2, 'total_damage': -123.5, 'total_heal': 50.25,
-                                    'verbose_recorder_present': False}
+        sample = result['sample']
+        assert {key: sample[key] for key in ('battle_serial', 'frame', 'game_time', 'battle_state',
+                'total_damage', 'total_heal', 'verbose_recorder_present')} == {
+                    'battle_serial': 1, 'frame': 30, 'game_time': 1, 'battle_state': 2,
+                    'total_damage': -123.5, 'total_heal': 50.25, 'verbose_recorder_present': False}
+        assert sample['stage_id'] == 'Obt/Main/level_main_01-07'
+        assert sample['paused'] is False and sample['pause_status'] == 'available'
+        assert sample['speed_level'] == 1 and sample['speed_name'] == 'STANDARD'
+        assert sample['outcome'] is None and sample['outcome_reason'] == 'battle_not_finished'
         assert result['research_only'] and result['limitations']
         assert probe.reader.calls <= battle.MAX_READ_CALLS
         assert probe.reader.bytes_requested <= battle.MAX_READ_BYTES
@@ -289,3 +319,153 @@ def test_failed_reads_and_budgets_are_controlled(runtime):
             reader.read(p['stats'], 8)
         with pytest.raises(battle.ResearchFailure, match='invalid_read_range'):
             reader.read(p['stats'], battle.MAX_SINGLE_READ + 1)
+
+
+@pytest.mark.parametrize('state,result,outcome,reason', [
+    (2, 0, None, 'battle_not_finished'), (2, 1, None, 'battle_not_finished'),
+    (3, 0, None, 'result_not_yet'), (3, 1, 'victory', None),
+    (3, 2, 'defeat', None), (3, 99, None, 'unrecognized_result'),
+])
+def test_outcome_uses_only_the_finished_native_result(runtime, state, result, outcome, reason):
+    root, api, p = runtime
+    api.put(p['controller'] + battle.BATTLE_STATE, '<ii', state, result)
+    with battle.NativePcBattleProbe(root, api) as probe:
+        sample = probe.sample()['sample']
+    assert sample['battle_state'] == state
+    assert sample['battle_state_name'] == ('PLAYING' if state == 2 else 'FINISHED')
+    assert sample['battle_result'] == result
+    assert sample['outcome'] == outcome and sample['outcome_reason'] == reason
+
+
+@pytest.mark.parametrize('stored,slow,effective,name', [
+    (0, 0, 0, 'SLOW_MOTION'), (1, 0, 1, 'STANDARD'), (2, 0, 2, 'FAST'),
+    (3, 0, 3, 'SUPER_FAST'), (2, 1, 0, 'SLOW_MOTION'),
+])
+def test_stock_speed_getter_semantics_include_the_slow_flag(runtime, stored, slow, effective, name):
+    root, api, p = runtime
+    api.put(p['controller'] + battle.BATTLE_SPEED, '<i', stored)
+    api.put(p['controller'] + battle.BATTLE_SLOW_FLAG, '<B', slow)
+    with battle.NativePcBattleProbe(root, api) as probe:
+        sample = probe.sample()['sample']
+    assert sample['speed_level_raw'] == stored
+    assert sample['speed_level'] == effective and sample['speed_name'] == name
+    assert sample['speed_status'] == 'available'
+
+
+@pytest.mark.parametrize('count,paused', [(0, False), (1, True), (3, True)])
+def test_pause_comes_from_verified_key_count_including_stagnant_clock(runtime, count, paused):
+    root, api, p = runtime
+    api.put(p['key_list'] + 0x18, '<ii', count, 4)
+    with battle.NativePcBattleProbe(root, api) as probe:
+        first = probe.sample()['sample']
+        second = probe.sample()['sample']
+    assert first['frame'] == second['frame']
+    assert first['paused'] is paused and second['paused'] is paused
+    assert first['pause_key_count'] == count
+    assert first['pause_reason'] is None
+
+
+@pytest.mark.parametrize('field,reason', [
+    ('wrapper', 'pause_state_missing'), ('key_set', 'pause_key_set_missing'),
+    ('key_list', 'pause_key_list_missing'), ('count', 'invalid_pause_key_count'),
+])
+def test_missing_pause_evidence_is_explicit_without_discarding_totals(runtime, field, reason):
+    root, api, p = runtime
+    address = {'wrapper': p['controller'] + battle.BATTLE_PAUSE,
+               'key_set': p['pause'] + 0x10, 'key_list': p['key_set'] + 0x10,
+               'count': p['key_list'] + 0x18}[field]
+    api.put(address, '<i' if field == 'count' else '<Q', -1 if field == 'count' else 0)
+    with battle.NativePcBattleProbe(root, api) as probe:
+        result = probe.sample()
+    assert result['status'] == 'sample_available'
+    assert result['sample']['total_damage'] == -123.5
+    assert result['sample']['paused'] is None
+    assert result['sample']['pause_status'] == 'unavailable'
+    assert result['sample']['pause_reason'] == reason
+
+
+def test_getter_overrides_disable_inferred_speed_and_pause(runtime):
+    root, api, p = runtime
+    api.put(p['clock'] + battle.PAUSE_GETTER_OVERRIDE, '<Q', api.allocate())
+    api.put(p['clock'] + battle.SPEED_GETTER_OVERRIDE, '<Q', api.allocate())
+    with battle.NativePcBattleProbe(root, api) as probe:
+        sample = probe.sample()['sample']
+    assert sample['paused'] is None and sample['speed_level'] is None
+    assert sample['pause_reason'] == 'pause_getter_override_present'
+    assert sample['speed_reason'] == 'speed_getter_override_present'
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('missing', 'level_id_missing'), ('length', 'invalid_level_id_length'),
+    ('utf16', 'invalid_level_id_utf16'), ('class', 'class_identity_mismatch'),
+])
+def test_optional_stage_failures_do_not_turn_into_a_guessed_stage(runtime, case, reason):
+    root, api, p = runtime
+    if case == 'missing':
+        api.put(p['level'] + battle.LEVEL_ID, '<Q', 0)
+    elif case == 'length':
+        api.put(p['stage'] + 0x10, '<i', 513)
+    elif case == 'utf16':
+        api.put(p['stage'] + 0x10, '<i', 1)
+        api.write(p['stage'] + 0x14, b'\x00\xd8')
+    else:
+        api.put(p['stage'], '<Q', p['stats_class'])
+    with battle.NativePcBattleProbe(root, api) as probe:
+        result = probe.sample()
+    assert result['status'] == 'sample_available'
+    assert result['sample']['stage_id'] is None
+    assert result['sample']['stage_status'] == 'unavailable'
+    assert result['sample']['stage_reason'] == reason
+
+
+@pytest.mark.parametrize('change', ['result', 'speed', 'pause', 'stage', 'getter_override'])
+def test_metadata_changes_inside_the_frame_bracket_are_retried(runtime, change):
+    root, api, p = runtime
+    counts = {}
+    def mutate(address, size):
+        counts[(address, size)] = counts.get((address, size), 0) + 1
+        if address == p['controller'] and counts[(address, size)] == 2:
+            changes = {
+                'result': (p['controller'] + battle.BATTLE_RESULT, '<i', 1),
+                'speed': (p['controller'] + battle.BATTLE_SPEED, '<i', 2),
+                'pause': (p['key_list'] + 0x18, '<i', 1),
+                'stage': (p['level'] + battle.LEVEL_ID, '<Q', 0),
+                'getter_override': (p['clock'] + battle.PAUSE_GETTER_OVERRIDE, '<Q', api.allocate()),
+            }
+            api.put(*changes[change])
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.on_read = mutate
+        assert probe.sample()['status'] == 'sample_retry'
+
+
+def test_origin_scale_is_explicit_and_nonfinite_values_stay_unavailable(runtime):
+    root, api, p = runtime
+    api.put(p['controller'] + battle.BATTLE_ORIGIN_TIME_SCALE, '<f', float('nan'))
+    with battle.NativePcBattleProbe(root, api) as probe:
+        result = probe.sample()
+    assert result['status'] == 'sample_available'
+    assert result['sample']['origin_time_scale'] is None
+    assert result['sample']['origin_time_scale_reason'] == 'invalid_origin_time_scale'
+    assert 'current_time_scale' not in result['sample']
+
+
+def test_acquisition_timing_uses_monotonic_wall_time_outside_sample(runtime, monkeypatch):
+    root, api, _ = runtime
+    times = iter([20.0, 20.125])
+    monkeypatch.setattr(battle.time, 'monotonic', lambda: next(times))
+    with battle.NativePcBattleProbe(root, api) as probe:
+        result = probe.sample()
+    assert result['acquisition'] == {'started_monotonic': 20.0, 'finished_monotonic': 20.125,
+                                     'duration_ms': 125.0}
+    assert 'acquisition' not in result['sample']
+
+
+def test_confirmed_stage_change_increments_the_opaque_battle_serial(runtime):
+    root, api, p = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        assert probe.sample()['sample']['battle_serial'] == 1
+        stage = api.ustring('Obt/Resource/level_tough_ce_05', p['string_class'])
+        api.put(p['level'] + battle.LEVEL_ID, '<Q', stage)
+        sample = probe.sample()['sample']
+    assert sample['battle_serial'] == 2
+    assert sample['stage_id'] == 'Obt/Resource/level_tough_ce_05'

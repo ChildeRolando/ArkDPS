@@ -51,3 +51,13 @@ def test_gaps_new_battles_and_time_regressions_do_not_prove_progress(monkeypatch
     assert not summary['frame_progress_observed']
     assert not summary['damage_change_observed']
     assert not summary['healing_change_observed']
+
+
+def test_heartbeat_records_a_frozen_clock_without_treating_it_as_movement(monkeypatch):
+    paused = sample(1, 30, 120.5)
+    summary, events = run(monkeypatch, *([paused] * 8), None)
+    assert [event['kind'] for event in events] == ['observation', 'heartbeat']
+    assert events[0]['elapsed_seconds'] == 0
+    assert events[1]['elapsed_seconds'] >= 1
+    assert events[1]['frame'] == 30 and events[1]['game_time'] == 1
+    assert summary['stable_samples'] == 1 and not summary['frame_progress_observed']
