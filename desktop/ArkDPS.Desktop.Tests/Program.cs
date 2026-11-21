@@ -139,5 +139,25 @@ internal static class Program
         Check("the UI fallback still skips old points inside a gap",
             legacyPoints.Count == 2 && legacyPoints[1].BreakBefore);
         Console.WriteLine("PASS_ENEMY_CHART_GAPS 3 assertions (projection only; no windows/input)");
+        using var observedEnemy = JsonDocument.Parse("""
+            {"name":"源石虫","lifecycle":"departed","first_observed_frame":185,
+             "last_present_frame":416,"last_hp_observed_frame":398,
+             "departure_observed_frame":429,"last_observed_hp":0}
+            """);
+        var observed = new EnemyItem(observedEnemy.RootElement, "2115", "");
+        Check("PC tooltip names the first, last and departure observations",
+            observed.Tooltip.Contains("首次观测帧 185") &&
+            observed.Tooltip.Contains("最后在场观测帧 416") &&
+            observed.Tooltip.Contains("最后 HP 观测帧 398 · HP 0") &&
+            observed.Tooltip.Contains("观测离场帧 429"));
+        Check("the observation does not identify a cause of departure", observed.Status == "已离场");
+        using var observedEvent = JsonDocument.Parse("""
+            {"name":"源石虫","lifecycle":"departed","spawn_frame":184,"end_frame":417,"end_reason":"death"}
+            """);
+        var fromEvent = new EnemyItem(observedEvent.RootElement, "2115", "");
+        Check("event-confirmed arrival and departure still use the exact event fields",
+            fromEvent.Tooltip.Contains("入场帧 184") && fromEvent.Tooltip.Contains("离场帧 417") &&
+            fromEvent.Status == "已击倒");
+        Console.WriteLine("PASS_ENEMY_OBSERVATION_BOUNDS 3 assertions (projection only; no windows/input)");
     }
 }

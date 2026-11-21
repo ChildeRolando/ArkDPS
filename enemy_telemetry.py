@@ -161,19 +161,32 @@ class NativeEnemyObservations:
             lifecycle = 'departed' if gone else 'entered'
             if member is None and previous['lifecycle'] == 'departed':
                 lifecycle = 'departed'
-            self.rows[uid] = dict(previous, lifecycle=lifecycle, hp=None)
+            # The first reliable absence bounds a transition between samples.
+            departure_frame = previous['departure_observed_frame']
+            if lifecycle != 'departed':
+                departure_frame = None
+            elif departure_frame is None:
+                departure_frame = frame
+            self.rows[uid] = dict(previous, lifecycle=lifecycle, hp=None,
+                                  departure_observed_frame=departure_frame)
 
         for uid, row in current.items():
             previous = self.rows.pop(uid, None)
             if previous is not None and previous['eid'] != row['eid']:
                 previous = None
             last_hp = row['hp']
+            hp_frame = frame if last_hp is not None else None
             peak_hp = previous['peak_observed_hp'] if previous is not None else None
             if last_hp is not None and (peak_hp is None or last_hp > peak_hp):
                 peak_hp = last_hp
             if last_hp is None and previous is not None:
                 last_hp = previous['last_observed_hp']
-            self.rows[uid] = dict(row, last_observed_hp=last_hp, peak_observed_hp=peak_hp)
+                hp_frame = previous['last_hp_observed_frame']
+            self.rows[uid] = dict(
+                row, last_observed_hp=last_hp, peak_observed_hp=peak_hp,
+                first_observed_frame=previous['first_observed_frame'] if previous is not None else frame,
+                last_present_frame=frame, last_hp_observed_frame=hp_frame, departure_observed_frame=None,
+            )
 
         excess = len(self.rows) - MAX_NATIVE_ENEMY_HISTORY
         if excess > 0:

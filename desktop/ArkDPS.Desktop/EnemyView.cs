@@ -145,6 +145,8 @@ public sealed class EnemyItem : INotifyPropertyChanged
               $"攻击 {Int(row.Get("atk"))}  ·  防御 {Int(row.Get("def"))}  ·  法抗 {Int(row.Get("res"))}" +
               $"  ·  移速 {moveSpeed}  ·  攻速 {Int(row.Get("attack_speed"))}"
             : "属性未知";
+        var lastHpFrame=row.Get("last_hp_observed_frame");
+        var lastPresentFrame=row.Get("last_present_frame");
         string detail = string.Join("\n", new[]
         {
             name,
@@ -155,6 +157,14 @@ public sealed class EnemyItem : INotifyPropertyChanged
             phaseHp,
             row.Get("spawn_frame").ValueKind == JsonValueKind.Number ? "入场帧 " + Int(row.Get("spawn_frame")) : null,
             row.Get("end_frame").ValueKind == JsonValueKind.Number ? "离场帧 " + Int(row.Get("end_frame")) : null,
+            row.Get("first_observed_frame").ValueKind == JsonValueKind.Number
+                ? "首次观测帧 " + Int(row.Get("first_observed_frame")) : null,
+            lastPresentFrame.ValueKind == JsonValueKind.Number
+                ? "最后在场观测帧 " + Int(lastPresentFrame) : null,
+            lastHpFrame.ValueKind == JsonValueKind.Number && Int(lastHpFrame) != Int(lastPresentFrame)
+                ? $"最后 HP 观测帧 {Int(lastHpFrame)} · HP {lastObserved}" : null,
+            row.Get("departure_observed_frame").ValueKind == JsonValueKind.Number
+                ? "观测离场帧 " + Int(row.Get("departure_observed_frame")) : null,
         }.Where(x => !string.IsNullOrEmpty(x)));
         return new Display(badge,name,eid,status,health,phaseHp??"",attrs,detail,
             ratioKnown ? hpRatio*100 : 0,ratioKnown,EnemyPortraits.Get(eid,departed));

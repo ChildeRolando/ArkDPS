@@ -123,28 +123,39 @@ def test_native_history_retains_last_hp_only_after_verified_membership_change():
         return tracker.observe(raw, frame=frame, game_time=frame / 30, catalog={})
 
     first = publish(snapshot(entity(1, hp=900)), 30)
+    first_row, = first['rows']
+    assert first_row['first_observed_frame'] == first_row['last_present_frame'] == 30
+    assert first_row['last_hp_observed_frame'] == 30
+    assert first_row['departure_observed_frame'] is None
     assert publish(snapshot(), 30) == first
     assert not publish({'enemies_status': 'unavailable'}, 40)['ready']
     uncertain = publish(snapshot(entity(1, native_object_present=False, hp=3)), 60)
     row, = uncertain['rows']
     assert row['lifecycle'] == 'entered' and row['hp'] is None
     assert row['last_observed_hp'] == 900
+    assert row['last_present_frame'] == 30 and row['departure_observed_frame'] is None
 
     departed = publish(snapshot(entity(2, hp=400)), 90)
     current, previous = departed['rows']
     assert current['instance_uid'] == '2' and current['hp'] == 400
     assert previous['instance_uid'] == '1' and previous['lifecycle'] == 'departed'
     assert previous['hp'] is None and previous['last_observed_hp'] == 900
+    assert previous['first_observed_frame'] == previous['last_present_frame'] == 30
+    assert previous['departure_observed_frame'] == 90
     assert 'end_reason' not in previous
     assert departed['totals'] == dict(entered_count=2, current_count=1, current_hp_count=1,
                                       remaining_hp=400, total_hp_complete=False,
                                       remaining_hp_complete=True)
     assert 'entered_total_hp' not in departed['series'][-1]
+    assert publish(snapshot(entity(2, hp=400)), 110)['rows'][-1]['departure_observed_frame'] == 90
 
     returned = publish(snapshot(entity(1, hp=80), entity(2, hp=400)), 120)
     assert returned['totals']['entered_count'] == 2
     assert returned['rows'][0]['lifecycle'] == 'current'
     assert returned['rows'][0]['hp'] == 80
+    assert returned['rows'][0]['last_present_frame'] == 120
+    assert returned['rows'][0]['first_observed_frame'] == 30
+    assert returned['rows'][0]['departure_observed_frame'] is None
     tracker.reset()
     assert publish(snapshot(entity(2, hp=100)), 30)['totals']['entered_count'] == 1
 
@@ -156,6 +167,7 @@ def test_incomplete_membership_does_not_prove_departure():
     row, = uncertain['rows']
     assert row['instance_uid'] == '1' and row['lifecycle'] == 'entered'
     assert row['hp'] is None
+    assert row['last_present_frame'] == 30 and row['departure_observed_frame'] is None
     assert uncertain['totals']['remaining_hp'] is None
     assert not uncertain['totals']['remaining_hp_complete']
 
@@ -177,12 +189,17 @@ def test_observed_peak_is_per_enemy_and_does_not_certify_max_hp():
     assert row['peak_observed_hp'] == 1000
     row, = read(120, entity(1, hp_status='unavailable', hp=1100))
     assert row['hp'] is None and row['peak_observed_hp'] == 1000
+    assert row['last_present_frame'] == 120 and row['last_hp_observed_frame'] == 90
     assert row['max_hp'] is None and row['hp_ratio'] is None and not row['hp_known']
 
     row, = read(150)
     assert row['lifecycle'] == 'departed' and row['peak_observed_hp'] == 1000
+    assert row['departure_observed_frame'] == 150 and row['last_hp_observed_frame'] == 90
     row, = read(180, entity(1, enemy_key='enemy_different', hp_status='unavailable'))
     assert row['last_observed_hp'] is None and row['peak_observed_hp'] is None
+    assert row['first_observed_frame'] == row['last_present_frame'] == 180
+    assert row['last_hp_observed_frame'] is None
+    assert row['departure_observed_frame'] is None
     row, = read(210, entity(1, enemy_key='enemy_different', hp=0))
     assert row['peak_observed_hp'] == 0
 
