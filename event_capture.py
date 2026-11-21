@@ -249,13 +249,12 @@ class LiveEventCapture:
         """
         try:
             validate_event_binding(sample, mark)
-            stream = self.adapter.event_stream
-            after = stream.sequence if stream is not None else sequence
-            validate_native_event_batch(sample, after, sequence, drained)
+            validate_native_event_batch(sample, sequence, drained, stream=self.adapter.event_stream)
             if self.baseline_sequence is None:
                 self.baseline_sequence = sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],
                                           sequence=sequence)
+            stream = self.adapter.event_stream
             if drained.get('error'):
                 raise StreamGap(f"observer callback error: {drained['error']}")
             if drained.get('stopped'):
@@ -281,8 +280,8 @@ class LiveEventCapture:
                     unknown = damage_quality.get('damage_settlement_unknown',
                                                  damage_quality.get('enemy_damage_unknown'))
                     self.adapter.statistics.settlement_stream_incomplete |= (ready is not True or bool(unknown))
-            self._apply_quality(drained, damage_quality, native_pc=(
-                (sample.get('battle_metadata') or {}).get('platform') == 'native_pc'))
+            native_pc = (sample.get('battle_metadata') or {}).get('platform') == 'native_pc'
+            self._apply_quality(drained, damage_quality, native_pc=native_pc)
             self.pending.extend(drained['events'])
             while self.pending:
                 event = self.pending[0]
@@ -291,19 +290,23 @@ class LiveEventCapture:
                 if event['sequence'] > sequence:
                     break
                 self.pending.popleft()
-                if self.initial_drain and event['sequence'] <= self.baseline_sequence:
+                if ((self.initial_drain and event['sequence'] <= self.baseline_sequence)
+                        or (native_pc and event['sequence'] <= stream.sequence)):
+                    # Native replays were compared against the original record
+                    # before this frame's roster could change its attribution.
                     continue
                 payload = {k: v for k, v in event.items() if k != 'proof'}
                 proof = event.get('proof')
                 if (payload.get('kind') in ('skill_start', 'skill_end')
                         and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
                     payload['skill_method'] = proof['method']
-                self.adapter.accept_event(session=sample['session'], refresh_result=False, **payload)
+                self.adapter.accept_event(session=sample['session'], refresh_result=False,
+                                          replay_record=event if native_pc else None, **payload)
             self.initial_drain = False
             if any(event.get('sequence', -1) <= sequence for event in self.pending):
                 raise StreamGap('event records were delivered out of order')
-            self.adapter.event_stream.watermark(session=sample['session'], sequence=sequence,
-                                                frame=sample['frame'], game_time=sample['game_time'])
+            stream.watermark(session=sample['session'], sequence=sequence,
+                             frame=sample['frame'], game_time=sample['game_time'])
             self.adapter.last_result = self.adapter.statistics.result()
             self.last_sample = sample
             return self.adapter.result()

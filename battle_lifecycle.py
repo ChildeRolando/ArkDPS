@@ -615,12 +615,14 @@ class BattleSessions:
             return {}
         sample = observation.sample
         drained = evidence.get('drain') or {}
-        after = stream.sequence if stream is not None and not stream.closed else through
+        if stream is not None and stream.closed:
+            stream = None
+        after = stream.sequence if stream is not None else through
         if (sample.get('battle_metadata') or {}).get('platform') == 'native_pc':
             try:
                 if baseline_barrier(evidence['before'], sample, evidence['after']) != through:
                     return {}
-                validate_native_event_batch(sample, after, through, drained)
+                validate_native_event_batch(sample, through, drained, stream=stream)
             except (KeyError, StreamGap):
                 return {}
         return source_attribution_batch(drained, after, through)

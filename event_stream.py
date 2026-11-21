@@ -5,6 +5,7 @@ monotonic sequence shared by all emitted events and watermarks. A watermark is
 valid only after all events through its sequence have been delivered. This
 receiver cannot establish those producer guarantees by itself.
 """
+from copy import deepcopy
 from math import isfinite
 
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -32,7 +33,7 @@ def validate_event_binding(sample, *payloads):
         raise StreamGap('observer data belongs to a different or unverified native PC battle or build')
 
 
-def validate_native_event_batch(sample, after, through, batch):
+def validate_native_event_batch(sample, through, batch, *, stream=None):
     """Verify the native prefix from the last accepted sequence to the barrier."""
     if (sample.get('battle_metadata') or {}).get('platform') != 'native_pc':
         return
@@ -42,8 +43,10 @@ def validate_native_event_batch(sample, after, through, batch):
     events = batch.get('events')
     if not isinstance(events, (list, tuple)):
         raise StreamGap('invalid native PC event batch')
-    last_record = None
+    after = stream.sequence if stream is not None else through
+    baseline = stream.baseline_sequence if stream is not None else through
     verified = after
+    last_record = None
     for event in events:
         if not isinstance(event, dict):
             raise StreamGap('invalid native PC event record')
@@ -57,6 +60,8 @@ def validate_native_event_batch(sample, after, through, batch):
             previous = last_record['sequence']
             if number < previous or (number == previous and event != last_record):
                 raise StreamGap('native PC event batch is out of order or has a conflicting replay')
+        if baseline < number <= after and event != stream.received.get(number):
+            raise StreamGap('native PC event replay conflicts with the accepted record')
         if number > verified:
             if number != verified + 1:
                 raise StreamGap('native PC event sequence gap')
@@ -144,18 +149,21 @@ class EventStream:
                enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None,
                mitigation_before=None, mitigation_after=None,
                source_character_uid=None, unresolved_source=False, settled_after_nested_kill=False,
-               settlement_complete=None, nominal_amount=None, settlement_identity=None):
+               settlement_complete=None, nominal_amount=None, settlement_identity=None,
+               replay_record=None):
         if self.closed:
             raise StreamGap('event stream is closed')
-        payload = (session, frame, game_time, source, kind, amount,
-                   target, real_delta, hp_before, hp_after, killed,
-                   target_type, damage_type, cancel_reason, shield_absorbed,
-                   target_instance, target_uid, enemy_damage_owner,
-                   skill_key, skill_id, skill_name, skill_reason, skill_method,
-                   phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
-                   finish_reason, enemy_max_hp, mitigation_before, mitigation_after,
-                   source_character_uid, unresolved_source, settled_after_nested_kill,
-                   settlement_complete, nominal_amount, settlement_identity)
+        payload = replay_record
+        if payload is None:
+            payload = (session, frame, game_time, source, kind, amount,
+                       target, real_delta, hp_before, hp_after, killed,
+                       target_type, damage_type, cancel_reason, shield_absorbed,
+                       target_instance, target_uid, enemy_damage_owner,
+                       skill_key, skill_id, skill_name, skill_reason, skill_method,
+                       phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
+                       finish_reason, enemy_max_hp, mitigation_before, mitigation_after,
+                       source_character_uid, unresolved_source, settled_after_nested_kill,
+                       settlement_complete, nominal_amount, settlement_identity)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -257,7 +265,7 @@ class EventStream:
         self.sequence = sequence
         self.frame = frame
         self.game_time = game_time
-        self.received[sequence] = payload
+        self.received[sequence] = deepcopy(replay_record) if replay_record is not None else payload
 
     def watermark(self, *, session, sequence, frame, game_time):
         if self.closed:
