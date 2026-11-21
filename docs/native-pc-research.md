@@ -23,9 +23,15 @@ ArkDPS 基于 rc.8 候选 `ee7cf86b61642108db8c832c0fc9994c4ff76747`。实机使
 | --- | --- |
 | [ArknightsCostBarRuler](https://github.com/ZeroAd-06/ArknightsCostBarRuler) | 从官服 Windows 窗口的费用条估算逻辑时间，提供本地 API。费用满、禁止自然回费或锁费时，无法靠这个方法推进计时。 |
 | [MAA 的 Windows 截图代码](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/ae2cd60b46841f3c60dda1af67705e7aaf2e4663/src/MaaCore/Controller/Win32Controller.cpp) 与[战场识别代码](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/ae2cd60b46841f3c60dda1af67705e7aaf2e4663/src/MaaCore/Task/BattleHelper.cpp) | 可识别击杀数、费用、部署栏等可见状态。当前实现没有给出逐干员原生累计和逐次结算数据。 |
-| [鹰角启动器数据面板说明](https://customer-service.hypergryph.com/app/arknights/question/ART178365239398256169747501) | 公开范围包括理智和任务进度。本轮在官方说明和开源项目中未发现可复用的原版 PC 逐干员伤害来源。 |
+| [鹰角启动器数据面板说明](https://customer-service.hypergryph.com/app/arknights/question/ART178365239398256169747501) | 公开范围包括理智和任务进度，本轮未找到该面板提供战斗统计的证据。 |
+| [ArkHelper v1.4.2 快照契约](https://github.com/zhengkanqin/ArkHelper/blob/v1.4.2/include/arkhelp/ipc.h) · [CSV 导出](https://github.com/zhengkanqin/ArkHelper/blob/v1.4.2/native/modules/damage_meter/csv_export.cpp) | 开源项目声明在国服 PC 获取数据。v11 实时快照定义了战局、逻辑帧、游戏时间、逐干员及团队指标、能力掩码，以及事件缺失和行截断标记。CSV 同时导出实际扣血和计算伤害。当前机器未观察到该发布端运行。 |
+| [ArkFramework v1.0.0 CSV 导出](https://github.com/wuyu8512/ArkFramework/blob/v1.0.0/plugins/damage_meter/csv_export.cpp) | 导出实际扣血、计算伤害和游戏时间，未找到独立的实时消费接口。 |
+
+ArkHelper 的公开说明称其数据发布端使用进程内注入和 Hook。ArkDPS 的实验接收端只尝试读取一个已存在的战斗快照。实时头文件里的总伤字段按实际扣血定义，ArkDPS 的游戏累计伤害含过量，两者保留各自口径。连续事件、技能区间、接敌 DPS 和护盾归因仍需要独立日志及实机对账。[ArkHelper 项目说明](https://github.com/zhengkanqin/ArkHelper/blob/v1.4.2/README.md) · [ArkDPS 统计契约](statistics-core.md)
 
 权限对照回执和本轮使用的诊断脚本保存在 `runtime/native-pc/2026-11-21-access/`。
+
+用发行版 C++ 头文件按 Windows x64 布局编译了独立的合成快照。实验接收端读出预期的战局 `42`、帧 `309`、时间 `10.3` 秒、逐干员实际扣血 `123.25` 和治疗 `45.5`。护盾能力位未设置，输出为 `null`。本机正常运行游戏时读取 ArkHelper 快照返回 `feed_missing`（Windows 错误码 `2`）。具体客户端构建上的真实战斗输出尚未验收。
 
 ## 复现
 
@@ -38,5 +44,11 @@ python acceptance/probe_native_pc.py --game-root 'D:\games\Hypergryph Launcher\g
 探针按三个文件的哈希、进程与模块路径限定目标。如 Windows 授予读取权限，探针会比较 `GameAssembly.dll` 中两个固定位置的 96 个字节。`read_gate_passed` 表示固定字节比较通过，仍需用实机战局验证游戏时钟、编队归属与累计数据。
 
 用 `--handle-only` 可以只核对 Windows 是否授予读取句柄，随后立即关闭。`read_handle_available` 只表示句柄申请通过，该模式不枚举游戏模块或读取游戏内存。
+
+外部实时快照探针可以检查当前 Windows 会话是否已有兼容的 ArkHelper 快照发布端，并将其当前快照输出为 JSON。
+
+```powershell
+python acceptance/probe_arkhelper_feed.py
+```
 
 本机回执位于 `runtime/native-pc/2026-11-21-ce5/receipt.json`，包含权限状态、构建身份及 `Player.log` 的比较结果。回执仅保存诊断与统计摘要。
