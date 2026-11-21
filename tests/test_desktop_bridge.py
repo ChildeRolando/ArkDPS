@@ -1070,10 +1070,18 @@ def test_worker_startup_setup_error_is_reported(tmp_path, monkeypatch):
     blocked_root = tmp_path / 'not-a-directory'
     blocked_root.write_text('file blocks runtime directory', encoding='utf-8')
     monkeypatch.setattr(desktop_bridge, 'ROOT', blocked_root)
-    worker = CollectionWorker(DesktopState(tmp_path/'state'))
+    state = DesktopState(tmp_path/'state')
+    cmd(state, 'connection_apply', config={'platform': 'native_pc', 'native_game_root': 'game'}, events=False)
+    state.expect_connection_request(state.connection, 1)
+    worker = CollectionWorker(state)
     worker.run()
     kind, error = worker.events.get_nowait()
-    assert kind == 'error' and error
+    assert kind == 'worker_error' and error
+    state.accept(kind, error)
+    assert state.snapshot()['status'] == 'disconnected'
+    assert state.error == error and not state.scanning
+    state.accept('sample', sample())
+    assert state.last is None  # An old source still cannot repopulate the view.
     assert worker.session is None
 
 
@@ -1559,6 +1567,122 @@ def test_native_connection_apply_keeps_mumu_preferences_and_replaces_cli_source(
     assert DesktopState(tmp_path).layout.event_observation is True
 
 
+def test_cross_platform_apply_clears_live_projection_and_waits_for_exact_source_ack(tmp_path, monkeypatch):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    old = dict(sample(), battle_id='old-mumu-battle')
+    state.accept('sample', old)
+    state.accept('diagnostic', {'selected_serial': 'old-serial'})
+    state.accept('observer', ('ready', None))
+    state.accept('lifecycle', 'playing')
+    panels = state.layout.to_dict()['panels']
+    native = ConnectionConfig(platform='native_pc', native_game_root='game')
+    cmd(state, 'connection_apply', config=native.to_dict(), events=True)
+    state.expect_connection_request(native, 2)
+    cleared = state.snapshot()
+    assert cleared['status'] == 'locating' and cleared['battle_id'] is None
+    assert state.last is state.diagnostic is state.observer_status is state.lifecycle is None
+    assert state.live_analysis is state.boss_live_analysis is None
+    assert cleared['layout']['panels'] == panels
+    assert all(not panel['entries'] for panel in cleared['panels'])
+
+    notifications = []
+    monkeypatch.setattr(state, 'refresh_history', lambda: notifications.append('history'))
+    state.accept('connection_source', {'revision': 1, 'platform': 'mumu'})
+    for kind, value in (
+        ('sample', old), ('diagnostic', {'selected_serial': 'stale'}),
+        ('observer', ('ready', None)), ('lifecycle', 'playing'),
+        ('connection', 'old source connected'), ('scanning', False), ('error', 'old error'),
+    ):
+        state.accept(kind, value)
+    state.accept('history', None)
+    assert notifications == ['history']
+    assert state.snapshot()['battle_id'] is None and state.snapshot()['status'] == 'locating'
+    assert state.error == '' and state.diagnostic is None
+
+    state.accept('connection_source', {'revision': 2, 'platform': 'native_pc'})
+    state.accept('scanning', False)
+    state.accept('sample', dict(sample(), battle_id='new-pc-battle'))
+    assert state.snapshot()['battle_id'] == 'new-pc-battle'
+
+
+def test_a_b_a_apply_cannot_unlock_on_an_old_marker_for_the_same_platform(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_id='old-a-battle'))
+    native = ConnectionConfig(platform='native_pc', native_game_root='game')
+    mumu = ConnectionConfig()
+    cmd(state, 'connection_apply', config=native.to_dict(), events=False)
+    state.expect_connection_request(native, 2)
+    cmd(state, 'connection_apply', config=mumu.to_dict(), events=False)
+    state.expect_connection_request(mumu, 3)
+    for revision, platform in ((1, 'mumu'), (2, 'native_pc')):
+        state.accept('connection_source', {'revision': revision, 'platform': platform})
+        state.accept('sample', dict(sample(), battle_id=f'obsolete-{revision}'))
+        assert state.last is None and state.snapshot()['battle_id'] is None
+    state.accept('connection_source', {'revision': 3, 'platform': 'mumu'})
+    state.accept('scanning', False)
+    state.accept('sample', dict(sample(), battle_id='new-a-battle'))
+    assert state.snapshot()['battle_id'] == 'new-a-battle'
+
+
+def test_rescan_while_switching_updates_source_ack_without_stranding_the_view(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_id='old-mumu'))
+    class Worker:
+        def __init__(self):
+            self.events = queue.Queue()
+            self.effective = (state.connection, False)
+            self.revision = 0
+        def request(self, config, enabled):
+            self.effective = config, enabled
+            self.revision += 1
+            return self.revision
+        def close(self):
+            pass
+    worker = Worker()
+    messages = [dict(version=1, op='hello'),
+                dict(version=1, op='connection_apply', events=False,
+                     config={'platform': 'native_pc', 'native_game_root': 'game'}),
+                dict(version=1, op='rescan'), dict(version=1, op='quit')]
+    serve(io.StringIO(''.join(json.dumps(message)+'\n' for message in messages)),
+          io.StringIO(), state, worker)
+    assert worker.revision == 2
+    state.accept('connection_source', {'revision': 1, 'platform': 'native_pc'})
+    state.accept('sample', dict(sample(), battle_id='superseded-pc'))
+    assert state.last is None
+    state.accept('connection_source', {'revision': 2, 'platform': 'native_pc'})
+    state.accept('scanning', False)
+    state.accept('sample', dict(sample(), battle_id='current-pc'))
+    assert state.snapshot()['battle_id'] == 'current-pc'
+
+
+def test_offline_platform_apply_clears_projection_without_waiting_for_a_worker_marker(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_id='offline-old-mumu'))
+    messages = [dict(version=1, op='hello'),
+                dict(version=1, op='connection_apply', events=False,
+                     config={'platform': 'native_pc', 'native_game_root': 'game'})]
+    output = io.StringIO()
+    serve(io.StringIO(''.join(json.dumps(message)+'\n' for message in messages)), output, state)
+    reply = json.loads(output.getvalue().splitlines()[-1])
+    assert reply['ok'] and reply['state']['battle_id'] is None
+    assert reply['state']['status'] == 'waiting'
+    assert not state.scanning and not state._awaiting_source
+
+
+def test_same_platform_apply_preserves_existing_reconnect_projection(tmp_path):
+    state = DesktopState(tmp_path)
+    old = dict(sample(), battle_id='same-mumu-battle')
+    state.accept('sample', old)
+    state.accept('observer', ('ready', None))
+    cmd(state, 'connection_apply', config=state.connection.to_dict(), events=False)
+    state.expect_connection_request(state.connection, 2)
+    assert state.last is old and state.observer_status == 'ready'
+    state.accept('sample', dict(sample(), battle_id='same-mumu-new-frame'))
+    assert state.snapshot()['battle_id'] == 'same-mumu-new-frame'
+
+
 def test_native_detect_is_configuration_only_and_does_not_probe_adb(tmp_path, monkeypatch):
     import desktop_bridge
     from connection import ConnectionConfig
@@ -1673,6 +1797,7 @@ def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
             sessions.append(self)
         def enable_lifecycle(self, runtime):
             self.runtime = runtime
+            runtime.feed.current_lifecycle = {'battle': None, 'state': None, 'target': ''}
         def connect(self):
             pass
         def read(self):
@@ -1703,6 +1828,7 @@ def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
     assert calls.index(('closed', first_platform)) < calls.index(('session', other))
     assert ('closed', other) == calls[-1]
     assert calls.count(('adb_resolve', 'mumu')) == calls.count(('frida', 'mumu')) == 1
+    assert [value for kind, value in worker.events.queue if kind == 'battle_waiting'] == [True, True]
     assert not any(kind == 'error' for kind, _ in worker.events.queue)
 
 
@@ -1797,6 +1923,91 @@ def test_native_process_change_releases_old_handle_and_reconnects(tmp_path, monk
     worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), False)
     worker.run()
     assert calls == ['open', 'close', 'open', 'close']
+
+
+@pytest.mark.parametrize('first_platform', ['native_pc', 'mumu'])
+@pytest.mark.parametrize('apply_timing', ['read_failure', 'connect_failure', 'after_retry_queued'])
+def test_new_source_apply_wins_over_old_session_recovery(
+        tmp_path, monkeypatch, first_platform, apply_timing):
+    from types import SimpleNamespace
+    import threading
+    import desktop_bridge
+    from collector import ProcessChanged, SampleUnavailable
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state)
+    configs = {
+        'native_pc': ConnectionConfig(platform='native_pc', native_game_root='game'),
+        'mumu': ConnectionConfig(adb_path='fake-adb', serial='fake-serial', auto_detect=False),
+    }
+    second_platform = 'mumu' if first_platform == 'native_pc' else 'native_pc'
+    clock, sessions, closed, applied = [0.0], [], [], []
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def apply_new_source():
+        # This is the GUI/stdio thread's request while a prior source is busy.
+        thread = threading.Thread(target=worker.request, args=(configs[second_platform], False))
+        thread.start()
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+        applied.append(True)
+
+    def diagnostic(platform):
+        return ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE,
+                                     platform=platform, selected_serial='fake-serial')
+
+    class NativeCollector:
+        diagnostics = diagnostic('native_pc')
+        def __init__(self, root):
+            pass
+
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, adb, serial, *, collector=None, **kwargs):
+            self.platform = 'native_pc' if collector is not None else 'mumu'
+            self.collector = collector or SimpleNamespace(diagnostics=diagnostic('mumu'))
+            self.reads = 0
+            sessions.append(self)
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            if len(sessions) == 1 and apply_timing == 'connect_failure':
+                clock[0] += 6  # Make the ordinary timed recovery due.
+                apply_new_source()
+                raise SampleUnavailable('old source attach failed after new source selected')
+        def read(self):
+            self.reads += 1
+            if len(sessions) == 1:
+                if apply_timing == 'read_failure':
+                    apply_new_source()
+                raise ProcessChanged('old source process changed')
+            # Allow one extra loop: the unfixed worker consumes its stale retry
+            # here and reopens A after B. The fixed worker stays on B.
+            if len(sessions) >= 3 or self.reads >= 2:
+                worker.stop.set()
+        def close(self):
+            closed.append(self.platform)
+
+    def wait(delay):
+        clock[0] += delay
+        if apply_timing == 'after_retry_queued' and not applied:
+            apply_new_source()
+        if clock[0] > 20:
+            worker.stop.set()
+
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda config: SimpleNamespace(
+        adb_path='fake-adb', serial='fake-serial', diagnostics=diagnostic('mumu')))
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    worker.request(configs[first_platform], False)
+    worker.run()
+    assert applied == [True]
+    assert [session.platform for session in sessions] == [first_platform, second_platform]
+    assert worker.effective == (configs[second_platform], False)
+    assert closed == [first_platform, second_platform]
+    assert worker.requests.empty()
 
 
 @pytest.mark.parametrize('saved_platform,args,expected', [

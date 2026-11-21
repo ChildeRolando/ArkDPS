@@ -126,6 +126,9 @@ class DesktopState:
         config = self.connection_store.load()
         self.connection = config.config
         self.effective_connection = self.connection
+        self._source_request_revision = None
+        self._source_request_platform = self.connection.platform
+        self._awaiting_source = False
         self.warnings = [x for x in (loaded.warning, config.warning,
                                      stage_names.catalog().warning) if x]
         self.history = BattleHistory(directory / 'history')
@@ -169,6 +172,25 @@ class DesktopState:
             self.selected = result.records[0]
 
     def accept(self, kind, value):
+        if kind == 'worker_error':
+            # Setup/loop failure can precede a source marker. It is global to
+            # the worker, rather than stale data from a retired session.
+            self.error = str(value)
+            self.scanning = False
+            self.analysis_interrupted = True
+            return
+        if kind == 'connection_source':
+            if (isinstance(value, dict) and type(value.get('revision')) is int
+                    and value['revision'] == self._source_request_revision
+                    and value.get('platform') == self._source_request_platform):
+                self._awaiting_source = False
+            return
+        # The acquisition thread is the sole source-event producer. Its FIFO
+        # marker precedes all events for the newly accepted request, so earlier
+        # queued events cannot repopulate a different platform's live view.
+        # Archive notifications are global and must survive source transitions.
+        if self._awaiting_source and kind != 'history':
+            return
         if kind == 'sample':
             if self.last is not None and observation_age(self.last) > 2:
                 self.analysis_interrupted = True
@@ -208,6 +230,30 @@ class DesktopState:
                 self.error = ''
                 self.observer_status = self.observer_error = None
                 self.analysis_interrupted = True
+
+    def expect_connection_request(self, config, revision):
+        self._source_request_platform = config.platform
+        self._source_request_revision = revision if type(revision) is int else None
+
+    def finish_offline_connection(self):
+        self._awaiting_source = False
+        self.scanning = False
+        self.connection_text = '离线模式 · 未连接采集源'
+
+    def _clear_live_source(self):
+        self.last = self.last_frame = None
+        self.last_progress = 0.
+        self.live_analysis = self.boss_live_analysis = self.boss_effective_live_analysis = None
+        self.analysis_interrupted = True
+        self.error = ''
+        self.connection_text = '正在切换采集平台'
+        self.diagnostic = None
+        self.event_status = self.event_error = self.lifecycle = None
+        self.observer_status = self.observer_error = None
+        self.battle_waiting = None
+        self.scanning = True
+        self._source_request_revision = None
+        self._awaiting_source = True
 
     def update_live_analysis(self, sample):
         """Keep one chart sample and its in-process observed peak per battle."""
@@ -534,6 +580,8 @@ class DesktopState:
                 raise
             self.layout = candidate_layout
             self.connection = config
+            if config.platform != self.effective_connection.platform:
+                self._clear_live_source()
             self.effective_connection = config
         else:
             raise ValueError('未知命令：' + str(op))
@@ -546,6 +594,8 @@ class CollectionWorker:
         self.history, self.endpoint = state.history, endpoint
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
+        self._request_lock = threading.Lock()
+        self._request_revision = 0
         self.stop = threading.Event()
         self.session = None
         self.cleanup_error = ''
@@ -555,8 +605,26 @@ class CollectionWorker:
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
 
     def request(self, config, enabled):
-        self.effective = (config, enabled)
-        self.requests.put(self.effective)
+        with self._request_lock:
+            self._request_revision += 1
+            self.effective = (config, enabled)
+            self.requests.put((self._request_revision, config, enabled))
+            return self._request_revision
+
+    def _retry_connection(self, revision):
+        """An old session's recovery cannot supersede a newer user request."""
+        with self._request_lock:
+            if revision != self._request_revision:
+                return False
+            self.requests.put((revision, *self.effective))
+            return True
+
+    def _next_request(self):
+        with self._request_lock:
+            while True:
+                request = self.requests.get_nowait()
+                if request[0] == self._request_revision:
+                    return request
 
     def release(self):
         if self.session is None:
@@ -594,6 +662,7 @@ class CollectionWorker:
                     usable = False
                     retry_allowed = True
                     current_config, current_enabled, current_target = None, False, None
+                    current_revision = None
                     last_battle_waiting = None
                     last_observer_state = None
                     endpoint_bound = False
@@ -603,10 +672,11 @@ class CollectionWorker:
                     while not self.stop.is_set():
                         next_live_read = None
                         try:
-                            config, enabled = self.requests.get_nowait()
+                            revision, config, enabled = self._next_request()
                         except queue.Empty:
                             config = None
                         if config is not None:
+                            current_revision = revision
                             current_config, current_enabled = config, enabled
                             current_target = None
                             usable = False
@@ -616,7 +686,10 @@ class CollectionWorker:
                             retries = 0
                             last_retry_audit = float('-inf')
                             last_live_frame = None
+                            last_battle_waiting = None
                             self.last_connect_attempt = time.monotonic()
+                            self.events.put(('connection_source', {
+                                'revision': revision, 'platform': config.platform}))
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
@@ -712,7 +785,7 @@ class CollectionWorker:
                                 self.events.put(('error', str(exc)))
                                 usable = False
                                 self.last_connect_attempt = time.monotonic()
-                                self.request(current_config, current_enabled)
+                                self._retry_connection(current_revision)
                             except Exception as exc:
                                 audit('capture_error', {'error_type': type(exc).__name__,
                                       'reason': str(exc).partition('\n')[0][:200],
@@ -753,7 +826,7 @@ class CollectionWorker:
                         if (not usable and retry_allowed and current_config is not None
                                 and time.monotonic() - self.last_connect_attempt >= 5):
                             self.last_connect_attempt = time.monotonic()
-                            self.request(current_config, current_enabled)
+                            self._retry_connection(current_revision)
                         # Pace successful live reads start-to-start, with a short
                         # rest even if capture took longer than the whole period.
                         # Idle, paused and retry paths keep their existing backoff.
@@ -766,7 +839,7 @@ class CollectionWorker:
                     if not self.release():
                         self.release()
         except Exception as exc:
-            self.events.put(('error', str(exc)))
+            self.events.put(('worker_error', str(exc)))
             traceback.print_exc(file=sys.stderr)
 
     def close(self):
@@ -909,12 +982,17 @@ def serve(input_stream, output, state, worker=None):
                 kind = 'state'
             elif op == 'rescan':
                 if worker:
-                    worker.request(*worker.effective)
+                    config, enabled = worker.effective
+                    revision = worker.request(config, enabled)
+                    state.expect_connection_request(config, revision)
                 result, kind = None, 'state'
             else:
                 result = state.command(cmd)
                 if op == 'connection_apply' and worker:
-                    worker.request(state.connection, state.layout.event_observation)
+                    revision = worker.request(state.connection, state.layout.event_observation)
+                    state.expect_connection_request(state.connection, revision)
+                elif op == 'connection_apply':
+                    state.finish_offline_connection()
                 kind = 'snapshot' if op == 'snapshot' else 'state'
             advance('snapshot')
             if getattr(worker, 'effective', None) is not None:
@@ -988,8 +1066,9 @@ def main():
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))
     worker = None if args.offline else CollectionWorker(state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE)
     if worker:
-        worker.request(effective_config,
-                       False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))
+        revision = worker.request(effective_config,
+            False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))
+        state.expect_connection_request(effective_config, revision)
         worker.thread.start()
     try:
         serve(sys.stdin, output, state, worker)
