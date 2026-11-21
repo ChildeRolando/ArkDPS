@@ -2,13 +2,19 @@
 
 评估日期 2026-11-21。目标是鹰角启动器国服 Windows x64 客户端，验收基线为 ArkDPS rc.8 的 MuMu 功能。**原生只读累计采集已实机验证可行**，覆盖伤害、非零治疗、稀音召唤伤害、干员撤退再部署、倍速、暂停、同图重开及胜负结算。Windows 的逐事件来源仍有缺口，现有证据支持接入累计统计，完整数值齐平仍取决于逐事件和产品验收。[MuMu 产品基线](v1-design.md) · [PC 实验记录](native-pc-research.md)
 
-当前便携候选 `41c24e0362ea43187535a51964c3378f6de4cb00` 在 PC 敌情曲线保留采样中断，并统一治疗速率排行的 HPS 标题。干净源码的 358 项 Python 相关回归、134 项无窗口 C# 断言和 WPF 发布构建通过。包内回放核对三份实机日志的 114 个 HP 观测点和六段曲线中断。实际 CE-5 样本的实时及历史投影都使用 HPS，三种主题的 12 张离屏 PNG 核对了标题、缺数说明和累计治疗。正常界面和保存对话框仍待验收。验证了 ZIP 完整性及修改模块与包内清单的一致性。ZIP SHA-256 为 `cdc02d8a39da14d202bd28a2d2fb782aaf94fdc4ebd301493c7c2dda75913541`。构建时 NuGet 漏洞元数据源不可用。[当前便携候选](../runtime/native-pc/product-41c24e0/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内敌情中断回执](../runtime/native-pc/product-41c24e0/enemy-chart-gaps.verified.json) · [HPS 导出回执](../runtime/native-pc/product-41c24e0/hps-heading-offscreen-103f70bf/receipt.json)
+当前便携候选 `270abede362b22675b172e94c8442f16ca751de6` 增加 PC 敌人观测帧。干净源码的 382 项 Python 回归、137 项无窗口 C# 断言及 WPF 发布构建通过。包内 Python 和源码对四份实机记录的 710 个独立敌情观测点得出相同结果。确认了 123 次离场观测，其中 55 个实例的最后已知 HP 为正。ZIP 完整性和包内清单核对通过。ZIP SHA-256 为 `2deb62596ec668c657c9ccd4dac9983247360bfb75ca25962aac8930a8cbb15b`。构建时 NuGet 漏洞元数据源不可用。[当前便携候选](../runtime/native-pc/product-270abed/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内敌人观测帧回执](../runtime/native-pc/enemy-observation-frames/package-738d87743d4e/receipt.json)
+
+便携候选 `41c24e0362ea43187535a51964c3378f6de4cb00` 在 PC 敌情曲线保留采样中断，并统一治疗速率排行的 HPS 标题。干净源码的 358 项 Python 相关回归、134 项无窗口 C# 断言和 WPF 发布构建通过。包内回放核对三份实机日志的 114 个 HP 观测点和六段曲线中断。实际 CE-5 样本的实时及历史投影都使用 HPS，三种主题的 12 张离屏 PNG 核对了标题、缺数说明和累计治疗。验证了 ZIP 完整性及修改模块与包内清单的一致性。ZIP SHA-256 为 `cdc02d8a39da14d202bd28a2d2fb782aaf94fdc4ebd301493c7c2dda75913541`。构建时 NuGet 漏洞元数据源不可用。[便携候选](../runtime/native-pc/product-41c24e0/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内敌情中断回执](../runtime/native-pc/product-41c24e0/enemy-chart-gaps.verified.json) · [HPS 导出回执](../runtime/native-pc/product-41c24e0/hps-heading-offscreen-103f70bf/receipt.json)
+
+同一便携候选通过正常 WPF 历史页和保存对话框写入真实 PC CE-5 伤害排行。文件可完整解码，尺寸为 900×413，图中保留「官服 PC」「演习状态未知」和两位干员的正伤害。导出请求与实际文件均有摘要。治疗排行已完成生产绘图的离屏核对，正式操作保存的本轮实证是伤害排行。[正常 PNG 保存回执](../runtime/native-pc/product-41c24e0/desktop-png-verification-20261121/damage-png-save.verified.json)
 
 便携候选 `65f545ab070ecf09b24c8ea220f568787e6a7688` 修正 PC 模式误判和速率空态。干净源码的 1167 项 Python 相关回归、131 项无窗口 C# 断言和 WPF 发布构建通过。用同包离线 worker 重载正式行动 1-7 与旧 CE-5 战绩，核对 1-7 的模式展示、胜利与原始 JSON，并核对 CE-5 的四个缺速率场景和两个累计对照。生产渲染器离屏通过三主题的 21 张 PNG，12 张缺数图保留具体原因。构建时 NuGet 漏洞元数据源不可用。ZIP SHA-256 为 `316968f0b214c2dff3525a67732666478955e3885ca250278d3016543c9d02ff`。[便携候选](../runtime/native-pc/product-65f545a/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内战绩对照](../runtime/native-pc/product-65f545a/history-evidence-offline-a28886fe/receipt.json) · [离屏导出回执](../runtime/native-pc/product-65f545a/png-unavailable-offscreen-21a4c387/receipt.json)
 
 玩家确认在 `f81f6e3` 中用「开始行动」打完官服 PC 1-7。日志从第 2 帧的零累计到第 3737 帧标记胜利，终点分类伤害 `73442.419189`，归档成功一次。旧版把编队页的模式提示绑定到开局，误标为演习。产品已停止据该提示判定战局模式，历史界面也将仅凭这项证据的旧标记显示为「演习状态未知」。原档保留采集证据。自动区分正式和演习仍需要实际战局的可靠来源。[正式行动实测回执](../runtime/native-pc/product-f81f6e3/desktop-review-20261121-175902/1-7-victory.verified.json)
 
 这局现有材料只有 ArkDPS 记录和玩家确认。游戏明示的演习状态或本局实际报酬可以提供独立的人工对照。官方已调整演习券消耗和作战失败、放弃时的理智返还，票券变化或失败后的理智差额无法区分模式。[鹰角官方演习及理智规则更新](https://ak.hypergryph.com/news/6277.html)
+
+PC 客户端已提供游戏内截图按键，可在下一次正常结算时留存关卡、模式标记或实际奖励作为独立证据。截图用于人工验收，自动模式判定仍需要可稳定绑定当前战局的来源。[鹰角官方 PC 截图说明](https://ak.hypergryph.com/news/0787.html)
 
 真实旧 CE-5 战绩在全周期和接敌口径曾把缺失时段显示为「已知为零」。速率空态现在使用所选口径的可用性和覆盖情况，存在有效零值时仍显示零。分类伤害和治疗的累计可在总量排行查看。[四种速率对照](../runtime/native-pc/empty-rate-known-zero-verified-34e42c6a.json)
 
@@ -126,6 +132,8 @@ K 实机补采 `ce5-dense-heal-20261121-160135.jsonl` 的 183 份同帧样本全
 
 敌情的实例详情增加「已观测最高 HP」。它取同一战局内、同一实例编号和敌人键的可靠 HP 读数最大值，离场后仍可查看。用 1-7 和 CE-5 的 549 个不同逻辑帧复核了 6129 条敌情行。例如源石虫 `2115` 当前 HP 约 `731.4` 时，已观测最高 HP 为 `1050`，离场后仍保留该值和最后读到的 `0`。实例详情的最大 HP、血条比例和属性继续保持未知。[离线回放回执](../runtime/native-pc/2026-11-21-battle/enemy-observed-peak.verified.json)
 
+`270abed` 在同一敌人详情保留首次观测、最后在场、HP 最后可读和首次确认离场的帧。正常入口捕获的 1-7 中，实例 `52` 在第 522 帧仍在名单，HP 为 `59.599985`，第 582 帧首次确认缺席。两帧给出离场的观测区间；区间内的精确时刻及原因保持未知。恢复同一在场实例会清除当前离场标记，身份变化时重新建立观测。回放另外核对了重复快照和采样失败。[包内敌人观测帧回执](../runtime/native-pc/enemy-observation-frames/package-738d87743d4e/receipt.json)
+
 PC 剩余 HP 曲线的采样中断由 worker 留在恢复点，界面跳过中间的不可用状态时仍会断开。归档前的三份正常入口日志共含 114 个独立观测点。回放在切换后的 CE-5 保留 1 段、正式行动 1-7 保留 5 段中断，连续可用的 CE-5 对照为 0 段。独立使用敌情观测帧核对两端点，最长间隔为第 2195 至 2501 帧，约 10.20 游戏秒。曲线上各个采样点的 HP 合计与原日志一致。[包内敌情中断回执](../runtime/native-pc/product-31e19ef/enemy-chart-gaps.verified.json)
 
 同一份 K 记录经正常统计会话离线回放，136 个可用近期 HPS 逐点重算一致。其中有 80 个完整五秒窗口处于标准速度且有正治疗。第 `434` 帧的五秒新增约 `1455.9001`，对应 `291.1800 HPS`。暂停时第 `762` 帧累计和 HPS 保持不变。唯一正治疗来源是闪灵 `char_147_shining`，最终来源累计 `9463.3515625`。[K 治疗与敌情回执](../runtime/native-pc/2026-11-21-battle/ce5-dense-heal-20261121-160135.normal-session.verified.json)
@@ -189,6 +197,8 @@ PC 产品现接入基于相邻样本的全周期 DPS/HPS，沿用 MuMu 的本体
 
 同日用 `38af2cd` 在同一个 ArkDPS 会话实测先打 MuMu CE-5，再切回官服 PC 打 CE-5。MuMu Android `2.7.91` 首份有效样本为第 26 帧，分类累计为 0，最后可靠分类累计 `75652.551514`。官服 PC 第 0 帧累计为 0，主动放弃时累计 `2046.279541`。两个战局 ID 独立，同一历史目录各写入一次。MuMu 本轮归档缺最终事件水位，结局与演习字段仍是未知，HUD 行为待单独确认。[双端切换实测回执](../runtime/native-pc/product-38af2cd/desktop-review-20261121-174824/ce5-platform-switch.verified.json)
 
+用 `41c24e0` 的包内桥接离线重放上述实机帧，接到切回 PC 请求时清除 MuMu 实时投影，丢弃迟到的 MuMu 消息，再接受 PC 的零开局与后续累计。生产 HUD 的无窗口回放核对了七种视图，选中旧 MuMu 战绩后，HUD 的源面板仍是当前 PC 对局。实机样本保留原时间戳，因此回放显示数据过期或原始战局状态。初始 PC 连接段未发布战局，非零 PC 切到 MuMu 的 HUD 过渡和可见窗口的点击穿透仍需实机观察。[HUD 双端离线回执](../runtime/native-pc/product-41c24e0/hud-switch-offline-c60c516f/receipt.json)
+
 ## MuMu 功能齐平矩阵
 
 | 能力 | Windows 现状 | 达到齐平的证据 |
@@ -198,9 +208,11 @@ PC 产品现接入基于相邻样本的全周期 DPS/HPS，沿用 MuMu 的本体
 | 召唤物与离场输出、全周期速率 | 1-7 实机验证稀音双车同场、撤退和补位，回放确认共享小车累计只归一次。缄默德克萨斯多次撤退及换实例再部署的来源累计延续。全周期 DPS/HPS 已通过真实 PC 记录的离线正负对照，CE-5 桌面战绩在场时长与独立积分对账一致。 | 确认指定实测的实时、HUD 和历史界面显示，以及施放者离场后仍有正输出的边界。 |
 | 敌情、首领、有效伤害、过量和减伤 | 已实测当前 HP 受击下降、暂停冻结、正常入口显示、同局离场保留及 9 个在场敌人的同帧 HP。CE-5 实机界面显示固定波次 42，观察到的 42 个实例逐种与固定配置相符。实例已观测最高 HP 和曲线的 6 段采样中断已通过实机日志回放。 | 最大 HP 和属性还需验证资源版本及配置。首领输出与过量还需逐次来源、目标、HP 前后、结算值和盾上下文。 |
 | 有效护盾、接敌 DPS/HPS、技能期拆分 | 现有 Windows 只读来源未提供完整有序的逐次事件。可读的盾剩余量或技能状态只能支持进一步验证。 | 实际盾吸收量与施盾人，逐次伤害与治疗帧，技能起止及输出归属。丢失短时事件时应报告覆盖缺口。 |
-| 战局生命周期、HUD、侧栏、历史和导出 | 1-7 正常桌面入口已实机验证正式行动的零开局、胜利和单次归档，演习亦覆盖自然失败、主动放弃。CE-5 至 1-7 已验证换进程自动重连。两端各打一局 CE-5，实机验证切换后按局累计、同一历史保留两份战绩。短测确认窗口跟随，两种结算的真实战绩 JSON 导出已通过包内离线复核。 | PC 正式和演习的自动区分仍缺可靠来源。HUD 状态和目标 PNG 保存待确认。MuMu 本轮切换实测的最终事件水位仍有缺口。 |
+| 战局生命周期、HUD、侧栏、历史和导出 | 1-7 正常桌面入口已实机验证正式行动的零开局、胜利和单次归档，演习亦覆盖自然失败、主动放弃。CE-5 至 1-7 已验证换进程自动重连。两端各打一局 CE-5，实机验证切换后按局累计、同一历史保留两份战绩。短测确认窗口跟随。历史 JSON 已通过包内离线复核，伤害 PNG 通过正常保存。 | PC 正式和演习的自动区分仍缺可靠来源。HUD 可见窗口状态与切换须实机确认，治疗 PNG 的正式操作保存待确认。MuMu 本轮切换实测的最终事件水位仍有缺口。 |
 
 MuMu 的事件来源与精度见[事件采集约定](event-capture.md)和[统计核心](statistics-core.md)。Windows 的开源 ArkHelper 快照公开了逻辑帧、行累计及覆盖标记。其发布端使用进程内观测，目前机器上没有该发布端，独立只读接收器已通过合成数据验证。公开快照还缺少 ArkDPS 所需的逐笔结算契约。[ArkHelper 快照接口](https://github.com/zhengkanqin/ArkHelper/blob/v1.4.2/include/arkhelp/ipc.h)
+
+对照 rc.8 发布提交 `1ce748582a9dcf8c6d072837ea6462d36149eb32` 的包内清单，当前的 `stats_core.py`、`event_stream.py`、`event_capture.py` 与 Android 事件适配脚本 SHA-256 一致。rc.8 已支持技能期与非技能期输出拆分，合成事件的 WPF 验收也覆盖了该项。完整齐平仍需 PC 提供可对账的技能边界；累计模式可独立使用。[rc.8 WPF 回执](../../arkdps-observer-cold-start/runtime/rc8-release/1ce748582a9dcf8c6d072837ea6462d36149eb32/wpf-source/receipt.json)
 
 再次核对匹配构建的 `BattleVerboseRecorder`，确实声明了 `m_detailLogs`，记录项含帧、来源、目标和修饰器。五份普通战斗录制的 1831 个有效样本里，该记录器均为空。已核对的 ArkHelper `BattleSnapshot` 序号用于避免读到写入一半的快照，接口提供分类累计与覆盖标记，没有逐笔结算或技能开始和结束队列。普通模式的有效伤害、盾吸收及技能期因此仍缺可独立核实的连续事件源。其他模式是否会提供完整记录须单独采样。[普通战斗采样回执](../runtime/native-pc/2026-11-21-battle/ordinary-battles-verbose-recorder.verified.json)
 
