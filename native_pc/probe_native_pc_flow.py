@@ -109,6 +109,15 @@ class FlowRead(presence.CheckedRead):
         return self.strings[address]
 
 
+def finish_transition(flow, stage_id):
+    if not flow or not stage_id:
+        return False
+    stage = stage_id.rsplit('/', 1)[-1].casefold()
+    return (flow['transiting'] and stage.startswith('level_')
+            and flow['source_scene'].casefold() == stage
+            and flow['target_scene'].casefold() == 'battle_finish')
+
+
 def capture_game_flow(read, context):
     """Return raw scene scalars only; never label abandoned, victory or loss.
 

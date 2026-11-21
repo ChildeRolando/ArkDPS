@@ -497,7 +497,13 @@ class BattleStatisticsAdapter:
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
             raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
-        if terminal and (sample.get('state') != 3 or self.statistics is None
+        metadata = sample.get('battle_metadata') or {}
+        native_abandon = (terminal and sample.get('state') == 2
+                          and metadata.get('platform') == 'native_pc'
+                          and metadata.get('outcome') == 'abandoned'
+                          and metadata.get('evidence'))
+        end_state = sample.get('state') == 3 or native_abandon
+        if terminal and (not end_state or self.statistics is None
                          or sample['session'] != self.session or self.last_game_time is None):
             raise FrameMismatch('结算修订必须属于已有观察战局的原生结束状态')
         if terminal and (sample['game_time'] < self.last_game_time or
@@ -512,7 +518,7 @@ class BattleStatisticsAdapter:
         game_time = sample['game_time']
         settling = self.statistics.end_time is not None
         if settling and (frame != self.last_frame or game_time != self.statistics.end_time
-                         or sample.get('state') != 3):
+                         or not end_state):
             raise FrameMismatch('结算修订必须属于同局、同帧、同时间的结束快照')
         if not settling and self.last_game_time is not None and not terminal:
             if game_time < self.last_game_time:

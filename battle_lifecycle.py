@@ -220,9 +220,11 @@ class BattleFeed:
         if before.get('state') == 3 or exiting:
             if self.generation == preparing_generation:
                 return self._end('finished')
-            # A finished controller can still supply guarded counters while the
-            # scene is exiting. A replacement cannot settle the old battle.
-            if self.identity == identity and not stage_changed and before.get('state') == 3:
+            # Windows can still supply a same-frame pair on a verified abandon.
+            final_pair = before.get('state') == 3 or (
+                exiting and metadata.get('platform') == 'native_pc'
+                and metadata.get('outcome') == 'abandoned')
+            if self.identity == identity and not stage_changed and final_pair:
                 from collector import SampleUnavailable, ProcessChanged
                 from roster import RosterUnavailable
                 from tools.stage_global_state.memory import ReadFailure

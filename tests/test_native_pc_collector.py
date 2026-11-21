@@ -25,7 +25,7 @@ class Probe:
         self.reads = 0
         self.closed = False
 
-    def sample(self, *, extra_reader):
+    def sample(self, *, extra_reader, idle_reader=None):
         self.reads += 1
         return deepcopy(next(self.reports))
 
@@ -51,6 +51,99 @@ def sample(frame, damage, *, state=2, presence=True):
 
 
 ABSENT = {'status': 'waiting_for_battle', 'reason': 'singleton_is_null'}
+
+
+def flow(source, target, *, transiting):
+    return dict(game_flow_status='available', game_flow=dict(
+        source_scene=source, target_scene=target, transiting=transiting))
+
+
+def opening(practice=True, stage='main_01-07'):
+    return dict(ABSENT, **flow('home', 'battle_loader', transiting=True),
+                practice_selection_status='available', practice_selection=dict(stage_id=stage, practice=practice))
+
+
+@pytest.mark.parametrize('loader_stays_open', [True, False])
+def test_idle_choice_requires_same_loader_before_and_after_read(tmp_path, monkeypatch, loader_stays_open):
+    loading = flow('home', 'battle_loader', transiting=True)
+    after = loading if loader_stays_open else flow('home', 'battle_loader', transiting=False)
+    flows = iter((loading, after))
+    monkeypatch.setattr('native_pc_collector.capture_game_flow', lambda *_: next(flows))
+    monkeypatch.setattr('native_pc_collector.capture_practice_selection', lambda *_: {
+        'practice_selection_status': 'available', 'practice_selection': dict(stage_id='main_01-07', practice=True)})
+    fields = NativePcCollector(tmp_path)._capture_idle(None, {})
+    assert ('practice_selection' in fields) is loader_stays_open
+
+
+@pytest.mark.parametrize(('state', 'result', 'outcome'), [(2, 0, 'abandoned'), (3, 2, 'defeat')])
+def test_opening_mode_and_finish_outcome_reach_history_once(tmp_path, state, result, outcome):
+    start = sample(6, 5.)
+    start['sample'].update(flow('home', 'battle_loader', transiting=False))
+    finish = sample(6, 7., state=state)
+    finish['sample'].update(flow('level_main_01-07', 'battle_finish', transiting=True), battle_result=result)
+    probe = Probe([opening(), dict(ABSENT, game_flow_status='unavailable'), start, finish, ABSENT, ABSENT])
+    history = BattleHistory(tmp_path)
+    session = CollectionSession(None, None, collector=NativePcCollector(tmp_path, probe_factory=lambda _: probe),
+                                frida_remote=None, history=history)
+    session.enable_lifecycle()
+    session.connect()
+    for _ in range(6):
+        try:
+            session.read()
+        except CaptureRetry:
+            pass
+    record, = history.list_recent().records
+    assert record.metadata['practice'] is True
+    assert record.metadata['outcome'] == outcome
+    assert record.metadata['platform'] == 'native_pc'
+    assert record.statistics['rows'][OPERATOR]['damage'] == 7.
+    session.close()
+
+
+@pytest.mark.parametrize(('choice', 'frame', 'wait', 'expected'), [
+    (None, 6, 0, None),
+    (opening(False), 6, 4, False),
+    (opening(False, 'main_01-08'), 6, 4, None),
+    (opening(), 151, 4, None),
+    (opening(), 6, 16, None),
+    (dict(opening(), **flow('battle_finish', 'home', transiting=False)), 6, 4, None),
+])
+def test_practice_requires_fresh_matching_opening_and_does_not_carry_over(
+        tmp_path, monkeypatch, choice, frame, wait, expected):
+    now = 0.
+    monkeypatch.setattr('native_pc_collector.time.monotonic', lambda: now)
+    start = sample(frame, 5.)
+    start['sample'].update(flow('home', 'battle_loader', transiting=False))
+    restart = deepcopy(start)
+    restart['sample'].update(battle_serial=2)
+    probe = Probe([*([choice] if choice is not None else []), start, restart])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    collector.connect()
+    if choice is not None:
+        assert collector.read_lifecycle()['battle'] is None
+    now += wait
+    assert collector.read_lifecycle()['metadata']['practice'] is expected
+    assert collector.read_lifecycle()['metadata']['practice'] is None
+    collector.close()
+
+
+@pytest.mark.parametrize(('source', 'target', 'transiting', 'result'), [
+    ('level_main_01-08', 'battle_finish', True, 0),
+    ('level_main_01-07', 'home', True, 0),
+    ('level_main_01-07', 'battle_finish', False, 0),
+    ('level_main_01-07', 'battle_finish', True, 2),
+])
+def test_nearby_flow_signatures_do_not_classify_abandonment(tmp_path, source, target, transiting, result):
+    active = sample(30, 5.)
+    active['sample'].update(flow(source, target, transiting=transiting), battle_result=result)
+    probe = Probe([active, ABSENT])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    collector.connect()
+    lifecycle = collector.read_lifecycle()
+    assert lifecycle['metadata']['outcome'] is None
+    assert not lifecycle['transiting']
+    assert collector.read_lifecycle()['battle'] is None
+    collector.close()
 
 
 def test_guarded_pair_publishes_and_archives_once_across_same_stage_restart(tmp_path):

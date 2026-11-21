@@ -11,6 +11,8 @@ from enemy_telemetry import NativeEnemyObservations, _load_enemy_db, native_enem
 from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
 from native_pc.probe_native_pc_enemies import capture_enemies
+from native_pc.probe_native_pc_flow import capture_game_flow, finish_transition
+from native_pc.probe_native_pc_practice import capture_practice_selection
 from native_pc.probe_native_pc_presence import capture_presence
 from native_pc.probe_native_pc_roster import capture_roster
 from native_pc.probe_native_pc_rows import capture_character_rows
@@ -21,6 +23,16 @@ BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
 SNAPSHOT_ONLY = '官服 PC 当前提供累计统计。逐次伤害、技能期与护盾吸收暂无数据。'
 ENEMY_SAMPLE_INTERVAL = 1.0
 ENEMY_MAX_AGE = 2.5
+OPENING_MAX_AGE = 15.0
+OPENING_MAX_FRAME = 150
+
+
+def _flow(report):
+    return report.get('game_flow') if report.get('game_flow_status') == 'available' else None
+
+
+def _battle_loader(flow):
+    return flow and flow['source_scene'] == 'home' and flow['target_scene'] == 'battle_loader'
 
 
 def _capture_fields(read, context):
@@ -71,6 +83,8 @@ class NativePcCollector:
         self._enemy_catalog = None
         self._enemy_observations = NativeEnemyObservations()
         self._next_enemy = float('-inf')
+        self._opening_choice = None
+        self._practice_battle = None
         self.event_capability = dict(status='unavailable', error=SNAPSHOT_ONLY)
         self.diagnostics = ConnectionDiagnostics(platform='native_pc', version_expected=BUILD_ID,
             native_game_root=str(self.game_root) if self.game_root is not None else None)
@@ -122,9 +136,10 @@ class NativePcCollector:
     def read_lifecycle(self):
         self._pending = None
         self.locate_lifecycle()
-        report = self.process.sample(extra_reader=self._capture)
+        report = self.process.sample(extra_reader=self._capture, idle_reader=self._capture_idle)
         status = report['status']
         if status == 'waiting_for_battle' and report.get('reason') == 'singleton_is_null':
+            self._observe_opening(report)
             self._reset_enemy_observation()
             return dict(battle=None, state=None, ready=False, transiting=False, source='', target='')
         if status in ('process_exited', 'process_changed'):
@@ -141,10 +156,21 @@ class NativePcCollector:
         identity = hashlib.sha256(struct.pack(f'<{len(roots)}Q', *roots)).hexdigest()
         battle = (identity,)
         stage_id = raw.get('stage_id') if raw.get('stage_status') == 'available' else None
-        metadata = dict(evidence='native_pc_guarded_memory', platform='native_pc', source_build=BUILD_ID,
-                        stage_id=stage_id, practice=None, outcome=raw.get('outcome'))
-        lifecycle = dict(battle=battle, state=raw['battle_state'], ready=True, transiting=False,
-                         source='', target='', metadata=metadata)
+        flow = _flow(raw)
+        practice = self._battle_practice(raw, flow, (battle, raw['battle_serial']), stage_id)
+        abandoned = (raw['battle_state'] == 2 and raw.get('battle_result') == 0
+                     and finish_transition(flow, stage_id))
+        evidence = 'native_pc_guarded_memory'
+        if practice is not None:
+            evidence += '+native_pc_squad_loader'
+        if abandoned:
+            evidence += '+native_pc_game_flow'
+        metadata = dict(evidence=evidence, platform='native_pc', source_build=BUILD_ID,
+                        stage_id=stage_id, practice=practice,
+                        outcome='abandoned' if abandoned else raw.get('outcome'))
+        lifecycle = dict(battle=battle, state=raw['battle_state'], ready=True, transiting=abandoned,
+                         source=flow['source_scene'].casefold() if abandoned else '',
+                         target='battle_finish' if abandoned else '', metadata=metadata)
         self._pending = (lifecycle, report)
         return lifecycle
 
@@ -154,7 +180,43 @@ class NativePcCollector:
         if now >= self._next_enemy:
             self._next_enemy = now + ENEMY_SAMPLE_INTERVAL
             fields.update(capture_enemies(read, context))
+        fields.update(capture_game_flow(read, context))
         return fields
+
+    def _capture_idle(self, read, context):
+        fields = capture_game_flow(read, context)
+        flow = _flow(fields)
+        if _battle_loader(flow) and flow['transiting']:
+            selection = capture_practice_selection(read, context)
+            if (selection['practice_selection_status'] == 'available'
+                    and _flow(capture_game_flow(read, context)) == flow):
+                fields.update(selection)
+        return fields
+
+    def _observe_opening(self, report):
+        self._practice_battle = None
+        flow = _flow(report)
+        if flow is not None and not _battle_loader(flow):
+            self._opening_choice = None
+        if (_battle_loader(flow) and flow['transiting']
+                and report.get('practice_selection_status') == 'available'):
+            raw = report['practice_selection']
+            self._opening_choice = (raw['stage_id'].casefold(), raw['practice'], time.monotonic())
+
+    def _battle_practice(self, raw, flow, identity, stage):
+        choice, self._opening_choice = self._opening_choice, None
+        if self._practice_battle is not None and self._practice_battle[0] != identity:
+            self._practice_battle = None
+        if not stage:
+            return None
+        short_stage = stage.rsplit('/', 1)[-1].casefold().removeprefix('level_')
+        if (choice and choice[0] == short_stage and _battle_loader(flow) and not flow['transiting']
+                and raw['battle_state'] == 2 and raw['frame'] <= OPENING_MAX_FRAME
+                and time.monotonic() - choice[2] <= OPENING_MAX_AGE):
+            self._practice_battle = (identity, stage, choice[1])
+        if self._practice_battle is not None and self._practice_battle[:2] == (identity, stage):
+            return self._practice_battle[2]
+        return None
 
     def _reset_enemy_observation(self):
         self._enemy_battle = None
@@ -207,6 +269,7 @@ class NativePcCollector:
 
     def close(self):
         self._pending = None
+        self._opening_choice = self._practice_battle = None
         self._reset_enemy_observation()
         if self.process is not None:
             self.process.close()

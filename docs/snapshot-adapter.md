@@ -62,6 +62,8 @@
 
 演习取自 `SquadPage.Params.isPractice`。只有采集器观察到本次开战、参数对象通过类型校验并且关卡 ID 匹配时才采信。复用旧参数、读取不稳或中途接入而没有观察到开战时保留未知。互相冲突的证据列入 `metadata_conflicts`，来源保留在 `evidence_sources`。场景切换期间短读可重试；地址范围失效时限频刷新映射并重新核验身份。
 
+官服 Windows 的放弃由同一战局的进行中、未决结果及当前关卡向 `battle_finish` 转场共同确认。这种终局可以接收同帧累计修订，保留客户端原始的进行中状态。演习选择需要在加载转场中前后校验，再绑定到紧接着进入的同关卡战局。[Windows 验证记录](native-pc-feasibility.md)
+
 ### 复核入口
 
 离线：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests -q --assert=plain`（PowerShell 用 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'`）。`tests/test_battle_lifecycle.py` 保护换局、代次、重复交接、结尾截断、缺口、视图选择和重放；`tests/test_lifecycle_reader.py` 保护原生状态读取、单例变化拒绝与短读不变零。
