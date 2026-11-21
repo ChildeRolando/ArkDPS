@@ -123,5 +123,6 @@ internal static class Program
         ConnectionDetectionTests.Run();
         HudStatusNoticeTests.Run();
         ScreenshotCategoryTests.Run();
+        HistorySourceLabelTests.Run();
     }
 }

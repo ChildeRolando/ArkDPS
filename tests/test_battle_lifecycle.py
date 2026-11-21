@@ -360,6 +360,44 @@ def test_unconfirmed_result_fields_stay_unknown():
     assert r.sessions.metadata['stage_id'] is None
 
 
+@pytest.mark.parametrize('verified, metadata', [
+    (True, None),
+    (True, dict(stage_id='OF-1', practice=False, evidence='android_stage')),
+    (False, None),
+])
+def test_android_archive_records_source_from_its_verified_collector(verified, metadata):
+    from collector import Collector
+    from connection import VersionStatus
+
+    c, r = FakeCollector(), BattleRuntime()
+    c.lifecycle['metadata'] = metadata
+    c._lifecycle_reader = SimpleNamespace(sample=c.read_lifecycle)
+    c._check_process_identity = lambda: None
+    c.read_lifecycle = Collector.read_lifecycle.__get__(c)
+    c.diagnostics = SimpleNamespace(
+        version_status=VersionStatus.COMPATIBLE if verified else VersionStatus.UNKNOWN,
+        version_actual='2.7.91',
+    )
+    observation = r.poll(c)
+    c.lifecycle['battle'] = None
+    r.poll(c)
+    record, = r.sessions.pop_archives()
+    stored = json.loads(json.dumps(record))['metadata']
+
+    assert stored['outcome'] == 'unknown'
+    assert stored['stage_id'] == ('OF-1' if metadata else None)
+    assert stored['practice'] is (False if metadata else None)
+    if verified:
+        assert stored['platform'] == 'android'
+        assert stored['source_build'] == 'android:2.7.91'
+        expected_evidence = 'android_stage' if metadata else 'android_package_version'
+        assert stored['evidence'] == expected_evidence
+        assert observation.sample['battle_metadata']['platform'] == 'android'
+    else:
+        assert 'platform' not in stored and 'source_build' not in stored
+        assert 'battle_metadata' not in observation.sample
+
+
 def test_final_metadata_preserves_known_stage_and_conflicting_outcomes_stay_unknown():
     c = FakeCollector()
     c.sample['battle_metadata'] = dict(stage_id='OF-1', practice=True, evidence='entry')

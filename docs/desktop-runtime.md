@@ -40,7 +40,9 @@ WPF 在后台按字节写入命令，并用独立线程读取回复。ADB 子进
 
 stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。历史页是拉取式缓存：每次进入页面发送 `history_refresh`；采集会话每成功提交一条新战绩就推送一次 `history` 事件（仅 `result.written` 为真时），`serve` 在下一条 `snapshot` 前重新 `list_recent()`，所以打开的历史页也会自动出现新局。自动刷新保留当前选中副本、详情与筛选条件，不按轮询扫描目录；「刷新」按钮只作手动兜底。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
 
-官服 PC 复用同一 worker、采集会话和战局归档。连接配置 v1 增加 `platform`（缺省 `mumu`）和 `native_game_root`。`connection_config` 保留已保存设置，`effective_connection_config` 表示本次启动实际选择。`--platform` 和 `--native-game-root` 覆盖本次启动，显式 Apply 才写入设置。官服 PC 通过 Windows 读权限、三个文件哈希和模块字节校验后发布同帧累计与编队。逐事件覆盖不可用。战绩保留 `metadata.platform` 与 `metadata.source_build`，旧版战绩仍可读取。[官服 PC 适配报告](native-pc-feasibility.md)
+官服 PC 复用同一 worker、采集会话和战局归档。连接配置 v1 增加 `platform`（缺省 `mumu`）和 `native_game_root`。`connection_config` 保留已保存设置，`effective_connection_config` 表示本次启动实际选择。`--platform` 和 `--native-game-root` 覆盖本次启动，显式 Apply 才写入设置。官服 PC 通过 Windows 读权限、三个文件哈希和模块字节校验后发布同帧累计与编队。逐事件覆盖不可用。[官服 PC 适配报告](native-pc-feasibility.md)
+
+新战绩的 `metadata.platform` 与 `metadata.source_build` 来自该局的采集器。官服 PC 保存构建指纹。ADB 采集在 Android 客户端版本校验通过后保存来源和客户端版本，历史显示「Android（ADB）」。切换连接不会改写历史，缺少来源的旧战绩会显示「来源未记录」。
 
 连接请求带版本号。自动重连仅重试仍有效的选择，新的显式应用会使排队中的旧请求失效。切换平台时清除上一平台的实时战况，待采集线程确认最新请求后才接收实时数据。历史归档通知照常处理。设置页的 MuMu 实例检测与发出时的平台和 ADB 路径绑定。平台、ADB 路径或已应用的连接设置变化后，旧检测结果失效。
 

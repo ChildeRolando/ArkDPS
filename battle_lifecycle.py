@@ -383,8 +383,9 @@ class BattleSessions:
             'evidence': metadata.get('evidence') if confirmed else None,
         }
         build = metadata.get('source_build')
-        if confirmed and metadata.get('platform') == 'native_pc' and isinstance(build, str) and build:
-            result.update(platform='native_pc', source_build=build)
+        platform = metadata.get('platform')
+        if confirmed and platform in ('android', 'native_pc') and isinstance(build, str) and build:
+            result.update(platform=platform, source_build=build)
         return result
 
     def _merge_metadata(self, sample):

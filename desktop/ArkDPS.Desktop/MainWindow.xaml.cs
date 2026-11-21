@@ -24,9 +24,11 @@ internal sealed class HistoryItem
     public string StageDescription=>Data.Text("stage_description");
     public string Outcome=>Data.Text("outcome");
     public string Practice=>Data.Get("labels").Items().ElementAtOrDefault(1).Text();
-    public string Summary=>Data.Text("platform")=="native_pc"
-        ?string.Join(" · ","官服 PC",Outcome,Data.Text("duration"))
-        :string.Join(" · ",Outcome,Data.Text("duration"));
+    public string SourceLabel=>Data.Text("source_label") is {Length:>0} source ? source : Data.Text("platform") switch
+    {
+        "native_pc"=>"官服 PC", "android"=>"Android（ADB）", _=>"来源未记录",
+    };
+    public string Summary=>string.Join(" · ",SourceLabel,Outcome,Data.Text("duration"));
     public string Date=>Data.Text("date");
 }
 
