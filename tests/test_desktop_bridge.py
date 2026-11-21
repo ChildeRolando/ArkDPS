@@ -1175,7 +1175,8 @@ def test_worker_paces_advancing_samples_and_preserves_retry_backoff(tmp_path, mo
     assert [sample['frame'] for kind, sample in events if kind == 'sample'] == [10, 20, 20, 30]
 
 
-def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_path, monkeypatch):
+@pytest.mark.parametrize('bundled', [False, True])
+def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_path, monkeypatch, bundled):
     from types import SimpleNamespace
     import desktop_bridge
 
@@ -1183,6 +1184,15 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
     worker = CollectionWorker(state)
     diagnostics = SimpleNamespace(as_dict=dict, selected_serial='serial', version_actual='test')
     target = SimpleNamespace(adb_path='adb', serial='serial', diagnostics=diagnostics)
+    archive = tmp_path / 'server.xz'
+    if bundled:
+        archive.touch()
+    monkeypatch.setattr(desktop_bridge, 'BUNDLED_SERVER_ARCHIVE', archive)
+    startup = []
+
+    def bind(adb, serial, *, remote):
+        startup.append(('prepare', adb, serial, remote))
+        return True, 'ready'
 
     class Session:
         cleanup_errors = {}
@@ -1191,17 +1201,19 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
         event_status = 'waiting_game_init'
         event_error = None
 
-        def __init__(self, *_args, **_kwargs):
-            pass
+        def __init__(self, *_args, prepare_observer=None, **_kwargs):
+            self.prepare_observer = prepare_observer
 
         def enable_lifecycle(self, runtime):
             self.runtime = runtime
 
         def connect(self):
-            pass
+            startup.append('connect')
 
         def read(self):
             if self.observer is None:
+                if self.prepare_observer is not None:
+                    assert self.prepare_observer() == (True, 'ready')
                 self.observer = SimpleNamespace(status='ready', error=None)
                 self.event_status = 'ready'
             else:
@@ -1212,11 +1224,13 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
 
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
-    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', lambda *_args, **_kwargs: (True, 'ready'))
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', bind)
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
     worker.request(worker.effective[0], True)
     worker.run()
 
+    prepare = ('prepare', 'adb', 'serial', worker.endpoint)
+    assert startup == (['connect', prepare] if bundled else [prepare, 'connect'])
     observer_states = []
     while not worker.events.empty():
         kind, value = worker.events.get_nowait()

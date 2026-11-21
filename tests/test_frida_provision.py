@@ -1,4 +1,9 @@
+import hashlib
+import lzma
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 import frida_provision as fp
 
@@ -127,3 +132,125 @@ def test_separate_server_launches_use_distinct_temporary_directories(monkeypatch
         assert fp.ensure_frida_endpoint('adb', 'serial')[0] is False
     assert len(set(starts)) == 2
     assert all(name.startswith('arkdps-frida-') for name in starts)
+
+
+@pytest.fixture
+def bundled_server(tmp_path, monkeypatch):
+    binary = b'synthetic Frida server for testing transfer'
+    compressed = lzma.compress(binary)
+    archive = tmp_path / 'server.xz'
+    archive.write_bytes(compressed)
+    monkeypatch.setattr(fp, 'BUNDLED_SERVER_ARCHIVE', archive)
+    monkeypatch.setattr(fp, 'BUNDLED_SERVER_ARCHIVE_SHA256', hashlib.sha256(compressed).hexdigest())
+    monkeypatch.setattr(fp, 'BUNDLED_SERVER_SHA256', hashlib.sha256(binary).hexdigest())
+    return binary
+
+
+def _adb_result(returncode=0, stdout='', stderr=''):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_portable_endpoint_installs_on_selected_instance_before_start(monkeypatch, bundled_server):
+    calls = []
+
+    def adb(adb_path, serial, args, timeout=8):
+        assert (adb_path, serial) == ('adb path', 'selected')
+        calls.append(args)
+        if args[0] == 'push':
+            assert Path(args[1]).read_bytes() == bundled_server
+        elif args[1] == 'id -u && getprop ro.product.cpu.abi':
+            return _adb_result(stdout='0\r\nx86_64\r\n')
+        elif args[1].startswith('test -x'):
+            return _adb_result(returncode=1)
+        return _adb_result()
+
+    ready = iter([False, True])
+    monkeypatch.setattr(fp, '_adb', adb)
+    monkeypatch.setattr(fp, 'endpoint_ready', lambda *args, **kwargs: next(ready))
+    ok, detail = fp.ensure_frida_endpoint('adb path', 'selected')
+
+    assert ok and '已部署随包' in detail
+    assert [args[0] for args in calls] == ['forward', 'shell', 'shell', 'shell', 'push', 'shell',
+                                          'shell', 'forward', 'shell']
+    stage = calls[4][2]
+    assert stage.startswith(f'{fp.DEFAULT_SERVER_DIR}/.{fp.DEFAULT_SERVER}-')
+    promote, start = calls[5][1], calls[6][1]
+    assert promote.index(f'sha256sum < {stage}') < promote.index(f'chmod 700 {stage}')
+    assert f'mv -f {stage} {fp.DEFAULT_SERVER_DIR}/{fp.DEFAULT_SERVER}' in promote
+    assert fp.BUNDLED_SERVER_SHA256 in promote
+    assert f'-l 127.0.0.1:{fp.DEFAULT_DEVICE_PORT}' in start
+
+
+def test_portable_endpoint_reuses_verified_device_file(monkeypatch, bundled_server):
+    calls = []
+    ready = iter([False, True])
+
+    def adb(_adb_path, _serial, args):
+        calls.append(args)
+        if args[1] == 'id -u && getprop ro.product.cpu.abi':
+            return _adb_result(stdout='0\nx86_64\n')
+        if args[1].startswith('test -x'):
+            return _adb_result(stdout=fp.BUNDLED_SERVER_SHA256 + '  /device/server\n')
+        return _adb_result()
+
+    monkeypatch.setattr(fp, '_adb', adb)
+    monkeypatch.setattr(fp, 'endpoint_ready', lambda *args, **kwargs: next(ready))
+    assert fp.ensure_frida_endpoint('adb', 'serial') == (True, '事件端点已恢复')
+    assert [args[0] for args in calls] == ['forward', 'shell', 'shell', 'shell', 'forward', 'shell']
+    assert '--directory arkdps-frida-' in calls[3][1]
+
+
+def test_portable_endpoint_with_active_listener_never_uploads_or_restarts(monkeypatch, bundled_server):
+    calls = []
+    monkeypatch.setattr(fp, '_adb', lambda *args: calls.append(args[2]) or _adb_result())
+    monkeypatch.setattr(fp, 'endpoint_ready', lambda *_args, **_kwargs: True)
+
+    assert fp.ensure_frida_endpoint('adb', 'serial') == (True, '事件端点已就绪')
+    assert [args[0] for args in calls] == ['forward', 'shell']
+    assert calls[1][1].startswith('netstat -lnt')
+
+
+@pytest.mark.parametrize(('probe', 'expected'), [('2000\nx86_64', '开启 Root'),
+                                                 ('0\narm64-v8a', 'arm64-v8a')])
+def test_portable_endpoint_requires_root_and_supported_abi(monkeypatch, bundled_server, probe, expected):
+    calls = []
+    monkeypatch.setattr(fp, '_adb', lambda *args: calls.append(args[2]) or _adb_result(stdout=probe))
+    monkeypatch.setattr(fp, 'endpoint_ready', lambda *args, **kwargs: False)
+    ok, detail = fp.ensure_frida_endpoint('adb', 'serial')
+    assert not ok and expected in detail
+    assert calls == [['forward', 'tcp:27043', 'tcp:27864'], ['shell', 'id -u && getprop ro.product.cpu.abi']]
+
+
+def test_portable_endpoint_rejects_tampered_archive_before_push(monkeypatch, bundled_server):
+    fp.BUNDLED_SERVER_ARCHIVE.write_bytes(b'altered')
+    calls = []
+    monkeypatch.setattr(fp, '_adb', lambda *args: calls.append(args[2]) or _adb_result(stdout='0\nx86_64'))
+    monkeypatch.setattr(fp, 'endpoint_ready', lambda *args, **kwargs: False)
+    ok, detail = fp.ensure_frida_endpoint('adb', 'serial')
+    assert not ok and '校验失败' in detail
+    assert len(calls) == 3
+    assert calls[-1][1].startswith('test -x')
+
+
+@pytest.mark.parametrize('fail_push', [True, False])
+def test_portable_endpoint_cleans_up_only_staging_file_on_install_error(monkeypatch, bundled_server, fail_push):
+    calls = []
+
+    def adb(_adb_path, _serial, args, timeout=8):
+        calls.append(args)
+        if args[1] == 'id -u && getprop ro.product.cpu.abi':
+            return _adb_result(stdout='0\nx86_64\n')
+        if args[0] == 'push' and fail_push:
+            return _adb_result(returncode=1, stderr='transfer failed')
+        if args[1].startswith('test "$(sha256sum'):
+            return _adb_result(returncode=1)
+        return _adb_result()
+
+    monkeypatch.setattr(fp, '_adb', adb)
+    monkeypatch.setattr(fp, 'endpoint_ready', lambda *args, **kwargs: False)
+    ok, detail = fp.ensure_frida_endpoint('adb', 'serial')
+    expected = 'transfer failed' if fail_push else '校验或安装失败'
+    assert not ok and expected in detail
+    _, _, stage = next(args for args in calls if args[0] == 'push')
+    assert calls[-1] == ['shell', f'rm -f {stage}']
+    assert not any('flock' in args[1] for args in calls)

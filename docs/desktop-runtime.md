@@ -59,7 +59,7 @@ python tools/package_windows.py --output runtime/packages
 - self-contained .NET/WPF 程序；
 - 固定 CPython 3.12.10 embeddable x64 运行时及其许可；
 - 同一次构建的 Python collector 源码、采集必需 vendor 子集、离线头像；
-- 默认包含固定 Frida 17.26.1 Windows abi3 客户端 wheel 及许可。`--without-events` 是明确的累计快照版变体，不是下载失败时的静默降级；客户端不等于设备 Frida 服务，包不安装/启动服务，不随包分发用户的 ADB。
+- 默认包含固定的 Frida 17.26.1 Windows abi3 客户端 wheel、Android x86_64 服务端和各自的许可证。启用观察者时，worker 在通过游戏版本和初始化检查后为选中的 MuMu 实例准备并启动服务。`--without-events` 生成不含这两项依赖的累计快照版。ADB 来自用户安装的模拟器。
 
 Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新的隔离目录；ZIP 拒绝路径穿越/符号链接/超大展开。Python `._pth` 仅白名单包内目录，不读系统 Python、用户 site-packages 或 `PYTHONPATH`。没有全局 pip install。
 

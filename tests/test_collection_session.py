@@ -166,6 +166,11 @@ def test_lifecycle_waits_for_game_signal_then_attaches_once_before_battle(monkey
         calls.append('check')
         return initialized
 
+    def prepare_observer():
+        calls.append('prepare')
+        return True, 'ready'
+
+    current.prepare_observer = prepare_observer
     monkeypatch.setattr(collector, 'observer_boot_ready', boot_ready)
     lifecycle = collector.read_lifecycle
     monkeypatch.setattr(collector, 'read_lifecycle', lambda: dict(lifecycle(), battle=None))
@@ -181,12 +186,28 @@ def test_lifecycle_waits_for_game_signal_then_attaches_once_before_battle(monkey
         with pytest.raises(CaptureRetry, match='lifecycle'):
             current.read()
         assert current.event_status == 'ready'
-        assert calls == ['transport', 'check', 'check', 'check', 'check', 'attach', 'lifecycle']
+        assert calls == ['transport', 'check', 'check', 'check', 'check', 'prepare', 'attach', 'lifecycle']
         assert [kind for kind, _ in records if kind.startswith('observer_')] == [
             'observer_waiting_game_init', 'observer_game_init_ready', 'observer_ready']
         monkeypatch.setattr(collector, 'read_lifecycle', lifecycle)
         assert current.read()['event_status'] == 'recording'
         assert calls.count('attach') == 1
+    finally:
+        current.close()
+
+
+def test_automatic_server_preparation_failure_preserves_snapshots_and_reason():
+    current, _, calls = session()
+    detail = '无法向选中的实例传输包内服务'
+    current.prepare_observer = lambda: (False, detail)
+    try:
+        current.connect()
+        current.locate()
+        sample = current.read()
+        assert calls == ['transport', 'locate']
+        assert current.observer is None and sample['event_status'] == 'failed'
+        assert sample['event_error'] == detail
+        assert sample['statistics']['rows']['char_a']['damage'] == 100
     finally:
         current.close()
 

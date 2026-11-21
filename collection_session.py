@@ -18,11 +18,13 @@ _BOOT_POLL_PERIOD = 1.0
 
 class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
-                 collector=None, observer_factory=None, history=None, on_history=None, state_dir=None):
+                 collector=None, observer_factory=None, prepare_observer=None,
+                 history=None, on_history=None, state_dir=None):
         self.collector = (collector if collector is not None else
                           Collector(adb, serial, log=log, state_dir=state_dir))
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
+        self.prepare_observer = prepare_observer
         self.observer = None
         self._pending_observers = []
         self.capture = None
@@ -108,6 +110,10 @@ class CollectionSession:
     def _attach_observer(self):
         self.event_status, self.event_error = 'attaching', None
         try:
+            if self.prepare_observer is not None:
+                ok, detail = self.prepare_observer()
+                if not ok:
+                    raise RuntimeError(detail)
             if self.observer_factory is None:
                 from event_observer import FridaEventObserver
                 self.observer_factory = FridaEventObserver

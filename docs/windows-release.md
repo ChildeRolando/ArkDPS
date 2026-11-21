@@ -18,9 +18,9 @@ Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](http
 
 ### 观察者
 
-便携包内置 **Frida 17.26.1 客户端**。设备端服务需要另行准备。从 [Frida 17.26.1](https://github.com/frida/frida/releases/tag/17.26.1) 获取与模拟器 Android 系统架构匹配的 `frida-server-17.26.1-android-*.xz`，解压后放到模拟器的 `/data/local/tmp/ark_dps/frida-server-17.26.1`，并赋予执行权限。
+标准便携包内置 [Frida 17.26.1](https://github.com/frida/frida/releases/tag/17.26.1) 的 Windows 客户端与供 MuMu 12 x86_64 Android 使用的设备端服务。观察者默认开启。在选定实例、游戏版本通过校验且游戏完成初始化后，ArkDPS 会自动准备并启动包内服务。已有可用服务时直接复用。首次准备使用本地包内文件，无需联网或手动下载。
 
-在连接设置开启观察者并应用设置。ArkDPS 会尝试启动已准备的服务并建立转发，默认主机端口为 `27043`，设备端口为 `27864`。端点不可用时，实时页仍可显示伤害与治疗累计，缺少事件证据的指标显示为未知。[事件采集与验收](event-capture.md)
+如果服务准备失败，设置页的连接诊断会显示原因。实时页仍可显示伤害与治疗累计，缺少事件证据的指标显示为未知。修改连接设置后可点击「应用设置并重连」。[事件采集与验收](event-capture.md)
 
 ### 升级与回退
 
@@ -40,7 +40,7 @@ python tools/package_windows.py --output runtime/packages
 ```
 
 构建器先验证「HEAD 精确 + 工作区干净」，再 `dotnet publish` 自包含 WPF 单文件、解包固定 SHA-256 的
-CPython 3.12.10 embeddable 运行时、下载并核验固定 Frida 17.26.1 wheel，然后按 `BACKEND` 白名单复制
+CPython 3.12.10 embeddable 运行时、下载并核验固定的 Frida 17.26.1 wheel 与 Android x86_64 服务端，然后按 `BACKEND` 白名单复制
 worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还会断言包内 manifest 不存在
 `tkinter` / Tcl / Tk 文件，并用包内 Python 执行 `import desktop_bridge` 且断言 `"tkinter" not in sys.modules`。
 
@@ -80,5 +80,4 @@ WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 完整本地许可和上游来源见 `LICENSE` / `THIRD_PARTY.md`，非 MIT，包含非商业限制。
 头像仍属鹰角；不能将其学术/交流来源说明解释为任意商业分发授权。候选随包保留 .NET、Python、Frida 与
 typing_extensions 的许可文本到 `licenses/`。Tcl/Tk 与 PyInstaller 文本随封存归档保留，不再进入分发。
-无 ADB、MuMu、游戏客户端、MAA 或 Frida server 随包分发。未签名程序可能被 SmartScreen 提示；
-不要指导用户关闭安全防护。
+ADB、MuMu、游戏客户端和 MAA 由各自的渠道提供。未签名程序可能被 SmartScreen 提示。不要指导用户关闭安全防护。
