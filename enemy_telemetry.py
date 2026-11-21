@@ -696,6 +696,160 @@ class EnemyTelemetry:
         self._finished = set()
         self._phase_calibration = set()
         self._trap_catalog = None
+        self._native_start = None
+        self._native_frame = self._native_time = None
+        self._native_events_lost = False
+        self._native_observation = None
+        self._native_identities = {}
+        self._native_from_zero = self._native_rebirth_seen = False
+
+    def note_native_gap(self):
+        """A native projection cannot re-establish a lost prefix in this battle."""
+        if self._native_start is not None:
+            self._native_events_lost = True
+
+    def sample_native_snapshot(self, snapshot, *, frame, game_time, enemy_entry=None,
+                               enemy_phases=None, enemy_state=None, enemy_damage=None):
+        """Reduce committed events from an explicit PC membership seed.
+
+        This entry point never uses a reader or bootstrap. The caller supplies
+        the already guarded PC projection and battle-scoped Statistics output;
+        its collector owns process/build/battle binding and snapshot freshness.
+        Membership proves neither alive nor capacity. Keep that observation
+        separately and use only verified events for those additional facts.
+        ``None`` requests the caller's unchanged native snapshot fallback.
+        """
+        if self._native_events_lost:
+            return None
+        if enemy_state is None:
+            self.note_native_gap()
+            return None
+        if not isinstance(enemy_state, Mapping) or enemy_state.get('complete') is not True:
+            self._native_events_lost = True
+            return None
+        start = enemy_state.get('start_frame')
+        events = enemy_state.get('events')
+        valid_clock = (type(frame) is int and frame >= 0
+                       and _finite(game_time, None) is not None and game_time >= 0)
+        if (not valid_clock or type(start) is not int or not 0 <= start <= frame
+                or not isinstance(events, list)
+                or (self._native_start is not None and start != self._native_start)
+                or (self._native_frame is not None and (frame < self._native_frame
+                    or game_time < self._native_time
+                    or (frame == self._native_frame and game_time != self._native_time)))):
+            self.note_native_gap()
+            return None
+        if enemy_entry is not None and (not isinstance(enemy_entry, Mapping)
+                                        or enemy_entry.get('start_frame') != start):
+            self.note_native_gap()
+            return None
+        # Statistics owns the cumulative prefix. Check only the new suffix,
+        # plus tail regression, rather than rescanning a long battle each poll.
+        tail = events[-1].get('sequence') if events and isinstance(events[-1], Mapping) else -1
+        if type(tail) is not int or tail < self._last_sequence:
+            self.note_native_gap()
+            return None
+        try:
+            first_new = bisect_right(events, self._last_sequence, key=lambda event: event['sequence'])
+        except (KeyError, TypeError, ValueError):
+            self.note_native_gap()
+            return None
+        previous_sequence = self._last_sequence
+        new_identities = {}
+        for event in events[first_new:]:
+            if (not isinstance(event, Mapping) or type(event.get('sequence')) is not int
+                    or event['sequence'] <= previous_sequence
+                    or type(event.get('frame')) is not int or not start <= event['frame'] <= frame
+                    or _finite(event.get('game_time'), None) is None
+                    or not 0 <= event['game_time'] <= game_time):
+                self.note_native_gap()
+                return None
+            uid, eid = event.get('instance_uid'), event.get('eid')
+            known = new_identities.get(uid, self._native_identities.get(uid))
+            if known is not None and known != eid:
+                self.note_native_gap()
+                return None
+            new_identities[uid] = eid
+            previous_sequence = event['sequence']
+        usable_snapshot = (isinstance(snapshot, Mapping)
+                           and snapshot.get('scope') == 'native_pc_current_hp'
+                           and snapshot.get('ready') is True
+                           and (snapshot.get('totals') or {}).get('remaining_hp_complete') is True)
+        observed_frame = observed_time = None
+        rows = []
+        new_snapshot = False
+        if usable_snapshot:
+            observed_frame, observed_time = snapshot.get('observed_frame'), snapshot.get('observed_game_time')
+            if (type(observed_frame) is not int or not start <= observed_frame <= frame
+                    or _finite(observed_time, None) is None or not 0 <= observed_time <= game_time
+                    or (self._snapshot_frame is not None and observed_frame < self._snapshot_frame)):
+                return None
+            new_snapshot = self._snapshot_frame is None or observed_frame > self._snapshot_frame
+            if new_snapshot:
+                for observed in snapshot['rows']:
+                    if observed['lifecycle'] != 'current':
+                        continue
+                    uid, eid = observed['instance_uid'], observed['eid']
+                    known = new_identities.get(uid, self._native_identities.get(uid))
+                    if known is not None and known != eid:
+                        self.note_native_gap()
+                        return None
+                    new_identities[uid] = eid
+                    row = self._event_row(observed['eid'], observed['instance_uid'])
+                    row.update(name=observed['name'], code=observed['code'], hp=observed['hp'])
+                    rows.append(row)
+        elif not self._seeded:
+            return None
+        self._native_start = start
+        try:
+            self._record_entries(enemy_entry)
+            # Optional entry coverage cannot be certified by state readiness.
+            if enemy_entry is None:
+                self._entry_events_complete = False
+            if enemy_phases is not None:
+                self._phase_data = enemy_phases
+            self._record_state_events(enemy_state)
+            if new_snapshot:
+                if self._snapshot_frame is None:
+                    self._native_from_zero = (start == frame == observed_frame == 0
+                                              and game_time == observed_time == 0 and not rows)
+                self._reconcile_snapshot(rows, observed_frame, calibration=False)
+                self._snapshot_frame = observed_frame
+                self._seeded = True
+            self.ready = True
+            self._planned_rows = []  # Current membership is never a stage plan.
+            result = self._state('ready', frame=frame, game_time=game_time,
+                                 our_damage=None, enemy_damage=enemy_damage)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            self._native_events_lost = True
+            return None
+        self._native_frame, self._native_time = frame, game_time
+        self._native_identities.update(new_identities)
+        self._native_rebirth_seen |= any(event['kind'] == 'enemy_reborn' for event in events[first_new:])
+        entered_origin_known = (self._native_from_zero and (not self._native_rebirth_seen
+                                or (enemy_phases or {}).get('complete') is True))
+        # A current-only seed carries no stage-plan proof. Entered capacity can
+        # be complete only from an empty battle-zero seed, with the generic
+        # reducer additionally proving entry/state/MaxHP and phase coverage.
+        for totals in [result['totals'], *result['series'], result.get('last_point')]:
+            if totals is not None:
+                totals.update(planned_complete=False, stage_total_hp_complete=False)
+                if not entered_origin_known:
+                    totals.update(total_hp_complete=False, hp_complete=False)
+        if new_snapshot:
+            observed_fields = ('instance_uid', 'eid', 'lifecycle', 'hp', 'last_observed_hp',
+                               'peak_observed_hp', 'first_observed_frame', 'last_present_frame',
+                               'last_hp_observed_frame', 'departure_observed_frame')
+            self._native_observation = {
+                'observed_frame': observed_frame, 'observed_game_time': observed_time,
+                'rows': [{key: row[key] for key in observed_fields if key in row}
+                         for row in snapshot['rows']],
+                'totals': dict(snapshot['totals']),
+                'history_truncated': snapshot.get('history_truncated', False),
+            }
+        result.update(scope='native_pc_enemy_events', observed_frame=frame, observed_game_time=game_time,
+                      snapshot_observation={**self._native_observation, 'stale': not usable_snapshot})
+        return result
 
     def _enemy_name(self, eid, name):
         if name and name != eid:

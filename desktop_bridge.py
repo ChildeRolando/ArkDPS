@@ -462,10 +462,13 @@ class DesktopState:
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         live_event_status = sample.get('event_status', self.event_status)
+        live_event_error = sample.get('event_error', self.event_error)
         if self.effective_connection.platform == 'native_pc' and live_event_status in (None, 'unavailable'):
-            live_event_status = 'snapshot_only'
+            live_event_status = self.observer_status or 'snapshot_only'
+            if self.observer_status not in (None, 'snapshot_only'):
+                live_event_error = self.observer_error
         live_event = EventAvailability(status=live_event_status,
-                                       error=sample.get('event_error', self.event_error), live=True)
+                                       error=live_event_error, live=True)
         event_status, event_error = self.event_status, self.event_error
         if event_status is None or self.observer_status in (
                 WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped', 'snapshot_only'):
@@ -605,8 +608,9 @@ class DesktopState:
 
 class CollectionWorker:
     """Owns the sole CollectionSession, never references WPF or pipe objects."""
-    def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE):
+    def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE, native_pc_observer_factory=None):
         self.history, self.endpoint = state.history, endpoint
+        self.native_pc_observer_factory = native_pc_observer_factory
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
         self._request_lock = threading.Lock()
@@ -712,6 +716,8 @@ class CollectionWorker:
                                     if config.platform == 'native_pc':
                                         from native_pc_collector import NativePcCollector
                                         session_kwargs['collector'] = NativePcCollector(config.native_game_root)
+                                        if enabled and self.native_pc_observer_factory is not None:
+                                            session_kwargs['observer_factory'] = self.native_pc_observer_factory
                                         adb, serial, remote = None, None, None
                                     else:
                                         target = resolve_configured(config)
@@ -757,6 +763,15 @@ class CollectionWorker:
                             # Attachment can be confirmed in the lobby, before any battle sample.
                             observer_state = (('snapshot_only', None) if current_config.platform == 'native_pc'
                                               else ('disabled', None))
+                            if (current_config.platform == 'native_pc' and current_enabled
+                                    and self.native_pc_observer_factory is not None):
+                                observer_state = (self.session.event_status, self.session.event_error)
+                                observer = self.session.observer
+                                provider_status = getattr(observer, 'status', ObserverStatus.READY)
+                                if provider_status in (
+                                        ObserverStatus.FAILED, ObserverStatus.INCOMPATIBLE, ObserverStatus.STOPPED):
+                                    observer_state = (provider_status,
+                                                      getattr(observer, 'error', None) or self.session.event_error)
                             if current_enabled and current_config.platform == 'mumu':
                                 observer = self.session.observer
                                 if getattr(self.session, 'event_status', None) == WAITING_GAME_INIT:

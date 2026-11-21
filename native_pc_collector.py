@@ -8,7 +8,7 @@ import time
 
 from collector import ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
-from enemy_telemetry import NativeEnemyObservations, _load_enemy_db, native_enemy_view
+from enemy_telemetry import EnemyTelemetry, NativeEnemyObservations, _load_enemy_db, native_enemy_view
 from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
 from native_pc.probe_native_pc_enemies import capture_enemies
@@ -106,6 +106,7 @@ class NativePcCollector:
         self._enemy_snapshot = None
         self._enemy_catalog = None
         self._enemy_observations = NativeEnemyObservations()
+        self._enemy_events = EnemyTelemetry(None)
         self._next_enemy = float('-inf')
         self._stage_plan_scope = None
         self._stage_plan_candidate = None
@@ -283,6 +284,7 @@ class NativePcCollector:
         self._enemy_snapshot = None
         self._next_enemy = float('-inf')
         self._enemy_observations.reset()
+        self._enemy_events.reset()
 
     def read_guarded_pair(self, lifecycle):
         pending, self._pending = self._pending, None
@@ -315,20 +317,32 @@ class NativePcCollector:
                       observed_at=time.time(), captured_monotonic=time.monotonic())
         return sample, roster
 
-    def read_enemies(self, *, game_time, frame=None, our_damage=None, **_events):
+    def read_enemies(self, *, game_time, frame=None, our_damage=None, **events):
         saved = self._enemy_snapshot
         if saved is None:
-            return self._with_stage_plan(native_enemy_view({}, frame=None, game_time=None, catalog={}), frame)
+            snapshot = native_enemy_view({}, frame=None, game_time=None, catalog={})
+            projected = self._enemy_events.sample_native_snapshot(
+                None, frame=frame, game_time=game_time, **events)
+            return self._with_stage_plan(projected if projected is not None else snapshot, frame)
         observed, enemy_frame, enemy_time, raw = saved
-        if (frame is None or game_time is None or frame < enemy_frame or game_time < enemy_time
-                or time.monotonic() - observed > ENEMY_MAX_AGE):
+        if frame is None or game_time is None or frame < enemy_frame or game_time < enemy_time:
             self._enemy_observations.note_gap()
             return self._with_stage_plan(native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
                                          frame=enemy_frame, game_time=enemy_time, catalog={}), frame)
+        if time.monotonic() - observed > ENEMY_MAX_AGE:
+            self._enemy_observations.note_gap()
+            snapshot = native_enemy_view({'enemies_reason': 'enemy_sample_stale'},
+                                         frame=enemy_frame, game_time=enemy_time, catalog={})
+            projected = self._enemy_events.sample_native_snapshot(
+                None, frame=frame, game_time=game_time, **events)
+            return self._with_stage_plan(projected if projected is not None else snapshot, frame)
         if self._enemy_catalog is None and raw.get('enemies_status') == 'available':
             self._enemy_catalog = _load_enemy_db() or {}
-        return self._with_stage_plan(self._enemy_observations.observe(
-            raw, frame=enemy_frame, game_time=enemy_time, catalog=self._enemy_catalog or {}), frame)
+        snapshot = self._enemy_observations.observe(
+            raw, frame=enemy_frame, game_time=enemy_time, catalog=self._enemy_catalog or {})
+        projected = self._enemy_events.sample_native_snapshot(
+            snapshot, frame=frame, game_time=game_time, **events)
+        return self._with_stage_plan(projected if projected is not None else snapshot, frame)
 
     def close(self):
         self._pending = None
