@@ -120,5 +120,6 @@ internal static class Program
         Check("restored identity resolves again", changing.Resolve(Diagnostic(), Config(), 0).State == NativePcWindowState.Available);
         Console.WriteLine($"PASS_NATIVE_PC_WINDOW_RESOLVER {passed} assertions (headless, injected metadata only)");
         LiveTargetSummaryTests.Run();
+        ConnectionDetectionTests.Run();
     }
 }

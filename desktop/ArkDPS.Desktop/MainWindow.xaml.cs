@@ -77,6 +77,7 @@ public partial class MainWindow : Window
         ? State.Get("effective_connection_config") : State.Get("connection_config");
     private bool UsingNativePc=>EffectiveConnectionConfig.Text("platform")=="native_pc";
     private string SelectedConnectionPlatform=>(ConnectionPlatform.SelectedItem as ComboBoxItem)?.Tag as string ?? "mumu";
+    private readonly ConnectionDetection connectionDetection = new();
     private string HistorySelectionId=>cachedHistorySelection?.Id ?? State.Get("history_selected").Text("battle_id");
     private JsonElement HistoryRecoveryConfig=>State.Get("history_selected").Get("view").Get("config");
     private string route="live";
@@ -170,6 +171,7 @@ public partial class MainWindow : Window
             if(op=="connection_apply")
             {
                 App.ClearConnectionOverrides();
+                InvalidateConnectionDetection();
                 UpdateConnectionForm();
             }
             if(reply.Get("result").ValueKind==JsonValueKind.String) Footer.Text=reply.Text("result");
@@ -301,7 +303,7 @@ public partial class MainWindow : Window
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected"),
             diag.Text("message"),diag.Text("error"),diag.Text("code")
         }.Where(text=>text.Length>0));
-        EnterSideMode.ToolTip=UsingNativePc ? "PC 版使用独立侧边窗口" : "将主窗口吸附在 MuMu 一侧";
+        EnterSideMode.ToolTip=UsingNativePc ? "将主窗口吸附到已连接的 PC 游戏窗口" : "将主窗口吸附在 MuMu 一侧";
         string reconnectLabel=UsingNativePc ? "重新连接" : "重连观察者";
         LiveReconnectButton.Content=SubpageReconnectButton.Content=reconnectLabel;
         applying=false;
@@ -491,6 +493,20 @@ public partial class MainWindow : Window
     }
     private void ConnectionPlatformChanged(object sender,SelectionChangedEventArgs e)
     {
+        ConnectionFormChanged();
+    }
+    private void ConnectionAdbChanged(object sender,TextChangedEventArgs e)
+    {
+        ConnectionFormChanged();
+    }
+    private void InvalidateConnectionDetection()
+    {
+        connectionDetection.Invalidate();
+        Instances?.Items.Clear();
+    }
+    private void ConnectionFormChanged()
+    {
+        InvalidateConnectionDetection();
         if(MumuConnectionFields is null || NativeConnectionFields is null || EventsEnabled is null) return;
         UpdateConnectionForm();
     }
@@ -1206,18 +1222,27 @@ public partial class MainWindow : Window
         if(bridge is not {CanSend:true} source || workerUnavailable ||
            recoveryTask is {IsCompleted:false} || closingRequested) return;
         DetectButton.IsEnabled=false;commands++;
+        var request=connectionDetection.Begin(SelectedConnectionPlatform,AdbPath.Text);
         try
         {
-            var reply=await source.RequestAsync("detect",new(){["adb"]=AdbPath.Text.Trim(),["platform"]=SelectedConnectionPlatform});
-            if(bridge!=source || workerUnavailable || closingRequested) return;
+            var reply=await source.RequestAsync("detect",new(){["adb"]=request.AdbPath,["platform"]=request.Platform});
+            if(bridge!=source || workerUnavailable || closingRequested ||
+               !connectionDetection.IsCurrent(request,SelectedConnectionPlatform,AdbPath.Text)) return;
             ApplyState(reply.Get("state"));
             var diag=reply.Get("result");DetectionNote.Text=diag.Text("message")+" "+diag.Text("error");
             Instances.Items.Clear();
             foreach(var instance in diag.Get("instances").Items())
                 Instances.Items.Add(new ListBoxItem{Content=instance.Text("model")+" · "+instance.Text("primary_serial")+" · "+instance.Text("problem"),Tag=instance.Text("primary_serial"),IsEnabled=instance.Bool("accessible")&&instance.Bool("certified")});
         }
-        catch(BridgeTransportException ex){ReportTransportFailure(source,ex);DetectionNote.Text=Status.Text;}
-        catch(Exception ex){DetectionNote.Text=ex.Message;}
+        catch(BridgeTransportException ex)
+        {
+            ReportTransportFailure(source,ex);
+            if(bridge==source && !closingRequested && connectionDetection.IsCurrent(request,SelectedConnectionPlatform,AdbPath.Text)) DetectionNote.Text=Status.Text;
+        }
+        catch(Exception ex)
+        {
+            if(bridge==source && !closingRequested && connectionDetection.IsCurrent(request,SelectedConnectionPlatform,AdbPath.Text)) DetectionNote.Text=ex.Message;
+        }
         finally{DetectButton.IsEnabled=true;commands--;}
     }
     private void ChooseInstance(object sender,SelectionChangedEventArgs e)
