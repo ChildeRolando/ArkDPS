@@ -23,6 +23,7 @@ internal sealed class HudWindow : Window
     internal bool SuppressClose;
     private const string ScaleHint="拖动以等比例缩放 HUD";
     private readonly Thumb scaleGrip;
+    private readonly HudStatusNotice statusNotice = new();
     private readonly ScaleTransform contentScale=new(1,1);
     internal HudLayout LayoutProfile { get; private set; }=HudLayout.Default;
     internal double BaseWidth { get; private set; }=HudLayout.Default.Width;
@@ -43,11 +44,17 @@ internal sealed class HudWindow : Window
         Panel.ConfigureHud(Close);
         Panel.TitleRegion.PreviewMouseLeftButtonDown+=DragTitle;
         Panel.LayoutTransform=contentScale;
+        statusNotice.LayoutTransform=contentScale;
         scaleGrip=CreateScaleGrip();
         scaleGrip.DragStarted+=BeginScale;
         scaleGrip.DragDelta+=DragScale;
         scaleGrip.DragCompleted+=CompleteScale;
         var surface=new Grid();
+        surface.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        surface.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        surface.Children.Add(statusNotice);
+        Grid.SetRow(Panel,1);
+        Grid.SetRow(scaleGrip,1);
         surface.Children.Add(Panel);
         surface.Children.Add(scaleGrip);
         Content=surface;
@@ -206,7 +213,8 @@ internal sealed class HudWindow : Window
             contentScale.ScaleX=contentScale.ScaleY=scale;
             double noticeHeight=Panel.RateNoticePanel.Visibility==Visibility.Visible
                 ? Panel.RateNoticePanel.ActualHeight+Panel.RateNoticePanel.Margin.Bottom : 0;
-            Panel.LimitHudViewport(MaxHeight/scale-LayoutProfile.TitleHeight-noticeHeight);
+            double statusHeight=statusNotice.Visibility==Visibility.Visible ? statusNotice.ActualHeight : 0;
+            Panel.LimitHudViewport(MaxHeight/scale-LayoutProfile.TitleHeight-noticeHeight-statusHeight);
             Width=BaseWidth*scale;
             if(dragStart==null) Native.KeepInWorkingArea(this,work);
         },DispatcherPriority.Loaded);
@@ -239,7 +247,17 @@ internal sealed class HudWindow : Window
         if(updateInput) Native.Lock(this,value==0);
         PlacementChanged?.Invoke();
     }
-    public void Update(JsonElement view,string status)=>Panel.Update(view);
+    // Positional offline fixtures predate availability metadata.
+    public void Update(JsonElement view,string status)=>Update(view,new HudDataStatus("",status,false,false));
+    public void Update(JsonElement view,HudDataStatus status)
+    {
+        Panel.Update(view);
+        SetStatus(status);
+    }
+    internal void SetStatus(HudDataStatus status)
+    {
+        if(statusNotice.Update(status)) QueueWorkAreaFit();
+    }
     public object Placement()
     {
         var bounds=Native.Bounds(this);return new {panel_id=PanelId,x=bounds[0],y=bounds[1],width=bounds[2],height=bounds[3],opacity=Opacity,locked=Locked};

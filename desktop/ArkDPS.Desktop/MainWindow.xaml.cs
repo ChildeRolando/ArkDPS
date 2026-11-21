@@ -64,6 +64,9 @@ public partial class MainWindow : Window
     private bool responseStale;
     private bool retainBattleSnapshot;
     private bool ShowingPreviousBattle=>retainBattleSnapshot && State.Text("battle_id").Length==0;
+    // A received snapshot is healthy before ApplyState clears the prior timeout flag.
+    private HudDataStatus CurrentHudStatus=>new(State.Text("status"),Status.Text,ShowingPreviousBattle,
+        workerUnavailable || responseStale && !applying);
     private int commands;
     private string activePanel="",lastBattle="",historyBattle="",historySignature="";
     private const int HistoryCacheLimit=8;
@@ -213,7 +216,7 @@ public partial class MainWindow : Window
         UpdateEnemySummary();
         RefreshLiveAvailability();
         RefreshHistoryAvailability();
-        foreach(var hud in Huds.Values) if(Panels.TryGetValue(hud.PanelId,out var panel)) hud.Update(panel.View,Status.Text);
+        foreach(var hud in Huds.Values) if(Panels.TryGetValue(hud.PanelId,out var panel)) hud.Update(panel.View,CurrentHudStatus);
     }
     private void ReportSnapshotFailure(Exception error)
     {
@@ -325,6 +328,7 @@ public partial class MainWindow : Window
                     UpdateLivePanel(id,panel,panel.View,Panels.Count>1);
                 if (sideMode) RefreshSideRanking();
             }
+            foreach(var hud in Huds.Values) hud.SetStatus(CurrentHudStatus);
             RefreshLiveAvailability();
             return false;
         }
@@ -402,7 +406,7 @@ public partial class MainWindow : Window
     {
         panel.Update(view,canDelete);
         if(Huds.TryGetValue(id,out var hud))
-            hud.Update(view,Status.Text+" · "+EventStatus.Text);
+            hud.Update(view,CurrentHudStatus);
         if(activePanel==id)
         {
             LiveInspector.Update(view);
@@ -802,7 +806,7 @@ public partial class MainWindow : Window
         };
         var profile=ReadHudLayout(id);
         if(profile!=null) hud.ApplyHudLayout(profile);
-        hud.Update(Panels[id].View,Status.Text+" · "+EventStatus.Text);
+        hud.Update(Panels[id].View,CurrentHudStatus);
         hud.Show();
         if(placement.ValueKind==JsonValueKind.Object) hud.RestorePlacement(placement,profile!=null);
         RefreshHudFooter(id);

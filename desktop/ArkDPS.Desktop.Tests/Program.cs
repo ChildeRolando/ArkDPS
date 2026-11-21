@@ -121,5 +121,6 @@ internal static class Program
         Console.WriteLine($"PASS_NATIVE_PC_WINDOW_RESOLVER {passed} assertions (headless, injected metadata only)");
         LiveTargetSummaryTests.Run();
         ConnectionDetectionTests.Run();
+        HudStatusNoticeTests.Run();
     }
 }
