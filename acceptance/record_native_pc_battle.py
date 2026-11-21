@@ -3,8 +3,10 @@
 import argparse
 from collections import Counter
 from datetime import datetime, timezone
+from functools import partial
 import json
 from pathlib import Path
+import re
 import time
 
 
@@ -57,6 +59,8 @@ def record_samples(poll, seconds, emit):
     last_idle_fields = None
     practice_selection_observations = 0
     practice_flag_values = set()
+    lifetime_samples = 0
+    lifetime_instances = set()
     unresolved_finish_transition_observed = False
     interrupted = False
     try:
@@ -74,6 +78,11 @@ def record_samples(poll, seconds, emit):
                     enemy_hp = _enemy_hp(sample)
                     actor_rows_observed |= bool(rows)
                     enemy_hp_observed |= bool(enemy_hp)
+                    if sample.get('presence_lifetime_status') == 'available':
+                        witnesses = sample['presence_lifetime']['witnesses']
+                        lifetime_samples += bool(witnesses)
+                        lifetime_instances.update((sample['battle_serial'], witness['instance_uid'])
+                                                  for witness in witnesses)
                     refs = _stage_enemy_references(sample)
                     if refs is not None:
                         stage_enemy_refs_samples += 1
@@ -150,6 +159,8 @@ def record_samples(poll, seconds, emit):
             'idle_game_flow_observations': idle_flow_changes,
             'practice_selection_observations': practice_selection_observations,
             'practice_selection_values': sorted(practice_flag_values),
+            'presence_lifetime_samples': lifetime_samples,
+            'presence_lifetime_instances': len(lifetime_instances),
             'unresolved_finish_transition_observed': unresolved_finish_transition_observed,
             'status_counts': dict(counts), 'interrupted': interrupted}
 
@@ -170,9 +181,13 @@ def main(argv=None):
                         help='also record guarded scene transitions without classifying the battle outcome')
     parser.add_argument('--practice-selection', action='store_true',
                         help='also record the top squad page selection before entering a battle')
+    parser.add_argument('--presence-lifetime', metavar='CHAR_ID',
+                        help='also record raw lifetime fields for one character, with manual actions')
     args = parser.parse_args(argv)
     if not 1 <= args.seconds <= MAX_SECONDS:
         parser.error(f'--seconds must be between 1 and {MAX_SECONDS}')
+    if args.presence_lifetime is not None and not re.fullmatch(r'char_[a-z0-9_#.-]{1,105}', args.presence_lifetime):
+        parser.error('--presence-lifetime requires a native character ID starting with char_')
 
     from probe_native_pc import ApiFailure
     from probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
@@ -181,10 +196,13 @@ def main(argv=None):
 
     captures = [('actor_rows', capture_character_rows), ('roster', capture_roster)]
     idle_captures = []
-    if args.witnesses:
+    witnesses = args.witnesses or args.presence_lifetime is not None
+    if witnesses:
         from probe_native_pc_actions import capture_actions
         from probe_native_pc_presence import capture_presence
 
+        if args.presence_lifetime is not None:
+            capture_presence = partial(capture_presence, lifetime_subject=args.presence_lifetime)
         captures.extend((('actions', capture_actions), ('presence', capture_presence)))
     if args.enemies:
         from native_pc.probe_native_pc_enemies import capture_enemies
@@ -236,9 +254,10 @@ def main(argv=None):
 
         start = {'kind': 'start', 'source': 'native_pc_read_only', 'research_only': True,
                  'started_at_utc': datetime.now(timezone.utc).isoformat(),
-                 'duration_seconds': args.seconds, 'witnesses': args.witnesses, 'enemies': args.enemies,
+                 'duration_seconds': args.seconds, 'witnesses': witnesses, 'enemies': args.enemies,
                  'stage_enemies': args.stage_enemies, 'game_flow': args.game_flow,
-                 'practice_selection': args.practice_selection}
+                 'practice_selection': args.practice_selection,
+                 'presence_lifetime_subject': args.presence_lifetime}
         emit(start)
         try:
             with NativePcBattleProbe(args.game_root) as probe:
@@ -256,10 +275,11 @@ def main(argv=None):
             return 2
         emit(summary)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
-        if args.stage_enemies or args.game_flow or args.practice_selection:
+        if args.stage_enemies or args.game_flow or args.practice_selection or args.presence_lifetime:
             completed = ((not args.stage_enemies or summary['stage_enemy_refs_stable'])
                          and (not args.game_flow or summary['game_flow_samples'] > 0)
-                         and (not args.practice_selection or summary['practice_selection_observations'] > 0))
+                         and (not args.practice_selection or summary['practice_selection_observations'] > 0)
+                         and (not args.presence_lifetime or summary['presence_lifetime_samples'] > 0))
             return 0 if completed else 2
         return 0 if summary['frame_progress_observed'] and summary['damage_change_observed'] else 2
 

@@ -141,3 +141,17 @@ def test_practice_selection_records_both_raw_values_without_assigning_a_battle_m
     assert summary['practice_selection_observations'] == 2
     assert summary['practice_selection_values'] == [False, True]
     assert 'practice' not in events[-1]['sample']
+
+
+def test_lifetime_summary_counts_instances_within_each_battle(monkeypatch):
+    before = sample(1, 6, 0.)
+    live = sample(1, 15, 0.)
+    replacement = sample(2, 3, 0.)
+    before['sample'].update(presence_lifetime_status='available', presence_lifetime={'witnesses': []})
+    for report in (live, replacement):
+        report['sample'].update(presence_lifetime_status='available', presence_lifetime={
+            'witnesses': [{'instance_uid': 68}],
+        })
+    summary, _ = run(monkeypatch, before, live, live, replacement, None)
+    assert summary['presence_lifetime_samples'] == 2
+    assert summary['presence_lifetime_instances'] == 2

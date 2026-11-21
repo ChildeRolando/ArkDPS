@@ -32,6 +32,40 @@ CONTAINER_HEADER = 0x10
 CHARACTER_DATA = 0x538
 ACTOR_ID = re.compile(r'[A-Za-z0-9_#.-]+')
 
+# Optional research extension only. Ordinary presence keeps its original
+# reader/budgets and never reads these fields when no subject is requested.
+MAX_LIFETIME_INSTANCES = 4
+MAX_LIFETIME_READ_CALLS = 256
+MAX_LIFETIME_READ_BYTES = 32 * 1024
+CHARACTER_CREATED_TIME = 0x398
+CHARACTER_DEAD_TIME = 0x3A0
+ENTITY_FINISH_REASON = 0x158
+FP_TYPE_INDEX = 39085
+FINISH_REASON_TYPE_INDEX = 10311
+TYPE_I4 = 0x08
+TYPE_I8 = 0x0A
+TYPE_VALUETYPE = 0x11
+LIFETIME_CHARACTER_FIELDS = (
+    (42, 'm_createdTime', CHARACTER_CREATED_TIME, TYPE_VALUETYPE, FP_TYPE_INDEX),
+    (43, 'm_deadTime', CHARACTER_DEAD_TIME, TYPE_VALUETYPE, FP_TYPE_INDEX),
+)
+LIFETIME_ENTITY_FIELDS = (
+    (39, '<finishReason>k__BackingField', ENTITY_FINISH_REASON,
+     TYPE_VALUETYPE, FINISH_REASON_TYPE_INDEX),
+)
+
+# Exact same hash-gated disk pair as above: metadata v29 typedef11491 Character
+# has 356 fields; typedef10318 Entity has 410. DLL tables at RVA0x87CE000
+# (field offsets) / 0x7F16AC0 (Il2CppType pointers) establish the indices,
+# offsets and types above. FP typedef39085/count42 has _serializedValue+0x10
+# (boxed offset), Int64; its FRACTIONAL_PLACES constant is 32. FinishReason
+# typedef10311/count14 has value__+0x10, Int32. The ordinary unboxed payloads
+# are read as signed integers, without protected-value decoding or game calls.
+# Static code writes m_createdTime during _BuildAtInternal (RVA0xAAAAF0),
+# not a proven activation edge. ForceDying (RVA0xA9F5E0) writes m_deadTime;
+# coverage of ordinary death/withdraw and sentinel semantics is unverified.
+# Neither time nor finishReason is converted to a product lifecycle event.
+
 # Indexed FieldInfo checks use the exact metadata/DLL pair already required by
 # the outer probe (GameAssembly cf7956bf...76ff, metadata e58fb854...caa5).
 BATTLE_FIELDS = ((4, '<playerSide>k__BackingField', BATTLE_SIDE),
@@ -215,12 +249,130 @@ def character_data(reader, address):
     return result
 
 
-def capture_presence(read, context):
+class LifetimeRead(CheckedRead):
+    """Independent optional budget; its failures never invalidate presence."""
+
+    def read(self, address, size):
+        require(self.calls < MAX_LIFETIME_READ_CALLS and
+                self.bytes_requested + size <= MAX_LIFETIME_READ_BYTES,
+                'presence_lifetime_read_budget_exhausted')
+        return super().read(address, size)
+
+    def identity(self, klass):
+        pointer(klass)
+        if klass not in self.known_classes:
+            names = struct.unpack('<QQ', self.guarded(klass + 0x10, 16))
+            parts = []
+            for address in names:
+                raw = self.guarded(address, 128)
+                end = raw.find(b'\0')
+                require(end >= 0, 'presence_lifetime_metadata_name_length')
+                try:
+                    parts.append(raw[:end].decode('ascii', errors='strict'))
+                except UnicodeDecodeError:
+                    raise PresenceError('presence_lifetime_metadata_name_encoding') from None
+            self.known_classes[klass] = tuple(parts)
+        return self.known_classes[klass]
+
+    def typed_fields(self, klass, expected_count, fields):
+        key = klass, expected_count, fields
+        if key in self.known_fields:
+            return
+        count, = struct.unpack('<H', self.guarded(klass + CLASS_FIELD_COUNT, 2))
+        require(count == expected_count, 'presence_lifetime_field_count')
+        table = self.ref(klass + CLASS_FIELDS, guard=True)
+        for index, name, expected_offset, code, type_index in fields:
+            require(0 <= index < count, 'presence_lifetime_field_index')
+            name_ref, type_ref, owner, offset, _ = struct.unpack(
+                '<QQQiI', self.guarded(table + index * 32, 32))
+            require(owner == klass and offset == expected_offset and
+                    self.guarded(name_ref, len(name) + 1) == name.encode('ascii') + b'\0',
+                    'presence_lifetime_field_layout')
+            data, bits = struct.unpack('<QI', self.guarded(pointer(type_ref), 12))
+            # Exact nominal value-type indices come from the accepted disk
+            # Il2CppType entries. An unresolved/different representation fails
+            # closed; it is never decoded or resolved by invoking game code.
+            require((bits >> 16) & 0xFF == code and not bits & 0x10 and
+                    (type_index is None or data == type_index),
+                    'presence_lifetime_field_type')
+        self.known_fields.add(key)
+
+
+def _capture_lifetime(read, context, subject, candidates, membership_guards):
+    reader = LifetimeRead(read)
+    try:
+        require(type(subject) is str and subject.startswith('char_') and
+                len(subject) <= MAX_ID_UNITS and ACTOR_ID.fullmatch(subject),
+                'presence_lifetime_invalid_subject')
+        require(len(candidates) <= MAX_LIFETIME_INSTANCES,
+                'presence_lifetime_instance_count')
+        witnesses = []
+        if candidates:
+            require(isinstance(context, dict) and 'class_definition_table_slot' in context,
+                    'presence_lifetime_class_table_slot_missing')
+            table = reader.ref(pointer(context['class_definition_table_slot']),
+                               nullable=True, guard=True)
+            require(table != 0, 'presence_lifetime_class_table_uninitialized')
+            for index, name, namespace, count, fields, parent_name in (
+                (FP_TYPE_INDEX, 'FP', 'Torappu', 42,
+                 ((0, '_serializedValue', 0x10, TYPE_I8, None),), 'ValueType'),
+                (FINISH_REASON_TYPE_INDEX, 'FinishReason', '', 14,
+                 ((0, 'value__', 0x10, TYPE_I4, None),), 'Enum'),
+            ):
+                klass = reader.ref(table + index * 8, nullable=True, guard=True)
+                require(klass != 0, 'presence_lifetime_class_uninitialized')
+                require(reader.is_class(klass, name, namespace), 'presence_lifetime_class_identity')
+                reader.typed_fields(klass, count, fields)
+                parent = reader.ref(klass + CLASS_PARENT, guard=True)
+                require(reader.is_class(parent, parent_name, 'System'),
+                        'presence_lifetime_value_inheritance')
+            for address, uid, character in candidates:
+                require(reader.is_class(character, 'Character'), 'presence_lifetime_class_identity')
+                reader.typed_fields(character, 356, LIFETIME_CHARACTER_FIELDS)
+                unit = reader.ref(character + CLASS_PARENT, guard=True)
+                require(reader.is_class(unit, 'Unit'), 'presence_lifetime_character_inheritance')
+                entity = reader.ref(unit + CLASS_PARENT, guard=True)
+                require(reader.is_class(entity, 'Entity'), 'presence_lifetime_character_inheritance')
+                reader.typed_fields(entity, 410, LIFETIME_ENTITY_FIELDS)
+                finish_reason, = struct.unpack('<i', reader.guarded(address + ENTITY_FINISH_REASON, 4))
+                created, dead = struct.unpack('<qq', reader.guarded(address + CHARACTER_CREATED_TIME, 16))
+                witnesses.append({'instance_uid': uid, 'finish_reason': finish_reason,
+                                  'created_time_raw': created, 'dead_time_raw': dead})
+            reader.validate()
+            # The base reader already proved these roots, slots, classes,
+            # instance UIDs, local player and non-token data. Recheck that
+            # entire selection after the extra reads with this budget, without
+            # following any reference absent from the current collection.
+            require(all(reader.read(address, len(raw)) == raw
+                        for address, raw in membership_guards),
+                    'presence_lifetime_membership_changed')
+    except PresenceError as error:
+        reason = str(error)
+        if not reason.startswith('presence_lifetime_'):
+            reason = reason.replace('presence_', 'presence_lifetime_', 1)
+    except native.ResearchFailure as error:
+        reason = ('presence_lifetime_read_budget_exhausted' if error.reason in
+                  ('read_budget_exhausted', 'optional_read_budget_exhausted')
+                  else 'presence_lifetime_parent_reader_unavailable')
+    except (native.access.ApiFailure, OSError):
+        reason = 'presence_lifetime_read_failed'
+    else:
+        return {'presence_lifetime_status': 'available', 'presence_lifetime': {
+            'subject_id': subject, 'witnesses': witnesses,
+        }}
+    return {'presence_lifetime_status': 'unavailable',
+            'presence_lifetime_reason': reason, 'presence_lifetime': None}
+
+
+def capture_presence(read, context, *, lifetime_subject=None):
     """Return optional witnesses; unavailable fields never fabricate absence.
 
     No state persists between calls. The consumer must correlate instance_uid
     within the enclosing battle_serial, retain gaps, and avoid allocating shared
-    per-key damage counters to individual live instances.
+    per-key damage counters to individual live instances. lifetime_subject is a
+    research-only operator ID: raw signed Q32/enum witnesses do not establish
+    exact activity/death/removal timestamps. Omission preserves the original
+    acquisition and JSON. The enclosing same-frame callback is still required.
     """
     reader = CheckedRead(read)
     try:
@@ -245,6 +397,7 @@ def capture_presence(read, context):
             require(count == 0, 'presence_missing_array')
         slots = reader.guarded(items + ARRAY_DATA, count * 8) if count else b''
         entities, non_characters, instance_uids, objects = [], 0, set(), set()
+        lifetime_candidates = []
         for address, in struct.iter_unpack('<Q', slots):
             pointer(address)
             require(address not in objects, 'presence_duplicate_object')
@@ -260,11 +413,15 @@ def capture_presence(read, context):
                 non_characters += 1
                 continue
             data = reader.ref(address + CHARACTER_DATA, guard=True)
-            entities.append({
+            row = {
                 'instance_uid': uid, 'side': entity_side, 'player_side': player_side,
                 'inited': bool(inited), 'borned': bool(borned),
                 'is_disappeared': bool(disappeared), **character_data(reader, data),
-            })
+            }
+            entities.append(row)
+            if (lifetime_subject is not None and row['id'] == lifetime_subject and
+                    not row['is_token'] and player_side == side):
+                lifetime_candidates.append((address, uid, character))
         reader.validate()
     except PresenceError as error:
         reason = str(error)
@@ -273,9 +430,18 @@ def capture_presence(read, context):
     except (native.access.ApiFailure, OSError):
         reason = 'presence_read_failed'
     else:
-        return {'presence_status': 'available', 'presence': {
+        result = {'presence_status': 'available', 'presence': {
             'scope': 'unit_manager_characters_membership', 'local_side': side,
             'collection_count': count, 'non_character_count': non_characters,
             'entities': entities, 'limitations': list(LIMITATIONS),
         }}
-    return {'presence_status': 'unavailable', 'presence_reason': reason, 'presence': None}
+        if lifetime_subject is not None:
+            result.update(_capture_lifetime(read, context, lifetime_subject,
+                                            lifetime_candidates, reader.guards))
+        return result
+    result = {'presence_status': 'unavailable', 'presence_reason': reason, 'presence': None}
+    if lifetime_subject is not None:
+        result.update({'presence_lifetime_status': 'unavailable',
+                       'presence_lifetime_reason': 'presence_lifetime_presence_unavailable',
+                       'presence_lifetime': None})
+    return result

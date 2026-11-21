@@ -269,3 +269,268 @@ def test_near_cap_synthetic_collection_stays_bounded(fixture):
     assert result['presence_status'] == 'unavailable'
     assert result['presence_reason'] == 'presence_read_budget_exhausted'
     assert len(mem.reads) <= presence.MAX_READ_CALLS
+
+
+@pytest.fixture
+def lifetime_fixture(fixture):
+    mem, context, p = fixture
+
+    def typed_field(klass, field, type_ref=None):
+        index, name, offset, code, type_index = field
+        if type_ref is None:
+            type_ref = mem.allocate()
+            mem.put(type_ref, '<QI', type_index or 0, 0x80000001 | code << 16)
+        table, = struct.unpack('<Q', mem.read(klass + presence.CLASS_FIELDS, 8))
+        mem.put(table + index * 32, '<QQQiI', mem.text(name), type_ref, klass, offset, 0)
+        return type_ref
+
+    value = mem.klass('ValueType', namespace='System')
+    enum = mem.klass('Enum', namespace='System')
+    fp = mem.klass('FP', 42, parent=value, namespace='Torappu')
+    finish = mem.klass('FinishReason', 14, parent=enum, namespace='')
+    typed_field(fp, (0, '_serializedValue', 0x10, presence.TYPE_I8, None))
+    typed_field(finish, (0, 'value__', 0x10, presence.TYPE_I4, None))
+    mem.put(p['classes']['entity'] + presence.CLASS_FIELD_COUNT, '<H', 410)
+    fp_type = None
+    for field in presence.LIFETIME_CHARACTER_FIELDS:
+        fp_type = typed_field(p['classes']['character'], field, fp_type)
+    finish_type = typed_field(p['classes']['entity'], presence.LIFETIME_ENTITY_FIELDS[0])
+    class_table = mem.allocate((presence.FP_TYPE_INDEX + 1) * 8)
+    class_slot = mem.allocate()
+    mem.put(class_slot, '<Q', class_table)
+    mem.put(class_table + presence.FP_TYPE_INDEX * 8, '<Q', fp)
+    mem.put(class_table + presence.FINISH_REASON_TYPE_INDEX * 8, '<Q', finish)
+    context['class_definition_table_slot'] = class_slot
+    mem.put(p['data'] + 0x50, '<Q', p['host_key'])
+    mem.put(p['data'] + 0x90, '<B', 0)
+    for index, address in enumerate(p['cameras']):
+        # Entity side need not equal local player side: select by player_side.
+        mem.put(address + 0x1C, '<i', 2)
+        mem.put(address + presence.ENTITY_FINISH_REASON, '<i', index * 4)
+        mem.put(address + presence.CHARACTER_CREATED_TIME, '<qq',
+                (index + 1) << 32, -(index + 2) << 32)
+    p.update(fp=fp, finish=finish, fp_type=fp_type, finish_type=finish_type,
+             class_table=class_table, class_slot=class_slot, subject='char_336_folivo')
+    return mem, context, p
+
+
+def test_lifetime_is_opt_in_and_does_not_change_default_reads_or_json(lifetime_fixture):
+    mem, context, p = lifetime_fixture
+    mem.reads.clear()
+    original = presence.capture_presence(mem.read, context)
+    original_reads = list(mem.reads)
+    mem.reads.clear()
+    explicit_none = presence.capture_presence(mem.read, context, lifetime_subject=None)
+    assert original == explicit_none and mem.reads == original_reads
+    assert not any(key.startswith('presence_lifetime') for key in original)
+    assert not any(address in (p['class_slot'], p['class_table'], p['fp_type'], p['finish_type'])
+                   for address, _ in original_reads)
+    assert not any(address == instance + presence.CHARACTER_CREATED_TIME
+                   or address == instance + presence.ENTITY_FINISH_REASON
+                   for address, _ in original_reads for instance in p['cameras'])
+
+
+def test_lifetime_preserves_raw_signed_values_and_instance_identity(lifetime_fixture):
+    mem, context, p = lifetime_fixture
+    mem.put(p['cameras'][0] + presence.CHARACTER_CREATED_TIME, '<qq', -(1 << 63), (1 << 63) - 1)
+    mem.put(p['cameras'][0] + presence.ENTITY_FINISH_REASON, '<i', -(1 << 31))
+    normal = presence.capture_presence(mem.read, context)
+    result = presence.capture_presence(mem.read, context, lifetime_subject=p['subject'])
+    assert {key: value for key, value in result.items()
+            if not key.startswith('presence_lifetime')} == normal
+    assert result['presence_lifetime_status'] == 'available'
+    assert result['presence_lifetime'] == {'subject_id': p['subject'], 'witnesses': [
+        {'instance_uid': 100, 'finish_reason': -(1 << 31),
+         'created_time_raw': -(1 << 63), 'dead_time_raw': (1 << 63) - 1},
+        {'instance_uid': 101, 'finish_reason': 4,
+         'created_time_raw': 2 << 32, 'dead_time_raw': -3 << 32},
+    ]}
+    assert 'presence_lifetime_reason' not in result
+    assert not any(key in ('birth_time', 'death_time', 'duration', 'deployed')
+                   for row in result['presence_lifetime']['witnesses'] for key in row)
+    for address in p['cameras']:
+        assert str(address) not in repr(result)
+
+
+@pytest.mark.parametrize('excluded', ['different_id', 'token', 'other_player', 'empty'])
+def test_lifetime_empty_match_is_available_without_type_or_time_reads(fixture, excluded):
+    mem, context, p = fixture
+    subject = 'char_336_folivo'
+    if excluded in ('token', 'other_player'):
+        mem.put(p['data'] + 0x50, '<Q', p['host_key'])
+    if excluded == 'other_player':
+        mem.put(p['data'] + 0x90, '<B', 0)
+        for address in p['cameras']:
+            mem.put(address + 0x20, '<i', 2)
+    if excluded == 'empty':
+        mem.put(p['container'] + 0x20, '<i', 0)
+    result = presence.capture_presence(mem.read, context, lifetime_subject=subject)
+    assert result['presence_status'] == result['presence_lifetime_status'] == 'available'
+    assert result['presence_lifetime'] == {'subject_id': subject, 'witnesses': []}
+    assert not any(address == instance + presence.CHARACTER_CREATED_TIME
+                   for address, _ in mem.reads for instance in p['cameras'])
+
+
+@pytest.mark.parametrize('subject', ['', 'token_10000_folivo_camera', 'char_bad value', 123, False])
+def test_lifetime_invalid_subject_is_explicit_and_preserves_presence(fixture, subject):
+    mem, context, _ = fixture
+    result = presence.capture_presence(mem.read, context, lifetime_subject=subject)
+    assert result['presence_status'] == 'available'
+    assert result['presence_lifetime_status'] == 'unavailable'
+    assert result['presence_lifetime_reason'] == 'presence_lifetime_invalid_subject'
+    assert result['presence_lifetime'] is None
+
+
+@pytest.mark.parametrize('count', [4, 5])
+def test_lifetime_four_instances_are_bounded_and_overflow_is_not_truncated(lifetime_fixture, count):
+    mem, context, p = lifetime_fixture
+    for index in range(2, count):
+        address = mem.obj(p['classes']['character'])
+        mem.put(address + 0x18, '<IiiBBB', 100 + index, 1, 1, 1, 1, 0)
+        mem.put(address + presence.CHARACTER_DATA, '<Q', p['data'])
+        p['cameras'].append(address)
+    mem.put(p['container'] + 0x20, '<i', count)
+    mem.put(p['array'] + presence.ARRAY_DATA, f'<{count}Q', *p['cameras'])
+    mem.reads.clear()
+    presence.capture_presence(mem.read, context)
+    baseline_calls = len(mem.reads)
+    baseline_bytes = sum(size for _, size in mem.reads)
+    mem.reads.clear()
+    result = presence.capture_presence(mem.read, context, lifetime_subject=p['subject'])
+    assert result['presence_status'] == 'available'
+    if count == 4:
+        assert result['presence_lifetime_status'] == 'available'
+        assert len(result['presence_lifetime']['witnesses']) == 4
+        assert 0 < len(mem.reads) - baseline_calls <= presence.MAX_LIFETIME_READ_CALLS
+        assert sum(size for _, size in mem.reads) - baseline_bytes <= presence.MAX_LIFETIME_READ_BYTES
+    else:
+        assert result['presence_lifetime_status'] == 'unavailable'
+        assert result['presence_lifetime_reason'] == 'presence_lifetime_instance_count'
+        assert result['presence_lifetime'] is None
+        assert len(mem.reads) == baseline_calls
+
+
+@pytest.mark.parametrize('fault,reason', [
+    ('missing_slot', 'class_table_slot_missing'),
+    ('null_table', 'class_table_uninitialized'),
+    ('null_class', 'class_uninitialized'),
+    ('class_name', 'class_identity'),
+    ('value_parent', 'value_inheritance'),
+    ('fp_count', 'field_count'),
+    ('enum_count', 'field_count'),
+    ('entity_count', 'field_count'),
+    ('field_offset', 'field_layout'),
+    ('field_owner', 'field_layout'),
+    ('field_name', 'field_layout'),
+    ('field_primitive', 'field_type'),
+    ('field_nominal', 'field_type'),
+    ('field_static', 'field_type'),
+    ('fp_underlying', 'field_type'),
+    ('enum_underlying', 'field_type'),
+])
+def test_lifetime_rejects_unverified_layout_without_invalidating_presence(lifetime_fixture, fault, reason):
+    mem, context, p = lifetime_fixture
+    table, = struct.unpack('<Q', mem.read(p['classes']['character'] + presence.CLASS_FIELDS, 8))
+    if fault == 'missing_slot':
+        del context['class_definition_table_slot']
+    elif fault == 'null_table':
+        mem.put(p['class_slot'], '<Q', 0)
+    elif fault == 'null_class':
+        mem.put(p['class_table'] + presence.FP_TYPE_INDEX * 8, '<Q', 0)
+    elif fault == 'class_name':
+        mem.put(p['fp'] + 0x10, '<Q', mem.text('Other'))
+    elif fault == 'value_parent':
+        mem.put(p['fp'] + presence.CLASS_PARENT, '<Q', p['classes']['object'])
+    elif fault in ('fp_count', 'enum_count', 'entity_count'):
+        owner = {'fp_count': p['fp'], 'enum_count': p['finish'],
+                 'entity_count': p['classes']['entity']}[fault]
+        mem.put(owner + presence.CLASS_FIELD_COUNT, '<H', 1)
+    elif fault in ('field_offset', 'field_owner', 'field_name'):
+        offset, fmt, value = {'field_offset': (24, '<i', 0),
+                              'field_owner': (16, '<Q', 0),
+                              'field_name': (0, '<Q', mem.text('otherTime'))}[fault]
+        mem.put(table + 42 * 32 + offset, fmt, value)
+    elif fault == 'field_primitive':
+        mem.put(p['fp_type'] + 8, '<I', presence.TYPE_I8 << 16)
+    elif fault == 'field_nominal':
+        mem.put(p['finish_type'], '<Q', presence.FP_TYPE_INDEX)
+    elif fault == 'field_static':
+        mem.put(p['fp_type'] + 8, '<I', presence.TYPE_VALUETYPE << 16 | 0x10)
+    elif fault in ('fp_underlying', 'enum_underlying'):
+        owner = p['fp'] if fault == 'fp_underlying' else p['finish']
+        fields, = struct.unpack('<Q', mem.read(owner + presence.CLASS_FIELDS, 8))
+        type_ref, = struct.unpack('<Q', mem.read(fields + 8, 8))
+        mem.put(type_ref + 8, '<I', presence.TYPE_VALUETYPE << 16)
+    result = presence.capture_presence(mem.read, context, lifetime_subject=p['subject'])
+    assert result['presence_status'] == 'available'
+    assert result['presence_lifetime_status'] == 'unavailable'
+    assert result['presence_lifetime_reason'] == 'presence_lifetime_' + reason
+    assert result['presence_lifetime'] is None
+
+
+@pytest.mark.parametrize('changed', ['time', 'finish', 'field', 'nominal', 'membership'])
+def test_lifetime_rereads_values_metadata_and_base_selection(lifetime_fixture, changed):
+    mem, context, p = lifetime_fixture
+    if changed == 'time':
+        target = p['cameras'][0] + presence.CHARACTER_CREATED_TIME, 16, 2, '<q', 999
+    elif changed == 'finish':
+        target = p['cameras'][0] + presence.ENTITY_FINISH_REASON, 4, 2, '<i', 12
+    elif changed == 'field':
+        table, = struct.unpack('<Q', mem.read(p['classes']['character'] + presence.CLASS_FIELDS, 8))
+        target = table + 42 * 32, 32, 2, '<Q', 0
+    elif changed == 'nominal':
+        target = p['fp_type'], 12, 3, '<Q', 0  # shared FP type used by two fields
+    else:
+        target = p['cameras'][0] + 0x18, 15, 3, '<I', 999
+    counts = {}
+    def change(address, size):
+        counts[address, size] = counts.get((address, size), 0) + 1
+        if (address, size) == target[:2] and counts[address, size] == target[2]:
+            mem.put(address, target[3], target[4])
+    mem.on_read = change
+    result = presence.capture_presence(mem.read, context, lifetime_subject=p['subject'])
+    assert result['presence_status'] == 'available'
+    assert result['presence_lifetime_status'] == 'unavailable'
+    assert result['presence_lifetime_reason'] == ('presence_lifetime_membership_changed'
+            if changed == 'membership' else 'presence_lifetime_changed_during_read')
+    assert result['presence_lifetime'] is None
+
+
+@pytest.mark.parametrize('fault,reason', [
+    ('denied', 'presence_lifetime_read_failed'),
+    ('short', 'presence_lifetime_short_read'),
+    ('parent_budget', 'presence_lifetime_read_budget_exhausted'),
+    ('calls', 'presence_lifetime_read_budget_exhausted'),
+    ('bytes', 'presence_lifetime_read_budget_exhausted'),
+])
+def test_lifetime_read_failures_and_own_budget_are_isolated(lifetime_fixture, monkeypatch, fault, reason):
+    mem, context, p = lifetime_fixture
+    target = p['cameras'][1] + presence.CHARACTER_CREATED_TIME
+    def read(address, size):
+        if address == target:
+            if fault == 'denied':
+                raise presence.native.access.ApiFailure('ReadProcessMemory', 299, 0)
+            if fault == 'short':
+                return mem.read(address, size)[:-1]
+            if fault == 'parent_budget':
+                raise presence.native.ResearchFailure('unsupported_layout', 'optional_read_budget_exhausted')
+        return mem.read(address, size)
+    if fault == 'calls':
+        monkeypatch.setattr(presence, 'MAX_LIFETIME_READ_CALLS', 1)
+    elif fault == 'bytes':
+        monkeypatch.setattr(presence, 'MAX_LIFETIME_READ_BYTES', 16)
+    result = presence.capture_presence(read, context, lifetime_subject=p['subject'])
+    assert result['presence_status'] == 'available'
+    assert result['presence_lifetime_status'] == 'unavailable'
+    assert result['presence_lifetime_reason'] == reason
+    assert result['presence_lifetime'] is None
+
+
+def test_lifetime_does_not_read_optional_fields_when_base_presence_is_unavailable(fixture):
+    mem, context, p = fixture
+    mem.put(p['battle'] + presence.BATTLE_UNIT_MANAGER, '<Q', 0)
+    result = presence.capture_presence(mem.read, context, lifetime_subject='char_336_folivo')
+    assert result == {'presence_status': 'unavailable', 'presence_reason': 'presence_invalid_reference',
+                      'presence': None, 'presence_lifetime_status': 'unavailable',
+                      'presence_lifetime_reason': 'presence_lifetime_presence_unavailable',
+                      'presence_lifetime': None}

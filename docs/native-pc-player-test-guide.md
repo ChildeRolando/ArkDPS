@@ -52,7 +52,7 @@
 
 ### D · 打到一半才打开采样，1-7 演习
 
-已收到 `midbattle-20261121-130509.jsonl`。打开采样时已有伤害，这项已对上。打开后的这段没读到新伤害，后续只需补这一步。
+第一次 `midbattle-20261121-130509.jsonl` 对上了接入时的伤害。补采 `midbattle-20261121-151919.jsonl` 已对上同一名干员接入后的新增伤害和近五秒速率。命令留作复查。
 
 1. 先进入战斗。用一名干员打几次，确认已经有伤害。然后**暂停**。
 2. 保持暂停，运行下面这条。等 `recording` 出现后再等约 3 秒。
@@ -129,6 +129,20 @@
 我会对照两局进入结算时的场景和结果字段。这个探针把两者分别记下来，便于检查游戏能否区分主动放弃和普通失败。
 
 `game-flow-20261121-145053.jsonl` 已验证普通和演习编队的两种选择、两次演习开战，以及主动放弃和自然失败的不同转换顺序。命令留作复查。
+
+### J · 手动撤退和被敌人击倒，CE-5 演习
+
+在关卡页用管理员 PowerShell 整条运行。看到 `recording` 再进 **CE-5 演习**，保持 1×。
+
+```powershell
+& 'F:\Code\python\python.exe' 'E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\acceptance\record_native_pc_battle.py' --game-root 'D:\games\Hypergryph Launcher\games\Arknights' --seconds 240 --presence-lifetime char_122_beagle --output "E:\文档\ChatGPT\ArkDPS\arkdps-native-pc\runtime\native-pc\2026-11-21-battle\presence-lifetime-$(Get-Date -Format 'yyyyMMdd-HHmmss').jsonl"
+```
+
+1. 让**米格鲁**挡住一波敌人，亲手把她撤下。其他干员可以守门。
+2. 米格鲁转好后，再把她放到敌人能打到的位置。这次不给她治疗，也不点撤退，等敌人把她击倒。
+3. 击倒后继续 3 秒，暂停并按 **Ctrl+C**。告诉我是否完成了两种离场。
+
+这次采样会记录同一名干员的两次在场编号、游戏报告的离场原因和原始时钟。就算画面上看到了离场，也需要样本里有对应时标，才能把它用在全周期速率里。
 
 ## 等我发对应的采样命令再打
 
