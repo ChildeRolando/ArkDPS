@@ -350,7 +350,9 @@ def runtime_for(api, tmp_path, monkeypatch):
     api.gadget.write_bytes(b'controlled bytes, no native execution')
     monkeypatch.setattr(module, 'GADGET_SHA256', hashlib.sha256(api.gadget.read_bytes()).hexdigest())
     return module.NativePcFridaRuntime(Path(api.image).parent, runtime_dir=tmp_path / 'state',
-        gadget_path=api.gadget, api=api, build_check=lambda _: ({'known_build': True}, []), admin_check=lambda: True)
+        gadget_path=api.gadget, api=api,
+        build_check=lambda _: ({'known_build': True, 'source_build': module.access.BUILD_ID}, []),
+        admin_check=lambda: True)
 
 
 def test_real_windows_loader_and_runtime_retry_final_presence_then_reconnect_without_reloading(api, tmp_path, monkeypatch):

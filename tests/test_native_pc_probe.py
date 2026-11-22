@@ -7,6 +7,8 @@ import struct
 
 import pytest
 
+from native_pc import probe_native_pc as build_gate
+
 
 SPEC = importlib.util.spec_from_file_location(
     'native_pc_probe', Path(__file__).parents[1] / 'acceptance' / 'probe_native_pc.py')
@@ -78,6 +80,41 @@ def test_hash_mismatch_is_explicit(monkeypatch, tmp_path):
     assert build['known_build'] is False
     assert build['files'][0]['sha256_matches'] is False
     assert samples is None
+
+
+@pytest.mark.parametrize(('exe', 'metadata', 'expected_build'), [
+    (b'official exe', b'official metadata', build_gate.BUILD_ID),
+    (b'Bilibili exe', b'Bilibili metadata', 'win-x64:fixture-bilibili'),
+    (b'official exe', b'Bilibili metadata', None),
+])
+def test_verify_build_matches_only_complete_tuples(monkeypatch, tmp_path, exe, metadata, expected_build):
+    exe_path = 'Arknights.exe'
+    dll_path = 'GameAssembly.dll'
+    metadata_path = 'Arknights_Data/il2cpp_data/Metadata/global-metadata.dat'
+    dll = b'shared GameAssembly'
+    def hashes(exe_bytes, metadata_bytes):
+        files = {exe_path: exe_bytes, dll_path: dll, metadata_path: metadata_bytes}
+        return {name: hashlib.sha256(content).hexdigest() for name, content in files.items()}
+
+    monkeypatch.setattr(build_gate, 'KNOWN_BUILDS', {
+        build_gate.BUILD_ID: hashes(b'official exe', b'official metadata'),
+        'win-x64:fixture-bilibili': hashes(b'Bilibili exe', b'Bilibili metadata'),
+    })
+    for name, content in {exe_path: exe, dll_path: dll, metadata_path: metadata}.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    code = b'x' * build_gate.CODE_SIZE
+    monkeypatch.setattr(build_gate, 'read_pe', lambda _: (0x8664, b'header', code))
+
+    build, samples = build_gate.verify_build(tmp_path)
+
+    assert build['known_build'] is (expected_build is not None)
+    assert build.get('source_build') == expected_build
+    if expected_build is None:
+        assert samples is None
+    else:
+        assert samples == [('pe_header', 0, b'header'), ('known_code', build_gate.CODE_RVA, code)]
 
 
 def test_pe_sample_uses_rva_mapping_instead_of_file_offset(tmp_path):

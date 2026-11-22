@@ -326,7 +326,7 @@ class World:
         self.runtime = module.NativePcFridaRuntime(self.root, runtime_dir=self.state_dir,
             gadget_path=self.asset, api=self.api,
             loader_factory=lambda pid, **_kwargs: Loader(self, pid),
-            build_check=lambda _root: ({'known_build': self.build_known}, []),
+            build_check=lambda _root: ({'known_build': self.build_known, 'source_build': module.access.BUILD_ID}, []),
             admin_check=lambda: self.admin)
         self.runtime._cancel = ScriptedEvent(self)
         self.runtime._port_occupied = lambda: self.port_busy
@@ -775,7 +775,8 @@ def make_observer(world):
     collector = SimpleNamespace(
         process=SimpleNamespace(pid=birth.pid, process_instance=(birth.pid, birth.created),
                                 process_alive=lambda: birth.alive),
-        diagnostics=SimpleNamespace(connection_ok=True, version_status=VersionStatus.COMPATIBLE))
+        diagnostics=SimpleNamespace(connection_ok=True, version_status=VersionStatus.COMPATIBLE,
+                                    version_actual=module.access.BUILD_ID))
     return world.runtime.observer_factory(collector, None)
 
 

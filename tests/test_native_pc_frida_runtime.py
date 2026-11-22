@@ -115,9 +115,10 @@ def environment(tmp_path, monkeypatch):
     loaders = Loaders(api)
     verified = []
     runtimes = []
-    def make(**kwargs):
+    def make(*, source_build=module.access.BUILD_ID, **kwargs):
         runtime = NativePcFridaRuntime(root, runtime_dir=tmp_path / 'state', gadget_path=gadget,
-            api=api, loader_factory=loaders, build_check=lambda _: ({'known_build': True}, []),
+            api=api, loader_factory=loaders,
+            build_check=lambda _: ({'known_build': True, 'source_build': source_build}, []),
             admin_check=lambda: True, **kwargs)
         def verify(record):
             assert api.rows[record['pid']].module
@@ -199,12 +200,15 @@ def test_running_process_before_arming_requires_restart(environment):
     assert not environment.loaders.loads
 
 
-def test_existing_ready_lease_reconnects_without_a_second_load(environment):
-    first = arm(environment)
+@pytest.mark.parametrize('source_build', (module.access.BUILD_ID, module.access.BILIBILI_BUILD_ID))
+def test_existing_ready_lease_reconnects_without_a_second_load(environment, source_build):
+    first = environment.make(source_build=source_build).start()
+    wait_for(first, lambda state: state['status'] == 'waiting_for_process')
     pid = add_new(environment, first)
     original = first.wait_ready(2)
+    assert original['source_build'] == source_build
     first.close()
-    second = environment.make().start()
+    second = environment.make(source_build=source_build).start()
     assert second.wait_ready(2) == original
     assert len(environment.loaders.loads) == 1
     assert environment.verified == [pid, pid]
@@ -277,7 +281,9 @@ def test_changed_lease_preserves_its_credential_file_on_cleanup(environment):
 def test_default_asset_is_copied_into_writable_runtime_cache(environment, monkeypatch, tmp_path):
     monkeypatch.setattr(module, 'DEFAULT_ASSET', environment.gadget)
     runtime = NativePcFridaRuntime(environment.root, runtime_dir=tmp_path / 'cached-state', api=environment.api,
-        loader_factory=environment.loaders, build_check=lambda _: ({'known_build': True}, []), admin_check=lambda: True)
+        loader_factory=environment.loaders,
+        build_check=lambda _: ({'known_build': True, 'source_build': module.access.BUILD_ID}, []),
+        admin_check=lambda: True)
     runtime._port_occupied = lambda: False
     runtime.start()
     try:
@@ -333,7 +339,9 @@ def test_changed_build_fingerprint_is_rechecked_before_a_new_attempt_mutates_fil
     calls = []
     def build_check(_):
         calls.append(binary.read_bytes())
-        return {'known_build': binary.read_bytes() == b'initial controlled file'}, []
+        if calls[-1] == b'initial controlled file':
+            return {'known_build': True, 'source_build': module.access.BUILD_ID}, []
+        return {'known_build': False}, None
     runtime.build_check = build_check
     runtime.start()
     wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
@@ -521,8 +529,9 @@ def test_gadget_observer_reuses_native_event_protocol_and_releases_only_client_r
     runtime.wait_ready(2)
     collector = SimpleNamespace(
         process=SimpleNamespace(pid=pid, process_instance=(pid, lease['created']), process_alive=lambda: True),
-        diagnostics=SimpleNamespace(connection_ok=True, version_status=VersionStatus.COMPATIBLE),
-        observer_binding=lambda **kw: {'native_session': 'independent-session', 'source_build': module.SOURCE_BUILD})
+        diagnostics=SimpleNamespace(connection_ok=True, version_status=VersionStatus.COMPATIBLE,
+                                    version_actual=module.access.BUILD_ID),
+        observer_binding=lambda **kw: {'native_session': 'independent-session', 'source_build': module.access.BUILD_ID})
     observer = runtime.observer_factory(collector, None)
     observer.start()
     assert observer.status == ObserverStatus.READY

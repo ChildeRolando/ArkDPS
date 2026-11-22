@@ -12,7 +12,7 @@ from collector import NativeClockBusy, ProcessChanged, SampleUnavailable, Snapsh
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
 from enemy_telemetry import EnemyTelemetry, NativeEnemyObservations, _load_enemy_db, native_enemy_view
 from event_probe import native_autochess_context_bound
-from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
+from native_pc.probe_native_pc import ApiFailure, BUILD_ID
 from native_pc.probe_native_pc_actions import capture_actions
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
 from native_pc.probe_native_pc_enemies import capture_enemies
@@ -25,7 +25,6 @@ from roster import CharacterEntry, RosterSnapshot
 from source_classification import classify_unmapped_source
 
 
-BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
 SNAPSHOT_ONLY = '官服 PC 事件观察尚未连接，当前显示原生累计统计。'
 ENEMY_SAMPLE_INTERVAL = 1.0
 ENEMY_MAX_AGE = 2.5
@@ -163,7 +162,8 @@ class NativePcCollector:
         diag.status = DetectionStatus.READY_UNIQUE
         diag.connection_ok = True
         diag.version_status = VersionStatus.COMPATIBLE
-        diag.version_actual = BUILD_ID
+        diag.version_actual = self.process.build['source_build']
+        diag.version_expected = diag.version_actual
         diag.native_game_root = str(self.game_root.resolve())
         diag.process_pid = self.process.pid
         diag.process_created_filetime = self.process.process_instance[1]
@@ -209,7 +209,7 @@ class NativePcCollector:
         words = (*identity, serial)
         digest = hashlib.sha256(struct.pack(f'<{len(words)}Q', *words)).hexdigest()
         return dict(native_session=':'.join(map(str, (*process.process_instance, digest))),
-                    source_build=BUILD_ID)
+                    source_build=self.diagnostics.version_actual)
 
     def observer_boot_ready(self):
         if self.process is None:
@@ -273,8 +273,8 @@ class NativePcCollector:
             evidence += '+native_pc_game_flow'
         # The squad page hint also read True during a confirmed ordinary action.
         # Keep mode unknown until it can be established for the actual battle.
-        metadata = dict(evidence=evidence, platform='native_pc', source_build=BUILD_ID,
-                        stage_id=stage_id, practice=None,
+        metadata = dict(evidence=evidence, platform='native_pc',
+                        source_build=self.diagnostics.version_actual, stage_id=stage_id, practice=None,
                         outcome='abandoned' if abandoned else raw.get('outcome'))
         lifecycle = dict(battle=battle, state=raw['battle_state'], ready=True, transiting=abandoned,
                          source=flow['source_scene'].casefold() if abandoned else '',

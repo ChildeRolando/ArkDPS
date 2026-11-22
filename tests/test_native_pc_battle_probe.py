@@ -105,7 +105,7 @@ class FakeApi:
 @pytest.fixture
 def runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(battle.access, 'verify_build', lambda root: (
-        {'known_build': True}, [('known_code', 0x1000, b'known')]))
+        {'known_build': True, 'source_build': battle.access.BUILD_ID}, [('known_code', 0x1000, b'known')]))
     api = FakeApi(tmp_path)
     api.write(api.base + 0x1000, b'known')
     # Explicitly seed a completed, unlocked VM; BattleController alone is not
