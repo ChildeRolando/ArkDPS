@@ -868,6 +868,13 @@ class MultiplayerBattleStatistics:
 
     def _player_result(self, side, player):
         stats = player.statistics.result()
+        # Core entry snapshots own their event dicts but retain the internal
+        # flat numeric attribute dict. Detach that last mutable leaf here.
+        enemy_entry = stats.get('enemy_entry')
+        if enemy_entry is not None:
+            for event in enemy_entry['events']:
+                if 'enemy_entry_attributes' in event:
+                    event['enemy_entry_attributes'] = dict(event['enemy_entry_attributes'])
         stats['totals_complete'] = False
         ledgers = []
         for owner, entry in sorted(player.actors.items()):
@@ -973,4 +980,4 @@ class MultiplayerBattleStatistics:
         return result
 
     def result(self):
-        return deepcopy(self._result(include_previous=True))
+        return self._result(include_previous=True)
