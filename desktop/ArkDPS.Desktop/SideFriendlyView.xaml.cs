@@ -25,7 +25,7 @@ public partial class SideFriendlyView : UserControl
     internal void SetConfigurationAvailable(bool available) =>
         RankingPanel.SetConfigurationAvailable(available);
 
-    internal void Update(string currentBattleId, JsonElement ranking)
+    internal void Update(string currentBattleId, JsonElement ranking, NativePcReadiness readiness = default)
     {
         bool reset = currentBattleId != battleId || ranking.Get("config").Text("panel_id") != RankingPanel.PanelId;
         battleId = currentBattleId;
@@ -36,6 +36,11 @@ public partial class SideFriendlyView : UserControl
             DetailViewport.ScrollToTop();
         }
         RankingPanel.Update(ranking);
+        if (readiness.Active && RankingPanel.Rows.Items.Count == 0)
+        {
+            RankingPanel.Empty.Text = readiness.Label;
+            RankingPanel.Empty.Visibility = Visibility.Visible;
+        }
         RankingPanel.RestoreSideSelection(Details.Owner, reset);
         Details.CompactReference = true;
         Details.Update(ranking);

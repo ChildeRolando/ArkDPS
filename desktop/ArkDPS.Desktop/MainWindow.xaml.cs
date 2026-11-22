@@ -83,6 +83,7 @@ public partial class MainWindow : Window
     private JsonElement EffectiveConnectionConfig=>State.Get("effective_connection_config").ValueKind==JsonValueKind.Object
         ? State.Get("effective_connection_config") : State.Get("connection_config");
     private bool UsingNativePc=>EffectiveConnectionConfig.Text("platform")=="native_pc";
+    private NativePcReadiness PcReadiness=>NativePcReadiness.From(State);
     private string SelectedConnectionPlatform=>(ConnectionPlatform.SelectedItem as ComboBoxItem)?.Tag as string ?? "mumu";
     private readonly ConnectionDetection connectionDetection = new();
     private string HistorySelectionId=>cachedHistorySelection?.Id ?? State.Get("history_selected").Text("battle_id");
@@ -316,7 +317,7 @@ public partial class MainWindow : Window
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         bool previousBattle=ShowingPreviousBattle;
         bool panelLayoutChanged=ApplyLiveSnapshot(state,previousBattle,changed || unitsChanged);
-        Footer.Text=state.Text("connection_text");
+        Footer.Text=PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text");
         if(!initialized)
         {
             Native.Restore(this,layout.Get("gui"));
@@ -331,7 +332,8 @@ public partial class MainWindow : Window
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
-            state.Text("connection_text"),state.Text("event_text"),
+            PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text"),state.Text("event_text"),
+            UsingNativePc ? state.Get("native_pc_bootstrap").Text("error") : "",
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected"),
             diag.Text("message"),diag.Text("error"),diag.Text("code")
         }.Where(text=>text.Length>0));
@@ -413,7 +415,13 @@ public partial class MainWindow : Window
     {
         bool waiting=status=="waiting" || State.Bool("battle_waiting") || State.Text("battle_id").Length==0;
         string title, subtitle;
-        if(waiting)
+        var readiness=PcReadiness;
+        if(readiness.Active)
+        {
+            title=readiness.IsError ? "PC 监听异常" : "PC 事件采集";
+            subtitle=readiness.Label;
+        }
+        else if(waiting)
         {
             title=UsingNativePc ? "PC 版快照" : observing ? "观察中" : "观察停止";
             subtitle="等待进入战斗";
@@ -434,6 +442,11 @@ public partial class MainWindow : Window
     private void UpdateLivePanel(string id,StatisticPanel panel,JsonElement view,bool canDelete)
     {
         panel.Update(view,canDelete);
+        if(PcReadiness.Active && panel.Rows.Items.Count==0)
+        {
+            panel.Empty.Text=PcReadiness.Label;
+            panel.Empty.Visibility=Visibility.Visible;
+        }
         if(Huds.TryGetValue(id,out var hud))
             hud.Update(view,CurrentHudStatus);
         if(activePanel==id)
@@ -505,6 +518,9 @@ public partial class MainWindow : Window
             "waiting" => ("等待连接观察者",StatusAmber),
             _ => ($"等待观察·{phase}",StatusAmber),
         };
+        var readiness=PcReadiness;
+        if(readiness.Active && status is not ("stale" or "reconnecting"))
+            (label,light)=(readiness.Label,readiness.IsError ? StatusRed : StatusAmber);
         if(ShowingPreviousBattle) label="上次快照 · "+label;
         Status.Text=label;
         StatusLight.Fill=light;
@@ -555,7 +571,7 @@ public partial class MainWindow : Window
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
             or "--frida-remote" or "--platform" or "--native-game-root")
             ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。"
-            : native ? "应用设置会开始等待游戏；已经就绪时无需再次重启。" : "唯一可用实例会自动填入；多实例时请从列表中选择。";
+            : native ? "应用后请按当前状态操作；等待显示「监听已就绪」后再启动游戏。已连接时无需再次重启。" : "唯一可用实例会自动填入；多实例时请从列表中选择。";
     }
     private void ChooseNativeGameRoot(object sender,RoutedEventArgs e)
     {

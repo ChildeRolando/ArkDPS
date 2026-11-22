@@ -1837,16 +1837,106 @@ def test_offline_platform_apply_clears_projection_without_waiting_for_a_worker_m
     assert not state.scanning and not state._awaiting_source
 
 
-def test_same_platform_apply_preserves_existing_reconnect_projection(tmp_path):
+def test_same_platform_apply_retains_data_but_waits_for_fresh_source_status(tmp_path):
     state = DesktopState(tmp_path)
     old = dict(sample(), battle_id='same-mumu-battle')
     state.accept('sample', old)
     state.accept('observer', ('ready', None))
     cmd(state, 'connection_apply', config=state.connection.to_dict(), events=False)
     state.expect_connection_request(state.connection, 2)
-    assert state.last is old and state.observer_status == 'ready'
+    assert state.last is old and state.observer_status is None
+    assert state.snapshot()['status'] == 'locating'
+    state.accept('sample', dict(sample(), battle_id='same-mumu-new-frame'))
+    assert state.last is old  # Already queued observations cannot cross the request marker.
+    state.accept('connection_source', {'revision': 2, 'platform': 'mumu'})
+    state.accept('scanning', False)
     state.accept('sample', dict(sample(), battle_id='same-mumu-new-frame'))
     assert state.snapshot()['battle_id'] == 'same-mumu-new-frame'
+
+
+def native_watch_proof():
+    return dict(status='waiting_for_process', code=None, armed_filetime=123,
+                thread_alive=True, cancelled=False)
+
+
+def test_native_path_apply_clears_old_watch_proof_until_matching_source(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    state.connection = state.effective_connection = ConnectionConfig(platform='native_pc', native_game_root='root-a')
+    state.layout = replace(state.layout, event_observation=True)
+    old = dict(sample(), battle_id='retained-battle')
+    state.accept('sample', old)
+    state.history.save(record(12))
+    state.refresh_history()
+    selected = state.selected
+    assert selected is not None
+    history_before = list(state._history_index)
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    state.accept('observer', ('ready', None))
+    state.accept('event', ('recording', None))
+    state.accept('error', 'old connection error')
+    new = ConnectionConfig(platform='native_pc', native_game_root='root-b')
+    cmd(state, 'connection_apply', config=new.to_dict(), events=True)
+    state.expect_connection_request(new, 2)
+    shot = state.snapshot()
+    assert shot['effective_connection_config']['native_game_root'] == 'root-b'
+    assert shot['native_pc_bootstrap'] is shot['observer_status'] is shot['event_status'] is None
+    assert shot['error'] == '' and shot['status'] == 'locating'
+    assert state.last is old and state.selected is selected
+    assert state._history_index == history_before
+    for kind, value in [('native_pc_bootstrap', native_watch_proof()), ('observer', ('ready', None)),
+                        ('event', ('recording', None)), ('error', 'queued old error')]:
+        state.accept(kind, value)
+    assert state.native_pc_bootstrap is state.observer_status is state.event_status is None
+    assert state.error == ''
+    state.accept('connection_source', {'revision': 2, 'platform': 'native_pc'})
+    current = dict(status='starting', code=None, armed_filetime=None, thread_alive=True)
+    state.accept('native_pc_bootstrap', current)
+    assert state.native_pc_bootstrap == current
+
+
+def test_platform_round_trip_never_restores_prior_pc_watch_proof(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    native = ConnectionConfig(platform='native_pc', native_game_root='root-a')
+    state.connection = state.effective_connection = native
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    cmd(state, 'connection_apply', config=ConnectionConfig().to_dict(), events=True)
+    assert state.native_pc_bootstrap is None  # Clearing the source itself drops proof too.
+    state.expect_connection_request(state.connection, 2)
+    cmd(state, 'connection_apply', config=native.to_dict(), events=True)
+    state.expect_connection_request(native, 3)
+    state.accept('connection_source', {'revision': 2, 'platform': 'mumu'})
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    assert state.native_pc_bootstrap is None and state._awaiting_source
+    state.accept('connection_source', {'revision': 3, 'platform': 'native_pc'})
+    assert state.native_pc_bootstrap is None
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    assert state.native_pc_bootstrap['armed_filetime'] == 123
+
+
+def test_same_pc_source_rescan_ignores_queued_ready_and_latest_revision_wins(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    native = ConnectionConfig(platform='native_pc', native_game_root='root-a')
+    state.connection = state.effective_connection = native
+    old = dict(sample(), battle_id='retained-local-battle')
+    state.accept('sample', old)
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    state.accept('observer', ('ready', None))
+    state.expect_connection_request(native, 2)
+    state.expect_connection_request(native, 3)
+    for marker in ({'revision': 2, 'platform': 'native_pc'}, {'revision': 3, 'platform': 'mumu'}):
+        state.accept('connection_source', marker)
+        state.accept('native_pc_bootstrap', native_watch_proof())
+        state.accept('observer', ('ready', None))
+        assert state.native_pc_bootstrap is state.observer_status is None
+        assert state.last is old and state._awaiting_source
+    state.accept('connection_source', {'revision': 3, 'platform': 'native_pc'})
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    state.accept('observer', ('attaching', None))
+    assert state.native_pc_bootstrap['armed_filetime'] == 123 and state.observer_status == 'attaching'
+    assert state.last is old and not state._awaiting_source
 
 
 def test_native_detect_is_configuration_only_and_does_not_probe_adb(tmp_path, monkeypatch):

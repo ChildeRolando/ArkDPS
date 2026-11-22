@@ -199,7 +199,7 @@ class DesktopState:
             return
         # The acquisition thread is the sole source-event producer. Its FIFO
         # marker precedes all events for the newly accepted request, so earlier
-        # queued events cannot repopulate a different platform's live view.
+        # queued events cannot repopulate a superseded connection's status.
         # Archive notifications are global and must survive source transitions.
         if self._awaiting_source and kind != 'history':
             return
@@ -253,6 +253,18 @@ class DesktopState:
     def expect_connection_request(self, config, revision):
         self._source_request_platform = config.platform
         self._source_request_revision = revision if type(revision) is int else None
+        # Keep the last battle/history, but never use the prior connection's
+        # readiness as permission to start a game for this new request.
+        self._awaiting_source = True
+        self.native_pc_bootstrap = None
+        self.observer_status = self.observer_error = None
+        self.event_status = self.event_error = None
+        self.diagnostic = None
+        self.error = ''
+        self.connection_text = '正在准备采集连接'
+        self.scanning = True
+        self._waiting_for_connection_sample = True
+        self.analysis_interrupted = True
 
     def finish_offline_connection(self):
         self._awaiting_source = False
@@ -269,6 +281,7 @@ class DesktopState:
         self.diagnostic = None
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
+        self.native_pc_bootstrap = None
         self.battle_waiting = None
         self.scanning = True
         self._source_request_revision = None
@@ -703,6 +716,7 @@ class CollectionWorker:
         self.pc_runtime_dir = state.history.directory.parent
         self.pc_cleanup_error = ''
         self._last_pc_bootstrap = None
+        self._pc_bootstrap_revision = None
         self._bootstrap_audit = None
         self.pending_history_count = 0
         self.last_connect_attempt = 0.0
@@ -812,12 +826,13 @@ class CollectionWorker:
             self.retired_errors.append('已释放 PC 启动加载器，保留历史清理异常：' + self.pc_cleanup_error)
         self.pc_runtime = None
         self.pc_runtime_key = None
+        self._pc_bootstrap_revision = None
         self.pc_cleanup_error = ''
         self._emit_pc_bootstrap(None)
         return True
 
-    def _emit_pc_bootstrap(self, value):
-        if value != self._last_pc_bootstrap:
+    def _emit_pc_bootstrap(self, value, *, force=False):
+        if force or value != self._last_pc_bootstrap:
             self._last_pc_bootstrap = value
             self.events.put(('native_pc_bootstrap', value))
             if self._bootstrap_audit is not None:
@@ -906,7 +921,8 @@ class CollectionWorker:
                                     explicit_retry_pending = False
                                     if self.pc_runtime is not None:
                                         bootstrap = self.pc_runtime.describe()
-                                        self._emit_pc_bootstrap(bootstrap)
+                                        self._emit_pc_bootstrap(bootstrap, force=revision != self._pc_bootstrap_revision)
+                                        self._pc_bootstrap_revision = revision
                                         if self.pc_runtime.is_pending:
                                             self.events.put(('observer', ('attaching', bootstrap.get('error'))))
                                             self.events.put(('connection', bootstrap.get('error') or
@@ -960,6 +976,11 @@ class CollectionWorker:
                                     self.events.put(('error', str(exc)))
                                     self.release()
                             self.events.put(('scanning', False))
+                        if (not usable and self.pc_runtime is not None
+                                and self._pc_bootstrap_revision == current_revision):
+                            # Startup telemetry must not wait for the five-second
+                            # connection retry or alter its owner/arming boundary.
+                            self._emit_pc_bootstrap(self.pc_runtime.describe())
                         if usable and self.session is not None:
                             if self._pc_observer_recovery_needed(self.session, session_bootstrap_generation):
                                 # Reauthentication waits until the old observer
