@@ -93,6 +93,8 @@ class DamageSettlement:
         recent_effective = sum(h[1] for h in recent)
         has_effective_window = has_window and (recent_effective > 0 or recent_complete)
         has_raw_window = has_window and (any(h[2] is not None for h in recent) or raw_recent_complete)
+        recent_raw = sum(h[2] or 0.0 for h in recent)
+        observed_duration = end - start
 
         def missing_share(accepted):
             return (hits - accepted) / hits if stream_complete and hits else None
@@ -119,9 +121,20 @@ class DamageSettlement:
             'active_damage': raw_active if self.raw > 0 else None,
             'engagement_damage_complete': raw_complete,
             'engagement_damage_unverified_share': missing_share(self.raw_hits),
+            # Event observations are a separate lane from native cumulative
+            # counters. An empty ledger is not evidence of zero output.
+            'nominal_hits': self.raw_hits,
+            'observed_damage': self.raw if self.raw_hits else None,
+            'observed_damage_complete': raw_complete and bool(self.raw_hits),
+            'observed_dps': (self.raw / observed_duration
+                             if self.raw_hits and observed_duration > 0 else None),
+            'observed_damage_window': (start, end) if self.raw_hits else None,
+            'observed_recent_damage': recent_raw / duration if has_raw_window else None,
+            'observed_recent_damage_complete': raw_recent_complete and has_window,
+            'observed_recent_damage_window': (begin, end) if has_raw_window else None,
             'observed_boss_damage': self.raw if boss and (self.raw_hits or raw_complete) else None,
             'observed_boss_damage_complete': boss and raw_complete,
-            'observed_boss_recent_damage': (sum(h[2] or 0.0 for h in recent) / duration
+            'observed_boss_recent_damage': (recent_raw / duration
                                             if boss and has_raw_window else None),
             'observed_boss_recent_damage_complete': boss and raw_recent_complete and has_window,
             'observed_boss_recent_window': (begin, end) if boss and has_raw_window else None,

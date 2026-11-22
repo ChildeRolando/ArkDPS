@@ -327,6 +327,7 @@ public partial class MainWindow : Window
             panelLayoutChanged = true;
         }
         UpdateHistory();
+        MultiplayerPage.Update(state.Get("multiplayer"));
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
@@ -641,7 +642,7 @@ public partial class MainWindow : Window
         if (narrow) Skin.Padding = new Thickness(8, 24, Theme.IsBabel ? 20 : 27, 4);
         else Skin.ClearValue(Control.PaddingProperty);
         ArrangeThemeArtwork(narrow);
-        foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (SettingsNav, SettingsNavLabel) })
+        foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (MultiplayerNav, MultiplayerNavLabel), (SettingsNav, SettingsNavLabel) })
         {
             button.HorizontalContentAlignment = narrow ? HorizontalAlignment.Center : HorizontalAlignment.Left;
             label.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
@@ -778,7 +779,7 @@ public partial class MainWindow : Window
         bool babel = Theme.IsBabel;
         foreach (var frame in new[] { LiveOverviewFrame, EnemySummary, RankingFrame, LiveDetail })
             frame.SetResourceReference(StyleProperty, babel ? "BabelResearchFrame" : "ResearchFrame");
-        foreach (var button in new[] { LiveNav, EnemyNav, HistoryNav, SettingsNav })
+        foreach (var button in new[] { LiveNav, EnemyNav, MultiplayerNav, HistoryNav, SettingsNav })
             button.SetResourceReference(StyleProperty, babel ? "BabelResearchNav" : "ResearchNav");
         foreach (Border metric in MetricCards.Children)
             metric.SetResourceReference(StyleProperty, babel ? "BabelSecondaryMetric" : "ResearchMetric");
@@ -989,11 +990,12 @@ public partial class MainWindow : Window
         route=page;LivePage.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
         EnemyPageScroll.Visibility=page=="enemies" ? Visibility.Visible : Visibility.Collapsed;
+        MultiplayerPage.Visibility=page=="multiplayer" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         bool live=page=="live";
         SubpageHeader.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
-        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","settings"=>"设置",_=>"实时战况"};
-        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
+        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","multiplayer"=>"卫戍四家","settings"=>"设置",_=>"实时战况"};
+        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","multiplayer"=>"本小局四家输出 · 分家查看干员","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
         SetNavState(page);
         AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         ArrangePanels();
@@ -1003,7 +1005,7 @@ public partial class MainWindow : Window
     }
     private void SetNavState(string page)
     {
-        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(EnemyNav,"enemies"),(SettingsNav,"settings")})
+        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(EnemyNav,"enemies"),(MultiplayerNav,"multiplayer"),(SettingsNav,"settings")})
         {
             bool active=tag==page;
             button.SetResourceReference(Control.BackgroundProperty, active ? "ShellNavActive" : "Sidebar");

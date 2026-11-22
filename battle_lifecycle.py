@@ -377,6 +377,44 @@ class BattleSessions:
         self.snapshot_intervals = []
         self._snapshot_open = False
         self._last_event_mark = None
+        self.multiplayer = None
+        self.multiplayer_error = None
+
+    def _consume_multiplayer(self, observation, sequence, drained, mark):
+        # The acquisition owner has already accepted this barrier. Player views
+        # consume the same ordered prefix and never acquire or acknowledge again.
+        try:
+            metadata = (observation.sample or {}).get('battle_metadata') or {}
+            stage = metadata.get('stage_id') or self.metadata.get('stage_id') or ''
+            if not isinstance(stage, str) or 'AUTOCHESS' not in stage.upper():
+                return
+            if self.multiplayer is None:
+                from multiplayer_battle import MultiplayerBattleStatistics
+                self.multiplayer = MultiplayerBattleStatistics()
+            self._multiplayer_call('consume', observation.sample, observation.roster, sequence,
+                                   drained, mark=mark, round_id=self.battle_id)
+        except Exception as exc:
+            self.multiplayer_error = str(exc)
+
+    def _multiplayer_call(self, method, *args, **kwargs):
+        if self.multiplayer is None:
+            return None
+        try:
+            return getattr(self.multiplayer, method)(*args, **kwargs)
+        except Exception as exc:
+            # An optional player projection cannot roll back accepted local
+            # events, block their acknowledgment, or prevent the main archive.
+            self.multiplayer_error = str(exc)
+            if method != 'gap':
+                self._multiplayer_call('gap', '玩家统计不可用：' + str(exc))
+            return None
+
+    def _multiplayer_result(self):
+        return self._multiplayer_call('result')
+
+    def _retain_multiplayer(self):
+        if self.latest_sample is not None and self.multiplayer is not None:
+            self.latest_sample['multiplayer'] = self._multiplayer_result()
 
     def _snapshot_accepted(self):
         now = self.adapter.last_game_time
@@ -386,7 +424,7 @@ class BattleSessions:
             self.snapshot_intervals.append([now, now])
             self._snapshot_open = True
 
-    def _events(self, observation):
+    def _events(self, observation, *, project=True):
         evidence = observation.events
         capability = (observation.sample or {}).get('event_capability', {})
         status = capability.get('status')
@@ -403,12 +441,16 @@ class BattleSessions:
             self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'],
                                 mark=evidence['after'],
                                 allow_late_baseline=observation.kind == 'sample')
+            if project:
+                self._consume_multiplayer(observation, sequence, evidence['drain'], evidence['after'])
             self._last_event_mark = evidence['after']
             self.event_status = 'recording'
             return True
         except Exception as exc:
             self.capture.close()
             self.event_status, self.event_error = 'gap', str(exc)
+            if self.multiplayer is not None:
+                self._multiplayer_call('gap', str(exc))
 
     def _metadata(self, sample):
         # Backends may supply confirmed metadata, never guessed from state=3,
@@ -469,6 +511,9 @@ class BattleSessions:
             self.capture.close()
         if self.event_status in ('ready', 'recording'):
             self.event_status, self.event_error = 'gap', reason
+        if self.multiplayer is not None:
+            self._multiplayer_call('gap', reason)
+            self._retain_multiplayer()
 
     def _close_unverified_event_end(self):
         if self.event_status == 'recording':
@@ -510,6 +555,8 @@ class BattleSessions:
         self.adapter.statistics.invalidate_rates()
         self.adapter.finish()
         self.event_status, self.event_error = 'finished', None
+        self._multiplayer_call('finish', self.adapter.last_game_time, complete=True)
+        self._retain_multiplayer()
         return True
 
     def _terminal_boundary_matches_watermark(self, observation, stream):
@@ -536,6 +583,10 @@ class BattleSessions:
             self._finish_at_verified_watermark(successor)
         self._close_unverified_event_end()
         self.adapter.finish()
+        if self.multiplayer is not None:
+            self._multiplayer_call('finish', self.adapter.last_game_time,
+                                   complete=self.event_status == 'finished')
+            self._retain_multiplayer()
         self._archives.append(deepcopy(dict(
             battle_id=self.battle_id, generation=self.generation,
             reason=reason, metadata=self.metadata,
@@ -568,7 +619,7 @@ class BattleSessions:
                         observation.sample, observation.roster,
                         **self._source_attribution(observation, final_adapter.event_stream))
                     self.adapter = final_adapter
-                    final_events = self._events(observation)
+                    final_events = self._events(observation, project=False)
                 if not final_events:
                     self._close_unverified_event_end()
             final_adapter.update(observation.sample, observation.roster, terminal=True)
@@ -580,9 +631,14 @@ class BattleSessions:
             self.adapter = final_adapter
             if final_events:
                 self.event_status = 'finished'
+                evidence = observation.events
+                self._consume_multiplayer(observation, evidence['sequence'],
+                                          evidence['drain'], evidence['after'])
+                self._multiplayer_call('finish', self.adapter.last_game_time, complete=True)
             if self.capture is not None:
                 self.capture.adapter = self.adapter
             self.latest_sample = deepcopy(observation.sample)
+            self._retain_multiplayer()
             self._snapshot_accepted()
             self.metadata.pop('final_sample_error', None)
             self._merge_metadata(observation.sample)
@@ -663,6 +719,8 @@ class BattleSessions:
                 self._archived = False
                 self._terminal_seen = False
                 self._last_event_mark = None
+                self.multiplayer = None
+                self.multiplayer_error = None
                 self.metadata = self._metadata(observation.sample)
                 self.snapshot_intervals = []
                 self._snapshot_open = False
@@ -672,6 +730,7 @@ class BattleSessions:
                 self._merge_metadata(observation.sample)
             self._events(observation)
             self.latest_sample = deepcopy(observation.sample)
+            self._retain_multiplayer()
             self._snapshot_accepted()
             self.state = 'playing'
             self.connection = 'connected'
@@ -712,11 +771,14 @@ class BattleSessions:
         return True
 
     def live(self):
-        return deepcopy(dict(battle_id=self.battle_id, state=self.state,
-                             connection=self.connection, reason=self.reason,
-                             metadata=self.metadata,
-                             event_status=self.event_status, event_error=self.event_error,
-                             statistics=self.adapter.result() if self.adapter else None))
+        result = dict(battle_id=self.battle_id, state=self.state,
+                      connection=self.connection, reason=self.reason,
+                      metadata=self.metadata,
+                      event_status=self.event_status, event_error=self.event_error,
+                      statistics=self.adapter.result() if self.adapter else None)
+        if self.multiplayer is not None:
+            result['multiplayer'] = self._multiplayer_result()
+        return deepcopy(result)
 
     def pop_archives(self):
         # _archive already detached the complete record from live state.
@@ -893,4 +955,6 @@ class BattleRuntime:
                       snapshot_revision=result.get('snapshot_revision'),
                       event_watermark=(dict(sequence=stream.sequence, frame=stream.frame,
                                             game_time=stream.game_time) if stream else None))
+        if self.sessions.multiplayer is not None:
+            sample['multiplayer'] = self.sessions._multiplayer_result()
         return sample

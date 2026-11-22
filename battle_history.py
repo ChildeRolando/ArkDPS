@@ -80,6 +80,143 @@ def _intervals(value, end):
         previous = stop
 
 
+def _validate_multiplayer(payload, battle_id, duration):
+    """Bind optional player observations to this frozen battle, never native totals."""
+    if payload is None:
+        return
+
+    def window(value, start, end, name):
+        if value is None:
+            return
+        _require(isinstance(value, (list, tuple)) and len(value) == 2, f'invalid {name}')
+        _number(value[0], name + ' start')
+        _number(value[1], name + ' end')
+        _require(start <= value[0] <= value[1] <= end, f'out-of-range {name}')
+
+    def scope(value, *, compact):
+        _require(isinstance(value, dict), 'invalid multiplayer scope')
+        _require(type(value.get('schema_version')) is int and value['schema_version'] == 1,
+                 'unsupported multiplayer schema_version')
+        _require(value.get('source_round_id') == battle_id, 'multiplayer battle_id mismatch')
+        epoch = value.get('identity_epoch')
+        _require(type(epoch) is int and epoch >= 0, 'invalid multiplayer identity_epoch')
+        scope_id = f'{battle_id}:players:{epoch}'
+        _require(value.get('round_id') == scope_id, 'multiplayer round_id mismatch')
+        _require(value.get('status') == 'ended', 'multiplayer scope not frozen')
+        _require(type(value.get('available')) is bool, 'invalid multiplayer availability')
+        start, end = value.get('coverage_start'), value.get('game_time')
+        _number(start, 'multiplayer coverage_start')
+        _number(end, 'multiplayer game_time')
+        _require(start <= end <= duration, 'multiplayer time exceeds battle duration')
+        if 'expected_player_slots' in value:
+            _require(type(value['expected_player_slots']) is int and value['expected_player_slots'] == 4,
+                     'invalid multiplayer display slots')
+        players = value.get('players')
+        _require(isinstance(players, list) and len(players) == 4, 'invalid multiplayer players')
+        seen = set()
+        actor_uids = set()
+        observed = set()
+        for player in players:
+            _require(isinstance(player, dict), 'invalid multiplayer player')
+            side = player.get('player_side')
+            _require(type(side) is int and 1 <= side <= 4 and side not in seen,
+                     'duplicate or invalid multiplayer player_side')
+            seen.add(side)
+            _require(player.get('is_local') is None or type(player['is_local']) is bool,
+                     'invalid multiplayer local flag')
+            _require(type(player.get('coverage_complete')) is bool,
+                     'invalid multiplayer coverage flag')
+            _require(player.get('status') in ('unknown', 'observed', 'partial'),
+                     'invalid multiplayer player status')
+            # Schema 1 has no independent native counter witness per player.
+            for metric in ('damage', 'dps', 'recent_dps'):
+                _require(metric in player and player[metric] is None,
+                         'multiplayer native counter has no independent witness')
+            for metric in ('observed_damage', 'observed_dps', 'observed_recent_dps'):
+                _require(metric in player, 'missing multiplayer observed metric')
+                _number(player[metric], 'multiplayer ' + metric, nullable=True)
+            for key in ('observed_window', 'observed_recent_window'):
+                window(player.get(key), start, end, 'multiplayer ' + key)
+            if player['observed_damage'] is None:
+                _require(player['observed_dps'] is None and player['observed_recent_dps'] is None
+                         and player.get('observed_window') is None
+                         and player.get('observed_recent_window') is None
+                         and player['coverage_complete'] is False,
+                         'multiplayer unknown output has a fabricated rate or coverage')
+                _require(player['status'] == 'unknown', 'multiplayer unknown output has a known status')
+            else:
+                observed.add(side)
+                _require(player.get('observed_window') is not None,
+                         'multiplayer observed output lacks its game-time window')
+            if compact:
+                _require('statistics' not in player and 'actor_ledgers' not in player,
+                         'retired multiplayer scope must be a compact summary')
+                continue
+            stats = player.get('statistics')
+            _require(isinstance(stats, dict) and stats.get('session') == f'{scope_id}:{side}',
+                     'multiplayer statistics session mismatch')
+            _require(stats.get('ended') is True and stats.get('game_time') == end,
+                     'multiplayer statistics not frozen at scope endpoint')
+            _require(stats.get('totals_complete') is False,
+                     'multiplayer native totals cannot be certified')
+            rows = stats.get('rows')
+            actors = player.get('actor_ledgers')
+            _require(isinstance(rows, dict) and isinstance(actors, list),
+                     'invalid multiplayer actor rows')
+            actor_keys = set()
+            for actor in actors:
+                _require(isinstance(actor, dict), 'invalid multiplayer actor')
+                cid, uid = actor.get('cid'), actor.get('source_character_uid')
+                _require(isinstance(cid, str) and bool(cid) and '#' not in cid
+                         and type(uid) is int and 0 < uid <= 0xffffffff and uid not in actor_uids,
+                         'invalid multiplayer actor identity')
+                actor_uids.add(uid)
+                owner = f'{cid}#{uid}'
+                _require(actor.get('owner_id') == owner and owner in rows and owner not in actor_keys,
+                         'multiplayer actor owner mismatch')
+                actor_keys.add(owner)
+                for alias in ('uid', 'actor_uid', 'unique_id'):
+                    if alias in actor:
+                        _require(type(actor[alias]) is int and actor[alias] == uid,
+                                 'multiplayer actor UID mismatch')
+                row = rows[owner]
+                _require(isinstance(row, dict) and row.get('cid') == cid
+                         and type(row.get('unique_id')) is int and row['unique_id'] == uid
+                         and row.get('id') == owner,
+                         'multiplayer statistics actor identity mismatch')
+                _require(row.get('damage') is None and row.get('healing') is None
+                         and row.get('counter_snapshot_complete') is False,
+                         'multiplayer actor has unwitnessed native counters')
+                ledger = actor.get('ledger')
+                _require(isinstance(ledger, dict) and ledger == row.get('settled_damage'),
+                         'multiplayer actor ledger mismatch')
+                for metric in ('observed_damage', 'observed_dps', 'observed_recent_damage',
+                               'effective_damage', 'known_hp_damage', 'known_shield_damage'):
+                    _number(ledger.get(metric), 'multiplayer actor ' + metric, nullable=True)
+                window(ledger.get('observed_damage_window'), start, end, 'multiplayer actor window')
+                window(ledger.get('observed_recent_damage_window'), start, end,
+                       'multiplayer actor recent window')
+            _require(set(rows) == actor_keys, 'multiplayer statistics has an unbound actor owner')
+        if 'observed_player_sides' in value:
+            sides = value['observed_player_sides']
+            _require(isinstance(sides, list) and all(type(s) is int for s in sides)
+                     and len(sides) == len(set(sides)) and set(sides) == observed,
+                     'invalid multiplayer observed sides')
+        return epoch
+
+    epoch = scope(payload, compact=False)
+    previous = payload.get('previous_rounds', [])
+    _require(isinstance(previous, list) and len(previous) <= 8,
+             'invalid retired multiplayer scopes')
+    last_epoch = -1
+    for old in previous:
+        old_epoch = scope(old, compact=True)
+        _require(last_epoch < old_epoch < epoch, 'unordered retired multiplayer identity epochs')
+        last_epoch = old_epoch
+    pruned = payload.get('previous_rounds_pruned', 0)
+    _require(type(pruned) is int and pruned >= 0, 'invalid retired multiplayer pruned count')
+
+
 class BattleRecord:
     """Validated JSON summary; null and numeric zero retain their meanings."""
 
@@ -266,6 +403,7 @@ class BattleRecord:
             sample = data['last_sample']
             _require(isinstance(sample, dict) and sample.get('session') == battle_id,
                      'last sample battle_id mismatch')
+            _validate_multiplayer(sample.get('multiplayer'), battle_id, data['duration'])
             _require(isinstance(data['event_status'], str), 'invalid event_status')
             _require(data['event_error'] is None or isinstance(data['event_error'], str),
                      'invalid event_error')

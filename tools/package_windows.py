@@ -26,7 +26,7 @@ from release_identity import candidate_head
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
 from windows_manifest import verify_executable_manifest
-DEFAULT_VERSION = '1.0.0-rc.14'
+DEFAULT_VERSION = '1.0.0-rc.15'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
@@ -51,7 +51,8 @@ BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'bat
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
            'stage_names.py', 'stats_core.py', 'native_pc_collector.py',
-           'event_probe_android2791.js', 'event_probe_native_pc.js', 'event_probe_runtime.js')
+           'event_probe_android2791.js', 'event_probe_native_pc.js', 'event_probe_runtime.js',
+           'multiplayer_battle.py')
 
 
 def digest(path):

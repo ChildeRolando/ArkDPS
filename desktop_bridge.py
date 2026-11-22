@@ -36,7 +36,7 @@ from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
-                         settled_boss_damage_rates, team_status)
+                         settled_boss_damage_rates, team_status, format_compact)
 import stage_names
 
 PROTOCOL_VERSION = 1
@@ -464,9 +464,68 @@ class DesktopState:
                 record_display(self.selected),
                 view=self.view(self.history_config, record_statistics(self.selected, for_panel=True),
                                event=event),
+                multiplayer=self.multiplayer_view(
+                    self.selected.last_sample.get('multiplayer'), event=event),
                 event_status=self.selected.event_status, event_error=event.error)
             self._history_view_key = key
         return self._history_view
+
+    def multiplayer_view(self, payload, *, event=None):
+        """Render the same statistics model in a player/actor-scoped view."""
+        if not isinstance(payload, dict) or payload.get('schema_version') != 1:
+            return None
+        result = dict(payload)
+        players = []
+        for raw in payload.get('players', ()):
+            if not isinstance(raw, dict):
+                continue
+            player = dict(raw)
+            side = player.get('player_side')
+            if type(side) is not int or not 1 <= side <= 4:
+                continue
+            statistics = player.get('statistics') or {'rows': {}}
+            config = PanelConfig(panel_id=f'multiplayer-{side}', effective_only=True,
+                                 ranking=Ranking.TOTAL, rate_basis=RateBasis.ENGAGEMENT,
+                                 title='已观察有效伤害 · 接敌 DPS')
+            player['view'] = self.view(config, statistics, event=event)
+            # render_panel keeps source rows by reference; presentation metadata
+            # belongs to this view, not the stored observation or history.
+            player['view']['source'] = dict(player['view']['source'])
+            for actor in player.get('actor_ledgers') or ():
+                if not isinstance(actor, dict):
+                    continue
+                owner = actor.get('owner_id') or actor.get('actor_id')
+                if owner in player['view']['source']:
+                    uid = actor.get('uid', actor.get('actor_uid', actor.get('unique_id')))
+                    player['view']['source'][owner] = dict(
+                        player['view']['source'][owner],
+                        actor_uid=uid,
+                        player_side=side, portrait_id=actor.get('cid'))
+                    for entry in player['view']['entries']:
+                        if entry['owner_id'] == owner:
+                            entry.update(actor_uid=uid, player_side=side, portrait_id=actor.get('cid'))
+            def display(exact_key, observed_key):
+                exact, observed = player.get(exact_key), player.get(observed_key)
+                valid = lambda value: (type(value) in (int, float)
+                                       and math.isfinite(value) and value >= 0)
+                if valid(exact):
+                    return format_compact(exact, self.layout.number_units)
+                if valid(observed):
+                    return '已观察 ' + format_compact(observed, self.layout.number_units)
+                return '未知'
+            player['display'] = dict(
+                damage=display('damage', 'observed_damage'),
+                dps=display('dps', 'observed_dps'),
+                recent_dps=display('recent_dps', 'observed_recent_dps'),
+                coverage='；'.join(player.get('reasons') or ())
+                    or ('已观察结算事件' if player.get('observed_damage') is not None else '尚无可靠输出证据'))
+            window = player.get('observed_window')
+            if (isinstance(window, (list, tuple)) and len(window) == 2
+                    and all(type(value) in (int, float) and math.isfinite(value) for value in window)):
+                player['window_text'] = f'观察 {window[0]:.1f}—{window[1]:.1f} 游戏秒'
+            players.append(player)
+        result['players'] = players
+        return result
 
     def snapshot(self):
         sample = self.last or {}
@@ -505,6 +564,7 @@ class DesktopState:
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
+                    multiplayer=self.multiplayer_view(sample.get('multiplayer'), event=live_event),
                     live_analysis=self.live_analysis,
                     boss_live_analysis=self.boss_live_analysis,
                     boss_effective_live_analysis=self.boss_effective_live_analysis,

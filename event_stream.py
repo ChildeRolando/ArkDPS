@@ -93,6 +93,12 @@ class EventStream:
         self.stop()
         raise StreamGap(message)
 
+    def _record_receipt(self, sequence, frame, game_time, payload, replay_record):
+        self.sequence = sequence
+        self.frame = frame
+        self.game_time = game_time
+        self.received[sequence] = deepcopy(replay_record) if replay_record is not None else payload
+
     def accept(self, verified_skill_end_owner=None, /, *, session, sequence, frame,
                game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
@@ -133,6 +139,29 @@ class EventStream:
                 or not isfinite(game_time) or game_time < self.game_time
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
+        if (self.statistics.settlement_enabled and settlement_identity
+                and settlement_identity[0] == 'foreign'):
+            # The roster/UID proved this event belongs to another player.
+            # It shares the global sequence, but no local skill activation or
+            # local legacy damage/HP account can validate its actor evidence.
+            elemental_burst = (kind == 'elemental_burst'
+                               or kind == 'damage_settlement' and damage_type == 5)
+            if kind == 'elemental_bar':
+                self.statistics.record_settlement_bar(target_uid, target, target_instance,
+                                                       'foreign', None, None)
+            elif elemental_burst:
+                for uid, bar in tuple(self.statistics.settlement_bars.items()):
+                    if uid == target_uid or bar[1] == target_instance:
+                        self.statistics.settlement_bars.pop(uid, None)
+            if kind == 'elemental_bar' or elemental_burst:
+                # Keep foreign target witnesses from leaving earlier local
+                # buildup available to an eventual source-null explosion.
+                if isinstance(target_instance, str) and target_instance:
+                    self.statistics.last_elemental.pop(target_instance, None)
+                else:
+                    self.statistics.last_elemental.clear()
+            self._record_receipt(sequence, frame, game_time, payload, replay_record)
+            return
         ignore_passive_native_cast = False
         native_cast = (skill_method or target_instance) == 'BasicSkill.OnCastFinish'
         skill_actor = (settlement_identity[2] if settlement_identity and settlement_identity[0] == 'local'
@@ -259,10 +288,7 @@ class EventStream:
                         finish_reason=finish_reason, enemy_max_hp=enemy_max_hp)
                 except (ValueError, TypeError, OverflowError):
                     self.statistics.mark_enemy_state_unknown()
-        self.sequence = sequence
-        self.frame = frame
-        self.game_time = game_time
-        self.received[sequence] = deepcopy(replay_record) if replay_record is not None else payload
+        self._record_receipt(sequence, frame, game_time, payload, replay_record)
 
     def watermark(self, *, session, sequence, frame, game_time):
         if self.closed:

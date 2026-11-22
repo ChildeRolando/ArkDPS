@@ -13,6 +13,52 @@ from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 
+def apply_event_quality(statistics, payload, enemy_damage_quality, *, baseline_frame, initial_drain):
+    """Apply the existing event-family quality rules to one scoped core."""
+    for source in payload.get('unknown_sources') or ():
+        statistics.mark_overkill_unknown(source)
+    for source in payload.get('engagement_unknown_sources') or ():
+        statistics.mark_engagement_unknown(source)
+    if payload['damage_unknown']:
+        statistics.mark_all_overkill_unknown()
+    if payload['engagement_unknown']:
+        statistics.mark_all_engagement_unknown()
+    if payload['shield_unknown']:
+        statistics.mark_shields_unknown()
+    if payload['skill_unknown']:
+        statistics.mark_skill_unknown()
+    if not payload['mitigation_ready'] or payload['mitigation_unknown']:
+        statistics.mark_mitigation_unknown()
+    if 'boss_damage_ready' in payload or statistics.boss_damage is not None:
+        statistics.observe_boss_damage(complete=payload.get('boss_damage_ready') is True
+                                       and not payload.get('boss_damage_unknown'))
+    if 'enemy_entry_ready' in payload or 'enemy_entry_unknown' in payload:
+        statistics.observe_enemy_entry(
+            baseline_frame,
+            complete=(payload.get('enemy_entry_ready') is True
+                      and payload.get('enemy_entry_unknown') is not True
+                      and (initial_drain
+                           or statistics.enemy_entry_start_frame is not None)),
+        )
+    if payload.get('enemy_phase_unknown') or payload.get('enemy_phase_ready') is False:
+        statistics.mark_enemy_phase_unknown()
+    if 'enemy_state_ready' in payload or 'enemy_state_unknown' in payload:
+        statistics.observe_enemy_state(
+            baseline_frame,
+            complete=(payload.get('enemy_state_ready') is True
+                      and payload.get('enemy_state_unknown') is not True
+                      and (initial_drain
+                           or statistics.enemy_state_start_frame is not None)),
+        )
+    elif statistics.enemy_state_start_frame is not None:
+        statistics.mark_enemy_state_unknown()
+    if 'enemy_damage_ready' in enemy_damage_quality or statistics.enemy_damage is not None:
+        statistics.observe_enemy_damage(complete=(
+            enemy_damage_quality.get('enemy_damage_ready') is True
+            and enemy_damage_quality.get('enemy_damage_unknown') is not True
+            and (initial_drain or statistics.enemy_damage is not None)))
+
+
 class CaptureRetry(RuntimeError):
     """No stable frame was obtained; queued events remain available."""
 
@@ -195,52 +241,10 @@ class LiveEventCapture:
             raise
 
     def _apply_quality(self, payload, enemy_damage_quality):
-        """Keep recoverable gaps scoped to their affected event metric."""
-        statistics = self.adapter.statistics
-        if statistics is None:
-            return
-        for source in payload.get('unknown_sources') or ():
-            statistics.mark_overkill_unknown(source)
-        for source in payload.get('engagement_unknown_sources') or ():
-            statistics.mark_engagement_unknown(source)
-        if payload['damage_unknown']:
-            statistics.mark_all_overkill_unknown()
-        if payload['engagement_unknown']:
-            statistics.mark_all_engagement_unknown()
-        if payload['shield_unknown']:
-            statistics.mark_shields_unknown()
-        if payload['skill_unknown']:
-            statistics.mark_skill_unknown()
-        if not payload['mitigation_ready'] or payload['mitigation_unknown']:
-            statistics.mark_mitigation_unknown()
-        if 'boss_damage_ready' in payload or statistics.boss_damage is not None:
-            statistics.observe_boss_damage(complete=payload.get('boss_damage_ready') is True
-                                           and not payload.get('boss_damage_unknown'))
-        if 'enemy_entry_ready' in payload or 'enemy_entry_unknown' in payload:
-            statistics.observe_enemy_entry(
-                self.adapter.event_stream.baseline_frame,
-                complete=(payload.get('enemy_entry_ready') is True
-                          and payload.get('enemy_entry_unknown') is not True
-                          and (self.initial_drain
-                               or statistics.enemy_entry_start_frame is not None)),
-            )
-        if payload.get('enemy_phase_unknown') or payload.get('enemy_phase_ready') is False:
-            statistics.mark_enemy_phase_unknown()
-        if 'enemy_state_ready' in payload or 'enemy_state_unknown' in payload:
-            statistics.observe_enemy_state(
-                self.adapter.event_stream.baseline_frame,
-                complete=(payload.get('enemy_state_ready') is True
-                          and payload.get('enemy_state_unknown') is not True
-                          and (self.initial_drain
-                               or statistics.enemy_state_start_frame is not None)),
-            )
-        elif statistics.enemy_state_start_frame is not None:
-            statistics.mark_enemy_state_unknown()
-        if 'enemy_damage_ready' in enemy_damage_quality or statistics.enemy_damage is not None:
-            statistics.observe_enemy_damage(complete=(
-                enemy_damage_quality.get('enemy_damage_ready') is True
-                and enemy_damage_quality.get('enemy_damage_unknown') is not True
-                and (self.initial_drain or statistics.enemy_damage is not None)))
+        if self.adapter.statistics is not None:
+            apply_event_quality(self.adapter.statistics, payload, enemy_damage_quality,
+                                baseline_frame=self.adapter.event_stream.baseline_frame,
+                                initial_drain=self.initial_drain)
 
     def ingest(self, sample, roster, sequence, drained, *, mark=None, allow_late_baseline=False):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.

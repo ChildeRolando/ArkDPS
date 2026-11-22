@@ -53,6 +53,10 @@ public sealed class RowItem : INotifyPropertyChanged
     internal void SetRank(int value) { if(rank!=value){rank=value;PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(Rank)));} }
     public string Id => Entry.Text("owner_id");
     public string Name => Entry.Text("name");
+    public string ActorUid => Entry.Text("actor_uid");
+    public string ActorName => ActorUid.Length > 0 && Name.EndsWith(" · " + ActorUid, StringComparison.Ordinal)
+        ? Name[..^(ActorUid.Length + 3)] : Name;
+    public string ActorIdentity => ActorUid.Length > 0 ? "UID " + ActorUid : Id;
     public string CoverageMarker => MetricCoverage.HasPartial(Entry.Get("coverage")) ? "*" : "";
     public Visibility CoverageMarkerVisibility => CoverageMarker.Length>0 ? Visibility.Visible : Visibility.Collapsed;
     public string DisplayName => CoverageMarker.Length>0 ? CoverageMarker+" "+Name : Name;
@@ -111,7 +115,7 @@ public sealed class RowItem : INotifyPropertyChanged
         + Environment.NewLine + ShareInfo.Label + " " + Share
         + (ShareInfo.Details.Length>0 ? Environment.NewLine + ShareInfo.Details : "")
         + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + CoverageSuffix;
-    public ImageSource? Portrait => Portraits.Get(Id, Entry.Bool("portrait_muted"));
+    public ImageSource? Portrait => Portraits.Get(Entry.Text("portrait_id") is { Length: > 0 } portraitId ? portraitId : Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
 

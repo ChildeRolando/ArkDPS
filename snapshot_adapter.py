@@ -336,6 +336,19 @@ class BattleStatisticsAdapter:
                 self.event_stream.accept(settlement_identity=self._settlement_identity(
                     source, event.get('source_character_uid')), **event)
                 return
+            if kind in SOURCE_EVENTS:
+                identity = self._settlement_identity(source, event.get('source_character_uid'))
+                if identity[0] == 'foreign':
+                    # Check stream order, then retire a verified other-player
+                    # event before CID-based legacy ownership or skill checks.
+                    self.event_stream.accept(settlement_identity=identity, **event)
+                    return
+                if self.settlement_version in (4, 5, 6, 7):
+                    event['settlement_identity'] = identity
+                    if identity[0] == 'unknown' and source is not None:
+                        # Modern observers provide actor evidence. A matching
+                        # prefab alone cannot turn an unknown UID into our hit.
+                        event['unresolved_source'] = True
             if kind in ('elemental_bar', 'skill_start', 'skill_end'):
                 if (self.settlement_version in (6, 7) and kind != 'elemental_bar'
                         and isinstance(source, str) and source in self.settlement_tokens):
@@ -357,7 +370,8 @@ class BattleStatisticsAdapter:
         if (self.statistics.settlement_enabled and legacy_damage and
                 (source is not None or kind != 'elemental_burst') and
                 (not isinstance(source, str) or not source)):
-            self.event_stream.accept(unresolved_source=True, **event)
+            event['unresolved_source'] = True
+            self.event_stream.accept(**event)
             return
         if not supplemental and kind != 'elemental_burst' and (
                 not isinstance(source, str) or not source):
@@ -370,7 +384,8 @@ class BattleStatisticsAdapter:
                 and (owner is None or source in blocked or owner in blocked)):
             if kind in ('damage', 'healing', 'elemental_bar', 'elemental_burst', 'shield_absorbed'):
                 self.unknown_sources.add(source)
-            self.event_stream.accept(unresolved_source=True, **event)
+            event['unresolved_source'] = True
+            self.event_stream.accept(**event)
             return
         if (not supplemental and source is not None
                 and (source in blocked or self.owner_map.owners.get(source) in blocked)):
@@ -493,6 +508,10 @@ class BattleStatisticsAdapter:
             source = event.get('source')
             uid = event.get('source_character_uid')
             if not isinstance(source, str) or not source or type(uid) is not int or not 0 < uid <= 0xffffffff:
+                continue
+            if self._settlement_identity(source, uid)[0] == 'foreign':
+                # A foreign instance with the same prefab is not an ownership
+                # witness for the local cumulative counter or skill window.
                 continue
             self.source_observed_uids.setdefault(source, set()).add(uid)
         for source, uids in self.source_observed_uids.items():
