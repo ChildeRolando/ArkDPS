@@ -225,6 +225,9 @@ internal static class MultiplayerViewTests
             app.InitializeComponent(); // Resource dictionary only. No Run, Show, target access or input.
         }
         Theme.Apply("lone-trail");
+        Check("AutoChess strategy operator loads its own normal and muted portraits",
+            Portraits.Get("char_618_acrbot", false) is System.Windows.Media.Imaging.CroppedBitmap { PixelWidth: 48, PixelHeight: 48 } &&
+            Portraits.Get("char_618_acrbot", true) is System.Windows.Media.Imaging.CroppedBitmap { PixelWidth: 48, PixelHeight: 48 });
         StableActorControls();
         RetainedDefenseTransitions();
         var surface = new MultiplayerView();

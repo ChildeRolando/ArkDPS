@@ -1676,7 +1676,7 @@ def test_real_metadata_key_and_invalid_manual_connection(tmp_path):
     state.accept('sample', dict(sample(), battle_metadata={'stage_id': 'OF-8'}))
     assert state.snapshot()['stage'] == 'OF-8'
     before = state.connection
-    with pytest.raises(ValueError, match='实例地址'):
+    with pytest.raises(ValueError, match='端口地址'):
         cmd(state, 'connection_apply', config={'auto_detect': False, 'serial': ''}, events=True)
     assert state.connection == before
 

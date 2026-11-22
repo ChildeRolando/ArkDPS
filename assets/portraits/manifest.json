@@ -1871,9 +1871,13 @@
     "char_617_sharp2": {
       "index": 466,
       "source_sha256": "98ceffb2875ddd96e191642debf23f205d19ccce4312c147c0dbbc5f34d468e3"
+    },
+    "char_618_acrbot": {
+      "index": 467,
+      "source_sha256": "089a560ad81cd3cb69bc802919dc720a3729bbc92a7b11f15d26aa802081bf29"
     }
   },
   "missing": [],
-  "normal.png": "4d2ebaeda649c7ebe3a47cbd45397418581b4232dee0b78d726930239c601ec2",
-  "muted.png": "8e2bc528c25b3d4d102a515e586d7d703a119659fa15eafc89fdc8471685fa38"
+  "normal.png": "7834e15be18c98a606a00ec90d61f5dd2e12a3849dbac2c4ec9ce5bfe27b7677",
+  "muted.png": "35bd59da3969234d3853dea244060f4b411e798a39a860022e10af4f8bdb184d"
 }

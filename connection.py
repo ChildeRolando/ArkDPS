@@ -747,7 +747,7 @@ def resolve_configured(config: ConnectionConfig,
             adb = resolve_adb_path(config.adb_path)
             diag = ConnectionDiagnostics(
                 status=DetectionStatus.NO_INSTANCE, adb_path=adb,
-                message='自动检测已关闭；请在连接设置中填写实例地址或重新开启自动检测。')
+                message='自动检测已关闭；请在连接设置中填写端口地址或重新开启自动检测。')
             raise ConnectionUnavailable(diag.message, diag)
         return resolve_target(ConnectionConfig(config.adb_path, config.serial, False),
                               runner)

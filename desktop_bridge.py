@@ -1023,7 +1023,7 @@ class DesktopState:
         elif op == 'connection_apply':
             config = ConnectionConfig.from_dict(cmd['config'])
             if config.platform == 'mumu' and not config.auto_detect and not config.serial:
-                raise ValueError('自动检测关闭时必须填写实例地址')
+                raise ValueError('自动检测关闭时必须填写端口地址')
             enabled = cmd['events']
             if not isinstance(enabled, bool):
                 raise ValueError('事件开关必须为布尔值')

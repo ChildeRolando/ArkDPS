@@ -119,7 +119,7 @@ def ensure_frida_endpoint(adb_path, serial, *, remote=DEFAULT_REMOTE,
     runs and endpoint overrides can keep using an existing device binary.
     """
     if not adb_path or not serial:
-        return False, '缺少 ADB 路径或实例地址'
+        return False, '缺少 ADB 路径或端口地址'
     parts = _remote_parts(remote)
     if parts is None:
         return False, '事件端点格式无效：' + str(remote)

@@ -80,6 +80,24 @@ def player(result, index):
     return next(p for p in result['players'] if p['player_uid'] == PLAYERS[index - 1]['uid'])
 
 
+def test_native_strategy_operator_uses_its_catalog_name_and_own_portrait_id(tmp_path):
+    from desktop_bridge import DesktopState, _event_only_statistics
+    from panel_model import PanelConfig
+
+    cid = 'char_618_acrbot'
+    roster = [member(3, cid=cid)]
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0, native=context(0, members=roster))
+    result = consume(meter, 2, [hit(1, 3, 1, cid=cid)], native=context(2, members=roster))
+    local = player(result, 3)
+    view = DesktopState(tmp_path)._actor_view(
+        PanelConfig(), _event_only_statistics(local['statistics']), local['actor_ledgers'],
+        player_uid=local['player_uid'])
+    entry, = view['entries']
+    assert entry['name'] == '暴躁铁皮 · 301'
+    assert entry['portrait_id'] == cid
+
+
 def test_native_same_cid_four_data_uids_belong_to_real_accounts_without_native_totals():
     meter = MultiplayerBattleStatistics()
     consume(meter, 0)

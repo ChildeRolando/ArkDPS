@@ -7,12 +7,16 @@ from hashlib import sha256
 from io import BytesIO
 import json
 from pathlib import Path
+import sys
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from character_catalog import load_character_names
+
 REVISION = '62fe51e6cd7faa5c1698e05f8cf63ed61cf6a7ac'
 BASE = f'https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/{REVISION}/avatar/'
 
@@ -31,7 +35,7 @@ def fetch(key):
 
 
 def main():
-    names = json.loads((ROOT / 'vendor/ark-source/game_data/catalogs/char_names.json').read_text('utf-8'))
+    names = load_character_names()
     keys = sorted(key for key in names if key.startswith('char_'))
     output = ROOT / 'assets/portraits'
     output.mkdir(parents=True, exist_ok=True)
