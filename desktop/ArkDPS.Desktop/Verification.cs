@@ -2085,7 +2085,11 @@ public partial class MainWindow
             var dpi=System.Windows.Media.VisualTreeHelper.GetDpi(hud);
             var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
             double width=Math.Clamp(placement.Number("width"),hud.MinWidth*dpi.DpiScaleX,work.Width);
-            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height)
+            var statusNotice=((Grid)hud.Content).Children.OfType<HudStatusNotice>().Single();
+            double statusHeight=statusNotice.Visibility==Visibility.Visible ? statusNotice.ActualHeight : 0;
+            double rateNoticeHeight=hud.Panel.RateNoticePanel.Visibility==Visibility.Visible
+                ? hud.Panel.RateNoticePanel.ActualHeight+hud.Panel.RateNoticePanel.Margin.Bottom : 0;
+            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height+statusHeight+rateNoticeHeight)
                 *hud.DisplayScale*dpi.DpiScaleY);
             double x=Math.Clamp(placement.Number("x"),work.Left,Math.Max(work.Left,work.Right-width));
             double y=Math.Clamp(placement.Number("y"),work.Top,Math.Max(work.Top,work.Bottom-height));
