@@ -67,6 +67,34 @@ function autoLayout(k,name,namespace,count,specs){
  }
  nativeAutoLayouts.set(cacheKey,out);return out;
 }
+function scopePointerNumber(pointer){
+ const value=Number(BigInt(pointer.toString()));
+ if(!Number.isSafeInteger(value)||value<0||value>0x7fffffffffff)throw new Error('AutoChess cached pointer range');
+ return value;
+}
+function scopeBlock(address,size,fields){
+ const bytes=address.readByteArray(size);
+ if(bytes===null||bytes.byteLength!==size)throw new Error('AutoChess block read unavailable');
+ const view=new DataView(bytes);
+ for(const [kind,offset,expected]of fields){
+  if(kind==='p'){
+   if(view.getUint32(offset,true)!==expected%4294967296||
+      view.getUint32(offset+4,true)!==Math.floor(expected/4294967296))
+    throw new Error('AutoChess scope block pointer changed');
+  }else if(view.getInt32(offset,true)!==expected)throw new Error('AutoChess scope block integer changed');
+ }
+}
+function scopeBlocks(cached){
+ const p=(offset,value)=>['p',offset,scopePointerNumber(value)],i=(offset,value)=>['i',offset,value];
+ return {
+  manager:[cached.manager.add(0x38),16,[p(0,cached.status),p(8,cached.center)]],
+  dict:[cached.dict.add(0x18),24,[p(0,cached.dictEntries),i(8,cached.dictCount),i(16,cached.dictFree),i(20,cached.dictVersion)]],
+  list:[cached.playerList.add(0x10),16,[p(0,cached.playerItems),i(8,cached.ownerRefs.length),i(12,cached.playerVersion)]],
+  owners:cached.ownerRefs.map(owner=>[
+   [owner.slot,16,[i(0,owner.index),p(8,owner.value)]],
+   [owner.value.add(0x10),16,[i(0,owner.index),p(8,owner.uidRef)]]])
+ };
+}
 function autoRead(){
  const guards=[];
  function value(kind,address){
@@ -93,8 +121,10 @@ function autoRead(){
   if(typeof result!=='string'||/[\u0000-\u001f\u007f]/.test(result))throw new Error('AutoChess string value');
   guards.push(['text',address,result]);return result;
  };
+ read.block=(address,size,fields)=>{scopeBlock(address,size,fields);guards.push(['block',address,{size,fields}]);};
  read.validate=()=>{
   for(const [kind,address,before] of guards){
+   if(kind==='block'){scopeBlock(address,before.size,before.fields);continue;}
    const after=kind==='p'?address.readPointer():kind==='i'?address.readS32():
     kind==='u'?address.readU32():kind==='b'?address.readU8():kind==='n'?address.readU64().toNumber():
     address.add(0x14).readUtf16String(address.add(0x10).readS32());
@@ -163,7 +193,8 @@ function autoHeader(identity,read){
  if(element.isNull()||((element.add(8).readU32()>>>16)&255)!==21)throw new Error('AutoChess dictionary metadata');
  const entry=autoGeneric(element.readPointer(),'Entry','',read);
  autoLayout(entry,'Entry','',4,[[0,'hashCode',0x10,[8]],[1,'next',0x14,[8]],[2,'key',0x18,[18]],[3,'value',0x20,[28,18]]]);
- const entries=read.p(dict.add(0x18)),count=read.i(dict.add(0x20)),free=read.i(dict.add(0x28));read.i(dict.add(0x2c));
+ const entries=read.p(dict.add(0x18)),count=read.i(dict.add(0x20)),free=read.i(dict.add(0x28));
+ const dictVersion=read.i(dict.add(0x2c));
  if(count<0||count>32||free<0||free>count||entries.isNull())throw new Error('AutoChess host dictionary bound');
  if(!autoIdentity(read.p(entries),'Entry[]',''))throw new Error('AutoChess host dictionary array');
  const capacity=read.n(entries.add(0x18));if(capacity<count||capacity>128)throw new Error('AutoChess host capacity');
@@ -191,7 +222,7 @@ function autoHeader(identity,read){
  if(![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(phase)||round<0)throw new Error('AutoChess phase/round');
  return {controller,host,dict,dictEntries:entries,dictCount:count,dictFree:free,managerSlot,
   manager,status,model,machine,center,phase,round,
-  self:read.i(center.add(0x38)),dictVersion:dict.add(0x2c).readS32()};
+  self:read.i(center.add(0x38)),dictVersion};
 }
 function autoData(address,read){
  read.object(address,'BattleCharacterData','Torappu.Battle',36,
@@ -321,6 +352,7 @@ function finishAutoChess(result,identity,frame,fixed){
  const scope_key=autoScope(identity,header.phase,header.round,frame,fixed,fingerprint,headerKey);
  nativeAutoCache={...header,playerModel:model,playerList,playerItems,playerVersion,
   ownerRefs,identity:{...identity},fingerprint,headerKey};
+ nativeAutoCache.blocks=scopeBlocks(nativeAutoCache);
  return {protocol_version:1,status:'available',verified_same_frame:true,frame,
   game_time:Number(BigInt(fixed))/4294967296,scope_key,phase:header.phase,round:header.round,
   self_player_index:header.self,players,memberships,unknown_memberships:unknown};
@@ -342,20 +374,18 @@ function stampAutoChessClock(when){
   const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
   if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time)throw new Error('AutoChess event clock mismatch');
   const read=autoRead();
-  for(const [address,expected]of [[cached.controller.add(0x2e8),cached.host],[cached.host.add(0x10),cached.dict],
-   [cached.manager.add(0x38),cached.status],[cached.manager.add(0x40),cached.center],
-   [cached.status.add(0x10),cached.model],[cached.model.add(0x18),cached.machine]]){
+  for(const [address,expected]of [[cached.controller.add(0x2e8),cached.host],[cached.host.add(0x10),cached.dict]]){
    if(!read.p(address).equals(expected))throw new Error('AutoChess header cache changed');
   }
-  if(read.i(cached.dict.add(0x2c))!==cached.dictVersion||!read.p(cached.dict.add(0x18)).equals(cached.dictEntries)||
-   read.i(cached.dict.add(0x20))!==cached.dictCount||read.i(cached.dict.add(0x28))!==cached.dictFree||
-   !read.p(cached.managerSlot).equals(cached.manager)||!read.p(cached.center.add(0xf8)).equals(cached.playerModel)||
-   !read.p(cached.playerModel.add(0x18)).equals(cached.playerList)||!read.p(cached.playerList.add(0x10)).equals(cached.playerItems)||
-   read.i(cached.playerList.add(0x18))!==cached.ownerRefs.length||
-   read.i(cached.playerList.add(0x1c))!==cached.playerVersion)throw new Error('AutoChess players cache changed');
-  for(const owner of cached.ownerRefs)if(read.i(owner.slot)!==owner.index||!read.p(owner.slot.add(8)).equals(owner.value)||
-   read.i(owner.value.add(0x10))!==owner.index||!read.p(owner.value.add(0x18)).equals(owner.uidRef))
-   throw new Error('AutoChess owner cache changed');
+  read.block(...cached.blocks.manager);
+  for(const [address,expected]of [[cached.status.add(0x10),cached.model],[cached.model.add(0x18),cached.machine]]){
+   if(!read.p(address).equals(expected))throw new Error('AutoChess header cache changed');
+  }
+  read.block(...cached.blocks.dict);
+  if(!read.p(cached.managerSlot).equals(cached.manager)||!read.p(cached.center.add(0xf8)).equals(cached.playerModel)||
+   !read.p(cached.playerModel.add(0x18)).equals(cached.playerList))throw new Error('AutoChess players cache changed');
+  read.block(...cached.blocks.list);
+  for(const owner of cached.blocks.owners){read.block(...owner[0]);read.block(...owner[1]);}
   const phase=read.i(cached.machine.add(0x5c)),round=read.i(cached.center.add(0x3c));
   if(![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(phase)||round<0)throw new Error('AutoChess event phase/round');
   read.validate();const after=currentNativeIdentity();
@@ -365,6 +395,19 @@ function stampAutoChessClock(when){
   when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,
    frame,game_time:when.game_time,scope_key,phase,round};
  }catch(e){nativeAutoCache=null;unknown(String(e));}
+}
+let nativeAutoBodyCache=null;
+function readAutoChessBody(identity,frame,fixed,key){
+ const cached=nativeAutoBodyCache;
+ if(cached&&cached.key===key&&cached.generation===nativeGeneration&&cached.epoch===nativeAutoEpoch
+    &&frame>=cached.frame&&BigInt(fixed)>=BigInt(cached.fixed)){
+  try{cached.body.read.validate();}
+  catch(e){nativeAutoBodyCache=null;return readAutoChess(identity,frame,fixed);}
+  try{cached.body.read.validate();}
+  catch(e){nativeAutoCache=null;nativeAutoBodyCache=null;return {error:String(e)};}
+  return cached.body;
+ }
+ nativeAutoBodyCache=null;return readAutoChess(identity,frame,fixed);
 }
 function currentNativeIdentity(){
  if(!nativeControllerClass)return null;
@@ -380,23 +423,25 @@ function nativeBinding(){
  // Windows sampler. The host binds this evidence to its battle serial.
  try{
   const before=currentNativeIdentity();
-  if(before===null)return null;
+  if(before===null){nativeAutoBodyCache=null;return null;}
   const state=ptr(before.controller).add(0x228).readS32();
-  if(state!==2&&state!==3)return null;
+  if(state!==2&&state!==3){nativeAutoBodyCache=null;return null;}
   const stage=str(ptr(before.level).add(0x18).readPointer());
-  if(typeof stage!=='string'||!stage.length)return null;
+  if(typeof stage!=='string'||!stage.length){nativeAutoBodyCache=null;return null;}
   const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
   const enabled=/AUTOCHESS/i.test(stage);
   const stageKey=[before.controller,before.native,before.logger,before.stats,before.level,stage].join(':');
-  if(nativeAutoStage?.key!==stageKey)nativeAutoCache=null;
+  if(nativeAutoStage?.key!==stageKey){nativeAutoCache=null;nativeAutoBodyCache=null;}
   nativeAutoStage={key:stageKey,enabled,stagePointer:ptr(before.level).add(0x18).readPointer()};
-  const auto=enabled?readAutoChess(before,frame,fixed):null;
+  const bodyKey=stageKey+'#'+nativeAutoStage.stagePointer.toString();
+  if(!enabled)nativeAutoBodyCache=null;
+  const auto=enabled?readAutoChessBody(before,frame,fixed,bodyKey):null;
   const after=currentNativeIdentity();
   if(after===null||clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed
      ||Object.keys(before).some(key=>before[key]!==after[key])
      ||ptr(after.controller).add(0x228).readS32()!==state
-     ||str(ptr(after.level).add(0x18).readPointer())!==stage)return null;
-  if(BigInt(fixed)<0n)return null;
+     ||str(ptr(after.level).add(0x18).readPointer())!==stage){nativeAutoBodyCache=null;return null;}
+  if(BigInt(fixed)<0n){nativeAutoBodyCache=null;return null;}
   damageSettlementStamp(frame,Number(BigInt(fixed))/4294967296);
   const key=[before.controller,before.native,before.logger,before.stats,before.level,stage].join(':');
   if(nativeLastBinding&&(nativeLastBinding.key!==key||frame<nativeLastBinding.frame
@@ -404,9 +449,13 @@ function nativeBinding(){
   nativeLastBinding={key,frame,fixed};
   const result={native_process_pid:Process.id,native_identity:before,native_generation:nativeGeneration,
    native_frame:frame,native_fixed_time:fixed,native_stage_id:stage};
-  if(enabled)result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
+  if(enabled){
+   result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
+   nativeAutoBodyCache=!auto.error&&auto.unknown.length===0?
+    {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto}:null;
+  }
   return result;
- }catch(e){return null;}
+ }catch(e){nativeAutoBodyCache=null;return null;}
 }
 const probeAdapter={
  moduleName:'GameAssembly.dll',imageSizeType:'size_t',requiredClasses:['LevelData'],allowNullClassRows:true,

@@ -1975,7 +1975,7 @@ def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed
         details={'win32_error': 5} if denied else {})
     class NativeCollector:
         diagnostics = diagnostic
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             calls.append(('collector', root))
     class Session:
         cleanup_errors = {}
@@ -2037,7 +2037,7 @@ def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
                                      selected_serial='mumu-serial', version_actual='build')
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             calls.append(('native_collector', root))
     class Session:
         cleanup_errors = {}
@@ -2110,7 +2110,7 @@ def test_native_permanent_connect_failures_wait_for_user_but_absence_recovers(
     clock, attempts, explicit = [0.0], [], []
     monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
     class NativeCollector:
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             attempts.append(clock[0])
             failed = len(attempts) == 1
             self.diagnostics = ConnectionDiagnostics(
@@ -2157,7 +2157,7 @@ def test_native_process_change_releases_old_handle_and_reconnects(tmp_path, monk
     calls = []
     class NativeCollector:
         diagnostics = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform='native_pc')
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             calls.append('open')
     class Session:
         cleanup_errors = {}
@@ -2215,7 +2215,7 @@ def test_new_source_apply_wins_over_old_session_recovery(
 
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             pass
 
     class Session:

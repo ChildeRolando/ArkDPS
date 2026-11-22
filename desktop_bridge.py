@@ -649,6 +649,10 @@ class DesktopState:
             if (isinstance(window, (list, tuple)) and len(window) == 2
                     and all(type(value) in (int, float) and math.isfinite(value) for value in window)):
                 player['window_text'] = f'观察 {window[0]:.1f}—{window[1]:.1f} 游戏秒'
+            # The rendered view owns the wire-facing source and details. Keep
+            # the raw statistics/actor ledgers only in samples and archives.
+            player.pop('statistics', None)
+            player.pop('actor_ledgers', None)
             players.append(player)
         result['players'] = players
         return result
@@ -1053,7 +1057,9 @@ class CollectionWorker:
                                     if config.platform == 'native_pc':
                                         from native_pc_collector import NativePcCollector
                                         session_kwargs['collector'] = NativePcCollector(
-                                            config.native_game_root, collect_actions=enabled)
+                                            config.native_game_root, collect_actions=enabled,
+                                            event_identity_only=(enabled and self.arkframework_root is None
+                                                and self.native_pc_observer_factory is None))
                                         if pc_provider is not None:
                                             session_kwargs['observer_factory'] = pc_provider
                                         adb, serial = None, None

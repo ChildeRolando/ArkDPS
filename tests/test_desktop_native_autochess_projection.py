@@ -5,8 +5,8 @@ from dataclasses import replace
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
-from desktop_bridge import DesktopState
-from panel_model import Category, EventAvailability, PanelConfig, Ranking
+from desktop_bridge import DesktopState, _event_only_statistics
+from panel_model import Category, EventAvailability, PanelConfig, Ranking, RateBasis
 from test_multiplayer_integration import CID
 from test_native_pc_autochess_acquisition import ScopedNativeBattle
 
@@ -51,6 +51,7 @@ def test_accepted_four_account_views_and_local_panels_share_the_existing_rendere
     assert projected['native_round'] == 4 and projected['scope'] == sample['multiplayer']['scope']
     for slot, player in enumerate(projected['players'], 1):
         assert player['slot'] == slot and player['player_uid'] == f'91000000{slot}'
+        assert 'statistics' not in player and 'actor_ledgers' not in player
         entry, = player['view']['entries']
         assert entry['value'] == slot * 100 and entry['actor_uid'] == slot * 100 + 1
         assert entry['portrait_id'] == CID and entry['player_uid'] == player['player_uid']
@@ -86,6 +87,60 @@ def test_known_identity_without_events_stays_unknown_even_in_effective_footer(tm
         assert player['view']['entries'] == [] and player['view']['footer_total'] is None
     assert snapshot['panels'][0]['footer_total'] is None
     assert snapshot['live_analysis']['observed_peak_dps'] is None
+
+
+@pytest.mark.parametrize('schema_version', [1, 2], ids=['legacy', 'native'])
+@pytest.mark.parametrize('historical', [False, True], ids=['live', 'history'])
+def test_wire_omits_only_raw_player_ledgers_and_keeps_full_rendered_views(tmp_path, schema_version, historical):
+    state = DesktopState(tmp_path)
+    if historical:
+        record, path = saved_native_record(tmp_path, end_phase=True)
+        original_bytes = path.read_bytes()
+        raw_record = record.to_dict()
+        state.selected = record
+        payload = record.last_sample['multiplayer']
+        event = EventAvailability(record.event_status, record.event_error, live=False)
+    else:
+        sample = populated().runtime.display_sample()
+        raw_sample = deepcopy(sample)
+        payload = sample['multiplayer']
+        state.accept('sample', sample)
+        event = EventAvailability(sample['event_status'], sample.get('event_error'))
+    if schema_version == 1:
+        payload = dict(payload, schema_version=1)
+    original = deepcopy(payload)
+    if schema_version == 2:
+        projected = state.snapshot()['history_selected' if historical else 'multiplayer']
+        if historical:
+            projected = projected['multiplayer']
+    else:
+        projected = state.multiplayer_view(payload, event=event)
+    omitted = {'statistics', 'actor_ledgers'}
+    assert projected.keys() == payload.keys()
+    assert {key: value for key, value in projected.items() if key != 'players'} == {
+        key: value for key, value in payload.items() if key != 'players'}
+    for raw, player in zip(payload['players'], projected['players'], strict=True):
+        assert omitted.isdisjoint(player)
+        assert player.keys() == (raw.keys() - omitted | {'view', 'display', 'window_text'})
+        assert {key: player[key] for key in raw.keys() - omitted} == {
+            key: value for key, value in raw.items() if key not in omitted}
+        position = raw['slot'] if schema_version == 2 else raw['player_side']
+        config = PanelConfig(panel_id=f'multiplayer-{position}', effective_only=True,
+                             ranking=Ranking.TOTAL, rate_basis=RateBasis.ENGAGEMENT,
+                             title='已观察有效伤害 · 接敌 DPS')
+        statistics = (_event_only_statistics(raw['statistics']) if schema_version == 2
+                      else raw['statistics'])
+        expected = state._actor_view(config, statistics, raw['actor_ledgers'],
+            side=raw['player_side'], player_uid=raw['player_uid'] if schema_version == 2 else None,
+            event=event)
+        assert player['view'] == expected
+        assert player['view']['footer_total'] == raw['observed_damage']
+        assert player['view']['details_by_owner']
+    assert payload == original
+    if historical:
+        assert record.to_dict() == raw_record and path.read_bytes() == original_bytes
+    else:
+        assert sample == raw_sample and state.last is sample
 
 
 @pytest.mark.parametrize('invalid', ['missing', 'multiple', 'duplicate_uid', 'unknown_uid', 'bad_uid'])
@@ -204,7 +259,8 @@ def test_unknown_account_slot_cannot_keep_an_old_players_values(tmp_path):
     payload['players'][0]['player_side'] = 3
     result = DesktopState(tmp_path).multiplayer_view(payload, event=EventAvailability('recording'))
     player = result['players'][0]
-    assert player['slot'] == 1 and player['player_uid'] is player['statistics'] is None
+    assert player['slot'] == 1 and player['player_uid'] is None
+    assert 'statistics' not in player and 'actor_ledgers' not in player
     assert player['view']['entries'] == [] and player['view']['source'] == {}
     assert player['display']['damage'] == '未知' and player['observed_damage'] is None
 
@@ -215,7 +271,8 @@ def test_unavailable_v2_payload_cannot_retain_old_values_in_its_views(tmp_path):
     result = DesktopState(tmp_path).multiplayer_view(payload)
     for player in result['players']:
         assert player['display']['damage'] == '未知' and player['observed_damage'] is None
-        assert player['statistics'] is None and player['view']['source'] == {}
+        assert 'statistics' not in player and 'actor_ledgers' not in player
+        assert player['view']['source'] == {}
         assert player['view']['footer_total'] is None
 
 

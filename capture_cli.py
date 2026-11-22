@@ -143,7 +143,10 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
         if platform == 'native_pc':
             from native_pc_collector import NativePcCollector
             collector = NativePcCollector(args.native_game_root,
-                                          collect_actions=getattr(args, 'collect_native_actions', True))
+                                          collect_actions=getattr(args, 'collect_native_actions', True),
+                                          event_identity_only=(args.frida_remote is None
+                                              and getattr(args, 'arkframework_root', None) is None
+                                              and native_pc_observer_factory is None))
             session_options.update(collector=collector, frida_remote=args.frida_remote)
             framework_root = getattr(args, 'arkframework_root', None)
             if framework_root is not None:

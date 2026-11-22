@@ -279,7 +279,7 @@ assert.equal(bounded.mark().sequence,513);
 // native pointer read or a protocol cursor mutation would fail this check.
 const scalarState=vm.runInContext('({sequence,acknowledgedSequence,readThroughSequence})',bounded.context);
 const queue=vm.runInContext('queue',bounded.context),pointerProto=bounded.ptr(0).constructor.prototype;
-const pointerMethods=['readPointer','readCString','readUtf16String','readU8','readU16','readU32','readS32','readFloat','readS64','readU64'];
+const pointerMethods=['readByteArray','readPointer','readCString','readUtf16String','readU8','readU16','readU32','readS32','readFloat','readS64','readU64'];
 const pointerReads=pointerMethods.map(name=>[name,pointerProto[name]]);
 for(const name of pointerMethods)pointerProto[name]=function(){throw new Error('baseline attempted a native read');};
 let pure;

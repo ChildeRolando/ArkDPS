@@ -584,6 +584,8 @@ def test_extra_reader_runs_inside_the_same_guard_without_exposing_addresses(runt
     root, api, p = runtime
     with battle.NativePcBattleProbe(root, api) as probe:
         def extra(read_bytes, context):
+            assert context['stage_id'] == 'Obt/Main/level_main_01-07'
+            assert context['stage_status'] == 'available'
             assert context['battle_stats'] == p['stats']
             assert context['level_data'] == p['level']
             assert context['class_definition_table_slot'] == api.base + battle.CLASS_DEFINITION_TABLE_RVA

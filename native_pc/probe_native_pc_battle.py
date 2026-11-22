@@ -519,6 +519,8 @@ class NativePcBattleProbe:
             extra = extra_reader(reader.read_optional, {'battle_controller': battle, 'battle_logger': logger,
                                               'battle_stats': stats, 'level_data': level, 'frame': frame,
                                               'game_time': game_time,
+                                              'stage_id': metadata['stage_id'],
+                                              'stage_status': metadata['stage_status'],
                                               'class_definition_table_slot': class_table_slot,
                                               'game_assembly_range': (self.base, self.module_size)})
             _require(type(extra) is dict, 'invalid_extra_sample')

@@ -993,6 +993,9 @@ class BattleRuntime:
                       snapshot_revision=result.get('snapshot_revision'),
                       event_watermark=(dict(sequence=stream.sequence, frame=stream.frame,
                                             game_time=stream.game_time) if stream else None))
-        if self.sessions.multiplayer is not None:
+        # consume/gap/finish retain the latest detached player projection. The
+        # sample copy above already isolates it from this caller; rebuild only
+        # when retention was unavailable, preserving optional-result retries.
+        if self.sessions.multiplayer is not None and not isinstance(sample.get('multiplayer'), dict):
             sample['multiplayer'] = self.sessions._multiplayer_result()
         return sample

@@ -37,10 +37,14 @@ def _flow(report):
     return report.get('game_flow') if report.get('game_flow_status') == 'available' else None
 
 
-def _capture_fields(read, context):
+def _capture_fields(read, context, *, event_identity_only=False):
     fields = {}
     for key, capture in (('actor_rows', capture_character_rows), ('roster', capture_roster),
                          ('presence', capture_presence)):
+        if event_identity_only and key in ('roster', 'presence'):
+            fields.update({key: None, f'{key}_status': 'not_requested',
+                           f'{key}_reason': 'native_event_identity'})
+            continue
         try:
             fields.update(capture(read, context))
         except (ApiFailure, ResearchFailure) as error:
@@ -101,10 +105,11 @@ class NativePcCollector:
 
     enemy_frame_bound = True
 
-    def __init__(self, game_root, *, probe_factory=None, collect_actions=True):
+    def __init__(self, game_root, *, probe_factory=None, collect_actions=True, event_identity_only=False):
         self.game_root = Path(game_root).expanduser() if game_root else None
         self.probe_factory = probe_factory or NativePcBattleProbe
         self.collect_actions = collect_actions
+        self.event_identity_only = event_identity_only
         self.process = None
         self._pending = None
         self._enemy_battle = None
@@ -264,7 +269,16 @@ class NativePcCollector:
         return lifecycle
 
     def _capture(self, read, context):
-        fields = _capture_fields(read, context)
+        event_identity = (self.event_identity_only and context.get('stage_status') == 'available'
+                          and 'AUTOCHESS' in str(context.get('stage_id', '')).upper())
+        if event_identity:
+            # The independent PC event envelope owns the account/actor table.
+            # Skip the redundant legacy identity walks. Retain actor counters
+            # for the existing initial-skill baseline check and diagnostics;
+            # the event-only adapter never splits them into player amounts.
+            fields = _capture_fields(read, context, event_identity_only=True)
+        else:
+            fields = _capture_fields(read, context)
         now = time.monotonic()
         enemy_due = now >= self._next_enemy
         if enemy_due:
@@ -282,7 +296,7 @@ class NativePcCollector:
             except (ApiFailure, ResearchFailure):
                 fields.update(stage_spawns_status='unavailable', stage_spawns=None,
                               stage_spawns_reason='optional_stage_plan_read_failed')
-        elif not enemy_due and self.collect_actions and now >= self._next_action_journal:
+        elif not enemy_due and self.collect_actions and not event_identity and now >= self._next_action_journal:
             self._next_action_journal = now + ACTION_JOURNAL_SAMPLE_INTERVAL
             try:
                 fields.update(capture_actions(read, context))

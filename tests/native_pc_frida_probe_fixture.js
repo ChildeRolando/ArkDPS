@@ -54,6 +54,25 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       return {toString: () => value.toString(), toNumber: () => Number(value)};
     }
     readU64() { return this.readS64(); }
+    readByteArray(size) {
+      assert(Number.isSafeInteger(size) && size >= 0 && size <= 128, 'owned byte-read bound');
+      const bytes = new ArrayBuffer(size), view = new DataView(bytes);
+      for (let offset = 0; offset < size;) {
+        const key = this.add(offset).toString();
+        // Scalar fixture cells omit struct padding; real allocated bytes exist.
+        if (!memory.has(key)) { offset += 4; continue; }
+        const value = memory.get(key);
+        if (value instanceof Pointer || typeof value === 'bigint') {
+          assert(offset + 8 <= size, 'owned pointer exceeds byte-read range');
+          view.setBigUint64(offset, BigInt.asUintN(64, value instanceof Pointer ? value.value : value), true);
+          offset += 8;
+        } else {
+          view.setInt32(offset, Number(value), true);
+          offset += 4;
+        }
+      }
+      return bytes;
+    }
     writeU64(value) { write(this, BigInt(value)); }
   }
   function ptr(value) { return value instanceof Pointer ? value : new Pointer(value); }
