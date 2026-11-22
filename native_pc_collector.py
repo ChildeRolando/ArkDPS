@@ -352,11 +352,15 @@ class NativePcCollector:
             raise SnapshotGap('官服 PC 的同帧累计及编队数据已失效')
         report = pending[1]
         raw = report['sample']
-        for key in ('actor_rows', 'roster'):
-            if raw.get(f'{key}_status') != 'available' or raw.get(key) is None:
-                raise SnapshotGap(f'官服 PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
+        missing = [key for key in ('actor_rows', 'roster')
+                   if raw.get(f'{key}_status') != 'available' or raw.get(key) is None]
+        event_candidate = bool(missing and raw.get('stage_status') == 'available'
+                               and 'AUTOCHESS' in str(raw.get('stage_id', '')).upper())
+        if missing and not event_candidate:
+            key = missing[0]
+            raise SnapshotGap(f'官服 PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
         self._observe_stage_plan(raw)
-        rows = raw['actor_rows']
+        rows = [] if 'actor_rows' in missing else raw['actor_rows']
         battle = lifecycle['battle']
         if self._enemy_battle != battle:
             self._reset_enemy_observation()
@@ -365,7 +369,10 @@ class NativePcCollector:
             observed = time.monotonic()
             self._enemy_snapshot = (observed, raw['frame'], raw['game_time'], raw)
             self._next_enemy = max(self._next_enemy, observed + ENEMY_SAMPLE_INTERVAL)
-        roster = _roster(raw)
+        # BattlePlayerData is a legacy witness, not the AutoChess account table.
+        # A candidate still needs the existing independent event binding before
+        # the adapter can accept it; an empty roster never certifies ownership.
+        roster = RosterSnapshot(raw['frame']) if event_candidate else _roster(raw)
         sample = dict(session=':'.join(map(str, (*self.process.process_instance, *lifecycle['battle']))),
                       frame=raw['frame'], game_time=raw['game_time'], battle_identity=lifecycle['battle'],
                       state=raw['battle_state'], speed=raw.get('speed_level'), paused=raw.get('paused'),
@@ -375,6 +382,11 @@ class NativePcCollector:
                       damage_basis='client character counters; includes overkill; excludes healing',
                       read_ms=report.get('acquisition', {}).get('duration_ms'),
                       observed_at=time.time(), captured_monotonic=time.monotonic())
+        if event_candidate:
+            sample['native_counter_scope'] = 'events_only'
+            sample['native_snapshot_witnesses'] = {
+                key: dict(status=raw.get(f'{key}_status'), reason=raw.get(f'{key}_reason'))
+                for key in ('actor_rows', 'roster')}
         if self.collect_actions and 'actions_status' in raw:
             sample['native_action_journal'] = dict(status=raw['actions_status'],
                                                    reason=raw.get('actions_reason'),

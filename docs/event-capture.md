@@ -14,6 +14,8 @@
 
 2026-11-22 的只读实机诊断已核验原生 `BATTLE=4`、`HELP_BATTLE=5`、四家账号表及各家的角色 data UID。第 4 轮分帧页中读取到四组共 15 名角色；协防又确认同一 `playerIndex=3` 的 `side` 从 3 变成 1。这些页仅是各自同帧的诊断证据，没有拼成一份生产名单，也不认证逐次伤害完整覆盖。最终诊断保存 3528 条样本；第 13 轮替换心跳文件遇到 Windows 拒绝访问而结束，失败状态与已保存数据摘要均保留。本机证据位于 `runtime/autochess-live-rc15/round-watch-20261122-204540-308181/`。较早的协防回放、身份诊断和合成 Node/生命周期测试均不能替代新 PC 采集端的防御四家实机对账。
 
+rc.16 实机未通过防御验收：记录中反复出现 `gap/read_unavailable`，只有协防存在已归账输出。另一次只读诊断在通过外层同帧守卫的原生样本中复现 `roster_status=unavailable / counter_list_size`，来自旧 `BattlePlayerData` 列表的 0–4 上界；读取入口在绑定新事件身份前就拒绝了样本。证据保留于 `runtime/event-probe-verification/rc16-live-audit/`。修复仅对受守卫的卫戍关卡允许提交显式 `events_only` 候选，保留旧累计、编队各自的不可用原因；缺少同帧事件身份时仍拒绝接纳和确认，不能回退到按角色名累计。其他关卡的旧读取条件保持。该修复仍待实机验收。
+
 2026-11-22 已在普通官服 PC 新进程中跑通独立 Gadget 启动加载，随后通过 ArkDPS 原有 `CollectionSession` 加载完整 `event_probe_native_pc.js`。一局 CE-5 已完成四类事件对账。正常 CLI 与桌面 worker 现由 `NativePcFridaRuntime` 在连接快照前管理启动和重连。普通 worker 在第二个新游戏进程中自动载入了组件，修正启动阶段访问快照的时序后，已在同一进程验证完整探针重连就绪及清理。[首次启动加载](../runtime/native-pc/frida-development/watch-game-20261122.json) · [完整探针就绪](../runtime/native-pc/frida-development/game-capture-20261122-01/READY.json) · [正常 worker 初始失败](../runtime/native-pc/frida-development/normal-worker-smoke-initial-failure.json) · [正常 worker 重连](../runtime/native-pc/frida-development/normal-worker-smoke-reconnect.json)
 
 官服 PC 的「启用观察者」使用 `NativePcFridaRuntime` 在新游戏启动早期装入固定版本官方 Gadget，再通过本机随机令牌认证连接，将 `NativePcFridaObserver` 与 `event_probe_native_pc.js` 绑定到已验证的 Windows x64 进程。源码与桌面入口共用此默认路径。`--no-events` 关闭观察及启动监听，`--frida-remote` 继续用于 MuMu。

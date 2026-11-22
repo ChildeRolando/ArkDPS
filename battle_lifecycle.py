@@ -33,6 +33,7 @@ class BattleObservation:
     events: dict | None = None
     lifecycle: dict | None = None
     round_reset: dict | None = None
+    read_error: dict | None = None
 
 
 class MappingRetry(CaptureRetry):
@@ -89,11 +90,12 @@ class BattleFeed:
         self.retired_stage = None
         self.autochess_identity = None
 
-    def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None):
+    def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None,
+              read_error=None):
         self.sequence += 1
         return BattleObservation(self.id, self.sequence, self.generation,
                                  kind, deepcopy(sample), roster, reason, deepcopy(events),
-                                 deepcopy(self.current_lifecycle), deepcopy(round_reset))
+                                 deepcopy(self.current_lifecycle), deepcopy(round_reset), deepcopy(read_error))
 
     @property
     def battle_waiting(self):
@@ -105,9 +107,11 @@ class BattleFeed:
         return (current['target'] != 'battle_finish' and
                 (current['battle'] is None or current['state'] in (0, 1)))
 
-    def gap(self, reason='read_unavailable'):
+    def gap(self, reason='read_unavailable', *, error=None):
         self.current_lifecycle = None
-        return self._emit('gap', reason=reason)
+        detail = (dict(type=type(error).__name__, message=str(error).partition('\n')[0][:240])
+                  if error is not None else None)
+        return self._emit('gap', reason=reason, read_error=detail)
 
     def _end(self, reason, sample=None, roster=None, *, observer=None):
         if self.identity is None:
@@ -938,10 +942,10 @@ class BattleRuntime:
                 self._consume(self.feed.gap('process_changed'))
                 raise
             if isinstance(exc, SnapshotGap):
-                self._consume(self.feed.gap('read_unavailable'))
+                self._consume(self.feed.gap('read_unavailable', error=exc))
             raise CaptureRetry(str(exc)) from exc
-        except Exception:
-            self._consume(self.feed.gap('read_unavailable'))
+        except Exception as exc:
+            self._consume(self.feed.gap('read_unavailable', error=exc))
             raise
         return observation
 

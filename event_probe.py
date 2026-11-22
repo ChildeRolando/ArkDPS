@@ -143,8 +143,8 @@ def bind_native_autochess_pair(sample, before, after):
     sample['native_counter_scope'] = 'events_only'
 
 
-def native_autochess_event_baseline(sample):
-    """Whether this accepted PC frame supplies a combat identity baseline."""
+def native_autochess_context_bound(sample):
+    """Whether this PC frame has independently bound AutoChess identity."""
     context = sample.get('autochess_context') or {}
     metadata = sample.get('battle_metadata') or {}
     identity = context.get('identity') or {}
@@ -155,10 +155,15 @@ def native_autochess_event_baseline(sample):
                 and context.get('verified_same_frame') is True
                 and context.get('frame') == sample.get('frame')
                 and context.get('game_time') == sample.get('game_time')
-                and context.get('phase') in (4, 5, 6)
                 and isinstance(identity.get('scope_key'), str) and identity['scope_key']
                 and identity.get('phase') == context.get('phase')
                 and identity.get('round') == context.get('round'))
+
+
+def native_autochess_event_baseline(sample):
+    """Whether this accepted PC frame supplies a combat identity baseline."""
+    return (native_autochess_context_bound(sample)
+            and sample['autochess_context']['phase'] in (4, 5, 6))
 
 
 def ready_probe_modes(payload):

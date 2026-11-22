@@ -16,7 +16,7 @@ from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import ENEMY_STATE_KINDS, Statistics
 from event_stream import EventStream, StreamGap
-from event_probe import native_autochess_event_baseline
+from event_probe import native_autochess_context_bound, native_autochess_event_baseline
 from source_classification import classify_unmapped_source
 
 DAMAGE_TYPES = ('physical', 'arts', 'true', 'elemental')
@@ -567,6 +567,12 @@ class BattleStatisticsAdapter:
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
             raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
+        if ('native_snapshot_witnesses' in sample
+                and not native_autochess_context_bound(sample)):
+            raise MappingUnavailable('原生累计或编队不可用，尚未取得可靠的卫戍事件身份；保留队列重试')
+        if (self.statistics is not None and sample.get('session') == self.session
+                and sample.get('native_counter_scope') == 'events_only' and not self._events_only):
+            raise MappingUnavailable('统计来源已转为按玩家事件归属，等待新的战局代次；拒绝复用按角色名累计')
         metadata = sample.get('battle_metadata') or {}
         native_abandon = (terminal and sample.get('state') == 2
                           and metadata.get('platform') == 'native_pc'

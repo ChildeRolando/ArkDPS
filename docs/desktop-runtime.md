@@ -2,6 +2,8 @@
 
 这是当前桌面入口和分发契约；统计及历史格式仍由 [panel-model](panel-model.md)、[statistics-core](statistics-core.md) 与 [snapshot-adapter](snapshot-adapter.md) 拥有。技术取舍见 [ADR 0003](adr/0003-wpf-python-worker.md)。
 
+采集审计的 `lifecycle_observation` 保留原有 `gap/read_unavailable` 原因，并可附带 `read_error: {type, message}`。该诊断记录被拒采样的具体错误，不构造快照或事件；缺少此字段的旧录制仍可重放。
+
 ## 进程与所有权
 
 - `desktop/ArkDPS.Desktop` 是 .NET 10 / C# / WPF 原生 UI：主窗、统计面板、历史页、连接表单、固定干员报告、HUD、托盘与 PNG 均由 WPF 绘制；不是 Tk 换皮，也没有 WebView。
