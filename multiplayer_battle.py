@@ -82,6 +82,10 @@ class MultiplayerBattleStatistics:
         self._sample_session = self._native_session = None
         self._settlement_version = None
         self._native_mode = False
+        self._collection_mode = 'all'
+        self._mode_declared = False
+        self._native_accounts = {}
+        self._local_account_uid = None
         self._context = self._active_context = None
         self._context_fingerprint = None
         self._retired_contexts = set()
@@ -99,6 +103,7 @@ class MultiplayerBattleStatistics:
     @staticmethod
     def _native_fingerprint(context, sample):
         if (not isinstance(context, dict) or context.get('status') not in ('available', 'partial')
+                or context.get('collection_mode', 'all') not in ('all', 'local')
                 or context.get('verified_same_frame') is not True
                 or context.get('frame') != sample['frame']
                 or context.get('game_time') != sample['game_time']):
@@ -128,7 +133,7 @@ class MultiplayerBattleStatistics:
 
     def _begin(self, sample, round_id, reason, *, context=None):
         new_context = self._native_fingerprint(context, sample) if context is not None else None
-        if self._players:
+        if self._enabled:
             old_identity = (self._base_round, self._sample_session, self._native_session)
             new_identity = (round_id, sample.get('session'), sample.get('native_session'))
             if old_identity != new_identity:
@@ -156,6 +161,10 @@ class MultiplayerBattleStatistics:
         self._base_round = round_id
         self._epoch += 1
         self._native_mode = context is not None
+        self._collection_mode = context.get('collection_mode', 'all') if context is not None else 'all'
+        self._mode_declared = context is not None and 'collection_mode' in context
+        self._native_accounts = {row['uid']: dict(row) for row in context['players']} if context is not None else {}
+        self._local_account_uid = context.get('self_player_uid') if context is not None else None
         self._context = self._active_context = deepcopy(context)
         self._context_fingerprint = new_context
         self._scope = (native_autochess_scope_id(context['identity'], self._context_fingerprint[3]) if self._native_mode
@@ -169,6 +178,8 @@ class MultiplayerBattleStatistics:
         slots = ([(row['uid'], row['index'], row['nick_name']) for row in context['players']]
                  if self._native_mode else [(side, None, None) for side in range(1, 5)])
         for key, slot, name in slots:
+            if self._native_mode and self._collection_mode == 'local' and key != self._local_account_uid:
+                continue
             stats = Statistics(f'{self._scope}:{key}', self._start)
             stats.settlement_sides_known = True
             # An empty counter snapshot establishes the clock only. No source
@@ -189,7 +200,7 @@ class MultiplayerBattleStatistics:
         self._settlement_version = None
         self._native_entries = {}
         self._native_aliases = {key: {} for key in self._players}
-        self._player_reasons = {key: set() for key in self._players}
+        self._player_reasons = {key: set() for key in (self._native_accounts if self._native_mode else self._players)}
         self._scope_foreign_events = 0
         self._scope_unknown_targets = set()
         self._scope_unknown_all_targets = False
@@ -198,17 +209,18 @@ class MultiplayerBattleStatistics:
 
     def _bind_native(self, context):
         self._context = self._active_context = deepcopy(context)
+        self._mode_declared = self._mode_declared or 'collection_mode' in context
         for row in context['players']:
-            self._players[row['uid']].player_name = row['nick_name']
+            self._native_accounts[row['uid']] = dict(row)
+            if row['uid'] in self._players:
+                self._players[row['uid']].player_name = row['nick_name']
         entries = {}
         for member in context['memberships']:
             uid = member['player_uid']
-            if uid not in self._players:
-                continue
             entry = CharacterEntry(member['cid'], member['data_uid'], member['is_token'],
                 member['is_predefined'], member['host_key'], member['host_uid'], member['player_side'])
             entries[entry.unique_id] = uid, entry
-            if not entry.is_token:
+            if not entry.is_token and uid in self._players:
                 player = self._players[uid]
                 owner = self._source_key(entry, uid)
                 if owner not in player.actors and self._baseline is not None:
@@ -217,6 +229,8 @@ class MultiplayerBattleStatistics:
                 player.statistics.register_source(owner, owner)
         self._native_entries = entries
         for uid, entry in entries.values():
+            if uid not in self._players:
+                continue
             host = entries.get(entry.host_uid) if entry.is_token else (uid, entry)
             if host is None or host[0] != uid:
                 continue
@@ -243,6 +257,9 @@ class MultiplayerBattleStatistics:
         if self._active_context is None or identity is None:
             return 'event_scope_unverified'
         if identity == self._context_fingerprint[:3]:
+            stamp = event.get('native_autochess_scope') or {}
+            if 'collection_mode' in stamp and stamp['collection_mode'] != self._collection_mode:
+                return 'event_scope_mismatch'
             return None
         if self._terminal_tail or identity in self._retired_event_scopes:
             return 'foreign_scope'
@@ -317,6 +334,9 @@ class MultiplayerBattleStatistics:
                     if (identity[1:] != current[1:] or identity[0] != current[0]
                             and not self._same_native_roots(identity[0], current[0])):
                         continue
+                    event_mode = (event.get('native_autochess_scope') or {}).get('collection_mode', self._collection_mode)
+                    if event_mode != self._collection_mode:
+                        self._reasons.add('初始技能前缀采集模式未确认')
                 data_uid = event.get('source_character_uid')
                 evidence = lookup_native_actor(self._context, cid=event.get('source'), data_uid=data_uid)
                 if evidence is None:
@@ -326,6 +346,8 @@ class MultiplayerBattleStatistics:
                     # A summon never supplies a host's activation window.
                     continue
                 uid, entry = self._native_entries[data_uid]
+                if uid not in self._players:
+                    continue
                 self._players[uid].statistics.mark_settlement_skill_unassigned(
                     self._source_key(entry, uid), 'native_baseline', None)
 
@@ -361,7 +383,7 @@ class MultiplayerBattleStatistics:
         if evidence is not None and evidence[1].cid == event.get('source'):
             uid, entry = evidence
             self._player_reasons[uid].add('该玩家存在阶段或轮次身份未核实的事件')
-            if event.get('kind') in ('skill_start', 'skill_end') and not entry.is_token:
+            if uid in self._players and event.get('kind') in ('skill_start', 'skill_end') and not entry.is_token:
                 source = self._source_key(entry, uid)
                 # This uncertainty is about scope, not native-cast semantics.
                 # Ordinary current-scope casts still go through EventStream.
@@ -374,9 +396,18 @@ class MultiplayerBattleStatistics:
         target = self._scope_target(event)
         if target is None:
             return
-        owner = self._source_key(actor, player_key)
-        bar = self._players[player_key].statistics.settlement_bars.get(target[0])
-        if bar is not None and bar[1:] == (target[1], 'local', owner, actor.unique_id):
+        if player_key in self._players:
+            owner = self._source_key(actor, player_key)
+            bar = self._players[player_key].statistics.settlement_bars.get(target[0])
+            confirmed = bar is not None and bar[1:] == (target[1], 'local', owner, actor.unique_id)
+        else:
+            # Local mode still feeds a verified foreign bar to the real local
+            # receiver. Its negative ownership witness can restore this target's
+            # scope without allocating or crediting a foreign statistics core.
+            confirmed = any((bar := player.statistics.settlement_bars.get(target[0])) is not None
+                            and bar[1:] == (target[1], 'foreign', None, None)
+                            for player in self._players.values())
+        if confirmed:
             self._scope_unknown_targets.discard(target)
             self._scope_verified_targets.add(target)
 
@@ -408,6 +439,8 @@ class MultiplayerBattleStatistics:
             if (host is None or host[0] != player_uid or host[1].cid != entry.host_key or host[1].is_token):
                 return 'token_host_unverified', None, None, None
             actor = host[1]
+        if player_uid not in self._players:
+            return 'not_collected', player_uid, actor, entry
         return 'owned', player_uid, actor, entry
 
     @staticmethod
@@ -660,6 +693,11 @@ class MultiplayerBattleStatistics:
             return
         context = sample.get('autochess_context') if native_requested else None
         fingerprint = self._native_fingerprint(context, sample) if native_requested else None
+        if (not self._terminal_tail and fingerprint is not None and fingerprint == self._context_fingerprint
+                and (context.get('collection_mode', 'all') != self._collection_mode
+                     or self._collection_mode == 'local' and context.get('self_player_uid') != self._local_account_uid)):
+            self.gap('同一原生观察范围的采集模式或本家身份发生变化')
+            return
         if not self._terminal_tail and fingerprint in self._retired_contexts:
             return
         if not self._terminal_tail and native_requested and fingerprint is None:
@@ -764,7 +802,7 @@ class MultiplayerBattleStatistics:
                                        'event_scope_mismatch', 'elemental_scope_unverified')
                 if state == 'foreign_scope':
                     self._scope_foreign_events += 1
-                elif state not in ('owned', 'global', 'non_team', 'elemental'):
+                elif state not in ('owned', 'global', 'non_team', 'not_collected', 'elemental'):
                     self._diagnose(event, state)
                 pending_skill_owner = None
                 skill_damage = event['kind'] in ('damage_settlement', 'damage', 'hp_damage', 'elemental_burst')
@@ -800,7 +838,7 @@ class MultiplayerBattleStatistics:
                                 'skill_start', 'skill_end') else ('local', owner, actor.unique_id)
                         else:
                             identity = ('foreign', None, None)
-                    elif state == 'non_team':
+                    elif state in ('non_team', 'not_collected'):
                         identity = ('foreign', None, None)
                     elif state not in ('global', 'elemental') and not skip_scope:
                         payload['unresolved_source'] = True
@@ -813,7 +851,7 @@ class MultiplayerBattleStatistics:
                     world_receipt = (self._native_mode and event['kind'] in ENEMY_STATE_KINDS)
                     player.stream.accept(None, unresolved_source_keys, skip_scope or world_receipt, session=player.statistics.session,
                         settlement_identity=identity, replay_record=event, **payload)
-                if self._native_mode and state == 'owned' and event['kind'] == 'elemental_bar':
+                if self._native_mode and state in ('owned', 'not_collected') and event['kind'] == 'elemental_bar':
                     self._confirm_scope_bar(event, side, actor)
                 if pending_skill_owner is not None:
                     # The ordinary receiver, including native/ammo rules, owns
@@ -844,7 +882,7 @@ class MultiplayerBattleStatistics:
         return
 
     def gap(self, reason='采集缺口'):
-        if not self._players or self._ended:
+        if not self._enabled or self._ended:
             return
         self._closed = True
         self._reasons.add(reason)
@@ -855,7 +893,7 @@ class MultiplayerBattleStatistics:
             player.statistics.settlement_stream_incomplete = True
 
     def finish(self, game_time=None, *, complete=False):
-        if not self._players or self._ended:
+        if not self._enabled or self._ended:
             return self.result()
         if game_time is not None and game_time != self._now:
             self.gap('终局时间缺少匹配的事件水位')
@@ -947,10 +985,22 @@ class MultiplayerBattleStatistics:
             statistics=None, actor_ledgers=[])
 
     def _result(self, *, include_previous):
-        if not self._enabled or not self._players:
+        if not self._enabled:
             return None
         if self._native_mode:
-            by_slot = {player.slot: self._player_result(uid, player) for uid, player in self._players.items()}
+            by_slot = {}
+            for uid, account in self._native_accounts.items():
+                if uid in self._players:
+                    value = self._player_result(uid, self._players[uid])
+                else:
+                    value = self._unknown_slot(account['index'])
+                    sides = {entry.player_side for owner, entry in self._native_entries.values() if owner == uid}
+                    value.update(player_uid=uid, player_name=account['nick_name'],
+                        player_side=next(iter(sides)) if len(sides) == 1 else None,
+                        label=account['nick_name'] or f"玩家 {account['index']}",
+                        is_local=(uid == self._context['self_player_uid']) if self._context['self_player_uid'] is not None else None,
+                        statistics_status='not_collected', reasons=['未启用该玩家统计'])
+                by_slot[account['index']] = value
             players = [by_slot.get(slot) or self._unknown_slot(slot) for slot in range(1, 5)]
             observed_sides = sorted({player['player_side'] for player in players
                 if player['observed_damage'] is not None and player['player_side'] in range(1, 5)})
@@ -978,6 +1028,8 @@ class MultiplayerBattleStatistics:
                 scope_foreign_events=self._scope_foreign_events,
                 unknown_memberships=deepcopy(self._context['unknown_memberships']),
                 note='玩家身份来自当前原生上下文。伤害来自同阶段同轮次的已观察事件，DPS按观察游戏时长计算；未知表示证据不足。')
+            if self._mode_declared:
+                result['collection_mode'] = self._collection_mode
         if include_previous:
             result['previous_rounds'] = deepcopy(self._previous)
             result['previous_rounds_pruned'] = self._previous_pruned

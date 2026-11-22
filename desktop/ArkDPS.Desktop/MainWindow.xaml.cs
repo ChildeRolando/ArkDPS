@@ -63,6 +63,12 @@ public partial class MainWindow : Window
     private bool syncingHudFooter;
     private bool multiplayerSettingPending;
     private bool MultiplayerEnabled=>State.Get("layout").Bool("multiplayer_enabled");
+    private bool MultiplayerActive=>State.Get("multiplayer_active").ValueKind switch
+    {
+        JsonValueKind.True=>true,
+        JsonValueKind.False=>false,
+        _=>MultiplayerEnabled,
+    };
     private object? normalGeometry;
     private bool closingRequested;
     private DispatcherOperation? workAreaLayout;
@@ -318,8 +324,10 @@ public partial class MainWindow : Window
         }
         Skin.SelectedIndex=Theme.IndexOf(theme);
         MultiplayerEnabledSetting.IsChecked=layout.Bool("multiplayer_enabled");
-        MultiplayerNav.Visibility=MultiplayerEnabled ? Visibility.Visible : Visibility.Collapsed;
-        if(!MultiplayerEnabled && route=="multiplayer") _=Navigate("live");
+        MultiplayerNav.Visibility=MultiplayerActive ? Visibility.Visible : Visibility.Collapsed;
+        MultiplayerSettingStatus.Visibility=state.Bool("multiplayer_mode_pending") ? Visibility.Visible : Visibility.Collapsed;
+        MultiplayerSettingStatus.Text=MultiplayerEnabled ? "下一小局开始统计四家" : "下一小局开始只统计本家";
+        if(!MultiplayerActive && route=="multiplayer") _=Navigate("live");
         EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         bool previousBattle=ShowingPreviousBattle;
@@ -335,7 +343,7 @@ public partial class MainWindow : Window
             panelLayoutChanged = true;
         }
         UpdateHistory();
-        MultiplayerPage.Update(MultiplayerEnabled ? state.Get("multiplayer") : default);
+        MultiplayerPage.Update(MultiplayerActive ? state.Get("multiplayer") : default);
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
@@ -1023,7 +1031,7 @@ public partial class MainWindow : Window
     private async void Navigate(object sender,RoutedEventArgs e)=>await Navigate((string)((Button)sender).Tag);
     internal async Task Navigate(string page)
     {
-        if(page=="multiplayer" && !MultiplayerEnabled) return;
+        if(page=="multiplayer" && !MultiplayerActive) return;
         route=page;LivePage.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
         EnemyPageScroll.Visibility=page=="enemies" ? Visibility.Visible : Visibility.Collapsed;

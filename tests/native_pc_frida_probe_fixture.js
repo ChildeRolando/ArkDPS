@@ -19,7 +19,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
   fieldApiLeavesTableNull = false, fieldApiStalls = false, lazySkillMethods = false,
   methodCountMismatch = false, methodIteratorMismatch = false, methodOwnerMismatch = false,
-  methodApiLeavesTableNull = false, methodApiStalls = false} = {}) {
+  methodApiLeavesTableNull = false, methodApiStalls = false, globals = {}} = {}) {
   let next = 0x10000;
   const memory = new Map();
   const methods = new Map();
@@ -28,6 +28,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const hookTrace = [];
   let rejectedHook = null;
   const messages = [];
+  const requests = new Map();
   const fieldTables = new Map(),methodTables=new Map(),apiCalls=[];
   class Pointer {
     constructor(value) { this.value = BigInt(value); }
@@ -245,8 +246,9 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       hookTrace.push({operation: 'attach', address: address.toString()});
       hooks.set(address.toString(), callback);
       return {detach: () => {hookTrace.push({operation: 'detach', address: address.toString()}); hooks.delete(address.toString());}};
-    }}, ptr, recv: () => {}, send: value => messages.push(value), rpc: {},
+    }}, ptr, recv: (kind,callback) => requests.set(kind,callback), send: value => messages.push(value), rpc: {},
   };
+  Object.assign(context,globals);
   vm.createContext(context);
   const source = loadProbeSource(sourcePath);
   vm.runInContext(source, context);
@@ -281,7 +283,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     assert(hook, 'Production callback installed at synthetic address ' + address);
     return hook;
   }
-  return {context, messages, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,
+  return {context, messages, requests, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,
     entity, unitClass, character, basicSkill, skillData, buffClass, blockDamage, level, controller, controllerClass,
     apiCalls, fieldTables, methodTables, vm, installSyntheticMitigation, hookTrace, hookAt,
     abilityClass,castSkillClass,skillCastFieldTypes,skillCastMethodTypes,skillCastTypeInfo,characterData,enemyClass};

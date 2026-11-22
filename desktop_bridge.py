@@ -137,6 +137,9 @@ def _native_display_source(sample):
     players = payload.get('players')
     if not isinstance(players, (list, tuple)):
         return None
+    if payload.get('collection_mode') == 'local':
+        local = _native_local_player(sample)
+        players = (local,) if local is not None else ()
     rows, actors = {}, []
     for player in players:
         if not isinstance(player, dict):
@@ -791,7 +794,8 @@ class DesktopState:
             self._history_view = dict(
                 record_display(self.selected),
                 view=view, multiplayer=(self.multiplayer_view(multiplayer, event=event)
-                                        if self.layout.multiplayer_enabled else None),
+                                        if self.layout.multiplayer_enabled and
+                                        (multiplayer or {}).get('collection_mode') != 'local' else None),
                 event_status=self.selected.event_status, event_error=event.error)
             self._history_view_key = key
         return self._history_view
@@ -866,6 +870,11 @@ class DesktopState:
 
     def snapshot(self):
         sample, multiplayer, analysis, presentation_note = self._presented_battle()
+        desired = self.layout.multiplayer_enabled
+        scene = self._autochess_scene
+        active = desired
+        if scene is not None and scene.phase in (4, 5, 6, 7, 8) and scene.collection_mode in ('all', 'local'):
+            active = scene.collection_mode == 'all'
         local_player = _native_display_source(sample)
         stats = _display_statistics(sample, source=local_player)
         if multiplayer and multiplayer.get('previous_defense') is True:
@@ -914,8 +923,9 @@ class DesktopState:
                                 side=local_player.get('player_side'), player_uid=local_player.get('player_uid'),
                                 event=live_event) if local_player else self.view(p, stats, None, live_event)
                             for p in self.layout.panels],
+                    multiplayer_active=active, multiplayer_mode_pending=active != desired,
                     multiplayer=(self.multiplayer_view(multiplayer, event=live_event)
-                                 if self.layout.multiplayer_enabled else None),
+                                 if active and (multiplayer or {}).get('collection_mode') != 'local' else None),
                     live_analysis=analysis[0],
                     boss_live_analysis=analysis[1],
                     boss_effective_live_analysis=analysis[2],
@@ -1050,6 +1060,7 @@ class CollectionWorker:
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
         self._request_lock = threading.Lock()
+        self._autochess_enabled = state.layout.multiplayer_enabled
         self._request_revision = 0
         self.stop = threading.Event()
         self.session = None
@@ -1066,6 +1077,14 @@ class CollectionWorker:
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
+
+    def set_multiplayer_enabled(self, enabled):
+        with self._request_lock:
+            self._autochess_enabled = enabled
+
+    def autochess_enabled(self):
+        with self._request_lock:
+            return self._autochess_enabled
 
     def request(self, config, enabled):
         with self._request_lock:
@@ -1314,6 +1333,7 @@ class CollectionWorker:
                                         session_bootstrap_generation = bootstrap.get('ready_generation')
                                     if config.platform == 'native_pc':
                                         from native_pc_collector import NativePcCollector
+                                        session_kwargs['autochess_enabled'] = self.autochess_enabled
                                         session_kwargs['collector'] = NativePcCollector(
                                             config.native_game_root, collect_actions=enabled,
                                             event_identity_only=(enabled and self.arkframework_root is None
@@ -1743,6 +1763,8 @@ def serve(input_stream, output, state, worker=None):
                     state.expect_connection_request(state.connection, revision)
                 elif op == 'connection_apply':
                     state.finish_offline_connection()
+                elif op == 'multiplayer_enabled' and worker:
+                    worker.set_multiplayer_enabled(state.layout.multiplayer_enabled)
                 kind = 'snapshot' if op == 'snapshot' else 'state'
             advance('snapshot')
             if getattr(worker, 'effective', None) is not None:

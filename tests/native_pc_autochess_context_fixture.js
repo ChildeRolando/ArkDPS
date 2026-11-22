@@ -5,8 +5,8 @@ const vm=require('node:vm');
 const {fixture}=require('./native_pc_frida_probe_fixture.js');
 const sourcePath=path.join(__dirname,'..','event_probe_native_pc.js');
 
-function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=false,unknownToken=false,rolesPerPlayer=1}={}){
- const f=fixture({sourcePath}),zero=f.ptr(0),NS='Torappu.Battle.AutoChess';
+function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=false,unknownToken=false,rolesPerPlayer=1,fixtureOptions={}}={}){
+ const f=fixture({sourcePath,...fixtureOptions}),zero=f.ptr(0),NS='Torappu.Battle.AutoChess';
  const adapter=vm.runInContext('probeAdapter',f.context);
  const oldMark=f.context.rpc.exports.mark();
  assert.equal(oldMark.native_autochess_context,undefined,'ordinary stages must not read an absent host');

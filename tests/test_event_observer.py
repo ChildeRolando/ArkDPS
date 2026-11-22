@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from connection import VersionStatus
+from collection_session import CollectionSession
 from event_observer import FridaEventObserver, NativePcFridaObserver, ObserverReadRetry, ObserverStatus
 
 
@@ -189,6 +190,37 @@ def native_collector():
     value = collector(VersionStatus.COMPATIBLE)
     value.process = SimpleNamespace(pid=123, process_instance=(123, 456), process_alive=lambda: True)
     return value
+
+
+def test_native_observer_reads_scope_preference_at_start_and_existing_marks(monkeypatch):
+    value = native_collector()
+    value.diagnostics.platform = 'native_pc'
+    observer = NativePcFridaObserver(value)
+    calls, sources = [], []
+    choices = [False]
+    monkeypatch.setattr(observer, 'start', lambda: sources.append(observer._probe_source()))
+    monkeypatch.setattr(observer.binding, 'bind', lambda _op, result: result)
+
+    def request(self, operation, *, timeout=None, **arguments):
+        calls.append((operation, timeout, arguments))
+        return {}
+
+    monkeypatch.setattr(FridaEventObserver, '_request', request)
+    session = CollectionSession(None, None, collector=value, observer_factory=lambda *_: observer,
+                                frida_remote=None, autochess_enabled=lambda: choices[0])
+    assert session._attach_observer()
+    assert sources[0].startswith('globalThis.arkdpsAutoChessMode = "local";\n')
+    observer.mark()
+    choices[0] = True
+    observer.mark()
+    observer.read_terminal_mark()
+    observer.read_through(42)
+    assert calls == [
+        ('mark', None, {'autochess_enabled': False}),
+        ('mark', None, {'autochess_enabled': True}),
+        ('mark', observer.terminal_mark_timeout, {'autochess_enabled': True}),
+        ('read', None, {'after': 0, 'through': 42}),
+    ]
 
 
 def test_native_pc_uses_local_native_device_without_android_endpoint(monkeypatch):

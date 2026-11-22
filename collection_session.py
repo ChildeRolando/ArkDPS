@@ -44,12 +44,14 @@ def _local_defense_enemy_damage(sample, scope):
 class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
                  collector=None, observer_factory=None, prepare_observer=None,
-                 history=None, on_history=None, on_history_result=None, state_dir=None):
+                 history=None, on_history=None, on_history_result=None, state_dir=None,
+                 autochess_enabled=None):
         self.collector = (collector if collector is not None else
                           Collector(adb, serial, log=log, state_dir=state_dir))
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
         self.prepare_observer = prepare_observer
+        self.autochess_enabled = autochess_enabled
         self.observer: EventProbe | None = None
         self._pending_observers = []
         self.capture = None
@@ -239,6 +241,10 @@ class CollectionSession:
                 from event_observer import FridaEventObserver, NativePcFridaObserver
                 self.observer_factory = NativePcFridaObserver if self._is_native_pc() else FridaEventObserver
             self.observer = self.observer_factory(self.collector, self.frida_remote)
+            if self.autochess_enabled is not None and self._is_native_pc():
+                configure = getattr(self.observer, 'set_autochess_setting', None)
+                if callable(configure):
+                    configure(self.autochess_enabled)
             timing = getattr(self.observer, 'set_request_timing_audit', None) if self._is_native_pc() else None
             if callable(timing):
                 timing(self.audit)

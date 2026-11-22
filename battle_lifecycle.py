@@ -29,6 +29,7 @@ class NativeAutoChessScene:
     scope: str
     phase: int
     round: int
+    collection_mode: str | None = None
 
 
 def native_autochess_scene(sample):
@@ -51,7 +52,7 @@ def native_autochess_scene(sample):
     match = (*process[:2], metadata.get('source_build'), metadata['stage_id'], roots, accounts,
              context.get('self_player_uid'))
     return NativeAutoChessScene(match, native_autochess_scope_id(identity, accounts),
-                                context['phase'], context['round'])
+                                context['phase'], context['round'], context.get('collection_mode'))
 
 
 @dataclass(frozen=True)

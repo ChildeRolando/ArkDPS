@@ -128,6 +128,8 @@ def _validate_multiplayer(payload, battle_id, duration):
                          'invalid native unknown membership UID')
 
     def native_header(value):
+        _require(value.get('collection_mode', 'all') in ('all', 'local'),
+                 'invalid native multiplayer collection mode')
         identity = value.get('context_identity')
         _require(isinstance(identity, dict) and set(identity) == {'scope_key', 'phase', 'round'},
                  'invalid native multiplayer context identity')
@@ -282,6 +284,15 @@ def _validate_multiplayer(payload, battle_id, duration):
                     observed_sides.add(side)
                 _require(player.get('observed_window') is not None,
                          'multiplayer observed output lacks its game-time window')
+            not_collected = (native and value.get('collection_mode') == 'local'
+                             and uid_key is not None and uid_key != value['self_player_uid'])
+            if not_collected:
+                _require(player.get('statistics_status') == 'not_collected'
+                         and player['observed_damage'] is None,
+                         'uncollected native player has statistics or output')
+            else:
+                _require('statistics_status' not in player,
+                         'collected or unknown native player has an uncollected marker')
             if native and uid_key is None:
                 _require(player['observed_damage'] is None and player.get('player_name') is None
                          and player.get('player_side') is None and player['is_local'] is None,
@@ -289,6 +300,10 @@ def _validate_multiplayer(payload, battle_id, duration):
             if compact:
                 _require('statistics' not in player and 'actor_ledgers' not in player,
                          'retired multiplayer scope must be a compact summary')
+                continue
+            if not_collected:
+                _require(player.get('statistics') is None and player.get('actor_ledgers') == [],
+                         'uncollected native player has a statistics ledger')
                 continue
             if native and uid_key is None:
                 _require(player.get('statistics') is None and player.get('actor_ledgers') == []

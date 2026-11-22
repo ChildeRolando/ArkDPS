@@ -46,6 +46,60 @@ let nativeControllerClass=null,nativeGeneration=0,nativeLastBinding=null;
 // managed metadata reads only; no game getter, class initializer or new hook.
 const nativeAutoLayouts=new Map();
 let nativeAutoStage=null,nativeAutoCache=null,nativeAutoEpoch=0,nativeAutoScope=null;
+let nativeAutoDesiredMode=globalThis.arkdpsAutoChessMode===undefined?'all':globalThis.arkdpsAutoChessMode;
+if(!['all','local'].includes(nativeAutoDesiredMode))throw new Error('invalid AutoChess collection mode');
+let nativeAutoEffective=null,nativeAutoOwners=null;
+function setAutoChessMode(enabled){
+ if(typeof enabled!=='boolean')throw new Error('autochess_enabled must be boolean');
+ nativeAutoDesiredMode=enabled?'all':'local';
+ return {desired_mode:nativeAutoDesiredMode,effective_mode:nativeAutoEffective?.mode??null};
+}
+function autoCollectionMode(scope_key,phase){
+ // Only a proven combat scope can latch a preference. Terminal observations
+ // retain the completed combat's effective mode until another combat starts.
+ if([4,5,6].includes(phase)&&nativeAutoEffective?.scope_key!==scope_key)
+  nativeAutoEffective={scope_key,mode:nativeAutoDesiredMode};
+ return nativeAutoEffective?.mode??nativeAutoDesiredMode;
+}
+function autoEventOwner(event){
+ const scope=event.native_autochess_scope,owners=nativeAutoOwners;
+ if(!nativeAutoCache||!owners||owners.capture!==nativeAutoCache||scope?.status!=='available'||scope.verified_same_frame!==true||
+    scope.collection_mode!=='local'||![4,5,6].includes(scope.phase)||scope.scope_key!==owners.scope_key||
+    scope.phase!==owners.phase||scope.round!==owners.round||scope.frame!==event.frame||
+    scope.game_time!==event.game_time||event.frame!==owners.frame||event.game_time!==owners.game_time||
+    typeof event.source!=='string'||!Number.isInteger(event.source_character_uid)||
+    event.source_character_uid<=0||event.source_character_uid>0xffffffff)return 'unknown';
+ const member=owners.byUid.get(event.source_character_uid);
+ if(!member||member.cid!==event.source)return 'unknown';
+ return member.player_index===owners.self?'local':'foreign';
+}
+function autoCollectionOwners(result,scope_key,mode,frame,game_time){
+ if(mode!=='local'){nativeAutoOwners=null;return;}
+ if(nativeAutoOwners?.body===result&&nativeAutoOwners.scope_key===scope_key){
+  nativeAutoOwners.capture=nativeAutoCache;nativeAutoOwners.frame=frame;nativeAutoOwners.game_time=game_time;return;
+ }
+ const {players,memberships,unknown,header}=result;
+ const validUid=uid=>typeof uid==='string'&&/^[0-9]{1,20}$/.test(uid)&&/[1-9]/.test(uid)&&
+  (uid.length<20||uid<='18446744073709551615');
+ if(!players.every(player=>validUid(player.uid))){nativeAutoOwners=null;return;}
+ const excluded=new Set(unknown.map(row=>row.data_uid)),byUid=new Map();
+ for(const row of memberships){
+  if(excluded.has(row.data_uid)||!Number.isInteger(row.data_uid)||row.data_uid<=0||row.data_uid>0xffffffff||
+     typeof row.cid!=='string'||!/^[A-Za-z0-9_#.-]{1,128}$/.test(row.cid)||
+     !players.some(player=>player.index===row.player_index))continue;
+  if(byUid.has(row.data_uid)){byUid.delete(row.data_uid);excluded.add(row.data_uid);}
+  else byUid.set(row.data_uid,row);
+ }
+ for(const [uid,row]of byUid){
+  if(row.is_token){
+   const host=byUid.get(row.host_uid);
+   if(!host||host.is_token||host.cid!==row.host_key||host.player_index!==row.player_index||
+      host.player_side!==row.player_side)byUid.delete(uid);
+  }
+ }
+ nativeAutoOwners={body:result,capture:nativeAutoCache,frame,game_time,scope_key,
+  phase:header.phase,round:header.round,self:header.self,byUid};
+}
 const AUTO_NS='Torappu.Battle.AutoChess';
 function autoIdentity(k,name,namespace){
  return !k.isNull()&&className(k)===name&&k.add(0x18).readPointer().readCString()===namespace;
@@ -350,12 +404,14 @@ function finishAutoChess(result,identity,frame,fixed){
  const {header,model,playerList,playerItems,playerVersion,ownerRefs,players,memberships,unknown,fingerprint}=result;
  const headerKey=[header.manager,header.status,header.model,header.machine,header.center].map(p=>p.toString()).join(':');
  const scope_key=autoScope(identity,header.phase,header.round,frame,fixed,fingerprint,headerKey);
+ const collection_mode=autoCollectionMode(scope_key,header.phase);
  nativeAutoCache={...header,playerModel:model,playerList,playerItems,playerVersion,
   ownerRefs,identity:{...identity},fingerprint,headerKey};
  nativeAutoCache.blocks=scopeBlocks(nativeAutoCache);
+ autoCollectionOwners(result,scope_key,collection_mode,frame,Number(BigInt(fixed))/4294967296);
  return {protocol_version:1,status:'available',verified_same_frame:true,frame,
   game_time:Number(BigInt(fixed))/4294967296,scope_key,phase:header.phase,round:header.round,
-  self_player_index:header.self,players,memberships,unknown_memberships:unknown};
+  self_player_index:header.self,players,memberships,unknown_memberships:unknown,collection_mode};
 }
 function stampAutoChessClock(when){
  if(!nativeAutoStage?.enabled)return;
@@ -393,7 +449,7 @@ function stampAutoChessClock(when){
    throw new Error('AutoChess event scope changed');
   const scope_key=autoScope(before,phase,round,frame,fixed,cached.fingerprint,cached.headerKey);
   when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,
-   frame,game_time:when.game_time,scope_key,phase,round};
+   frame,game_time:when.game_time,scope_key,phase,round,collection_mode:autoCollectionMode(scope_key,phase)};
  }catch(e){nativeAutoCache=null;unknown(String(e));}
 }
 let nativeAutoBodyCache=null;
@@ -468,6 +524,8 @@ const probeAdapter={
  factoryArgument(args,index){return args[index+1];},
  factoryStorage(args){return args[0];},
  scopedModifierTrace:true,directHealingProof:true,
+ setAutoChessMode,
+ eventCollectionOwner:autoEventOwner,
  stampClock(when){stampAutoChessClock(when);},
  baselineEnvelope(fields,records,acknowledged,through){return discardedAutoChessSkills(fields,records,acknowledged,through);},
  readEnvelope(){

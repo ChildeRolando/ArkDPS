@@ -7,6 +7,7 @@ from dataclasses import replace
 import hashlib
 import json
 
+import pytest
 import desktop_bridge as bridge
 import native_pc_collector
 from collection_session import CollectionSession
@@ -24,7 +25,8 @@ def digest(value):
                                      allow_nan=False).encode('utf-8')).hexdigest()
 
 
-def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True):
+def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
+              mode_by_epoch=None, settings_by_action=None):
     """Run real CollectionSession.read + worker FIFO from one owned PC source."""
     state = bridge.DesktopState(tmp_path / 'desktop')
     state.layout = replace(state.layout, multiplayer_enabled=multiplayer_enabled, panels=(PanelConfig(),
@@ -36,15 +38,35 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True):
     monkeypatch.setattr(native_pc_collector, 'NativePcCollector', lambda *_args, **_kwargs: battle.collector)
     worker.stop.wait = lambda *_: False
     original_batch = battle.observer.read_through
+    original_mark = battle.observer.mark
     fail_batch = [False]
+
+    def mode_for(scope):
+        return (mode_by_epoch or {}).get(int(scope['scope_key'].rsplit(':', 1)[-1]))
+
+    def with_collection_mode(packet):
+        raw = packet['native_autochess_context']
+        mode = mode_for(raw)
+        if mode is not None:
+            raw['collection_mode'] = mode
+        for event in packet.get('events', ()):
+            scope = event.get('native_autochess_scope')
+            if scope is not None and (mode := mode_for(scope)) is not None:
+                scope['collection_mode'] = mode
+        return packet
 
     def batch(through):
         if fail_batch[0]:
             fail_batch[0] = False
             raise ObserverReadRetry('owned guarded assist batch not yet available')
-        return original_batch(through)
+        packet = original_batch(through)
+        if mode_by_epoch and battle.commits:
+            packet['events'] = [event for event in packet['events'] if event['sequence'] > battle.commits[-1]]
+        return with_collection_mode(packet)
 
     battle.observer.read_through = batch
+    if mode_by_epoch:
+        battle.observer.mark = lambda: with_collection_mode(original_mark())
     battle.observer.status = ObserverStatus.READY
     battle.observer.stop = lambda: None
     steps, accepted, saved, sessions = [], [], {}, []
@@ -148,6 +170,8 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True):
     assert not [(kind, value) for kind, value in events if kind in ('error', 'worker_error')]
     snapshots = {}
     for step in steps:
+        if settings_by_action and step['action'] in settings_by_action:
+            state.command(dict(version=1, op='multiplayer_enabled', enabled=settings_by_action[step['action']]))
         for kind, value in events[step['event_start']:step['event_end']]:
             state.accept(kind, value)
         snapshots[step['action']] = state.snapshot()
@@ -184,6 +208,34 @@ def assert_assist_waiting(snapshot):
     assert '当前协防战场' in snapshot['status_text'] and '等待数据' in snapshot['status_text']
     payload = snapshot['multiplayer']
     assert payload is None or payload.get('scope_kind') == 'assist' or not payload.get('available')
+
+
+@pytest.mark.parametrize('initial', (False, True))
+def test_multiplayer_setting_latches_at_next_combat_and_preserves_retained_defense(tmp_path, monkeypatch, initial):
+    old_mode, new_mode = ('all', 'local') if initial else ('local', 'all')
+    state, battle, _, _, views, _ = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'ordinary_retry', 'assist_busy', 'assist_baseline',
+         'assist_hits', 'prepare', 'next_defense_baseline', 'next_defense_hits'],
+        multiplayer_enabled=initial, mode_by_epoch={1: old_mode, 3: new_mode, 5: new_mode},
+        settings_by_action={'ordinary_retry': not initial})
+    assert views['defense_hits']['multiplayer_active'] is initial
+    assert view_values(views['defense_hits']) == [300]
+    pending = views['ordinary_retry']
+    assert pending['layout']['multiplayer_enabled'] is not initial
+    assert pending['multiplayer_active'] is initial and pending['multiplayer_mode_pending'] is True
+    assert pending['panels'] == views['defense_hits']['panels']
+    assert_assist_waiting(views['assist_busy'])
+    assert views['assist_busy']['multiplayer_active'] is not initial
+    assert views['assist_busy']['multiplayer_mode_pending'] is False
+    expected_assist = [3000] if initial else [4000, 3000, 2000, 1000]
+    assert view_values(views['assist_hits']) == expected_assist
+    assert view_values(views['prepare']) == [300]
+    assert '上一场防御' in views['prepare']['status_text']
+    assert views['prepare']['multiplayer'] is None
+    assert view_values(views['next_defense_hits']) == [21]
+    assert views['next_defense_hits']['multiplayer_active'] is not initial
+    assert (views['next_defense_hits']['multiplayer'] is not None) is not initial
+    assert state.last is not None and battle.commits[-1] == 12
 
 
 def test_guarded_assist_without_an_accepted_sample_restores_defense_on_prepare(tmp_path, monkeypatch):

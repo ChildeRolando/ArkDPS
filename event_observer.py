@@ -258,6 +258,11 @@ class NativePcFridaObserver(FridaEventObserver):
             raise ValueError('官服 PC Frida 使用本机进程，frida_remote 必须为 None')
         super().__init__(collector, remote)
         self.binding = NativePcBinding(collector)
+        self._autochess_enabled = None
+
+    def set_autochess_setting(self, enabled):
+        """Read the worker's latest preference at existing observation boundaries."""
+        self._autochess_enabled = enabled
 
     def read_baseline(self, sequence):
         # Obtain the bound quality and advance the producer's readable
@@ -291,8 +296,13 @@ class NativePcFridaObserver(FridaEventObserver):
         self.binding.reset()
         assembled = assemble_probe_source('native_pc')
         self._probe_source_manifest = assembled.audit()
-        return assembled.source
+        if self._autochess_enabled is None:
+            return assembled.source
+        mode = 'all' if self._autochess_enabled() else 'local'
+        return f'globalThis.arkdpsAutoChessMode = "{mode}";\n' + assembled.source
 
     def _request(self, operation, *, timeout=None, **arguments):
+        if operation == 'mark' and self._autochess_enabled is not None:
+            arguments['autochess_enabled'] = self._autochess_enabled()
         result = super()._request(operation, timeout=timeout, **arguments)
         return self.binding.bind(operation, result)

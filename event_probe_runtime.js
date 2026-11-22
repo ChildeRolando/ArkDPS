@@ -920,6 +920,18 @@ function record(source,kind,amount,when,proof,evidence,sourceUid){
 function enqueueEvent(source,kind,amount,when,proof,evidence){
  if(stopped||fatal)return;
  if(!Number.isFinite(amount)||amount<0)throw new Error('invalid amount');
+ const event={sequence:undefined,frame:when.frame,game_time:when.game_time,source,kind,amount,proof};
+ if(evidence)Object.assign(event,evidence);
+ // A delayed/coalesced record retains the scope observed with its own clock.
+ // Reading the current scope here would move an old tail into the next round.
+ if(Object.prototype.hasOwnProperty.call(when,'native_autochess_scope'))
+  event.native_autochess_scope=when.native_autochess_scope&&typeof when.native_autochess_scope==='object'
+   ?{...when.native_autochess_scope}:when.native_autochess_scope;
+ if(omitUnrelatedAutoChessEvent(event)){
+  // Callers still receive their assembled proof, so nested settlement and
+  // quality bookkeeping run normally. No sequence was allocated or queued.
+  delete event.sequence;return event;
+ }
  if(queue.length>=EVENT_BUFFER_LIMIT){
   // A later read or mark must expose the gap even if the emitting hook only
   // degrades its own diagnostic quality on failure.
@@ -930,15 +942,22 @@ function enqueueEvent(source,kind,amount,when,proof,evidence){
   fatal='event sequence exhausted';
   return;
  }
- const event={sequence:++sequence,frame:when.frame,game_time:when.game_time,source,kind,amount,proof};
- if(evidence)Object.assign(event,evidence);
- // A delayed/coalesced record retains the scope observed with its own clock.
- // Reading the current scope here would move an old tail into the next round.
- if(Object.prototype.hasOwnProperty.call(when,'native_autochess_scope'))
-  event.native_autochess_scope=when.native_autochess_scope&&typeof when.native_autochess_scope==='object'
-   ?{...when.native_autochess_scope}:when.native_autochess_scope;
+ event.sequence=++sequence;
  queue.push(event);
  return event;
+}
+function omitUnrelatedAutoChessEvent(event){
+ if(event.native_autochess_scope?.collection_mode!=='local')return false;
+ if(typeof probeAdapter.eventCollectionOwner!=='function')return false;
+ // Shared enemy/elemental settlements and target-dependent healing/shields
+ // remain authoritative facts even when the source belongs to another player.
+ const skill=event.kind==='skill_start'||event.kind==='skill_end';
+ const legacyDamage=(event.kind==='damage'||event.kind==='hp_damage')&&
+  [1,2,3].includes(event.damage_type)&&event.target_type===0&&
+  typeof event.target==='string'&&/^(enemy_|trap_)/.test(event.target);
+ if(!skill&&!legacyDamage)return false;
+ try{return probeAdapter.eventCollectionOwner(event)==='foreign';}
+ catch(e){return false;}
 }
 // Keep the first heal intact. It may establish the HP and MaxHP needed to
 // prove subsequent healing. An exactly contiguous, increasing tail with the
@@ -2603,7 +2622,10 @@ function receiveEventRequest(){
   let result;
   try{
    switch(request.operation){
-    case 'mark':result=markEvents();break;
+    case 'mark':
+     if(Object.prototype.hasOwnProperty.call(request,'autochess_enabled')&&typeof probeAdapter.setAutoChessMode==='function')
+      probeAdapter.setAutoChessMode(request.autochess_enabled);
+     result=markEvents();break;
     case 'read':result=readEvents(request.after,request.through);break;
     case 'ack':result=ackEvents(request.sequence);break;
     default:result={error:'unknown event transport operation'};

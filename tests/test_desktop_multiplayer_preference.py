@@ -181,10 +181,11 @@ def test_actual_worker_command_toggles_wire_detail_without_requesting_reconnect(
     original = deepcopy(sample)
 
     def reconnect(*_args, **_kwargs):
-        pytest.fail('presentation preference requested a new collection source')
+        pytest.fail('multiplayer preference requested a new collection source')
 
+    choices = []
     worker = SimpleNamespace(events=Queue(), effective=(state.effective_connection, state.layout.event_observation),
-                             request=reconnect, close=lambda: None)
+                             request=reconnect, close=lambda: None, set_multiplayer_enabled=choices.append)
     commands = [dict(version=PROTOCOL_VERSION, id=1, op='hello'),
                 dict(version=PROTOCOL_VERSION, id=2, op='multiplayer_enabled', enabled=True),
                 dict(version=PROTOCOL_VERSION, id=3, op='multiplayer_enabled', enabled=False)]
@@ -192,6 +193,7 @@ def test_actual_worker_command_toggles_wire_detail_without_requesting_reconnect(
     serve(io.StringIO(''.join(json.dumps(command) + '\n' for command in commands)), output, state, worker)
     replies = [json.loads(line) for line in output.getvalue().splitlines()]
     assert len(replies) == 3 and all(reply['ok'] for reply in replies)
+    assert choices == [True, False]
     assert replies[0]['state']['multiplayer'] is None
     assert len(replies[1]['state']['multiplayer']['players']) == 4
     assert replies[2]['state']['multiplayer'] is None

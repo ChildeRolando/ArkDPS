@@ -454,9 +454,11 @@
           <ComboBoxItem Content="万 / 亿" Tag="chinese"/>
          </ComboBox>
         </StackPanel>
-        <CheckBox x:Name="MultiplayerEnabledSetting" Content="显示卫戍四家面板" IsChecked="False"
-                  Click="MultiplayerEnabledChanged" Margin="0,10,0,0" AutomationProperties.Name="显示卫戍四家面板"
-                  ToolTip="开启后显示四家防御数据；关闭不影响普通实时统计。"/>
+        <CheckBox x:Name="MultiplayerEnabledSetting" Content="统计卫戍四家" IsChecked="False"
+                  Click="MultiplayerEnabledChanged" Margin="0,10,0,0" AutomationProperties.Name="统计卫戍四家"
+                  ToolTip="关闭时只统计本家，保留敌情。战斗中修改，从下一小局生效。"/>
+        <TextBlock x:Name="MultiplayerSettingStatus" Style="{StaticResource FieldLabel}" Margin="0,4,0,0"
+                   Visibility="Collapsed" TextWrapping="Wrap"/>
         <WrapPanel Margin="0,8,0,0">
          <TextBlock Text="HUD 布局" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
          <ComboBox x:Name="HudLayoutTarget" AutomationProperties.Name="HUD 源面板" DisplayMemberPath="Label" Width="186"/>

@@ -33,7 +33,7 @@ internal static class MultiplayerSettingsTests
         },
     };
 
-    private static JsonElement Snapshot(bool? enabled, string theme)
+    private static JsonElement Snapshot(bool? enabled, string theme, bool? active = null)
     {
         var selected = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "Fixtures", "native-ce5-healing.selected.json")))!.AsObject();
@@ -44,6 +44,7 @@ internal static class MultiplayerSettingsTests
         return JsonSerializer.SerializeToElement(new JsonObject
         {
             ["protocol"] = 1, ["layout"] = layout, ["battle_id"] = "optional-live-battle", ["game_time"] = 216,
+            ["multiplayer_active"] = active, ["multiplayer_mode_pending"] = active.HasValue && active != enabled,
             ["status"] = "live", ["status_text"] = "正在统计", ["warnings"] = new JsonArray(), ["error"] = "",
             ["effective_connection_config"] = new JsonObject { ["platform"] = "mumu" },
             ["observer_status"] = "ready", ["event_status"] = "recording",
@@ -105,6 +106,21 @@ internal static class MultiplayerSettingsTests
                 Check(skin + " restored on preference starts clean instead of reviving the old foreign pin",
                     window.MultiplayerEnabledSetting.IsChecked == true && window.MultiplayerPage.SelectedPlayerUid == "910000001" &&
                     window.MultiplayerPage.DetailInspector.Owner is null);
+
+                window.Navigate("multiplayer").GetAwaiter().GetResult();
+                window.ApplyState(Snapshot(false, skin, active: true));
+                Check(skin + " pending off preserves the current four-player page until the next combat",
+                    window.MultiplayerEnabledSetting.IsChecked == false && window.MultiplayerNav.Visibility == Visibility.Visible &&
+                    window.MultiplayerPage.Visibility == Visibility.Visible && window.MultiplayerSettingStatus.Visibility == Visibility.Visible &&
+                    window.MultiplayerSettingStatus.Text.Contains("只统计本家"));
+                window.ApplyState(Snapshot(false, skin, active: false));
+                Check(skin + " the new combat applies pending off",
+                    window.MultiplayerNav.Visibility == Visibility.Collapsed && window.LivePage.Visibility == Visibility.Visible &&
+                    window.MultiplayerSettingStatus.Visibility == Visibility.Collapsed);
+                window.ApplyState(Snapshot(true, skin, active: false));
+                Check(skin + " pending on keeps the local round and explains the next combat",
+                    window.MultiplayerEnabledSetting.IsChecked == true && window.MultiplayerNav.Visibility == Visibility.Collapsed &&
+                    window.MultiplayerSettingStatus.Visibility == Visibility.Visible && window.MultiplayerSettingStatus.Text.Contains("统计四家"));
 
                 window.ApplyState(Snapshot(false, skin));
                 window.MultiplayerEnabledSetting.IsChecked = true;
