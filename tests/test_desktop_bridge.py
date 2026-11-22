@@ -1676,7 +1676,7 @@ def test_real_metadata_key_and_invalid_manual_connection(tmp_path):
     state.accept('sample', dict(sample(), battle_metadata={'stage_id': 'OF-8'}))
     assert state.snapshot()['stage'] == 'OF-8'
     before = state.connection
-    with pytest.raises(ValueError, match='实例地址'):
+    with pytest.raises(ValueError, match='端口地址'):
         cmd(state, 'connection_apply', config={'auto_detect': False, 'serial': ''}, events=True)
     assert state.connection == before
 
@@ -1837,16 +1837,106 @@ def test_offline_platform_apply_clears_projection_without_waiting_for_a_worker_m
     assert not state.scanning and not state._awaiting_source
 
 
-def test_same_platform_apply_preserves_existing_reconnect_projection(tmp_path):
+def test_same_platform_apply_retains_data_but_waits_for_fresh_source_status(tmp_path):
     state = DesktopState(tmp_path)
     old = dict(sample(), battle_id='same-mumu-battle')
     state.accept('sample', old)
     state.accept('observer', ('ready', None))
     cmd(state, 'connection_apply', config=state.connection.to_dict(), events=False)
     state.expect_connection_request(state.connection, 2)
-    assert state.last is old and state.observer_status == 'ready'
+    assert state.last is old and state.observer_status is None
+    assert state.snapshot()['status'] == 'locating'
+    state.accept('sample', dict(sample(), battle_id='same-mumu-new-frame'))
+    assert state.last is old  # Already queued observations cannot cross the request marker.
+    state.accept('connection_source', {'revision': 2, 'platform': 'mumu'})
+    state.accept('scanning', False)
     state.accept('sample', dict(sample(), battle_id='same-mumu-new-frame'))
     assert state.snapshot()['battle_id'] == 'same-mumu-new-frame'
+
+
+def native_watch_proof():
+    return dict(status='waiting_for_process', code=None, armed_filetime=123,
+                thread_alive=True, cancelled=False)
+
+
+def test_native_path_apply_clears_old_watch_proof_until_matching_source(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    state.connection = state.effective_connection = ConnectionConfig(platform='native_pc', native_game_root='root-a')
+    state.layout = replace(state.layout, event_observation=True)
+    old = dict(sample(), battle_id='retained-battle')
+    state.accept('sample', old)
+    state.history.save(record(12))
+    state.refresh_history()
+    selected = state.selected
+    assert selected is not None
+    history_before = list(state._history_index)
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    state.accept('observer', ('ready', None))
+    state.accept('event', ('recording', None))
+    state.accept('error', 'old connection error')
+    new = ConnectionConfig(platform='native_pc', native_game_root='root-b')
+    cmd(state, 'connection_apply', config=new.to_dict(), events=True)
+    state.expect_connection_request(new, 2)
+    shot = state.snapshot()
+    assert shot['effective_connection_config']['native_game_root'] == 'root-b'
+    assert shot['native_pc_bootstrap'] is shot['observer_status'] is shot['event_status'] is None
+    assert shot['error'] == '' and shot['status'] == 'locating'
+    assert state.last is old and state.selected is selected
+    assert state._history_index == history_before
+    for kind, value in [('native_pc_bootstrap', native_watch_proof()), ('observer', ('ready', None)),
+                        ('event', ('recording', None)), ('error', 'queued old error')]:
+        state.accept(kind, value)
+    assert state.native_pc_bootstrap is state.observer_status is state.event_status is None
+    assert state.error == ''
+    state.accept('connection_source', {'revision': 2, 'platform': 'native_pc'})
+    current = dict(status='starting', code=None, armed_filetime=None, thread_alive=True)
+    state.accept('native_pc_bootstrap', current)
+    assert state.native_pc_bootstrap == current
+
+
+def test_platform_round_trip_never_restores_prior_pc_watch_proof(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    native = ConnectionConfig(platform='native_pc', native_game_root='root-a')
+    state.connection = state.effective_connection = native
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    cmd(state, 'connection_apply', config=ConnectionConfig().to_dict(), events=True)
+    assert state.native_pc_bootstrap is None  # Clearing the source itself drops proof too.
+    state.expect_connection_request(state.connection, 2)
+    cmd(state, 'connection_apply', config=native.to_dict(), events=True)
+    state.expect_connection_request(native, 3)
+    state.accept('connection_source', {'revision': 2, 'platform': 'mumu'})
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    assert state.native_pc_bootstrap is None and state._awaiting_source
+    state.accept('connection_source', {'revision': 3, 'platform': 'native_pc'})
+    assert state.native_pc_bootstrap is None
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    assert state.native_pc_bootstrap['armed_filetime'] == 123
+
+
+def test_same_pc_source_rescan_ignores_queued_ready_and_latest_revision_wins(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    native = ConnectionConfig(platform='native_pc', native_game_root='root-a')
+    state.connection = state.effective_connection = native
+    old = dict(sample(), battle_id='retained-local-battle')
+    state.accept('sample', old)
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    state.accept('observer', ('ready', None))
+    state.expect_connection_request(native, 2)
+    state.expect_connection_request(native, 3)
+    for marker in ({'revision': 2, 'platform': 'native_pc'}, {'revision': 3, 'platform': 'mumu'}):
+        state.accept('connection_source', marker)
+        state.accept('native_pc_bootstrap', native_watch_proof())
+        state.accept('observer', ('ready', None))
+        assert state.native_pc_bootstrap is state.observer_status is None
+        assert state.last is old and state._awaiting_source
+    state.accept('connection_source', {'revision': 3, 'platform': 'native_pc'})
+    state.accept('native_pc_bootstrap', native_watch_proof())
+    state.accept('observer', ('attaching', None))
+    assert state.native_pc_bootstrap['armed_filetime'] == 123 and state.observer_status == 'attaching'
+    assert state.last is old and not state._awaiting_source
 
 
 def test_native_detect_is_configuration_only_and_does_not_probe_adb(tmp_path, monkeypatch):
@@ -1885,7 +1975,7 @@ def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed
         details={'win32_error': 5} if denied else {})
     class NativeCollector:
         diagnostics = diagnostic
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             calls.append(('collector', root))
     class Session:
         cleanup_errors = {}
@@ -1947,7 +2037,7 @@ def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
                                      selected_serial='mumu-serial', version_actual='build')
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             calls.append(('native_collector', root))
     class Session:
         cleanup_errors = {}
@@ -2020,7 +2110,7 @@ def test_native_permanent_connect_failures_wait_for_user_but_absence_recovers(
     clock, attempts, explicit = [0.0], [], []
     monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
     class NativeCollector:
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             attempts.append(clock[0])
             failed = len(attempts) == 1
             self.diagnostics = ConnectionDiagnostics(
@@ -2067,7 +2157,7 @@ def test_native_process_change_releases_old_handle_and_reconnects(tmp_path, monk
     calls = []
     class NativeCollector:
         diagnostics = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform='native_pc')
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             calls.append('open')
     class Session:
         cleanup_errors = {}
@@ -2125,7 +2215,7 @@ def test_new_source_apply_wins_over_old_session_recovery(
 
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
             pass
 
     class Session:
@@ -2235,11 +2325,11 @@ def test_history_event_refreshes_records_before_the_next_snapshot(tmp_path):
     cmd(state, 'history_refresh')
     selected = state.selected
     new = record(2)
-    state.history.save(new)
+    committed = state.history.save(new)
     assert all(x['battle_id'] != new.battle_id for x in state.snapshot()['history'])
     worker = Worker()
-    # This is exactly what CollectionSession's on_history callback enqueues.
-    worker.events.put(('history', None))
+    # The writer's already-validated result avoids a second archive scan.
+    worker.events.put(('history', committed))
     output = io.StringIO()
     serve(io.StringIO('{"version":1,"op":"hello"}\n{"version":1,"op":"quit"}\n'),
           output, state, worker)
@@ -2264,9 +2354,9 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
 
     class Session:
         cleanup_errors = {}
-        def __init__(self, *_args, audit=None, on_history=None, state_dir=None, **_kwargs):
+        def __init__(self, *_args, audit=None, on_history_result=None, state_dir=None, **_kwargs):
             self.audit = audit
-            self.on_history = on_history
+            self.on_history_result = on_history_result
             self.state_dir = state_dir
             self.collector = SimpleNamespace(diagnostics=diagnostics)
             self.runtime = None
@@ -2286,14 +2376,15 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
     worker.thread.join()
     assert len(sessions) == 1
     assert sessions[0].state_dir == tmp_path / 'state'
-    sessions[0].on_history()
+    committed = state.history.save(record(2))
+    sessions[0].on_history_result(committed)
     events = []
     while True:
         try:
             events.append(worker.events.get_nowait())
         except queue.Empty:
             break
-    assert ('history', None) in events
+    assert ('history', committed) in events
 
 
 def event_sample(status, error, statistics):

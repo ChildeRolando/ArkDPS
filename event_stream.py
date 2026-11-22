@@ -56,7 +56,11 @@ def baseline_barrier(before, sample, after, *, contract=None):
                 or (shared_scope and before['damage_settlement_scope'] != after['damage_settlement_scope'])
                 or sample['frame'] != after['frame']
                 or sample['game_time'] != after['game_time']):
-            raise BarrierBusy('baseline crossed an event or game frame')
+            changed = [key for key in ('sequence', 'epoch', 'frame', 'game_time') if before[key] != after[key]]
+            if shared_scope and before['damage_settlement_scope'] != after['damage_settlement_scope']:
+                changed.append('damage_settlement_scope')
+            changed.extend('snapshot_' + key for key in ('frame', 'game_time') if sample[key] != after[key])
+            raise BarrierBusy('baseline crossed an event or game frame (' + ', '.join(changed) + ')')
     except (KeyError, TypeError):
         raise StreamGap('incomplete producer mark or baseline') from None
     return after['sequence']
@@ -64,7 +68,7 @@ def baseline_barrier(before, sample, after, *, contract=None):
 
 class EventStream:
     def __init__(self, statistics: Statistics, *, session, baseline_frame,
-                 baseline_sequence):
+                 baseline_sequence, retain_owned_replay_records=False):
         if (session != statistics.session or not statistics.baseline_ready
                 or not statistics.event_coverage or statistics.event_coverage_end is not None
                 or not self._nonnegative_int(baseline_frame)
@@ -78,6 +82,9 @@ class EventStream:
         self.frame = baseline_frame
         self.game_time = statistics.now
         self.received = {}
+        # The scoped multiplayer receiver already detached each raw record
+        # from the transport. Its private receipt stores only read that copy.
+        self._retain_owned_replay_records = retain_owned_replay_records
         self.closed = False
 
     @staticmethod
@@ -93,7 +100,24 @@ class EventStream:
         self.stop()
         raise StreamGap(message)
 
-    def accept(self, verified_skill_end_owner=None, /, *, session, sequence, frame,
+    def _record_receipt(self, sequence, frame, game_time, payload, replay_record):
+        self.sequence = sequence
+        self.frame = frame
+        self.game_time = game_time
+        if replay_record is not None and not self._retain_owned_replay_records:
+            payload = deepcopy(replay_record)
+        self.received[sequence] = payload
+
+    def _observe_unresolved_source(self, source, source_keys, kind, amount, target_instance, *, damage_type):
+        for key in source_keys or (source,):
+            self.statistics.observe_unresolved_source(kind, key, amount, target_instance,
+                                                      damage_type=damage_type)
+
+    def _mark_settlement_skill_unassigned(self, source, source_keys, method, reason):
+        for key in source_keys or (source,):
+            self.statistics.mark_settlement_skill_unassigned(key, method, reason)
+
+    def accept(self, verified_skill_end_owner=None, unresolved_source_keys=(), skip_scope=False, world_only=False, /, *, session, sequence, frame,
                game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
@@ -133,6 +157,40 @@ class EventStream:
                 or not isfinite(game_time) or game_time < self.game_time
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
+        if type(skip_scope) is not bool:
+            self._fail('invalid consumer scope decision')
+        if type(world_only) is not bool:
+            self._fail('invalid world reducer decision')
+        if skip_scope:
+            # This record belongs to another native phase/round, or its scope
+            # cannot be proved. Consume its protocol receipt without letting
+            # old elemental bars, skills or amounts touch this scoped core.
+            # Positional-only: a producer field cannot select this path.
+            self._record_receipt(sequence, frame, game_time, payload, replay_record)
+            return
+        if (self.statistics.settlement_enabled and settlement_identity
+                and settlement_identity[0] == 'foreign'):
+            # The roster/UID proved this event belongs to another player.
+            # It shares the global sequence, but no local skill activation or
+            # local legacy damage/HP account can validate its actor evidence.
+            elemental_burst = (kind == 'elemental_burst'
+                               or kind == 'damage_settlement' and damage_type == 5)
+            if kind == 'elemental_bar':
+                self.statistics.record_settlement_bar(target_uid, target, target_instance,
+                                                       'foreign', None, None)
+            elif elemental_burst:
+                for uid, bar in tuple(self.statistics.settlement_bars.items()):
+                    if uid == target_uid or bar[1] == target_instance:
+                        self.statistics.settlement_bars.pop(uid, None)
+            if kind == 'elemental_bar' or elemental_burst:
+                # Keep foreign target witnesses from leaving earlier local
+                # buildup available to an eventual source-null explosion.
+                if isinstance(target_instance, str) and target_instance:
+                    self.statistics.last_elemental.pop(target_instance, None)
+                else:
+                    self.statistics.last_elemental.clear()
+            self._record_receipt(sequence, frame, game_time, payload, replay_record)
+            return
         ignore_passive_native_cast = False
         native_cast = (skill_method or target_instance) == 'BasicSkill.OnCastFinish'
         skill_actor = (settlement_identity[2] if settlement_identity and settlement_identity[0] == 'local'
@@ -159,7 +217,12 @@ class EventStream:
                 self.statistics.record_damage_settlement(
                     game_time, state, owner, actor, source, target, target_uid, target_instance, amount, shield_absorbed,
                     settlement_complete, damage_type, nominal_amount, mitigation_before, mitigation_after,
-                    killed=killed, settled_after_nested_kill=settled_after_nested_kill)
+                    killed=killed, settled_after_nested_kill=settled_after_nested_kill,
+                    world_only=world_only)
+            elif world_only and kind == 'elemental_bar':
+                # The ordinary settlement-bar reducer below owns the witness;
+                # a shared world has no actor engagement or legacy damage row.
+                pass
             elif settlement_identity == ('summon', None, None):
                 # A proven summon skill never opens a host skill window.
                 pass
@@ -168,14 +231,14 @@ class EventStream:
                 # call. An unmatched passive observation cannot affect a CID peer.
                 pass
             elif unresolved_source:
-                self.statistics.observe_unresolved_source(
-                    kind, source, amount, target_instance, damage_type=damage_type)
+                self._observe_unresolved_source(source, unresolved_source_keys,
+                    kind, amount, target_instance, damage_type=damage_type)
             elif (skill_method == 'BasicSkill.OnCastFinish' and self.statistics.settlement_enabled
                   and (settlement_identity is None or settlement_identity[0] != 'local')):
                 # New native state evidence must not upgrade a different actor
                 # merely because its CID still resolves to the same owner.
-                self.statistics.observe_unresolved_source(
-                    kind, source, amount, target_instance, damage_type=damage_type)
+                self._observe_unresolved_source(source, unresolved_source_keys,
+                    kind, amount, target_instance, damage_type=damage_type)
             elif kind == 'enemy_enter':
                 self.statistics.record_enemy_entry(
                     frame, game_time, source, amount, target, target_instance,
@@ -228,11 +291,11 @@ class EventStream:
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, 'unknown', None, None)
             elif kind in ('skill_start', 'skill_end') and (self.statistics.settlement_enabled or native_cast):
                 if native_cast:
-                    self.statistics.observe_unresolved_source(
-                        kind, source, amount, target_instance, damage_type=damage_type)
+                    self._observe_unresolved_source(source, unresolved_source_keys,
+                        kind, amount, target_instance, damage_type=damage_type)
                 if self.statistics.settlement_enabled:
-                    self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
-                                                                     skill_reason)
+                    self._mark_settlement_skill_unassigned(source, unresolved_source_keys,
+                        skill_method or target_instance, skill_reason)
             elif self.statistics.settlement_enabled and kind == 'damage_settlement':
                 self.statistics.settlement_stream_incomplete = True
                 self.statistics.observe_enemy_damage(complete=False)
@@ -245,8 +308,8 @@ class EventStream:
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor)
                 elif (kind in ('skill_start', 'skill_end') and state == 'unknown'
                       and not ignore_passive_native_cast):
-                    self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
-                                                                     skill_reason)
+                    self._mark_settlement_skill_unassigned(source, unresolved_source_keys,
+                        skill_method or target_instance, skill_reason)
             if self.statistics.settlement_enabled and kind in ('enemy_enter', 'enemy_fake_death',
                                                                'enemy_reborn', 'enemy_finish'):
                 self.statistics.clear_settlement_bar(target_instance, kind)
@@ -259,10 +322,7 @@ class EventStream:
                         finish_reason=finish_reason, enemy_max_hp=enemy_max_hp)
                 except (ValueError, TypeError, OverflowError):
                     self.statistics.mark_enemy_state_unknown()
-        self.sequence = sequence
-        self.frame = frame
-        self.game_time = game_time
-        self.received[sequence] = deepcopy(replay_record) if replay_record is not None else payload
+        self._record_receipt(sequence, frame, game_time, payload, replay_record)
 
     def watermark(self, *, session, sequence, frame, game_time):
         if self.closed:

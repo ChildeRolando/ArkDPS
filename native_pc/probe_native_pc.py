@@ -25,6 +25,19 @@ KNOWN_FILES = {
     'Arknights_Data/il2cpp_data/Metadata/global-metadata.dat':
         'e58fb854ae519bc22f7d8bc7ac83502425a51b896a907a3374f5215202f9caa5',
 }
+BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
+BILIBILI_FILES = {
+    'Arknights.exe':
+        '31f3c6f12a2ebee1260cadab4d7858b5e3f7000fcfaec0054fd93dd4bb79f444',
+    'GameAssembly.dll':
+        '6654b76f8eb32993513ed3b5e861be8e028a61c9cf85b7a696167358e9732e94',
+    'Arknights_Data/il2cpp_data/Metadata/global-metadata.dat':
+        'e58fb854ae519bc22f7d8bc7ac83502425a51b896a907a3374f5215202f9caa5',
+}
+BILIBILI_BUILD_ID = 'win-x64:' + BILIBILI_FILES['GameAssembly.dll']
+# Keep each three-file set intact. The Bilibili build uses the existing probe
+# layouts for the compatibility test and still needs live capture validation.
+KNOWN_BUILDS = {BUILD_ID: KNOWN_FILES, BILIBILI_BUILD_ID: BILIBILI_FILES}
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 READ_ACCESS = 0x0400 | 0x0010  # PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
 STILL_ACTIVE = 259
@@ -78,18 +91,25 @@ def read_pe(path):
 def verify_build(root, *, known_files=None):
     checks = []
     files = KNOWN_FILES if known_files is None else known_files
-    for relative, expected in files.items():
-        check = {'file': relative, 'sha256_matches': False}
+    for relative in files:
+        check = {'file': relative}
         try:
             digest = hashlib.sha256()
             with (root / relative).open('rb') as stream:
                 for block in iter(lambda: stream.read(1024 * 1024), b''):
                     digest.update(block)
             check['sha256'] = digest.hexdigest()
-            check['sha256_matches'] = digest.hexdigest() == expected
         except OSError as error:
             check['file_error'] = error.errno
         checks.append(check)
+    source_build = None
+    if known_files is None:
+        observed = {check['file']: check.get('sha256') for check in checks}
+        source_build = next((key for key, fingerprints in KNOWN_BUILDS.items()
+                             if observed == fingerprints), None)
+        files = KNOWN_BUILDS.get(source_build, KNOWN_FILES)
+    for check in checks:
+        check['sha256_matches'] = check.get('sha256') == files[check['file']]
     build = {'files': checks, 'known_build': all(c['sha256_matches'] for c in checks)}
     if not build['known_build']:
         return build, None
@@ -99,6 +119,8 @@ def verify_build(root, *, known_files=None):
     if not build['amd64'] or code is None or len(code) != CODE_SIZE:
         build['known_build'] = False
         return build, None
+    if source_build is not None:
+        build['source_build'] = source_build
     return build, [('pe_header', 0, header), ('known_code', CODE_RVA, code)]
 
 

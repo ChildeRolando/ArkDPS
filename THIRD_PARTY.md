@@ -26,7 +26,7 @@ python -m ziglang cc -target aarch64-linux-musl -static -O2 -o memsrv memsrv.c
 
 ## GUI 干员头像
 
-`assets/portraits/normal.png` 和 `muted.png` 包含随附名称目录中 467 个干员的基础头像。
+`assets/portraits/normal.png` 和 `muted.png` 包含 468 个干员的基础头像。应用名称目录补充了卫戍干员「暴躁铁皮」，构建图集时也使用该目录。
 来源为 [yuanyan3060/ArknightsGameResource](https://github.com/yuanyan3060/ArknightsGameResource/tree/62fe51e6cd7faa5c1698e05f8cf63ed61cf6a7ac/avatar)，
 固定提交 `62fe51e6cd7faa5c1698e05f8cf63ed61cf6a7ac`。该仓库声明静态资源版权属于
 Arknights / 上海鹰角网络科技有限公司，仅用于学习与交流；游戏素材不重新声明为本项目自有素材。

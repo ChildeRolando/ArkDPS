@@ -183,6 +183,7 @@ class Layout:
     number_units: str = DEFAULT_NUMBER_UNITS
     hud_styles: tuple[tuple[str, HudStyle], ...] = ()
     side_mode: bool = False
+    multiplayer_enabled: bool = False
 
     def __post_init__(self):
         if self.theme not in THEMES:
@@ -191,6 +192,8 @@ class Layout:
             raise ValueError('未知数值单位')
         if not isinstance(self.side_mode, bool):
             raise ValueError('侧边模式必须是布尔值')
+        if not isinstance(self.multiplayer_enabled, bool):
+            raise ValueError('卫戍四家开关必须是布尔值')
         if not self.panels:
             raise ValueError('至少需要一个面板')
         ids = [panel.panel_id for panel in self.panels]
@@ -206,6 +209,7 @@ class Layout:
     def to_dict(self) -> dict:
         return {'version': LAYOUT_VERSION, 'theme': self.theme,
                 'event_observation': bool(self.event_observation),
+                'multiplayer_enabled': self.multiplayer_enabled,
                 'number_units': self.number_units,
                 'side_mode': self.side_mode,
                 'gui': self.gui.to_dict() if self.gui else None,
@@ -331,6 +335,10 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     if not isinstance(event, bool):
         warnings.append('事件观察开关无效，已使用默认开启')
         event = True
+    multiplayer_enabled = raw.get('multiplayer_enabled', False)
+    if not isinstance(multiplayer_enabled, bool):
+        warnings.append('卫戍四家开关无效，已使用默认关闭')
+        multiplayer_enabled = False
     gui = None
     if raw.get('gui') is not None:
         try:
@@ -354,7 +362,7 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     return Layout(panels=panels, huds=huds, gui=gui,
                   event_observation=event, theme=theme,
                   number_units=number_units, hud_styles=hud_styles,
-                  side_mode=side_mode), warnings, migrated_from
+                  side_mode=side_mode, multiplayer_enabled=multiplayer_enabled), warnings, migrated_from
 
 
 class LayoutStore:

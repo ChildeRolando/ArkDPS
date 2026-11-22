@@ -10,12 +10,15 @@ in diagnostics.
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from dataclasses import dataclass, field
 
+from autochess_context import lookup_native_actor, native_autochess_event_identity
 from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import ENEMY_STATE_KINDS, Statistics
 from event_stream import EventStream, StreamGap
+from event_probe import native_autochess_context_bound, native_autochess_event_baseline
 from source_classification import classify_unmapped_source
 
 DAMAGE_TYPES = ('physical', 'arts', 'true', 'elemental')
@@ -135,6 +138,7 @@ class BattleStatisticsAdapter:
     """One live battle at a time; callers create a new adapter per process."""
 
     def __init__(self):
+        self._events_only = False
         self.snapshot_revision = 0
         self.event_stream = None
         self._character_names = load_character_names()
@@ -172,6 +176,9 @@ class BattleStatisticsAdapter:
         self.settlement_side: int | None = None
         self.settlement_batch_side: int | None = None
         self.settlement_version = None
+        self._world_identity = self._world_accounts = None
+        self._world_context = self._world_last_context = None
+        self._world_native_session = None
 
     @property
     def active(self) -> bool:
@@ -238,11 +245,22 @@ class BattleStatisticsAdapter:
         self.event_stream = None
         session = sample['session']
         start = sample['game_time']
-        mapping = build_owner_map(roster)
-        if not mapping.owners:
+        events_only = native_autochess_event_baseline(sample)
+        if sample.get('native_counter_scope') == 'events_only' and not events_only:
+            raise MappingUnavailable(
+                '卫戍身份或阶段尚未取得可靠事件基线；拒绝回退到按角色名累计')
+        mapping = OwnerMap() if events_only else build_owner_map(roster)
+        if not mapping.owners and not events_only:
             raise MappingUnavailable(
                 '未能从战局编队建立可靠的统计键归属；拒绝发布累计数据')
         self.owner_map = mapping
+        self._events_only = events_only
+        context = sample.get('autochess_context') if events_only else None
+        self._world_identity = (tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round'))
+                                if context is not None else None)
+        self._world_accounts = (self._world_player_accounts(context) if context is not None else None)
+        self._world_context = self._world_last_context = deepcopy(context)
+        self._world_native_session = sample.get('native_session')
         self.statistics = Statistics(session, start)
         self.session = session
         self.coverage_start = start
@@ -326,6 +344,9 @@ class BattleStatisticsAdapter:
                 self.last_result = self.statistics.result()
 
     def _accept_event(self, **event):
+        if self._events_only:
+            self._accept_world_event(event)
+            return
         kind = event.get('kind')
         if kind in ENEMY_STATE_KINDS:
             self.event_stream.accept(**event)
@@ -336,6 +357,19 @@ class BattleStatisticsAdapter:
                 self.event_stream.accept(settlement_identity=self._settlement_identity(
                     source, event.get('source_character_uid')), **event)
                 return
+            if kind in SOURCE_EVENTS:
+                identity = self._settlement_identity(source, event.get('source_character_uid'))
+                if identity[0] == 'foreign':
+                    # Check stream order, then retire a verified other-player
+                    # event before CID-based legacy ownership or skill checks.
+                    self.event_stream.accept(settlement_identity=identity, **event)
+                    return
+                if self.settlement_version in (4, 5, 6, 7):
+                    event['settlement_identity'] = identity
+                    if identity[0] == 'unknown' and source is not None:
+                        # Modern observers provide actor evidence. A matching
+                        # prefab alone cannot turn an unknown UID into our hit.
+                        event['unresolved_source'] = True
             if kind in ('elemental_bar', 'skill_start', 'skill_end'):
                 if (self.settlement_version in (6, 7) and kind != 'elemental_bar'
                         and isinstance(source, str) and source in self.settlement_tokens):
@@ -357,7 +391,8 @@ class BattleStatisticsAdapter:
         if (self.statistics.settlement_enabled and legacy_damage and
                 (source is not None or kind != 'elemental_burst') and
                 (not isinstance(source, str) or not source)):
-            self.event_stream.accept(unresolved_source=True, **event)
+            event['unresolved_source'] = True
+            self.event_stream.accept(**event)
             return
         if not supplemental and kind != 'elemental_burst' and (
                 not isinstance(source, str) or not source):
@@ -370,7 +405,8 @@ class BattleStatisticsAdapter:
                 and (owner is None or source in blocked or owner in blocked)):
             if kind in ('damage', 'healing', 'elemental_bar', 'elemental_burst', 'shield_absorbed'):
                 self.unknown_sources.add(source)
-            self.event_stream.accept(unresolved_source=True, **event)
+            event['unresolved_source'] = True
+            self.event_stream.accept(**event)
             return
         if (not supplemental and source is not None
                 and (source in blocked or self.owner_map.owners.get(source) in blocked)):
@@ -395,6 +431,81 @@ class BattleStatisticsAdapter:
                 self.event_stream.stop()
                 raise StreamGap('event source cannot be registered')
         self.event_stream.accept(verified_skill_end_owner, **event)
+
+    @staticmethod
+    def _world_player_accounts(context):
+        return tuple(sorted((row['index'], row['uid']) for row in context['players']))
+
+    @property
+    def enemy_world_scope(self):
+        """Scope of this shared reducer, including a verified terminal tail."""
+        return dict(self._world_context['identity']) if self._world_context is not None else {}
+
+    def _bind_world_context(self, sample, *, end_state):
+        context = sample.get('autochess_context')
+        if (native_autochess_event_baseline(sample)
+                and tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round')) == self._world_identity
+                and self._world_player_accounts(context) == self._world_accounts):
+            self._world_context = self._world_last_context = deepcopy(context)
+        elif (end_state and self._world_native_session is not None
+              and sample.get('native_session') == self._world_native_session):
+            # A verified terminal handoff closes the old combat prefix. Its
+            # events retain their original scope; END does not retag a backlog.
+            self._world_context = self._world_last_context
+        else:
+            self._world_context = None
+
+    def _world_event_gap(self, event):
+        kind = event.get('kind')
+        if kind in ENEMY_STATE_KINDS:
+            self.statistics.mark_enemy_state_unknown()
+        if kind == 'enemy_enter':
+            self.statistics.mark_enemy_entry_unknown()
+        elif kind == 'enemy_reborn':
+            self.statistics.mark_enemy_phase_unknown()
+        if kind in ('damage_settlement', 'enemy_damage', 'elemental_bar', 'elemental_burst'):
+            self.statistics.observe_enemy_damage(complete=False)
+        if kind in ('elemental_bar', 'elemental_burst') or (kind == 'damage_settlement'
+                                                           and event.get('damage_type') == 5):
+            self.statistics.record_settlement_bar(event.get('target_uid'), event.get('target'),
+                event.get('target_instance'), 'unknown', None, None)
+
+    def _world_settlement_identity(self, event):
+        source = event.get('source')
+        if source is not None and classify_unmapped_source(source) is not None:
+            return 'foreign', None, None
+        member = lookup_native_actor(self._world_context, cid=source,
+                                     data_uid=event.get('source_character_uid'))
+        if member is None:
+            return 'unknown', None, None
+        actor = member
+        if member['is_token']:
+            actor = lookup_native_actor(self._world_context, cid=member['host_key'],
+                                        data_uid=member['host_uid'])
+            if actor is None or actor['is_token'] or actor['player_uid'] != member['player_uid']:
+                return 'unknown', None, None
+        return 'local', f"{actor['player_uid']}:{actor['cid']}#{actor['data_uid']}", actor['data_uid']
+
+    def _accept_world_event(self, event):
+        raw = event.get('replay_record') or event
+        identity = native_autochess_event_identity(raw)
+        payload = {key: value for key, value in event.items() if key != 'native_autochess_scope'}
+        world_kind = event.get('kind') in ENEMY_STATE_KINDS or event.get('kind') in (
+            'damage_settlement', 'elemental_bar', 'elemental_burst', 'enemy_damage')
+        if (identity != self._world_identity or self._world_context is None or not world_kind):
+            self.event_stream.accept(None, (), True, **payload)
+            if world_kind and (identity is None or identity == self._world_identity):
+                self._world_event_gap(event)
+            return
+        if event['kind'] in ENEMY_STATE_KINDS:
+            self.event_stream.accept(**payload)
+        elif event['kind'] in ('enemy_damage', 'elemental_burst'):
+            # Current native settlements are authoritative; the legacy incoming
+            # event is not a second HP deduction.
+            self.event_stream.accept(None, (), True, **payload)
+        else:
+            self.event_stream.accept(None, (), False, True,
+                settlement_identity=self._world_settlement_identity(event), **payload)
 
     def _settlement_identity(self, source, uid):
         """Resolve a hit using its UID and the battle's verified player side."""
@@ -494,6 +605,10 @@ class BattleStatisticsAdapter:
             uid = event.get('source_character_uid')
             if not isinstance(source, str) or not source or type(uid) is not int or not 0 < uid <= 0xffffffff:
                 continue
+            if self._settlement_identity(source, uid)[0] == 'foreign':
+                # A foreign instance with the same prefab is not an ownership
+                # witness for the local cumulative counter or skill window.
+                continue
             self.source_observed_uids.setdefault(source, set()).add(uid)
         for source, uids in self.source_observed_uids.items():
             candidates = [self.source_uid_owners.get(uid, set()) for uid in uids]
@@ -536,6 +651,12 @@ class BattleStatisticsAdapter:
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
             raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
+        if ('native_snapshot_witnesses' in sample
+                and not native_autochess_context_bound(sample)):
+            raise MappingUnavailable('原生累计或编队不可用，尚未取得可靠的卫戍事件身份；保留队列重试')
+        if (self.statistics is not None and sample.get('session') == self.session
+                and sample.get('native_counter_scope') == 'events_only' and not self._events_only):
+            raise MappingUnavailable('统计来源已转为按玩家事件归属，等待新的战局代次；拒绝复用按角色名累计')
         metadata = sample.get('battle_metadata') or {}
         native_abandon = (terminal and sample.get('state') == 2
                           and metadata.get('platform') == 'native_pc'
@@ -554,6 +675,8 @@ class BattleStatisticsAdapter:
                 self._freeze()
                 self.statistics = None
             self._begin(sample, roster)
+        if self._events_only:
+            self._bind_world_context(sample, end_state=end_state)
         game_time = sample['game_time']
         settling = self.statistics.end_time is not None
         if settling and (frame != self.last_frame or game_time != self.statistics.end_time
@@ -567,7 +690,7 @@ class BattleStatisticsAdapter:
                 self.statistics = None
                 self._begin(sample, roster)
             elif game_time == self.last_game_time:
-                if (frame == self.last_frame and source_attribution and not self.source_attribution
+                if (not self._events_only and frame == self.last_frame and source_attribution and not self.source_attribution
                         and self.event_stream is None):
                     # A paused battle can expose its first event barrier on
                     # the last native frame. Keep its counters and accept the
@@ -576,6 +699,22 @@ class BattleStatisticsAdapter:
                 return None
         if self.last_frame is not None and frame == self.last_frame and not terminal and not settling:
             return None
+        if self._events_only:
+            # Advance only the shared clock. CID rows remain raw diagnostics;
+            # they never become a per-player zero or cumulative counter.
+            if settling:
+                return None
+            self.statistics.snapshot(game_time, {})
+            if terminal and self.statistics.end_time is None:
+                self.statistics.finish(game_time)
+            self.last_frame, self.last_game_time = frame, game_time
+            self.last_roster, self.last_roster_frame = roster, roster.frame
+            self.presence_complete = False
+            self.missing_fields.add('native_player_counters')
+            self.snapshot_revision += 1
+            self.last_result = self.statistics.result()
+            return AdapterUpdate(self.session, game_time, self.result(roster),
+                                 missing_fields=('native_player_counters',), roster_frame=roster.frame)
         roster_map = build_owner_map(roster)
         if self.source_attribution or source_attribution:
             self._update_event_sources(roster, roster_map, source_events, settlement_version)
@@ -786,6 +925,9 @@ class BattleStatisticsAdapter:
             self.unknown_sources or self.owner_map.unknown_token_cids
             or self.owner_map.ambiguous_cids or self.mapping_conflicts
             or self.missing_fields)
+        if self._events_only:
+            result['totals_complete'] = False
+            result['native_counter_scope'] = 'unavailable'
         result['adapter_session'] = self.session
         result['snapshot_revision'] = self.snapshot_revision
         return result

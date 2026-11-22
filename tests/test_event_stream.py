@@ -28,8 +28,14 @@ def test_barrier_retries_when_the_native_battle_changes_without_a_clock_change()
     before = dict(sequence=10, epoch=4, active=0, frame=1, game_time=0,
                   damage_settlement_scope=3)
     after = dict(before, damage_settlement_scope=4)
-    with pytest.raises(BarrierBusy):
+    with pytest.raises(BarrierBusy, match='damage_settlement_scope'):
         baseline_barrier(before, dict(frame=1, game_time=0), after)
+
+
+def test_barrier_diagnostic_separates_event_sequence_and_snapshot_clock_changes():
+    mark = dict(sequence=10, epoch=4, active=0, frame=2, game_time=0)
+    with pytest.raises(BarrierBusy, match=r'\(sequence, snapshot_frame\)$'):
+        baseline_barrier(mark, dict(frame=1, game_time=0), dict(mark, sequence=11))
 
 
 @pytest.mark.parametrize('change', [dict(sequence=12), dict(frame=899),

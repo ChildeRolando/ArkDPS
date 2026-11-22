@@ -14,6 +14,8 @@ Metadata v29: 92-byte typedefs, strings/fields/typedef tables at header offsets
 0x18/0x60/0xA0; DLL field-offset pointer table RVA 0x87CE000 and type pointer
 table RVA 0x7F16AC0. UnitManager typedef 11604, Enemy 11538, Entity 10318,
 LevelData.EnemyData 4732. FieldInfo checks below revalidate their exact fields.
+UnitManager.enemies is an UnorderedArray<Unit>. Enemy and Character both
+inherit Unit. Use Entity.<id> for non-Enemy members such as traps.
 Entity.get_hp (RVA 0x7364B0) returns m_hp when its hotfix getter is absent.
 Torappu.FP's metadata constant FRACTIONAL_PLACES is 32. Dynamic maxHp uses
 Attributes.GetValue and an unverified cached-value representation; omit it.
@@ -30,11 +32,13 @@ MAX_READ_BYTES = 64 * 1024
 ENEMIES = 0x20
 ENEMY_DATA = 0x530
 ENTITY_HP = 0x40
+ENTITY_ID = 0x148
 HP_GETTER_OVERRIDE = 0x268
 MANAGER_FIELDS = ((2, '<enemies>k__BackingField', ENEMIES),)
 ENEMY_FIELDS = ((104, '<data>k__BackingField', ENEMY_DATA),)
 ENTITY_FIELDS = ((2, 'm_hp', ENTITY_HP),
                  (125, '__Hotfix0_get_hp', HP_GETTER_OVERRIDE))
+ENTITY_ID_FIELDS = ((37, '<id>k__BackingField', ENTITY_ID),)
 DATA_FIELDS = ((2, 'key', 0x20),)
 ENEMY_PREFIX_GUARDS = ((0, 8), (0x10, 0x27), (ENTITY_HP, ENTITY_HP + 8))
 LIMITATIONS = (
@@ -58,6 +62,7 @@ class EnemyRead(presence.CheckedRead):
         return super().read(address, size)
 
     def enemy_lineage(self, klass):
+        """Verify the shared Unit layout and determine the member's ID source."""
         if klass in self.lineages:
             return self.lineages[klass]
         original = klass
@@ -71,19 +76,25 @@ class EnemyRead(presence.CheckedRead):
             klass = self.ref(klass + presence.CLASS_PARENT, guard=True)
         else:
             raise presence.PresenceError('enemy_class_depth')
-        expected = ('Enemy', 'Unit', 'Entity', 'BObject', 'VisualObject')
-        presence.require(len(lineage) >= 5 and all(
-            self.is_class(item, name) for item, name in zip(lineage[-5:], expected)),
+        expected = ('Unit', 'Entity', 'BObject', 'VisualObject')
+        presence.require(len(lineage) >= len(expected) and all(
+            self.is_class(item, name) for item, name in zip(lineage[-4:], expected)),
             'enemy_inheritance')
-        self.fields(lineage[-5], 408, ENEMY_FIELDS)
-        self.fields(lineage[-3], 410, ENTITY_FIELDS)
+        entity = lineage[-3]
+        uses_enemy_data = len(lineage) > len(expected) and self.is_class(lineage[-5], 'Enemy')
+        if uses_enemy_data:
+            self.fields(lineage[-5], 408, ENEMY_FIELDS)
+        else:
+            self.fields(entity, 410, ENTITY_ID_FIELDS)
+        self.fields(entity, 410, ENTITY_FIELDS)
         self.fields(lineage[-2], 9, presence.OBJECT_FIELDS)
-        statics = self.ref(lineage[-3] + presence.native.CLASS_STATICS,
+        statics = self.ref(entity + presence.native.CLASS_STATICS,
                            nullable=True, guard=True)
         override = self.ref(statics + HP_GETTER_OVERRIDE, nullable=True,
                             guard=True) if statics else None
-        self.lineages[original] = override
-        return override
+        result = uses_enemy_data, override
+        self.lineages[original] = result
+        return result
 
     def enemy_values(self, address):
         # Coalesce physical reads without guarding unrelated gaps in the
@@ -91,11 +102,11 @@ class EnemyRead(presence.CheckedRead):
         raw = self.read(address, ENTITY_HP + 8)
         self.enemy_prefixes.append((address, raw))
         klass = presence.pointer(struct.unpack_from('<Q', raw)[0])
-        override = self.enemy_lineage(klass)
+        lineage = self.enemy_lineage(klass)
         native = presence.pointer(struct.unpack_from('<Q', raw, 0x10)[0], nullable=True)
         flags = struct.unpack_from('<IiiBBB', raw, 0x18)
         hp_raw, = struct.unpack_from('<q', raw, ENTITY_HP)
-        return override, native, flags, hp_raw
+        return lineage, native, flags, hp_raw
 
     def validate(self):
         super().validate()
@@ -150,14 +161,17 @@ def capture_enemies(read, context):
             presence.pointer(address)
             presence.require(address not in objects, 'enemy_duplicate_object')
             objects.add(address)
-            hp_override, native, flags, hp_raw = reader.enemy_values(address)
+            (uses_enemy_data, hp_override), native, flags, hp_raw = reader.enemy_values(address)
             uid, entity_side, player_side, inited, borned, disappeared = flags
             presence.require(uid not in uids, 'enemy_duplicate_instance_uid')
             uids.add(uid)
             presence.require(all(flag in (0, 1) for flag in (inited, borned, disappeared)),
                              'enemy_lifecycle_flags')
-            data = reader.ref(address + ENEMY_DATA, guard=True)
-            key = reader.enemy_key(data)
+            if uses_enemy_data:
+                data = reader.ref(address + ENEMY_DATA, guard=True)
+                key = reader.enemy_key(data)
+            else:
+                key = reader.actor_id(reader.ref(address + ENTITY_ID, guard=True))
             hp = hp_raw / (1 << 32)
             hp_reason = ('hp_getter_storage_uninitialized' if hp_override is None else
                          'hp_getter_override_present' if hp_override else None)
@@ -165,6 +179,7 @@ def capture_enemies(read, context):
                 hp_reason = 'hp_out_of_supported_range'
             entities.append({
                 'instance_uid': uid, 'enemy_key': key,
+                'enemy_events_supported': uses_enemy_data or key.startswith('trap_'),
                 'side': entity_side, 'player_side': player_side,
                 'inited': bool(inited), 'borned': bool(borned),
                 'is_disappeared': bool(disappeared),

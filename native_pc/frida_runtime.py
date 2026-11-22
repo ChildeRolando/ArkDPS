@@ -28,7 +28,6 @@ from . import probe_native_pc as access
 FRIDA_VERSION = '17.26.1'
 GADGET_NAME = 'frida-gadget-17.26.1-windows-x86_64.dll'
 GADGET_SHA256 = 'e18e5869be6207fa79cdfcc05aa4e4fe3e304f1d8a28c6d7f1329276e84e5b67'
-SOURCE_BUILD = 'win-x64:' + access.KNOWN_FILES['GameAssembly.dll']
 DEFAULT_ASSET = Path(__file__).resolve().parents[1] / 'vendor' / 'frida' / FRIDA_VERSION / GADGET_NAME
 ADDRESS = '127.0.0.1'
 PORT = 27382
@@ -444,7 +443,7 @@ class NativePcFridaRuntime:
         self._endpoint_needs_cleanup = False
         self._observers = set()
         self._next_auth = 0
-        self._build_signature = None
+        self._verified_build = None
         self._asset_signature = None
         self._ready_generation = 0
         self._loader_diagnostic = None
@@ -634,14 +633,16 @@ class NativePcFridaRuntime:
 
     def _verify_build_cached(self):
         signature = tuple(self._file_token(self.game_root / name) for name in access.KNOWN_FILES)
-        if signature == self._build_signature:
-            return
+        if self._verified_build is not None and signature == self._verified_build[0]:
+            return self._verified_build[1]
         build, _ = self.build_check(self.game_root)
-        if build.get('known_build') is not True:
+        source_build = build.get('source_build')
+        if build.get('known_build') is not True or source_build not in access.KNOWN_BUILDS:
             raise RuntimeFailure('native_unsupported_build', 'PC 客户端构建不匹配；请等待适配此版本')
         if signature != tuple(self._file_token(self.game_root / name) for name in access.KNOWN_FILES):
             raise RuntimeFailure('native_build_changed', 'PC 客户端文件正在变化；请完成更新后重试')
-        self._build_signature = signature
+        self._verified_build = signature, source_build
+        return source_build
 
     def _verify_assets(self):
         source = self.asset_path or self.gadget_path
@@ -672,9 +673,10 @@ class NativePcFridaRuntime:
         self._check_cancelled()
         if not self.admin_check():
             raise RuntimeFailure('native_permission_denied', '请以管理员权限启动 ArkDPS，才能启用 PC Frida 事件采集')
-        self._verify_build_cached()
+        source_build = self._verify_build_cached()
         self._verify_assets()
         self.api = self.api or access.WindowsApi()
+        return source_build
 
     def _instances(self):
         matches = []
@@ -740,7 +742,7 @@ class NativePcFridaRuntime:
                 or any(type(record[key]) is not int or record[key] <= 0 for key in ('pid', 'created'))
                 or any(not isinstance(record[key], str) for key in ('game_root', 'source_build', 'gadget_path', 'gadget_sha256'))
                 or not access.same_path(record['game_root'], self.game_root)
-                or record['source_build'] != SOURCE_BUILD
+                or record['source_build'] not in access.KNOWN_BUILDS
                 or record['gadget_sha256'] != GADGET_SHA256 or record['status'] not in ('loading', 'ready', 'failed')
                 or not isinstance(record['config_sha256'], str) or len(record['config_sha256']) != 64
                 or any(ch not in '0123456789abcdef' for ch in record['config_sha256'])):
@@ -934,7 +936,7 @@ class NativePcFridaRuntime:
             self._state(RuntimeState.WAITING_PROCESS)
 
     def _load_once(self, instance):
-        self._verify_build_cached()
+        source_build = self._verify_build_cached()
         self._verify_assets()
         with self._condition:
             self._check_cancelled()
@@ -942,7 +944,7 @@ class NativePcFridaRuntime:
                 raise RuntimeFailure('restart_required', '当前游戏进程已尝试加载；请正常重启游戏')
             self._attempted.add(instance)
         record = {'version': 1, 'pid': instance[0], 'created': instance[1], 'game_root': str(self.game_root),
-                  'source_build': SOURCE_BUILD, 'gadget_path': str(self.gadget_path),
+                  'source_build': source_build, 'gadget_path': str(self.gadget_path),
                   'gadget_sha256': GADGET_SHA256, 'status': 'loading'}
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -966,7 +968,13 @@ class NativePcFridaRuntime:
         loader = self.loader_factory(instance[0])
         self._pending_loader = loader
         loader.cancelled, loader.commit = self._cancel.is_set, self._commit
-        loader.before_mutation = lambda: (self._verify_build_cached(), self._verify_assets())
+
+        def verify_before_mutation():
+            if self._verify_build_cached() != source_build:
+                raise RuntimeFailure('native_build_changed', 'PC 客户端构建已变化；请正常重启游戏')
+            self._verify_assets()
+
+        loader.before_mutation = verify_before_mutation
         try:
             self._check_cancelled()
             if loader.created_filetime != instance[1] or not self._alive(record):
@@ -1008,7 +1016,7 @@ class NativePcFridaRuntime:
 
     def _reconcile(self):
         self._state(RuntimeState.STARTING)
-        self._preflight()
+        source_build = self._preflight()
         record = self._read_lease()
         if self._lease is not None and record != self._lease:
             raise RuntimeFailure('lease_conflict', 'A changed PC Frida lease was preserved')
@@ -1026,6 +1034,10 @@ class NativePcFridaRuntime:
         if not self._alive(record):
             self._release_endpoint()
             self._remove_credentials(record)
+            return
+        if record['source_build'] != source_build:
+            self._state(RuntimeState.PROCESS_FAILED, 'restart_required',
+                        'PC 客户端构建已变化；请保持 ArkDPS 开启，再正常重启游戏', loaded=False)
             return
         if not access.same_path(record['gadget_path'], self.gadget_path) or not self._module_present(record):
             self._state(RuntimeState.PROCESS_FAILED, 'restart_required',
@@ -1160,12 +1172,53 @@ class NativePcFridaRuntime:
 
 
 class _GadgetObserver(NativePcFridaObserver):
+    native_clock_busy_retry = True
+
     def __init__(self, collector, remote, *, runtime):
         super().__init__(collector, remote)
         self.runtime = runtime
         self._reserved = False
         self._detach_intent = None
         self.script_error = None
+        self._request_timing_audit = None
+
+    def set_request_timing_audit(self, sink=None):
+        self._request_timing_audit = sink
+
+    def _request(self, operation, *, timeout=None, **arguments):
+        sink = self._request_timing_audit
+        if sink is None:
+            return super()._request(operation, timeout=timeout, **arguments)
+        started = time.monotonic()
+        started_perf = time.perf_counter()
+        error_type = None
+        reply = None
+        try:
+            # Include both transport and NativePcBinding validation. The audit
+            # write below is outside the measured request wall time.
+            reply = super()._request(operation, timeout=timeout, **arguments)
+            return reply
+        except BaseException as error:
+            error_type = type(error).__name__
+            raise
+        finally:
+            try:
+                receipt = dict(
+                    op=operation if operation in ('mark', 'read', 'ack') else 'other',
+                    started_monotonic=started, started_perf_counter=started_perf,
+                    elapsed_ms=(time.perf_counter() - started_perf) * 1000,
+                    outcome='success' if error_type is None else 'error', error_type=error_type)
+                sequence = arguments.get('sequence')
+                if operation == 'ack' and type(sequence) is int:
+                    acknowledged = reply.get('acknowledged') if isinstance(reply, dict) else None
+                    confirmed = (type(acknowledged) is int and acknowledged == sequence
+                                 and not reply.get('error'))
+                    receipt['acknowledgement'] = ('unknown' if error_type else
+                                                  'confirmed' if confirmed else 'rejected')
+                    receipt['ack_sequence'] = sequence
+                sink('native_pc_request_timing', receipt)
+            except BaseException:
+                pass  # Optional diagnostics cannot replace a result or exception.
 
     def start(self):
         if self.status != ObserverStatus.STOPPED or self.session is not None or self.script is not None or self._reserved:
@@ -1212,6 +1265,7 @@ class _GadgetObserver(NativePcFridaObserver):
         process = self.collector.process
         if (process.process_instance != (record['pid'], record['created'])
                 or process.pid != record['pid'] or not process.process_alive()
+                or self.collector.diagnostics.version_actual != record['source_build']
                 or not self.runtime._module_present(record)):
             raise RuntimeFailure('process_changed', 'PC Frida lease does not match the connected collector process')
         self.runtime._reserve_observer(self, record)

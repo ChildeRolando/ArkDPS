@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from connection import VersionStatus
+from collection_session import CollectionSession
 from event_observer import FridaEventObserver, NativePcFridaObserver, ObserverReadRetry, ObserverStatus
 
 
@@ -167,10 +168,61 @@ def test_terminal_mark_uses_short_deadline_without_changing_normal_requests(monk
     assert requests == [('mark', {'timeout': .5}), ('mark', {})]
 
 
+def test_native_baseline_reads_only_the_watermark_before_releasing_the_prefix(monkeypatch):
+    observer = NativePcFridaObserver(collector(VersionStatus.COMPATIBLE))
+    requests = []
+
+    def request(operation, **arguments):
+        requests.append((operation, arguments))
+        if operation == 'read':
+            return {'events': list(range(arguments['after'] + 1, arguments['through'] + 1))}
+        return {'acknowledged': arguments['sequence']}
+
+    monkeypatch.setattr(observer, '_request', request)
+    assert observer.read_baseline(50)['events'] == []
+    assert requests == [('read', {'after': 50, 'through': 50})]
+    observer.commit_events(50)
+    assert observer.read_through(51)['events'] == [51]
+    assert requests[1:] == [('ack', {'sequence': 50}), ('read', {'after': 50, 'through': 51})]
+
+
 def native_collector():
     value = collector(VersionStatus.COMPATIBLE)
     value.process = SimpleNamespace(pid=123, process_instance=(123, 456), process_alive=lambda: True)
     return value
+
+
+@pytest.mark.parametrize('platform', ('native_pc', 'mumu'))
+def test_observer_reads_scope_preference_at_start_and_existing_marks(monkeypatch, platform):
+    value = native_collector()
+    value.diagnostics.platform = platform
+    observer = NativePcFridaObserver(value) if platform == 'native_pc' else FridaEventObserver(value, 'fixture')
+    calls, sources = [], []
+    choices = [False]
+    monkeypatch.setattr(observer, 'start', lambda: sources.append(observer._probe_source()))
+    if platform == 'native_pc':
+        monkeypatch.setattr(observer.binding, 'bind', lambda _op, result: result)
+
+    def request(self, operation, *, timeout=None, **arguments):
+        calls.append((operation, timeout, arguments))
+        return {}
+
+    monkeypatch.setattr(FridaEventObserver, '_request', request)
+    session = CollectionSession(None, None, collector=value, observer_factory=lambda *_: observer,
+                                frida_remote=None, autochess_enabled=lambda: choices[0])
+    assert session._attach_observer()
+    assert sources[0].startswith('globalThis.arkdpsAutoChessMode = "local";\n')
+    observer.mark()
+    choices[0] = True
+    observer.mark()
+    observer.read_terminal_mark()
+    observer.read_through(42)
+    assert calls == [
+        ('mark', None, {'autochess_enabled': False}),
+        ('mark', None, {'autochess_enabled': True}),
+        ('mark', observer.terminal_mark_timeout, {'autochess_enabled': True}),
+        ('read', None, {'after': 0, 'through': 42}),
+    ]
 
 
 def test_native_pc_uses_local_native_device_without_android_endpoint(monkeypatch):

@@ -61,6 +61,17 @@ public partial class MainWindow : Window
     private bool adbPathDetected,serialDetected,fillingDetectedConnection;
     private (string? AdbPath,string? Serial)? workerConnectionTarget;
     private bool syncingHudFooter;
+    private bool multiplayerSettingPending;
+    private const string MultiplayerPcOnly="卫戍队友DPS仅支持官服 PC";
+    private bool MultiplayerEnabled=>State.Get("layout").Bool("multiplayer_enabled");
+    private bool MultiplayerSupported=>State.Bool("multiplayer_supported") &&
+        State.Get("effective_connection_config").Text("platform")=="native_pc";
+    private bool MultiplayerActive=>MultiplayerSupported && (State.Get("multiplayer_active").ValueKind switch
+    {
+        JsonValueKind.True=>true,
+        JsonValueKind.False=>false,
+        _=>MultiplayerEnabled,
+    });
     private object? normalGeometry;
     private bool closingRequested;
     private DispatcherOperation? workAreaLayout;
@@ -83,6 +94,9 @@ public partial class MainWindow : Window
     private JsonElement EffectiveConnectionConfig=>State.Get("effective_connection_config").ValueKind==JsonValueKind.Object
         ? State.Get("effective_connection_config") : State.Get("connection_config");
     private bool UsingNativePc=>EffectiveConnectionConfig.Text("platform")=="native_pc";
+    private NativePcReadiness PcReadiness=>NativePcReadiness.From(State);
+    private bool SamplingRejected=>State.Get("sampling_rejection").Text("code")=="mapping_unavailable" &&
+        (State.Text("status") is "sampling_rejected" or "stale") && State.Text("error").Length==0 && !PcReadiness.IsError;
     private string SelectedConnectionPlatform=>(ConnectionPlatform.SelectedItem as ComboBoxItem)?.Tag as string ?? "mumu";
     private readonly ConnectionDetection connectionDetection = new();
     private string HistorySelectionId=>cachedHistorySelection?.Id ?? State.Get("history_selected").Text("battle_id");
@@ -312,11 +326,25 @@ public partial class MainWindow : Window
             OperatorTrend.RefreshTheme();
         }
         Skin.SelectedIndex=Theme.IndexOf(theme);
+        MultiplayerEnabledSetting.IsChecked=layout.Bool("multiplayer_enabled");
+        MultiplayerNav.Visibility=MultiplayerActive ? Visibility.Visible : Visibility.Collapsed;
+        bool scopeUnverified=MultiplayerSupported && state.Bool("multiplayer_scope_unverified");
+        string scopeDetail=state.Text("multiplayer_scope_detail");
+        string scopeNotice=scopeDetail.Length==0 ? "卫戍阶段或本家身份未确认，等待有效小局数据"
+            : "卫戍身份未确认 · "+scopeDetail;
+        MultiplayerEnabledSetting.ToolTip=MultiplayerSupported
+            ? "关闭时只统计本家，保留敌情。战斗中修改，从下一小局生效。" : MultiplayerPcOnly;
+        System.Windows.Automation.AutomationProperties.SetHelpText(MultiplayerEnabledSetting, MultiplayerEnabledSetting.ToolTip.ToString());
+        MultiplayerSettingStatus.Visibility=!MultiplayerSupported || state.Bool("multiplayer_mode_pending") || scopeUnverified
+            ? Visibility.Visible : Visibility.Collapsed;
+        MultiplayerSettingStatus.Text=!MultiplayerSupported ? MultiplayerPcOnly : scopeUnverified ? scopeNotice
+            : MultiplayerEnabled ? "下一小局开始统计卫戍队友DPS" : "下一小局开始只统计本家";
+        if(!MultiplayerActive && route=="multiplayer") _=Navigate("live");
         EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         bool previousBattle=ShowingPreviousBattle;
         bool panelLayoutChanged=ApplyLiveSnapshot(state,previousBattle,changed || unitsChanged);
-        Footer.Text=state.Text("connection_text");
+        Footer.Text=SamplingRejected ? state.Text("status_text") : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text");
         if(!initialized)
         {
             Native.Restore(this,layout.Get("gui"));
@@ -327,10 +355,12 @@ public partial class MainWindow : Window
             panelLayoutChanged = true;
         }
         UpdateHistory();
+        MultiplayerPage.Update(MultiplayerActive ? state.Get("multiplayer") : default, scopeUnverified ? scopeNotice : "");
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
-            state.Text("connection_text"),state.Text("event_text"),
+            SamplingRejected ? state.Text("status_text") : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text"),state.Text("event_text"),
+            UsingNativePc ? state.Get("native_pc_bootstrap").Text("error") : "",
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected"),
             diag.Text("message"),diag.Text("error"),diag.Text("code")
         }.Where(text=>text.Length>0));
@@ -408,11 +438,22 @@ public partial class MainWindow : Window
         RefreshLiveAvailability();
         return panelLayoutChanged;
     }
-    private void UpdateBabelMasthead(string status,bool observing)
+    private void UpdateBabelMasthead(string status,bool observing,string workerLabel)
     {
         bool waiting=status=="waiting" || State.Bool("battle_waiting") || State.Text("battle_id").Length==0;
         string title, subtitle;
-        if(waiting)
+        var readiness=PcReadiness;
+        if(SamplingRejected)
+        {
+            title="采样暂不可用";
+            subtitle=workerLabel;
+        }
+        else if(readiness.Active)
+        {
+            title=readiness.IsError ? "PC 监听异常" : "PC 事件采集";
+            subtitle=readiness.Label;
+        }
+        else if(waiting)
         {
             title=UsingNativePc ? "PC 版快照" : observing ? "观察中" : "观察停止";
             subtitle="等待进入战斗";
@@ -433,6 +474,16 @@ public partial class MainWindow : Window
     private void UpdateLivePanel(string id,StatisticPanel panel,JsonElement view,bool canDelete)
     {
         panel.Update(view,canDelete);
+        if(PcReadiness.Active && panel.Rows.Items.Count==0)
+        {
+            panel.Empty.Text=PcReadiness.Label;
+            panel.Empty.Visibility=Visibility.Visible;
+        }
+        if(SamplingRejected && panel.Rows.Items.Count==0)
+        {
+            panel.Empty.Text=State.Text("status_text");
+            panel.Empty.Visibility=Visibility.Visible;
+        }
         if(Huds.TryGetValue(id,out var hud))
             hud.Update(view,CurrentHudStatus);
         if(activePanel==id)
@@ -462,6 +513,7 @@ public partial class MainWindow : Window
     }
     private void RefreshLiveAvailability()
     {
+        MultiplayerEnabledSetting.IsEnabled=MultiplayerSupported && !multiplayerSettingPending && !workerUnavailable && !closingRequested && !quitting && !updateShutdownPreparing;
         bool available=!workerUnavailable && !ShowingPreviousBattle;
         AddPanelButton.IsEnabled=available;
         foreach(var panel in Panels.Values) panel.SetConfigurationAvailable(available);
@@ -475,7 +527,7 @@ public partial class MainWindow : Window
             State.Get("layout").Get("event_observation").ValueKind==JsonValueKind.False);
         bool observing=!disabled && status is not ("disconnected" or "reconnecting" or "locating")
             && (observer=="ready" || (observer.Length==0 && coverage=="recording"));
-        UpdateBabelMasthead(status,observing);
+        UpdateBabelMasthead(status,observing,workerLabel);
         string phase=status switch
         {
             "waiting" => "等待进入战斗",
@@ -484,6 +536,7 @@ public partial class MainWindow : Window
         };
         (string label,Brush light) = UsingNativePc ? status switch
         {
+            "sampling_rejected" => (workerLabel,StatusAmber),
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" or "locating" => (workerLabel,StatusAmber),
             "waiting" => ("PC 版 · 等待进入战斗",StatusAmber),
@@ -491,6 +544,7 @@ public partial class MainWindow : Window
             _ => (workerLabel,StatusGray),
         } : status switch
         {
+            "sampling_rejected" => (workerLabel,StatusAmber),
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" => (workerLabel,StatusAmber),
             "locating" => (disabled ? workerLabel : "正在连接观察者",StatusAmber),
@@ -504,6 +558,9 @@ public partial class MainWindow : Window
             "waiting" => ("等待连接观察者",StatusAmber),
             _ => ($"等待观察·{phase}",StatusAmber),
         };
+        var readiness=PcReadiness;
+        if(readiness.Active && !SamplingRejected && status is not ("stale" or "reconnecting"))
+            (label,light)=(readiness.Label,readiness.IsError ? StatusRed : StatusAmber);
         if(ShowingPreviousBattle) label="上次快照 · "+label;
         Status.Text=label;
         StatusLight.Fill=light;
@@ -554,7 +611,7 @@ public partial class MainWindow : Window
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
             or "--frida-remote" or "--platform" or "--native-game-root")
             ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。"
-            : native ? "应用设置会开始等待游戏；已经就绪时无需再次重启。" : "唯一可用实例会自动填入；多实例时请从列表中选择。";
+            : native ? "应用后请按当前状态操作；等待显示「监听已就绪」后再启动游戏。已连接时无需再次重启。" : "唯一可用实例会自动填入；多实例时请从列表中选择。";
     }
     private void ChooseNativeGameRoot(object sender,RoutedEventArgs e)
     {
@@ -636,12 +693,12 @@ public partial class MainWindow : Window
         bool wide = width >= 1320;
         bool scrollLive = narrow || ContentRoot.ActualHeight < (wide ? 640 : 960);
         bool narrowOverview = width < 920;
-        NavigationColumn.Width = new GridLength(Theme.IsBabel ? (narrow ? 86 : 172) : (narrow ? 92 : 208));
+        NavigationColumn.Width = new GridLength(Theme.IsBabel ? (narrow ? 86 : 184) : (narrow ? 92 : 208));
         BrandBadge.Width = NavigationColumn.Width.Value - (narrow ? 5 : 6);
         if (narrow) Skin.Padding = new Thickness(8, 24, Theme.IsBabel ? 20 : 27, 4);
         else Skin.ClearValue(Control.PaddingProperty);
         ArrangeThemeArtwork(narrow);
-        foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (SettingsNav, SettingsNavLabel) })
+        foreach (var (button, label) in new[] { (LiveNav, LiveNavLabel), (HistoryNav, HistoryNavLabel), (EnemyNav, EnemyNavLabel), (MultiplayerNav, MultiplayerNavLabel), (SettingsNav, SettingsNavLabel) })
         {
             button.HorizontalContentAlignment = narrow ? HorizontalAlignment.Center : HorizontalAlignment.Left;
             label.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
@@ -778,7 +835,7 @@ public partial class MainWindow : Window
         bool babel = Theme.IsBabel;
         foreach (var frame in new[] { LiveOverviewFrame, EnemySummary, RankingFrame, LiveDetail })
             frame.SetResourceReference(StyleProperty, babel ? "BabelResearchFrame" : "ResearchFrame");
-        foreach (var button in new[] { LiveNav, EnemyNav, HistoryNav, SettingsNav })
+        foreach (var button in new[] { LiveNav, EnemyNav, MultiplayerNav, HistoryNav, SettingsNav })
             button.SetResourceReference(StyleProperty, babel ? "BabelResearchNav" : "ResearchNav");
         foreach (Border metric in MetricCards.Children)
             metric.SetResourceReference(StyleProperty, babel ? "BabelSecondaryMetric" : "ResearchMetric");
@@ -986,14 +1043,16 @@ public partial class MainWindow : Window
     private async void Navigate(object sender,RoutedEventArgs e)=>await Navigate((string)((Button)sender).Tag);
     internal async Task Navigate(string page)
     {
+        if(page=="multiplayer" && !MultiplayerActive) return;
         route=page;LivePage.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
         EnemyPageScroll.Visibility=page=="enemies" ? Visibility.Visible : Visibility.Collapsed;
+        MultiplayerPage.Visibility=page=="multiplayer" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         bool live=page=="live";
         SubpageHeader.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
-        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","settings"=>"设置",_=>"实时战况"};
-        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
+        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","multiplayer"=>"卫戍队友DPS","settings"=>"设置",_=>"实时战况"};
+        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","multiplayer"=>"本小局队友输出 · 分玩家查看干员","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
         SetNavState(page);
         AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         ArrangePanels();
@@ -1003,7 +1062,7 @@ public partial class MainWindow : Window
     }
     private void SetNavState(string page)
     {
-        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(EnemyNav,"enemies"),(SettingsNav,"settings")})
+        foreach(var (button,tag) in new[]{(LiveNav,"live"),(HistoryNav,"history"),(EnemyNav,"enemies"),(MultiplayerNav,"multiplayer"),(SettingsNav,"settings")})
         {
             bool active=tag==page;
             button.SetResourceReference(Control.BackgroundProperty, active ? "ShellNavActive" : "Sidebar");
@@ -1161,6 +1220,25 @@ public partial class MainWindow : Window
     {
         if (applying || !initialized || NumberUnits.SelectedItem is not ComboBoxItem item) return;
         await Command("number_units", new() { ["number_units"] = item.Tag });
+    }
+    private async void MultiplayerEnabledChanged(object sender,RoutedEventArgs e)
+    {
+        if(applying || !initialized || multiplayerSettingPending) return;
+        if(!MultiplayerSupported)
+        {
+            MultiplayerEnabledSetting.IsChecked=MultiplayerEnabled;
+            return;
+        }
+        bool enabled=MultiplayerEnabledSetting.IsChecked==true;
+        multiplayerSettingPending=true;
+        RefreshLiveAvailability();
+        try { await Command("multiplayer_enabled",new(){["enabled"]=enabled}); }
+        finally
+        {
+            multiplayerSettingPending=false;
+            MultiplayerEnabledSetting.IsChecked=MultiplayerEnabled;
+            RefreshLiveAvailability();
+        }
     }
     private void UpdateHistory()
     {

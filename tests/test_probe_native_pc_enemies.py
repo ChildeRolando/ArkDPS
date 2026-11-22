@@ -4,6 +4,8 @@ import struct
 
 import pytest
 
+import collector  # Initialize the vendored imports used by the projection.
+from enemy_telemetry import NativeEnemyObservations
 from native_pc import probe_native_pc_enemies as enemies
 from test_probe_native_pc_presence import Memory
 
@@ -18,10 +20,11 @@ def fixture():
                                 namespace='Torappu')
     visual = mem.klass('VisualObject')
     obj = mem.klass('BObject', 9, enemies.presence.OBJECT_FIELDS, visual)
-    p['entity_class'] = mem.klass('Entity', 410, enemies.ENTITY_FIELDS, obj)
+    p['entity_class'] = mem.klass('Entity', 410, (*enemies.ENTITY_FIELDS, *enemies.ENTITY_ID_FIELDS), obj)
     p['statics'] = mem.allocate()
     mem.put(p['entity_class'] + enemies.presence.native.CLASS_STATICS, '<Q', p['statics'])
     unit = mem.klass('Unit', parent=p['entity_class'])
+    p['unit_class'] = unit
     p['enemy_class'] = mem.klass('Enemy', 408, enemies.ENEMY_FIELDS, unit)
     p['data_class'] = mem.klass('EnemyData', 18, enemies.DATA_FIELDS, namespace='')
     string = mem.klass('String', namespace='System')
@@ -68,11 +71,11 @@ class LegacyEnemyRead(enemies.EnemyRead):
 
     def enemy_values(self, address):
         klass = self.ref(address, guard=True)
-        override = self.enemy_lineage(klass)
+        lineage = self.enemy_lineage(klass)
         native = self.ref(address + 0x10, nullable=True, guard=True)
         flags = struct.unpack('<IiiBBB', self.guarded(address + 0x18, 15))
         hp_raw, = struct.unpack('<q', self.guarded(address + enemies.ENTITY_HP, 8))
-        return override, native, flags, hp_raw
+        return lineage, native, flags, hp_raw
 
     def enemy_key(self, data):
         klass = self.expect_class(data, 'EnemyData', '')
@@ -205,6 +208,34 @@ def test_distinct_instances_with_shared_enemy_key_have_current_hp_only(fixture):
     assert sum(size for _, size in mem.reads) <= enemies.MAX_READ_BYTES
 
 
+@pytest.mark.parametrize('eid,events_supported', [
+    ('trap_1112_acblzd', True), ('char_143_ghost', False),
+])
+def test_guard_round_shows_enemies_and_other_hostile_units_in_the_same_snapshot(
+        fixture, eid, events_supported):
+    mem, context, p = fixture
+    character = mem.klass('Character', parent=p['unit_class'])
+    klass = character
+    if events_supported:
+        token = mem.klass('Token', parent=character)
+        klass = mem.klass('Trap', parent=token)
+    unit = p['objects'][0]
+    mem.put(unit, '<Q', klass)
+    mem.put(unit + enemies.ENEMY_DATA, '<Q', 0)
+    mem.put(unit + enemies.ENTITY_ID, '<Q', mem.string(eid, p['string_class']))
+
+    snapshot = enemies.capture_enemies(mem.read, context)
+
+    assert snapshot['enemies_status'] == 'available'
+    view = NativeEnemyObservations().observe(snapshot, frame=25, game_time=25 / 30, catalog={})
+    assert view['ready']
+    assert [(row['eid'], row['hp']) for row in view['rows']] == [
+        (eid, 1000.5), ('enemy_1001_soldier', 750.5),
+    ]
+    assert view['totals']['remaining_hp_complete']
+    assert view.get('enemy_events_supported', True) is events_supported
+
+
 def test_changes_between_polls_do_not_become_damage_or_death_events(fixture):
     mem, context, p = fixture
     first = enemies.capture_enemies(mem.read, context)['enemies']['entities']
@@ -246,7 +277,7 @@ def test_unverified_hp_stays_unknown_without_discarding_membership(fixture, cond
 
 @pytest.mark.parametrize('fault', [
     'count', 'capacity', 'null_slot', 'duplicate_object', 'duplicate_uid',
-    'field_count', 'field_offset', 'namespace', 'inheritance', 'flags', 'bad_key',
+    'field_count', 'field_offset', 'namespace', 'inheritance', 'not_unit', 'flags', 'bad_key',
 ])
 def test_invalid_or_unsupported_source_is_unknown_not_empty(fixture, fault):
     mem, context, p = fixture
@@ -267,6 +298,8 @@ def test_invalid_or_unsupported_source_is_unknown_not_empty(fixture, fault):
         mem.put(p['data_class'] + 0x18, '<Q', mem.text('Other'))
     elif fault == 'inheritance':
         mem.put(p['enemy_class'] + enemies.presence.CLASS_PARENT, '<Q', p['enemy_class'])
+    elif fault == 'not_unit':
+        mem.put(p['objects'][0], '<Q', p['entity_class'])
     elif fault == 'flags':
         mem.put(p['objects'][0] + 0x24, '<B', 3)
     else:

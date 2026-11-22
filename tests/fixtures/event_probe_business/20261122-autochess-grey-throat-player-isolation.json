@@ -1,0 +1,2359 @@
+{
+  "provenance": {
+    "source_head": "e7eb83e5099e3829391f2350b4943997be18ad78",
+    "source_log": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+    "source_log_sha256": "e70a55d8d7ea3275a23b7689649547c5625aee4225a018901305ad1841efc640",
+    "battle_id": "bd0b6c183e0b4042ab264f77b7886a28:12",
+    "platform": "native_pc",
+    "stage_id": "Activities/ACT3AUTOCHESS/level_act3autochess_m11",
+    "selection": "Original grey-throat skill markers, all 72 local settlements, first foreign hp_damage and damage; roster reduced to the two grey-throat entries. Test transport renumbers the selected records consecutively; original sequence/frame/time/evidence remain frozen here. This is a per-actor regression, not a complete capture replay or producer-quality certificate."
+  },
+  "local_player_side": 3,
+  "roster_entries": [
+    {
+      "cid": "char_367_swllow",
+      "unique_id": 3145802,
+      "is_token": false,
+      "is_predefined": false,
+      "host_key": null,
+      "host_uid": null,
+      "player_side": 3
+    },
+    {
+      "cid": "char_367_swllow",
+      "unique_id": 4194395,
+      "is_token": false,
+      "is_predefined": false,
+      "host_key": null,
+      "host_uid": null,
+      "player_side": 4
+    }
+  ],
+  "original_records": [
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 545,
+      "event": {
+        "sequence": 6744,
+        "frame": 228,
+        "game_time": 7.599992752075195,
+        "source": "char_367_swllow",
+        "kind": "hp_damage",
+        "amount": 393.08799916505814,
+        "proof": {
+          "method": "Unit.OnTakeDamage",
+          "type": 1,
+          "target": 0
+        },
+        "target": "enemy_1071_dftman",
+        "hp_before": 4838,
+        "shield_absorbed": 0,
+        "target_instance": "0x134c81800",
+        "target_type": 0,
+        "damage_type": 1,
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 545,
+      "event": {
+        "sequence": 6747,
+        "frame": 228,
+        "game_time": 7.599992752075195,
+        "source": "char_367_swllow",
+        "kind": "damage",
+        "amount": 393.08799916505814,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "type": 1,
+          "target": 0,
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_instance": "0x134c81800",
+        "target_type": 0,
+        "damage_type": 1,
+        "real_delta": -393.08799916505814,
+        "hp_before": 4838,
+        "hp_after": 4444.912000834942,
+        "killed": false,
+        "cancel_reason": 0,
+        "shield_absorbed": 0,
+        "mitigation_before": 463.08799916505814,
+        "mitigation_after": 393.08799916505814,
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 545,
+      "event": {
+        "sequence": 6750,
+        "frame": 230,
+        "game_time": 7.666659355163574,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2324",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 549,
+      "event": {
+        "sequence": 6768,
+        "frame": 254,
+        "game_time": 8.466658592224121,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2324",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 553,
+      "event": {
+        "sequence": 6782,
+        "frame": 282,
+        "game_time": 9.399991035461426,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2324",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 553,
+      "event": {
+        "sequence": 6805,
+        "frame": 310,
+        "game_time": 10.33332347869873,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2324",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 553,
+      "event": {
+        "sequence": 6834,
+        "frame": 338,
+        "game_time": 11.266655921936035,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2324",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 555,
+      "event": {
+        "sequence": 6855,
+        "frame": 366,
+        "game_time": 12.19998836517334,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2324",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 557,
+      "event": {
+        "sequence": 6894,
+        "frame": 394,
+        "game_time": 13.133320808410645,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2344",
+        "target_instance": "0x134c2d000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 561,
+      "event": {
+        "sequence": 6931,
+        "frame": 422,
+        "game_time": 14.06665325164795,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2344",
+        "target_instance": "0x134c2d000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 563,
+      "event": {
+        "sequence": 6964,
+        "frame": 450,
+        "game_time": 14.999985694885254,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2344",
+        "target_instance": "0x134c2d000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 566,
+      "event": {
+        "sequence": 7005,
+        "frame": 478,
+        "game_time": 15.933318138122559,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2344",
+        "target_instance": "0x134c2d000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 568,
+      "event": {
+        "sequence": 7061,
+        "frame": 506,
+        "game_time": 16.866650581359863,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2344",
+        "target_instance": "0x134c2d000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 570,
+      "event": {
+        "sequence": 7113,
+        "frame": 533,
+        "game_time": 17.76664972305298,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2382",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 572,
+      "event": {
+        "sequence": 7174,
+        "frame": 563,
+        "game_time": 18.766648769378662,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2399",
+        "target_instance": "0x134c81000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 574,
+      "event": {
+        "sequence": 7219,
+        "frame": 590,
+        "game_time": 19.666647911071777,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 20.399962100666016,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2399",
+        "target_instance": "0x134c81000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": true,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 578,
+      "event": {
+        "sequence": 7270,
+        "frame": 615,
+        "game_time": 20.499980449676514,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2382",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 580,
+      "event": {
+        "sequence": 7383,
+        "frame": 642,
+        "game_time": 21.39997959136963,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2382",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 584,
+      "event": {
+        "sequence": 7441,
+        "frame": 673,
+        "game_time": 22.433311939239502,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 42,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_10087_hlchgr",
+        "target_uid": "2432",
+        "target_instance": "0x134b3e800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 42,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 42,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 586,
+      "event": {
+        "sequence": 7546,
+        "frame": 700,
+        "game_time": 23.333311080932617,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 42,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_10087_hlchgr",
+        "target_uid": "2432",
+        "target_instance": "0x134b3e800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 42,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 42,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 588,
+      "event": {
+        "sequence": 7625,
+        "frame": 728,
+        "game_time": 24.266643524169922,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 162,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2417",
+        "target_instance": "0x137169000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 162,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 162,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 588,
+      "event": {
+        "sequence": 7723,
+        "frame": 756,
+        "game_time": 25.199975967407227,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 162,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2417",
+        "target_instance": "0x137169000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 162,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 162,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 588,
+      "event": {
+        "sequence": 7826,
+        "frame": 784,
+        "game_time": 26.13330841064453,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 162,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2417",
+        "target_instance": "0x137169000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 162,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 162,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 591,
+      "event": {
+        "sequence": 7889,
+        "frame": 812,
+        "game_time": 27.066640853881836,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2461",
+        "target_instance": "0x134c2d000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 593,
+      "event": {
+        "sequence": 8031,
+        "frame": 840,
+        "game_time": 27.99997329711914,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 162,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2417",
+        "target_instance": "0x137169000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 162,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 162,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 595,
+      "event": {
+        "sequence": 8100,
+        "frame": 868,
+        "game_time": 28.933305740356445,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2494",
+        "target_instance": "0x134c81000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 595,
+      "event": {
+        "sequence": 8246,
+        "frame": 896,
+        "game_time": 29.86663818359375,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2494",
+        "target_instance": "0x134c81000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8319,
+        "frame": 924,
+        "game_time": 30.799970626831055,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 322,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2494",
+        "target_instance": "0x134c81000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 322,
+        "killed": false,
+        "mitigation_before": 392,
+        "mitigation_after": 322,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8321,
+        "frame": 924,
+        "game_time": 30.799970626831055,
+        "source": "char_367_swllow",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.SwitchToSkillState"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8337,
+        "frame": 929,
+        "game_time": 30.966637134552002,
+        "source": "char_367_swllow",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillStart"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8338,
+        "frame": 929,
+        "game_time": 30.966637134552002,
+        "source": "char_367_swllow",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillCastSucceed"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8339,
+        "frame": 930,
+        "game_time": 30.99997043609619,
+        "source": "char_367_swllow",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.SwitchToSkillState"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8340,
+        "frame": 930,
+        "game_time": 30.99997043609619,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "BasicSkill.OnCastFinish"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": 1,
+        "skill_wait_for_end": true,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8341,
+        "frame": 930,
+        "game_time": 30.99997043609619,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": 1,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8342,
+        "frame": 930,
+        "game_time": 30.99997043609619,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": 1,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8349,
+        "frame": 935,
+        "game_time": 31.16663694381714,
+        "source": "char_367_swllow",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillStart"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8350,
+        "frame": 935,
+        "game_time": 31.16663694381714,
+        "source": "char_367_swllow",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillCastSucceed"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8359,
+        "frame": 936,
+        "game_time": 31.199970245361328,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "BasicSkill.OnCastFinish"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": 1,
+        "skill_wait_for_end": true,
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8360,
+        "frame": 936,
+        "game_time": 31.199970245361328,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": 1,
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8361,
+        "frame": 936,
+        "game_time": 31.199970245361328,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": 1,
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 597,
+      "event": {
+        "sequence": 8365,
+        "frame": 939,
+        "game_time": 31.299970149993896,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 599,
+      "event": {
+        "sequence": 8385,
+        "frame": 944,
+        "game_time": 31.466636657714844,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 599,
+      "event": {
+        "sequence": 8403,
+        "frame": 949,
+        "game_time": 31.63330316543579,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 599,
+      "event": {
+        "sequence": 8495,
+        "frame": 967,
+        "game_time": 32.2333025932312,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 599,
+      "event": {
+        "sequence": 8516,
+        "frame": 972,
+        "game_time": 32.39996910095215,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 599,
+      "event": {
+        "sequence": 8532,
+        "frame": 977,
+        "game_time": 32.566635608673096,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 603,
+      "event": {
+        "sequence": 8596,
+        "frame": 995,
+        "game_time": 33.166635036468506,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 603,
+      "event": {
+        "sequence": 8608,
+        "frame": 999,
+        "game_time": 33.299968242645264,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 603,
+      "event": {
+        "sequence": 8628,
+        "frame": 1004,
+        "game_time": 33.46663475036621,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 605,
+      "event": {
+        "sequence": 8695,
+        "frame": 1022,
+        "game_time": 34.06663417816162,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 605,
+      "event": {
+        "sequence": 8713,
+        "frame": 1027,
+        "game_time": 34.23330068588257,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 607,
+      "event": {
+        "sequence": 8739,
+        "frame": 1032,
+        "game_time": 34.399967193603516,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 607,
+      "event": {
+        "sequence": 8796,
+        "frame": 1050,
+        "game_time": 34.999966621398926,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 607,
+      "event": {
+        "sequence": 8823,
+        "frame": 1055,
+        "game_time": 35.16663312911987,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 607,
+      "event": {
+        "sequence": 8841,
+        "frame": 1060,
+        "game_time": 35.33329963684082,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 611,
+      "event": {
+        "sequence": 8909,
+        "frame": 1079,
+        "game_time": 35.96663236618042,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 611,
+      "event": {
+        "sequence": 8923,
+        "frame": 1084,
+        "game_time": 36.13329887390137,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 611,
+      "event": {
+        "sequence": 8948,
+        "frame": 1089,
+        "game_time": 36.299965381622314,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 220.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon",
+        "target_uid": "2510",
+        "target_instance": "0x2c320c800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 220.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 220.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 614,
+      "event": {
+        "sequence": 8996,
+        "frame": 1106,
+        "game_time": 36.866631507873535,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 380.8000023365021,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2382",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 380.8000023365021,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 380.8000023365021,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 614,
+      "event": {
+        "sequence": 9016,
+        "frame": 1111,
+        "game_time": 37.03329801559448,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 380.8000023365021,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2382",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 380.8000023365021,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 380.8000023365021,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 614,
+      "event": {
+        "sequence": 9036,
+        "frame": 1116,
+        "game_time": 37.19996452331543,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 380.8000023365021,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2382",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 380.8000023365021,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 380.8000023365021,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 614,
+      "event": {
+        "sequence": 9077,
+        "frame": 1134,
+        "game_time": 37.79996395111084,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 146.89987905067392,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1071_dftman",
+        "target_uid": "2382",
+        "target_instance": "0x134caa800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 380.8000023365021,
+        "killed": true,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 380.8000023365021,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 616,
+      "event": {
+        "sequence": 9170,
+        "frame": 1165,
+        "game_time": 38.83329629898071,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 616,
+      "event": {
+        "sequence": 9188,
+        "frame": 1170,
+        "game_time": 38.99996280670166,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 616,
+      "event": {
+        "sequence": 9213,
+        "frame": 1175,
+        "game_time": 39.16662931442261,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9245,
+        "frame": 1192,
+        "game_time": 39.73329544067383,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9269,
+        "frame": 1197,
+        "game_time": 39.899961948394775,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9293,
+        "frame": 1202,
+        "game_time": 40.06662845611572,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9351,
+        "frame": 1220,
+        "game_time": 40.66662788391113,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9369,
+        "frame": 1225,
+        "game_time": 40.83329439163208,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9377,
+        "frame": 1230,
+        "game_time": 40.99996089935303,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9435,
+        "frame": 1249,
+        "game_time": 41.63329362869263,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 618,
+      "event": {
+        "sequence": 9455,
+        "frame": 1254,
+        "game_time": 41.799960136413574,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 620,
+      "event": {
+        "sequence": 9471,
+        "frame": 1259,
+        "game_time": 41.96662664413452,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2664",
+        "target_instance": "0x137270000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 620,
+      "event": {
+        "sequence": 9525,
+        "frame": 1277,
+        "game_time": 42.56662607192993,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 622,
+      "event": {
+        "sequence": 9544,
+        "frame": 1282,
+        "game_time": 42.73329257965088,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 622,
+      "event": {
+        "sequence": 9560,
+        "frame": 1286,
+        "game_time": 42.86662578582764,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 622,
+      "event": {
+        "sequence": 9614,
+        "frame": 1304,
+        "game_time": 43.46662521362305,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 622,
+      "event": {
+        "sequence": 9623,
+        "frame": 1309,
+        "game_time": 43.633291721343994,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 622,
+      "event": {
+        "sequence": 9635,
+        "frame": 1314,
+        "game_time": 43.79995822906494,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 624,
+      "event": {
+        "sequence": 9668,
+        "frame": 1332,
+        "game_time": 44.39995765686035,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 624,
+      "event": {
+        "sequence": 9681,
+        "frame": 1337,
+        "game_time": 44.5666241645813,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 624,
+      "event": {
+        "sequence": 9701,
+        "frame": 1342,
+        "game_time": 44.733290672302246,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 626,
+      "event": {
+        "sequence": 9723,
+        "frame": 1361,
+        "game_time": 45.366623401641846,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 626,
+      "event": {
+        "sequence": 9736,
+        "frame": 1366,
+        "game_time": 45.53328990936279,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 626,
+      "event": {
+        "sequence": 9761,
+        "frame": 1371,
+        "game_time": 45.69995641708374,
+        "source": "char_367_swllow",
+        "kind": "damage_settlement",
+        "amount": 200.80000233650208,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1010_demon_2",
+        "target_uid": "2729",
+        "target_instance": "0x287029000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 200.80000233650208,
+        "killed": false,
+        "mitigation_before": 450.8000023365021,
+        "mitigation_after": 200.80000233650208,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 628,
+      "event": {
+        "sequence": 9858,
+        "frame": 1411,
+        "game_time": 47.03328847885132,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillFinish"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": null,
+        "source_character_uid": 3145802
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 631,
+      "event": {
+        "sequence": 9864,
+        "frame": 1417,
+        "game_time": 47.233288288116455,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillFinish"
+        },
+        "skill_key": "skchr_swllow_2",
+        "skill_id": "skchr_swllow_2",
+        "skill_name": "回流",
+        "skill_reason": null,
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 779,
+      "event": {
+        "sequence": 10775,
+        "frame": 2540,
+        "game_time": 84.66658592224121,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "BattleController.OnCharacterFinished"
+        },
+        "skill_key": null,
+        "skill_id": null,
+        "skill_name": null,
+        "skill_reason": 7,
+        "source_character_uid": 4194395
+      }
+    },
+    {
+      "file": "wpf-20261122-095950-712004-49522e267ad94e9598e4444a6bef1449-part-000002.jsonl",
+      "line": 779,
+      "event": {
+        "sequence": 10783,
+        "frame": 2540,
+        "game_time": 84.66658592224121,
+        "source": "char_367_swllow",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "BattleController.OnCharacterFinished"
+        },
+        "skill_key": null,
+        "skill_id": null,
+        "skill_name": null,
+        "skill_reason": 7,
+        "source_character_uid": 3145802
+      }
+    }
+  ],
+  "checkpoint": {
+    "local_uid": 3145802,
+    "foreign_uid": 4194395,
+    "foreign_cast_sequence": 8359,
+    "local_settlement_hits": 72,
+    "local_classified_before_foreign_cast": 26,
+    "local_unclassified_after_foreign_cast": 46,
+    "local_nominal_damage": 17488.800107479095,
+    "local_hp_damage": 16953.299946293933
+  }
+}

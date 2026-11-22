@@ -1,5 +1,6 @@
 """Worker source routing with injected in-memory sessions; no PC, ADB or feed."""
 import sys
+import threading
 from io import StringIO
 from types import SimpleNamespace
 
@@ -69,7 +70,8 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
 
-        def __init__(self, root, *, collect_actions):
+        def __init__(self, root, *, collect_actions, event_identity_only=False):
+            assert event_identity_only is (enabled and arkframework_root is None and factory is None)
             calls.append(('native_collector', root, collect_actions))
 
     class Session:
@@ -128,7 +130,18 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
     monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', endpoint)
     monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', endpoint)
     worker.request(ConnectionConfig(platform=platform, native_game_root='recorded-game-root'), enabled)
-    worker.run()
+    timed_out = threading.Event()
+    def expire():
+        timed_out.set()
+        worker.stop.set()
+    watchdog = threading.Timer(10, expire)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        worker.run()
+    finally:
+        watchdog.cancel()
+    assert not timed_out.is_set(), 'In-memory worker did not reach its scripted stop condition'
     events = list(worker.events.queue)
     assert not any(kind in ('error', 'worker_error') for kind, _ in events)
     state.effective_connection = worker.effective[0]

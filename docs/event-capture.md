@@ -8,6 +8,18 @@
 
 当前发布整合基线 2208 已通过 CE-5 逐实例扣血、治疗、实际吸盾和技能效果对账，具体数值、源提交及未观测弹药结束的限制见 [rc.14 发布说明](release-rc14.md#pc-实机覆盖)。下面保留早期排障记录，其中的失败与待验收状态属于各自旧候选。
 
+「卫戍队友DPS」仅支持具有多战场视野的官服 PC。MuMu 及其它端的防御按本家统计，协防和首领按各自战场处理。队友输出对比使用原生身份接口，仍待新包实机验收。`event_probe_native_pc.js` 在既有 envelope 的五根与精确时钟边界内读取完整玩家、ChessInst 和 data UID；每个事件的阶段 scope 在原始时钟处生成，不能在延迟入队时用当前阶段补标签。`nativeGeneration` 的原有进程/战局绑定保持独立。接收端通过 `autochess_context.py` 校验完整单帧身份，再把同一份已接受批次送入各玩家已有统计核心；没有复制 MuMu 的金额、技能或减伤公式。
+
+中途建立基线时，基线前事件仍不重放。探针仅从未确认队列附带有界的技能起点身份证据，用于把相应 UID 的技能分类标为未知，不补技能窗口或金额。仅零帧、零时钟、零累计且前缀证据完整时可确认初态；缺少证据时保留逐次伤害，技能与非技能占比不伪装为完整。
+
+2026-11-22 的只读实机诊断已核验原生 `BATTLE=4`、`HELP_BATTLE=5`、四家账号表及各家的角色 data UID。第 4 轮分帧页中读取到四组共 15 名角色；协防又确认同一 `playerIndex=3` 的 `side` 从 3 变成 1。这些页仅是各自同帧的诊断证据，没有拼成一份生产名单，也不认证逐次伤害完整覆盖。最终诊断保存 3528 条样本；第 13 轮替换心跳文件遇到 Windows 拒绝访问而结束，失败状态与已保存数据摘要均保留。本机证据位于 `runtime/autochess-live-rc15/round-watch-20261122-204540-308181/`。较早的协防回放、身份诊断和合成 Node/生命周期测试均不能替代新 PC 采集端的防御四家实机对账。
+
+rc.16 实机未通过防御验收：记录中反复出现 `gap/read_unavailable`，只有协防存在已归账输出。另一次只读诊断在通过外层同帧守卫的原生样本中复现 `roster_status=unavailable / counter_list_size`，来自旧 `BattlePlayerData` 列表的 0–4 上界；读取入口在绑定新事件身份前就拒绝了样本。证据保留于 `runtime/event-probe-verification/rc16-live-audit/`。修复仅对受守卫的卫戍关卡允许提交显式 `events_only` 候选，保留旧累计、编队各自的不可用原因；缺少同帧事件身份时仍拒绝接纳和确认，不能回退到按角色名累计。其他关卡的旧读取条件保持。
+
+rc.17 在同一游戏进程重新连接后，已于第 11 轮防御取得四家正观察伤害和 31 个角色账本；冻结 975 条观察、69 次发布及 4 份关联历史，用包内 Python 3.12 重放后精确一致。但实测存在明显卡顿，采集发布曾断档 13.843 秒；第 12 轮没有正输出且未记录协防，因此仍未通过完整实机验收。证据位于 `runtime/event-probe-verification/rc17-live-audit/runs/20261122T155448.993751Z/`，不能用离线处理加速代替游戏性能验收。
+
+后续性能候选仅在自有 Frida、已受守卫的卫戍关卡中省略旧 roster/presence 身份遍历和手动动作读取；角色累计仍为已有初始技能检查及诊断保留，不分派为玩家金额。其他平台、关闭观察者、外部 provider 和阶段未知时沿原读取路径。探针身份表仅在两遍完整可变字段校验及本次五根、时钟、状态、关卡守卫成功后复用；变化时重读或返回未知，不缓存 partial/unknown。同一对象内的批量读取继续逐字段核对完整指针，不能只比较低位。该性能候选尚未取得实机卡顿改善证据。
+
 2026-11-22 已在普通官服 PC 新进程中跑通独立 Gadget 启动加载，随后通过 ArkDPS 原有 `CollectionSession` 加载完整 `event_probe_native_pc.js`。一局 CE-5 已完成四类事件对账。正常 CLI 与桌面 worker 现由 `NativePcFridaRuntime` 在连接快照前管理启动和重连。普通 worker 在第二个新游戏进程中自动载入了组件，修正启动阶段访问快照的时序后，已在同一进程验证完整探针重连就绪及清理。[首次启动加载](../runtime/native-pc/frida-development/watch-game-20261122.json) · [完整探针就绪](../runtime/native-pc/frida-development/game-capture-20261122-01/READY.json) · [正常 worker 初始失败](../runtime/native-pc/frida-development/normal-worker-smoke-initial-failure.json) · [正常 worker 重连](../runtime/native-pc/frida-development/normal-worker-smoke-reconnect.json)
 
 官服 PC 的「启用观察者」使用 `NativePcFridaRuntime` 在新游戏启动早期装入固定版本官方 Gadget，再通过本机随机令牌认证连接，将 `NativePcFridaObserver` 与 `event_probe_native_pc.js` 绑定到已验证的 Windows x64 进程。源码与桌面入口共用此默认路径。`--no-events` 关闭观察及启动监听，`--frida-remote` 继续用于 MuMu。
@@ -132,7 +144,7 @@ ARK-6 在此基线上整合跨局所有权：GUI 和命令行启用生命周期�
 
 伤害、敌人入场和技能事件共用有序队列。主机读到稳定水位后按序号取事件，入账成功再确认该水位，探针收到确认后才释放这一段。读取响应丢失时从已入账的水位重读，确认响应丢失时可重复确认。未确认事件积压达到上限后，继续写入会明确报采集缺口。为兼容历史回放，日志中的事件批次字段仍为 `drain`。
 
-新版观察者在原生角色数据布局验证成功后，会记录来源的角色 UID。主机用同局已验证的编队 UID 关联角色形态和原生累计键。同一累计键出现不同归属时，会保留该键的归属缺口。有序队列继续处理其他来源和敌人状态，未确认的元素来源也会清除该目标此前的元素归属，避免把爆条记给上一位干员。采集就绪日志记录 UID 证据是否可用。
+新版观察者在原生角色数据布局验证成功后，会记录来源的角色 UID。主机用同局已验证的编队 UID 关联角色形态和原生累计键。同一累计键出现不同归属时，会保留该键的归属缺口。有序队列继续处理其他来源和敌人状态，未确认的元素来源也会清除该目标此前的元素归属，避免把爆条记给上一位干员。采集就绪日志记录 UID 证据是否可用。回调来源可以是继承了 `Character.data` 的 `Token`，包括游戏标为敌方阵营的召唤物。探针先核对类继承链，再读取同一角色数据 UID。卫戍账本继续用该 UID 和已核实的宿主绑定归属每笔结算。
 
 被减伤率由同一击的公式前伤害 `mitigation_before` 与结算来伤 `mitigation_after` 计算。探针观察 `BattleFormula.CalculateDamage`、`CalculateDamageNoEvent` 和 `AttackInfo.GetFinalAtk`，一次嵌套公式只取一个主结果。有来源的结果按同线程、同逻辑帧、来源与目标指针、伤害类型和定点来伤值配对到 `Entity.ApplyModifier`。公式来源为空时，在通用的 `Modifier.NewDamageModifierAfterCalculate` 上确认来源、目标实例、公式前后值和返回对象，再用同一组原生字段核对结算入口。两个重载都保留 `originAtk`。八参数重载的 `rawValue` 可携带独立参考值。实机中，机械师召唤物的一击主公式为 286 → 228.8，另一个公式返回 457.6，后者填入 `rawValue`。歌蕾蒂娅位移法伤也经该工厂生成 `Modifier`，一次实机样本为 397.66655 → 198.83327。
 

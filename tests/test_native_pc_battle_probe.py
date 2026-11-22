@@ -105,7 +105,7 @@ class FakeApi:
 @pytest.fixture
 def runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(battle.access, 'verify_build', lambda root: (
-        {'known_build': True}, [('known_code', 0x1000, b'known')]))
+        {'known_build': True, 'source_build': battle.access.BUILD_ID}, [('known_code', 0x1000, b'known')]))
     api = FakeApi(tmp_path)
     api.write(api.base + 0x1000, b'known')
     # Explicitly seed a completed, unlocked VM; BattleController alone is not
@@ -584,6 +584,8 @@ def test_extra_reader_runs_inside_the_same_guard_without_exposing_addresses(runt
     root, api, p = runtime
     with battle.NativePcBattleProbe(root, api) as probe:
         def extra(read_bytes, context):
+            assert context['stage_id'] == 'Obt/Main/level_main_01-07'
+            assert context['stage_status'] == 'available'
             assert context['battle_stats'] == p['stats']
             assert context['level_data'] == p['level']
             assert context['class_definition_table_slot'] == api.base + battle.CLASS_DEFINITION_TABLE_RVA

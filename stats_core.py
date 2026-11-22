@@ -511,7 +511,7 @@ class Statistics:
 
     def record_damage_settlement(self, when, state, owner, actor, source, target, target_uid, instance,
                                  hp, shield, complete, kind, nominal, before, after, *, killed=None,
-                                 settled_after_nested_kill=False):
+                                 settled_after_nested_kill=False, world_only=False):
         """Record each confirmed component, preserving independently verified neighbors."""
         valid_target = self._enemy_identity(target, target_uid) and target.startswith(('enemy_', 'trap_'))
         previous = self.enemy_damage.get(target_uid) if valid_target and self.enemy_damage is not None else None
@@ -549,6 +549,9 @@ class Statistics:
                 elif residual <= 0.01:
                     overkill = 0.0
         if state != 'local' or owner is None or not valid_target:
+            if world_only:
+                self.observe_enemy_damage(complete=False)
+                return
             if hp > 0 or shield or not complete or (self.damage_settlement_version >= 7 and nominal):
                 self.settlement_unassigned['hits'] += 1
                 self.settlement_unassigned['hp'] += hp
@@ -566,6 +569,14 @@ class Statistics:
             return
         if hp > 0:
             self.record_enemy_damage(source, owner, kind, hp, target, target_uid, None, settled=True)
+        if world_only:
+            # The shared native world owns target HP facts, not player meters.
+            # All identity, HP and elemental-witness validation above is shared.
+            if not complete:
+                self.observe_enemy_damage(complete=False)
+            if source is not None and element:
+                self.settlement_bars.pop(target_uid, None)
+            return
         if nominal is None or not self._mitigation_pair(nominal, before, after):
             before = after = None
         if source is None and element and nominal is not None:

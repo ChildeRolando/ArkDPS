@@ -6,7 +6,7 @@ namespace ArkDPS.Desktop;
 
 internal readonly record struct HudDataStatus(string Code, string Label, bool Retained, bool Unavailable)
 {
-    internal string Notice => Retained || Unavailable || Code is "stale" or "disconnected" or "reconnecting" or "locating" or "frozen" or "preparing"
+    internal string Notice => Retained || Unavailable || Code is "stale" or "disconnected" or "reconnecting" or "locating" or "frozen" or "preparing" or "sampling_rejected"
         ? string.IsNullOrWhiteSpace(Label)
             ? Retained ? "上次快照 · 等待当前战局" : "统计暂不可用 · 保留最后有效记录"
             : Label

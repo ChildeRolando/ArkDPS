@@ -119,7 +119,7 @@ public sealed class Inspector : Border
         rankBox.Child=rankStack;top.Children.Add(rankBox);
 
         var identity=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center};
-        var portrait=Portraits.Get(owner,row.Get("present").ValueKind==JsonValueKind.False);
+        var portrait=Portraits.Get(row.Text("portrait_id") is { Length: > 0 } portraitId ? portraitId : owner,row.Get("present").ValueKind==JsonValueKind.False);
         var frame=new Border{Width=42,Height=42,CornerRadius=new CornerRadius(2),ClipToBounds=true,
             BorderBrush=Theme.Resource("Line"),BorderThickness=new Thickness(1),Background=Theme.Resource("Inset"),Margin=new Thickness(0,0,8,0)};
         var frameGrid=new Grid();
@@ -591,7 +591,7 @@ public sealed class Inspector : Border
             string displayName=row.Text("name");
             if(displayName.Length==0) displayName=owner;
             initial.Text=displayName[..1];
-            portrait.Source=Portraits.Get(owner,row.Get("present").ValueKind==JsonValueKind.False);
+            portrait.Source=Portraits.Get(row.Text("portrait_id") is { Length: > 0 } portraitId ? portraitId : owner,row.Get("present").ValueKind==JsonValueKind.False);
             avatar.ToolTip=displayName;
             AutomationProperties.SetName(avatar,displayName+"头像");
             SetSideSelection(displayName);

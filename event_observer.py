@@ -1,5 +1,6 @@
 """Frida event transports sharing bounded reads and commit acknowledgements."""
 from enum import Enum
+import json
 import os
 from hashlib import sha256
 from threading import Event, Lock
@@ -33,6 +34,7 @@ def _while_live(operation, released):
 
 class FridaEventObserver:
     contract = MUMU_CONTRACT
+    provides_autochess_context = True
 
     def __init__(self, collector, remote):
         self.collector = collector
@@ -51,6 +53,20 @@ class FridaEventObserver:
         self._committed_sequence = 0
         self._acknowledged_sequence = 0
         self._ack_error = None
+        self._autochess_enabled = None
+
+    def set_autochess_setting(self, enabled):
+        """Read the worker's latest preference at existing observation boundaries."""
+        self._autochess_enabled = enabled
+
+    def _with_autochess_setting(self, source):
+        if self._autochess_enabled is None:
+            return source
+        mode = 'all' if self._autochess_enabled() else 'local'
+        return f'globalThis.arkdpsAutoChessMode = "{mode}";\n' + source
+
+    def _mark_options(self):
+        return {} if self._autochess_enabled is None else {'autochess_enabled': self._autochess_enabled()}
 
     request_timeout = 5.0
     terminal_mark_timeout = 0.5
@@ -68,9 +84,13 @@ class FridaEventObserver:
             ) from exc
 
     def _probe_source(self):
+        from collector import android_event_layout
+
         assembled = assemble_probe_source('mumu')
-        self._probe_source_manifest = assembled.audit()
-        return assembled.source
+        layout = android_event_layout()
+        self._probe_source_manifest = dict(assembled.audit(), android_battle_layout=layout)
+        prefix = 'globalThis.arkdpsAndroidBattleLayout = ' + json.dumps(layout, separators=(',', ':')) + ';\n'
+        return self._with_autochess_setting(prefix + assembled.source)
 
     def _wake_request(self):
         with self._request_lock:
@@ -177,35 +197,45 @@ class FridaEventObserver:
                 self._pending_request = None
 
     def mark(self):
-        return self._request('mark')
+        return self._request('mark', **self._mark_options())
 
     def read_terminal_mark(self):
         # The battle already ended. An optional proof must not hold up archiving.
-        return self._request('mark', timeout=self.terminal_mark_timeout)
+        return self._request('mark', timeout=self.terminal_mark_timeout, **self._mark_options())
 
     def read_through(self, sequence):
+        return self._read_event_range(self._committed_sequence, sequence)
+
+    def read_baseline(self, sequence):
+        return self._read_event_range(sequence, sequence)
+
+    def _read_event_range(self, after, through):
         if self._ack_error:
             raise RuntimeError(self._ack_error)
-        return self._request('read', after=self._committed_sequence, through=sequence)
+        return self._request('read', after=after, through=through)
 
     def commit_events(self, sequence):
-        """Release the prefix only after it was accepted by the host."""
+        """Advance the host cursor and report whether the producer confirmed it."""
         self._committed_sequence = max(sequence, self._committed_sequence)
         if self._committed_sequence <= self._acknowledged_sequence:
-            return
+            return True
+        if self._ack_error:
+            return False
         try:
             reply = self._request('ack', sequence=self._committed_sequence)
         except ObserverReadRetry:
             # A lost response can mean the producer already released this
             # prefix. A future acknowledgement is cumulative and idempotent.
-            return
+            return False
         except RuntimeError as exc:
             self._ack_error = str(exc)
-            return
-        if reply.get('error') or reply.get('acknowledged') != self._committed_sequence:
+            return False
+        acknowledged = reply.get('acknowledged')
+        if reply.get('error') or type(acknowledged) is not int or acknowledged != self._committed_sequence:
             self._ack_error = reply.get('error') or 'observer acknowledgement did not match the committed watermark'
-        else:
-            self._acknowledged_sequence = self._committed_sequence
+            return False
+        self._acknowledged_sequence = acknowledged
+        return True
 
     def _release(self):
         # Both releases must be attempted. Keep failed handles available for a
@@ -279,7 +309,7 @@ class NativePcFridaObserver(FridaEventObserver):
         self.binding.reset()
         assembled = assemble_probe_source('native_pc')
         self._probe_source_manifest = assembled.audit()
-        return assembled.source
+        return self._with_autochess_setting(assembled.source)
 
     def _request(self, operation, *, timeout=None, **arguments):
         result = super()._request(operation, timeout=timeout, **arguments)

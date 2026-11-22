@@ -42,41 +42,6 @@ function classMethods(k){
  return methods;
 }
 let nativeControllerClass=null,nativeGeneration=0,nativeLastBinding=null;
-function currentNativeIdentity(){
- if(!nativeControllerClass)return null;
- const parent=nativeControllerClass.add(0x58).readPointer();
- if(parent.isNull())return null;
- const statics=parent.add(0xb8).readPointer();
- if(statics.isNull())return null;
- const controller=statics.readPointer();
- return terminalIdentity(controller,nativeControllerClass);
-}
-function nativeBinding(){
- // Read the same five ownership roots and exact Q32.32 clock as the guarded
- // Windows sampler. The host binds this evidence to its battle serial.
- try{
-  const before=currentNativeIdentity();
-  if(before===null)return null;
-  const state=ptr(before.controller).add(0x228).readS32();
-  if(state!==2&&state!==3)return null;
-  const stage=str(ptr(before.level).add(0x18).readPointer());
-  if(typeof stage!=='string'||!stage.length)return null;
-  const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
-  const after=currentNativeIdentity();
-  if(after===null||clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed
-     ||Object.keys(before).some(key=>before[key]!==after[key])
-     ||ptr(after.controller).add(0x228).readS32()!==state
-     ||str(ptr(after.level).add(0x18).readPointer())!==stage)return null;
-  if(BigInt(fixed)<0n)return null;
-  damageSettlementStamp(frame,Number(BigInt(fixed))/4294967296);
-  const key=[before.controller,before.native,before.logger,before.stats,before.level,stage].join(':');
-  if(nativeLastBinding&&(nativeLastBinding.key!==key||frame<nativeLastBinding.frame
-     ||BigInt(fixed)<BigInt(nativeLastBinding.fixed)))nativeGeneration++;
-  nativeLastBinding={key,frame,fixed};
-  return {native_process_pid:Process.id,native_identity:before,native_generation:nativeGeneration,
-   native_frame:frame,native_fixed_time:fixed,native_stage_id:stage};
- }catch(e){return null;}
-}
 const probeAdapter={
  moduleName:'GameAssembly.dll',imageSizeType:'size_t',requiredClasses:['LevelData'],allowNullClassRows:true,
  controllerFields:{s_fixedFrameCnt:0x14,s_fixedPlayTime:0x18,m_logger:0xe0,m_levelData:0x160,m_state:0x228},
@@ -88,6 +53,11 @@ const probeAdapter={
  factoryArgument(args,index){return args[index+1];},
  factoryStorage(args){return args[0];},
  scopedModifierTrace:true,directHealingProof:true,
+ supportsAutoChessAllDefense:true,
+ setAutoChessMode,
+ eventCollectionOwner:autoEventOwner,
+ stampClock(when){stampAutoChessClock(when);},
+ baselineEnvelope(fields,records,acknowledged,through){return discardedAutoChessSkills(fields,records,acknowledged,through);},
  readEnvelope(){
   const binding=nativeBinding();
   return {fields:{scoped_trace_count:scopedTraceCount,scoped_trace_dropped:scopedTraceDropped,

@@ -79,7 +79,12 @@ public partial class MainWindow
     private void RefreshSideRanking()
     {
         var firstPanel = PanelHost.Children.OfType<StatisticPanel>().FirstOrDefault();
-        SideFriendly.Update(DisplayedBattleId, firstPanel?.View ?? default);
+        SideFriendly.Update(DisplayedBattleId, firstPanel?.View ?? default, PcReadiness);
+        if(SamplingRejected && SideFriendly.RankingPanel.Rows.Items.Count==0)
+        {
+            SideFriendly.RankingPanel.Empty.Text=State.Text("status_text");
+            SideFriendly.RankingPanel.Empty.Visibility=Visibility.Visible;
+        }
     }
 
     private void UpdateSidePlacement(bool placeFallback = false, bool allowMinimize = true)
@@ -165,6 +170,9 @@ public partial class MainWindow
 
     private void SetSideAttachmentStatus(string text)
     {
+        // Connection recovery takes precedence over the secondary placement hint.
+        // The footer's primary line is bound to the same Status as the full window.
+        if (PcReadiness.NeedsAttention) text = "";
         SideAttachmentStatus.Text = text;
         SideAttachmentStatus.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }

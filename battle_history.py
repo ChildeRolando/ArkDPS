@@ -9,8 +9,11 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import tempfile
 from threading import RLock
+
+from autochess_context import MAX_MEMBERSHIPS, PHASE_NAMES, native_autochess_scope_id, valid_player_uid
 
 
 POLICIES = {
@@ -78,6 +81,329 @@ def _intervals(value, end):
         _number(stop, 'interval end')
         _require(previous <= start <= stop <= end, 'unordered/out-of-range interval')
         previous = stop
+
+
+def _validate_multiplayer(payload, battle_id, duration):
+    """Bind optional player observations to this frozen battle, never native totals."""
+    if payload is None:
+        return
+
+    def text(value, maximum):
+        return isinstance(value, str) and 0 < len(value) <= maximum
+
+    def reasons(value, name, maximum=64):
+        _require(isinstance(value, list) and len(value) <= maximum
+                 and all(text(reason, 1024) for reason in value), f'invalid {name}')
+
+    def native_membership_unknowns(value):
+        rows = value.get('unknown_memberships')
+        _require(isinstance(rows, list) and len(rows) <= MAX_MEMBERSHIPS * 2 + 1,
+                 'invalid native unknown_memberships')
+        for row in rows:
+            _require(isinstance(row, dict) and set(row) <= {
+                'row_index', 'origin', 'reason', 'reasons', 'cid', 'data_uid',
+                'player_index', 'player_side', 'candidate_player_index'},
+                'invalid native unknown membership')
+            _require(type(row.get('row_index')) is int and 0 <= row['row_index'] <= MAX_MEMBERSHIPS,
+                     'invalid native unknown membership index')
+            _require(text(row.get('reason'), 256), 'invalid native unknown membership reason')
+            reasons(row.get('reasons'), 'native unknown membership reasons', 16)
+            _require(row['reasons'] and row['reason'] == row['reasons'][0],
+                     'native unknown membership reasons mismatch')
+            if 'origin' in row:
+                _require(row['origin'] == 'native_unknown', 'invalid native unknown membership origin')
+            if 'cid' in row:
+                _require(isinstance(row['cid'], str)
+                         and re.fullmatch(r'[A-Za-z0-9_#.-]{1,128}', row['cid']) is not None,
+                         'invalid native unknown membership cid')
+            for key in ('player_index', 'candidate_player_index'):
+                if key in row:
+                    _require(type(row[key]) is int and row[key] in range(1, 5),
+                             'invalid native unknown membership player index')
+            if 'player_side' in row:
+                _require(type(row['player_side']) is int and 0 <= row['player_side'] < 1 << 31,
+                         'invalid native unknown membership side')
+            if 'data_uid' in row:
+                _require(type(row['data_uid']) is int and 0 < row['data_uid'] <= 0xffffffff,
+                         'invalid native unknown membership UID')
+
+    def native_header(value):
+        _require(value.get('collection_mode', 'all') in ('all', 'local'),
+                 'invalid native multiplayer collection mode')
+        identity = value.get('context_identity')
+        _require(isinstance(identity, dict) and set(identity) == {'scope_key', 'phase', 'round'},
+                 'invalid native multiplayer context identity')
+        root, phase, number = identity['scope_key'], identity['phase'], identity['round']
+        _require(text(root, 2048) and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in root),
+                 'invalid native multiplayer root scope')
+        _require(type(phase) is int and phase in PHASE_NAMES
+                 and type(number) is int and 0 <= number < 1 << 31,
+                 'invalid native multiplayer phase or round')
+        _require(type(value.get('native_phase')) is int and value['native_phase'] == phase
+                 and type(value.get('native_round')) is int and value['native_round'] == number,
+                 'native multiplayer phase or round mismatch')
+        _require(type(value.get('available')) is bool, 'invalid native multiplayer availability')
+        expected_kind = ({2: 'prepare', 3: 'prepare', 4: 'defense', 5: 'assist', 6: 'boss'}.get(phase, 'unknown')
+                         if value['available'] else 'unknown')
+        _require(value.get('scope_kind') == expected_kind, 'native multiplayer scope kind mismatch')
+        players = value.get('players')
+        _require(isinstance(players, list) and len(players) == 4, 'invalid native multiplayer slots')
+        accounts, slots, uids = [], set(), set()
+        for player in players:
+            _require(isinstance(player, dict), 'invalid native multiplayer player')
+            slot, uid = player.get('slot'), player.get('player_uid')
+            _require(type(slot) is int and slot in range(1, 5) and slot not in slots,
+                     'duplicate or invalid native multiplayer slot')
+            slots.add(slot)
+            _require(uid is None or valid_player_uid(uid) and uid not in uids,
+                     'duplicate or invalid native multiplayer player UID')
+            if uid is not None:
+                accounts.append((slot, uid))
+                uids.add(uid)
+            name = player.get('player_name')
+            _require(name is None or isinstance(name, str) and len(name) <= 128,
+                     'invalid native multiplayer player name')
+        _require(accounts, 'native multiplayer has no verified player accounts')
+        scope_id = native_autochess_scope_id(identity, accounts)
+        _require(value.get('scope') == scope_id, 'native multiplayer scope identity mismatch')
+        self_uid = value.get('self_player_uid')
+        _require('self_player_uid' in value and (self_uid is None or self_uid in uids),
+                 'invalid native multiplayer self UID')
+        _require(type(value.get('scope_foreign_events')) is int and value['scope_foreign_events'] >= 0,
+                 'invalid native multiplayer foreign count')
+        reasons(value.get('reasons'), 'native multiplayer reasons')
+        native_membership_unknowns(value)
+        return scope_id
+
+    def ledger_numbers(value, *, key='', depth=0):
+        _require(depth <= 8, 'native multiplayer metric nesting limit')
+        if type(value) in (int, float):
+            # A native mitigation pair can represent amplification. Its signed
+            # percentage is evidence, while damage/count/rate values stay >=0.
+            if key == 'observed_mitigation_rate':
+                _require(math.isfinite(value), 'invalid native observed mitigation rate')
+            else:
+                _number(value, 'native multiplayer ' + key)
+            if key.endswith('_hits'):
+                _require(type(value) is int, 'invalid native multiplayer hit count')
+            if key.endswith('_share'):
+                _require(value <= 1, 'invalid native multiplayer unverified share')
+        elif isinstance(value, dict):
+            _require(len(value) <= 512, 'native multiplayer metric field limit')
+            for field, item in value.items():
+                _require(isinstance(field, str), 'invalid native multiplayer metric field')
+                ledger_numbers(item, key=field, depth=depth + 1)
+        elif isinstance(value, (list, tuple)):
+            _require(len(value) <= 4096, 'native multiplayer metric array limit')
+            for item in value:
+                ledger_numbers(item, key=key, depth=depth + 1)
+        else:
+            _require(value is None or type(value) is bool or isinstance(value, str),
+                     'invalid native multiplayer metric')
+            if type(value) is bool:
+                _require(key == 'complete' or key.endswith(('_complete', '_available', '_stale')),
+                         'boolean native multiplayer amount')
+
+    def window(value, start, end, name):
+        if value is None:
+            return
+        _require(isinstance(value, (list, tuple)) and len(value) == 2, f'invalid {name}')
+        _number(value[0], name + ' start')
+        _number(value[1], name + ' end')
+        _require(start <= value[0] <= value[1] <= end, f'out-of-range {name}')
+
+    def scope(value, *, compact):
+        _require(isinstance(value, dict), 'invalid multiplayer scope')
+        _require(type(value.get('schema_version')) is int and value['schema_version'] in (1, 2),
+                 'unsupported multiplayer schema_version')
+        native = value['schema_version'] == 2
+        _require(value.get('source_round_id') == battle_id, 'multiplayer battle_id mismatch')
+        epoch = value.get('identity_epoch')
+        _require(type(epoch) is int and epoch >= 0, 'invalid multiplayer identity_epoch')
+        if native:
+            scope_id = native_header(value)
+        else:
+            scope_id = f'{battle_id}:players:{epoch}'
+        _require(value.get('round_id') == scope_id, 'multiplayer round_id mismatch')
+        _require(value.get('status') == 'ended', 'multiplayer scope not frozen')
+        _require(type(value.get('available')) is bool, 'invalid multiplayer availability')
+        start, end = value.get('coverage_start'), value.get('game_time')
+        _number(start, 'multiplayer coverage_start')
+        _number(end, 'multiplayer game_time')
+        _require(start <= end <= duration, 'multiplayer time exceeds battle duration')
+        if 'expected_player_slots' in value:
+            _require(type(value['expected_player_slots']) is int and value['expected_player_slots'] == 4,
+                     'invalid multiplayer display slots')
+        players = value.get('players')
+        _require(isinstance(players, list) and len(players) == 4, 'invalid multiplayer players')
+        seen = set()
+        actor_uids = set()
+        observed = set()
+        observed_sides = set()
+        for player in players:
+            _require(isinstance(player, dict), 'invalid multiplayer player')
+            side = player.get('player_side')
+            if native:
+                _require(side is None or type(side) is int and 0 <= side < 1 << 31,
+                         'invalid native multiplayer side')
+                slot, uid_key = player['slot'], player['player_uid']
+                self_uid = value['self_player_uid']
+                _require(player.get('is_local') is ((uid_key == self_uid) if self_uid is not None and uid_key is not None else None),
+                         'native multiplayer local UID mismatch')
+                reasons(player.get('reasons'), 'native multiplayer player reasons')
+            else:
+                _require(type(side) is int and 1 <= side <= 4 and side not in seen,
+                         'duplicate or invalid multiplayer player_side')
+                seen.add(side)
+                slot, uid_key = side, side
+            _require(player.get('is_local') is None or type(player['is_local']) is bool,
+                     'invalid multiplayer local flag')
+            _require(type(player.get('coverage_complete')) is bool,
+                     'invalid multiplayer coverage flag')
+            _require(player.get('status') in ('unknown', 'observed', 'partial'),
+                     'invalid multiplayer player status')
+            # Schema 1 has no independent native counter witness per player.
+            for metric in ('damage', 'dps', 'recent_dps'):
+                _require(metric in player and player[metric] is None,
+                         'multiplayer native counter has no independent witness')
+            for metric in ('observed_damage', 'observed_dps', 'observed_recent_dps'):
+                _require(metric in player, 'missing multiplayer observed metric')
+                _number(player[metric], 'multiplayer ' + metric, nullable=True)
+            for key in ('observed_window', 'observed_recent_window'):
+                window(player.get(key), start, end, 'multiplayer ' + key)
+            if player['observed_damage'] is None:
+                _require(player['observed_dps'] is None and player['observed_recent_dps'] is None
+                         and player.get('observed_window') is None
+                         and player.get('observed_recent_window') is None
+                         and player['coverage_complete'] is False,
+                         'multiplayer unknown output has a fabricated rate or coverage')
+                _require(player['status'] == 'unknown', 'multiplayer unknown output has a known status')
+            else:
+                observed.add(slot)
+                if type(side) is int and side in range(1, 5):
+                    observed_sides.add(side)
+                _require(player.get('observed_window') is not None,
+                         'multiplayer observed output lacks its game-time window')
+            not_collected = (native and value.get('collection_mode') == 'local'
+                             and uid_key is not None and uid_key != value['self_player_uid'])
+            if not_collected:
+                _require(player.get('statistics_status') == 'not_collected'
+                         and player['observed_damage'] is None,
+                         'uncollected native player has statistics or output')
+            else:
+                _require('statistics_status' not in player,
+                         'collected or unknown native player has an uncollected marker')
+            if native and uid_key is None:
+                _require(player['observed_damage'] is None and player.get('player_name') is None
+                         and player.get('player_side') is None and player['is_local'] is None,
+                         'native multiplayer unknown slot has fabricated identity or output')
+            if compact:
+                _require('statistics' not in player and 'actor_ledgers' not in player,
+                         'retired multiplayer scope must be a compact summary')
+                continue
+            if not_collected:
+                _require(player.get('statistics') is None and player.get('actor_ledgers') == [],
+                         'uncollected native player has a statistics ledger')
+                continue
+            if native and uid_key is None:
+                _require(player.get('statistics') is None and player.get('actor_ledgers') == []
+                         and player['observed_damage'] is None and player['is_local'] is None,
+                         'native multiplayer unknown slot has fabricated statistics')
+                continue
+            stats = player.get('statistics')
+            _require(isinstance(stats, dict) and stats.get('session') == f'{scope_id}:{uid_key}',
+                     'multiplayer statistics session mismatch')
+            _require(stats.get('ended') is True and stats.get('game_time') == end,
+                     'multiplayer statistics not frozen at scope endpoint')
+            _require(stats.get('totals_complete') is False,
+                     'multiplayer native totals cannot be certified')
+            rows = stats.get('rows')
+            actors = player.get('actor_ledgers')
+            _require(isinstance(rows, dict) and isinstance(actors, list),
+                     'invalid multiplayer actor rows')
+            actor_keys = set()
+            for actor in actors:
+                _require(isinstance(actor, dict), 'invalid multiplayer actor')
+                cid, uid = actor.get('cid'), actor.get('source_character_uid')
+                valid_cid = (isinstance(cid, str) and re.fullmatch(r'[A-Za-z0-9_#.-]{1,128}', cid) is not None
+                             if native else isinstance(cid, str) and bool(cid) and '#' not in cid)
+                # Current missing/conflicting membership cannot revoke amounts
+                # accepted under an earlier verified witness in this scope.
+                # Global UID uniqueness and account/owner binding still apply.
+                _require(valid_cid and type(uid) is int and 0 < uid <= 0xffffffff
+                         and uid not in actor_uids,
+                         'invalid multiplayer actor identity')
+                actor_uids.add(uid)
+                owner = f'{uid_key}:{cid}#{uid}' if native else f'{cid}#{uid}'
+                if native:
+                    _require(actor.get('player_uid') == uid_key,
+                             'native multiplayer actor account mismatch')
+                _require(actor.get('owner_id') == owner and owner in rows and owner not in actor_keys,
+                         'multiplayer actor owner mismatch')
+                actor_keys.add(owner)
+                for alias in ('uid', 'actor_uid', 'unique_id'):
+                    if alias in actor:
+                        _require(type(actor[alias]) is int and actor[alias] == uid,
+                                 'multiplayer actor UID mismatch')
+                row = rows[owner]
+                _require(isinstance(row, dict) and row.get('cid') == cid
+                         and type(row.get('unique_id')) is int and row['unique_id'] == uid
+                         and row.get('id') == owner,
+                         'multiplayer statistics actor identity mismatch')
+                if native:
+                    _require(row.get('player_uid') == uid_key, 'native multiplayer row account mismatch')
+                _require(row.get('damage') is None and row.get('healing') is None
+                         and row.get('counter_snapshot_complete') is False,
+                         'multiplayer actor has unwitnessed native counters')
+                ledger = actor.get('ledger')
+                _require(isinstance(ledger, dict) and ledger == row.get('settled_damage'),
+                         'multiplayer actor ledger mismatch')
+                if native:
+                    ledger_numbers(ledger)
+                    for field, amount in row.items():
+                        if field.startswith('observed_'):
+                            ledger_numbers(amount, key=field)
+                    _require(row.get('observed_damage') == ledger.get('observed_damage'),
+                             'native multiplayer row observed damage mismatch')
+                for metric in ('observed_damage', 'observed_dps', 'observed_recent_damage',
+                               'effective_damage', 'known_hp_damage', 'known_shield_damage'):
+                    _number(ledger.get(metric), 'multiplayer actor ' + metric, nullable=True)
+                window(ledger.get('observed_damage_window'), start, end, 'multiplayer actor window')
+                window(ledger.get('observed_recent_damage_window'), start, end,
+                       'multiplayer actor recent window')
+            _require(set(rows) == actor_keys, 'multiplayer statistics has an unbound actor owner')
+        if 'observed_player_sides' in value:
+            sides = value['observed_player_sides']
+            _require(isinstance(sides, list) and all(type(s) is int for s in sides)
+                     and len(sides) == len(set(sides)) and set(sides) == (observed_sides if native else observed),
+                     'invalid multiplayer observed sides')
+        if native:
+            slots = value.get('observed_player_slots')
+            _require(isinstance(slots, list) and all(type(slot) is int for slot in slots)
+                     and len(slots) == len(set(slots)) and set(slots) == observed,
+                     'invalid native multiplayer observed slots')
+        return epoch
+
+    epoch = scope(payload, compact=False)
+    previous = payload.get('previous_rounds', [])
+    _require(isinstance(previous, list) and len(previous) <= 8,
+             'invalid retired multiplayer scopes')
+    last_epoch = -1
+    native_scopes = {payload.get('scope')} if payload.get('schema_version') == 2 else set()
+    last_end = None
+    for old in previous:
+        old_epoch = scope(old, compact=True)
+        _require(last_epoch < old_epoch < epoch, 'unordered retired multiplayer identity epochs')
+        if old.get('schema_version') == 2:
+            _require(old['scope'] not in native_scopes, 'retired native multiplayer scope collision')
+            native_scopes.add(old['scope'])
+            _require(old['game_time'] <= payload['coverage_start']
+                     and (last_end is None or last_end <= old['coverage_start']),
+                     'overlapping native multiplayer scopes')
+            last_end = old['game_time']
+        last_epoch = old_epoch
+    pruned = payload.get('previous_rounds_pruned', 0)
+    _require(type(pruned) is int and pruned >= 0, 'invalid retired multiplayer pruned count')
 
 
 class BattleRecord:
@@ -266,6 +592,7 @@ class BattleRecord:
             sample = data['last_sample']
             _require(isinstance(sample, dict) and sample.get('session') == battle_id,
                      'last sample battle_id mismatch')
+            _validate_multiplayer(sample.get('multiplayer'), battle_id, data['duration'])
             _require(isinstance(data['event_status'], str), 'invalid event_status')
             _require(data['event_error'] is None or isinstance(data['event_error'], str),
                      'invalid event_error')
@@ -338,6 +665,9 @@ class HistoryResult:
     records: tuple = ()
     diagnostics: tuple = ()
     written: bool = False
+    # Optional catalog from the writer's existing retention scan. `records`
+    # remains the operation result (one committed record for save).
+    recent: tuple | None = None
 
 
 def _unique_keys(pairs):
@@ -447,4 +777,5 @@ class BattleHistory:
                 old_path.unlink()
             except OSError as exc:
                 diagnostics.append(HistoryDiagnostic('prune_failed', str(old_path), str(exc)))
-        return HistoryResult((record,), tuple(diagnostics), written=written)
+        return HistoryResult((record,), tuple(diagnostics), written=written,
+                             recent=tuple(records[:100]))

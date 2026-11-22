@@ -33,6 +33,9 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        // Host real product resource dictionaries without launching its Application.
+        System.Reflection.Assembly.SetEntryAssembly(null);
+        System.Windows.Application.ResourceAssembly = typeof(App).Assembly;
         var normal = new NativePcWindowResolver(_ => Birth, _ => new[] { Window() });
         Check("unique suitable window", normal.Resolve(Diagnostic(), Config(), 0) is
             { State: NativePcWindowState.Available, Handle: 100 });
@@ -125,6 +128,11 @@ internal static class Program
         HudStatusNoticeTests.Run();
         ScreenshotCategoryTests.Run();
         HistorySourceLabelTests.Run();
+        MultiplayerViewTests.Run();
+        MultiplayerSettingsTests.Run();
+        NativePcReadinessTests.Run();
+        SamplingRejectionTests.Run();
+        RefreshBudgetTests.Run();
         using var recovery = JsonDocument.Parse("""
             [{"game_time":11,"remaining_hp":900,"remaining_hp_complete":true},
              {"game_time":17,"remaining_hp":500,"remaining_hp_complete":true,"break_before":true},

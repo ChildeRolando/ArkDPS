@@ -1,6 +1,7 @@
 """Operator and automatic requests traverse the real worker loop."""
 from types import SimpleNamespace
 from threading import Event, Thread
+from queue import Queue
 
 import pytest
 
@@ -33,15 +34,18 @@ def run_sequence(tmp_path, monkeypatch, mode):
 
         def start(self):
             self.phase = ('starting' if mode == 'pending_rescan' else
-                          'ready' if mode == 'endpoint_recovery' else 'failed')
+                          'waiting_for_process' if mode == 'armed_rescan' else
+                          'ready' if mode in ('endpoint_recovery', 'healthy') else 'failed')
             trace.append(('start', self.armed))
 
         @property
         def is_pending(self):
-            return self.phase in ('starting', 'authenticating')
+            return self.phase in ('starting', 'waiting_for_process', 'authenticating')
 
         def describe(self):
-            return {'status': self.phase, 'error': None, 'ready_generation': self.generation}
+            trace.append(('describe', self.phase))
+            return {'status': self.phase, 'error': None, 'ready_generation': self.generation,
+                    'armed_filetime': self.armed, 'thread_alive': True, 'code': None}
 
         def retry(self):
             trace.append(('retry', self.phase, self.armed))
@@ -78,7 +82,7 @@ def run_sequence(tmp_path, monkeypatch, mode):
             clock[0] += delay
             self.steps += 1
             check(self.steps < 200, 'Worker did not finish the finite request trace')
-            if mode == 'pending_rescan' and owners:
+            if mode in ('pending_rescan', 'armed_rescan') and owners:
                 if not self.requested:
                     self.requested = True
                     worker.request(config, True)
@@ -148,7 +152,7 @@ def run_sequence(tmp_path, monkeypatch, mode):
     worker.run()
     assert not faults
     assert not any(kind == 'worker_error' for kind, _ in worker.events.queue)
-    assert len(owners) == 1 and owners[0].retries == (0 if mode == 'endpoint_recovery' else 1)
+    assert len(owners) == 1 and owners[0].retries == (0 if mode in ('endpoint_recovery', 'healthy') else 1)
     assert trace[-1] == ('startup_close',)
     return trace, worker
 
@@ -171,6 +175,59 @@ def test_rescan_during_startup_preserves_original_owner_and_arming_boundary(tmp_
     assert trace.count(('start', 123)) == 1
 
 
+def test_explicit_rescan_republishes_unchanged_owner_watch_after_source_marker(tmp_path, monkeypatch):
+    trace, worker = run_sequence(tmp_path, monkeypatch, 'armed_rescan')
+    events = list(worker.events.queue)
+    marker = events.index(('connection_source', {'revision': 2, 'platform': 'native_pc'}))
+    fresh = next(value for kind, value in events[marker + 1:] if kind == 'native_pc_bootstrap')
+    assert fresh['status'] == 'waiting_for_process' and fresh['armed_filetime'] == 123
+    assert sum(kind == 'native_pc_bootstrap' and value is not None
+               and value['status'] == 'waiting_for_process' for kind, value in events) == 2
+    assert trace.count(('start', 123)) == 1 and ('retry', 'waiting_for_process', 123) in trace
+
+
+def test_failed_old_session_release_cannot_publish_retired_owner_as_new_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    worker = CollectionWorker(DesktopState(tmp_path / 'state'))
+    owner = SimpleNamespace(
+        describe=lambda: dict(status='waiting_for_process', armed_filetime=123, thread_alive=True),
+        close=lambda: None)
+    worker.pc_runtime, worker._pc_bootstrap_revision = owner, 1
+    worker._last_pc_bootstrap = dict(status='starting', armed_filetime=None)
+
+    class Session:
+        closes = 0
+        cleanup_errors = {}
+
+        def close(self):
+            self.closes += 1
+            if self.closes == 1:
+                raise OSError('old observer still owns handles')
+
+    class Stop:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, delay):
+            clock[0] += delay
+            self.stopped = True
+            return True
+
+    worker.session, worker.stop = Session(), Stop()
+    worker.request(ConnectionConfig(platform='native_pc', native_game_root='new-root'), True)
+    # The outstanding request is newer than the retired owner's bound revision.
+    worker._pc_bootstrap_revision = 0
+    worker.run()
+    events = list(worker.events.queue)
+    assert any(kind == 'connection_source' for kind, _ in events)
+    assert not any(kind == 'native_pc_bootstrap' and value is not None for kind, value in events)
+    assert not any(kind == 'worker_error' for kind, _ in events)
+
+
 def test_shutdown_rejects_new_operator_request_and_stale_automatic_retry(tmp_path):
     worker = CollectionWorker(DesktopState(tmp_path))
     worker.stop.set()
@@ -185,6 +242,14 @@ def test_transport_recovery_releases_old_session_before_attaching_new_generation
     assert trace.index(('session_close', 1, 1)) < trace.index(('connect', 2))
 
 
+def test_usable_pc_session_keeps_existing_bootstrap_poll_cost(tmp_path, monkeypatch):
+    trace, _ = run_sequence(tmp_path, monkeypatch, 'healthy')
+    # One initial connection description and the existing observer-recovery
+    # description. Startup telemetry adds no call to the usable sampling path.
+    assert [step for step in trace if step[0] == 'describe'] == [('describe', 'ready')] * 2
+    assert [step for step in trace if step[0] == 'collector'] == [('collector', 'ready')]
+
+
 def test_unchanged_ready_bootstrap_does_not_spin_on_incompatible_probe(tmp_path):
     worker = CollectionWorker(DesktopState(tmp_path))
     worker.pc_runtime = SimpleNamespace(is_pending=False,
@@ -192,6 +257,88 @@ def test_unchanged_ready_bootstrap_does_not_spin_on_incompatible_probe(tmp_path)
     session = SimpleNamespace(event_status='failed', observer=None)
     assert not worker._pc_observer_recovery_needed(session, 7)
     assert worker._pc_observer_recovery_needed(session, 6)
+
+
+@pytest.mark.parametrize('final_code', ['restart_required', 'native_permission_denied'])
+def test_pending_bootstrap_changes_are_published_before_connection_retry(tmp_path, monkeypatch, final_code):
+    clock = [0.0]
+    publications, owners, calls = [], [], []
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    worker = CollectionWorker(DesktopState(tmp_path / 'state'))
+
+    class Events(Queue):
+        def put(self, event, *args, **kwargs):
+            if event[0] == 'native_pc_bootstrap' and event[1] is not None:
+                publications.append((clock[0], dict(event[1])))
+            return super().put(event, *args, **kwargs)
+
+    class Startup:
+        phase, code, armed = 'starting', None, None
+
+        def start(self):
+            calls.append('start')
+
+        @property
+        def is_pending(self):
+            return self.phase in ('starting', 'waiting_for_process')
+
+        def describe(self):
+            return dict(status=self.phase, code=self.code, armed_filetime=self.armed,
+                        thread_alive=True, error=self.code)
+
+        def retry(self):
+            pytest.fail('Telemetry must not request a startup retry')
+
+        def observer_factory(self, *_args):
+            pytest.fail('Telemetry must not create an observer')
+
+        def close(self):
+            calls.append('close')
+
+    def factory(*_args):
+        owner = Startup()
+        owners.append(owner)
+        return owner
+
+    class Stop:
+        stopped, steps = False, 0
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            clock[0] += delay
+            self.steps += 1
+            assert self.steps <= 4, 'Finite startup telemetry trace did not stop'
+            if self.steps == 1:
+                owners[0].phase, owners[0].armed = 'waiting_for_process', 123
+            elif self.steps == 3:
+                owners[0].phase = 'waiting_for_process' if final_code == 'restart_required' else 'failed'
+                owners[0].code = final_code
+            elif self.steps == 4:
+                self.stopped = True
+            return self.stopped
+
+    def no_collector(*_args, **_kwargs):
+        pytest.fail('Bootstrap telemetry must not construct a snapshot collector')
+
+    worker.events, worker.stop = Events(), Stop()
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', factory)
+    monkeypatch.setattr(native_pc_collector, 'NativePcCollector', no_collector)
+    worker.request(ConnectionConfig(platform='native_pc', native_game_root='test-client'), True)
+    worker.run()
+    assert not any(kind == 'worker_error' for kind, _ in worker.events.queue)
+    assert [(item['status'], item['code'], item['armed_filetime']) for _, item in publications] == [
+        ('starting', None, None), ('waiting_for_process', None, 123),
+        ('waiting_for_process' if final_code == 'restart_required' else 'failed', final_code, 123)]
+    assert [when for when, _ in publications] == pytest.approx([0, .2, .6])
+    assert clock[0] < 5 and worker.last_connect_attempt == 0
+    assert len(owners) == 1 and owners[0].armed == 123 and calls == ['start', 'close']
+    assert worker.requests.empty()
 
 
 def test_shutdown_winning_during_provider_construction_prevents_start_and_publication(tmp_path, monkeypatch):

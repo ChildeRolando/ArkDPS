@@ -284,13 +284,30 @@ const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
 function entityId(p){if(p.isNull())throw new Error('missing source entity');const id=str(p.add(0x148).readPointer());if(!id)throw new Error('missing source identity');return id;}
+const sourceCharacterLineage=new Map();
+function isCharacterSourceClass(klass){
+ const base=sourceCharacterClasses.character;
+ if(klass.equals(base))return true;
+ const key=klass.toString();
+ if(sourceCharacterLineage.has(key))return sourceCharacterLineage.get(key);
+ let current=klass;
+ for(let depth=0;depth<10&&!current.isNull();depth++){
+  if(current.equals(base)){
+   sourceCharacterLineage.set(key,true);
+   return true;
+  }
+  current=current.add(0x58).readPointer();
+ }
+ // Class metadata is stable, but a failed or truncated walk proves nothing.
+ if(current.isNull())sourceCharacterLineage.set(key,false);
+ return false;
+}
 function sourceCharacterUid(source,sourceId){
  if(!sourceCharacterClasses||!sourceId||!own(sourceId))return;
  try{
-  // This is the roster's Character.data UID. BObject.instanceUid has a
-  // different lifetime and must not be substituted for roster identity.
-  // The statistics key can differ from the roster prefab (transformed unit).
-  if(source.isNull()||!source.readPointer().equals(sourceCharacterClasses.character))return;
+  // The verified Character.data field is inherited by Token, including
+  // enemy-side tokens. Its data UID belongs to the roster identity domain.
+  if(source.isNull()||!isCharacterSourceClass(source.readPointer()))return;
   const data=source.add(0x538).readPointer();
   if(data.isNull()||!data.readPointer().equals(sourceCharacterClasses.data))return;
   const uid=data.add(0x6c).readU32();
@@ -313,6 +330,16 @@ function damageSettlementStamp(frame,game_time){
  }
  const sample={frame,game_time,settlementScope:damageSettlementScope};
  damageSettlementClock=sample;
+ if(typeof probeAdapter.stampClock==='function'){
+  try{
+   probeAdapter.stampClock(sample);
+   if(sample.native_autochess_scope&&typeof sample.native_autochess_scope==='object')
+    sample.native_autochess_scope={...sample.native_autochess_scope};
+  }catch(e){
+   sample.native_autochess_scope={protocol_version:1,status:'unknown',verified_same_frame:false,
+    frame,game_time,reason:'native scope observation failed'};
+  }
+ }
  return sample;
 }
 function observeDamageSettlementController(identity,{starting=false}={}){
@@ -650,7 +677,7 @@ function observeNestedTargetSettlement(invocation){
   for(const previous of activeModifiers.get(invocation.tid)||[]){
    if(previous.target?.equals(invocation.target)&&sameMitigationTime(previous.when,invocation.when)){
     previous.nestedTargetCheckpoint=previous.targetSettlementNested?null:
-      captureParentBeforeNestedKill(previous,invocation);
+      captureParentBeforeNestedSettlement(previous,invocation);
     previous.targetSettlementNested=true;
    }
   }
@@ -687,7 +714,7 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
    return reject('modifier scope identity or clock changed');
   if(!commit)return null;
   if(scope.targetSettlementNested){
-   const nested=verifiedParentBeforeNestedKill(scope,target,when,amount,type);
+   const nested=verifiedParentBeforeNestedSettlement(scope,target,when,amount,type);
    if(nested){scope.targetSettlementEvidence=nested;return nested;}
    return reject('nested modifier changed target settlement scope');
   }
@@ -821,12 +848,14 @@ function damageTargetUid(target){
  if(!enemyEntryConfig||!target||target.isNull())return null;
  try{return target.add(0x18).readU32()||null;}catch(e){return null;}
 }
-function captureParentBeforeNestedKill(parent,child){
+function captureParentBeforeNestedSettlement(parent,child){
  try{
   const hit=parent.targetHit,commit=hit?.commit;
   if(!commit?.returned||!sameMitigationTime(commit.returnWhen,child.when)||
-     !targetSettlementIdentity(parent,hit,child.when)||
-     child.mod.add(0x68).readS32()!==5||!child.mod.readPointer().isNull()||
+     !targetSettlementIdentity(parent,hit,child.when))return null;
+  const childType=child.mod.add(0x68).readS32();
+  const ordinary=[1,2,3].includes(childType);
+  if((!ordinary&&(childType!==5||!child.mod.readPointer().isNull()))||
      child.mod.add(0x60).readS32()!==0||child.mod.add(0x70).readS32()!==0||
      damageTargetUid(child.target)!==hit.uid||!child.mod.add(0x10).readPointer().equals(hit.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
@@ -838,12 +867,34 @@ function captureParentBeforeNestedKill(parent,child){
      !Number.isFinite(amount)||amount+0.01<-real)return null;
   // This is the parent's signed native result at the child's entry, paired
   // with the target-side HP-before. Nominal damage never supplies its HP.
-  return {child,when:child.when,uid:hit.uid,real,hpBefore:hit.hpBefore,hpAfter:hp};
+  return {child,ordinary,when:child.when,uid:hit.uid,real,hpBefore:hit.hpBefore,hpAfter:hp};
  }catch(e){return null;}
 }
-function verifiedParentBeforeNestedKill(scope,target,when,amount,type){
+function rememberNestedOrdinarySettlement(child,when,evidence,event){
+ // The child supplies its own checked target callback and signed result.
+ // Never recover either hit by subtracting nominal values or final HP totals.
+ if(event?.settlement_complete!==true||!child.targetSettlementEvidence||
+    child.targetSettlementEvidence!==evidence||child.targetSettlementNested||
+    evidence.shield_absorbed!==0||!(evidence.real_delta<0)||
+    !(evidence.hp_before>evidence.hp_after)||!(evidence.hp_after>0)||
+    event.amount!==-evidence.real_delta)return;
+ const scopes=activeModifiers.get(child.tid);
+ if(!scopes||scopes.length<2||scopes[scopes.length-1]!==child)return;
+ const parents=scopes.slice(0,-1).filter(parent=>
+  parent.nestedTargetCheckpoint?.ordinary&&parent.nestedTargetCheckpoint.child===child);
+ for(const parent of parents){
+  const checkpoint=parent.nestedTargetCheckpoint;
+  parent.nestedOrdinarySettlement=parents.length===1&&parent.nestedOrdinarySettlement===undefined&&
+    checkpoint.hpAfter===evidence.hp_before&&sameMitigationTime(checkpoint.when,when)?
+    {child,when,uid:checkpoint.uid,hpBefore:evidence.hp_before,
+     hpAfter:evidence.hp_after,real:evidence.real_delta}:null;
+ }
+}
+function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
  try{
-  const checkpoint=scope.nestedTargetCheckpoint,kill=scope.nestedElementalKill,hit=scope.targetHit;
+  const checkpoint=scope.nestedTargetCheckpoint,hit=scope.targetHit;
+  const kill=checkpoint?.ordinary?scope.nestedOrdinarySettlement:scope.nestedElementalKill;
+  const childAfter=checkpoint?.ordinary?kill?.hpAfter:0;
   if(!checkpoint||!kill||kill.child!==checkpoint.child||!kill.child.settlementRecordEmitted||
      checkpoint.uid!==kill.uid||kill.hpBefore!==checkpoint.hpAfter||
      !sameMitigationTime(checkpoint.when,when)||!sameMitigationTime(kill.when,when)||
@@ -851,11 +902,11 @@ function verifiedParentBeforeNestedKill(scope,target,when,amount,type){
      !target?.equals(hit.target)||!targetSettlementIdentity(scope,hit,when)||
      fp(scope.mod.add(0x48))!==checkpoint.real||fp(scope.mod.add(0x30))!==amount||
      !Number.isFinite(amount)||amount+0.01<-checkpoint.real||
-     targetHp(target)!==0||scope.numericShieldUnknown||scope.unmatchedShield||scope.numericShield>0||
+     targetHp(target)!==childAfter||scope.numericShieldUnknown||scope.unmatchedShield||scope.numericShield>0||
      shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
   scope.nestedParentSettlementProof={target_uid:String(kill.uid),parent_real_delta:checkpoint.real,
    parent_hp_before:checkpoint.hpBefore,parent_hp_after:checkpoint.hpAfter,
-   child_hp_before:kill.hpBefore,child_hp_after:0,child_real_delta:kill.real};
+   child_hp_before:kill.hpBefore,child_hp_after:childAfter,child_real_delta:kill.real};
   return {target:hit.commit.targetKey,real_delta:checkpoint.real,
    hp_before:checkpoint.hpBefore,hp_after:checkpoint.hpAfter,killed:false,
    target_type:0,damage_type:type,cancel_reason:0,shield_absorbed:0};
@@ -910,6 +961,18 @@ function record(source,kind,amount,when,proof,evidence,sourceUid){
 function enqueueEvent(source,kind,amount,when,proof,evidence){
  if(stopped||fatal)return;
  if(!Number.isFinite(amount)||amount<0)throw new Error('invalid amount');
+ const event={sequence:undefined,frame:when.frame,game_time:when.game_time,source,kind,amount,proof};
+ if(evidence)Object.assign(event,evidence);
+ // A delayed/coalesced record retains the scope observed with its own clock.
+ // Reading the current scope here would move an old tail into the next round.
+ if(Object.prototype.hasOwnProperty.call(when,'native_autochess_scope'))
+  event.native_autochess_scope=when.native_autochess_scope&&typeof when.native_autochess_scope==='object'
+   ?{...when.native_autochess_scope}:when.native_autochess_scope;
+ if(omitUnrelatedAutoChessEvent(event)){
+  // Callers still receive their assembled proof, so nested settlement and
+  // quality bookkeeping run normally. No sequence was allocated or queued.
+  delete event.sequence;return event;
+ }
  if(queue.length>=EVENT_BUFFER_LIMIT){
   // A later read or mark must expose the gap even if the emitting hook only
   // degrades its own diagnostic quality on failure.
@@ -920,10 +983,22 @@ function enqueueEvent(source,kind,amount,when,proof,evidence){
   fatal='event sequence exhausted';
   return;
  }
- const event={sequence:++sequence,frame:when.frame,game_time:when.game_time,source,kind,amount,proof};
- if(evidence)Object.assign(event,evidence);
+ event.sequence=++sequence;
  queue.push(event);
  return event;
+}
+function omitUnrelatedAutoChessEvent(event){
+ if(event.native_autochess_scope?.collection_mode!=='local')return false;
+ if(typeof probeAdapter.eventCollectionOwner!=='function')return false;
+ // Shared enemy/elemental settlements and target-dependent healing/shields
+ // remain authoritative facts even when the source belongs to another player.
+ const skill=event.kind==='skill_start'||event.kind==='skill_end';
+ const legacyDamage=(event.kind==='damage'||event.kind==='hp_damage')&&
+  [1,2,3].includes(event.damage_type)&&event.target_type===0&&
+  typeof event.target==='string'&&/^(enemy_|trap_)/.test(event.target);
+ if(!skill&&!legacyDamage)return false;
+ try{return probeAdapter.eventCollectionOwner(event)==='foreign';}
+ catch(e){return false;}
 }
 // Keep the first heal intact. It may establish the HP and MaxHP needed to
 // prove subsequent healing. An exactly contiguous, increasing tail with the
@@ -940,6 +1015,74 @@ function resetEnemyHpCoalescing(){
  flushCoalescedEnemyHp();
  enemyHpBirths.clear();
 }
+// Baseline evidence describes only already observed, unacknowledged queue
+// records. Platform adapters opt in through their envelope metadata; this
+// helper performs no native reads, event replay, clock or cursor updates.
+function discardedAutoChessSkills(fields,records,acknowledged,through){
+ if(!fields||!Object.prototype.hasOwnProperty.call(fields,'native_autochess_context'))return {};
+ const result={baseline_discarded_skill_events:[],baseline_discarded_skill_events_complete:true};
+ if(!Array.isArray(records)||records.length>100000||!Number.isSafeInteger(acknowledged)||acknowledged<0||
+    !Number.isSafeInteger(through)||through<acknowledged){result.baseline_discarded_skill_events_complete=false;return result;}
+ // These are identities of already observed queue records, not native reads.
+ function scopeKey(scope,frame,game_time){
+  if(!scope||scope.protocol_version!==1||scope.status!=='available'||scope.verified_same_frame!==true||
+     scope.frame!==frame||scope.game_time!==game_time||!Number.isSafeInteger(frame)||frame<0||
+     !Number.isFinite(game_time)||game_time<0||![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(scope.phase)||
+     !Number.isSafeInteger(scope.round)||scope.round<0||typeof scope.scope_key!=='string')return null;
+  const parts=scope.scope_key.split(':');
+  if(parts.length!==7||parts[5]!=='autochess'||!/^(0|[1-9][0-9]{0,15})$/.test(parts[6])||
+     !Number.isSafeInteger(Number(parts[6])))return null;
+  for(const root of parts.slice(0,5)){
+   if(!/^0x[0-9a-f]{1,16}$/.test(root))return null;
+   const number=BigInt(root);if(number<0x10000n||number>0x7fffffffffffn||number%8n)return null;
+   if('0x'+number.toString(16)!==root)return null;
+  }
+  // Epoch changes alone do not prove a foreign actor: the same roots and
+  // phase/round may have discarded an earlier start during a clock reset.
+  return JSON.stringify([parts.slice(0,5),scope.phase,scope.round]);
+ }
+ const current=fields.native_autochess_context;
+ let currentKey=scopeKey(current,current?.frame,current?.game_time);
+ if(currentKey!==null&&(fields.native_frame!==current.frame||typeof fields.native_fixed_time!=='string'||
+    !/^[0-9]{1,20}$/.test(fields.native_fixed_time)||
+    Number(BigInt(fields.native_fixed_time))/4294967296!==current.game_time))currentKey=null;
+ const roots=fields.native_identity;
+ if(currentKey!==null&&(!roots||['controller','native','logger','stats','level'].map(name=>roots[name]).join(':')+
+    ':autochess:'!==current.scope_key.slice(0,current.scope_key.lastIndexOf(':')+1)))currentKey=null;
+ const seen=new Set();let expected=acknowledged+1;
+ for(const event of records){
+  if(!event||!Number.isSafeInteger(event.sequence)){result.baseline_discarded_skill_events_complete=false;continue;}
+  if(event.sequence<=acknowledged||event.sequence>through)continue;
+  if(event.sequence!==expected)result.baseline_discarded_skill_events_complete=false;
+  expected=Math.max(expected,event.sequence+1);
+  if(event.kind!=='skill_start'||event.proof?.method==='BasicSkill.OnCastFinish')continue;
+  const scope=event.native_autochess_scope,eventKey=scopeKey(scope,event.frame,event.game_time);
+  if(currentKey!==null&&eventKey!==null&&currentKey!==eventKey)continue;
+  const identity=scope&&typeof scope==='object'?
+   [scope.protocol_version,scope.status,scope.verified_same_frame,scope.scope_key,scope.phase,scope.round]:null;
+  const key=JSON.stringify([event.source,event.source_character_uid,identity]);
+  if(seen.has(key))continue;
+  if(result.baseline_discarded_skill_events.length>=512){result.baseline_discarded_skill_events_complete=false;break;}
+  seen.add(key);
+  const evidence={};
+  for(const field of ['sequence','frame','game_time','source','source_character_uid','proof','native_autochess_scope']){
+   if(Object.prototype.hasOwnProperty.call(event,field)&&event[field]!==undefined)
+    evidence[field]=event[field]&&typeof event[field]==='object'?JSON.parse(JSON.stringify(event[field])):event[field];
+  }
+  result.baseline_discarded_skill_events.push(evidence);
+ }
+ if(expected<=through)result.baseline_discarded_skill_events_complete=false;
+ return result;
+}
+function sameNativeEventScope(left,right){
+ const a=left.native_autochess_scope,b=right.native_autochess_scope;
+ if(a===undefined&&b===undefined)return true;
+ return !!a&&!!b&&a.protocol_version===1&&b.protocol_version===1
+  &&a.status==='available'&&b.status==='available'
+  &&a.verified_same_frame===true&&b.verified_same_frame===true
+  &&typeof a.scope_key==='string'&&a.scope_key.length>0&&a.scope_key===b.scope_key
+  &&a.phase===b.phase&&a.round===b.round;
+}
 function recordEnemyHp(write,when,method,hp,maxHp){
  const {key,evidence,hpBefore,maxHpBefore}=write;
  if(maxHp!==null)evidence.enemy_max_hp=maxHp;
@@ -953,7 +1096,8 @@ function recordEnemyHp(write,when,method,hp,maxHp){
      &&0<hpBefore&&hpBefore<hp&&hp<=maxHp){
    const run=enemyHpRun;
    if(run&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
-      &&run.when.frame===when.frame&&run.when.game_time===when.game_time&&run.after===hpBefore){
+      &&run.when.frame===when.frame&&run.when.game_time===when.game_time
+      &&sameNativeEventScope(run.when,when)&&run.after===hpBefore){
     if(run.tail)run.tail.evidence.hp_after=hp;
     else run.tail={when,method,evidence};
     run.after=hp;
@@ -992,6 +1136,15 @@ function readEvents(after,through){
  if(!envelope.ready)return result;
  if(error||stopped)return result;
  result.events=queue.slice(after-acknowledgedSequence,through-acknowledgedSequence);
+ if(after===through&&typeof probeAdapter.baselineEnvelope==='function'){
+  try{
+   Object.assign(result,probeAdapter.baselineEnvelope(envelope.fields,queue,acknowledgedSequence,through));
+  }catch(e){
+   result.baseline_discarded_skill_events=[];
+   result.baseline_discarded_skill_events_complete=false;
+   result.baseline_discarded_skill_events_error=String(e);
+  }
+ }
  result.hp_context=hpContext.filter(item=>after<item.eventSequence&&item.eventSequence<=through)
   .map(item=>item.context);
  readThroughSequence=Math.max(readThroughSequence,through);
@@ -1224,6 +1377,8 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
                    evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
  if(event)scope.settlementRecordEmitted=true;
+ if(event&&targetCommit&&capturedHp&&[1,2,3].includes(type))
+  rememberNestedOrdinarySettlement(scope,when,exactEvidence,event);
  return true;
 }
 function settleSourcelessBurst(scope,evidence,when,amount,reduction) {
@@ -2394,18 +2549,32 @@ installEnemyStateHooks();
 installMitigationHooks();
 installSkillCastStateHook();
 let terminalBoundary=null,terminalGeneration=0;
-function terminalIdentity(controller,controllerClass){
- if(controller.isNull()||!controller.readPointer().equals(controllerClass))return null;
+function terminalIdentity(controller,controllerClass,reject){
+ if(controller.isNull())return reject?.('singleton_empty')??null;
+ const klass=controller.readPointer();
+ if(!klass.equals(controllerClass)){
+  if(!reject)return null;
+  let observed=null;
+  try{if(!klass.isNull())observed=className(klass);}catch(e){/* The mismatch is already proved. */}
+  return reject('controller_class_mismatch',observed);
+ }
  // Use the same two ownership references as the guarded native snapshot.
- const native=controller.add(0x10).readPointer(),logger=controller.add(probeAdapter.loggerOffset).readPointer();
+ const native=controller.add(probeAdapter.nativeOffset??0x10).readPointer();
+ const logger=controller.add(probeAdapter.loggerOffset).readPointer();
  const level=controller.add(probeAdapter.levelOffset).readPointer();
- if(native.isNull()||logger.isNull()||level.isNull()
-    ||!native.add(0x28).readPointer().equals(controller)
-    ||className(logger.readPointer())!=='BattleLogger'
-    ||!logger.add(0x18).readPointer().equals(controller)
-    ||className(level.readPointer())!=='LevelData')return null;
- const stats=logger.add(0x30).readPointer();
- if(stats.isNull()||className(stats.readPointer())!=='BattleStats')return null;
+ if(native.isNull())return reject?.('native_missing')??null;
+ if(logger.isNull())return reject?.('logger_missing')??null;
+ if(level.isNull())return reject?.('level_missing')??null;
+ if(!native.add(probeAdapter.nativeOwnerOffset??0x28).readPointer().equals(controller))return reject?.('native_owner_mismatch')??null;
+ const loggerClass=className(logger.readPointer());
+ if(loggerClass!=='BattleLogger')return reject?.('logger_class_mismatch',loggerClass)??null;
+ if(!logger.add(probeAdapter.loggerOwnerOffset??0x18).readPointer().equals(controller))return reject?.('logger_owner_mismatch')??null;
+ const levelClass=className(level.readPointer());
+ if(levelClass!=='LevelData')return reject?.('level_class_mismatch',levelClass)??null;
+ const stats=logger.add(probeAdapter.statsOffset??0x30).readPointer();
+ if(stats.isNull())return reject?.('stats_missing')??null;
+ const statsClass=className(stats.readPointer());
+ if(statsClass!=='BattleStats')return reject?.('stats_class_mismatch',statsClass)??null;
  return {controller:controller.toString(),native:native.toString(),logger:logger.toString(),
   stats:stats.toString(),level:level.toString()};
 }
@@ -2510,7 +2679,10 @@ function receiveEventRequest(){
   let result;
   try{
    switch(request.operation){
-    case 'mark':result=markEvents();break;
+    case 'mark':
+     if(Object.prototype.hasOwnProperty.call(request,'autochess_enabled')&&typeof probeAdapter.setAutoChessMode==='function')
+      probeAdapter.setAutoChessMode(request.autochess_enabled);
+     result=markEvents();break;
     case 'read':result=readEvents(request.after,request.through);break;
     case 'ack':result=ackEvents(request.sequence);break;
     default:result={error:'unknown event transport operation'};

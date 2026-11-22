@@ -7,8 +7,9 @@ from battle_lifecycle import BattleRuntime
 from collection_session import CollectionSession
 from collector import ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
 from event_capture import CaptureRetry
+from native_pc.probe_native_pc import BILIBILI_BUILD_ID, BUILD_ID
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
-from native_pc_collector import BUILD_ID, NativePcCollector
+from native_pc_collector import NativePcCollector
 from panel_model import Category, PanelConfig, Ranking, RateBasis, render_panel, rows_from_statistics
 
 
@@ -22,8 +23,10 @@ def frida_binding_fixture():
     process._identity = process._last_clock = process._stage_id = None
     process._serial = 0
     process.process_alive = lambda: True
+    process.build = {'known_build': True, 'source_build': BUILD_ID}
     collector = NativePcCollector(None)
     collector.process = process
+    collector.diagnostics.version_actual = BUILD_ID
     mark = dict(frame=10, game_time=1.0, native_process_pid=123, native_fixed_time=str(1 << 32),
                 native_stage_id='Obt/Main/level_main_01-07',
                 native_identity=dict(zip(('controller', 'native', 'logger', 'stats', 'level'),
@@ -78,7 +81,7 @@ def test_frida_binding_rejects_malformed_clock_identity_or_pid(changed):
 class Probe:
     pid = 456
     process_instance = (456, 100)
-    build = {'known_build': True}
+    build = {'known_build': True, 'source_build': BUILD_ID}
     battle_identity = (100, 200, 300, 400, 500)
 
     def __init__(self, reports):
@@ -111,6 +114,17 @@ def sample(frame, damage, *, state=2, presence=True):
         presence={'local_side': 0, 'entities': [dict(
             data_uid=10, player_side=0, side=1, inited=True, borned=True, is_disappeared=False,
             id=OPERATOR, is_token=False, is_predefined=False)]} if presence else None)}
+
+
+def test_bilibili_build_is_reported_in_connection_and_battle_metadata(tmp_path):
+    probe = Probe([sample(6, 5.)])
+    probe.build = {'known_build': True, 'source_build': BILIBILI_BUILD_ID}
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    collector.connect()
+
+    assert collector.diagnostics.version_actual == BILIBILI_BUILD_ID
+    assert collector.read_lifecycle()['metadata']['source_build'] == BILIBILI_BUILD_ID
+    collector.close()
 
 
 ABSENT = {'status': 'waiting_for_battle', 'reason': 'singleton_is_null'}

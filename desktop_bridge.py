@@ -20,30 +20,37 @@ import time
 import traceback
 from uuid import uuid4
 
-from battle_history import BattleHistory
-from battle_lifecycle import BattleRuntime, MappingRetry
+from autochess_context import native_local_player as _native_local_player, valid_player_uid
+from battle_history import BattleHistory, HistoryResult
+from battle_lifecycle import BattleRuntime, MappingRetry, autochess_scene
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
-from collector import BattleChanged, ROOT
+from collector import BattleChanged, NativeClockBusy, ProcessChanged, SnapshotGap, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
                         DetectionStatus, detect_instances, resolve_configured)
 from desktop_audit import DesktopCaptureJournal
 from event_capture import CaptureRetry
-from event_observer import ObserverStatus
+from event_observer import ObserverReadRetry, ObserverStatus
+from event_probe import BarrierBusy, NATIVE_PC_CONTRACT
 from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
-                         settled_boss_damage_rates, team_status)
+                         settled_boss_damage_rates, team_status, format_compact)
 import stage_names
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
+BRIDGE_EVENT_LIMIT = 32
+BRIDGE_EVENT_BUDGET = .025
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
+NATIVE_BUSY_ATTEMPTS = 3
+NATIVE_BUSY_BUDGET = .04
+NATIVE_BUSY_REST = .005
 NATIVE_ACTION_REQUIRED_CODES = frozenset((
     'native_permission_denied', 'native_root_required', 'native_unsupported_build',
 ))
@@ -51,6 +58,7 @@ BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
     'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
+    'multiplayer_enabled',
 ))
 
 
@@ -69,6 +77,21 @@ def event_label(status, error=None):
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
 
+def _native_clock_busy(error):
+    """Only typed acquisition evidence qualifies; messages and RPC retries do not."""
+    leaf_busy = False
+    seen = set()
+    while error is not None and id(error) not in seen and len(seen) < 16:
+        seen.add(id(error))
+        if isinstance(error, (MappingRetry, SnapshotGap, BattleChanged)):
+            return False
+        if not isinstance(error, (CaptureRetry, ObserverReadRetry, BarrierBusy, NativeClockBusy)):
+            return False
+        leaf_busy = isinstance(error, (BarrierBusy, NativeClockBusy))
+        error = error.__cause__
+    return leaf_busy and error is None
+
+
 def team_totals(statistics):
     """Whole-team metric strip. Unknown rows stay None; no partial sum is shown as a total."""
     rows = (statistics or {}).get('rows') or {}
@@ -79,6 +102,144 @@ def team_totals(statistics):
             isinstance(value, (int, float)) and not isinstance(value, bool)
             for value in values) else None)
     return result
+
+
+def _event_only_statistics(statistics):
+    # A detached display container opts into existing event-lane values. The
+    # accepted sample and its four Statistics results retain their native None.
+    return dict(statistics, native_counter_scope='unavailable',
+                event_only_projection=True, totals_complete=False)
+
+
+def _defense_has_settlement(sample):
+    """A counter baseline is not a replacement for an observed defense result."""
+    payload = sample.get('multiplayer') or {}
+    for player in payload.get('players') or ():
+        uid, statistics = player.get('player_uid'), player.get('statistics') or {}
+        if (not valid_player_uid(uid) or statistics.get('session') != f"{payload.get('scope')}:{uid}"
+                or statistics.get('game_time') != sample.get('game_time')):
+            continue
+        for actor in player.get('actor_ledgers') or ():
+            if actor.get('player_uid') != uid:
+                continue
+            lane = actor.get('ledger') or {}
+            for hits, amount in (('nominal_hits', 'observed_damage'), ('observed_hits', 'effective_damage')):
+                value = lane.get(amount)
+                if (type(lane.get(hits)) is int and lane[hits] > 0
+                        and type(value) in (int, float) and math.isfinite(value) and value >= 0):
+                    return True
+    return False
+
+
+def _native_display_source(sample):
+    """Assist shows the evidenced battlefield; other phases still select self."""
+    payload = sample.get('multiplayer')
+    if not isinstance(payload, dict) or payload.get('scope_kind') != 'assist':
+        return _native_local_player(sample)
+    scope, when = payload.get('scope'), payload.get('game_time')
+    if (sample.get('native_counter_scope') != 'events_only'
+            or payload.get('schema_version') != 2 or payload.get('available') is not True
+            or payload.get('native_phase') != 5 or type(payload.get('native_phase')) is not int
+            or type(payload.get('native_round')) is not int or payload['native_round'] < 0
+            or not isinstance(scope, str) or not scope
+            or type(when) not in (int, float) or not math.isfinite(when) or when < 0):
+        return None
+    identity = payload.get('context_identity')
+    if not isinstance(identity, dict) or set(identity) != {'scope_key', 'phase', 'round'}:
+        return None
+    root = identity['scope_key']
+    if (not isinstance(root, str) or not 0 < len(root) <= 2048
+            or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in root)
+            or type(identity['phase']) is not int or identity['phase'] != payload['native_phase']
+            or type(identity['round']) is not int or not 0 <= identity['round'] < 1 << 31
+            or identity['round'] != payload['native_round']):
+        return None
+    players = payload.get('players')
+    if not isinstance(players, (list, tuple)):
+        return None
+    if payload.get('collection_mode') == 'local':
+        local = _native_local_player(sample)
+        players = (local,) if local is not None else ()
+    rows, actors = {}, []
+    for player in players:
+        if not isinstance(player, dict):
+            continue
+        uid, statistics = player.get('player_uid'), player.get('statistics')
+        if (not valid_player_uid(uid) or sum(isinstance(other, dict)
+                and other.get('player_uid') == uid for other in players) != 1
+                or not isinstance(statistics, dict)
+                or statistics.get('session') != f'{scope}:{uid}'
+                or statistics.get('game_time') != when
+                or not isinstance(statistics.get('rows'), dict)):
+            continue
+        # A row is displayed only with its own unambiguous actor witness. The
+        # union retains existing owner keys and lanes; no Statistics is replayed.
+        ledgers = {}
+        raw_actors = player.get('actor_ledgers')
+        if not isinstance(raw_actors, (list, tuple)):
+            continue
+        for actor in raw_actors:
+            if isinstance(actor, dict) and isinstance(actor.get('owner_id'), str):
+                owner = actor['owner_id']
+                ledgers[owner] = None if owner in ledgers else actor
+        for owner, row in statistics['rows'].items():
+            actor = ledgers.get(owner)
+            if not isinstance(row, dict) or actor is None:
+                continue
+            actor_uid, cid = actor.get('actor_uid'), actor.get('cid')
+            if (actor.get('player_uid') != uid or row.get('player_uid') != uid
+                    or type(actor_uid) is not int or not 0 < actor_uid <= 0xffffffff
+                    or not isinstance(cid, str) or not cid
+                    or type(row.get('unique_id')) is not int
+                    or row.get('unique_id') != actor_uid or row.get('cid') != cid
+                    or row.get('id') != owner or owner != f'{uid}:{cid}#{actor_uid}'):
+                continue
+            rows[owner] = row
+            actors.append(dict(owner_id=owner, actor_uid=actor_uid, cid=cid,
+                               player_uid=uid, player_side=player.get('player_side')))
+    statistics = dict(sample.get('statistics') or {}, rows=rows, game_time=when,
+                      display_scope_label='当前协防战场')
+    return dict(statistics=statistics, actor_ledgers=actors)
+
+
+def _display_statistics(sample, *, source=None):
+    statistics = sample.get('statistics') or {}
+    if sample.get('native_counter_scope') != 'events_only':
+        return statistics
+    player = source if source is not None else _native_display_source(sample)
+    if player is not None:
+        return _event_only_statistics(player['statistics'])
+    return dict(rows={}, totals_complete=False, native_counter_scope='unavailable',
+                game_time=sample.get('game_time'), ended=statistics.get('ended') is True)
+
+
+def _display_analysis_identity(sample):
+    battle_id = sample.get('battle_id', sample.get('session'))
+    if sample.get('native_counter_scope') != 'events_only' or not isinstance(battle_id, str):
+        return battle_id
+    player = _native_local_player(sample)
+    payload = sample.get('multiplayer') or {}
+    return 'autochess:' + json.dumps([battle_id, payload.get('scope'),
+        payload.get('scope_kind'), payload.get('native_phase'), payload.get('native_round'),
+        'assist_scene' if payload.get('scope_kind') == 'assist' else
+        player['player_uid'] if player else None])
+
+
+def _unknown_player(slot):
+    return dict(slot=slot, player_uid=None, player_name=None, player_side=None,
+                label='玩家身份未知', is_local=None, status='unknown',
+                damage=None, dps=None, recent_dps=None, observed_damage=None,
+                observed_dps=None, observed_recent_dps=None, observed_window=None,
+                coverage_complete=False, reasons=['玩家身份未确认'],
+                statistics=None, actor_ledgers=[])
+
+
+def _preparing_multiplayer():
+    return dict(schema_version=2, available=False, status='preparing',
+                scope_kind='prepare', scope=None, native_phase=None, native_round=None,
+                round_id=None, game_time=None, coverage_start=None,
+                note='战斗准备中，等待当前阶段的玩家与结算证据。',
+                players=[_unknown_player(slot) for slot in range(1, 5)])
 
 
 def team_unassigned_hits(statistics, *, boss_scope):
@@ -150,6 +311,12 @@ class DesktopState:
         self._history_view_key = None
         self._history_view = None
         self.last = None
+        self._autochess_scene = self._sample_scene = None
+        self._autochess_scene_announced = False
+        self._defense_sample = None
+        self._defense_analysis = (None, None, None)
+        self._requested_native_root = None
+        self._requested_connection = self.connection
         self.last_frame = None
         self.last_progress = 0.
         self.live_analysis = None
@@ -162,6 +329,7 @@ class DesktopState:
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
         self.native_pc_bootstrap = None
+        self.sampling_rejection = None
         self._waiting_for_connection_sample = False
         self.battle_waiting = False
         self.scanning = False
@@ -170,18 +338,40 @@ class DesktopState:
 
     def refresh_history(self):
         result = self.history.list_recent()
-        self.records = {r.battle_id: r for r in result.records}
+        self._install_history(result.records, result.diagnostics)
+
+    def _install_history(self, records, diagnostics):
+        self.records = {r.battle_id: r for r in records}
         history = []
-        for record in result.records:
+        for record in records:
             item = record_display(record)
             # Readable labels and the native id both match, so old records stay searchable.
             item['search'] = ' '.join((*item['labels'], item['date'], ' '.join(record.operator_names),
                                       item['stage_raw'] or '')).casefold()
             history.append(item)
         self._history_index = history
-        self.history_notice = '；'.join(f'{d.code}: {d.message[:160]}' for d in result.diagnostics)
-        if self.selected is None and result.records:
-            self.selected = result.records[0]
+        self.history_notice = '；'.join(f'{d.code}: {d.message[:160]}' for d in diagnostics)
+        if self.selected is None and records:
+            self.selected = records[0]
+
+    def _history_committed(self, result):
+        if not isinstance(result, HistoryResult):
+            # Legacy in-process callers can still explicitly request a rescan;
+            # the collection producer always publishes the committed result.
+            self.refresh_history()
+            return
+        if not result.written:
+            return
+        if result.recent is not None:
+            self._install_history(result.recent, result.diagnostics)
+            return
+        records = dict(self.records)
+        records.update((record.battle_id, record) for record in result.records)
+        def order(record):
+            data = record.display_metadata()
+            return datetime.fromisoformat(data['observed_at'] or data['recorded_at']), record.battle_id
+        recent = sorted(records.values(), key=order, reverse=True)[:100]
+        self._install_history(recent, result.diagnostics)
 
     def accept(self, kind, value):
         if kind == 'worker_error':
@@ -199,11 +389,21 @@ class DesktopState:
             return
         # The acquisition thread is the sole source-event producer. Its FIFO
         # marker precedes all events for the newly accepted request, so earlier
-        # queued events cannot repopulate a different platform's live view.
+        # queued events cannot repopulate a superseded connection's status.
         # Archive notifications are global and must survive source transitions.
         if self._awaiting_source and kind != 'history':
             return
-        if kind == 'sample':
+        if kind == 'autochess_scene':
+            self._autochess_scene_announced = True
+            self._set_autochess_scene(value)
+        elif kind == 'sample':
+            scene = autochess_scene(value) if self._autochess_scene_announced else None
+            if scene != self._autochess_scene:
+                # A late terminal DTO may finish the cached defense. It cannot
+                # take over the live assist or reset the current presentation.
+                self._remember_defense(value, scene, late=True)
+                return
+            self.sampling_rejection = None
             self._waiting_for_connection_sample = False
             if self.last is not None and observation_age(self.last) > 2:
                 self.analysis_interrupted = True
@@ -213,8 +413,10 @@ class DesktopState:
                 self.last_progress = time.monotonic()
                 self.last_frame = frame
             self.last = value
+            self._sample_scene = scene
             self.event_status, self.event_error = value.get('event_status'), value.get('event_error')
             self.update_live_analysis(value)
+            self._remember_defense(value, scene)
         elif kind == 'error':
             self.error = str(value)
             self.analysis_interrupted = True
@@ -231,14 +433,18 @@ class DesktopState:
             self.observer_status, self.observer_error = value
         elif kind == 'native_pc_bootstrap':
             self.native_pc_bootstrap = value
+        elif kind == 'sampling_rejection':
+            self.sampling_rejection = (dict(code='mapping_unavailable', reason=value['reason'][:200])
+                if isinstance(value, dict) and value.get('code') == 'mapping_unavailable'
+                and isinstance(value.get('reason'), str) and value['reason'].strip() else None)
         elif kind == 'lifecycle':
             self.lifecycle = value
         elif kind == 'battle_waiting':
             self.battle_waiting = value
         elif kind == 'history':
-            # A record was committed by the collection owner: re-read the list
-            # now instead of polling the directory on every snapshot.
-            self.refresh_history()
+            # The writer already validated/read back this durable record. Do
+            # not synchronously rescan every archive on the IPC response path.
+            self._history_committed(value)
         elif kind == 'scanning':
             self.scanning = value
             if value:
@@ -251,8 +457,29 @@ class DesktopState:
                 self.analysis_interrupted = True
 
     def expect_connection_request(self, config, revision):
+        prior = self._requested_connection
+        changed = (config.platform != prior.platform or
+                   (config.native_game_root != prior.native_game_root if config.platform == 'native_pc' else
+                    (config.adb_path, config.serial) != (prior.adb_path, prior.serial)))
+        if changed:
+            self._set_autochess_scene(None)
+        self._requested_connection = config
+        self._requested_native_root = config.native_game_root
         self._source_request_platform = config.platform
         self._source_request_revision = revision if type(revision) is int else None
+        # Keep the last battle/history, but never use the prior connection's
+        # readiness as permission to start a game for this new request.
+        self._awaiting_source = True
+        self.native_pc_bootstrap = None
+        self.sampling_rejection = None
+        self.observer_status = self.observer_error = None
+        self.event_status = self.event_error = None
+        self.diagnostic = None
+        self.error = ''
+        self.connection_text = '正在准备采集连接'
+        self.scanning = True
+        self._waiting_for_connection_sample = True
+        self.analysis_interrupted = True
 
     def finish_offline_connection(self):
         self._awaiting_source = False
@@ -260,6 +487,7 @@ class DesktopState:
         self.connection_text = '离线模式 · 未连接采集源'
 
     def _clear_live_source(self):
+        self._set_autochess_scene(None)
         self.last = self.last_frame = None
         self.last_progress = 0.
         self.live_analysis = self.boss_live_analysis = self.boss_effective_live_analysis = None
@@ -269,15 +497,94 @@ class DesktopState:
         self.diagnostic = None
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
+        self.native_pc_bootstrap = None
+        self.sampling_rejection = None
         self.battle_waiting = None
         self.scanning = True
         self._source_request_revision = None
         self._awaiting_source = True
 
+    def _set_autochess_scene(self, scene):
+        prior = self._autochess_scene
+        if scene == prior:
+            return
+        self._autochess_scene = scene
+        if prior is not None and (scene is None or scene.match != prior.match):
+            self._defense_sample = None
+            self._defense_analysis = (None, None, None)
+            if self._sample_scene is not None:
+                self.last = self.last_frame = self._sample_scene = None
+                self.live_analysis = self.boss_live_analysis = self.boss_effective_live_analysis = None
+        self.analysis_interrupted = True
+
+    def _remember_defense(self, sample, scene, *, late=False):
+        active = self._autochess_scene
+        if scene is None or active is None or scene.match != active.match:
+            return
+        payload = sample.get('multiplayer')
+        player = _native_local_player(sample)
+        if (player is None or payload.get('scope_kind') != 'defense'
+                or sample.get('event_status') not in ('recording', 'finished')
+                or player['statistics'].get('session') != f"{payload['scope']}:{player['player_uid']}"
+                or player['statistics'].get('game_time') != sample.get('game_time')):
+            return
+        old = self._defense_sample
+        same_scope = old is not None and old['multiplayer']['scope'] == payload['scope']
+        if same_scope and (sample['frame'] < old['frame'] or sample['game_time'] < old['game_time']):
+            return
+        current = scene == active and scene.phase == 4 and scene.scope == payload['scope']
+        if not current and not (same_scope and sample.get('state') == 3):
+            return
+        if old is not None and _defense_has_settlement(old) and not _defense_has_settlement(sample):
+            # The next native phase can precede its actual combat. Retain the
+            # useful prior result through empty baselines, including reconnects.
+            return
+        # The worker transfers an owned DTO. Retain only the presentation
+        # fields, since the shared world statistics can contain a large journal.
+        self._defense_sample = {key: sample[key] for key in (
+            'native_counter_scope', 'multiplayer', 'battle_id', 'session', 'game_time',
+            'battle_metadata', 'event_status', 'event_error', 'frame', 'state', 'enemy'
+        ) if key in sample}
+        if not late:
+            self._defense_analysis = (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis)
+        else:
+            self._defense_analysis = (None, None, None)
+
+    def _presented_battle(self):
+        sample = self.last or {}
+        analysis = (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis)
+        scene, defense = self._autochess_scene, self._defense_sample
+        if scene is None:
+            multiplayer = _preparing_multiplayer() if self.lifecycle == 'preparing' else sample.get('multiplayer')
+            return sample, multiplayer, analysis, None
+        if scene.phase in (5, 6):
+            multiplayer = sample.get('multiplayer') or {}
+            kind = 'assist' if scene.phase == 5 else 'boss'
+            if (self._sample_scene == scene and multiplayer.get('scope') == scene.scope
+                    and multiplayer.get('scope_kind') == kind and multiplayer.get('available') is True):
+                return sample, multiplayer, analysis, None
+            label = '当前协防战场' if scene.phase == 5 else '当前首领战场'
+            return dict(statistics=dict(rows={}, display_scope_label=label)), None, (None,) * 3, label + ' · 等待数据'
+        if defense is not None:
+            multiplayer = defense['multiplayer']
+            if (scene.phase == 4 and scene.scope == multiplayer['scope']
+                    and self._sample_scene == scene and sample.get('frame') == defense.get('frame')
+                    and sample.get('multiplayer') is multiplayer
+                    and sample.get('event_status') in ('recording', 'finished')
+                    and defense.get('state') != 3 and self.lifecycle not in ('preparing', 'ended', 'finalizing')):
+                return defense, multiplayer, self._defense_analysis, None
+            note = f"上一场防御 · 第 {multiplayer['native_round']} 回合"
+            waiting = scene.phase == 4 and scene.scope != multiplayer['scope']
+            return (defense, dict(multiplayer, previous_defense=True, note=note),
+                    self._defense_analysis, ('等待本轮防御数据 · ' if waiting else '') + note)
+        if scene.phase == 4:
+            return {}, None, (None,) * 3, '等待本轮防御数据'
+        return {}, _preparing_multiplayer(), (None,) * 3, None
+
     def update_live_analysis(self, sample):
         """Keep one chart sample and its in-process observed peak per battle."""
-        statistics = sample.get('statistics') or {}
-        battle_id = sample.get('battle_id', sample.get('session'))
+        statistics = _display_statistics(sample)
+        battle_id = _display_analysis_identity(sample)
         game_time = statistics.get('game_time', sample.get('game_time'))
         previous = self.live_analysis
         same_battle = previous is not None and previous['battle_id'] == battle_id
@@ -294,6 +601,11 @@ class DesktopState:
 
         terminal = statistics.get('ended') is True or self.lifecycle in ('ended', 'frozen', 'finalizing')
         team_recent, operators = live_damage_rates(statistics, game_time)
+        scope_label = statistics.get('display_scope_label')
+        if scope_label:
+            for operator in operators:
+                row = statistics['rows'][operator['owner_id']]
+                operator.update(player_uid=row['player_uid'], actor_uid=row['unique_id'])
         complete, _, _ = team_status(statistics)
         team_total = team_totals(statistics)['damage'] if complete else None
         if team_total is not None and (not math.isfinite(team_total) or team_total < 0):
@@ -321,6 +633,8 @@ class DesktopState:
             team_recent_dps=team_recent,
             team_average_dps=average if average is not None and math.isfinite(average) else None,
             observed_peak_dps=peak, team_total_damage=team_total, operators=operators)
+        if scope_label:
+            self.live_analysis['scope_label'] = scope_label
         rows = statistics.get('rows') or {}
         if any('partial_damage' in row for row in rows.values()):
             known_damage = [row['damage'] for row in rows.values()
@@ -333,7 +647,9 @@ class DesktopState:
                 if game_time > 0:
                     self.live_analysis['observed_team_average_dps'] = observed_total / game_time
             if team_recent is None and not terminal and known_rates:
-                windows = {tuple(rows[row['owner_id']]['recent_damage_window']) for row in operators
+                windows = {tuple(rows[row['owner_id']].get('recent_damage_window') or
+                                 (rows[row['owner_id']].get('settled_damage') or {}).get(
+                                     'observed_recent_damage_window')) for row in operators
                            if row['recent_dps'] is not None}
                 if len(windows) == 1:
                     self.live_analysis['observed_team_recent_dps'] = sum(known_rates)
@@ -384,6 +700,13 @@ class DesktopState:
             return 'locating', '正在定位 · 保留最后有效记录'
         if self.error:
             return 'disconnected', '连接断开 / 读取中断 · 显示最后有效记录'
+        if self.sampling_rejection:
+            label = '当前样本未通过归属校验：' + self.sampling_rejection['reason']
+            if self.last:
+                label += ' · 保留最后有效记录'
+                if observation_age(self.last) > 2:
+                    return 'stale', '数据已过期 · ' + label
+            return 'sampling_rejected', label
         if self._waiting_for_connection_sample:
             return ('frozen', '等待新连接的可靠样本 · 上次快照') if self.last else (
                 'waiting', '等待新连接的可靠样本')
@@ -410,6 +733,10 @@ class DesktopState:
             complete, reason, note = team_status(statistics, number_units)
         else:
             reason, note = '', ''
+        if statistics.get('event_only_projection') is True:
+            scope_label = statistics.get('display_scope_label') or '当前玩家'
+            reason = f'原生累计未知，以下仅含{scope_label}的已观察结算'
+            note = '已观察结算口径；未覆盖区间保持未知'
         if config.boss_scope:
             reason = statistics['boss_damage_reason'] or reason
             complete = complete and statistics['boss_damage_available']
@@ -448,30 +775,152 @@ class DesktopState:
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source
+        if scope_label := statistics.get('display_scope_label'):
+            view['scope_label'] = scope_label
+            view['title'] = f"{scope_label} · {view['title']}"
+        return view
+
+    def _actor_view(self, config, statistics, actors, *, side=None, player_uid=None, event=None):
+        view = self.view(config, statistics, event=event)
+        view['source'] = dict(view['source'])
+        for actor in actors or ():
+            if not isinstance(actor, dict):
+                continue
+            owner = actor.get('owner_id') or actor.get('actor_id')
+            if owner not in view['source']:
+                continue
+            uid = actor.get('uid', actor.get('actor_uid', actor.get('unique_id')))
+            identity = dict(actor_uid=uid, player_side=side if side is not None else actor.get('player_side'),
+                            portrait_id=actor.get('cid'))
+            if (owner_uid := player_uid if player_uid is not None else actor.get('player_uid')) is not None:
+                identity['player_uid'] = owner_uid
+            view['source'][owner] = dict(view['source'][owner], **identity)
+            for entry in view['entries']:
+                if entry['owner_id'] == owner:
+                    entry.update(identity)
         return view
 
     def _selected_history(self):
         if self.selected is None:
             self._history_view_key = self._history_view = None
             return None
-        key = self.selected, self.history_config, self.layout.number_units
+        key = self.selected, self.history_config, self.layout.number_units, self.layout.multiplayer_enabled
         if key != self._history_view_key:
             event_status = self.selected.event_status
             if self.selected.metadata.get('platform') == 'native_pc' and event_status == 'unavailable':
                 event_status = 'snapshot_only'
             event = EventAvailability(event_status, self.selected.event_error, live=False)
+            sample = self.selected.last_sample
+            multiplayer = sample.get('multiplayer')
+            if (sample.get('native_counter_scope') == 'events_only'
+                    and isinstance(multiplayer, dict) and multiplayer.get('schema_version') == 2):
+                player = _native_display_source(sample)
+                statistics = _display_statistics(sample, source=player)
+                view = (self._actor_view(self.history_config, statistics, player.get('actor_ledgers'),
+                            side=player.get('player_side'), player_uid=player.get('player_uid'), event=event)
+                        if player else self.view(self.history_config, statistics, event=event))
+            else:
+                view = self.view(self.history_config, record_statistics(self.selected, for_panel=True), event=event)
             self._history_view = dict(
                 record_display(self.selected),
-                view=self.view(self.history_config, record_statistics(self.selected, for_panel=True),
-                               event=event),
+                view=view, multiplayer=(self.multiplayer_view(multiplayer, event=event)
+                                        if self.layout.multiplayer_enabled and
+                                         self.selected.metadata.get('platform') == 'native_pc' and
+                                        (multiplayer or {}).get('collection_mode') != 'local' else None),
                 event_status=self.selected.event_status, event_error=event.error)
             self._history_view_key = key
         return self._history_view
 
+    def multiplayer_view(self, payload, *, event=None):
+        """Render the same statistics model in a player/actor-scoped view."""
+        if not isinstance(payload, dict) or payload.get('schema_version') not in (1, 2):
+            return None
+        result = dict(payload)
+        native = payload['schema_version'] == 2
+        raw_players = payload.get('players') or ()
+        if native:
+            slots = {}
+            for raw in raw_players:
+                slot = raw.get('slot') if isinstance(raw, dict) else None
+                if type(slot) is int and 1 <= slot <= 4:
+                    slots[slot] = None if slot in slots else raw
+            raw_players = [slots.get(slot) or _unknown_player(slot) for slot in range(1, 5)]
+        players = []
+        for raw in raw_players:
+            if not isinstance(raw, dict):
+                continue
+            player = dict(raw)
+            side = player.get('player_side')
+            position = player.get('slot') if native else side
+            if type(position) is not int or not 1 <= position <= 4:
+                continue
+            if native:
+                uid = player.get('player_uid')
+                if (not valid_player_uid(uid) or sum(row.get('player_uid') == uid
+                        for row in raw_players if isinstance(row, dict)) != 1):
+                    player = _unknown_player(position)
+                elif payload.get('available') is not True:
+                    player.update({key: value for key, value in _unknown_player(position).items()
+                                   if key not in ('slot', 'player_uid', 'player_name', 'label')})
+            statistics = player.get('statistics') or {'rows': {}}
+            if native and isinstance(player.get('statistics'), dict):
+                statistics = _event_only_statistics(statistics)
+            config = PanelConfig(panel_id=f'multiplayer-{position}', effective_only=True,
+                                 ranking=Ranking.TOTAL, rate_basis=RateBasis.ENGAGEMENT,
+                                 title='已观察有效伤害 · 接敌 DPS')
+            player['view'] = self._actor_view(config, statistics, player.get('actor_ledgers'),
+                                            side=player.get('player_side'),
+                                            player_uid=player.get('player_uid') if native else None,
+                                            event=event)
+            def display(exact_key, observed_key):
+                exact, observed = player.get(exact_key), player.get(observed_key)
+                valid = lambda value: (type(value) in (int, float)
+                                       and math.isfinite(value) and value >= 0)
+                if valid(exact):
+                    return format_compact(exact, self.layout.number_units)
+                if valid(observed):
+                    return '已观察 ' + format_compact(observed, self.layout.number_units)
+                return '未知'
+            player['display'] = dict(
+                damage=display('damage', 'observed_damage'),
+                dps=display('dps', 'observed_dps'),
+                recent_dps=display('recent_dps', 'observed_recent_dps'),
+                coverage='；'.join(player.get('reasons') or ())
+                    or ('已观察结算事件' if player.get('observed_damage') is not None else '尚无可靠输出证据'))
+            window = player.get('observed_window')
+            if (isinstance(window, (list, tuple)) and len(window) == 2
+                    and all(type(value) in (int, float) and math.isfinite(value) for value in window)):
+                player['window_text'] = f'观察 {window[0]:.1f}—{window[1]:.1f} 游戏秒'
+            # The rendered view owns the wire-facing source and details. Keep
+            # the raw statistics/actor ledgers only in samples and archives.
+            player.pop('statistics', None)
+            player.pop('actor_ledgers', None)
+            players.append(player)
+        result['players'] = players
+        return result
+
     def snapshot(self):
-        sample = self.last or {}
-        stats = sample.get('statistics') or {}
+        sample, multiplayer, analysis, presentation_note = self._presented_battle()
+        desired = self.layout.multiplayer_enabled
+        supported = self.effective_connection.platform == 'native_pc'
+        scene = self._autochess_scene
+        active = desired
+        if scene is not None and scene.phase in (4, 5, 6, 7, 8) and scene.collection_mode in ('all', 'local'):
+            active = scene.collection_mode == 'all'
+        active = supported and active
+        scope_unverified = (supported and scene is None and sample.get('native_counter_scope') != 'events_only'
+                            and 'AUTOCHESS' in str((sample.get('battle_metadata') or {}).get('stage_id', '')).upper())
+        local_player = _native_display_source(sample)
+        stats = _display_statistics(sample, source=local_player)
+        if multiplayer and multiplayer.get('previous_defense') is True:
+            stats = dict(stats, display_scope_label=multiplayer['note'])
         status, label = self.status()
+        if presentation_note is not None:
+            if self.scanning or self.error or self._waiting_for_connection_sample or self.sampling_rejection:
+                label += ' · ' + presentation_note
+            else:
+                status = 'preparing' if multiplayer and multiplayer.get('previous_defense') else 'waiting'
+                label = presentation_note
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
         live_event_status = (self.observer_status if self._waiting_for_connection_sample
@@ -497,6 +946,7 @@ class DesktopState:
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
                     observer_status=self.observer_status, event_status=self.event_status,
                     native_pc_bootstrap=self.native_pc_bootstrap,
+                    sampling_rejection=self.sampling_rejection,
                     event_text=event_label(event_status, event_error),
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
@@ -504,10 +954,19 @@ class DesktopState:
                     stage_code=live_stage.code or None, stage_name=live_stage.name or None,
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
-                    panels=[self.view(p, stats, None, live_event) for p in self.layout.panels],
-                    live_analysis=self.live_analysis,
-                    boss_live_analysis=self.boss_live_analysis,
-                    boss_effective_live_analysis=self.boss_effective_live_analysis,
+                    panels=[self._actor_view(p, stats, local_player.get('actor_ledgers'),
+                                side=local_player.get('player_side'), player_uid=local_player.get('player_uid'),
+                                event=live_event) if local_player else self.view(p, stats, None, live_event)
+                            for p in self.layout.panels],
+                    multiplayer_supported=supported, multiplayer_active=active,
+                    multiplayer_mode_pending=supported and active != desired,
+                    multiplayer_scope_unverified=scope_unverified,
+                    multiplayer_scope_detail=sample.get('autochess_scope_detail') if scope_unverified else None,
+                    multiplayer=(self.multiplayer_view(multiplayer, event=live_event)
+                                 if active and (multiplayer or {}).get('collection_mode') != 'local' else None),
+                    live_analysis=analysis[0],
+                    boss_live_analysis=analysis[1],
+                    boss_effective_live_analysis=analysis[2],
                     enemy=sample.get('enemy') or dict(status='starting', error=None,
                         ready=False, rows=[], totals={}, series=[]),
                     history=self._history_index, history_selected=self._selected_history(),
@@ -548,6 +1007,12 @@ class DesktopState:
             self.persist(replace(self.layout, theme=cmd['theme']))
         elif op == 'number_units':
             self.persist(replace(self.layout, number_units=cmd['number_units']))
+        elif op == 'multiplayer_enabled':
+            enabled = cmd.get('enabled')
+            if type(enabled) is not bool:
+                raise ValueError('卫戍队友DPS开关必须是布尔值')
+            if enabled != self.layout.multiplayer_enabled:
+                self.persist(replace(self.layout, multiplayer_enabled=enabled))
         elif op == 'hud_style':
             panel_id = cmd['panel_id']
             if panel_id not in {p.panel_id for p in self.layout.panels}:
@@ -596,7 +1061,7 @@ class DesktopState:
         elif op == 'connection_apply':
             config = ConnectionConfig.from_dict(cmd['config'])
             if config.platform == 'mumu' and not config.auto_detect and not config.serial:
-                raise ValueError('自动检测关闭时必须填写实例地址')
+                raise ValueError('自动检测关闭时必须填写端口地址')
             enabled = cmd['events']
             if not isinstance(enabled, bool):
                 raise ValueError('事件开关必须为布尔值')
@@ -633,6 +1098,7 @@ class CollectionWorker:
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
         self._request_lock = threading.Lock()
+        self._autochess_enabled = state.layout.multiplayer_enabled
         self._request_revision = 0
         self.stop = threading.Event()
         self.session = None
@@ -643,11 +1109,20 @@ class CollectionWorker:
         self.pc_runtime_dir = state.history.directory.parent
         self.pc_cleanup_error = ''
         self._last_pc_bootstrap = None
+        self._pc_bootstrap_revision = None
         self._bootstrap_audit = None
         self.pending_history_count = 0
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
+
+    def set_multiplayer_enabled(self, enabled):
+        with self._request_lock:
+            self._autochess_enabled = enabled
+
+    def autochess_enabled(self):
+        with self._request_lock:
+            return self._autochess_enabled
 
     def request(self, config, enabled):
         with self._request_lock:
@@ -752,12 +1227,13 @@ class CollectionWorker:
             self.retired_errors.append('已释放 PC 启动加载器，保留历史清理异常：' + self.pc_cleanup_error)
         self.pc_runtime = None
         self.pc_runtime_key = None
+        self._pc_bootstrap_revision = None
         self.pc_cleanup_error = ''
         self._emit_pc_bootstrap(None)
         return True
 
-    def _emit_pc_bootstrap(self, value):
-        if value != self._last_pc_bootstrap:
+    def _emit_pc_bootstrap(self, value, *, force=False):
+        if force or value != self._last_pc_bootstrap:
             self._last_pc_bootstrap = value
             self.events.put(('native_pc_bootstrap', value))
             if self._bootstrap_audit is not None:
@@ -785,7 +1261,12 @@ class CollectionWorker:
             capture_dir = self.directory / 'captures'
             with DesktopCaptureJournal(capture_dir, encoder=json_value,
                                        warn=lambda message: self.events.put(('warning', message))) as journal:
-                audit = journal.write
+                sampling_observation = None
+                def audit(kind, value):
+                    nonlocal sampling_observation
+                    if kind == 'lifecycle_observation':
+                        sampling_observation = (value.feed, value.sequence, value.kind)
+                    journal.write(kind, value)
                 self._bootstrap_audit = audit
                 regeneration = None
                 try:
@@ -801,7 +1282,26 @@ class CollectionWorker:
                     retries = 0
                     last_retry_audit = float('-inf')
                     last_live_frame = None
+                    last_sampling_rejection = None
+                    last_autochess_scene = object()
+                    clock_burst = None
                     bundled_observer = self.endpoint == DEFAULT_FRIDA_REMOTE and BUNDLED_SERVER_ARCHIVE.is_file()
+
+                    def publish_sampling_rejection(value):
+                        nonlocal last_sampling_rejection
+                        if value != last_sampling_rejection:
+                            last_sampling_rejection = value
+                            self.events.put(('sampling_rejection', value))
+
+                    def publish_autochess_scene(runtime, *, exited=False):
+                        nonlocal last_autochess_scene
+                        feed = runtime.feed
+                        scene = None if exited else getattr(feed, 'autochess_scene', None)
+                        if scene is None and not (exited or getattr(feed, 'autochess_exited', False)):
+                            return  # A short read is not an exit or a phase transition.
+                        if scene != last_autochess_scene:
+                            last_autochess_scene = scene
+                            self.events.put(('autochess_scene', scene))
 
                     def bind_observer_endpoint(target):
                         nonlocal endpoint_bound
@@ -815,6 +1315,7 @@ class CollectionWorker:
 
                     while not self.stop.is_set():
                         next_live_read = None
+                        clock_retry_delay = None
                         try:
                             revision, config, enabled = self._next_request()
                         except queue.Empty:
@@ -837,16 +1338,21 @@ class CollectionWorker:
                             self.last_connect_attempt = time.monotonic()
                             self.events.put(('connection_source', {
                                 'revision': revision, 'platform': config.platform}))
+                            last_sampling_rejection = None
+                            last_autochess_scene = object()
+                            clock_burst = None
+                            self.events.put(('sampling_rejection', None))
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
-                                    session_kwargs = {}
+                                    session_kwargs = {'autochess_enabled': self.autochess_enabled}
                                     pc_provider = self._pc_provider(config, enabled,
                                         explicit_retry=explicit_retry_pending)
                                     explicit_retry_pending = False
                                     if self.pc_runtime is not None:
                                         bootstrap = self.pc_runtime.describe()
-                                        self._emit_pc_bootstrap(bootstrap)
+                                        self._emit_pc_bootstrap(bootstrap, force=revision != self._pc_bootstrap_revision)
+                                        self._pc_bootstrap_revision = revision
                                         if self.pc_runtime.is_pending:
                                             self.events.put(('observer', ('attaching', bootstrap.get('error'))))
                                             self.events.put(('connection', bootstrap.get('error') or
@@ -858,7 +1364,9 @@ class CollectionWorker:
                                     if config.platform == 'native_pc':
                                         from native_pc_collector import NativePcCollector
                                         session_kwargs['collector'] = NativePcCollector(
-                                            config.native_game_root, collect_actions=enabled)
+                                            config.native_game_root, collect_actions=enabled,
+                                            event_identity_only=(enabled and self.arkframework_root is None
+                                                and self.native_pc_observer_factory is None))
                                         if pc_provider is not None:
                                             session_kwargs['observer_factory'] = pc_provider
                                         adb, serial = None, None
@@ -877,7 +1385,7 @@ class CollectionWorker:
                                     self._connect_session(adb, serial, runtime,
                                         frida_remote=remote, **session_kwargs,
                                         history=self.history, audit=audit, state_dir=self.directory,
-                                        on_history=lambda: self.events.put(('history', None)),
+                                        on_history_result=lambda result: self.events.put(('history', result)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
                                     if self.stop.is_set():
                                         continue
@@ -900,6 +1408,11 @@ class CollectionWorker:
                                     self.events.put(('error', str(exc)))
                                     self.release()
                             self.events.put(('scanning', False))
+                        if (not usable and self.pc_runtime is not None
+                                and self._pc_bootstrap_revision == current_revision):
+                            # Startup telemetry must not wait for the five-second
+                            # connection retry or alter its owner/arming boundary.
+                            self._emit_pc_bootstrap(self.pc_runtime.describe())
                         if usable and self.session is not None:
                             if self._pc_observer_recovery_needed(self.session, session_bootstrap_generation):
                                 # Reauthentication waits until the old observer
@@ -938,11 +1451,38 @@ class CollectionWorker:
                                 last_observer_state = observer_state
                                 self.events.put(('observer', observer_state))
                             runtime = self.session.runtime
+                            feed, sessions = runtime.feed, runtime.sessions
+                            consume_sequence = sessions.sequence
+                            clock_retry = (current_config.platform == 'native_pc' and current_enabled
+                                and self.native_pc_observer_factory is None and self.arkframework_root is None
+                                and getattr(self.session.observer, 'native_clock_busy_retry', False) is True
+                                and getattr(self.session.observer, 'contract', None) is NATIVE_PC_CONTRACT)
+                            if clock_retry:
+                                owner = (current_revision, self.session, self.session.observer, runtime, feed, sessions)
+                                if clock_burst is not None and (self.stop.is_set() or current_revision != self._request_revision):
+                                    clock_burst = None
+                                    continue
+                                same_owner = (clock_burst is not None and owner[0] == clock_burst[0][0]
+                                    and all(left is right for left, right in zip(owner[1:], clock_burst[0][1:])))
+                                read_perf = time.perf_counter()
+                                if same_owner:
+                                    if read_perf - clock_burst[1] >= NATIVE_BUSY_BUDGET:
+                                        clock_burst = None
+                                        self.stop.wait(COLLECTION_PERIOD)
+                                        continue
+                                    clock_burst = (owner, clock_burst[1], clock_burst[2] + 1)
+                                else:
+                                    clock_burst = (owner, read_perf, 1)
+                            else:
+                                clock_burst = None
                             started = time.monotonic()
+                            sampling_observation = None
                             try:
                                 sample = self.session.read()
+                                publish_autochess_scene(runtime)
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
+                                    publish_sampling_rejection(None)
                                     self.events.put(('sample', sample))
                                     if sample.get('state') == 2 and sample.get('frame') is not None:
                                         frame = (sample.get('battle_id'), sample['frame'])
@@ -950,8 +1490,32 @@ class CollectionWorker:
                                             next_live_read = started + COLLECTION_PERIOD
                                         last_live_frame = frame
                             except CaptureRetry as exc:
+                                publish_autochess_scene(runtime)
                                 lifecycle = runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
+                                # A failed read may already have consumed a native
+                                # pre-observer frame. Never accelerate that path.
+                                if (clock_retry and self.session is owner[1]
+                                        and self.session.observer is owner[2]
+                                        and self.session.runtime is runtime and runtime.feed is feed
+                                        and runtime.sessions is sessions and sessions.sequence == consume_sequence
+                                        and sampling_observation is None
+                                        and not self.stop.is_set() and current_revision == self._request_revision
+                                        and _native_clock_busy(exc)
+                                        and clock_burst[2] < NATIVE_BUSY_ATTEMPTS
+                                        and time.perf_counter() + NATIVE_BUSY_REST < clock_burst[1] + NATIVE_BUSY_BUDGET):
+                                    clock_retry_delay = NATIVE_BUSY_REST
+                                if isinstance(exc, MappingRetry):
+                                    reason = str(exc).partition('\n')[0].strip()[:200]
+                                    publish_sampling_rejection(dict(code='mapping_unavailable',
+                                                                    reason=reason or '归属证据尚未确认'))
+                                elif (sampling_observation is not None
+                                        and sampling_observation[0] == runtime.feed.id
+                                        and sampling_observation[1] == runtime.sessions.sequence
+                                        and sampling_observation[2] in ('preparing', 'waiting', 'end', 'terminal')):
+                                    # _read_lifecycle reports successfully consumed non-sample
+                                    # observations as retries. A gap or an old state is not proof.
+                                    publish_sampling_rejection(None)
                                 if lifecycle == 'playing' or isinstance(exc, MappingRetry):
                                     retries += 1
                                     now = time.monotonic()
@@ -966,6 +1530,8 @@ class CollectionWorker:
                                         retries = 0
                                         last_retry_audit = now
                             except BattleChanged as exc:
+                                if isinstance(exc, ProcessChanged):
+                                    publish_autochess_scene(runtime, exited=True)
                                 self.events.put(('error', str(exc)))
                                 usable = False
                                 self.last_connect_attempt = time.monotonic()
@@ -984,6 +1550,8 @@ class CollectionWorker:
                                     current_config.platform == 'native_pc'
                                     and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
                                 usable = False
+                            if clock_retry_delay is None:
+                                clock_burst = None
                             if usable:
                                 battle_waiting = runtime.feed.battle_waiting
                                 if battle_waiting is not None and battle_waiting != last_battle_waiting:
@@ -1023,7 +1591,8 @@ class CollectionWorker:
                         # Pace successful live reads start-to-start, with a short
                         # rest even if capture took longer than the whole period.
                         # Idle, paused and retry paths keep their existing backoff.
-                        delay = (COLLECTION_PERIOD if next_live_read is None else
+                        delay = (clock_retry_delay if clock_retry_delay is not None else
+                                 COLLECTION_PERIOD if next_live_read is None else
                                  max(COLLECTION_MIN_REST, next_live_read - time.monotonic()))
                         self.stop.wait(delay)
                 finally:
@@ -1057,6 +1626,25 @@ class CollectionWorker:
             errors.append(f'{self.pending_history_count} 局战绩尚未保存，更新未应用。')
         if errors:
             raise RuntimeError('；'.join(errors))
+
+
+def _drain_worker_events(worker, state):
+    """Bound admission, retaining FIFO samples, transitions and archive commits.
+
+    Every admitted sample still updates analysis. This neither coalesces raw
+    observations nor refreshes their captured_monotonic. A running producer
+    cannot prevent a reply by keeping the queue nonempty. One admitted update
+    may finish after the budget; this is not an interruption of that update.
+    """
+    started = time.perf_counter()
+    for index in range(BRIDGE_EVENT_LIMIT):
+        if index and time.perf_counter() - started >= BRIDGE_EVENT_BUDGET:
+            break
+        try:
+            event = worker.events.get_nowait()
+        except queue.Empty:
+            break
+        state.accept(*event)
 
 
 def serve(input_stream, output, state, worker=None):
@@ -1147,11 +1735,7 @@ def serve(input_stream, output, state, worker=None):
             cache_response = request_id is not None
             advance('events')
             if worker:
-                while True:
-                    try:
-                        state.accept(*worker.events.get_nowait())
-                    except queue.Empty:
-                        break
+                _drain_worker_events(worker, state)
             advance('command')
             op = cmd['op']
             if op == 'hello':
@@ -1208,6 +1792,8 @@ def serve(input_stream, output, state, worker=None):
                     state.expect_connection_request(state.connection, revision)
                 elif op == 'connection_apply':
                     state.finish_offline_connection()
+                elif op == 'multiplayer_enabled' and worker:
+                    worker.set_multiplayer_enabled(state.layout.multiplayer_enabled)
                 kind = 'snapshot' if op == 'snapshot' else 'state'
             advance('snapshot')
             if getattr(worker, 'effective', None) is not None:
