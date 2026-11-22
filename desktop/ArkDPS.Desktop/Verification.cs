@@ -2085,7 +2085,11 @@ public partial class MainWindow
             var dpi=System.Windows.Media.VisualTreeHelper.GetDpi(hud);
             var work=System.Windows.Forms.Screen.FromHandle(Native.Handle(hud)).WorkingArea;
             double width=Math.Clamp(placement.Number("width"),hud.MinWidth*dpi.DpiScaleX,work.Width);
-            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height)
+            var statusNotice=((Grid)hud.Content).Children.OfType<HudStatusNotice>().Single();
+            double statusHeight=statusNotice.Visibility==Visibility.Visible ? statusNotice.ActualHeight : 0;
+            double rateNoticeHeight=hud.Panel.RateNoticePanel.Visibility==Visibility.Visible
+                ? hud.Panel.RateNoticePanel.ActualHeight+hud.Panel.RateNoticePanel.Margin.Bottom : 0;
+            double height=Math.Min(work.Height,(hud.Panel.TitleRegion.Height+hud.Panel.Rows.Height+statusHeight+rateNoticeHeight)
                 *hud.DisplayScale*dpi.DpiScaleY);
             double x=Math.Clamp(placement.Number("x"),work.Left,Math.Max(work.Left,work.Right-width));
             double y=Math.Clamp(placement.Number("y"),work.Top,Math.Max(work.Top,work.Bottom-height));
@@ -2131,7 +2135,10 @@ public partial class MainWindow
             Require(!label.Contains('/'),"history stage label leaked the native levelId");
             var display=new HistoryItem{Data=item};
             Require(!display.StageDescription.Contains("原始关卡 ID"),"history tooltip leaked the native levelId");
-            Require(display.Summary==$"{item.Text("outcome")} · {item.Text("duration")}" &&
+            string sourceLabel=item.Text("source_label") is {Length:>0} recordedSource
+                ? recordedSource : "来源未记录";
+            Require(display.SourceLabel==sourceLabel &&
+                    display.Summary==$"{sourceLabel} · {item.Text("outcome")} · {item.Text("duration")}" &&
                     !display.Summary.Contains("最后可靠游戏时刻"),"history row leaked practice or timing metadata");
             Require(DateTime.TryParseExact(display.Date,"yyyy-MM-dd HH:mm",System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None,out _),"history timestamp was not displayed to the minute");
@@ -2402,6 +2409,9 @@ public partial class MainWindow
         string eventStatus=frozenHistory.Text("event_status");
         Require(eventStatus.Length>0 && HasText(Screenshot.StatisticsDocument(frozenHistory,Theme.Key),"事件："+eventStatus),
                 "ranking PNG lost the selected archive's event status");
+        var babelRanking=Screenshot.StatisticsDocument(frozenHistory,Theme.Babel);
+        Require(FindAutomationElement(babelRanking,"ExportRank") is TextBlock rank && rank.Text=="1",
+                "ranking PNG did not number the first history row as 1");
         byte[] frozenPng=Screenshot.Statistics(frozenHistory,Theme.Key);
         string pngPath=Path.Combine(output,"frozen-history.png");
         await ExportHistory(frozenHistory,"png",pngPath,frozenPng);

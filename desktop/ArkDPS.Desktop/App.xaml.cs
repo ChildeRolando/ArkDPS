@@ -20,6 +20,16 @@ public partial class App : System.Windows.Application
     internal static UpdateFixture? UpdateVerification;
     internal static string[] LaunchArguments = [];
     internal static readonly List<string> BridgeArguments = new();
+    internal static void ClearConnectionOverrides()
+    {
+        for (int index = 0; index < BridgeArguments.Count;)
+        {
+            string argument = BridgeArguments[index];
+            if (argument is "--adb" or "--serial" or "--platform" or "--native-game-root")
+                BridgeArguments.RemoveRange(index, Math.Min(2, BridgeArguments.Count - index));
+            else index++;
+        }
+    }
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -62,7 +72,10 @@ public partial class App : System.Windows.Application
                     case "--offline": case "--no-events": BridgeArguments.Add(arg); break;
                     case "--state-dir": stateOverride = arguments[++i]; break;
                     case "--fixture": case "--adb": case "--serial": case "--frida-remote":
+                    case "--platform": case "--native-game-root":
                         BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
+                    case "--arkframework-root":
+                        BridgeArguments.Add(arg); BridgeArguments.Add(Path.GetFullPath(arguments[++i])); break;
                     default: throw new ArgumentException("未知参数：" + arg);
                 }
             }

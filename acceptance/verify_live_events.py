@@ -4,13 +4,17 @@ from collections import Counter, defaultdict
 import json
 import math
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 
 STATE_ONLY = {'enemy_hp', 'enemy_fake_death', 'enemy_finish'}
 
 
 def near(left, right):
-    if not math.isclose(left, right, rel_tol=1e-7, abs_tol=.01):
+    if (type(left) not in (int, float) or type(right) not in (int, float)
+            or not math.isfinite(left) or not math.isfinite(right)
+            or not math.isclose(left, right, rel_tol=1e-7, abs_tol=.01)):
         raise ValueError(f'amount mismatch: {left} != {right}')
 
 
@@ -51,24 +55,139 @@ def enemy_state_event(event):
     return result
 
 
-def verify(directory, *, source_owners=(), require_partial=False, require_zero=False,
-           allow_incomplete=False):
-    summary = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
-    if summary.get('error') and not allow_incomplete:
-        raise ValueError('capture reports a failure: ' + summary['error'])
-    records = [json.loads(line) for line in (directory / 'capture.jsonl').read_text(encoding='utf-8').splitlines()]
-    publications = [record['data'] for record in records if record['kind'] == 'published']
-    failed_run = bool(summary.get('error')) or not publications or publications[-1]['event_status'] not in ('recording', 'finished')
-    if failed_run and allow_incomplete:
-        publications = [sample for sample in publications if sample['event_status'] in ('recording', 'finished')]
-    if not publications or publications[0]['frame'] == publications[-1]['frame']:
-        raise ValueError('no observed battle progression')
-    first, last = publications[0], publications[-1]
-    complete = not failed_run
-    if first['session'] != last['session'] or not complete and not allow_incomplete:
-        raise ValueError('capture does not have one reliable event session')
-    start_sequence = first['event_watermark']['sequence']
-    end_sequence = last['event_watermark']['sequence']
+def pc_records(records, summary, publications):
+    """Read only ordered batches bound to this collector's guarded PC samples."""
+    if __package__ in (None, '') and str(Path(__file__).resolve().parents[1]) not in sys.path:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from event_stream import baseline_barrier, validate_native_event_batch
+    from native_pc.probe_native_pc import KNOWN_FILES
+    from native_pc_collector import BUILD_ID
+
+    connections = [r['data'] for r in records if r['kind'] == 'connected']
+    instance = summary.get('process_instance')
+    if (summary.get('platform') != 'native_pc' or summary.get('game_version') != BUILD_ID
+            or not isinstance(instance, list) or len(instance) != 2
+            or not all(type(value) is int and value > 0 for value in instance)
+            or summary.get('pid') != instance[0] or len(connections) != 1):
+        raise ValueError('missing native PC capture identity')
+    connection = connections[0]
+    diagnostics = connection.get('diagnostics') or {}
+    details = diagnostics.get('details') or {}
+    build = details.get('build') or {}
+    files = {entry['file']: entry['sha256'] for entry in build.get('files', [])
+             if entry.get('sha256_matches') is True}
+    if (connection.get('pid') != instance[0] or connection.get('process_instance') != instance
+            or diagnostics.get('platform') != 'native_pc' or diagnostics.get('version_actual') != BUILD_ID
+            or details.get('fixed_module_bytes_match') is not True or build.get('known_build') is not True
+            or files != KNOWN_FILES):
+        raise ValueError('missing matching PC build verification')
+
+    native_session = publications[0].get('native_session')
+    if not isinstance(native_session, str) or not native_session.startswith(f'{instance[0]}:{instance[1]}:'):
+        raise ValueError('wrong native PC process instance')
+    session = publications[0]['session']
+    stream = None
+    latest = None
+    for record in records:
+        kind, data = record['kind'], record['data']
+        if kind == 'lifecycle_observation' and (data.get('events') or {}).get('drain') is not None:
+            evidence, sample = data['events'], data['sample']
+            metadata = sample.get('battle_metadata') or {}
+            if (sample.get('session') != session or sample.get('native_session') != native_session
+                    or metadata.get('platform') != 'native_pc' or metadata.get('source_build') != BUILD_ID):
+                raise ValueError('wrong native PC battle or build')
+            seq = baseline_barrier(evidence['before'], sample, evidence['after'])
+            batch = evidence['drain']
+            if (evidence.get('error') or evidence.get('sequence') != seq or batch.get('error') or batch.get('stopped')
+                    # The engagement flag also guards the published observed_damage/healing totals.
+                    or any(batch.get(key) is not False for key in
+                           ('damage_unknown', 'engagement_unknown', 'shield_unknown', 'skill_unknown'))):
+                raise ValueError('missing native PC event coverage')
+            validate_native_event_batch(sample, seq, batch, stream=stream)
+            if stream is None:
+                stream = SimpleNamespace(sequence=seq, baseline_sequence=seq, received={})
+            if seq < stream.sequence:
+                raise ValueError('native PC watermark moved backwards')
+            stream.received.update((e['sequence'], e) for e in batch['events'] if e['sequence'] > stream.sequence)
+            stream.sequence = seq
+            latest = sample
+        elif kind == 'published':
+            watermark = data.get('event_watermark') or {}
+            if (latest is None or data.get('event_status') not in ('recording', 'finished')
+                    or any(data.get(k) != latest[k] for k in ('frame', 'game_time', 'session', 'native_session'))
+                    or watermark != dict(frame=latest['frame'], game_time=latest['game_time'], sequence=stream.sequence)
+                    or latest['rows'] != data.get('native_rows')):
+                raise ValueError('PC publication has no matching guarded event sample')
+    return stream.received
+
+
+def check_pc_families(accepted, rows, ownership, deltas):
+    """Reconcile a window with attributed hits and directly observed skill endings."""
+    from stats_core import NATIVE_DAMAGE_TYPES, Statistics
+
+    for family in ('damage', 'healing'):
+        if not any(delta[family]['native_delta'] > 0 for delta in deltas.values()):
+            raise ValueError(f'no positive native PC {family} delta to reconcile')
+    if not any(e['kind'] == 'shield_absorbed' and e['amount'] > 0 for e in accepted):
+        raise ValueError('no positive PC shield absorption')
+    hp, shield, absorbed_by_source = Counter(), Counter(), Counter()
+    active, durations, windows = {}, Counter(), Counter()
+    for event in accepted:
+        source, kind = event['source'], event['kind']
+        if kind == 'shield_absorbed':
+            absorbed_by_source[source] += event['amount']
+        if kind in ('damage', 'healing') and event['amount'] > 0 and (
+                source not in deltas or event['sequence'] <= deltas[source]['start_sequence']):
+            raise ValueError('PC event has no preceding native counter baseline')
+        if kind not in ('damage_settlement', 'skill_start', 'skill_end'):
+            continue
+        owner = ownership.get(source)
+        if not owner:
+            raise ValueError('unattributed PC settlement or skill')
+        if kind == 'damage_settlement':
+            absorption = event.get('shield_absorbed')
+            if (event.get('settlement_complete') is not True
+                    or not Statistics._enemy_identity(event.get('target'), event.get('target_uid'))
+                    or not event['target'].startswith(('enemy_', 'trap_'))
+                    or type(event.get('damage_type')) is not int or event['damage_type'] not in NATIVE_DAMAGE_TYPES
+                    or type(absorption) not in (int, float)
+                    or not 0 <= absorption < math.inf):
+                raise ValueError('incomplete PC damage settlement')
+            hp[owner] += event['amount']
+            shield[owner] += absorption
+            continue
+        method = (event.get('proof') or {}).get('method')
+        identity = (source, event.get('skill_id') or event.get('skill_key'))
+        if not identity[1]:
+            raise ValueError('missing PC skill identity')
+        if kind == 'skill_start':
+            if method not in ('Character.OnSkillStart', 'Character.SwitchToSkillState',
+                              'Character.OnSkillCastSucceed', 'Character.OnToggleSkillStart',
+                              'Character.OnSkillRetriggered'):
+                raise ValueError('unverified PC skill activation')
+            active.setdefault(identity, event['game_time'])
+        elif method in ('Character.OnSkillFinish', 'Character.SwitchOutFromSkillState'):
+            if identity not in active:
+                raise ValueError('PC skill ending has no matching activation in this window')
+            durations[owner] += event['game_time'] - active.pop(identity)
+            windows[owner] += 1
+    if sum(hp.values()) <= 0 or active or sum(durations.values()) <= 0:
+        raise ValueError('missing HP settlement or directly observed closed PC skill window')
+    for owner, row in rows.items():
+        ledger = row.get('settled_damage') or {}
+        if ledger.get('complete') is not True or row.get('skill_coverage_complete') is not True:
+            raise ValueError('incomplete published PC settlement or skill window')
+        near(ledger['known_hp_damage'], hp[owner])
+        near(ledger['known_shield_damage'], shield[owner])
+        near(row['skill_active_seconds'], durations[owner])
+        if row['skill_window_count'] != windows[owner]:
+            raise ValueError('PC skill window count differs from paired events')
+    return {'scope': 'single_capture_journal_window', 'settled_hp': dict(hp), 'settled_enemy_shield': dict(shield),
+            'absorbed_by_source': dict(absorbed_by_source),
+            'paired_skill_windows': dict(windows), 'skill_seconds': dict(durations)}
+
+
+def captured_records(records):
     by_sequence = {}
     for record in records:
         if record['kind'] == 'lifecycle_observation':
@@ -83,6 +202,32 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
             if sequence in by_sequence and by_sequence[sequence] != event:
                 raise ValueError('conflicting replay in raw events')
             by_sequence[sequence] = event
+    return by_sequence
+
+
+def verify(directory, *, source_owners=(), require_partial=False, require_zero=False,
+           allow_incomplete=False, pc_settlements=False):
+    if pc_settlements and allow_incomplete:
+        raise ValueError('PC settlement reconciliation requires a continuous capture')
+    summary = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
+    if summary.get('error') and not allow_incomplete:
+        raise ValueError('capture reports a failure: ' + summary['error'])
+    records = [json.loads(line) for line in (directory / 'capture.jsonl').read_text(encoding='utf-8').splitlines()]
+    publications = [record['data'] for record in records if record['kind'] == 'published']
+    failed_run = bool(summary.get('error')) or not publications or publications[-1]['event_status'] not in ('recording', 'finished')
+    if failed_run and allow_incomplete:
+        publications = [sample for sample in publications if sample['event_status'] in ('recording', 'finished')]
+    if not publications or publications[0]['frame'] == publications[-1]['frame']:
+        raise ValueError('no observed battle progression')
+    first, last = publications[0], publications[-1]
+    if pc_settlements and any(not isinstance(sample.get('event_watermark'), dict) for sample in publications):
+        raise ValueError('PC sample has no combat-event watermark')
+    complete = not failed_run
+    if first['session'] != last['session'] or not complete and not allow_incomplete:
+        raise ValueError('capture does not have one reliable event session')
+    start_sequence = first['event_watermark']['sequence']
+    end_sequence = last['event_watermark']['sequence']
+    by_sequence = pc_records(records, summary, publications) if pc_settlements else captured_records(records)
     accepted = [by_sequence[sequence] for sequence in range(start_sequence + 1, end_sequence + 1)
                 if sequence in by_sequence]
     if len(accepted) != end_sequence - start_sequence:
@@ -169,6 +314,8 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 eid=eid, frame=event['frame'], game_time=event['game_time'],
                 phase_total_hp=total, phase_count=count, phase_from_birth=from_birth)
             continue
+        if pc_settlements and kind == 'damage_settlement':
+            continue
         if kind in ('hp_damage', 'elemental_bar', 'elemental_burst', 'skill_start', 'skill_end'):
             continue
         if source not in ownership or kind not in ('damage', 'healing', 'shield_absorbed'):
@@ -254,6 +401,8 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
     if published_enemy_state is not None:
         result['enemy_state_complete'] = published_enemy_state['complete']
         result['enemy_state_events'] = len(enemy_state_events)
+    if pc_settlements:
+        result['native_pc_settlements'] = check_pc_families(accepted, rows, ownership, counter_deltas)
     return result
 
 
@@ -264,12 +413,14 @@ if __name__ == '__main__':
     parser.add_argument('--require-partial', action='store_true')
     parser.add_argument('--require-zero', action='store_true')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--pc-settlements', action='store_true',
+                        help='reconcile a single native PC window with positive hits, healing, shield absorption and closed skills')
     parser.add_argument('--allow-incomplete-prefix', action='store_true',
                         help='diagnose a frozen reliable prefix; never report it as complete acceptance')
     args = parser.parse_args()
     result = verify(args.directory, source_owners=args.source_owner,
                     require_partial=args.require_partial, require_zero=args.require_zero,
-                    allow_incomplete=args.allow_incomplete_prefix)
+                    allow_incomplete=args.allow_incomplete_prefix, pc_settlements=args.pc_settlements)
     if args.output:
         with args.output.open('x', encoding='utf-8') as out:
             json.dump(result, out, ensure_ascii=False, indent=2)

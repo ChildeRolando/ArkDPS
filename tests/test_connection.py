@@ -1,5 +1,7 @@
 import json
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,10 +89,38 @@ def adb_path(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_local_manager(monkeypatch):
+def isolate_local_mumu(monkeypatch):
     monkeypatch.delenv('ADB_SERVER_SOCKET', raising=False)
     monkeypatch.delenv('ANDROID_ADB_SERVER_ADDRESS', raising=False)
-    monkeypatch.setattr(conn, '_mumu_manager_tools', lambda adb: ())
+    monkeypatch.setattr(conn, 'winreg', None)
+    monkeypatch.setattr(conn, 'MUMU_ADB_CANDIDATES', ())
+
+
+@pytest.fixture
+def install_records(monkeypatch):
+    records = {}
+
+    def open_key(hive, name, reserved, access):
+        assert name == r'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer'
+        assert reserved == 0 and access & 1
+        try:
+            return nullcontext(records[hive, access & ~1])
+        except KeyError:
+            raise FileNotFoundError from None
+
+    def query_value(key, name):
+        assert name == 'InstallLocation'
+        return key, 1
+
+    monkeypatch.setattr(conn, 'winreg', SimpleNamespace(
+        HKEY_LOCAL_MACHINE='HKLM', HKEY_CURRENT_USER='HKCU',
+        KEY_READ=1, KEY_WOW64_64KEY=64, KEY_WOW64_32KEY=32,
+        OpenKey=open_key, QueryValueEx=query_value,
+    ))
+    monkeypatch.delenv('MULTICA_ADB', raising=False)
+    monkeypatch.delenv('ADB_PATH', raising=False)
+    monkeypatch.setattr(conn.shutil, 'which', lambda _name: None)
+    return records
 
 
 @pytest.fixture
@@ -115,6 +145,77 @@ def test_zero_instances(adb_path):
     assert result.status is conn.DetectionStatus.NO_INSTANCE
     assert result.selected_serial is None
     assert not result.candidates
+
+
+@pytest.mark.parametrize(('adb_relative', 'player_relative', 'registry_slot', 'use_sdk'), [
+    ('nx_main/adb.exe', 'nx_main/MuMuNxMain.exe', ('HKLM', 64), False),
+    ('shell/adb.exe', 'shell/MuMuPlayer.exe', ('HKLM', 32), False),
+    ('nx_device/15.0/shell/adb.exe', 'nx_main/MuMuNxMain.exe', ('HKCU', 64), False),
+    ('nx_main/adb.exe', 'nx_main/MuMuNxMain.exe', ('HKCU', 32), True),
+])
+def test_custom_install_is_detected_and_connected(
+        tmp_path, monkeypatch, install_records, adb_relative, player_relative, registry_slot, use_sdk):
+    root = tmp_path / '安卓 工具'
+    adb = root / adb_relative
+    player = root / player_relative
+    manager = player.with_name('mumu-cli.exe')
+    for path in (adb, player, manager):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    monkeypatch.setenv('EMULATOR_HOME', str(root))
+    install_records[registry_slot] = '"${EMULATOR_HOME}"'
+    if use_sdk:
+        adb = tmp_path / 'adb.exe'
+        adb.touch()
+        monkeypatch.setenv('ADB_PATH', str(adb))
+
+    serial = '127.0.0.1:16385'
+    fake = FakeAdb(identities={serial: identity()}, manager_report=[manager_instance(0, 16385)],
+                   register=(serial,))
+    target = conn.resolve_configured(conn.ConnectionConfig(), fake)
+    assert (target.adb_path, target.serial, target.source) == (str(adb), serial, 'auto')
+    assert fake.calls[:4] == [[str(adb), 'devices', '-l'], [str(manager), 'info', '-v', 'all'],
+                              [str(adb), 'connect', serial], [str(adb), 'devices', '-l']]
+
+
+def test_adb_resolution_preserves_overrides_and_falls_back_from_stale_records(
+        tmp_path, monkeypatch, install_records):
+    stale_adb = tmp_path / 'removed' / 'nx_main' / 'adb.exe'
+    root = tmp_path / 'installed'
+    registered_adb = root / 'nx_main' / 'adb.exe'
+    player = registered_adb.with_name('MuMuNxMain.exe')
+    explicit, env, default, on_path = (
+        tmp_path / folder / 'adb.exe' for folder in ('explicit', 'env', 'default', 'path'))
+    for path in (explicit, env, default, on_path, stale_adb, registered_adb, player):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    install_records['HKLM', 64] = str(stale_adb.parent.parent)
+    install_records['HKCU', 32] = str(root)
+    monkeypatch.setattr(conn, 'MUMU_ADB_CANDIDATES', (str(default),))
+    monkeypatch.setattr(conn.shutil, 'which', lambda _name: str(on_path))
+    monkeypatch.setenv('ADB_PATH', str(env))
+
+    assert conn.resolve_adb_path(str(explicit)) == str(explicit)
+    assert conn.resolve_adb_path() == str(env)
+    monkeypatch.delenv('ADB_PATH')
+    assert conn.resolve_adb_path() == str(registered_adb)
+    registered_adb.unlink()
+    assert conn.resolve_adb_path() == str(default)
+    default.unlink()
+    assert conn.resolve_adb_path() == str(on_path)
+
+
+def test_installed_player_accepts_adb_emulator_alias_without_manager(tmp_path, install_records):
+    root = tmp_path / 'Android Studio'
+    adb = root / 'nx_main' / 'adb.exe'
+    adb.parent.mkdir(parents=True)
+    adb.touch()
+    adb.with_name('MuMuNxMain.exe').touch()
+    install_records['HKLM', 64] = str(root)
+
+    serial = 'emulator-5554'
+    fake = FakeAdb(device_line(serial), identities={serial: identity()})
+    assert conn.detect_instances(runner=fake).selected_serial == serial
 
 
 @pytest.mark.parametrize('automatic', [False, True])
@@ -370,6 +471,51 @@ def test_config_rejects_invalid_values():
         conn.ConnectionConfig.from_dict({'auto_detect': 'yes'})
     with pytest.raises(ValueError):
         conn.ConnectionConfig.from_dict([])
+
+
+def test_v1_config_defaults_to_mumu_and_preserves_native_settings(tmp_path):
+    old = {'version': 1, 'adb_path': 'my-adb', 'serial': 'manual:1', 'auto_detect': False}
+    migrated = conn.ConnectionConfig.from_dict(old)
+    assert migrated.platform == 'mumu' and migrated.native_game_root is None
+    assert all(migrated.to_dict()[key] == value for key, value in old.items())
+    native = conn.ConnectionConfig.from_dict({**old, 'platform': 'native_pc',
+                                             'native_game_root': r'D:\games\Arknights'})
+    store = conn.ConnectionConfigStore(tmp_path / 'connection.json')
+    store.save(native)
+    assert store.load().config == native
+    assert store.load().config.serial == 'manual:1'  # MuMu preference survives switching.
+    assert store.load().config.to_dict()['version'] == 1
+
+
+@pytest.mark.parametrize('extra', [{'platform': None}, {'platform': 'other'},
+                                  {'platform': True}, {'native_game_root': 42},
+                                  {'native_game_root': []}])
+def test_native_config_rejects_invalid_new_field_types(extra):
+    with pytest.raises(ValueError):
+        conn.ConnectionConfig.from_dict(extra)
+
+
+def test_native_diagnostics_are_additive_and_legacy_mumu_shape_is_unchanged():
+    legacy = conn.ConnectionDiagnostics().as_dict()
+    assert not {'platform', 'native_game_root', 'process_pid', 'code', 'details'} & legacy.keys()
+    diagnostic = conn.ConnectionDiagnostics(
+        status=conn.DetectionStatus.ERROR, platform='native_pc', native_game_root='game',
+        process_pid=42, code='native_permission_denied', details={'win32_error': 5})
+    encoded = diagnostic.as_dict()
+    assert encoded['platform'] == 'native_pc' and encoded['code'] == 'native_permission_denied'
+    assert encoded['details'] == {'win32_error': 5} and encoded['process_pid'] == 42
+    assert set(legacy) <= set(encoded)
+
+
+@pytest.mark.parametrize('resolver', [conn.resolve_configured, conn.resolve_target])
+def test_adb_resolvers_refuse_native_config_before_running_any_command(resolver, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail('native connection must not probe ADB')
+    monkeypatch.setattr(conn, 'resolve_adb_path', forbidden)
+    monkeypatch.setattr(conn, 'detect_instances', forbidden)
+    with pytest.raises(conn.ConnectionUnavailable) as caught:
+        resolver(conn.ConnectionConfig(platform='native_pc', native_game_root='game'))
+    assert caught.value.diagnostics.as_dict()['platform'] == 'native_pc'
 
 
 def test_unsafe_adb_commands_are_refused():

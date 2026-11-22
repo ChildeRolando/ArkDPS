@@ -38,6 +38,10 @@ class SampleUnavailable(RuntimeError):
     pass
 
 
+class SnapshotGap(SampleUnavailable):
+    """A verified observation is missing, with snapshot coverage interrupted."""
+
+
 class BattleChanged(SampleUnavailable):
     pass
 
@@ -57,6 +61,12 @@ class UnsupportedVersion(SampleUnavailable):
     def __init__(self, message, diagnostics=None):
         super().__init__(message)
         self.diagnostics = diagnostics
+
+
+def collector_process(collector):
+    """Resolve the process owner without requiring the Android transport on PC."""
+    process = getattr(collector, 'process', None)
+    return process if process is not None else collector.core.mc
 
 
 def check_battle_ownership(bc, native, managed_reference, logger_owner):
@@ -340,7 +350,7 @@ class Collector:
             raise SampleUnavailable('生命周期尚未连接')
         self._check_process_identity()
         try:
-            return self._lifecycle_reader.sample()
+            observation = self._lifecycle_reader.sample()
         except ReadFailure as exc:
             if exc.reason != 'binding_invalid' or self.last_pid_check - self._lifecycle_maps_refresh_at < 1:
                 raise
@@ -348,7 +358,15 @@ class Collector:
             # readable ranges. Refresh the ranges, then repeat all identity checks.
             self._lifecycle_maps_refresh_at = self.last_pid_check
             self.core.mc.reload_maps()
-            return self._lifecycle_reader.sample()
+            observation = self._lifecycle_reader.sample()
+        diagnostics = getattr(self, 'diagnostics', None)
+        if (getattr(diagnostics, 'version_status', None) == VersionStatus.COMPATIBLE
+                and diagnostics.version_actual and observation.get('battle') is not None):
+            metadata = dict(observation.get('metadata') or {})
+            metadata.setdefault('evidence', 'android_package_version')
+            metadata.update(platform='android', source_build=f'android:{diagnostics.version_actual}')
+            return dict(observation, metadata=metadata)
+        return observation
 
     def observer_boot_ready(self):
         """Check the live game scene through the read-only channel before injection."""

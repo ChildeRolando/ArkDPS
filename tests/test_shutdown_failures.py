@@ -173,8 +173,14 @@ def test_retired_observer_handles_are_retried_on_close(stage):
         current.event_status = 'gap'
         current._observer_generation = 1
         retried, active = current._prepare_battle_observer(SimpleNamespace(generation=2, events={}))
-        assert retried and active is replacement
+        assert retried and active is None
+        assert current.observer is None and current._pending_observers == [old]
+        assert 'replacement' not in calls
     failures.clear()
+    if stage == 'new_battle':
+        retried, active = current._prepare_battle_observer(SimpleNamespace(generation=3, events={}))
+        assert retried and active is replacement
+        assert old.script is old.session is None and current._pending_observers == []
     current.close()
     assert old.script is old.session is None
     assert calls.count('unload') >= 2 and calls.count('detach') >= 2

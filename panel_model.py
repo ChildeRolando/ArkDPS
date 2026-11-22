@@ -56,6 +56,8 @@ def ranking_label(category: Category, ranking: Ranking) -> str:
     if ranking is Ranking.TOTAL:
         return {Category.DAMAGE: '总伤', Category.HEALING: '总治疗',
                 Category.SHIELD: '总护盾'}[category]
+    if category is Category.HEALING and ranking is Ranking.DPS:
+        return 'HPS'
     return RANKING_LABELS[ranking]
 
 RATE_LABELS = {RateBasis.RECENT_5S: '近 5 秒', RateBasis.ENGAGEMENT: '接敌',
@@ -85,11 +87,14 @@ def _error_summary(error: str | None, limit: int = 120) -> str:
 def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, str]:
     """Return ``(available, reason, hint, action, action_label)``.
 
-    Only a live or recorded event stream certifies engagement data. Every
-    other state carries a readable reason and a recovery entry.
+    Only a live or recorded event stream certifies engagement data. Missing
+    coverage carries a readable reason and an action when recovery applies.
     """
     if event is None or event.status in ('recording', 'finished'):
         return True, '', '', '', ''
+    if event.status == 'snapshot_only':
+        return (False, '官服 PC 缺少接敌速率所需的逐次事件',
+                '官服 PC 已提供累计量和有覆盖的近 5 秒速率。', '', '')
     error = _error_summary(event.error)
     detail = f'（{error}）' if error else ''
     if event.live:
@@ -427,6 +432,13 @@ class PanelSourceRow:
                  else self.total(category))
         if (not _finite(total) or not _finite(self.presence_seconds)
                 or self.presence_seconds <= 0 or not self.presence_complete):
+            return None
+        if category is Category.DAMAGE and self.settled_damage is not None and (effective or self.damage is None):
+            certificate = 'complete' if effective else 'observed_boss_damage_complete'
+            if self.settled_damage.get(certificate) is not True:
+                return None
+        elif not self.counter_complete or not self.source_complete:
+            # A retained cumulative value may end before the presence integral.
             return None
         # Roster presence sampling can start after the first event. The active
         # engagement interval is evidence that the owner was present, so it is
@@ -968,11 +980,12 @@ def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
     if _finite(rate):
         return 'value', f'{format_compact(rate, number_units)}/s', ''
     if full_cycle:
+        rate_name = 'HPS' if category is Category.HEALING else 'DPS'
         if not row.presence_complete or row.presence_seconds is None:
-            return 'unknown', '—', '在场时间未建立可靠覆盖；全周期 DPS 未知'
+            return 'unknown', '—', f'在场时间未建立可靠覆盖；全周期 {rate_name} 未知'
         if row.presence_seconds <= 0:
-            return 'unknown', '—', '未观察到在场时间；全周期 DPS 未知'
-        return 'unknown', '—', '总量或在场时间不完整；全周期 DPS 未知'
+            return 'unknown', '—', f'未观察到在场时间；全周期 {rate_name} 未知'
+        return 'unknown', '—', f'总量或在场时间不完整；全周期 {rate_name} 未知'
     if not engagement:
         return 'unknown', '—', ''
     observed, active = row.observed(category), row.active(category)
@@ -1228,7 +1241,8 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                 observed = detail['observed_' + key] = lane.get('observed_' + key)
                 detail[key] = observed if split else None
             if not split:
-                reason = lane.get('skill_split_reason') or lane.get('reason')
+                reason = (lane.get('reason') or lane.get('skill_split_reason')
+                          or row.damage_scope_reason or row.skill_split_reason)
                 if reason or lane.get('observed_hits'):
                     detail['skill_split' + suffix + '_reason'] = reason or '部分命中缺少技能窗口证据'
     return detail
@@ -1254,6 +1268,8 @@ def render_panel(config: PanelConfig,
     full_cycle_ranking = ranking is Ranking.DPS and config.rate_basis is RateBasis.FULL_CYCLE
     rate_supported = category is not Category.SHIELD
     rate_label = RATE_LABELS[config.rate_basis] if rate_supported else ''
+    if category is Category.HEALING and config.rate_basis is RateBasis.FULL_CYCLE:
+        rate_label = '全周期'
     if rate_supported:
         rate_available, rate_reason, rate_hint, rate_action, rate_action_label = rate_notice(event)
     else:
@@ -1455,7 +1471,8 @@ def render_panel(config: PanelConfig,
     share_reason = ' · '.join(reasons)
     max_value = max(displayed.values(), default=0.0)
 
-    metric_label = (('有效伤害 · DPS' if effective else CATEGORY_LABELS[category] + ' · DPS')
+    metric_label = (('治疗 · HPS' if category is Category.HEALING else
+                     '有效伤害 · DPS' if effective else CATEGORY_LABELS[category] + ' · DPS')
                     if ranking is Ranking.DPS else
                     '有效伤害 · ' + ranking_label(category, ranking) if effective else
                     CATEGORY_LABELS[category] + ' · ' + ranking_label(category, ranking))

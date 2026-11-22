@@ -3,6 +3,7 @@ from dataclasses import fields, is_dataclass
 from enum import Enum
 import hashlib
 import json
+import math
 from pathlib import Path
 import shutil
 import subprocess
@@ -12,6 +13,61 @@ import time
 from collection_session import CollectionSession
 from battle_history import BattleHistory
 from event_capture import CaptureRetry
+
+
+def _native_pc_frida_runtime(game_root, runtime_dir):
+    from native_pc.frida_runtime import NativePcFridaRuntime
+    return NativePcFridaRuntime(game_root, runtime_dir=runtime_dir)
+
+
+def _connect_pc_after_bootstrap(session, bootstrap, *, timeout, cancelled):
+    """Share one wait budget across readiness and initial module/access retries.
+
+    A zero timeout permits one immediate readiness/connection check, without
+    retrying. An already running synchronous connect is not preempted.
+    """
+    from collector import SampleUnavailable, UnsupportedVersion
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout) or timeout < 0):
+        raise ValueError('PC connection timeout must be finite and nonnegative')
+
+    def check_cancelled():
+        if cancelled is not None and cancelled():
+            raise InterruptedError('collection cancelled before PC connection')
+
+    check_cancelled()
+    deadline = time.monotonic() + timeout
+    bootstrap.wait_ready(max(0, deadline - time.monotonic()), cancelled=cancelled)
+    check_cancelled()
+    if timeout > 0 and time.monotonic() >= deadline:
+        raise TimeoutError('PC connection readiness exhausted the initialization wait budget')
+    permission_deadline = min(deadline, time.monotonic() + 5)
+    while True:
+        check_cancelled()
+        if timeout > 0 and time.monotonic() >= deadline:
+            raise TimeoutError('PC connection initialization wait budget expired')
+        try:
+            session.connect()
+        except UnsupportedVersion:
+            raise
+        except SampleUnavailable:
+            check_cancelled()
+            diagnostic = session.collector.diagnostics
+            module_initializing = (diagnostic.code == 'native_unavailable'
+                and diagnostic.details.get('reason') in ('module_not_unique', 'process_not_unique'))
+            access_initializing = (diagnostic.code == 'native_permission_denied'
+                                   and time.monotonic() < permission_deadline)
+            if (not (module_initializing or access_initializing)
+                    or session.collector.process is not None or time.monotonic() >= deadline):
+                raise
+            retry_deadline = min(deadline, permission_deadline) if access_initializing else deadline
+            time.sleep(min(.1, max(0, retry_deadline - time.monotonic())))
+            check_cancelled()
+            if time.monotonic() >= retry_deadline:
+                raise
+        else:
+            check_cancelled()
+            return
 
 
 def json_value(value):
@@ -33,7 +89,7 @@ def write_json(path, value):
         json.dump(value, out, ensure_ascii=False, indent=2, default=json_value, allow_nan=False)
 
 
-def run_capture(args, *, session_factory=CollectionSession):
+def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_factory=None):
     root = Path(__file__).resolve().parent
     frozen = getattr(sys, 'frozen', False)
     if frozen:
@@ -55,10 +111,14 @@ def run_capture(args, *, session_factory=CollectionSession):
     if any((dest / name).exists() for name in ('capture.jsonl', 'READY.json', 'summary.json',
                                              'maa-job.json', 'maa-callbacks.jsonl')):
         raise RuntimeError('capture evidence already exists; choose a fresh output directory')
+    platform = getattr(args, 'platform', 'mumu')
     metadata = {'head': head, 'stage': args.stage, 'frida_remote': args.frida_remote,
                 'adb': args.adb, 'serial': args.serial, 'started_at': time.time(),
                 'capture_seconds_after_baseline': args.capture_seconds,
                 'require_events': args.require_events}
+    if platform == 'native_pc':
+        metadata.update(platform=platform, native_game_root=args.native_game_root,
+                        frida_remote=None, event_observation=args.frida_remote is None)
     if args.maa_job:
         job = args.maa_job.read_bytes()
         metadata['maa_job_sha256'] = hashlib.sha256(job).hexdigest()
@@ -77,13 +137,60 @@ def run_capture(args, *, session_factory=CollectionSession):
             journal.write(json.dumps(record, ensure_ascii=False, default=json_value, allow_nan=False) + '\n')
             journal.flush()
 
-        session = session_factory(args.adb, args.serial, frida_remote=args.frida_remote, audit=audit)
+        session_options = dict(frida_remote=args.frida_remote, audit=audit)
+        regeneration = None
+        pc_runtime = None
+        if platform == 'native_pc':
+            from native_pc_collector import NativePcCollector
+            collector = NativePcCollector(args.native_game_root,
+                                          collect_actions=getattr(args, 'collect_native_actions', True))
+            session_options.update(collector=collector, frida_remote=args.frida_remote)
+            framework_root = getattr(args, 'arkframework_root', None)
+            if framework_root is not None:
+                from native_pc.arkframework_replay import RegenerationRecorder
+                regeneration = RegenerationRecorder(Path(framework_root) / 'battle_timeline.json',
+                                                     dest / 'arkframework')
+                metadata['arkframework_root'] = str(framework_root)
+            if native_pc_observer_factory is not None and args.frida_remote is None:
+                session_options['observer_factory'] = native_pc_observer_factory
+            elif args.frida_remote is None:
+                pc_runtime = _native_pc_frida_runtime(args.native_game_root, root / 'runtime')
+                session_options['observer_factory'] = pc_runtime.observer_factory
+        session = session_factory(args.adb, args.serial, **session_options)
         if isinstance(session, CollectionSession):
             session.history = BattleHistory(root / 'runtime' / 'history')
             session.enable_lifecycle()
+
+        def poll_replay(*, final=False):
+            if regeneration is not None:
+                regeneration.poll_reporting(time.monotonic(), audit, force=final)
+
         audit('metadata', metadata)
         try:
-            session.connect()
+            poll_replay()
+            bootstrap_started = False
+            if pc_runtime is not None:
+                try:
+                    pc_runtime.start()
+                    bootstrap_started = True
+                except Exception as exc:
+                    audit('native_pc_bootstrap_error', {'reason': str(exc)})
+                    if args.require_events:
+                        raise
+            if bootstrap_started:
+                print('WAITING_GAME 已准备 PC 事件采集，请启动游戏；已在运行时请先正常重启游戏。', flush=True)
+                try:
+                    _connect_pc_after_bootstrap(session, pc_runtime, timeout=args.wait_battle_seconds,
+                        cancelled=(lambda: args.stop_file.exists()) if args.stop_file else None)
+                except Exception as exc:
+                    if (args.require_events or isinstance(exc, InterruptedError)
+                            or not pc_runtime.is_failed):
+                        raise
+                    audit('native_pc_bootstrap_error', {'reason': str(exc)})
+                    session.connect()
+                audit('native_pc_bootstrap', pc_runtime.describe())
+            else:
+                session.connect()
             if isinstance(session, CollectionSession):
                 session.wait_for_game_init(wait_seconds=args.wait_battle_seconds,
                     cancelled=(lambda: args.stop_file.exists()) if args.stop_file else None)
@@ -103,6 +210,7 @@ def run_capture(args, *, session_factory=CollectionSession):
             while end is None or time.monotonic() < end:
                 if args.stop_file and args.stop_file.exists():
                     break
+                poll_replay()
                 try:
                     last_sample = session.read()
                     counts['samples'] += 1
@@ -125,13 +233,23 @@ def run_capture(args, *, session_factory=CollectionSession):
                 raise RuntimeError('capture contains no observed battle progression')
         except BaseException as exc:
             failure = f'{type(exc).__name__}: {exc}'
-            audit('failure', {'reason': failure})
+            failure_data = {'reason': failure}
+            if platform == 'native_pc':
+                failure_data['diagnostics'] = session.collector.diagnostics.as_dict()
+            audit('failure', failure_data)
         finally:
             try:
                 session.close()
             except Exception as exc:
                 failure = failure or f'cleanup failed: {exc}'
                 audit('cleanup_error', {'reason': str(exc)})
+            if pc_runtime is not None:
+                try:
+                    pc_runtime.close()
+                except Exception as exc:
+                    failure = failure or f'PC bootstrap cleanup failed: {exc}'
+                    audit('cleanup_error', {'reason': str(exc)})
+            poll_replay(final=True)
             final = session.capture.adapter.result() if session.capture is not None else None
             summary = {**metadata, **counts, 'ended_at': time.time(), 'error': failure,
                        'last_sample': last_sample, 'final_statistics': final}

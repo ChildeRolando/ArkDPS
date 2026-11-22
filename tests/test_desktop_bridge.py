@@ -16,7 +16,7 @@ from battle_history import BattleHistory, BattleRecord
 from damage_settlement import DamageSettlement
 from desktop_bridge import DesktopState, CollectionWorker, PROTOCOL_VERSION, empty_text, serve
 from layout_store import LayoutStore
-from panel_model import PanelConfig, Ranking, RateBasis
+from panel_model import Category, EventAvailability, PanelConfig, Ranking, RateBasis
 from stats_core import Statistics
 from test_battle_history import record
 from test_battle_share import exported_record
@@ -38,6 +38,94 @@ def test_effective_panel_with_known_native_damage_does_not_call_unknown_effectiv
     config = PanelConfig(effective_only=True)
     source = {'char_a': {'damage': 50, 'effective_damage': None, 'counter_snapshot_complete': True}}
     assert empty_text(config, source, True, {}) == '当前有效伤害尚无可靠数据'
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+@pytest.mark.parametrize('basis', [RateBasis.ENGAGEMENT, RateBasis.FULL_CYCLE])
+def test_unknown_rate_empty_state_does_not_call_known_cumulative_output_zero(tmp_path, category, basis):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(presence_seconds=None, presence_complete=False)
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=basis)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only', live=False))
+    assert sum(row[category.value] for row in statistics['rows'].values()) > 0
+    assert view['entries'] == [] and view['footer_rate'] is None
+    assert '已知为零' not in view['empty_text']
+    assert view['empty_text'] == (view['rate_reason'] if basis is RateBasis.ENGAGEMENT
+                                  else view['share_reason'])
+    if basis is RateBasis.ENGAGEMENT:
+        assert '逐次事件' in view['empty_text']
+    else:
+        assert '在场时间' in view['empty_text']
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+@pytest.mark.parametrize('basis', [RateBasis.RECENT_5S, RateBasis.FULL_CYCLE])
+def test_snapshot_rate_empty_state_preserves_certified_zero_without_events(tmp_path, category, basis):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(damage=0., healing=0., recent_damage=0., recent_healing=0.,
+                   presence_seconds=10., presence_complete=True)
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=basis)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert view['rate_available'] is False  # Event capability is irrelevant to these bases.
+    assert view['entries'] == [] and view['footer_rate'] == 0
+    assert view['footer_rate_complete'] is True
+    assert view['empty_text'] == '暂无输出（已知为零）'
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+def test_full_cycle_zero_without_observed_presence_is_unknown(tmp_path, category):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(damage=0., healing=0., presence_seconds=0., presence_complete=True)
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=RateBasis.FULL_CYCLE)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert view['entries'] == [] and view['footer_rate'] is None
+    assert '已知为零' not in view['empty_text']
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+def test_engagement_empty_state_preserves_verified_no_engagement(tmp_path, category):
+    statistics = Statistics('covered', 0, event_coverage=True)
+    statistics.register_source('a', 'a')
+    statistics.snapshot(0, {'a': {'damage': 100., 'healing': 50.}})
+    statistics.snapshot(3, {'a': {'damage': 100., 'healing': 50.}})
+    config = PanelConfig(category=category, ranking=Ranking.DPS, rate_basis=RateBasis.ENGAGEMENT)
+    view = DesktopState(tmp_path).view(config, statistics.result(), event=EventAvailability('recording'))
+    assert view['entries'] == [] and view['footer_rate'] == 0
+    assert view['footer_rate_complete'] is True
+    assert view['rates']['a'][category.value]['state'] == 'no_engagement'
+    assert view['rates']['a'][category.value]['text'] == '无接敌'
+    assert view['empty_text'] == '暂无输出（已知为零）'
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+@pytest.mark.parametrize('basis', [RateBasis.ENGAGEMENT, RateBasis.FULL_CYCLE])
+def test_total_ranking_keeps_cumulative_data_when_selected_rate_is_unknown(tmp_path, category, basis):
+    state = DesktopState(tmp_path)
+    statistics = sample()['statistics']
+    config = PanelConfig(category=category, ranking=Ranking.TOTAL, rate_basis=basis)
+    view = state.view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert sum(entry['value'] for entry in view['entries']) == sum(
+        row[category.value] for row in statistics['rows'].values())
+    assert view['footer_total_complete'] is True
+    assert view['footer_total'] > 0 and view['footer_rate'] is None
+
+
+@pytest.mark.parametrize('category', [Category.DAMAGE, Category.HEALING])
+def test_total_empty_state_keeps_certified_zero_with_missing_events(tmp_path, category):
+    statistics = sample()['statistics']
+    for row in statistics['rows'].values():
+        row.update(damage=0., healing=0.)
+    config = PanelConfig(category=category, ranking=Ranking.TOTAL, rate_basis=RateBasis.ENGAGEMENT)
+    view = DesktopState(tmp_path).view(config, statistics, event=EventAvailability('snapshot_only'))
+    assert view['entries'] == [] and view['footer_total'] == 0
+    assert view['footer_total_complete'] is True
+    assert view['empty_text'] == '暂无输出（已知为零）'
 
 
 def test_first_launch_and_default_model_ignores_legacy_projection(tmp_path):
@@ -1064,6 +1152,28 @@ def test_worker_preserves_final_audit_failure_after_collection_close_retry(tmp_p
                for error in worker.retired_errors)
 
 
+def test_worker_startup_setup_error_is_reported(tmp_path, monkeypatch):
+    import desktop_bridge
+
+    def failed_runtime():
+        raise OSError('battle runtime initialization failed')
+
+    monkeypatch.setattr(desktop_bridge, 'BattleRuntime', failed_runtime)
+    state = DesktopState(tmp_path/'state')
+    cmd(state, 'connection_apply', config={'platform': 'native_pc', 'native_game_root': 'game'}, events=False)
+    state.expect_connection_request(state.connection, 1)
+    worker = CollectionWorker(state)
+    worker.run()
+    kind, error = worker.events.get_nowait()
+    assert (kind, error) == ('worker_error', 'battle runtime initialization failed')
+    state.accept(kind, error)
+    assert state.snapshot()['status'] == 'disconnected'
+    assert state.error == error and not state.scanning
+    state.accept('sample', sample())
+    assert state.last is None  # An old source still cannot repopulate the view.
+    assert worker.session is None
+
+
 def test_unwritable_capture_directory_does_not_stop_live_worker(tmp_path, monkeypatch):
     import desktop_bridge
     from types import SimpleNamespace
@@ -1104,7 +1214,7 @@ def test_unwritable_capture_directory_does_not_stop_live_worker(tmp_path, monkey
     events = dict(worker.events.queue)
     assert '采集日志暂不可写' in events['warning']
     assert events['sample']['frame'] == 1
-    assert 'error' not in events
+    assert 'error' not in events and 'worker_error' not in events
     assert worker.session is None
 
 
@@ -1591,6 +1701,508 @@ def test_rescan_retains_effective_cli_target_until_explicit_settings_apply(tmp_p
     assert state.connection != override
 
 
+def test_native_connection_apply_keeps_mumu_preferences_and_replaces_cli_source(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    override = ConnectionConfig(platform='mumu', serial='cli-target')
+    class Worker:
+        events = queue.Queue()
+        effective = (override, False)
+        requests = []
+        def request(self, config, enabled):
+            self.effective = (config, enabled)
+            self.requests.append(self.effective)
+        def close(self):
+            pass
+    worker = Worker()
+    native = dict(version=1, platform='native_pc', native_game_root='game',
+                  adb_path='saved-adb', serial=None, auto_detect=False)
+    commands = [dict(version=1, op='hello'),
+                dict(version=1, op='connection_apply', config=native, events=True),
+                dict(version=1, op='rescan'), dict(version=1, op='quit')]
+    output = io.StringIO()
+    serve(io.StringIO(''.join(json.dumps(c)+'\n' for c in commands)), output, state, worker)
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert all(reply['ok'] for reply in replies)
+    config = ConnectionConfig.from_dict(native)
+    assert worker.requests == [(config, True), (config, True)]
+    snapshot = replies[1]['state']
+    assert snapshot['connection_config'] == native
+    assert snapshot['effective_connection_config'] == native
+    assert DesktopState(tmp_path).connection == config
+    assert DesktopState(tmp_path).layout.event_observation is True
+
+
+def test_cross_platform_apply_clears_live_projection_and_waits_for_exact_source_ack(tmp_path, monkeypatch):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    old = dict(sample(), battle_id='old-mumu-battle')
+    state.accept('sample', old)
+    state.accept('diagnostic', {'selected_serial': 'old-serial'})
+    state.accept('observer', ('ready', None))
+    state.accept('lifecycle', 'playing')
+    panels = state.layout.to_dict()['panels']
+    native = ConnectionConfig(platform='native_pc', native_game_root='game')
+    cmd(state, 'connection_apply', config=native.to_dict(), events=True)
+    state.expect_connection_request(native, 2)
+    cleared = state.snapshot()
+    assert cleared['status'] == 'locating' and cleared['battle_id'] is None
+    assert state.last is state.diagnostic is state.observer_status is state.lifecycle is None
+    assert state.live_analysis is state.boss_live_analysis is None
+    assert cleared['layout']['panels'] == panels
+    assert all(not panel['entries'] for panel in cleared['panels'])
+
+    notifications = []
+    monkeypatch.setattr(state, 'refresh_history', lambda: notifications.append('history'))
+    state.accept('connection_source', {'revision': 1, 'platform': 'mumu'})
+    for kind, value in (
+        ('sample', old), ('diagnostic', {'selected_serial': 'stale'}),
+        ('observer', ('ready', None)), ('lifecycle', 'playing'),
+        ('connection', 'old source connected'), ('scanning', False), ('error', 'old error'),
+    ):
+        state.accept(kind, value)
+    state.accept('history', None)
+    assert notifications == ['history']
+    assert state.snapshot()['battle_id'] is None and state.snapshot()['status'] == 'locating'
+    assert state.error == '' and state.diagnostic is None
+
+    state.accept('connection_source', {'revision': 2, 'platform': 'native_pc'})
+    state.accept('scanning', False)
+    state.accept('sample', dict(sample(), battle_id='new-pc-battle'))
+    assert state.snapshot()['battle_id'] == 'new-pc-battle'
+
+
+def test_a_b_a_apply_cannot_unlock_on_an_old_marker_for_the_same_platform(tmp_path):
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_id='old-a-battle'))
+    native = ConnectionConfig(platform='native_pc', native_game_root='game')
+    mumu = ConnectionConfig()
+    cmd(state, 'connection_apply', config=native.to_dict(), events=False)
+    state.expect_connection_request(native, 2)
+    cmd(state, 'connection_apply', config=mumu.to_dict(), events=False)
+    state.expect_connection_request(mumu, 3)
+    for revision, platform in ((1, 'mumu'), (2, 'native_pc')):
+        state.accept('connection_source', {'revision': revision, 'platform': platform})
+        state.accept('sample', dict(sample(), battle_id=f'obsolete-{revision}'))
+        assert state.last is None and state.snapshot()['battle_id'] is None
+    state.accept('connection_source', {'revision': 3, 'platform': 'mumu'})
+    state.accept('scanning', False)
+    state.accept('sample', dict(sample(), battle_id='new-a-battle'))
+    assert state.snapshot()['battle_id'] == 'new-a-battle'
+
+
+def test_rescan_while_switching_updates_source_ack_without_stranding_the_view(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_id='old-mumu'))
+    class Worker:
+        def __init__(self):
+            self.events = queue.Queue()
+            self.effective = (state.connection, False)
+            self.revision = 0
+        def request(self, config, enabled):
+            self.effective = config, enabled
+            self.revision += 1
+            return self.revision
+        def close(self):
+            pass
+    worker = Worker()
+    messages = [dict(version=1, op='hello'),
+                dict(version=1, op='connection_apply', events=False,
+                     config={'platform': 'native_pc', 'native_game_root': 'game'}),
+                dict(version=1, op='rescan'), dict(version=1, op='quit')]
+    serve(io.StringIO(''.join(json.dumps(message)+'\n' for message in messages)),
+          io.StringIO(), state, worker)
+    assert worker.revision == 2
+    state.accept('connection_source', {'revision': 1, 'platform': 'native_pc'})
+    state.accept('sample', dict(sample(), battle_id='superseded-pc'))
+    assert state.last is None
+    state.accept('connection_source', {'revision': 2, 'platform': 'native_pc'})
+    state.accept('scanning', False)
+    state.accept('sample', dict(sample(), battle_id='current-pc'))
+    assert state.snapshot()['battle_id'] == 'current-pc'
+
+
+def test_offline_platform_apply_clears_projection_without_waiting_for_a_worker_marker(tmp_path):
+    state = DesktopState(tmp_path)
+    state.accept('sample', dict(sample(), battle_id='offline-old-mumu'))
+    messages = [dict(version=1, op='hello'),
+                dict(version=1, op='connection_apply', events=False,
+                     config={'platform': 'native_pc', 'native_game_root': 'game'})]
+    output = io.StringIO()
+    serve(io.StringIO(''.join(json.dumps(message)+'\n' for message in messages)), output, state)
+    reply = json.loads(output.getvalue().splitlines()[-1])
+    assert reply['ok'] and reply['state']['battle_id'] is None
+    assert reply['state']['status'] == 'waiting'
+    assert not state.scanning and not state._awaiting_source
+
+
+def test_same_platform_apply_preserves_existing_reconnect_projection(tmp_path):
+    state = DesktopState(tmp_path)
+    old = dict(sample(), battle_id='same-mumu-battle')
+    state.accept('sample', old)
+    state.accept('observer', ('ready', None))
+    cmd(state, 'connection_apply', config=state.connection.to_dict(), events=False)
+    state.expect_connection_request(state.connection, 2)
+    assert state.last is old and state.observer_status == 'ready'
+    state.accept('sample', dict(sample(), battle_id='same-mumu-new-frame'))
+    assert state.snapshot()['battle_id'] == 'same-mumu-new-frame'
+
+
+def test_native_detect_is_configuration_only_and_does_not_probe_adb(tmp_path, monkeypatch):
+    import desktop_bridge
+    from connection import ConnectionConfig
+    state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
+    def forbidden(*args, **kwargs):
+        pytest.fail('native detect must not run emulator setup')
+    monkeypatch.setattr(desktop_bridge, 'detect_instances', forbidden)
+    output = io.StringIO()
+    serve(io.StringIO('{"version":1,"op":"hello"}\n{"version":1,"op":"detect"}\n'),
+          output, state)
+    reply = json.loads(output.getvalue().splitlines()[-1])
+    assert reply['ok'] and reply['result']['code'] == 'native_root_required'
+    assert reply['result']['platform'] == 'native_pc'
+
+
+@pytest.mark.parametrize('denied', [False, True])
+def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed_status(
+        tmp_path, monkeypatch, denied):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from collector import SampleUnavailable
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus, VersionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state)
+    calls = []
+    diagnostic = ConnectionDiagnostics(
+        status=DetectionStatus.ERROR if denied else DetectionStatus.READY_UNIQUE,
+        platform='native_pc', native_game_root='game', connection_ok=not denied,
+        version_status=VersionStatus.UNKNOWN if denied else VersionStatus.COMPATIBLE,
+        version_actual='pc-build', message='PC read-only status',
+        code='native_permission_denied' if denied else None,
+        details={'win32_error': 5} if denied else {})
+    class NativeCollector:
+        diagnostics = diagnostic
+        def __init__(self, root, *, collect_actions):
+            calls.append(('collector', root))
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, adb, serial, *, collector, frida_remote, **kwargs):
+            assert adb is serial is None and frida_remote == ''
+            self.collector = collector
+            calls.append(('session',))
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+            runtime.sessions.state = 'playing'
+        def connect(self):
+            if denied:
+                worker.stop.set()
+                raise SampleUnavailable('permission denied')
+        def read(self):
+            worker.stop.set()
+            return {'state': 2, 'battle_id': 'pc-battle', 'frame': 1}
+        def close(self):
+            calls.append(('close',))
+    def forbidden(*args, **kwargs):
+        pytest.fail('native worker must not invoke ADB or Frida provisioning')
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', forbidden)
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', forbidden)
+    monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', forbidden)
+    worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), False)
+    worker.run()
+    events = list(worker.events.queue)
+    assert calls == [('collector', 'game'), ('session',), ('close',)]
+    assert next(value for kind, value in events if kind == 'diagnostic') == diagnostic.as_dict()
+    if denied:
+        assert any(kind == 'error' for kind, _ in events)
+        assert not any(kind == 'sample' for kind, _ in events)
+    else:
+        assert ('observer', ('snapshot_only', None)) in events
+        state.effective_connection = worker.effective[0]
+        for kind, value in events:
+            state.accept(kind, value)
+        assert state.snapshot()['event_text'] == '官服 PC 累计快照 · 逐事件不可用'
+
+
+@pytest.mark.parametrize('first_platform', ['mumu', 'native_pc'])
+def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
+        tmp_path, monkeypatch, first_platform):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state, native_pc_observer_factory=lambda *_args: None)
+    calls, sessions = [], []
+    configs = {
+        'mumu': ConnectionConfig(adb_path='adb', serial='mumu-serial', auto_detect=False),
+        'native_pc': ConnectionConfig(platform='native_pc', native_game_root='game'),
+    }
+    def diagnostic(platform):
+        return ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform=platform,
+                                     selected_serial='mumu-serial', version_actual='build')
+    class NativeCollector:
+        diagnostics = diagnostic('native_pc')
+        def __init__(self, root, *, collect_actions):
+            calls.append(('native_collector', root))
+    class Session:
+        cleanup_errors = {}
+        event_status, event_error = 'ready', None
+        def __init__(self, adb, serial, *, frida_remote, collector=None, **kwargs):
+            self.platform = 'native_pc' if collector is not None else 'mumu'
+            self.collector = collector or SimpleNamespace(diagnostics=diagnostic('mumu'))
+            self.observer = (SimpleNamespace(status=desktop_bridge.ObserverStatus.READY, error=None)
+                             if self.platform == 'mumu' else None)
+            assert (adb, serial, frida_remote) == ((None, None, None) if collector is not None
+                                                  else ('adb', 'mumu-serial', worker.endpoint))
+            calls.append(('session', self.platform))
+            sessions.append(self)
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+            runtime.feed.current_lifecycle = {'battle': None, 'state': None, 'target': ''}
+        def connect(self):
+            pass
+        def read(self):
+            if len(sessions) == 1:
+                other = 'native_pc' if self.platform == 'mumu' else 'mumu'
+                worker.request(configs[other], True)
+            else:
+                worker.stop.set()
+        def close(self):
+            calls.append(('closed', self.platform))
+    def resolve(config):
+        calls.append(('adb_resolve', config.platform))
+        assert config.platform == 'mumu'
+        return SimpleNamespace(adb_path='adb', serial='mumu-serial', diagnostics=diagnostic('mumu'))
+    def endpoint(adb, serial, **kwargs):
+        assert (adb, serial) == ('adb', 'mumu-serial')
+        calls.append(('frida', 'mumu'))
+        return True, 'ready'
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', resolve)
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', endpoint)
+    monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', endpoint)
+    monkeypatch.setattr(worker.stop, 'wait', lambda delay: None)
+    worker.request(configs[first_platform], True)
+    worker.run()
+    other = 'native_pc' if first_platform == 'mumu' else 'mumu'
+    assert calls.index(('closed', first_platform)) < calls.index(('session', other))
+    assert ('closed', other) == calls[-1]
+    assert calls.count(('adb_resolve', 'mumu')) == calls.count(('frida', 'mumu')) == 1
+    assert [value for kind, value in worker.events.queue if kind == 'battle_waiting'] == [True, True]
+    assert not any(kind == 'error' for kind, _ in worker.events.queue)
+
+
+@pytest.mark.parametrize('code,explicit_retry,expected_attempts', [
+    ('native_permission_denied', False, 1),
+    ('native_root_required', False, 1),
+    ('native_unsupported_build', False, 1),
+    ('native_permission_denied', True, 2),
+    ('native_root_required', True, 2),
+    ('native_unsupported_build', True, 2),
+    ('native_unavailable', False, 2),
+])
+def test_native_permanent_connect_failures_wait_for_user_but_absence_recovers(
+        tmp_path, monkeypatch, code, explicit_retry, expected_attempts):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from collector import SampleUnavailable
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state)
+    config = ConnectionConfig(platform='native_pc', native_game_root='game')
+    clock, attempts, explicit = [0.0], [], []
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    class NativeCollector:
+        def __init__(self, root, *, collect_actions):
+            attempts.append(clock[0])
+            failed = len(attempts) == 1
+            self.diagnostics = ConnectionDiagnostics(
+                status=DetectionStatus.ERROR if failed else DetectionStatus.READY_UNIQUE,
+                platform='native_pc', code=code if failed else None)
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, _adb, _serial, *, collector, **kwargs):
+            self.collector = collector
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            if self.collector.diagnostics.code:
+                raise SampleUnavailable('typed native failure')
+        def read(self):
+            worker.stop.set()
+        def close(self):
+            pass
+    def wait(delay):
+        clock[0] += delay
+        if explicit_retry and not explicit and clock[0] >= 6:
+            explicit.append(True)
+            worker.request(config, False)  # Same path used by explicit Rescan.
+        if clock[0] >= 12:
+            worker.stop.set()
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    worker.request(config, False)
+    worker.run()
+    assert len(attempts) == expected_attempts
+    if len(attempts) == 2:
+        assert attempts[1] >= (6 if explicit_retry else 5)
+    assert worker.session is None
+
+
+def test_native_process_change_releases_old_handle_and_reconnects(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+    from collector import ProcessChanged
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    worker = CollectionWorker(DesktopState(tmp_path / 'state'))
+    calls = []
+    class NativeCollector:
+        diagnostics = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform='native_pc')
+        def __init__(self, root, *, collect_actions):
+            calls.append('open')
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, _adb, _serial, *, collector, **kwargs):
+            self.collector = collector
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            pass
+        def read(self):
+            if calls.count('open') == 1:
+                raise ProcessChanged('process creation identity changed')
+            worker.stop.set()
+        def close(self):
+            calls.append('close')
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(worker.stop, 'wait', lambda delay: None)
+    worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), False)
+    worker.run()
+    assert calls == ['open', 'close', 'open', 'close']
+
+
+@pytest.mark.parametrize('first_platform', ['native_pc', 'mumu'])
+@pytest.mark.parametrize('apply_timing', ['read_failure', 'connect_failure', 'after_retry_queued'])
+def test_new_source_apply_wins_over_old_session_recovery(
+        tmp_path, monkeypatch, first_platform, apply_timing):
+    from types import SimpleNamespace
+    import threading
+    import desktop_bridge
+    from collector import ProcessChanged, SampleUnavailable
+    from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
+    monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
+    state = DesktopState(tmp_path / 'state')
+    worker = CollectionWorker(state)
+    configs = {
+        'native_pc': ConnectionConfig(platform='native_pc', native_game_root='game'),
+        'mumu': ConnectionConfig(adb_path='fake-adb', serial='fake-serial', auto_detect=False),
+    }
+    second_platform = 'mumu' if first_platform == 'native_pc' else 'native_pc'
+    clock, sessions, closed, applied = [0.0], [], [], []
+    monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def apply_new_source():
+        # This is the GUI/stdio thread's request while a prior source is busy.
+        thread = threading.Thread(target=worker.request, args=(configs[second_platform], False))
+        thread.start()
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+        applied.append(True)
+
+    def diagnostic(platform):
+        return ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE,
+                                     platform=platform, selected_serial='fake-serial')
+
+    class NativeCollector:
+        diagnostics = diagnostic('native_pc')
+        def __init__(self, root, *, collect_actions):
+            pass
+
+    class Session:
+        cleanup_errors = {}
+        def __init__(self, adb, serial, *, collector=None, **kwargs):
+            self.platform = 'native_pc' if collector is not None else 'mumu'
+            self.collector = collector or SimpleNamespace(diagnostics=diagnostic('mumu'))
+            self.reads = 0
+            sessions.append(self)
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+        def connect(self):
+            if len(sessions) == 1 and apply_timing == 'connect_failure':
+                clock[0] += 6  # Make the ordinary timed recovery due.
+                apply_new_source()
+                raise SampleUnavailable('old source attach failed after new source selected')
+        def read(self):
+            self.reads += 1
+            if len(sessions) == 1:
+                if apply_timing == 'read_failure':
+                    apply_new_source()
+                raise ProcessChanged('old source process changed')
+            # Allow one extra loop: the unfixed worker consumes its stale retry
+            # here and reopens A after B. The fixed worker stays on B.
+            if len(sessions) >= 3 or self.reads >= 2:
+                worker.stop.set()
+        def close(self):
+            closed.append(self.platform)
+
+    def wait(delay):
+        clock[0] += delay
+        if apply_timing == 'after_retry_queued' and not applied:
+            apply_new_source()
+        if clock[0] > 20:
+            worker.stop.set()
+
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=NativeCollector))
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda config: SimpleNamespace(
+        adb_path='fake-adb', serial='fake-serial', diagnostics=diagnostic('mumu')))
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    worker.request(configs[first_platform], False)
+    worker.run()
+    assert applied == [True]
+    assert [session.platform for session in sessions] == [first_platform, second_platform]
+    assert worker.effective == (configs[second_platform], False)
+    assert closed == [first_platform, second_platform]
+    assert worker.requests.empty()
+
+
+@pytest.mark.parametrize('saved_platform,args,expected', [
+    ('mumu', ['--native-game-root', 'override-game'], 'native_pc'),
+    ('mumu', ['--arkframework-root', 'framework root'], 'native_pc'),
+    ('native_pc', [], 'native_pc'),
+    ('native_pc', ['--platform', 'mumu'], 'mumu'),
+    ('native_pc', ['--platform', 'mumu', '--native-game-root', 'override-game'], 'mumu'),
+])
+def test_worker_cli_source_overrides_are_effective_only(tmp_path, monkeypatch, saved_platform, args, expected):
+    import desktop_bridge
+    from connection import ConnectionConfig, ConnectionConfigStore
+    saved = ConnectionConfig(adb_path='saved-adb', serial='saved-serial', auto_detect=False,
+                             platform=saved_platform, native_game_root='saved-game')
+    ConnectionConfigStore(tmp_path / 'connection.json').save(saved)
+    captured = []
+    monkeypatch.setattr(sys, 'argv', ['desktop_bridge.py', '--offline', '--state-dir', str(tmp_path), *args])
+    monkeypatch.setattr(desktop_bridge, 'serve', lambda _input, _output, state, worker:
+                        captured.append((state.connection, state.effective_connection, worker)))
+    with monkeypatch.context() as context:
+        context.setattr(sys, 'stdout', io.StringIO())
+        desktop_bridge.main()
+    assert captured[0][0] == saved and captured[0][2] is None
+    effective = captured[0][1]
+    assert effective.platform == expected and effective.adb_path == 'saved-adb'
+    assert effective.native_game_root == ('override-game' if '--native-game-root' in args else 'saved-game')
+    assert ConnectionConfigStore(tmp_path / 'connection.json').load().config == saved
+
+
 @pytest.mark.parametrize('flag,args,needle', [
     ('--legacy-tk', [], '--legacy-tk'),
     ('--self-test', ['out'], 'verify_wpf'),
@@ -1748,6 +2360,30 @@ def test_history_view_explains_missing_event_coverage_without_backfill(tmp_path)
     assert all(entry['rate'] is None for entry in view['entries'])
     assert all(entry['rate_text'] == '—' for entry in view['entries'])
     assert all(entry['rate_state'] != 'no_engagement' for entry in view['entries'])
+
+
+def test_native_engagement_explains_snapshot_only_without_an_observer_action(tmp_path):
+    from connection import ConnectionConfig
+
+    archived = record().to_dict()
+    archived['event_status'] = 'unavailable'
+    archived['metadata'].update(platform='native_pc', source_build='win-x64:verified')
+    BattleHistory(tmp_path / 'history').save(BattleRecord.from_dict(archived))
+    state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc', native_game_root='game')
+    state.accept('sample', dict(sample(), event_status='unavailable'))
+    cmd(state, 'panel_update', config=dict(state.layout.panels[0].to_dict(), rate_basis='engagement'))
+    state.history_config = PanelConfig.from_dict(dict(panel_id='history', rate_basis='engagement'))
+    live = state.snapshot()['panels'][0]
+
+    # The archived explanation follows the record's source after a platform switch.
+    state.effective_connection = ConnectionConfig(platform='mumu')
+    selected = state.snapshot()['history_selected']
+    assert selected['event_status'] == 'unavailable'
+    for view in (live, selected['view']):
+        assert '官服 PC' in view['rate_reason'] and '逐次事件' in view['rate_reason']
+        assert not view['rate_available'] and not view['rate_action'] and not view['rate_action_label']
+        assert view['entries'] and all(entry['rate'] is None for entry in view['entries'])
 
 
 def test_finished_history_record_publishes_team_shares(tmp_path):

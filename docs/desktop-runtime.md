@@ -40,6 +40,16 @@ WPF 在后台按字节写入命令，并用独立线程读取回复。ADB 子进
 
 stdout 专用于协议；worker 将普通日志重定向到 stderr。WPF 保存 stderr 至 `runtime/wpf-collector-*.log`（发布包位于 `collector/runtime`），原始采样审计仍在 `runtime/captures`。窗口生命周期、主题及历史选择只改变展示，不改变采集口径。历史页是拉取式缓存：每次进入页面发送 `history_refresh`；采集会话每成功提交一条新战绩就推送一次 `history` 事件（仅 `result.written` 为真时），`serve` 在下一条 `snapshot` 前重新 `list_recent()`，所以打开的历史页也会自动出现新局。自动刷新保留当前选中副本、详情与筛选条件，不按轮询扫描目录；「刷新」按钮只作手动兜底。一次性 CLI 连接覆盖在本次重定位中保留；只有显式应用设置才改长期偏好。`connection_apply` 先保存候选布局，再保存连接配置；若连接配置写入失败，会尝试恢复原布局并报告回滚失败。两份文件分别原子替换，但不是跨进程崩溃原子事务。
 
+官服 PC 复用同一 worker、采集会话和战局归档。连接配置 v1 增加 `platform`（缺省 `mumu`）和 `native_game_root`。`connection_config` 保留已保存设置，`effective_connection_config` 表示本次启动实际选择。`--platform` 和 `--native-game-root` 覆盖本次启动，显式 Apply 才写入设置。官服 PC 通过 Windows 读权限、三个文件哈希和模块字节校验后发布同帧累计与编队。启用观察时由 `NativePcFridaRuntime` 先监听新进程并载入官方 Gadget，经本机认证连接独立 PC 探针。连接仍等待类及静态数据初始化，标记和批次必须通过同战局、同帧验证。`--no-events` 关闭事件及启动监听。2026-11-22 已完成 CE-5 逐次结算对账及普通 worker 的探针重连验证。[实机验证状态](event-capture.md#arkdps-本机-frida-探针)
+
+PC 启动运行时由 CLI 或 `CollectionWorker` 持有，跨越 `CollectionSession` 的连接重试；观察者只持有自己的脚本和会话。独立持有者隔离了组件的进程生命周期与脚本重连：将启动监听放进采样器会等待 `GameAssembly` 后才开始，将它放进观察者则要等采集器连接完成，两者都会错过已实测的早期加载窗口。初始化阶段不访问快照，直到启动组件就绪或明确失败。可选事件失败保留快照能力，`--require-events` 在就绪前失败。关闭时先释放脚本与会话，再停止并 join 启动监听；清理异常保留所有权及历史失败。Gadget 已载入时随游戏保留，凭据和租约留在可写 runtime，重连核对 PID、创建时间、构建、模块路径、组件及配置摘要。
+
+新战绩的 `metadata.platform` 与 `metadata.source_build` 来自该局的采集器。官服 PC 保存构建指纹。ADB 采集在 Android 客户端版本校验通过后保存来源和客户端版本，历史显示「Android（ADB）」。切换连接不会改写历史，缺少来源的旧战绩会显示「来源未记录」。
+
+连接请求带版本号。自动重连仅重试仍有效的选择，新的显式应用会使排队中的旧请求失效。切换平台时清除上一平台的实时战况，待采集线程确认最新请求后才接收实时数据。历史归档通知照常处理。设置页的 MuMu 实例检测与发出时的平台和 ADB 路径绑定。平台、ADB 路径或已应用的连接设置变化后，旧检测结果失效。
+
+HUD 在定位、重连、数据过期、战局冻结或等待新局时共享主窗的状态提示。保留旧战况时提示「上次快照」。实时统计恢复后收起提示条，正常排行高度与点击穿透按原设置运行。
+
 桌面采集日志达到 64 MiB 后从下一条完整记录开始新分段。启动和写入需要空间时，按最后写入时间从旧到新清理自动生成的 `wpf-*.jsonl`，将日志总量限制为 512 MiB（含旧版单文件和当前分段）。占用中的文件会跳过。无法腾出空间或无法写入时，桌面 worker 发出日志告警并稍后重试，采集和战绩归档照常执行。手动采集的证据包和 `runtime/history` 使用独立的路径。
 
 `python capture_battles.py --replay <任一分段>` 按顺序读取同一次运行的分段。文件链完整时由原有对账器复算。分段缺失时输出 `coverage: retained_only` 和仍保留的最新发布统计，供诊断使用。每段的首条敌人状态增量都保存可独立解码的前缀。
@@ -59,11 +69,11 @@ python tools/package_windows.py --output runtime/packages
 - self-contained .NET/WPF 程序；
 - 固定 CPython 3.12.10 embeddable x64 运行时及其许可；
 - 同一次构建的 Python collector 源码、采集必需 vendor 子集、离线头像；
-- 默认包含固定的 Frida 17.26.1 Windows abi3 客户端 wheel、Android x86_64 服务端和各自的许可证。启用观察者时，worker 在通过游戏版本和初始化检查后为选中的 MuMu 实例准备并启动服务。`--without-events` 生成不含这两项依赖的累计快照版。ADB 来自用户安装的模拟器。
+- 标准事件版包含固定版本的 Windows 客户端、Windows x64 观察者组件、MuMu 12 的 Android x86_64 观察者服务及对应许可。选择 MuMu 并启用观察者后，程序为该实例准备服务。模拟器内 Root 和 ADB 由用户配置。构建选项 `--without-events` 生成累计快照版。
 
 Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新的隔离目录；ZIP 拒绝路径穿越/符号链接/超大展开。Python `._pth` 仅白名单包内目录，不读系统 Python、用户 site-packages 或 `PYTHONPATH`。没有全局 pip install。
 
-`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本。支持应用内更新的标准便携版将校验完成的完整程序保存于 `.arkdps-update/versions/`。用户确认重启后，旧版先退出采集器并保存设置，原启动入口切换到新版 WPF 及与它匹配的 worker。两个版本共用原启动目录的 `collector/runtime/`。首次从旧版迁移时可通过手动解压并复制该目录保留设置和战绩。便携包需要解压到可写目录。
+`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本。支持应用内更新的标准便携版将校验完成的完整程序保存于 `.arkdps-update/versions/`。用户确认重启后，旧版先退出采集器并保存设置，原启动入口切换到新版 WPF 及与它匹配的 worker。两个版本共用原启动目录的 `collector/runtime/`。首次从旧版迁移时可通过手动解压并复制该目录保留设置和战绩。便携包需要解压到可写目录。新版桌面入口要求 Windows 管理员权限。尚未要求管理员权限的旧根启动器不能可靠启动新版，本次必须完整 ZIP 迁移一次并使用新目录入口；单次管理员运行旧版完成更新不足以修复后续启动。迁移时，退出旧版后将现有 `collector/runtime/` 整目录复制到已解压的新版中。
 
 ## 可复核验收
 

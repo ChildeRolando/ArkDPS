@@ -21,6 +21,7 @@ from tools.package_windows import (
     FRIDA_SERVER_LICENSE_NAME, FRIDA_SERVER_LICENSE_SHA256, FRIDA_SERVER_PATH,
     FRIDA_SERVER_SHA256, FRIDA_SERVER_URL, PACKAGE_ROOT, UPDATE_PROTOCOL, archive_name, digest,
 )
+from windows_manifest import require_admin_test_host, verify_executable_manifest
 
 
 def main():
@@ -28,6 +29,7 @@ def main():
     parser.add_argument('archive',type=Path)
     parser.add_argument('--output',type=Path,default=ROOT/'runtime'/'package-validation')
     args=parser.parse_args()
+    require_admin_test_host()
     output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
     install=Path(tempfile.mkdtemp(prefix='clean-install-',dir=output))
     with zipfile.ZipFile(args.archive) as archive:
@@ -66,6 +68,7 @@ def main():
                      DOTNET_MULTILEVEL_LOOKUP='0',ARKDPS_GIT=shutil.which('git'),
                      PATH=str(Path(os.environ['WINDIR'])/'System32'))
     executable = bundle/'ArkDPS.Desktop.exe'
+    verify_executable_manifest(executable)
     worker = bundle/'collector/desktop_bridge.py'
     original = worker.read_bytes()
     rejection = output/'wrong-worker'

@@ -6,12 +6,218 @@ from types import SimpleNamespace
 
 import pytest
 
+from battle_history import BattleHistory
+from battle_lifecycle import BattleRuntime
 from collection_session import CollectionSession
 from enemy_telemetry import EnemyTelemetry
 from event_capture import CaptureRetry
 from event_observer import ObserverReadRetry
 from test_collection_session import Collector, LiveObserver
-from test_event_capture import event
+from test_event_capture import Collector as SnapshotFixture, event
+
+
+def native_connection():
+    """Use an atomic collector and a serialized observer with no target access."""
+    snapshot = SnapshotFixture()
+    snapshot.damage = 0
+    snapshot.session = '10:1234:opaque-battle'
+    process = SimpleNamespace(pid=10, process_instance=(10, 1234))
+    state = SimpleNamespace(active=True, battle_state=2, healing=0)
+    events = SimpleNamespace(queue=[], claims={}, terminal={})
+    calls = []
+    source_build = 'win-x64:fixture-build'
+    binding = dict(native_session=snapshot.session, source_build=source_build)
+    commit = []
+    captured = None
+
+    def read_lifecycle():
+        nonlocal captured
+        calls.append('lifecycle')
+        metadata = dict(platform='native_pc', source_build=source_build, evidence='fixture',
+                        outcome='victory' if state.battle_state == 3 else None)
+        battle = ('opaque-battle',) if state.active else None
+        life = dict(battle=battle, state=state.battle_state, ready=True, transiting=False,
+                    source='', target='', metadata=metadata)
+        sample = dict(snapshot.read(), battle_identity=battle, state=state.battle_state)
+        sample['rows'][0]['healing'] = state.healing
+        captured = life, sample, snapshot.read_roster()
+        return life
+
+    def guarded_pair(life):
+        calls.append('pair')
+        assert captured[0] is life
+        return captured[1:]
+
+    def mark():
+        calls.append('mark')
+        latest = events.queue[-1]['sequence'] if events.queue else 0
+        value = dict(binding, sequence=latest, epoch=latest, active=0,
+                     frame=snapshot.frame, game_time=snapshot.game_time)
+        value.update(events.claims.get(calls.count('mark'), {}))
+        return value
+
+    def read_through(sequence):
+        calls.append('batch')
+        return dict(binding, events=[e for e in events.queue if e['sequence'] <= sequence],
+                    damage_unknown=False, engagement_unknown=False, skill_unknown=False,
+                    shield_unknown=False, mitigation_ready=True, mitigation_unknown=False) | events.claims.get('batch', {})
+
+    collector = SimpleNamespace(process=process, read_lifecycle=read_lifecycle,
+                                read_guarded_pair=guarded_pair)
+    observer = SimpleNamespace(mark=mark, read_through=read_through, commit_events=commit.append,
+                               read_terminal_mark=lambda: {'terminal_boundary': mark() | events.terminal})
+    return BattleRuntime(), collector, observer, snapshot, state, events, calls, commit
+
+
+def test_native_guarded_sample_brackets_and_consumes_all_event_families_once(tmp_path):
+    runtime, collector, observer, snapshot, state, events, calls, commits = native_connection()
+    collector.diagnostics = SimpleNamespace(platform='native_pc', connection_ok=True)
+    collector.connect = lambda **_: None
+    collector.locate_lifecycle = lambda: None
+    collector.close = lambda: None
+    observer.start = observer.stop = lambda: None
+    history = BattleHistory(tmp_path)
+    session = CollectionSession(None, None, collector=collector, frida_remote=None,
+                                observer_factory=lambda *_: observer, history=history)
+    session.enable_lifecycle(runtime)
+    session.connect()
+    try:
+        first = session.read()
+        assert calls == ['mark', 'lifecycle', 'pair', 'mark', 'batch']
+        assert first['event_status'] == 'recording'
+        snapshot.frame, snapshot.game_time, snapshot.damage, state.healing = 2, 1, 20, 6
+        events.queue = [
+            dict(event(1, 2, 1, 1), kind='skill_start', skill_key='skill'),
+            dict(event(2, 2, 1, 20), target='enemy', target_type=0, damage_type=1,
+                 hp_before=100, hp_after=80, real_delta=-20, killed=False, shield_absorbed=0),
+            dict(event(3, 2, 1, 6), kind='healing'),
+            dict(event(4, 2, 1, 3), kind='shield_absorbed'),
+        ]
+        session.read()
+        snapshot.frame, snapshot.game_time, state.battle_state = 3, 2, 3
+        events.queue.append(dict(event(5, 3, 2, 1), kind='skill_end', skill_key='skill'))
+        assert session.read()['event_status'] == 'finished'
+        assert commits == [0, 4, 5]
+        state.active = False
+        with pytest.raises(CaptureRetry, match='battle_absent'):
+            session.read()
+        with pytest.raises(CaptureRetry, match='battle_absent'):
+            session.read()
+        archive, = history.list_recent().records
+        assert archive.event_status == 'finished'
+        assert archive.battle_id == first['battle_id']
+        row = archive.statistics['rows']['char_a']
+        assert row['damage'] == row['observed_damage'] == row['skill_damage'] == 20
+        assert row['effective_damage'] == 20
+        assert row['healing'] == row['observed_healing'] == 6
+        assert row['shield_absorbed'] == 3
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize('step', [1, 2, 'batch'])
+@pytest.mark.parametrize('key', ['source_build', 'native_session'])
+def test_native_observer_rejects_mismatched_marks_or_batches_without_losing_counters(step, key):
+    runtime, collector, observer, snapshot, _, events, calls, commits = native_connection()
+    events.claims[step] = {key: 'wrong'}
+    snapshot.damage = 12
+    result = runtime.poll(collector, observer)
+    assert 'different or unverified' in result.events['error']
+    assert ('batch' in calls) == (step == 'batch')
+    row = runtime.sessions.adapter.result()['rows']['char_a']
+    assert row['damage'] == 12 and not row['event_coverage_complete']
+    assert commits == []
+
+
+def test_busy_native_opening_keeps_events_pending_for_the_next_guarded_pair():
+    runtime, collector, observer, snapshot, _, events, calls, commits = native_connection()
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1, 20
+    events.queue = [event(1, 2, 1, 20)]
+    events.claims[4] = {'active': 1}
+    with pytest.raises(CaptureRetry, match='in flight'):
+        runtime.poll(collector, observer)
+    assert calls.count('batch') == 1 and commits == [0]
+    runtime.poll(collector, observer)
+    assert commits == [0, 1]
+    assert runtime.sessions.adapter.result()['rows']['char_a']['observed_damage'] == 20
+
+
+@pytest.mark.parametrize('clock', [
+    {'sequence': 3},
+    {'frame': 4},
+    {'game_time': 3},
+    {'game_time': 1.5},
+])
+def test_native_batch_cannot_publish_or_acknowledge_events_beyond_its_watermark(clock):
+    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1, 20
+    first = event(1, 2, 1, 20)
+    events.queue = [first]
+    runtime.poll(collector, observer)
+
+    snapshot.frame, snapshot.game_time, snapshot.damage = 3, 2, 60
+    second = event(2, 3, 2, 40)
+    events.queue.append(second)
+    bad_events = [first, second, second | clock] if 'sequence' in clock else [first, second | clock]
+    events.claims['batch'] = dict(events=bad_events, source_attribution_version=1,
+                                  partial_damage_version=7, damage_settlement_ready=True)
+    runtime.poll(collector, observer)
+
+    result = runtime.display_sample()
+    assert result['event_status'] == 'gap'
+    assert 'bounded watermark' in result['event_error']
+    row = result['statistics']['rows']['char_a']
+    assert row['damage'] == 60
+    assert row['observed_damage'] == 20
+    assert result['event_watermark']['sequence'] == 1
+    assert not runtime.sessions.adapter.statistics.settlement_enabled
+    assert commits == [0, 1]
+
+
+def test_native_batch_with_a_sequence_gap_cannot_change_source_attribution():
+    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1, 20
+    events.queue = [event(1, 2, 1, 20)]
+    runtime.poll(collector, observer)
+
+    snapshot.frame, snapshot.game_time, snapshot.damage = 3, 2, 50
+    events.queue = [dict(event(3, 3, 2, 30), source_character_uid=77)]
+    events.claims['batch'] = dict(source_attribution_version=1)
+    runtime.poll(collector, observer)
+
+    result = runtime.display_sample()
+    assert result['event_status'] == 'gap'
+    assert 'event sequence gap' in result['event_error']
+    row = result['statistics']['rows']['char_a']
+    assert row['damage'] == 50
+    assert row['observed_damage'] == 20
+    assert 'char_a' not in runtime.sessions.adapter.mapping_conflicts
+    assert commits == [0, 1]
+
+
+def test_native_observer_requires_ordered_read_and_acknowledgement_before_reading():
+    runtime, collector, observer, snapshot, _, _, calls, _ = native_connection()
+    del observer.commit_events
+    snapshot.damage = 12
+    result = runtime.poll(collector, observer)
+    assert 'bounded reads and commit acknowledgements' in result.events['error']
+    assert 'batch' not in calls
+    assert runtime.sessions.adapter.result()['rows']['char_a']['damage'] == 12
+
+
+@pytest.mark.parametrize('valid', [True, False])
+def test_native_terminal_boundary_requires_exact_opaque_identity(valid):
+    runtime, collector, observer, _, state, events, _, _ = native_connection()
+    runtime.poll(collector, observer)
+    state.active = False
+    if not valid:
+        events.terminal = {'native_session': 'different battle'}
+    runtime.poll(collector, observer)
+    archive, = runtime.sessions.pop_archives()
+    assert archive['event_status'] == ('finished' if valid else 'gap')
 
 
 def connected(*, observer=LiveObserver, remote='remote'):

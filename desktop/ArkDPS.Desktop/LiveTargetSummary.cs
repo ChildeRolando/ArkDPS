@@ -218,7 +218,10 @@ public sealed class LiveTargetSummary : Border
 
     private sealed record Target(string Key, string Uid, string Eid, JsonElement Row)
     {
-        internal bool Live => Row.Bool("alive") && Row.Text("lifecycle") is "active" or "rebirthing";
+        // Native snapshots certify current membership without claiming an
+        // alive/death event. Their rows intentionally have no `alive` field.
+        internal bool Live => Row.Text("lifecycle") == "current" ||
+            (Row.Bool("alive") && Row.Text("lifecycle") is "active" or "rebirthing");
         internal bool Departed => Row.Text("lifecycle") == "departed";
         internal double EndFrame => Row.Number("end_frame", Row.Number("spawn_frame", -1));
 

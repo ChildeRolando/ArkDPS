@@ -690,6 +690,31 @@ def test_config_roundtrip_and_collection_validation():
         PanelConfig.from_dict({'category': 'nope'})
 
 
+@pytest.mark.parametrize('basis', list(RateBasis))
+def test_default_healing_rate_heading_matches_shared_metric_label(basis):
+    config = PanelConfig(category=Category.HEALING, ranking=Ranking.DPS, rate_basis=basis)
+    restored = PanelConfig.from_dict(config.to_dict())
+    view = render_panel(restored, [])
+    # Live, history and PNG consume this same default title and metric label.
+    assert restored.display_title == view.title == view.metric_label == '治疗 · HPS'
+
+
+def test_custom_healing_heading_is_preserved_while_metric_label_uses_hps():
+    config = PanelConfig(category=Category.HEALING, ranking=Ranking.DPS, title='我的治疗面板')
+    view = render_panel(PanelConfig.from_dict(config.to_dict()), [])
+    assert config.display_title == view.title == '我的治疗面板'
+    assert view.metric_label == '治疗 · HPS'
+
+
+@pytest.mark.parametrize('effective,boss,expected', [
+    (False, False, '伤害 · DPS'), (True, False, '有效伤害 · DPS'),
+    (False, True, '仅首领 · 伤害 · DPS'), (True, True, '仅首领 · 有效伤害 · DPS'),
+])
+def test_damage_rate_headings_keep_dps(effective, boss, expected):
+    config = PanelConfig(ranking=Ranking.DPS, effective_only=effective, boss_only=boss)
+    assert config.display_title == render_panel(config, []).title == expected
+
+
 def test_rows_from_statistics_maps_adapter_fields():
     result = {'rows': {'A': {
         'name': '灰烬', 'damage': 10, 'healing': 2, 'shield_absorbed': 3,

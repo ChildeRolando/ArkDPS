@@ -21,6 +21,7 @@ from connection import ConnectionConfig, ConnectionConfigStore
 from layout_store import Layout, LayoutStore
 from package_windows import UPDATE_PROTOCOL, archive_name, digest, unpack
 from test_battle_history import record
+from windows_manifest import require_admin_test_host, verify_executable_manifest
 
 
 def release_manifest(archive):
@@ -81,6 +82,7 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
     capture.write_bytes(capture_record)
 
     executable = bundle / 'ArkDPS.Desktop.exe'
+    verify_executable_manifest(executable)
     versions = bundle / '.arkdps-update' / 'versions'
     staged = versions / f"{new['version']}-{new_digest[:16]}"
     environment = dict(os.environ, PYTHONHOME='Z:/missing-python', PYTHONPATH='Z:/missing-python',
@@ -155,6 +157,7 @@ def main():
     parser.add_argument('target', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    require_admin_test_host()
     source, target, output = args.source.resolve(), args.target.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     old, new = release_manifest(source), release_manifest(target)

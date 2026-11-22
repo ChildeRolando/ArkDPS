@@ -548,7 +548,7 @@ public partial class StatisticPanel : UserControl
         var category=config.Text("category");
         if(category=="shield") Select(Ranking,"total");
         ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
-        ((ComboBoxItem)Ranking.Items[1]).Content=category=="shield" ? "近期" : "DPS";
+        ((ComboBoxItem)Ranking.Items[1]).Content=category switch{"shield"=>"近期","healing"=>"HPS",_=>"DPS"};
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
             ? Visibility.Visible : Visibility.Collapsed;

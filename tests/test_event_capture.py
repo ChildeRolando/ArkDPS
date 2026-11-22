@@ -1,7 +1,7 @@
 import pytest
-from pathlib import Path
 
 from event_capture import CaptureRetry, LiveEventCapture, read_terminal_mark
+from event_probe import assemble_probe_source
 from event_stream import StreamGap
 from roster import CharacterEntry, RosterSnapshot
 from roster import RosterUnavailable
@@ -521,7 +521,7 @@ def test_unknown_source_keeps_coverage_and_only_hides_its_overkill():
 
 
 def test_probe_records_hp_evidence_only_after_onleave():
-    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    js = assemble_probe_source('mumu').source
     start = js.index('for(const m of cfg.methods.filter(shouldObserveCallback))')
     production = js[start:js.index('\ninstallEnemyEntryHooks();', start)]
     enter, leave = production.split('onLeave(){', 1)
@@ -534,7 +534,7 @@ def test_probe_records_hp_evidence_only_after_onleave():
 
 
 def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
-    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    js = assemble_probe_source('mumu').source
     assert 'scopes[index].mod.equals(modifier)' in js
     assert 'scope.source===this.source&&sameMitigationTime(scope.when,this.when)' in js
     assert 'if(scope.targetHit)scope.targetHitAmbiguous=true' in js
@@ -613,7 +613,7 @@ def test_elemental_burst_counts_actual_enemy_hp_once(burst_source, scoped_settle
 
 
 def test_probe_hooks_character_skill_windows_and_keeps_them_out_of_onenter():
-    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    js = assemble_probe_source('mumu').source
     assert "wanted=new Set([" in js and "'Character'" in js and "'BasicSkill'" in js
     assert "'skill_start'" in js and "'skill_end'" in js
     assert 'OnSkillStart' in js and 'OnSkillFinish' in js and 'OnAfterSkill' in js
@@ -789,3 +789,189 @@ def test_ammo_cast_completion_leaves_only_that_skill_window_unknown(prefab_key):
     assert regular['skill_active_seconds'] == 1
     assert regular['skill_damage'] == 10 and regular['non_skill_damage'] == 5
     assert capture.adapter.event_stream.sequence == 9
+
+
+_QUALITY_UNKNOWN_FLAGS = ('damage_unknown', 'engagement_unknown',
+                          'shield_unknown', 'skill_unknown')
+_MISSING_QUALITY = object()
+
+
+class QualityCollector(Collector):
+    def __init__(self, platform):
+        super().__init__()
+        self.platform = platform
+        self.damage = self.healing = 0
+
+    def read(self):
+        sample = super().read()
+        sample['rows'][0]['healing'] = self.healing
+        if self.platform is not None:
+            sample['battle_metadata'] = {'platform': self.platform,
+                                         'source_build': 'native-test-build'}
+        return sample
+
+
+class QualityObserver(Observer):
+    binding = {'native_session': 'battle', 'source_build': 'native-test-build'}
+
+    def __init__(self, collector, quality):
+        super().__init__(collector)
+        self.quality = quality
+
+    def mark(self):
+        return {**super().mark(), **self.binding}
+
+    def drain(self):
+        payload = super().drain()
+        for key in _QUALITY_UNKNOWN_FLAGS:
+            payload.pop(key, None)
+        return {**payload, 'partial_damage_version': 1, **self.quality, **self.binding}
+
+
+def quality_declarations():
+    return {**dict.fromkeys(_QUALITY_UNKNOWN_FLAGS, False),
+            'mitigation_ready': True, 'mitigation_unknown': False}
+
+
+def capture_quality_events(quality, *, platform='native_pc'):
+    collector = QualityCollector(platform)
+    observer = QualityObserver(collector, quality)
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    collector.frame, collector.game_time = 2, 1
+    collector.damage, collector.healing = 20, 4
+    observer.events = [
+        dict(event(1, frame=2, game_time=1, amount=1),
+             kind='skill_start', skill_key='skill'),
+        dict(event(2, frame=2, game_time=1), target='enemy_a', target_instance='enemy-1',
+             hp_before=8, hp_after=0, real_delta=-8, killed=True, shield_absorbed=0,
+             damage_type=1, mitigation_before=40, mitigation_after=20),
+        dict(event(3, frame=2, game_time=1, amount=4), kind='healing'),
+        dict(event(4, frame=2, game_time=1, amount=3), kind='shield_absorbed'),
+        dict(event(5, frame=2, game_time=1, amount=1),
+             kind='skill_end', skill_key='skill', target_instance='Character.OnSkillFinish'),
+    ]
+    observer.sequence = observer.epoch = len(observer.events)
+    capture.sample()
+    collector.frame, collector.game_time = 3, 2
+    return capture, capture.sample()['rows']['char_a']
+
+
+@pytest.mark.parametrize('flag', _QUALITY_UNKNOWN_FLAGS)
+@pytest.mark.parametrize('value', [
+    pytest.param(_MISSING_QUALITY, id='missing'), None, 0, 1, '', 'false', [], {}, True,
+])
+def test_native_metric_requires_explicit_false_without_closing_other_families(flag, value):
+    quality = quality_declarations()
+    if value is _MISSING_QUALITY:
+        quality.pop(flag)
+    else:
+        quality[flag] = value
+    capture, row = capture_quality_events(quality)
+
+    assert row['damage'] == 20 and row['healing'] == 4
+    assert row['event_coverage_complete'] is True
+    assert capture.adapter.event_stream.sequence == 5
+    assert row['overkill_damage'] == (None if flag == 'damage_unknown' else 12)
+    assert row['shield_absorbed'] == (None if flag == 'shield_unknown' else 3)
+    assert row['skill_coverage_complete'] is (flag != 'skill_unknown')
+    assert row['skill_damage'] == (None if flag == 'skill_unknown' else 20)
+    assert row['observed_damage'] == (None if flag == 'engagement_unknown' else 20)
+    assert row['observed_healing'] == (None if flag == 'engagement_unknown' else 4)
+    assert row['partial_damage']['effective_damage'] == 8
+    assert row['partial_damage']['observed_shield_absorbed'] == 3
+    assert row['partial_damage']['active_damage'] == 1
+    assert row['partial_damage']['active_healing'] == 1
+    assert all(key not in capture.adapter.result()
+               for key in ('boss_damage', 'enemy_entry', 'enemy_phases', 'enemy_state', 'enemy_damage'))
+
+
+def test_native_explicit_quality_keeps_verified_zero_and_observed_nonzero_values():
+    _, row = capture_quality_events(quality_declarations())
+    assert row['overkill_damage'] == 12 and row['effective_damage'] == 8
+    assert row['shield_absorbed'] == 3
+    assert row['skill_damage'] == 20 and row['non_skill_damage'] == 0
+    assert row['skill_split_complete'] is True
+    assert row['mitigation_rate'] == 50
+    assert row['observed_damage'] == 20 and row['observed_healing'] == 4
+
+    collector = QualityCollector('native_pc')
+    capture = LiveEventCapture(collector, QualityObserver(collector, quality_declarations()))
+    empty = capture.sample()['rows']['char_a']
+    assert empty['shield_absorbed'] == 0
+    assert empty['skill_damage'] == 0 and empty['non_skill_damage'] == 0
+    assert empty['skill_coverage_complete'] is True
+
+
+@pytest.mark.parametrize('key,value', [
+    ('mitigation_ready', _MISSING_QUALITY), ('mitigation_ready', None),
+    ('mitigation_ready', 1), ('mitigation_ready', 'true'), ('mitigation_ready', False),
+    ('mitigation_unknown', _MISSING_QUALITY), ('mitigation_unknown', None),
+    ('mitigation_unknown', 0), ('mitigation_unknown', ''), ('mitigation_unknown', True),
+])
+def test_native_formula_readiness_must_be_affirmed_independently(key, value):
+    quality = quality_declarations()
+    if value is _MISSING_QUALITY:
+        quality.pop(key)
+    else:
+        quality[key] = value
+    _, row = capture_quality_events(quality)
+    assert row['event_coverage_complete'] is True
+    assert row['observed_damage'] == 20 and row['shield_absorbed'] == 3
+    assert row['skill_split_complete'] is True
+    assert row['mitigation_rate'] is None
+    assert row['mitigation_unknown_reason'] == '伤害公式回调覆盖不足'
+
+
+@pytest.mark.parametrize('platform', [None, 'mumu'])
+def test_legacy_quality_omission_preserves_existing_replay_contract(platform):
+    _, row = capture_quality_events({}, platform=platform)
+    assert row['event_coverage_complete'] is True
+    assert row['overkill_damage'] == 12 and row['shield_absorbed'] == 3
+    assert row['observed_damage'] == 20 and row['observed_healing'] == 4
+    assert row['skill_damage'] == 20 and row['skill_split_complete'] is True
+    assert row['mitigation_rate'] == 50
+
+
+def test_native_later_quality_loss_is_sticky_but_preserves_observed_partial_values():
+    capture, first = capture_quality_events(quality_declarations())
+    assert first['shield_absorbed'] == 3 and first['skill_split_complete'] is True
+    capture.observer.quality.clear()
+    capture.collector.frame, capture.collector.game_time = 4, 3
+    partial = capture.sample()['rows']['char_a']
+    assert partial['event_coverage_complete'] is True
+    assert partial['damage'] == 20 and partial['healing'] == 4
+    assert partial['overkill_damage'] is None and partial['shield_absorbed'] is None
+    assert partial['observed_damage'] is None and partial['observed_healing'] is None
+    assert partial['skill_split_complete'] is False
+    assert partial['partial_damage']['effective_damage'] == 8
+    assert partial['partial_damage']['observed_shield_absorbed'] == 3
+    assert partial['partial_damage']['active_damage'] == 1.5
+    assert partial['partial_damage']['active_healing'] == 1.5
+
+    capture.observer.quality.update(quality_declarations())
+    capture.collector.frame, capture.collector.game_time = 5, 4
+    still_partial = capture.sample()['rows']['char_a']
+    assert still_partial['shield_absorbed'] is None and still_partial['overkill_damage'] is None
+    assert still_partial['skill_split_complete'] is False
+
+
+@pytest.mark.parametrize('fault', ['missing_mark', 'missing_batch_session', 'wrong_batch_build'])
+def test_native_direct_ingest_rejects_unbound_payload_before_opening_events(fault):
+    collector = QualityCollector('native_pc')
+    observer = QualityObserver(collector, quality_declarations())
+    capture = LiveEventCapture(collector, observer)
+    sample, roster = collector.read(), collector.read_roster()
+    capture.adapter.update(sample, roster)
+    mark, batch = observer.mark(), observer.drain()
+    if fault == 'missing_mark':
+        mark = None
+    elif fault == 'missing_batch_session':
+        batch.pop('native_session')
+    else:
+        batch['source_build'] = 'other-build'
+    with pytest.raises(StreamGap, match='different or unverified native PC battle or build'):
+        capture.ingest(sample, roster, 0, batch, mark=mark)
+    assert capture.baseline_sequence is None
+    assert capture.adapter.event_stream is None
+    assert capture.adapter.result()['rows']['char_a']['shield_absorbed'] is None

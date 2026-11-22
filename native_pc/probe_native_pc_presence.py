@@ -1,0 +1,473 @@
+"""Optional managed-unit membership witnesses for the fingerprinted PC build.
+
+Call only from NativePcBattleProbe.sample's same-frame extra_reader callback.
+The caller owns build verification, the read-only handle and the outer clock/root
+bracket. This module opens nothing and performs no acquisition when imported.
+Collection membership and raw lifecycle flags are observed; native Unity object
+liveness, HP, exact deployment edges and per-instance damage are not inferred.
+"""
+
+import re
+import struct
+
+from . import probe_native_pc_battle as native
+
+
+MAX_ENTITIES = 128
+MAX_ARRAY_CAPACITY = 4096
+MAX_READ_CALLS = 768
+MAX_READ_BYTES = 96 * 1024
+MAX_SINGLE_READ = 4096
+MAX_CLASS_DEPTH = 10
+MAX_ID_UNITS = 110
+CLASS_PARENT = 0x58
+CLASS_FIELDS = 0x80
+CLASS_FIELD_COUNT = 0x124
+ARRAY_LENGTH = 0x18
+ARRAY_DATA = 0x20
+BATTLE_SIDE = 0x18
+BATTLE_UNIT_MANAGER = 0x2C0
+MANAGER_CHARACTERS = 0x18
+CONTAINER_HEADER = 0x10
+CHARACTER_DATA = 0x538
+ACTOR_ID = re.compile(r'[A-Za-z0-9_#.-]+')
+
+# Optional research extension only. Ordinary presence keeps its original
+# reader/budgets and never reads these fields when no subject is requested.
+MAX_LIFETIME_INSTANCES = 4
+MAX_LIFETIME_READ_CALLS = 256
+MAX_LIFETIME_READ_BYTES = 32 * 1024
+CHARACTER_CREATED_TIME = 0x398
+CHARACTER_DEAD_TIME = 0x3A0
+ENTITY_FINISH_REASON = 0x158
+FP_TYPE_INDEX = 39085
+FINISH_REASON_TYPE_INDEX = 10311
+TYPE_I4 = 0x08
+TYPE_I8 = 0x0A
+TYPE_VALUETYPE = 0x11
+FIELD_TYPE_TABLE_RVA = 0x7F16AC0
+CREATED_DEAD_FIELD_TYPE = 54452
+FINISH_REASON_FIELD_TYPE = 98015
+FP_VALUE_FIELD_TYPE = 60349
+ENUM_VALUE_FIELD_TYPE = 60333
+FIELD_TYPE_RVAS = {
+    CREATED_DEAD_FIELD_TYPE: 0x8D60CE8,
+    FINISH_REASON_FIELD_TYPE: 0x8D4A1D8,
+    FP_VALUE_FIELD_TYPE: 0x8D98088,
+    ENUM_VALUE_FIELD_TYPE: 0x8D96048,
+}
+LIFETIME_CHARACTER_FIELDS = (
+    (42, 'm_createdTime', CHARACTER_CREATED_TIME, TYPE_VALUETYPE, CREATED_DEAD_FIELD_TYPE),
+    (43, 'm_deadTime', CHARACTER_DEAD_TIME, TYPE_VALUETYPE, CREATED_DEAD_FIELD_TYPE),
+)
+LIFETIME_ENTITY_FIELDS = (
+    (39, '<finishReason>k__BackingField', ENTITY_FINISH_REASON,
+     TYPE_VALUETYPE, FINISH_REASON_FIELD_TYPE),
+)
+
+# Exact same hash-gated disk pair as above: metadata v29 typedef11491 Character
+# has 356 fields; typedef10318 Entity has 410. DLL tables at RVA0x87CE000
+# (field offsets) / 0x7F16AC0 (Il2CppType pointers) establish the indices,
+# offsets and types above. FP typedef39085/count42 has _serializedValue+0x10
+# (boxed offset), Int64; its FRACTIONAL_PLACES constant is 32. FinishReason
+# typedef10311/count14 has value__+0x10, Int32. The ordinary unboxed payloads
+# are read as signed integers, without protected-value decoding or game calls.
+# Static code writes m_createdTime during _BuildAtInternal (RVA0xAAAAF0),
+# not a proven activation edge. ForceDying (RVA0xA9F5E0) writes m_deadTime;
+# coverage of ordinary death/withdraw and sentinel semantics is unverified.
+# Neither time nor finishReason is converted to a product lifecycle event.
+
+# Indexed FieldInfo checks use the exact metadata/DLL pair already required by
+# the outer probe (GameAssembly cf7956bf...76ff, metadata e58fb854...caa5).
+BATTLE_FIELDS = ((4, '<playerSide>k__BackingField', BATTLE_SIDE),
+                 (100, '<unitManager>k__BackingField', BATTLE_UNIT_MANAGER))
+MANAGER_FIELDS = ((1, '<characters>k__BackingField', MANAGER_CHARACTERS),)
+CONTAINER_FIELDS = ((0, 'm_items', 0x10), (2, '<count>k__BackingField', 0x20))
+CHARACTER_FIELDS = ((78, '<data>k__BackingField', CHARACTER_DATA),)
+OBJECT_FIELDS = ((1, '<instanceUid>k__BackingField', 0x18),
+                 (2, '<side>k__BackingField', 0x1C),
+                 (3, '<playerSide>k__BackingField', 0x20),
+                 (4, '<inited>k__BackingField', 0x24),
+                 (5, '<borned>k__BackingField', 0x25),
+                 (6, '<isDisappeared>k__BackingField', 0x26))
+DATA_FIELDS = ((4, 'prefabKey', 0x50), (8, 'uniqueId', 0x6C),
+               (14, 'isToken', 0x90), (15, 'isPredefined', 0x91),
+               (18, 'tokenOrHostKey', 0x98), (19, 'tokenOrHostUniqueId', 0xA0))
+LIMITATIONS = (
+    'UnitManager.characters membership and raw managed lifecycle flags only.',
+    'Native Unity liveness, HP and exact deployment/removal times are unverified.',
+    'A shared data UID/statistic key does not identify one summon instance.',
+)
+
+
+class PresenceError(ValueError):
+    pass
+
+
+def require(condition, reason):
+    if not condition:
+        raise PresenceError(reason)
+
+
+def pointer(value, nullable=False):
+    require((nullable and value == 0) or
+            (type(value) is int and 0x10000 <= value < (1 << 47) and value % 8 == 0),
+            'presence_invalid_reference')
+    return value
+
+
+class CheckedRead:
+    def __init__(self, read):
+        self.source = read
+        self.calls = self.bytes_requested = 0
+        self.guards = []
+        self.known_classes = {}
+        self.known_fields = set()
+        self.strings = {}
+        self.lineages = {}
+        self.character_data = {}
+
+    def read(self, address, size):
+        require(type(address) is int and type(size) is int and
+                0x10000 <= address and 0 < size <= MAX_SINGLE_READ and
+                address + size <= (1 << 47), 'presence_invalid_read_range')
+        require(self.calls < MAX_READ_CALLS and self.bytes_requested + size <= MAX_READ_BYTES,
+                'presence_read_budget_exhausted')
+        self.calls += 1
+        self.bytes_requested += size
+        raw = self.source(address, size)
+        require(isinstance(raw, bytes) and len(raw) == size, 'presence_short_read')
+        return raw
+
+    def guarded(self, address, size):
+        raw = self.read(address, size)
+        self.guards.append((address, raw))
+        return raw
+
+    def ref(self, address, nullable=False, guard=False):
+        value, = struct.unpack('<Q', self.guarded(address, 8) if guard else self.read(address, 8))
+        return pointer(value, nullable)
+
+    def named(self, address, expected):
+        require(0x10000 <= address < (1 << 47), 'presence_invalid_metadata_reference')
+        return self.read(address, len(expected) + 1) == expected.encode('ascii') + b'\0'
+
+    def identity(self, klass):
+        pointer(klass)
+        if klass not in self.known_classes:
+            name, namespace = struct.unpack('<QQ', self.read(klass + 0x10, 16))
+            parts = []
+            for address in (name, namespace):
+                raw = self.read(address, 128)
+                end = raw.find(b'\0')
+                require(end >= 0, 'presence_metadata_name_length')
+                try:
+                    parts.append(raw[:end].decode('ascii', errors='strict'))
+                except UnicodeDecodeError:
+                    raise PresenceError('presence_metadata_name_encoding') from None
+            self.known_classes[klass] = tuple(parts)
+        return self.known_classes[klass]
+
+    def is_class(self, klass, name, namespace='Torappu.Battle'):
+        return self.identity(klass) == (name, namespace)
+
+    def expect_class(self, address, name, namespace='Torappu.Battle'):
+        klass = self.ref(address, guard=True)
+        require(self.is_class(klass, name, namespace), 'presence_class_identity')
+        return klass
+
+    def fields(self, klass, expected_count, fields):
+        key = klass, expected_count, fields
+        if key in self.known_fields:
+            return
+        count, = struct.unpack('<H', self.read(klass + CLASS_FIELD_COUNT, 2))
+        require(count == expected_count, 'presence_field_count')
+        table = self.ref(klass + CLASS_FIELDS)
+        for index, name, expected_offset in fields:
+            require(0 <= index < count, 'presence_field_index')
+            name_ref, _, owner, offset, _ = struct.unpack('<QQQiI', self.read(table + index * 32, 32))
+            require(owner == klass and offset == expected_offset and self.named(name_ref, name),
+                    'presence_field_layout')
+        self.known_fields.add(key)
+
+    def actor_id(self, address):
+        pointer(address)
+        if address not in self.strings:
+            self.expect_class(address, 'String', 'System')
+            length_raw = self.guarded(address + 0x10, 4)
+            length, = struct.unpack('<i', length_raw)
+            require(0 < length <= MAX_ID_UNITS, 'presence_id_length')
+            raw = self.guarded(address + 0x14, length * 2)
+            try:
+                text = raw.decode('utf-16-le', errors='strict')
+            except UnicodeDecodeError:
+                raise PresenceError('presence_id_encoding') from None
+            require(ACTOR_ID.fullmatch(text), 'presence_id_format')
+            self.strings[address] = text
+        return self.strings[address]
+
+    def lineage(self, address):
+        klass = self.ref(address, guard=True)
+        if klass in self.lineages:
+            return self.lineages[klass]
+        original_class = klass
+        lineage, seen = [], set()
+        for _ in range(MAX_CLASS_DEPTH):
+            require(klass not in seen, 'presence_class_cycle')
+            seen.add(klass)
+            lineage.append(klass)
+            if self.is_class(klass, 'VisualObject'):
+                break
+            klass = self.ref(klass + CLASS_PARENT, guard=True)
+        else:
+            raise PresenceError('presence_class_depth')
+        # UnitManager's collection can also contain other Unit subclasses.
+        tail = ('Unit', 'Entity', 'BObject', 'VisualObject')
+        require(len(lineage) >= len(tail) and
+                all(self.is_class(klass, name) for klass, name in zip(lineage[-4:], tail)),
+                'presence_unit_inheritance')
+        self.fields(lineage[-2], 9, OBJECT_FIELDS)
+        character = next((klass for klass in lineage[:-4] if self.is_class(klass, 'Character')), None)
+        if character is not None:
+            require(character == lineage[-5], 'presence_character_inheritance')
+            self.fields(character, 356, CHARACTER_FIELDS)
+        self.lineages[original_class] = character
+        return character
+
+    def validate(self):
+        require(all(self.read(address, len(raw)) == raw for address, raw in self.guards),
+                'presence_changed_during_read')
+
+
+def character_data(reader, address):
+    if address in reader.character_data:
+        return reader.character_data[address]
+    klass = reader.expect_class(address, 'BattleCharacterData')
+    reader.fields(klass, 36, DATA_FIELDS)
+    raw = reader.guarded(address + 0x50, 0x54)
+    key, = struct.unpack_from('<Q', raw)
+    uid, = struct.unpack_from('<I', raw, 0x1C)
+    is_token, is_predefined = struct.unpack_from('<BB', raw, 0x40)
+    host_key, host_uid = struct.unpack_from('<QI', raw, 0x48)
+    require(is_token in (0, 1) and is_predefined in (0, 1), 'presence_data_flags')
+    result = {
+        'id': reader.actor_id(pointer(key)), 'data_uid': uid,
+        'is_token': bool(is_token), 'is_predefined': bool(is_predefined),
+        'host_key': reader.actor_id(pointer(host_key)) if is_token and host_key else None,
+        'host_uid': host_uid if is_token else None,
+    }
+    reader.character_data[address] = result
+    return result
+
+
+class LifetimeRead(CheckedRead):
+    """Independent optional budget; its failures never invalidate presence."""
+
+    def read(self, address, size):
+        require(self.calls < MAX_LIFETIME_READ_CALLS and
+                self.bytes_requested + size <= MAX_LIFETIME_READ_BYTES,
+                'presence_lifetime_read_budget_exhausted')
+        return super().read(address, size)
+
+    def identity(self, klass):
+        pointer(klass)
+        if klass not in self.known_classes:
+            names = struct.unpack('<QQ', self.guarded(klass + 0x10, 16))
+            parts = []
+            for address in names:
+                raw = self.guarded(address, 128)
+                end = raw.find(b'\0')
+                require(end >= 0, 'presence_lifetime_metadata_name_length')
+                try:
+                    parts.append(raw[:end].decode('ascii', errors='strict'))
+                except UnicodeDecodeError:
+                    raise PresenceError('presence_lifetime_metadata_name_encoding') from None
+            self.known_classes[klass] = tuple(parts)
+        return self.known_classes[klass]
+
+    def typed_fields(self, klass, expected_count, fields, module):
+        key = klass, expected_count, fields
+        if key in self.known_fields:
+            return
+        count, = struct.unpack('<H', self.guarded(klass + CLASS_FIELD_COUNT, 2))
+        require(count == expected_count, 'presence_lifetime_field_count')
+        table = self.ref(klass + CLASS_FIELDS, guard=True)
+        base, module_size = module
+        for index, name, expected_offset, code, type_index in fields:
+            require(0 <= index < count, 'presence_lifetime_field_index')
+            name_ref, type_ref, owner, offset, _ = struct.unpack(
+                '<QQQiI', self.guarded(table + index * 32, 32))
+            require(owner == klass and offset == expected_offset and
+                    self.guarded(name_ref, len(name) + 1) == name.encode('ascii') + b'\0',
+                    'presence_lifetime_field_layout')
+            slot_rva = FIELD_TYPE_TABLE_RVA + type_index * 8
+            type_rva = FIELD_TYPE_RVAS[type_index]
+            require(slot_rva + 8 <= module_size and type_rva + 12 <= module_size,
+                    'presence_lifetime_module_range')
+            # The matched FieldDef's registered Il2CppType preserves its
+            # identity after loading. Its mutable union data need not contain
+            # the static metadata index anymore.
+            registered = self.ref(base + slot_rva, nullable=True, guard=True)
+            require(registered == type_ref == base + type_rva,
+                    f'presence_lifetime_field_binding_{type_index}')
+            _data, bits = struct.unpack('<QI', self.guarded(registered, 12))
+            require((bits >> 16) & 0xFF == code and not bits & 0x10,
+                    f'presence_lifetime_field_kind_{type_index}')
+        self.known_fields.add(key)
+
+
+def _capture_lifetime(read, context, subject, candidates, membership_guards):
+    reader = LifetimeRead(read)
+    try:
+        require(type(subject) is str and subject.startswith('char_') and
+                len(subject) <= MAX_ID_UNITS and ACTOR_ID.fullmatch(subject),
+                'presence_lifetime_invalid_subject')
+        require(len(candidates) <= MAX_LIFETIME_INSTANCES,
+                'presence_lifetime_instance_count')
+        witnesses = []
+        if candidates:
+            require(isinstance(context, dict) and 'class_definition_table_slot' in context,
+                    'presence_lifetime_class_table_slot_missing')
+            module = context.get('game_assembly_range')
+            require(isinstance(module, tuple) and len(module) == 2 and type(module[1]) is int,
+                    'presence_lifetime_module_range')
+            base, module_size = module
+            pointer(base)
+            class_slot = context['class_definition_table_slot']
+            require(class_slot == base + native.CLASS_DEFINITION_TABLE_RVA and
+                    native.CLASS_DEFINITION_TABLE_RVA + 8 <= module_size,
+                    'presence_lifetime_module_range')
+            table = reader.ref(class_slot, nullable=True, guard=True)
+            require(table != 0, 'presence_lifetime_class_table_uninitialized')
+            for index, name, namespace, count, fields, parent_name in (
+                (FP_TYPE_INDEX, 'FP', 'Torappu', 42,
+                 ((0, '_serializedValue', 0x10, TYPE_I8, FP_VALUE_FIELD_TYPE),), 'ValueType'),
+                (FINISH_REASON_TYPE_INDEX, 'FinishReason', '', 14,
+                 ((0, 'value__', 0x10, TYPE_I4, ENUM_VALUE_FIELD_TYPE),), 'Enum'),
+            ):
+                klass = reader.ref(table + index * 8, nullable=True, guard=True)
+                require(klass != 0, 'presence_lifetime_class_uninitialized')
+                require(reader.is_class(klass, name, namespace), 'presence_lifetime_class_identity')
+                reader.typed_fields(klass, count, fields, module)
+                parent = reader.ref(klass + CLASS_PARENT, guard=True)
+                require(reader.is_class(parent, parent_name, 'System'),
+                        'presence_lifetime_value_inheritance')
+            for address, uid, character in candidates:
+                require(reader.is_class(character, 'Character'), 'presence_lifetime_class_identity')
+                reader.typed_fields(character, 356, LIFETIME_CHARACTER_FIELDS, module)
+                unit = reader.ref(character + CLASS_PARENT, guard=True)
+                require(reader.is_class(unit, 'Unit'), 'presence_lifetime_character_inheritance')
+                entity = reader.ref(unit + CLASS_PARENT, guard=True)
+                require(reader.is_class(entity, 'Entity'), 'presence_lifetime_character_inheritance')
+                reader.typed_fields(entity, 410, LIFETIME_ENTITY_FIELDS, module)
+                finish_reason, = struct.unpack('<i', reader.guarded(address + ENTITY_FINISH_REASON, 4))
+                created, dead = struct.unpack('<qq', reader.guarded(address + CHARACTER_CREATED_TIME, 16))
+                witnesses.append({'instance_uid': uid, 'finish_reason': finish_reason,
+                                  'created_time_raw': created, 'dead_time_raw': dead})
+            reader.validate()
+            # The base reader already proved these roots, slots, classes,
+            # instance UIDs, local player and non-token data. Recheck that
+            # entire selection after the extra reads with this budget, without
+            # following any reference absent from the current collection.
+            require(all(reader.read(address, len(raw)) == raw
+                        for address, raw in membership_guards),
+                    'presence_lifetime_membership_changed')
+    except PresenceError as error:
+        reason = str(error)
+        if not reason.startswith('presence_lifetime_'):
+            reason = reason.replace('presence_', 'presence_lifetime_', 1)
+    except native.ResearchFailure as error:
+        reason = ('presence_lifetime_read_budget_exhausted' if error.reason in
+                  ('read_budget_exhausted', 'optional_read_budget_exhausted')
+                  else 'presence_lifetime_parent_reader_unavailable')
+    except (native.access.ApiFailure, OSError):
+        reason = 'presence_lifetime_read_failed'
+    else:
+        return {'presence_lifetime_status': 'available', 'presence_lifetime': {
+            'subject_id': subject, 'witnesses': witnesses,
+        }}
+    return {'presence_lifetime_status': 'unavailable',
+            'presence_lifetime_reason': reason, 'presence_lifetime': None}
+
+
+def capture_presence(read, context, *, lifetime_subject=None):
+    """Return optional witnesses; unavailable fields never fabricate absence.
+
+    No state persists between calls. The consumer must correlate instance_uid
+    within the enclosing battle_serial, retain gaps, and avoid allocating shared
+    per-key damage counters to individual live instances. lifetime_subject is a
+    research-only operator ID: raw signed Q32/enum witnesses do not establish
+    exact activity/death/removal timestamps. Omission preserves the original
+    acquisition and JSON. The enclosing same-frame callback is still required.
+    """
+    reader = CheckedRead(read)
+    try:
+        battle = pointer(context['battle_controller'])
+        klass = reader.expect_class(battle, 'BattleController')
+        reader.fields(klass, 515, BATTLE_FIELDS)
+        side, = struct.unpack('<i', reader.guarded(battle + BATTLE_SIDE, 4))
+        manager = reader.ref(battle + BATTLE_UNIT_MANAGER, guard=True)
+        klass = reader.expect_class(manager, 'UnitManager')
+        reader.fields(klass, 7, MANAGER_FIELDS)
+        container = reader.ref(manager + MANAGER_CHARACTERS, guard=True)
+        klass = reader.expect_class(container, 'UnorderedArray`1', 'Torappu')
+        reader.fields(klass, 3, CONTAINER_FIELDS)
+        raw = reader.guarded(container + CONTAINER_HEADER, 20)
+        items, _item_map, count = struct.unpack('<QQi', raw)
+        require(0 <= count <= MAX_ENTITIES, 'presence_entity_count')
+        if items:
+            pointer(items)
+            capacity, = struct.unpack('<Q', reader.guarded(items + ARRAY_LENGTH, 8))
+            require(count <= capacity <= MAX_ARRAY_CAPACITY, 'presence_array_capacity')
+        else:
+            require(count == 0, 'presence_missing_array')
+        slots = reader.guarded(items + ARRAY_DATA, count * 8) if count else b''
+        entities, non_characters, instance_uids, objects = [], 0, set(), set()
+        lifetime_candidates = []
+        for address, in struct.iter_unpack('<Q', slots):
+            pointer(address)
+            require(address not in objects, 'presence_duplicate_object')
+            objects.add(address)
+            character = reader.lineage(address)
+            raw = reader.guarded(address + 0x18, 15)
+            uid, entity_side, player_side, inited, borned, disappeared = struct.unpack('<IiiBBB', raw)
+            require(all(flag in (0, 1) for flag in (inited, borned, disappeared)),
+                    'presence_lifecycle_flags')
+            require(uid not in instance_uids, 'presence_duplicate_instance_uid')
+            instance_uids.add(uid)
+            if character is None:
+                non_characters += 1
+                continue
+            data = reader.ref(address + CHARACTER_DATA, guard=True)
+            row = {
+                'instance_uid': uid, 'side': entity_side, 'player_side': player_side,
+                'inited': bool(inited), 'borned': bool(borned),
+                'is_disappeared': bool(disappeared), **character_data(reader, data),
+            }
+            entities.append(row)
+            if (lifetime_subject is not None and row['id'] == lifetime_subject and
+                    not row['is_token'] and player_side == side):
+                lifetime_candidates.append((address, uid, character))
+        reader.validate()
+    except PresenceError as error:
+        reason = str(error)
+    except native.ResearchFailure:
+        reason = 'presence_parent_reader_unavailable'
+    except (native.access.ApiFailure, OSError):
+        reason = 'presence_read_failed'
+    else:
+        result = {'presence_status': 'available', 'presence': {
+            'scope': 'unit_manager_characters_membership', 'local_side': side,
+            'collection_count': count, 'non_character_count': non_characters,
+            'entities': entities, 'limitations': list(LIMITATIONS),
+        }}
+        if lifetime_subject is not None:
+            result.update(_capture_lifetime(read, context, lifetime_subject,
+                                            lifetime_candidates, reader.guards))
+        return result
+    result = {'presence_status': 'unavailable', 'presence_reason': reason, 'presence': None}
+    if lifetime_subject is not None:
+        result.update({'presence_lifetime_status': 'unavailable',
+                       'presence_lifetime_reason': 'presence_lifetime_presence_unavailable',
+                       'presence_lifetime': None})
+    return result

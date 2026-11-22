@@ -1,0 +1,993 @@
+{
+  "format": 1,
+  "provenance": {
+    "scope": "Frozen real native field inputs; later source-callback execution remains synthetic",
+    "source_prefix_sha256": "ab11ea8013c14c1b008381861818d96f7ff47d38b4ea5a7880750bda82f7e907",
+    "source_head": "43bb3bb15ddb77fc2f348ea3f8c8892f9f450c05",
+    "diagnostic_payload_sha256": "601fb1ed9de9b01994f7c4d89c503546c0d4b219a7d9c4e50afc5e4de8332277",
+    "gameassembly_sha256": "cf7956bf88a61986859ef55c026d231713e2d12cf69ffd9a19779ab491cf76ff",
+    "source_lines_file": "owned-ammo-pipeline-source-lines.jsonl",
+    "source_lines_sha256": "76ad272f249b8bb0496e30067a8922c05e6a74090e75c7a78c004728153df3fc",
+    "source_lines": [
+      {
+        "fixture_line": 1,
+        "original_line": 277,
+        "line_sha256": "c6f81e6e7815a1182b57958374bc4914ac388f982dbee37497011cfc284aeb91"
+      },
+      {
+        "fixture_line": 2,
+        "original_line": 1082,
+        "line_sha256": "98e8432da8b3bd8497e193751ba00f7c2af61ed5868e14f4c74a3f34e9cbf1cb"
+      }
+    ]
+  },
+  "actor": {
+    "cid": "char_1041_angel2",
+    "data_uid": 2147483989,
+    "bobject_uid": 697,
+    "skill_key": "skchr_angel2_3",
+    "native_skill_class": "CastSkillWithLimitTimes"
+  },
+  "hits": {
+    "first_live": {
+      "damage": {
+        "sequence": 138,
+        "frame": 320,
+        "game_time": 10.666656494140625,
+        "source": "char_1041_angel2",
+        "kind": "damage",
+        "amount": 2754.8299512099475,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "type": 1,
+          "target": 0,
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1006_shield_2",
+        "target_instance": "0x2b45b7000",
+        "target_type": 0,
+        "damage_type": 1,
+        "real_delta": -2754.8299512099475,
+        "hp_before": 8169.360002612695,
+        "hp_after": 5414.530051402748,
+        "killed": false,
+        "cancel_reason": 0,
+        "shield_absorbed": 0,
+        "mitigation_before": 3119.1000401973724,
+        "mitigation_after": 2754.8299512099475,
+        "source_character_uid": 2147483989
+      },
+      "hp_damage": {
+        "sequence": 135,
+        "frame": 320,
+        "game_time": 10.666656494140625,
+        "source": "char_1041_angel2",
+        "kind": "hp_damage",
+        "amount": 2119.1000401973724,
+        "proof": {
+          "method": "Unit.OnTakeDamage",
+          "type": 1,
+          "target": 0
+        },
+        "target": "enemy_1006_shield_2",
+        "hp_before": 8169.360002612695,
+        "shield_absorbed": 0,
+        "target_instance": "0x2b45b7000",
+        "target_type": 0,
+        "damage_type": 1,
+        "source_character_uid": 2147483989
+      },
+      "settlement": {
+        "sequence": 137,
+        "frame": 320,
+        "game_time": 10.666656494140625,
+        "source": "char_1041_angel2",
+        "kind": "damage_settlement",
+        "amount": 2754.8299512099475,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1006_shield_2",
+        "target_uid": "676",
+        "target_instance": "0x2b45b7000",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 2754.8299512099475,
+        "killed": false,
+        "mitigation_before": 3119.1000401973724,
+        "mitigation_after": 2754.8299512099475,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 277,
+        "byte_offset": 755301,
+        "line_sha256": "c6f81e6e7815a1182b57958374bc4914ac388f982dbee37497011cfc284aeb91",
+        "drain_event_index": 3
+      }
+    },
+    "outside_after_true_finish": {
+      "damage": {
+        "sequence": 847,
+        "frame": 2592,
+        "game_time": 86.39991760253906,
+        "source": "char_1041_angel2",
+        "kind": "damage",
+        "amount": 494.74000602960587,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "type": 1,
+          "target": 0,
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1015_litamr_2",
+        "target_instance": "0x2b5b12800",
+        "target_type": 0,
+        "damage_type": 1,
+        "real_delta": -494.74000602960587,
+        "hp_before": 3135.000012628734,
+        "hp_after": 2640.2600065991282,
+        "killed": false,
+        "cancel_reason": 0,
+        "shield_absorbed": 0,
+        "mitigation_before": 994.7400060296059,
+        "mitigation_after": 494.74000602960587,
+        "source_character_uid": 2147483989
+      },
+      "hp_damage": {
+        "sequence": 844,
+        "frame": 2592,
+        "game_time": 86.39991760253906,
+        "source": "char_1041_angel2",
+        "kind": "hp_damage",
+        "amount": 494.74000602960587,
+        "proof": {
+          "method": "Unit.OnTakeDamage",
+          "type": 1,
+          "target": 0
+        },
+        "target": "enemy_1015_litamr_2",
+        "hp_before": 3135.000012628734,
+        "shield_absorbed": 0,
+        "target_instance": "0x2b5b12800",
+        "target_type": 0,
+        "damage_type": 1,
+        "source_character_uid": 2147483989
+      },
+      "settlement": {
+        "sequence": 846,
+        "frame": 2592,
+        "game_time": 86.39991760253906,
+        "source": "char_1041_angel2",
+        "kind": "damage_settlement",
+        "amount": 494.74000602960587,
+        "proof": {
+          "method": "Entity.ApplyModifier",
+          "evidence_method": "Unit.OnTakeDamage+Entity.ApplyModifier"
+        },
+        "target": "enemy_1015_litamr_2",
+        "target_uid": "887",
+        "target_instance": "0x2b5b12800",
+        "damage_type": 1,
+        "shield_absorbed": 0,
+        "settlement_complete": true,
+        "nominal_amount": 494.74000602960587,
+        "killed": false,
+        "mitigation_before": 994.7400060296059,
+        "mitigation_after": 494.74000602960587,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1082,
+        "byte_offset": 4693504,
+        "line_sha256": "98e8432da8b3bd8497e193751ba00f7c2af61ed5868e14f4c74a3f34e9cbf1cb",
+        "drain_event_index": 9
+      }
+    }
+  },
+  "markers": [
+    {
+      "event": {
+        "sequence": 129,
+        "frame": 306,
+        "game_time": 10.199990272521973,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.SwitchToSkillState"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 262,
+        "byte_offset": 711113,
+        "line_sha256": "3d4ee6ca8fef518d96f8155efee099eb6cee6de8d15ca4010d99a04ce174416d",
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 131,
+        "frame": 313,
+        "game_time": 10.433323383331299,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillStart"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 268,
+        "byte_offset": 730833,
+        "line_sha256": "c9290a9e29ea416c99081bbb5548339d931573a267be1ce02c669aa0444f75c6",
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 132,
+        "frame": 313,
+        "game_time": 10.433323383331299,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillCastSucceed"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 268,
+        "byte_offset": 730833,
+        "line_sha256": "c9290a9e29ea416c99081bbb5548339d931573a267be1ce02c669aa0444f75c6",
+        "drain_event_index": 1
+      }
+    },
+    {
+      "event": {
+        "sequence": 133,
+        "frame": 314,
+        "game_time": 10.466656684875488,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 274,
+        "byte_offset": 744705,
+        "line_sha256": "71425428b6ee9ea92c011f4f9b36c6560502d0c13ae3e8de594d00936f24ad94",
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 134,
+        "frame": 314,
+        "game_time": 10.466656684875488,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 274,
+        "byte_offset": 744705,
+        "line_sha256": "71425428b6ee9ea92c011f4f9b36c6560502d0c13ae3e8de594d00936f24ad94",
+        "drain_event_index": 1
+      }
+    },
+    {
+      "event": {
+        "sequence": 832,
+        "frame": 2543,
+        "game_time": 84.76658582687378,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillFinish"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": null,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1073,
+        "byte_offset": 4563743,
+        "line_sha256": "e153a2103e928170f4132c3d7608be7465c67fbe3464804155da5d325fdd174d",
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1025,
+        "frame": 3765,
+        "game_time": 125.49988031387329,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.SwitchToSkillState"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1269,
+        "byte_offset": 5688547,
+        "line_sha256": "96753c24276d32cd9c038f56fe7dfab98ebff99791512c0b08e9bc884b08fa8d",
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1027,
+        "frame": 3772,
+        "game_time": 125.73321342468262,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillStart"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1276,
+        "byte_offset": 5710781,
+        "line_sha256": "85c1a67e43a2f3f2cd31e4f33bdf070274fcbc518e7300fedf7157ce34bf1b3e",
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1028,
+        "frame": 3772,
+        "game_time": 125.73321342468262,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillCastSucceed"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1276,
+        "byte_offset": 5710781,
+        "line_sha256": "85c1a67e43a2f3f2cd31e4f33bdf070274fcbc518e7300fedf7157ce34bf1b3e",
+        "drain_event_index": 1
+      }
+    },
+    {
+      "event": {
+        "sequence": 1029,
+        "frame": 3773,
+        "game_time": 125.7665467262268,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1282,
+        "byte_offset": 5724653,
+        "line_sha256": "d25f62618390b9793872c057599b2a11a7623b7a081619a898b5ff6dde62dd23",
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1030,
+        "frame": 3773,
+        "game_time": 125.7665467262268,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1282,
+        "byte_offset": 5724653,
+        "line_sha256": "d25f62618390b9793872c057599b2a11a7623b7a081619a898b5ff6dde62dd23",
+        "drain_event_index": 1
+      }
+    }
+  ],
+  "native_lifecycle": [
+    {
+      "line": 266,
+      "byte_offset": 728467,
+      "line_sha256": "a1d13b83790f54eeb2516be28e665e51504f4a37f1ed9a7febe0ad7bbb84fea6",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 105,
+        "phase": "enter",
+        "call_id": 53,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 313,
+          "native_fixed_time": "44810782720",
+          "game_time": 10.433323383331299,
+          "canonical_sequence": 130
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 0,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 267,
+      "byte_offset": 729648,
+      "line_sha256": "aabd9af486007f297e70d7bc30436b66ea2539f2685dfda8833681525c4fb377",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 106,
+        "phase": "leave",
+        "call_id": 53,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 313,
+          "native_fixed_time": "44810782720",
+          "game_time": 10.433323383331299,
+          "canonical_sequence": 131
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 0,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 272,
+      "byte_offset": 742317,
+      "line_sha256": "66e7d4e1104d8de69b91f5273e45bd6c6dcb66ced745319368fcdebb630d3076",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 109,
+        "phase": "enter",
+        "call_id": 55,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 314,
+          "native_fixed_time": "44953948160",
+          "game_time": 10.466656684875488,
+          "canonical_sequence": 132
+        },
+        "args": [
+          "0x2b5543d80",
+          1,
+          false
+        ],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 273,
+      "byte_offset": 743521,
+      "line_sha256": "cc3f2ff4e9d096aabab82aa5a84621d5aa51e36c3528337f5eef743420956ba7",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 110,
+        "phase": "leave",
+        "call_id": 55,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 314,
+          "native_fixed_time": "44953948160",
+          "game_time": 10.466656684875488,
+          "canonical_sequence": 132
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": true,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1071,
+      "byte_offset": 4561378,
+      "line_sha256": "bfc90c23bdb02c1b3f6de333ccd8db7c6d6de6cdc4d1ce1ae3dcec8bb1d514b3",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 293,
+        "phase": "enter",
+        "call_id": 147,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillEnd"
+        ],
+        "method_rva": "0x9967a0",
+        "return_address": {
+          "address": "0x7fff28437310",
+          "module": "GameAssembly.dll",
+          "rva": "0x997310"
+        },
+        "clock": {
+          "frame": 2543,
+          "native_fixed_time": "364069713920",
+          "game_time": 84.76658582687378,
+          "canonical_sequence": 831
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": true,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1072,
+      "byte_offset": 4562558,
+      "line_sha256": "234315bc2556b40514d65be139d55e2251a782ffac57a9dead3cb7268ed6ff3e",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 294,
+        "phase": "leave",
+        "call_id": 147,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillEnd"
+        ],
+        "method_rva": "0x9967a0",
+        "return_address": {
+          "address": "0x7fff28437310",
+          "module": "GameAssembly.dll",
+          "rva": "0x997310"
+        },
+        "clock": {
+          "frame": 2543,
+          "native_fixed_time": "364069713920",
+          "game_time": 84.76658582687378,
+          "canonical_sequence": 832
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1274,
+      "byte_offset": 5708407,
+      "line_sha256": "b72a141901dc031d6c30ac9dca3717fc771026a089aaed80237b65ef724ae150",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 305,
+        "phase": "enter",
+        "call_id": 153,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 3772,
+          "native_fixed_time": "540020039680",
+          "game_time": 125.73321342468262,
+          "canonical_sequence": 1026
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1275,
+      "byte_offset": 5709592,
+      "line_sha256": "92639db3a2a628a25b8d9a5fcecb9a94367719c62177885f86e9721dab4287eb",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 306,
+        "phase": "leave",
+        "call_id": 153,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 3772,
+          "native_fixed_time": "540020039680",
+          "game_time": 125.73321342468262,
+          "canonical_sequence": 1027
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1280,
+      "byte_offset": 5722259,
+      "line_sha256": "8abbb96e7b06790408294c715461113706381fa03bcc306bf80431b6baf18d4b",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 309,
+        "phase": "enter",
+        "call_id": 155,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 3773,
+          "native_fixed_time": "540163205120",
+          "game_time": 125.7665467262268,
+          "canonical_sequence": 1028
+        },
+        "args": [
+          "0x2b5543d80",
+          1,
+          false
+        ],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 2,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1281,
+      "byte_offset": 5723466,
+      "line_sha256": "d2df9f41e5ea1650673ab9c062f62d47202cab36c865df0ab18cfb37aeab058f",
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 310,
+        "phase": "leave",
+        "call_id": 155,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 3773,
+          "native_fixed_time": "540163205120",
+          "game_time": 125.7665467262268,
+          "canonical_sequence": 1028
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": true,
+          "is_early_finished": false,
+          "trigger_count": 2,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    }
+  ],
+  "terminal_boundary": {
+    "controller": "0x12da69320",
+    "native": "0x2110cb420",
+    "logger": "0x1293d2b90",
+    "stats": "0x2ad5c9220",
+    "level": "0x2b97999c0",
+    "frame": 6280,
+    "game_time": 209.33313369750977,
+    "sequence": 1302,
+    "epoch": 3788,
+    "active": 0,
+    "damage_settlement_scope": 2
+  },
+  "second_activation_has_no_outgoing_hp_formula_hit": true
+}

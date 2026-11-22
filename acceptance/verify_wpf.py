@@ -11,9 +11,10 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
+sys.path[:0] = [str(ROOT), str(ROOT / 'tests'), str(ROOT / 'tools')]
 from battle_history import BattleHistory, BattleRecord
 from test_battle_history import record
+from windows_manifest import require_admin_test_host, verify_executable_manifest
 
 
 def seed(directory):
@@ -113,6 +114,7 @@ def main():
     parser.add_argument('--migrate-v1', action='store_true')
     parser.add_argument('--output', type=Path, default=ROOT/'runtime'/'ark19-wpf')
     args = parser.parse_args()
+    require_admin_test_host()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if not args.bundle:
@@ -138,6 +140,7 @@ def main():
         shutil.copytree(previous_state, directory)
         fixture = directory / fixture.name
     executable = (args.bundle.resolve()/'ArkDPS.Desktop.exe') if args.bundle else ROOT/'desktop/ArkDPS.Desktop/bin/Release/net10.0-windows/ArkDPS.Desktop.exe'
+    verify_executable_manifest(executable)
     # Reject a mismatched worker before accepting any snapshots.
     if not args.bundle:
         incompatible = Path(tempfile.mkdtemp(prefix='wrong-version-', dir=output))

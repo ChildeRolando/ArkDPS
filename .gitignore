@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 runtime/
+vendor/frida/*/
 acceptance/audit-*.jsonl
 acceptance/*hint.json
 acceptance/STOP

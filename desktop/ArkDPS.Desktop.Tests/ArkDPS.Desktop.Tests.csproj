@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ArkDPS.Desktop/ArkDPS.Desktop.csproj" />
+    <None Update="Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="../ArkDPS.Desktop/Assets/People/Components/city-and-ranking-pennant-red.png" Link="Assets/People/Components/city-and-ranking-pennant-red.png" />
+    <Resource Include="../ArkDPS.Desktop/Assets/Babel/Components/tower-emblem.png" Link="Assets/Babel/Components/tower-emblem.png" />
+  </ItemGroup>
+</Project>

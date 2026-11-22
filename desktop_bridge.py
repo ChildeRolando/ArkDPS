@@ -26,8 +26,8 @@ from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
 from collector import BattleChanged, ROOT
-from connection import (ConnectionConfig, ConnectionConfigStore, detect_instances,
-                        resolve_configured)
+from connection import (ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
+                        DetectionStatus, detect_instances, resolve_configured)
 from desktop_audit import DesktopCaptureJournal
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
@@ -44,6 +44,9 @@ MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
+NATIVE_ACTION_REQUIRED_CODES = frozenset((
+    'native_permission_denied', 'native_root_required', 'native_unsupported_build',
+))
 BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
@@ -62,6 +65,7 @@ def event_label(status, error=None):
               'disabled': '事件已关闭 · 使用伤害/治疗快照',
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
               'finished': '事件观察结束 · 保留已覆盖区间'}
+    labels['snapshot_only'] = '官服 PC 累计快照 · 逐事件不可用'
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
 
@@ -96,12 +100,21 @@ def empty_text(config, source, complete, view):
         return '暂无首领伤害（已知为零）'
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
+    if config.ranking is Ranking.DPS:
+        # A known cumulative counter cannot certify a missing rate denominator
+        # or event stream. Recent/full-cycle rates do not require events.
+        if config.rate_basis is RateBasis.ENGAGEMENT and view.get('rate_available') is False:
+            return view.get('rate_reason') or '当前指标尚无可靠数据 · 未知不记零'
+        if view.get('footer_rate') is None:
+            return view.get('share_reason') or '当前指标尚无可靠数据 · 未知不记零'
+        if not complete or view.get('footer_rate_complete') is not True:
+            return '已观察输出为零 · 未覆盖部分仍未知'
+        return '暂无输出（已知为零）'
     if config.category.value == 'damage' and config.effective_only and any(
             row.get('effective_damage') is None for row in source.values()):
         return '当前有效伤害尚无可靠数据'
     key = {'damage': 'damage', 'healing': 'healing', 'shield': 'shield_absorbed'}[config.category.value]
-    if config.ranking is Ranking.RECENT or (
-            config.ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S):
+    if config.ranking is Ranking.RECENT:
         key = 'recent_' + config.category.value
     if any(row.get(key) is None for row in source.values()):
         return '当前指标尚无可靠数据 · 未知不记零'
@@ -122,6 +135,10 @@ class DesktopState:
         self.connection_store = ConnectionConfigStore(directory / 'connection.json')
         config = self.connection_store.load()
         self.connection = config.config
+        self.effective_connection = self.connection
+        self._source_request_revision = None
+        self._source_request_platform = self.connection.platform
+        self._awaiting_source = False
         self.warnings = [x for x in (loaded.warning, config.warning,
                                      stage_names.catalog().warning) if x]
         self.history = BattleHistory(directory / 'history')
@@ -144,6 +161,8 @@ class DesktopState:
         self.diagnostic = None
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
+        self.native_pc_bootstrap = None
+        self._waiting_for_connection_sample = False
         self.battle_waiting = False
         self.scanning = False
         self.history_notice = ''
@@ -165,7 +184,27 @@ class DesktopState:
             self.selected = result.records[0]
 
     def accept(self, kind, value):
+        if kind == 'worker_error':
+            # Setup/loop failure can precede a source marker. It is global to
+            # the worker, rather than stale data from a retired session.
+            self.error = str(value)
+            self.scanning = False
+            self.analysis_interrupted = True
+            return
+        if kind == 'connection_source':
+            if (isinstance(value, dict) and type(value.get('revision')) is int
+                    and value['revision'] == self._source_request_revision
+                    and value.get('platform') == self._source_request_platform):
+                self._awaiting_source = False
+            return
+        # The acquisition thread is the sole source-event producer. Its FIFO
+        # marker precedes all events for the newly accepted request, so earlier
+        # queued events cannot repopulate a different platform's live view.
+        # Archive notifications are global and must survive source transitions.
+        if self._awaiting_source and kind != 'history':
+            return
         if kind == 'sample':
+            self._waiting_for_connection_sample = False
             if self.last is not None and observation_age(self.last) > 2:
                 self.analysis_interrupted = True
             self.error = ''
@@ -190,6 +229,8 @@ class DesktopState:
             self.event_status, self.event_error = value
         elif kind == 'observer':
             self.observer_status, self.observer_error = value
+        elif kind == 'native_pc_bootstrap':
+            self.native_pc_bootstrap = value
         elif kind == 'lifecycle':
             self.lifecycle = value
         elif kind == 'battle_waiting':
@@ -203,7 +244,35 @@ class DesktopState:
             if value:
                 self.error = ''
                 self.observer_status = self.observer_error = None
+                # Retain the last battle data, including its coverage gaps, as
+                # a stale view. It is not the new connection's event status.
+                self.event_status = self.event_error = None
+                self._waiting_for_connection_sample = True
                 self.analysis_interrupted = True
+
+    def expect_connection_request(self, config, revision):
+        self._source_request_platform = config.platform
+        self._source_request_revision = revision if type(revision) is int else None
+
+    def finish_offline_connection(self):
+        self._awaiting_source = False
+        self.scanning = False
+        self.connection_text = '离线模式 · 未连接采集源'
+
+    def _clear_live_source(self):
+        self.last = self.last_frame = None
+        self.last_progress = 0.
+        self.live_analysis = self.boss_live_analysis = self.boss_effective_live_analysis = None
+        self.analysis_interrupted = True
+        self.error = ''
+        self.connection_text = '正在切换采集平台'
+        self.diagnostic = None
+        self.event_status = self.event_error = self.lifecycle = None
+        self.observer_status = self.observer_error = None
+        self.battle_waiting = None
+        self.scanning = True
+        self._source_request_revision = None
+        self._awaiting_source = True
 
     def update_live_analysis(self, sample):
         """Keep one chart sample and its in-process observed peak per battle."""
@@ -315,6 +384,9 @@ class DesktopState:
             return 'locating', '正在定位 · 保留最后有效记录'
         if self.error:
             return 'disconnected', '连接断开 / 读取中断 · 显示最后有效记录'
+        if self._waiting_for_connection_sample:
+            return ('frozen', '等待新连接的可靠样本 · 上次快照') if self.last else (
+                'waiting', '等待新连接的可靠样本')
         if self.lifecycle == 'preparing':
             return 'preparing', ('战斗准备中 · 保留上一局统计' if self.last else '战斗准备中')
         if not self.last:
@@ -325,7 +397,8 @@ class DesktopState:
             return 'stale', '数据已过期 · 等待下一次可靠采样 · 保留最后有效记录'
         if time.monotonic() - self.last_progress > .8:
             return 'paused', '暂停 / 等待战斗推进'
-        if self.event_status in ('gap', 'failed', 'unavailable'):
+        if (self.event_status in ('gap', 'failed', 'unavailable')
+                and self.effective_connection.platform != 'native_pc'):
             return 'degraded', '正在统计 · 事件降级'
         return 'live', '正在统计'
 
@@ -383,12 +456,15 @@ class DesktopState:
             return None
         key = self.selected, self.history_config, self.layout.number_units
         if key != self._history_view_key:
-            event = EventAvailability(self.selected.event_status, self.selected.event_error, live=False)
+            event_status = self.selected.event_status
+            if self.selected.metadata.get('platform') == 'native_pc' and event_status == 'unavailable':
+                event_status = 'snapshot_only'
+            event = EventAvailability(event_status, self.selected.event_error, live=False)
             self._history_view = dict(
                 record_display(self.selected),
                 view=self.view(self.history_config, record_statistics(self.selected, for_panel=True),
                                event=event),
-                event_status=event.status, event_error=event.error)
+                event_status=self.selected.event_status, event_error=event.error)
             self._history_view_key = key
         return self._history_view
 
@@ -398,19 +474,29 @@ class DesktopState:
         status, label = self.status()
         live_stage = stage_names.resolve((sample.get('battle_metadata') or {}).get('stage_id'))
         has_live_stage = bool((sample.get('battle_metadata') or {}).get('stage_id'))
-        live_event = EventAvailability(status=sample.get('event_status', self.event_status),
-                                       error=sample.get('event_error', self.event_error), live=True)
+        live_event_status = (self.observer_status if self._waiting_for_connection_sample
+                             else sample.get('event_status', self.event_status))
+        live_event_error = (self.observer_error if self._waiting_for_connection_sample
+                            else sample.get('event_error', self.event_error))
+        if self.effective_connection.platform == 'native_pc' and live_event_status in (None, 'unavailable'):
+            live_event_status = self.observer_status or 'snapshot_only'
+            if self.observer_status not in (None, 'snapshot_only'):
+                live_event_error = self.observer_error
+        live_event = EventAvailability(status=live_event_status,
+                                       error=live_event_error, live=True)
         event_status, event_error = self.event_status, self.event_error
         if event_status is None or self.observer_status in (
-                WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped'):
+                WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped', 'snapshot_only'):
             event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
+                    effective_connection_config=self.effective_connection.to_dict(),
                     totals=team_totals(stats),
                     status=status, status_text=label, error=self.error,
                     battle_waiting=self.battle_waiting,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
                     observer_status=self.observer_status, event_status=self.event_status,
+                    native_pc_bootstrap=self.native_pc_bootstrap,
                     event_text=event_label(event_status, event_error),
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
@@ -509,7 +595,7 @@ class DesktopState:
             return '已保存：' + Path(cmd['path']).name
         elif op == 'connection_apply':
             config = ConnectionConfig.from_dict(cmd['config'])
-            if not config.auto_detect and not config.serial:
+            if config.platform == 'mumu' and not config.auto_detect and not config.serial:
                 raise ValueError('自动检测关闭时必须填写实例地址')
             enabled = cmd['events']
             if not isinstance(enabled, bool):
@@ -528,6 +614,9 @@ class DesktopState:
                 raise
             self.layout = candidate_layout
             self.connection = config
+            if config.platform != self.effective_connection.platform:
+                self._clear_live_source()
+            self.effective_connection = config
         else:
             raise ValueError('未知命令：' + str(op))
         return None
@@ -535,23 +624,54 @@ class DesktopState:
 
 class CollectionWorker:
     """Owns the sole CollectionSession, never references WPF or pipe objects."""
-    def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE):
+    def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE, native_pc_observer_factory=None,
+                 arkframework_root=None):
         self.directory = state.directory
         self.history, self.endpoint = state.history, endpoint
+        self.native_pc_observer_factory = native_pc_observer_factory
+        self.arkframework_root = Path(arkframework_root) if arkframework_root is not None else None
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
+        self._request_lock = threading.Lock()
+        self._request_revision = 0
         self.stop = threading.Event()
         self.session = None
         self.cleanup_error = ''
         self.retired_errors = []
+        self.pc_runtime = None
+        self.pc_runtime_key = None
+        self.pc_runtime_dir = state.history.directory.parent
+        self.pc_cleanup_error = ''
+        self._last_pc_bootstrap = None
+        self._bootstrap_audit = None
         self.pending_history_count = 0
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
 
     def request(self, config, enabled):
-        self.effective = (config, enabled)
-        self.requests.put(self.effective)
+        with self._request_lock:
+            if self.stop.is_set():
+                raise RuntimeError('采集器正在关闭，不能重新连接')
+            self._request_revision += 1
+            self.effective = (config, enabled)
+            self.requests.put((self._request_revision, config, enabled))
+            return self._request_revision
+
+    def _retry_connection(self, revision):
+        """An old session's recovery cannot supersede a newer user request."""
+        with self._request_lock:
+            if self.stop.is_set() or revision != self._request_revision:
+                return False
+            self.requests.put((revision, *self.effective))
+            return True
+
+    def _next_request(self):
+        with self._request_lock:
+            while True:
+                request = self.requests.get_nowait()
+                if request[0] == self._request_revision:
+                    return request
 
     def release(self):
         if self.session is None:
@@ -562,13 +682,100 @@ class CollectionWorker:
             self.cleanup_error = f'旧采集会话清理失败（{exc}）。请解决问题后重连观察者。'
             self.events.put(('error', self.cleanup_error))
             return False
-        if self.session.cleanup_errors:
-            error = '已释放旧会话，保留历史清理异常：' + str(self.session.cleanup_errors)
+        if self.session.cleanup_errors or self.cleanup_error:
+            error = '已释放旧会话，保留历史清理异常：' + str(self.session.cleanup_errors or self.cleanup_error)
             self.retired_errors.append(error)
             self.events.put(('warning', error))
         self.session = None
         self.cleanup_error = ''
         return True
+
+    def _connect_session(self, adb, serial, runtime, **kwargs):
+        # Publishing ownership and admitting the connection are one local
+        # commit against close(). Session setup opens no device connection.
+        # Once admitted, connect is in flight and shutdown owns its cancellation
+        # and release. Never hold this gate across the blocking transport call.
+        with self._request_lock:
+            if self.stop.is_set():
+                raise InterruptedError('采集线程正在关闭，不再建立采集会话')
+            if self.session is not None:
+                raise RuntimeError('旧采集会话尚未释放')
+            self.session = CollectionSession(adb, serial, **kwargs)
+            self.session.enable_lifecycle(runtime)
+            session = self.session
+        session.connect()
+        return session
+
+    def _pc_provider(self, config, enabled, *, explicit_retry=False):
+        with self._request_lock:
+            if self.stop.is_set():
+                raise InterruptedError('采集器正在关闭')
+        needed = (config.platform == 'native_pc' and enabled and bool(config.native_game_root)
+                  and self.native_pc_observer_factory is None)
+        key = str(Path(config.native_game_root).expanduser().resolve()) if needed and config.native_game_root else None
+        if self.pc_runtime is not None and (not needed or key != self.pc_runtime_key):
+            if not self._close_pc_runtime():
+                raise RuntimeError(self.pc_cleanup_error)
+        if not needed:
+            return self.native_pc_observer_factory if config.platform == 'native_pc' and enabled else None
+        if self.pc_runtime is None:
+            from capture_cli import _native_pc_frida_runtime
+            candidate = _native_pc_frida_runtime(config.native_game_root, self.pc_runtime_dir)
+            with self._request_lock:
+                if self.stop.is_set():
+                    candidate.close()
+                    raise InterruptedError('采集器在启动运行时创建期间关闭')
+                self.pc_runtime = candidate
+                self.pc_runtime_key = key
+                try:
+                    # Publish the owner before starting it, under the same
+                    # gate used by shutdown, so cancellation cannot miss it.
+                    self.pc_runtime.start()
+                except Exception as exc:
+                    self.events.put(('warning', str(exc)))
+        elif explicit_retry:
+            # A user request reconciles the existing owner. Automatic retries
+            # preserve its loading window, lease and attempted process births.
+            self.pc_runtime.retry()
+        return self.pc_runtime.observer_factory
+
+    def _close_pc_runtime(self):
+        if self.pc_runtime is None:
+            return True
+        try:
+            self.pc_runtime.close()
+        except Exception as exc:
+            self.pc_cleanup_error = f'PC 启动加载器清理失败：{exc}'
+            self.events.put(('error', self.pc_cleanup_error))
+            return False
+        if self.pc_cleanup_error:
+            self.retired_errors.append('已释放 PC 启动加载器，保留历史清理异常：' + self.pc_cleanup_error)
+        self.pc_runtime = None
+        self.pc_runtime_key = None
+        self.pc_cleanup_error = ''
+        self._emit_pc_bootstrap(None)
+        return True
+
+    def _emit_pc_bootstrap(self, value):
+        if value != self._last_pc_bootstrap:
+            self._last_pc_bootstrap = value
+            self.events.put(('native_pc_bootstrap', value))
+            if self._bootstrap_audit is not None:
+                self._bootstrap_audit('native_pc_bootstrap', value)
+
+    def _pc_observer_recovery_needed(self, session, generation):
+        if self.pc_runtime is None:
+            return False
+        bootstrap = self.pc_runtime.describe()
+        self._emit_pc_bootstrap(bootstrap)
+        observer_status = getattr(session.observer, 'status', None)
+        failed = (session.event_status in ('failed', 'incompatible', 'stopped')
+                  or observer_status in (ObserverStatus.FAILED, ObserverStatus.INCOMPATIBLE, ObserverStatus.STOPPED))
+        if not failed:
+            return False
+        return (self.pc_runtime.is_pending or
+                (bootstrap['status'] == 'ready' and bootstrap.get('ready_generation') is not None
+                 and bootstrap['ready_generation'] != generation))
 
     def run(self):
         try:
@@ -579,9 +786,15 @@ class CollectionWorker:
             with DesktopCaptureJournal(capture_dir, encoder=json_value,
                                        warn=lambda message: self.events.put(('warning', message))) as journal:
                 audit = journal.write
+                self._bootstrap_audit = audit
+                regeneration = None
                 try:
                     usable = False
+                    retry_allowed = True
                     current_config, current_enabled, current_target = None, False, None
+                    current_revision = None
+                    explicit_retry_pending = False
+                    session_bootstrap_generation = None
                     last_battle_waiting = None
                     last_observer_state = None
                     endpoint_bound = False
@@ -603,50 +816,117 @@ class CollectionWorker:
                     while not self.stop.is_set():
                         next_live_read = None
                         try:
-                            config, enabled = self.requests.get_nowait()
+                            revision, config, enabled = self._next_request()
                         except queue.Empty:
                             config = None
                         if config is not None:
+                            if revision != current_revision:
+                                explicit_retry_pending = True
+                            current_revision = revision
                             current_config, current_enabled = config, enabled
+                            current_target = None
                             usable = False
+                            retry_allowed = True
                             last_observer_state = None
                             endpoint_bound = False
                             retries = 0
                             last_retry_audit = float('-inf')
                             last_live_frame = None
+                            last_battle_waiting = None
+                            session_bootstrap_generation = None
                             self.last_connect_attempt = time.monotonic()
+                            self.events.put(('connection_source', {
+                                'revision': revision, 'platform': config.platform}))
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
-                                    target = resolve_configured(config)
-                                    current_target = target
-                                    self.events.put(('diagnostic', target.diagnostics.as_dict()))
-                                    if enabled and not bundled_observer:
-                                        bind_observer_endpoint(target)
-                                    self.session = CollectionSession(target.adb_path, target.serial,
-                                        frida_remote=self.endpoint if enabled else None,
-                                        prepare_observer=(lambda target=target: bind_observer_endpoint(target))
-                                        if enabled and bundled_observer else None,
+                                    session_kwargs = {}
+                                    pc_provider = self._pc_provider(config, enabled,
+                                        explicit_retry=explicit_retry_pending)
+                                    explicit_retry_pending = False
+                                    if self.pc_runtime is not None:
+                                        bootstrap = self.pc_runtime.describe()
+                                        self._emit_pc_bootstrap(bootstrap)
+                                        if self.pc_runtime.is_pending:
+                                            self.events.put(('observer', ('attaching', bootstrap.get('error'))))
+                                            self.events.put(('connection', bootstrap.get('error') or
+                                                'PC 事件采集正在准备，请先运行 ArkDPS，再启动游戏。'))
+                                            self.events.put(('scanning', False))
+                                            self.stop.wait(COLLECTION_PERIOD)
+                                            continue
+                                        session_bootstrap_generation = bootstrap.get('ready_generation')
+                                    if config.platform == 'native_pc':
+                                        from native_pc_collector import NativePcCollector
+                                        session_kwargs['collector'] = NativePcCollector(
+                                            config.native_game_root, collect_actions=enabled)
+                                        if pc_provider is not None:
+                                            session_kwargs['observer_factory'] = pc_provider
+                                        adb, serial = None, None
+                                        remote = None if enabled else ''
+                                    else:
+                                        target = resolve_configured(config)
+                                        current_target = target
+                                        self.events.put(('diagnostic', target.diagnostics.as_dict()))
+                                        if enabled and not bundled_observer:
+                                            bind_observer_endpoint(target)
+                                        if enabled and bundled_observer:
+                                            session_kwargs['prepare_observer'] = (
+                                                lambda target=target: bind_observer_endpoint(target))
+                                        adb, serial = target.adb_path, target.serial
+                                        remote = self.endpoint if enabled else None
+                                    self._connect_session(adb, serial, runtime,
+                                        frida_remote=remote, **session_kwargs,
                                         history=self.history, audit=audit, state_dir=self.directory,
                                         on_history=lambda: self.events.put(('history', None)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
-                                    self.session.enable_lifecycle(runtime)
-                                    self.session.connect()
+                                    if self.stop.is_set():
+                                        continue
                                     diag = self.session.collector.diagnostics
                                     self.events.put(('diagnostic', diag.as_dict()))
-                                    self.events.put(('connection', f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}'))
+                                    text = (diag.message or '已连接官服 PC · 累计快照'
+                                            if config.platform == 'native_pc' else
+                                            f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}')
+                                    self.events.put(('connection', text))
                                     usable = True
                                 except Exception as exc:
                                     diag = getattr(exc, 'diagnostics', None)
+                                    if diag is None and self.session is not None:
+                                        diag = getattr(self.session.collector, 'diagnostics', None)
                                     if diag:
                                         self.events.put(('diagnostic', diag.as_dict()))
+                                    retry_allowed = not (
+                                        config.platform == 'native_pc'
+                                        and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
                                     self.events.put(('error', str(exc)))
                                     self.release()
                             self.events.put(('scanning', False))
                         if usable and self.session is not None:
+                            if self._pc_observer_recovery_needed(self.session, session_bootstrap_generation):
+                                # Reauthentication waits until the old observer
+                                # has released its session and script. A changed
+                                # authenticated generation can repair a fallback
+                                # session; an unchanged healthy bootstrap cannot
+                                # spin on a permanently incompatible probe.
+                                usable = False
+                                retry_allowed = True
+                                self.last_connect_attempt = time.monotonic()
+                                if self.release():
+                                    self.events.put(('observer', ('attaching', None)))
+                                    self._retry_connection(current_revision)
+                                self.stop.wait(COLLECTION_PERIOD)
+                                continue
                             # Attachment can be confirmed in the lobby, before any battle sample.
-                            observer_state = ('disabled', None)
-                            if current_enabled:
+                            observer_state = (('snapshot_only', None) if current_config.platform == 'native_pc'
+                                              else ('disabled', None))
+                            if current_config.platform == 'native_pc' and current_enabled:
+                                observer_state = (self.session.event_status, self.session.event_error)
+                                observer = self.session.observer
+                                provider_status = getattr(observer, 'status', ObserverStatus.READY)
+                                if provider_status in (
+                                        ObserverStatus.FAILED, ObserverStatus.INCOMPATIBLE, ObserverStatus.STOPPED):
+                                    observer_state = (provider_status,
+                                                      getattr(observer, 'error', None) or self.session.event_error)
+                            if current_enabled and current_config.platform == 'mumu':
                                 observer = self.session.observer
                                 if getattr(self.session, 'event_status', None) == WAITING_GAME_INIT:
                                     observer_state = (WAITING_GAME_INIT, self.session.event_error)
@@ -689,18 +969,34 @@ class CollectionWorker:
                                 self.events.put(('error', str(exc)))
                                 usable = False
                                 self.last_connect_attempt = time.monotonic()
-                                self.request(current_config, current_enabled)
+                                self._retry_connection(current_revision)
                             except Exception as exc:
                                 audit('capture_error', {'error_type': type(exc).__name__,
                                       'reason': str(exc).partition('\n')[0][:200],
                                       'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
+                                diag = getattr(exc, 'diagnostics', None)
+                                if diag is None:
+                                    diag = getattr(self.session.collector, 'diagnostics', None)
+                                if diag is not None:
+                                    self.events.put(('diagnostic', diag.as_dict()))
+                                retry_allowed = not (
+                                    current_config.platform == 'native_pc'
+                                    and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
                                 usable = False
                             if usable:
                                 battle_waiting = runtime.feed.battle_waiting
                                 if battle_waiting is not None and battle_waiting != last_battle_waiting:
                                     last_battle_waiting = battle_waiting
                                     self.events.put(('battle_waiting', battle_waiting))
+                        if (self.arkframework_root is not None and current_enabled
+                                and current_config.platform == 'native_pc'):
+                            if regeneration is None:
+                                from native_pc.arkframework_replay import RegenerationRecorder
+                                regeneration = RegenerationRecorder(
+                                    self.arkframework_root / 'battle_timeline.json',
+                                    capture_dir / f'{journal.run}.arkframework')
+                            regeneration.poll_reporting(time.monotonic(), audit)
                         if (usable and current_enabled and current_target is not None
                                 and (not bundled_observer or self.session.event_status != WAITING_GAME_INIT)
                                 and time.monotonic() - self.last_endpoint_check >= 5):
@@ -720,10 +1016,10 @@ class CollectionWorker:
                                   'monotonic': finished})
                             if not ok:
                                 self.events.put(('warning', '事件端点保活：' + detail))
-                        if (not usable and current_config is not None
+                        if (not usable and retry_allowed and current_config is not None
                                 and time.monotonic() - self.last_connect_attempt >= 5):
                             self.last_connect_attempt = time.monotonic()
-                            self.request(current_config, current_enabled)
+                            self._retry_connection(current_revision)
                         # Pace successful live reads start-to-start, with a short
                         # rest even if capture took longer than the whole period.
                         # Idle, paused and retry paths keep their existing backoff.
@@ -735,15 +1031,28 @@ class CollectionWorker:
                     # A transient cleanup failure gets one retry before the sink closes.
                     if not self.release():
                         self.release()
+                    if not self._close_pc_runtime():
+                        self._close_pc_runtime()
+                    config, enabled = self.effective
+                    if regeneration is not None and enabled and config.platform == 'native_pc':
+                        regeneration.poll_reporting(time.monotonic(), audit, force=True)
                     self.pending_history_count = len(runtime.pending_history)
         except Exception as exc:
-            self.events.put(('error', str(exc)))
+            self.events.put(('worker_error', str(exc)))
             traceback.print_exc(file=sys.stderr)
 
     def close(self, *, require_history_saved=False):
-        self.stop.set()
-        self.thread.join()  # Never orphan device cleanup on UI exit / pipe EOF.
-        errors = self.retired_errors + ([self.cleanup_error] if self.cleanup_error else [])
+        with self._request_lock:
+            self.stop.set()
+            startup = self.pc_runtime
+        if startup is not None:
+            startup.cancel()
+        if self.thread.ident is not None:
+            self.thread.join()  # Never orphan device cleanup on UI exit / pipe EOF.
+        else:
+            self.release()
+            self._close_pc_runtime()
+        errors = self.retired_errors + [error for error in (self.cleanup_error, self.pc_cleanup_error) if error]
         if require_history_saved and self.pending_history_count:
             errors.append(f'{self.pending_history_count} 局战绩尚未保存，更新未应用。')
         if errors:
@@ -868,19 +1177,41 @@ def serve(input_stream, output, state, worker=None):
                     worker.close()
                 result, kind, quit_requested = None, 'bye', True
             elif op == 'detect':
-                result = detect_instances(cmd.get('adb') or None,
-                                          register_mumu=worker is not None).diagnostics().as_dict()
+                effective = getattr(worker, 'effective', None)
+                config = effective[0] if effective is not None else state.effective_connection
+                platform = cmd.get('platform', config.platform)
+                if platform == 'native_pc':
+                    native_root = cmd.get('native_game_root', config.native_game_root)
+                    ConnectionConfig.from_dict({'platform': platform, 'native_game_root': native_root})
+                    result = ConnectionDiagnostics(
+                        status=DetectionStatus.NO_INSTANCE, platform='native_pc',
+                        native_game_root=native_root,
+                        code='native_root_required' if not native_root else 'native_unavailable',
+                        message='官服 PC 无需 ADB 检测；请填写游戏目录并应用连接设置以检查构建和读取权限。',
+                        version_expected=None).as_dict()
+                elif platform == 'mumu':
+                    result = detect_instances(cmd.get('adb') or None,
+                                              register_mumu=worker is not None).diagnostics().as_dict()
+                else:
+                    raise ValueError('platform 必须是 mumu 或 native_pc')
                 kind = 'state'
             elif op == 'rescan':
                 if worker:
-                    worker.request(*worker.effective)
+                    config, enabled = worker.effective
+                    revision = worker.request(config, enabled)
+                    state.expect_connection_request(config, revision)
                 result, kind = None, 'state'
             else:
                 result = state.command(cmd)
                 if op == 'connection_apply' and worker:
-                    worker.request(state.connection, state.layout.event_observation)
+                    revision = worker.request(state.connection, state.layout.event_observation)
+                    state.expect_connection_request(state.connection, revision)
+                elif op == 'connection_apply':
+                    state.finish_offline_connection()
                 kind = 'snapshot' if op == 'snapshot' else 'state'
             advance('snapshot')
+            if getattr(worker, 'effective', None) is not None:
+                state.effective_connection = worker.effective[0]
             reply = dict(version=PROTOCOL_VERSION, id=request_id, kind=kind, ok=True,
                          result=result, state=state.snapshot())
         except Exception as exc:
@@ -910,13 +1241,16 @@ def serve(input_stream, output, state, worker=None):
             return
 
 
-def main():
+def main(*, native_pc_observer_factory=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--state-dir', type=Path)
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--fixture', type=Path)
     parser.add_argument('--adb')
     parser.add_argument('--serial')
+    parser.add_argument('--platform', choices=('mumu', 'native_pc'))
+    parser.add_argument('--native-game-root')
+    parser.add_argument('--arkframework-root', type=Path)
     parser.add_argument('--no-events', action='store_true')
     parser.add_argument('--frida-remote')
     args = parser.parse_args()
@@ -935,14 +1269,25 @@ def main():
     output = sys.stdout
     sys.stdout = sys.stderr  # stdout is exclusively the protocol stream
     state = DesktopState(args.state_dir)
+    effective_config = replace(
+        state.connection, adb_path=args.adb or state.connection.adb_path,
+        serial=args.serial or state.connection.serial,
+        auto_detect=False if args.serial else state.connection.auto_detect,
+        platform=args.platform or ('native_pc' if args.native_game_root is not None or args.arkframework_root is not None
+                                   else state.connection.platform),
+        native_game_root=(args.native_game_root if args.native_game_root is not None
+                          else state.connection.native_game_root))
+    state.effective_connection = effective_config
     if args.fixture:
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))
-    worker = None if args.offline else CollectionWorker(state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE)
+    worker = None if args.offline else CollectionWorker(
+        state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE,
+        arkframework_root=args.arkframework_root,
+        native_pc_observer_factory=native_pc_observer_factory)
     if worker:
-        worker.request(replace(state.connection, adb_path=args.adb or state.connection.adb_path,
-                               serial=args.serial or state.connection.serial,
-                               auto_detect=False if args.serial else state.connection.auto_detect),
-                       False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))
+        revision = worker.request(effective_config,
+            False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))
+        state.expect_connection_request(effective_config, revision)
         worker.thread.start()
     try:
         serve(sys.stdin, output, state, worker)

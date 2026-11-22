@@ -379,7 +379,9 @@ internal sealed class PortableUpdateHost(string root)
     {
         var start = new ProcessStartInfo(Path.Combine(directory, Executable))
         {
-            WorkingDirectory = directory, UseShellExecute = false,
+            // Let Windows apply the target executable's manifest. The returned
+            // Process still belongs to the existing ready/exit/rollback protocol.
+            WorkingDirectory = directory, UseShellExecute = true,
         };
         start.ArgumentList.Add(option);
         start.ArgumentList.Add(Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(request)));

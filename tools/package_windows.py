@@ -2,7 +2,7 @@
 
 Run from the repository, not an extracted download. Inputs land in a fresh empty
 folder; hashes are pinned here. Nothing installs into the developer's Python.
-The full package includes the Frida client and the Android server for MuMu. ADB
+The full package includes the Frida client, native PC Gadget and Android server. ADB
 continues to come from the user's emulator installation.
 """
 from __future__ import annotations
@@ -22,7 +22,11 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from release_identity import candidate_head
-DEFAULT_VERSION = '1.0.0-rc.11'
+# The vendored upstream also owns a regular package named tools.
+sys.path.insert(0, str(ROOT / 'tools'))
+from frida_gadget_asset import stage_gadget, gadget_metadata
+from windows_manifest import verify_executable_manifest
+DEFAULT_VERSION = '1.0.0-rc.14'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
@@ -42,12 +46,12 @@ FRIDA_SERVER_LICENSE_SHA256 = '5ea1544b51a28bc823b03159190d4108f9fb4f4ef912389f5
 TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', 'tcl86t')
 BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py', 'boss_catalog.py',
            'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py', 'damage_settlement.py',
-           'connection.py', 'desktop_audit.py', 'event_capture.py', 'event_observer.py', 'event_stream.py',
+           'connection.py', 'desktop_audit.py', 'event_capture.py', 'event_observer.py', 'event_probe.py', 'event_stream.py',
            'frida_provision.py',
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
-           'stage_names.py', 'stats_core.py',
-           'event_probe_android2791.js')
+           'stage_names.py', 'stats_core.py', 'native_pc_collector.py',
+           'event_probe_android2791.js', 'event_probe_native_pc.js', 'event_probe_runtime.js')
 
 
 def digest(path):
@@ -94,7 +98,7 @@ def archive_name(version, with_events):
 
 
 def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
-          frida_server=None, frida_server_license=None, with_events=True):
+          frida_gadget_archive=None, frida_server=None, frida_server_license=None, with_events=True):
     if not RELEASE_VERSION.fullmatch(version) or any(
             int(part) > 2147483647 for part in re.findall(r'[0-9]+', version)):
         raise ValueError('Use a version such as 1.0.0 or 1.0.0-rc.1')
@@ -126,6 +130,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:PublishTrimmed=false',
         '-p:DebugType=none', '--artifacts-path', str(build_artifacts), '-o', str(bundle)],
         cwd=ROOT, check=True)
+    verify_executable_manifest(bundle / 'ArkDPS.Desktop.exe')
     runtime_config, = (build_artifacts / 'bin/ArkDPS.Desktop').glob('*/ArkDPS.Desktop.runtimeconfig.json')
     unpack(python_zip, bundle / 'python')
     # Isolated embedded interpreter: no user site, registry Python, PATH or pip.
@@ -136,8 +141,18 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     collector.mkdir()
     for name in BACKEND:
         shutil.copy2(ROOT / name, collector / name)
-    for name in ('assets', 'vendor'):
-        shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    for name in ('assets', 'vendor', 'native_pc'):
+        # The separately built ArkFramework DLL belongs to its host, outside the Python worker.
+        ignored = ('__pycache__', '*.pyc', 'arkframework') if name == 'native_pc' else ('__pycache__', '*.pyc')
+        if name == 'vendor':
+            # Only the full variant receives a verified Gadget. A local source
+            # cache must never leak it into a snapshot-only archive.
+            ignored += ('frida',)
+        shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns(*ignored))
+    if with_events:
+        component_dir = collector / 'vendor' / 'frida'
+        stage_gadget(component_dir / FRIDA_VERSION, source_archive=frida_gadget_archive)
+        shutil.copy2(ROOT / 'vendor/frida/COPYING', component_dir / 'COPYING')
     notices = bundle / 'licenses'
     notices.mkdir()
     for name in ('LICENSE', 'THIRD_PARTY.md'):
@@ -157,6 +172,11 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     # Python LICENSE.txt and the Frida client's dist-info/licenses/COPYING stay in their archives.
     metadata = bundle / 'metadata'
     metadata.mkdir()
+    pc_instructions = (
+        '官服 PC 请填写 Arknights.exe 所在目录。逐次事件需要先启动 ArkDPS，再启动游戏。\n'
+        'PC 事件组件随游戏保留到正常退出，仅通过本机认证端点连接。关闭观察者可只采累计。\n'
+        if with_events else
+        '本包仅包含累计快照。官服 PC 请填写 Arknights.exe 所在目录，并关闭「启用观察者」。\n')
     update_instructions = (
         '程序启动后会在后台检查并下载更新。也可从设置页手动检查。\n'
         '下载完成后，在设置页选择「重启并更新」。软件会保留设置和战绩。\n\n'
@@ -168,10 +188,13 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     (bundle / 'README.txt').write_text(
         f'ArkDPS {version} · Windows x64\n\n'
         '解压到可写目录，双击 ArkDPS.Desktop.exe。无需安装 Python 或 .NET。\n'
-        '实时统计需要开启 Root 的 MuMu 12 和已适配的安卓游戏 2.7.91。\n'
+        'ArkDPS 始终申请管理员权限，请允许 Windows 提升提示；取消提示不会启动程序。\n'
+        '在设置中选择 MuMu 或官服 PC。MuMu 需要开启 Root，并使用已适配的安卓游戏 2.7.91。\n'
+        f'{pc_instructions}'
         f'{observer_instructions}'
         'ADB 由模拟器提供。\n\n'
         f'{update_instructions}'
+        '从尚未要求管理员权限的旧版首次升级，请退出旧版并手动下载完整 ZIP，按下面步骤迁移一次。\n'
         '首次从旧版迁移或需要手动升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
         '如果旧版有 collector/runtime，将整个 runtime 目录复制到新版的 collector 后再启动。\n'
         '保留旧目录与备份。需要手动回退时，先退出新版，再启动旧目录中的程序。\n',
@@ -184,6 +207,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         collector_sha256=digest(collector/'desktop_bridge.py'), python='3.12.10',
         python_source=PYTHON_URL, python_archive_sha256=PYTHON_SHA256,
         frida=FRIDA_VERSION if with_events else None, frida_wheel_sha256=FRIDA_SHA256 if with_events else None,
+        native_pc_gadget=gadget_metadata() if with_events else None,
         files={str(p.relative_to(bundle)).replace('\\','/'):digest(p) for p in sorted(bundle.rglob('*')) if p.is_file()})
     if with_events:
         manifest['update_protocol'] = UPDATE_PROTOCOL
@@ -192,7 +216,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
     environment=dict(os.environ, PYTHONHOME='Z:/not-a-python', PYTHONPATH='Z:/not-a-python', DOTNET_MULTILEVEL_LOOKUP='0')
-    script='import desktop_bridge, sys; assert "tkinter" not in sys.modules; print(sys.version); print(sys.executable)'
+    script=('import desktop_bridge, native_pc_collector, sys; '
+            'assert "tkinter" not in sys.modules; print(sys.version); print(sys.executable)')
     script_args = []
     if with_events:
         script += (f'; import frida, lzma; assert frida.__version__ == {FRIDA_VERSION!r}; print(frida.__version__)'
@@ -219,12 +244,14 @@ def main():
     parser.add_argument('--version', default=DEFAULT_VERSION)
     parser.add_argument('--python-zip',type=Path)
     parser.add_argument('--frida-wheel',type=Path)
+    parser.add_argument('--frida-gadget-archive',type=Path, help='verified official PC Gadget XZ input')
     parser.add_argument('--frida-server', type=Path, help='reuse the pinned Android server .xz')
     parser.add_argument('--frida-server-license', type=Path, help='reuse the pinned server COPYING text')
     parser.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
     args=parser.parse_args()
     build(args.output.resolve(), version=args.version, python_zip=args.python_zip,
-          frida_wheel=args.frida_wheel, frida_server=args.frida_server,
+          frida_wheel=args.frida_wheel, frida_gadget_archive=args.frida_gadget_archive,
+          frida_server=args.frida_server,
           frida_server_license=args.frida_server_license, with_events=not args.without_events)
 
 

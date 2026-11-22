@@ -1,0 +1,40 @@
+cmake_minimum_required(VERSION 3.22)
+project(ArkDPSCollector LANGUAGES CXX)
+
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "ArkFramework requires a 64-bit Windows toolchain")
+endif()
+
+find_path(ARKFRAMEWORK_INCLUDE_DIR NAMES ark/battle.h REQUIRED)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+add_library(arkdps_sdk INTERFACE)
+target_include_directories(arkdps_sdk INTERFACE "${ARKFRAMEWORK_INCLUDE_DIR}")
+# ArkFramework a2ae65f's pinned Dear ImGui 1.91.9b host ABI.
+target_compile_definitions(arkdps_sdk INTERFACE ARKDPS_IMGUI_VERSION=19191 NOMINMAX WIN32_LEAN_AND_MEAN)
+if(MSVC)
+  target_compile_options(arkdps_sdk INTERFACE /utf-8)
+elseif(MINGW)
+  target_link_options(arkdps_sdk INTERFACE -static)
+endif()
+
+add_library(arkdps_collector MODULE plugin.cpp)
+target_link_libraries(arkdps_collector PRIVATE arkdps_sdk)
+set_target_properties(arkdps_collector PROPERTIES OUTPUT_NAME "ArkDPS.Collector" PREFIX "")
+
+option(BUILD_TESTING "Build the controlled ArkFramework SDK consumer test" OFF)
+if(BUILD_TESTING)
+  enable_testing()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(test_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/native_pc_arkframework")
+  add_executable(arkdps_sdk_test_host "${test_dir}/host.cpp")
+  target_link_libraries(arkdps_sdk_test_host PRIVATE arkdps_sdk)
+  if(MINGW)
+    target_link_options(arkdps_sdk_test_host PRIVATE -municode)
+  endif()
+  add_test(NAME sdk_event_capture COMMAND "${Python3_EXECUTABLE}" "${test_dir}/check_capture.py"
+           "$<TARGET_FILE:arkdps_sdk_test_host>" "$<TARGET_FILE:arkdps_collector>")
+endif()

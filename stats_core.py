@@ -613,6 +613,26 @@ class Statistics:
         row = meter.result(self.event_coverage_start, self.now, end, stream_complete=stream_complete,
                            missing_hits=missing, live=self.end_time is None, boss=boss,
                            include_overkill=self.damage_settlement_version >= 7)
+        # Classification accepted while an effect was live remains an observed
+        # component. A later missing endpoint cannot certify the whole window.
+        skill_reason = self.skill_incomplete.get(owner)
+        if skill_reason is None and (self.skill_unknown or owner in self.settlement_skill_unassigned
+                                     or any(identity[0] == owner for identity in self.settlement_skill_incomplete)):
+            skill_reason = '技能事件覆盖不完整'
+        if skill_reason is None:
+            live = self.end_time is None and self.event_coverage_end is None
+            for (candidate_owner, _actor), window in self.settlement_skill_active.items():
+                if candidate_owner == owner:
+                    # Existing ordinary effects can be clipped by a reliable
+                    # battle boundary. New native wait evidence certifies only
+                    # its open interval, until an actual end is observed.
+                    window_live = live or not self._is_ammo_window(window)
+                    skill_reason = self._unconfirmed_skill_reason(window, live=window_live)
+                    if skill_reason is not None:
+                        break
+        if skill_reason is not None:
+            row.update(skill_split_complete=False, skill_split_effective_complete=False,
+                       skill_split_reason=skill_reason)
         if not self.settlement_sides_known:
             row['reason'] = '当前玩家阵营未确认'
             if 'overkill_unknown_reason' in row:
@@ -877,10 +897,34 @@ class Statistics:
         return total
 
     @staticmethod
-    def _unconfirmed_skill_reason(window, *, live=False):
+    def _is_ammo_window(window):
+        return window is not None and 'skchr_angel2_3' in (window['key'], window['id'])
+
+    @staticmethod
+    def _validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id):
+        if method == 'BasicSkill.OnCastFinish':
+            if (kind != 'skill_end' or type(wait_for_end) is not bool
+                    or type(reason) is not int or not -(1 << 31) <= reason < (1 << 31)
+                    or not any(isinstance(value, str) and value for value in (key, skill_id))):
+                raise ValueError('invalid native skill cast state')
+        elif wait_for_end is not None:
+            raise ValueError('native skill state is only valid for a cast-return observation')
+
+    @staticmethod
+    def _native_cast_window_matches(window, source, key, skill_id, actor):
+        if window is None or source != window['source'] or actor != window.get('actor'):
+            return False
+        identity = {key, skill_id} - {None}
+        active_identity = {window['key'], window['id']} - {None}
+        return bool(identity and active_identity and not active_identity.isdisjoint(identity))
+
+    @classmethod
+    def _unconfirmed_skill_reason(cls, window, *, live=False):
         if window is None or ('cast_completed_at' not in window and 'movement_at' not in window):
             return None
-        if 'skchr_angel2_3' in (window['key'], window['id']):
+        if cls._is_ammo_window(window):
+            if live and window['effect_started'] and window.get('native_wait_for_skill_end') is True:
+                return None
             return '未观察到弹药技能的实际结束'
         if live and window['effect_started']:
             # The observed portion of a confirmed activation is a usable window.
@@ -902,23 +946,29 @@ class Statistics:
         for owner, window in tuple(self.skill_active.items()):
             # A reliable battle end clips any window that was valid while open.
             confirmed = battle_end and self._unconfirmed_skill_reason(window, live=True) is None
+            # A cast-return state witness proves the observed open effect, not
+            # an unobserved effect end. Old ordinary battle clipping is intact.
+            if self._is_ammo_window(window):
+                confirmed = False
             self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
 
     def _record_skill_transition(self, owner, source, kind, game_time, *,
-                                 key, skill_id, name, method, reason):
+                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None):
         self._apply_skill_transition(
             self.skill_active, owner, source, kind, game_time, key=key, skill_id=skill_id,
-            name=name, method=method, reason=reason, close=self._close_skill_window)
+            name=name, method=method, reason=reason, wait_for_end=wait_for_end,
+            close=self._close_skill_window, actor=actor)
 
     def record_settlement_skill(self, owner, actor, source, kind, game_time, *,
-                                key, skill_id, name, method, reason):
+                                key, skill_id, name, method, reason, wait_for_end=None):
         def close(identity, _time, _reason, *, confirmed):
             window = self.settlement_skill_active.pop(identity)
             if not confirmed and self._unconfirmed_skill_reason(window):
                 self.settlement_skill_incomplete.add(identity)
         self._apply_skill_transition(
             self.settlement_skill_active, (owner, actor), source, kind, game_time,
-            key=key, skill_id=skill_id, name=name, method=method, reason=reason, close=close)
+            key=key, skill_id=skill_id, name=name, method=method, reason=reason,
+            wait_for_end=wait_for_end, close=close, actor=actor)
 
     def mark_settlement_skill_unassigned(self, source, method, reason):
         owner = self.owners.get(source)
@@ -933,7 +983,8 @@ class Statistics:
         self.settlement_skill_unassigned.add(owner)
 
     def _apply_skill_transition(self, active, identity_key, source, kind, game_time, *,
-                                key, skill_id, name, method, reason, close):
+                                key, skill_id, name, method, reason, close, wait_for_end=None, actor=None):
+        self._validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id)
         window = active.get(identity_key)
         identity = {key, skill_id} - {None}
         active_identity = {window['key'], window['id']} - {None} if window is not None else set()
@@ -954,11 +1005,23 @@ class Statistics:
             if window is None:
                 active[identity_key] = {
                     'start': game_time, 'source': source, 'key': key, 'id': skill_id,
-                    'name': name, 'effect_started': effect_started}
+                    'name': name, 'effect_started': effect_started, 'actor': actor}
             elif source == window['source'] and same_skill and effect_started:
                 window['effect_started'] = True
             return
+        if method == 'BasicSkill.OnCastFinish' and not self._native_cast_window_matches(
+                window, source, key, skill_id, actor):
+            if wait_for_end is True:
+                raise ValueError('native cast state has no matching skill activation')
+            return
         if window is None or source != window['source'] or not same_skill:
+            if method == 'BasicSkill.OnCastFinish' and wait_for_end is True:
+                raise ValueError('native cast state has no matching skill activation')
+            return
+        if method == 'BasicSkill.OnCastFinish':
+            # This native return observes cast state, never an effect endpoint.
+            window.setdefault('cast_completed_at', game_time)
+            window['native_wait_for_skill_end'] = wait_for_end
             return
         if method == 'Character.OnAfterSkill' and type(reason) is int and reason == 1:
             # Ability.FinishReason.INTERRUPTED can end the cast action while
@@ -1232,7 +1295,7 @@ class Statistics:
               killed=None, target_type=None, damage_type=None,
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-              verified_skill_end_owner=None, skill_method=None,
+              verified_skill_end_owner=None, skill_method=None, skill_wait_for_end=None, skill_actor=None,
               mitigation_before=None, mitigation_after=None, settled_after_nested_kill=False):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
@@ -1257,6 +1320,8 @@ class Statistics:
                  'hp_damage', 'skill_start', 'skill_end')
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
+        self._validate_skill_cast_state(kind, skill_method or target_instance, skill_reason,
+                                        skill_wait_for_end, skill_key, skill_id)
         owner = self.owners.get(source)
         if kind == 'skill_end' and owner is None:
             owner = verified_skill_end_owner
@@ -1279,7 +1344,7 @@ class Statistics:
         if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
             raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
         payload = (game_time, source, kind, amount, evidence, target_instance, owner,
-                   skill_key, skill_id, skill_name, skill_reason, skill_method,
+                   skill_key, skill_id, skill_name, skill_reason, skill_method, skill_wait_for_end, skill_actor,
                    mitigation_before, mitigation_after, settled_after_nested_kill)
         if event_id in self.events:
             if self.events[event_id] != payload:
@@ -1374,7 +1439,8 @@ class Statistics:
         if kind in ('skill_start', 'skill_end'):
             self._record_skill_transition(
                 owner, source, kind, game_time, key=skill_key, skill_id=skill_id,
-                name=skill_name, method=skill_method or target_instance, reason=skill_reason)
+                name=skill_name, method=skill_method or target_instance, reason=skill_reason,
+                wait_for_end=skill_wait_for_end, actor=skill_actor)
             return
         if kind == 'hp_damage':
             friendly = (isinstance(target, str)

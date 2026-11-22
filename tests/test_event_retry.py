@@ -1,12 +1,16 @@
 """A failed observer is retried at a confirmed new battle, never mid-battle."""
+from dataclasses import replace
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from event_capture import CaptureRetry
+from event_observer import ObserverReadRetry
+from collector import BattleChanged, ProcessChanged
 from test_collection_session import LiveObserver
 from test_event_capture import event
-from test_lifecycle_events import connected, advance
+from test_lifecycle_events import connected, advance, native_connection
 
 
 def next_battle(session, collector, damage=3, *, initialize=True):
@@ -199,3 +203,237 @@ def test_event_retry_journal_preserves_replay_and_each_archive_once(tmp_path):
     path.write_text('\n'.join(json.dumps(dict(kind=kind, data=data), default=json_value)
                               for kind, data in records) + '\n', encoding='utf-8')
     assert replay(path)['archives'] == 2
+
+
+def native_ack_timeout(*, terminal=False):
+    # This fixture serializes identity changes between poll calls. Its commit
+    # callback belongs to that fixture stream; a real producer must provide the
+    # same binding or keep sequences unique for the observer's entire lifetime.
+    runtime, collector, observer, snapshot, state, events, calls, commits = native_connection()
+    attempts = []
+    lost = False
+
+    def acknowledge(sequence):
+        nonlocal lost
+        attempts.append(sequence)
+        if sequence == 1 and not lost:
+            lost = True
+            raise ObserverReadRetry('ack response timed out')
+        commits.append(sequence)
+
+    observer.commit_events = acknowledge
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1., 20.
+    state.battle_state = 3 if terminal else 2
+    events.queue = [event(1, frame=2, game_time=1., amount=20)]
+    accepted = runtime.poll(collector, observer)  # An accepted sample must not raise.
+    assert runtime.sessions.adapter.result()['rows']['char_a']['observed_damage'] == 20
+    assert runtime.sessions.adapter.result()['rows']['char_a']['event_coverage_complete'] is True
+    assert attempts == [0, 1] and commits == [0]
+    return runtime, collector, observer, snapshot, state, events, attempts, commits, accepted
+
+
+@pytest.mark.parametrize('new_events', [False, True])
+def test_native_ack_timeout_retries_accepted_prefix_without_gap_or_double_credit(new_events):
+    runtime, collector, observer, snapshot, _, events, attempts, commits, _ = native_ack_timeout()
+    if new_events:
+        snapshot.frame, snapshot.game_time, snapshot.damage = 3, 2., 40.
+        events.queue.append(event(2, frame=3, game_time=2., amount=20))
+    runtime.poll(collector, observer)
+    row = runtime.sessions.adapter.result()['rows']['char_a']
+    expected_sequence = 2 if new_events else 1
+    assert row['damage'] == row['observed_damage'] == (40 if new_events else 20)
+    assert row['event_coverage_complete'] is True and runtime.sessions.event_status == 'recording'
+    assert runtime.sessions.adapter.event_stream.sequence == expected_sequence
+    assert attempts == [0, 1, expected_sequence]
+    assert commits == [0, expected_sequence]
+    assert runtime._pending_event_ack is None
+
+
+@pytest.mark.parametrize('changed_field', [None, 'amount', 'source_character_uid'])
+def test_native_ack_replay_uses_the_original_record_after_roster_attribution_changes(changed_field):
+    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    original_roster = snapshot.read_roster
+    player_side = None
+    snapshot.read_roster = lambda: replace(original_roster(), local_player_side=player_side)
+    events.claims['batch'] = dict(source_attribution_version=1, partial_damage_version=7,
+                                  damage_settlement_ready=True)
+
+    def acknowledge(sequence):
+        if sequence == 1:
+            raise ObserverReadRetry('ack response timed out')
+        commits.append(sequence)
+
+    def damage_record(sequence, frame, game_time):
+        return dict(event(sequence, frame, game_time, 20), kind='damage_settlement',
+                    source_character_uid=1, target='enemy_a', target_uid='77',
+                    damage_type=1, shield_absorbed=0, settlement_complete=True,
+                    nominal_amount=20, killed=False)
+
+    observer.commit_events = acknowledge
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1., 20.
+    events.queue = [damage_record(1, 2, 1.)]
+    runtime.poll(collector, observer)
+    first = runtime.display_sample()['statistics']['rows']['char_a']['settled_damage']
+    assert first['observed_hits'] == first['unverified_hits'] == 1
+
+    player_side = 0
+    snapshot.frame, snapshot.game_time, snapshot.damage = 3, 2., 40.
+    if changed_field is not None:
+        events.queue[0][changed_field] += 1
+    events.queue.append(damage_record(2, 3, 2.))
+    runtime.poll(collector, observer)
+
+    result = runtime.display_sample()
+    row = result['statistics']['rows']['char_a']
+    assert row['damage'] == 40
+    damage = row['settled_damage']
+    assert damage['unverified_hits'] == 1
+    if changed_field is None:
+        assert result['event_status'] == 'recording'
+        assert result['event_watermark']['sequence'] == 2
+        assert damage['observed_hits'] == 2
+        assert damage['effective_damage'] == 20
+        assert commits == [0, 2]
+    else:
+        assert result['event_status'] == 'gap'
+        assert 'conflicts with the accepted record' in result['event_error']
+        assert result['event_watermark']['sequence'] == 1
+        assert damage['observed_hits'] == 1
+        assert damage['effective_damage'] is None
+        assert commits == [0]
+
+
+def test_native_ack_replay_can_include_records_covered_by_the_initial_baseline():
+    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    snapshot.damage = 20
+    events.queue = [event(1)]
+
+    def acknowledge(sequence):
+        if sequence == 1:
+            raise ObserverReadRetry('baseline ack response timed out')
+        commits.append(sequence)
+
+    observer.commit_events = acknowledge
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1., 40.
+    events.queue.append(event(2, 2, 1., 20))
+    runtime.poll(collector, observer)
+
+    result = runtime.display_sample()
+    row = result['statistics']['rows']['char_a']
+    assert row['damage'] == 40 and row['observed_damage'] == 20
+    assert result['event_status'] == 'recording'
+    assert result['event_watermark']['sequence'] == 2
+    assert commits == [2]
+
+
+@pytest.mark.parametrize('guard_retry', [False, True])
+def test_native_terminal_ack_retry_preserves_once_archive_and_finished_coverage(guard_retry):
+    runtime, collector, observer, _, state, _, attempts, commits, accepted = native_ack_timeout(terminal=True)
+    assert runtime.sessions.event_status == 'finished'
+    if guard_retry:
+        original_mark = observer.mark
+        mark_calls = 0
+
+        def mark():
+            nonlocal mark_calls
+            mark_calls += 1
+            if mark_calls == 2:  # next acquisition mark succeeds; retained-ack guard is busy
+                raise ObserverReadRetry('ack identity mark response timed out')
+            return original_mark()
+
+        observer.mark = mark
+    state.active = False
+    runtime.poll(collector, observer)
+    archive, = runtime.sessions.pop_archives()
+    assert archive['battle_id'] == accepted.sample['session']
+    assert archive['event_status'] == 'finished'
+    row = archive['statistics']['rows']['char_a']
+    assert row['damage'] == row['observed_damage'] == 20 and row['event_coverage_complete'] is True
+    if guard_retry:
+        assert attempts == [0, 1] and runtime._pending_event_ack is not None
+    runtime.poll(collector, observer)
+    assert attempts == [0, 1, 1] and commits == [0, 1]
+    assert not runtime.sessions.pop_archives()
+    assert runtime._pending_event_ack is None
+
+
+def test_native_pending_ack_does_not_cross_a_new_session_with_reset_sequence():
+    runtime, collector, observer, snapshot, _, events, attempts, commits, _ = native_ack_timeout()
+    snapshot.session = 'next-native-battle'
+    snapshot.frame, snapshot.game_time, snapshot.damage = 1, 0., 0.
+    events.queue = []
+    mark, read = observer.mark, observer.read_through
+    observer.mark = lambda: {**mark(), 'native_session': snapshot.session}
+    observer.read_through = lambda sequence: {**read(sequence), 'native_session': snapshot.session}
+    successor = runtime.poll(collector, observer)
+    assert successor.generation == 2
+    assert attempts == [0, 1, 0] and commits == [0, 0]
+    assert runtime._pending_event_ack is None
+    row = runtime.sessions.adapter.result()['rows']['char_a']
+    assert row['damage'] == row['observed_damage'] == 0
+    old, = runtime.sessions.pop_archives()
+    assert old['statistics']['rows']['char_a']['observed_damage'] == 20
+
+
+def test_native_pending_ack_is_not_sent_to_a_reconnected_observer():
+    runtime, collector, observer, _, state, _, attempts, _, _ = native_ack_timeout(terminal=True)
+    replacement_commits = []
+    replacement = SimpleNamespace(**vars(observer))
+    replacement.commit_events = replacement_commits.append
+    state.active = False
+    runtime.poll(collector, replacement)
+    assert attempts == [0, 1] and replacement_commits == []
+    assert runtime._pending_event_ack is None
+    archive, = runtime.sessions.pop_archives()
+    assert archive['statistics']['rows']['char_a']['observed_damage'] == 20
+
+
+@pytest.mark.parametrize('key', ['native_session', 'source_build'])
+def test_native_pending_terminal_ack_requires_a_fresh_matching_producer_binding(key):
+    runtime, collector, observer, _, state, _, attempts, _, _ = native_ack_timeout(terminal=True)
+    mark = observer.mark
+    observer.mark = lambda: {**mark(), key: 'replacement-identity'}
+    state.active = False
+    runtime.poll(collector, observer)
+    assert attempts == [0, 1] and runtime._pending_event_ack is None
+    archive, = runtime.sessions.pop_archives()
+    assert archive['event_status'] == 'finished'
+    assert archive['statistics']['rows']['char_a']['observed_damage'] == 20
+
+
+@pytest.mark.parametrize('sequence', [0, True, None, '1'])
+def test_native_pending_terminal_ack_rejects_noninteger_or_reset_producer_sequence(sequence):
+    runtime, collector, observer, _, state, _, attempts, _, _ = native_ack_timeout(terminal=True)
+    mark = observer.mark
+    observer.mark = lambda: {**mark(), 'sequence': sequence}
+    state.active = False
+    runtime.poll(collector, observer)
+    assert attempts == [0, 1] and runtime._pending_event_ack is None
+    archive, = runtime.sessions.pop_archives()
+    assert archive['event_status'] == 'finished'
+    assert archive['statistics']['rows']['char_a']['observed_damage'] == 20
+
+
+def test_explicit_disconnect_clears_pending_ack_without_retrying_transport():
+    runtime, _, _, _, _, _, attempts, _, _ = native_ack_timeout()
+    runtime.disconnected('explicit_disconnect')
+    assert runtime._pending_event_ack is None
+    assert attempts == [0, 1]
+    assert runtime.sessions.adapter.result()['rows']['char_a']['observed_damage'] == 20
+
+
+@pytest.mark.parametrize('failure', [ProcessChanged, BattleChanged])
+def test_process_change_clears_pending_ack_without_sending_old_watermark(failure):
+    runtime, collector, observer, _, _, _, attempts, _, _ = native_ack_timeout()
+
+    def changed():
+        raise failure('process changed')
+
+    collector.read_lifecycle = changed
+    with pytest.raises(failure):
+        runtime.poll(collector, observer)
+    assert runtime._pending_event_ack is None and attempts == [0, 1]
+    assert runtime.sessions.adapter.result()['rows']['char_a']['observed_damage'] == 20

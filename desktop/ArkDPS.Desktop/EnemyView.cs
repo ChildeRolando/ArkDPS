@@ -102,6 +102,7 @@ public sealed class EnemyItem : INotifyPropertyChanged
             },
             "rebirthing" => "等待重生",
             "entered" => "已入场 · 状态未知",
+            "current" => "在场",
             _ => row.Bool("alive") ? "在场" : "状态未知",
         };
         string hpText=Int(row.Get("hp"));
@@ -110,7 +111,14 @@ public sealed class EnemyItem : INotifyPropertyChanged
         bool maxKnown=row.Bool("hp_known") && row.Number("max_hp",double.NaN)>0;
         string maxHp=hasFloor ? $"≥ {Int(row.Get("max_hp_lower_bound"))}"
             : maxKnown ? Int(row.Get("max_hp")) : "—";
-        string health=hpText=="—" && maxHp=="—" ? "HP 未知" : $"{hpText} / {maxHp}";
+        string lastObserved=Int(row.Get("last_observed_hp"));
+        var peakReading=row.Get("peak_observed_hp");
+        bool currentHpOnly=peakReading.ValueKind!=JsonValueKind.Undefined && maxHp=="—";
+        string peakObserved=Int(peakReading);
+        bool rememberedHp=(departed || lifecycle=="entered") && lastObserved!="—";
+        string health=rememberedHp ? "最后 HP " + lastObserved
+            : hpText=="—" && maxHp=="—" ? "HP 未知"
+            : currentHpOnly ? "当前 HP " + hpText : $"{hpText} / {maxHp}";
         double hpRatio=row.Number("hp_ratio",double.NaN);
         bool ratioKnown=!hasFloor && maxKnown && hpText!="—" && hpRatio is >= 0 and <= 1;
         var phaseTotal = row.Get("phase_total_hp");
@@ -125,6 +133,8 @@ public sealed class EnemyItem : INotifyPropertyChanged
         string phaseFloor=Int(row.Get("phase_max_hp_lower_bound"));
         if(phaseFloor!="—")
             phaseHp=(phaseHp==null ? "" : phaseHp+" · ")+"本阶段 HP 容量 ≥ "+phaseFloor;
+        if(peakObserved!="—")
+            phaseHp=(phaseHp==null ? "" : phaseHp+" · ")+"已观测最高 HP "+peakObserved;
         double speed = row.Get("move_speed").TryNumber(double.NaN);
         string moveSpeed = double.IsFinite(speed) ? speed.ToString("0.##", CultureInfo.InvariantCulture) : "—";
         bool entryAttributes = lifecycle == "entered" || row.Bool("attributes_from_entry");
@@ -135,16 +145,26 @@ public sealed class EnemyItem : INotifyPropertyChanged
               $"攻击 {Int(row.Get("atk"))}  ·  防御 {Int(row.Get("def"))}  ·  法抗 {Int(row.Get("res"))}" +
               $"  ·  移速 {moveSpeed}  ·  攻速 {Int(row.Get("attack_speed"))}"
             : "属性未知";
+        var lastHpFrame=row.Get("last_hp_observed_frame");
+        var lastPresentFrame=row.Get("last_present_frame");
         string detail = string.Join("\n", new[]
         {
             name,
             eid.Length > 0 ? eid : null,
             code.Length > 0 ? "图鉴 " + code : null,
             "状态 " + row.Text("state"),
-            "当前 HP / 最大 HP " + health,
+            rememberedHp || currentHpOnly ? health : "当前 HP / 最大 HP " + health,
             phaseHp,
             row.Get("spawn_frame").ValueKind == JsonValueKind.Number ? "入场帧 " + Int(row.Get("spawn_frame")) : null,
             row.Get("end_frame").ValueKind == JsonValueKind.Number ? "离场帧 " + Int(row.Get("end_frame")) : null,
+            row.Get("first_observed_frame").ValueKind == JsonValueKind.Number
+                ? "首次观测帧 " + Int(row.Get("first_observed_frame")) : null,
+            lastPresentFrame.ValueKind == JsonValueKind.Number
+                ? "最后在场观测帧 " + Int(lastPresentFrame) : null,
+            lastHpFrame.ValueKind == JsonValueKind.Number && Int(lastHpFrame) != Int(lastPresentFrame)
+                ? $"最后 HP 观测帧 {Int(lastHpFrame)} · HP {lastObserved}" : null,
+            row.Get("departure_observed_frame").ValueKind == JsonValueKind.Number
+                ? "观测离场帧 " + Int(row.Get("departure_observed_frame")) : null,
         }.Where(x => !string.IsNullOrEmpty(x)));
         return new Display(badge,name,eid,status,health,phaseHp??"",attrs,detail,
             ratioKnown ? hpRatio*100 : 0,ratioKnown,EnemyPortraits.Get(eid,departed));
@@ -454,6 +474,8 @@ public partial class MainWindow
             enemyGapStart??=EnemyChart.Points[^1].GameTime;
 
         bool hasReading=shownEnemy.ValueKind==JsonValueKind.Object;
+        bool nativeCurrentHp=enemy.Text("scope")=="native_pc_current_hp" ||
+            shownEnemy.Text("scope")=="native_pc_current_hp";
         var totals=shownEnemy.Get("totals");
         bool totalComplete=EnemyComplete(totals,"total_hp_complete");
         bool remainingComplete=EnemyComplete(totals,"remaining_hp_complete");
@@ -466,13 +488,14 @@ public partial class MainWindow
         EnemyEntered.Text=EnemyReading(totals,"entered_count",entryComplete);
         EnemyTotalHp.Text=EnemyReading(totals,"entered_total_hp",totalComplete);
         EnemyRemaining.Text=EnemyReading(totals,"remaining_hp",remainingComplete);
+        EnemyRemainingScope.Text=nativeCurrentHp ? "当前快照名单" : "仅场上存活实例";
         EnemyOurDamageLabel.Text=scopedDamage ? "我方对敌扣血" : "我方有效伤害";
         EnemyOurDamage.Text=last.Bool("our_damage_known")
             ? EnemyReading(last,"our_effective_damage",damageComplete) : "—";
 
         string enemyStatus=status switch
         {
-            "ready" => enemy.Bool("enemy_state_complete") ? "事件更新" : "快照读取",
+            "ready" => nativeCurrentHp ? "当前在场快照" : enemy.Bool("enemy_state_complete") ? "事件更新" : "快照读取",
             "locating" => "正在定位敌人",
             "stale" => "敌情快照不完整",
             "unavailable" => "敌情遥测不可用",
@@ -493,6 +516,8 @@ public partial class MainWindow
 
         var hints=new List<string>();
         string error=enemy.Text("error");
+        if(nativeCurrentHp && error.Length>0)
+            error=error=="enemy_sample_stale" ? "敌情快照已过期。" : "等待下一份可靠的敌情快照。";
         if(error.Length>0) hints.Add(error);
         if(!ready && hasReading) hints.Add(battleStatus is "preparing" or "previous"
             ? "显示上一局最后一次可用的敌情。" : "显示本局最后一次可用的敌情。");
@@ -502,7 +527,25 @@ public partial class MainWindow
             JsonValueKind.False => "入场事件覆盖不完整，已入场人数为已确认下限。",
             _ => "已入场人数来自已观察的敌人快照。",
         };
-        if(hasReading)
+        if(nativeCurrentHp)
+        {
+            var plan=enemy.Get("stage_plan");
+            if(!blocked && battleId.Length>0 && plan.Get("fixed_count").TryNumber() is double fixedCount && fixedCount>=0)
+            {
+                hints.Add("固定波次计数 "+plan.UiInt("fixed_count")+" 个。");
+                if(plan.Get("conditional_actions").TryNumber()>0)
+                    hints.Add("另有 "+plan.UiInt("conditional_actions")+" 条条件出怪动作。");
+                if(plan.Bool("branches_present")) hints.Add("检测到关卡分支引用。");
+            }
+            hints.Add("入场人数为已观测下限。离场表示实例已从采样名单消失，原因未知。");
+            if(totals.Get("current_count").ValueKind==JsonValueKind.Number &&
+                totals.Get("current_hp_count").ValueKind==JsonValueKind.Number)
+                hints.Add("确认在场 "+totals.UiInt("current_count")+" 个，可读 HP "+totals.UiInt("current_hp_count")+" 个。");
+            if(!remainingComplete) hints.Add("≥ 表示当前名单已读到的 HP 下限。");
+            hints.Add("最大 HP、属性、关卡总血量及逐次结算暂缺数据。");
+            if(shownEnemy.Bool("history_truncated")) hints.Add("敌人过多，早期观察记录已达到保留上限。");
+        }
+        else if(hasReading)
         {
             hints.Add(entryHint+"已入场总血量含已记录的重生阶段。");
             if(!totalComplete || !remainingComplete || (last.Bool("our_damage_known") && !damageComplete))
@@ -531,7 +574,7 @@ public partial class MainWindow
         EnemyEmpty.Visibility=enemyRows.Count==0 ? Visibility.Visible : Visibility.Collapsed;
         EnemyEmpty.Text=status switch
         {
-            "ready" when ready => "当前未确认有敌人入场。",
+            "ready" when ready => nativeCurrentHp ? "这份快照中未确认有在场敌人。" : "当前未确认有敌人入场。",
             "locating" => "正在定位敌人。",
             "unavailable" => "敌人遥测不可用；干员统计不受影响。",
             "stale" => "没有可显示的可靠敌情。",
@@ -539,7 +582,7 @@ public partial class MainWindow
         };
         EnemyChartLegendTotal.Text = "已入场总血量  " + EnemyTotalHp.Text;
         EnemyChartLegendDamage.Text = EnemyOurDamageLabel.Text + "  " + EnemyOurDamage.Text;
-        EnemyChartLegendRemaining.Text = "敌方剩余  " + EnemyRemaining.Text;
+        EnemyChartLegendRemaining.Text = (nativeCurrentHp ? "当前名单 HP  " : "敌方剩余  ") + EnemyRemaining.Text;
     }
 
     private void UpdateEnemyRows(JsonElement data)
@@ -589,21 +632,28 @@ public partial class MainWindow
             enemyGapStart=null;
         }
         enemyGaps.RemoveAll(gap=>gap.End<samples[0].Number("game_time"));
+        EnemyChart.SetData(ProjectEnemyPoints(samples,enemyGaps));
+    }
+
+    internal static IReadOnlyList<EnemyPoint> ProjectEnemyPoints(JsonElement[] samples,
+        IReadOnlyList<(double Start,double End)> gaps)
+    {
         var next=new List<EnemyPoint>(samples.Length);
         foreach(var sample in samples)
         {
             double time=sample.Number("game_time");
-            if(enemyGaps.Any(gap=>time>gap.Start && time<gap.End)) continue;
+            if(gaps.Any(gap=>time>gap.Start && time<gap.End)) continue;
             bool totalComplete=EnemyComplete(sample,"total_hp_complete");
             bool remainingComplete=EnemyComplete(sample,"remaining_hp_complete");
             bool damageComplete=sample.Get("our_damage_complete").ValueKind!=JsonValueKind.False;
-            bool breaks=next.Count>0 && enemyGaps.Any(gap=>next[^1].GameTime<=gap.Start && time>=gap.End);
+            bool breaks=next.Count>0 && (sample.Bool("break_before") ||
+                gaps.Any(gap=>next[^1].GameTime<=gap.Start && time>=gap.End));
             next.Add(new EnemyPoint(time,EnemyNumber(sample,"entered_total_hp",totalComplete),totalComplete,
                 EnemyNumber(sample,"remaining_hp",remainingComplete),remainingComplete,
                 sample.Bool("our_damage_known") ? EnemyNumber(sample,"our_effective_damage",damageComplete) : null,
                 damageComplete,breaks));
         }
-        EnemyChart.SetData(next);
+        return next;
     }
 
     private static bool EnemyComplete(JsonElement data,string key) =>

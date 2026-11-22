@@ -1,6 +1,7 @@
 """Source-checkout launcher for the C#/WPF UI (no Tk or device access)."""
 from pathlib import Path
 import ctypes
+from ctypes import wintypes
 import os
 import shutil
 import subprocess
@@ -14,6 +15,61 @@ EXECUTABLE = PROJECT.parent / 'bin' / 'Release' / 'net10.0-windows' / 'ArkDPS.De
 def worker_python(executable):
     path = Path(executable)
     return str(path.with_name('python.exe') if path.name.lower() == 'pythonw.exe' else path)
+
+
+class ShellExecuteInfo(ctypes.Structure):
+    _fields_ = [('cbSize', wintypes.DWORD), ('fMask', wintypes.ULONG),
+               ('hwnd', wintypes.HWND), ('lpVerb', wintypes.LPCWSTR),
+               ('lpFile', wintypes.LPCWSTR), ('lpParameters', wintypes.LPCWSTR),
+               ('lpDirectory', wintypes.LPCWSTR), ('nShow', ctypes.c_int),
+               ('hInstApp', wintypes.HINSTANCE), ('lpIDList', ctypes.c_void_p),
+               ('lpClass', wintypes.LPCWSTR), ('hkeyClass', wintypes.HKEY),
+               ('dwHotKey', wintypes.DWORD), ('hIcon', wintypes.HANDLE),
+               ('hProcess', wintypes.HANDLE)]
+
+
+def _elevated_launch(command, directory):
+    """The EXE manifest requires elevation; keep ownership of the launched app."""
+    shell = ctypes.WinDLL('shell32', use_last_error=True)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    shell.ShellExecuteExW.argtypes = [ctypes.POINTER(ShellExecuteInfo)]
+    shell.ShellExecuteExW.restype = wintypes.BOOL
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    request = ShellExecuteInfo(cbSize=ctypes.sizeof(ShellExecuteInfo),
+        fMask=0x40 | 0x100,  # SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+        lpVerb='runas', lpFile=str(command[0]),
+        lpParameters=subprocess.list2cmdline([str(value) for value in command[1:]]),
+        lpDirectory=str(directory), nShow=1)
+    if not shell.ShellExecuteExW(ctypes.byref(request)):
+        error = ctypes.get_last_error()
+        if error == 1223:
+            raise RuntimeError('已取消管理员权限请求，ArkDPS 尚未启动。')
+        raise ctypes.WinError(error)
+    if not request.hProcess:
+        raise RuntimeError('Windows 未返回 ArkDPS 进程句柄，无法确认启动结果。')
+    try:
+        if kernel.WaitForSingleObject(request.hProcess, 0xffffffff) != 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(request.hProcess, ctypes.byref(code)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return code.value
+    finally:
+        kernel.CloseHandle(request.hProcess)
+
+
+def run_desktop(command, directory):
+    try:
+        return subprocess.run(command, cwd=directory).returncode
+    except OSError as error:
+        if getattr(error, 'winerror', None) != 740:
+            raise
+        return _elevated_launch(command, directory)
 
 
 def launch(args=None):
@@ -34,10 +90,13 @@ def launch(args=None):
                 raise RuntimeError(f'WPF 构建失败（退出码 {result.returncode}）；详情见 runtime/wpf-build.log。')
         command = [str(EXECUTABLE), '--repo', str(ROOT), '--python', worker_python(sys.executable)]
         if args is not None:
-            for name in ('adb', 'serial'):
+            for name in ('adb', 'serial', 'platform', 'native_game_root'):
                 value = getattr(args, name, None)
                 if value:
-                    command += ['--' + name, value]
+                    command += ['--' + name.replace('_', '-'), value]
+            framework_root = getattr(args, 'arkframework_root', None)
+            if framework_root:
+                command += ['--arkframework-root', str(Path(framework_root).absolute())]
             endpoint = getattr(args, 'frida_remote', None)
             if endpoint == '':
                 command.append('--no-events')
@@ -45,7 +104,7 @@ def launch(args=None):
                 command += ['--frida-remote', endpoint]
         # Keep the launcher foreground-owned; WPF owns the independent Python
         # process, keeps it alive when hidden, and awaits cleanup on explicit Quit.
-        return subprocess.run(command, cwd=ROOT).returncode
+        return run_desktop(command, ROOT)
     except (OSError, RuntimeError) as exc:
         ctypes.windll.user32.MessageBoxW(None, str(exc), 'ArkDPS 启动失败', 0x10)
         return 1

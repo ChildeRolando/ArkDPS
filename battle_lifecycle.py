@@ -16,6 +16,7 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
+from event_probe import contract_for
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 
@@ -55,6 +56,19 @@ def _terminal_boundary(observer):
     return {'terminal_boundary': boundary} if isinstance(boundary, dict) else None
 
 
+def _observer_mark(observer):
+    mark = observer.mark()
+    if not isinstance(mark, dict):
+        raise StreamGap('invalid observer mark')
+    if mark.get('error'):
+        raise StreamGap(f"observer callback error: {mark['error']}")
+    if mark.get('stopped'):
+        raise StreamGap('observer stopped')
+    if mark.get('retry'):
+        raise CaptureRetry('observer clock advanced')
+    return mark
+
+
 class BattleFeed:
     """Issue generations at acquisition, before any asynchronous UI queue."""
 
@@ -64,6 +78,7 @@ class BattleFeed:
         self.generation = 0
         self.identity = None
         self.clock = None
+        self.frame = None
         self.retired = None
         self.retired_clock = None
         self.retired_session = None
@@ -100,7 +115,7 @@ class BattleFeed:
         self.retired, self.retired_clock = self.identity, self.clock
         self.retired_session = self.native_session
         self.retired_stage = self.stage
-        self.identity = self.clock = self.native_session = None
+        self.identity = self.clock = self.frame = self.native_session = None
         self.stage = None
         self.terminal = False
         return self._emit('end', sample, roster, reason=reason, events=events)
@@ -110,13 +125,7 @@ class BattleFeed:
         mark = None
         if observer is not None:
             try:
-                mark = observer.mark()
-                if mark.get('error'):
-                    raise StreamGap(f"observer callback error: {mark['error']}")
-                if mark.get('stopped'):
-                    raise StreamGap('observer stopped')
-                if mark.get('retry'):
-                    raise CaptureRetry('observer clock advanced')
+                mark = _observer_mark(observer)
             except (CaptureRetry, ObserverReadRetry) as exc:
                 raise CaptureRetry(str(exc)) from exc
             except Exception as exc:
@@ -126,7 +135,7 @@ class BattleFeed:
             try:
                 # Skip the roster transaction when the guarded counters already
                 # crossed the opening mark. The closing mark is still required.
-                baseline_barrier(mark, sample, mark)
+                baseline_barrier(mark, sample, mark, contract=contract_for(observer, sample))
             except BarrierBusy:
                 raise
             except StreamGap as exc:
@@ -137,7 +146,7 @@ class BattleFeed:
                 end_mark = observer.mark()
                 if end_mark.get('retry'):
                     raise CaptureRetry('observer clock advanced')
-                sequence = baseline_barrier(mark, sample, end_mark)
+                sequence = baseline_barrier(mark, sample, end_mark, contract=contract_for(observer, sample))
                 events = dict(before=mark, after=end_mark, sequence=sequence)
             except BarrierBusy:
                 raise
@@ -147,21 +156,41 @@ class BattleFeed:
                 events = {'error': str(exc)}
         return sample, roster, events
 
-    def _read_pair(self, collector, before, observer=None):
-        collector.bind_battle(before['battle'][0])
-        # A busy frame is normal at 2x speed. Retry within the original
-        # lifecycle bracket before paying for another process lookup and poll.
-        deadline = time.monotonic() + .04
-        for attempt in range(3):
-            try:
-                sample, roster, events = self._read_marked_snapshot(collector, observer)
-                break
-            except BarrierBusy as exc:
-                if attempt == 2 or time.monotonic() >= deadline:
-                    raise CaptureRetry(str(exc)) from exc
+    @staticmethod
+    def _guarded_events(observer, opening, sample):
+        mark, opening_error = opening
+        if isinstance(opening_error, (CaptureRetry, ObserverReadRetry)):
+            raise CaptureRetry(str(opening_error)) from opening_error
+        if opening_error is not None:
+            return {'error': str(opening_error)}
+        try:
+            end_mark = _observer_mark(observer)
+            sequence = baseline_barrier(mark, sample, end_mark, contract=contract_for(observer, sample))
+            return dict(before=mark, after=end_mark, sequence=sequence)
+        except (BarrierBusy, CaptureRetry, ObserverReadRetry) as exc:
+            raise CaptureRetry(str(exc)) from exc
+        except Exception as exc:
+            return {'error': str(exc)}
+
+    def _read_pair(self, collector, before, observer=None, opening=None):
+        guarded_pair = getattr(collector, 'read_guarded_pair', None)
+        if guarded_pair is not None:
+            sample, roster = guarded_pair(before)
+            after, events = before, None
+        else:
+            collector.bind_battle(before['battle'][0])
+            # Retry a busy frame within the original lifecycle bracket.
+            deadline = time.monotonic() + .04
+            for attempt in range(3):
+                try:
+                    sample, roster, events = self._read_marked_snapshot(collector, observer)
+                    break
+                except BarrierBusy as exc:
+                    if attempt == 2 or time.monotonic() >= deadline:
+                        raise CaptureRetry(str(exc)) from exc
+            after = collector.read_lifecycle()
         if hasattr(collector, 'event_capability'):
             sample['event_capability'] = deepcopy(collector.event_capability)
-        after = collector.read_lifecycle()
         self.current_lifecycle = after
         if before != after or sample['frame'] != roster.frame:
             raise FrameMismatch('生命周期或累计/编队帧在读取期间变化')
@@ -174,13 +203,22 @@ class BattleFeed:
         now = sample['game_time']
         if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
             raise FrameMismatch('游戏时间无效')
+        if opening is not None and observer is not None:
+            events = self._guarded_events(observer, opening, sample)
         return sample, roster, events
 
     @staticmethod
-    def _drain(observer, evidence):
+    def _drain(observer, evidence, sample):
         if evidence is not None and 'error' not in evidence:
             try:
+                contract = contract_for(observer, sample)
+                evidence['probe_contract'] = contract.describe()
+                if (contract.bounded_reads_required
+                        and not (callable(getattr(observer, 'read_through', None))
+                                 and callable(getattr(observer, 'commit_events', None)))):
+                    raise StreamGap('event probe must support bounded reads and commit acknowledgements')
                 evidence['drain'] = read_event_batch(observer, evidence['sequence'])
+                contract.validate_binding(sample, evidence['drain'])
             except CaptureRetry:
                 raise
             except Exception as exc:
@@ -196,6 +234,14 @@ class BattleFeed:
         battle. No polling timeout, empty unit list or transport error does.
         """
         self.current_lifecycle = None
+        opening = None
+        if getattr(collector, 'read_guarded_pair', None) is not None and observer is not None:
+            # The native backend captures the pair in read_lifecycle(). A mark
+            # taken while retrieving its cached result would be too late.
+            try:
+                opening = (_observer_mark(observer), None)
+            except Exception as exc:
+                opening = (None, exc)
         before = collector.read_lifecycle()
         self.current_lifecycle = before
         metadata = before.get('metadata') or {}
@@ -207,33 +253,37 @@ class BattleFeed:
             self.retired = self.retired_clock = None
             self.retired_session = None
             return observation
-        identity = (*collector.core.mc.process_instance,
-                    collector.core.mc.pid, *battle)
+        from collector import collector_process
+        process = collector_process(collector)
+        identity = (*process.process_instance, process.pid, *battle)
         exiting = (before['transiting'] and before['source'].startswith('level_')
                    and before['target'] == 'battle_finish')
         if before.get('state') == 3 or exiting:
             if self.generation == preparing_generation:
                 return self._end('finished')
-            # A finished controller can still supply guarded counters while the
-            # scene is exiting. A replacement cannot settle the old battle.
-            if self.identity == identity and not stage_changed and before.get('state') == 3:
+            # Windows can still supply a same-frame pair on a verified abandon.
+            final_pair = before.get('state') == 3 or (
+                exiting and metadata.get('platform') == 'native_pc'
+                and metadata.get('outcome') == 'abandoned')
+            if self.identity == identity and not stage_changed and final_pair:
                 from collector import SampleUnavailable, ProcessChanged
                 from roster import RosterUnavailable
                 from tools.stage_global_state.memory import ReadFailure
                 try:
                     sample, roster, events = self._read_pair(
-                        collector, before, observer if not self.terminal else None)
+                        collector, before, observer if not self.terminal else None, opening)
                 except ProcessChanged:
                     raise
                 except (SampleUnavailable, RosterUnavailable, AdapterError, ReadFailure):
                     self.current_lifecycle = before
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
-                    events = self._drain(observer, events)
+                    events = self._drain(observer, events, sample)
                     sample['native_session'] = sample['session']
                     sample['session'] = f'{self.id}:{self.generation}'
                     self.terminal = True
                     self.clock = sample['game_time']
+                    self.frame = sample['frame']
                     return self._emit('terminal', sample, roster, events=events)
             if self.identity == identity and not stage_changed:
                 return self._end('finished', observer=observer)
@@ -246,7 +296,7 @@ class BattleFeed:
                 return observation
             return self.gap('scene_transition')
         try:
-            sample, roster, events = self._read_pair(collector, before, observer)
+            sample, roster, events = self._read_pair(collector, before, observer, opening)
         except FrameMismatch:
             after = self.current_lifecycle
             exit_metadata = (after.get('metadata') or {}) if after else {}
@@ -267,7 +317,9 @@ class BattleFeed:
                 return self._emit('waiting', reason='retired_battle')
         same_native = (self.identity == identity and not stage_changed
                        and self.native_session == sample['session'])
-        clock_reset = same_native and self.clock is not None and now < self.clock
+        frame_reset = (metadata.get('platform') == 'native_pc' and self.frame is not None
+                       and sample['frame'] < self.frame)
+        clock_reset = same_native and self.clock is not None and (now < self.clock or frame_reset)
         changed = not same_native or clock_reset
         generation = self.generation + int(changed)
         preparing = (generation > published_generation and roster.present_known
@@ -276,7 +328,7 @@ class BattleFeed:
         # leave the previous prefix for the next accepted combat watermark.
         # A same-controller round reset can still prove the old stream ended
         # at its last accepted watermark, without draining preparation events.
-        events = events if preparing else self._drain(observer, events)
+        events = events if preparing else self._drain(observer, events, sample)
         round_reset = None
         if clock_reset and events is not None and 'sequence' in events:
             drained = events.get('drain') or {}
@@ -288,7 +340,7 @@ class BattleFeed:
             self.stage = stage
         elif stage:
             self.stage = stage
-        self.identity, self.clock = identity, now
+        self.identity, self.clock, self.frame = identity, now, sample['frame']
         self.native_session = sample['session']
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
@@ -337,8 +389,9 @@ class BattleSessions:
     def _events(self, observation):
         evidence = observation.events
         capability = (observation.sample or {}).get('event_capability', {})
-        if not evidence and self.event_status == 'unavailable' and capability.get('status') == 'failed':
-            self.event_status, self.event_error = 'failed', capability.get('error')
+        status = capability.get('status')
+        if not evidence and self.event_status == 'unavailable' and status in ('failed', 'unavailable'):
+            self.event_status, self.event_error = status, capability.get('error')
         if not evidence or self.capture.closed:
             return
         try:
@@ -363,7 +416,7 @@ class BattleSessions:
         metadata = sample.get('battle_metadata', {})
         outcome = metadata.get('outcome', 'unknown')
         confirmed = isinstance(metadata.get('evidence'), str) and bool(metadata['evidence'].strip())
-        return {
+        result = {
             'stage_id': metadata.get('stage_id') if confirmed else None,
             'practice': metadata.get('practice') if confirmed and
                         isinstance(metadata.get('practice'), bool) else None,
@@ -371,6 +424,11 @@ class BattleSessions:
                        ('victory', 'defeat', 'abandoned') else 'unknown',
             'evidence': metadata.get('evidence') if confirmed else None,
         }
+        build = metadata.get('source_build')
+        platform = metadata.get('platform')
+        if confirmed and platform in ('android', 'native_pc') and isinstance(build, str) and build:
+            result.update(platform=platform, source_build=build)
+        return result
 
     def _merge_metadata(self, sample):
         incoming = self._metadata(sample)
@@ -458,19 +516,13 @@ class BattleSessions:
         boundary = (observation.events or {}).get('terminal_boundary')
         if not isinstance(boundary, dict):
             return False
+        sample = self.latest_sample
         try:
-            controller, native = self.latest_sample['battle_identity']
-            session_controller, stats, level = map(int, self.latest_sample['native_session'].rsplit(':', 3)[-3:])
-            if session_controller != controller:
-                return False
-            for key, expected in (('controller', controller), ('native', native),
-                                  ('stats', stats), ('level', level)):
-                if expected <= 0 or int(boundary[key], 16) != expected:
-                    return False
-            if int(boundary['logger'], 16) <= 0:
-                return False
             mark = self._last_event_mark
-            if (baseline_barrier(mark, self.latest_sample, boundary) != stream.sequence or
+            contract = self.capture.contract
+            if not contract.terminal_identity_matches(sample, boundary):
+                return False
+            if (baseline_barrier(mark, sample, boundary, contract=contract) != stream.sequence or
                     stream.frame != boundary['frame'] or stream.game_time != boundary['game_time']):
                 return False
         except (KeyError, ValueError, TypeError):
@@ -556,8 +608,20 @@ class BattleSessions:
         through = evidence.get('sequence')
         if type(through) is not int:
             return {}
-        after = stream.sequence if stream is not None and not stream.closed else through
-        return source_attribution_batch(evidence.get('drain') or {}, after, through)
+        sample = observation.sample
+        drained = evidence.get('drain') or {}
+        if stream is not None and stream.closed:
+            stream = None
+        after = stream.sequence if stream is not None else through
+        contract = contract_for(sample=sample, descriptor=evidence.get('probe_contract') or drained.get('probe_contract'))
+        if contract.bounded_reads_required:
+            try:
+                if baseline_barrier(evidence['before'], sample, evidence['after'], contract=contract) != through:
+                    return {}
+                contract.validate_batch(sample, through, drained, stream=stream)
+            except (KeyError, StreamGap):
+                return {}
+        return source_attribution_batch(drained, after, through)
 
     def consume(self, observation):
         if (observation.feed != self.feed_id or
@@ -692,6 +756,7 @@ class BattleRuntime:
         # Frozen handoffs outlive the transport session during in-process rescans.
         self.pending_history = deque()
         self.record = lambda observation: None
+        self._pending_event_ack = None
 
     def _consume(self, observation):
         self.record(observation)
@@ -707,9 +772,48 @@ class BattleRuntime:
                                  published_generation=self.sessions.generation,
                                  preparing_generation=self.sessions.preparing_generation)
 
+    def _acknowledge_observation(self, observation, observer, consumed):
+        """Release accepted data without turning a lost ack response into a gap."""
+        pending_ack = self._pending_event_ack
+        identity_sample = observation.sample or self.sessions.latest_sample or {}
+        evidence = observation.events or {}
+        contract = contract_for(observer, identity_sample, evidence.get('probe_contract'))
+        ack_binding = contract.ack_scope(identity_sample, observation.generation)
+        if pending_ack is not None and (pending_ack[0] is not observer
+                                        or pending_ack[2] != ack_binding):
+            # An integer-only ack must never cross a replacement observer,
+            # battle identity or a generation whose sequence can restart.
+            pending_ack = None
+        current_ack = False
+        if consumed and observer is not None and self.sessions.event_status in ('recording', 'finished'):
+            evidence = observation.events or {}
+            stream = self.sessions.adapter.event_stream
+            if ('drain' in evidence and stream is not None
+                    and stream.sequence == evidence['sequence']
+                    and stream.frame == observation.sample['frame']):
+                pending_ack = (observer, stream.sequence, ack_binding)
+                current_ack = True
+        retry_ack = pending_ack is not None
+        if retry_ack and not current_ack and contract.ack_mark_required:
+            try:
+                # Guard a retained terminal ack against an already observed
+                # producer reset; commit itself must still be stream-bound.
+                mark = _observer_mark(observer)
+                if not contract.validate_ack_mark(identity_sample, mark, pending_ack[1]):
+                    pending_ack = None
+                    retry_ack = False
+            except (CaptureRetry, ObserverReadRetry):
+                retry_ack = False
+            except Exception:
+                pending_ack = None
+                retry_ack = False
+        if retry_ack and acknowledge_event_batch(pending_ack[0], pending_ack[1]):
+            pending_ack = None
+        self._pending_event_ack = pending_ack
+
     def poll(self, collector, observer=None, *, prepare_observer=None):
         """Prepare event recovery only after the feed confirms a new battle."""
-        from collector import SampleUnavailable, BattleChanged, ProcessChanged
+        from collector import SampleUnavailable, BattleChanged, ProcessChanged, SnapshotGap
         from roster import RosterUnavailable
         from tools.stage_global_state.memory import ReadFailure
         try:
@@ -726,13 +830,7 @@ class BattleRuntime:
                     self._consume(replace(observation, sample=native, events=None))
                     observation = self._acquire(collector, observer)
             consumed = self._consume(observation)
-            if consumed and observer is not None and self.sessions.event_status in ('recording', 'finished'):
-                evidence = observation.events or {}
-                stream = self.sessions.adapter.event_stream
-                if ('drain' in evidence and stream is not None
-                        and stream.sequence == evidence['sequence']
-                        and stream.frame == observation.sample['frame']):
-                    acknowledge_event_batch(observer, stream.sequence)
+            self._acknowledge_observation(observation, observer, consumed)
         except CaptureRetry:
             raise
         except (SampleUnavailable, RosterUnavailable, FrameMismatch, ReadFailure) as exc:
@@ -740,8 +838,11 @@ class BattleRuntime:
                 self.process_changed()
                 raise
             if isinstance(exc, BattleChanged):
+                self._pending_event_ack = None
                 self._consume(self.feed.gap('process_changed'))
                 raise
+            if isinstance(exc, SnapshotGap):
+                self._consume(self.feed.gap('read_unavailable'))
             raise CaptureRetry(str(exc)) from exc
         except Exception:
             self._consume(self.feed.gap('read_unavailable'))
@@ -749,10 +850,12 @@ class BattleRuntime:
         return observation
 
     def process_changed(self):
+        self._pending_event_ack = None
         self.feed.current_lifecycle = None
         self._consume(self.feed._end('process_changed'))
 
     def disconnected(self, reason):
+        self._pending_event_ack = None
         observation = self.feed.gap(reason)
         self._consume(observation)
         self.sessions.connection = 'disconnected'

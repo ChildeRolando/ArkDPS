@@ -160,6 +160,7 @@ class BattleStatisticsAdapter:
         self.presence_seconds: dict[str, float] = {}
         self.presence_complete = True
         self.presence_gap = False
+        self._native_presence = False
         self.finished_session: str | None = None
         self.source_attribution = False
         self.source_uid_owners: dict[int, set[str]] = {}
@@ -248,6 +249,18 @@ class BattleStatisticsAdapter:
         self.last_frame = None
         self.last_game_time = None
         self.last_result = None
+        self.presence_seconds = {}
+        self.presence_gap = False
+        self.presence_complete = sample.get('presence_duration_supported') is not False
+        self._native_presence = (sample.get('battle_metadata') or {}).get('platform') == 'native_pc'
+        if self._native_presence:
+            # PC counters are whole-battle values. Start the presence integral
+            # before deployment and output, inside the first game second.
+            self.presence_complete = (sample.get('presence_duration_supported') is True
+                and roster.present_known and sample.get('state') == 2 and 0 <= start <= 1
+                and 0 <= sample['frame'] <= 30 and sample.get('global_total') == sample.get('global_heal') == 0
+                and not any(entry.unique_id in roster.present_unique_ids for entry in roster.entries)
+                and all(row.get('damage') == row.get('healing') == 0 for row in sample.get('rows', ())))
         self.last_types = {}
         self.types_current = set()
         self.unknown_sources = set(mapping.unknown_token_cids)
@@ -470,6 +483,13 @@ class BattleStatisticsAdapter:
         for event in events:
             if not isinstance(event, dict) or event.get('kind') not in SOURCE_EVENTS:
                 continue
+            proof = event.get('proof')
+            method = (proof['method'] if isinstance(proof, dict) and isinstance(proof.get('method'), str)
+                      else event.get('skill_method'))
+            if event.get('kind') == 'skill_end' and method == 'BasicSkill.OnCastFinish':
+                # Cast state is supplemental actor evidence, not evidence that
+                # this native instance contributes to a cumulative source row.
+                continue
             source = event.get('source')
             uid = event.get('source_character_uid')
             if not isinstance(source, str) or not source or type(uid) is not int or not 0 < uid <= 0xffffffff:
@@ -516,7 +536,13 @@ class BattleStatisticsAdapter:
         frame = sample.get('frame')
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
             raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
-        if terminal and (sample.get('state') != 3 or self.statistics is None
+        metadata = sample.get('battle_metadata') or {}
+        native_abandon = (terminal and sample.get('state') == 2
+                          and metadata.get('platform') == 'native_pc'
+                          and metadata.get('outcome') == 'abandoned'
+                          and metadata.get('evidence'))
+        end_state = sample.get('state') == 3 or native_abandon
+        if terminal and (not end_state or self.statistics is None
                          or sample['session'] != self.session or self.last_game_time is None):
             raise FrameMismatch('结算修订必须属于已有观察战局的原生结束状态')
         if terminal and (sample['game_time'] < self.last_game_time or
@@ -531,7 +557,7 @@ class BattleStatisticsAdapter:
         game_time = sample['game_time']
         settling = self.statistics.end_time is not None
         if settling and (frame != self.last_frame or game_time != self.statistics.end_time
-                         or sample.get('state') != 3):
+                         or not end_state):
             raise FrameMismatch('结算修订必须属于同局、同帧、同时间的结束快照')
         if not settling and self.last_game_time is not None and not terminal:
             if game_time < self.last_game_time:
@@ -631,16 +657,21 @@ class BattleStatisticsAdapter:
             changed = True
         if (self.last_roster is not None and self.last_game_time is not None
                 and game_time > self.last_game_time and not settling):
+            delta = game_time - self.last_game_time
             if self.presence_gap:
                 self.presence_gap = False
                 self.presence_complete = False
+            elif self._native_presence and delta > 5:
+                # A span larger than a full recent window cannot represent
+                # continuous sampling of deployments and removals.
+                self.presence_complete = False
             elif self.last_roster.present_known and roster.present_known:
-                delta = game_time - self.last_game_time
-                for owner in self._present_owners(self.last_roster):
-                    self.presence_seconds[owner] = self.presence_seconds.get(owner, 0.0) + delta
+                if self.presence_complete:
+                    for owner in self._present_owners(self.last_roster):
+                        self.presence_seconds[owner] = self.presence_seconds.get(owner, 0.0) + delta
             else:
                 self.presence_complete = False
-        if not roster.present_known:
+        if not roster.present_known or sample.get('presence_duration_supported') is False:
             self.presence_complete = False
         if (changed or roster != self.last_roster
                 or any(self.last_types.get(cid) != values for cid, values in types_update.items())):

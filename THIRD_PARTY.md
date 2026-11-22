@@ -73,7 +73,7 @@ ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff75850538032
 旧 PyInstaller + Tk 候选（CPython 3.10.10、Tcl/Tk 8.6、frida 客户端、typing_extensions、PyInstaller bootloader）
 已于 ARK-27 封存，构建工具、`release.json` 与 Tcl 许可原文归档在 `archive/legacy-tk/`，不再随任何产物分发。
 来源与历史许可说明保留在归档目录与 git 历史中；当前分发只包含 WPF 自包含运行时、CPython 3.12.10、
-可选 Frida 17.26.1 客户端及 .NET 许可，见上节。
+可选 Frida 17.26.1 客户端及 .NET 许可，见上节。完整 Windows 包还包含官方 Windows x64 Gadget 17.26.1，压缩包与 DLL 的摘要在 `tools/frida_gadget_asset.py` 固定，发布清单记录来源。`vendor/frida/COPYING` 保留该固定版本的 wxWindows Library Licence 3.1 原文，随组件分发。`--without-events` 排除 Gadget。
 
 Tcl 8.6.12 原文（归档）取自 https://github.com/tcltk/tcl/blob/core-8-6-12/license.terms ，
 本地原始文本 SHA-256 `c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16`。

@@ -1,11 +1,13 @@
-"""A temporary, explicitly attached Frida event observer for Android 2.7.91."""
+"""Frida event transports sharing bounded reads and commit acknowledgements."""
 from enum import Enum
 import os
-from pathlib import Path
+from hashlib import sha256
 from threading import Event, Lock
 from types import SimpleNamespace
 
 from connection import VersionStatus
+from event_probe import (MUMU_CONTRACT, NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry,
+                         ready_probe_modes, assemble_probe_source)
 
 
 class ObserverStatus(str, Enum):
@@ -14,10 +16,6 @@ class ObserverStatus(str, Enum):
     INCOMPATIBLE = 'incompatible'
     STOPPED = 'stopped'
     FAILED = 'failed'
-
-
-class ObserverReadRetry(RuntimeError):
-    """A live observer did not deliver a response within the request window."""
 
 
 def _while_live(operation, released):
@@ -34,6 +32,8 @@ def _while_live(operation, released):
 
 
 class FridaEventObserver:
+    contract = MUMU_CONTRACT
+
     def __init__(self, collector, remote):
         self.collector = collector
         self.remote = remote
@@ -43,6 +43,7 @@ class FridaEventObserver:
         self.script = None
         self.ready = Event()
         self.probe_modes = {}
+        self._probe_source_manifest = {}
         self.cleanup_errors = {}
         self._request_lock = Lock()
         self._request_id = 0
@@ -53,6 +54,23 @@ class FridaEventObserver:
 
     request_timeout = 5.0
     terminal_mark_timeout = 0.5
+
+    def _attach_session(self, frida):
+        device = frida.get_device_manager().add_remote_device(self.remote)
+        try:
+            return device.attach(self.collector.core.mc.pid, realm='emulated')
+        except frida.NotSupportedError as exc:
+            if str(exc).strip().casefold() != 'process is not using emulation':
+                raise
+            raise RuntimeError(
+                'Frida 服务无法加载 ARM64 事件探针（process is not using emulation）。'
+                '请重启设备端 Frida 服务后重连观察者。'
+            ) from exc
+
+    def _probe_source(self):
+        assembled = assemble_probe_source('mumu')
+        self._probe_source_manifest = assembled.audit()
+        return assembled.source
 
     def _wake_request(self):
         with self._request_lock:
@@ -73,13 +91,9 @@ class FridaEventObserver:
                     pending.response = payload.get('result')
                     pending.done.set()
         elif isinstance(payload, dict) and payload.get('ready'):
-            self.probe_modes = {
-                key: payload[key] for key in ('coalesce_enemy_hp', 'trace_hp_context',
-                                              'source_character_uid_ready')
-                if type(payload.get(key)) is bool
-            }
-            if isinstance(payload.get('source_character_uid_error'), str):
-                self.probe_modes['source_character_uid_error'] = payload['source_character_uid_error']
+            self.probe_modes = ready_probe_modes(payload)
+            if self._probe_source_manifest:
+                self.probe_modes["probe_source"] = dict(self._probe_source_manifest)
             self.ready.set()
 
     def _detached(self, reason, *_args):
@@ -100,28 +114,22 @@ class FridaEventObserver:
         self.error = None
         self.ready.clear()
         self.probe_modes = {}
+        self._probe_source_manifest = {}
         self._committed_sequence = self._acknowledged_sequence = 0
         self._ack_error = None
         try:
             import frida
             if frida.__version__ != '17.26.1':
                 raise RuntimeError('Frida 17.26.1 is required')
-            device = frida.get_device_manager().add_remote_device(self.remote)
-            try:
-                self.session = device.attach(self.collector.core.mc.pid, realm='emulated')
-            except frida.NotSupportedError as exc:
-                if str(exc).strip().casefold() != 'process is not using emulation':
-                    raise
-                raise RuntimeError(
-                    'Frida 服务无法加载 ARM64 事件探针（process is not using emulation）。'
-                    '请重启设备端 Frida 服务后重连观察者。'
-                ) from exc
+            self.session = self._attach_session(frida)
             self.session.on('detached', self._detached)
-            source = Path(__file__).with_name('event_probe_android2791.js').read_text(encoding='utf-8')
+            source = self._probe_source()
             if os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1':
                 source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
             if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '1':
                 source = 'globalThis.arkdpsCoalesceEnemyHp = true;\n' + source
+            self._probe_source_manifest['submitted_sha256'] = sha256(source.encode('utf-8')).hexdigest()
+            self.probe_modes['probe_source'] = dict(self._probe_source_manifest)
             self.script = self.session.create_script(source)
             self.script.on('message', self._message)
             self.script.load()
@@ -231,3 +239,48 @@ class FridaEventObserver:
         finally:
             self.status = ObserverStatus.STOPPED
             self._release()
+
+
+class NativePcFridaObserver(FridaEventObserver):
+    """Use the local Windows device and independently bind every PC prefix."""
+
+    contract = NATIVE_PC_CONTRACT
+
+    def __init__(self, collector, remote=None):
+        if remote is not None:
+            raise ValueError('官服 PC Frida 使用本机进程，frida_remote 必须为 None')
+        super().__init__(collector, remote)
+        self.binding = NativePcBinding(collector)
+
+    def _message(self, message, data):
+        payload = message.get('payload')
+        if isinstance(payload, dict) and payload.get('ready') and payload.get('arch') != 'x64':
+            message = {'type': 'error', 'description': '官服 PC Frida 探针必须运行在 Windows x64 进程'}
+        super()._message(message, data)
+
+    def _attach_session(self, frida):
+        process = self.collector.process
+        if not process.process_alive():
+            raise RuntimeError('官服 PC 游戏进程已退出，请重新连接')
+        instance = process.process_instance
+        if (not isinstance(instance, tuple) or len(instance) != 2
+                or instance[0] != process.pid or type(instance[1]) is not int or instance[1] <= 0):
+            raise RuntimeError('官服 PC 缺少已验证的进程创建时间')
+        try:
+            return frida.get_local_device().attach(process.pid, realm='native')
+        except frida.PermissionDeniedError as exc:
+            raise RuntimeError('Windows 拒绝 Frida 访问官服 PC 游戏进程，请以管理员权限启动 ArkDPS') from exc
+        except frida.ProcessNotRespondingError as exc:
+            raise RuntimeError('Frida 本机附加未完成，代理会话未建立；PC 事件探针尚未执行：' + str(exc)) from exc
+
+    def _probe_source(self):
+        if not self.collector.process.process_alive():
+            raise RuntimeError('官服 PC 游戏进程已退出，请重新连接')
+        self.binding.reset()
+        assembled = assemble_probe_source('native_pc')
+        self._probe_source_manifest = assembled.audit()
+        return assembled.source
+
+    def _request(self, operation, *, timeout=None, **arguments):
+        result = super()._request(operation, timeout=timeout, **arguments)
+        return self.binding.bind(operation, result)

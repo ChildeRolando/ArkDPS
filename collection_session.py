@@ -5,9 +5,11 @@ from dataclasses import asdict
 
 from battle_history import BattleRecord, HistoryError
 
-from collector import Collector, SampleUnavailable, BattleChanged, ProcessChanged, UnsupportedVersion
+from collector import (Collector, SampleUnavailable, BattleChanged, ProcessChanged,
+                       UnsupportedVersion, collector_process)
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
+from event_probe import EventProbe
 from event_stream import StreamGap
 
 
@@ -26,7 +28,7 @@ class CollectionSession:
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
         self.prepare_observer = prepare_observer
-        self.observer = None
+        self.observer: EventProbe | None = None
         self._pending_observers = []
         self.capture = None
         self.audit = audit or (lambda *_args: None)
@@ -62,18 +64,44 @@ class CollectionSession:
         self._pending_history = self.runtime.pending_history
         self.runtime.record = lambda observation: self.audit('lifecycle_observation', observation)
 
+    def _is_native_pc(self):
+        diagnostics = getattr(self.collector, 'diagnostics', None)
+        return getattr(diagnostics, 'platform', None) == 'native_pc'
+
+    def _observer_requested(self):
+        if self._is_native_pc():
+            # Native Windows observation has no remote Android endpoint.
+            # The empty string is the explicit --no-events sentinel.
+            return self.runtime is not None and self.frida_remote is None
+        return bool(self.frida_remote)
+
     def connect(self):
         self.collector.connect(locate=False)
+        process = collector_process(self.collector)
         self.audit('connected', {'diagnostics': vars(self.collector.diagnostics),
-                                 'pid': self.collector.core.mc.pid,
-                                 'process_instance': getattr(self.collector.core.mc, 'process_instance', None)})
+                                 'pid': process.pid,
+                                 'process_instance': getattr(process, 'process_instance', None)})
+        if self._is_native_pc():
+            self.event_error = getattr(self.collector, 'event_capability', {}).get('error')
+            if self.observer_factory is not None and not self._observer_requested():
+                self.event_error = '官服 PC 观察者需要生命周期模式及 frida_remote=None'
+            if self._observer_requested() and callable(getattr(self.collector, 'observer_boot_ready', None)):
+                self.event_status, self.event_error = WAITING_GAME_INIT, None
+                self._next_boot_check = float('-inf')
+                if not self._finish_when_game_ready():
+                    self.audit('observer_waiting_game_init', {'pid': process.pid})
+                return
+            self._finish_connect()
+            return
         if not self.frida_remote:
+            capability = getattr(self.collector, 'event_capability', {})
+            self.event_error = capability.get('error')
             self._finish_connect()
             return
         self.event_status, self.event_error = WAITING_GAME_INIT, None
         self._next_boot_check = float('-inf')
         if not self._finish_when_game_ready():
-            self.audit('observer_waiting_game_init', {'pid': self.collector.core.mc.pid})
+            self.audit('observer_waiting_game_init', {'pid': collector_process(self.collector).pid})
 
     def _finish_when_game_ready(self):
         if self.event_status != WAITING_GAME_INIT:
@@ -82,17 +110,20 @@ class CollectionSession:
         if now < self._next_boot_check:
             return False
         self._next_boot_check = now + _BOOT_POLL_PERIOD
-        pid = self.collector.core.mc.pid
+        pid = collector_process(self.collector).pid
         source = 'build_metadata'
         if not self.collector.observer_boot_ready():
-            fast_reason = self.collector.observer_boot_reason
+            fast_reason = getattr(self.collector, 'observer_boot_reason', None)
             lifecycle_bound = self.runtime is not None and self.capture is not None
-            fallback_ready = lifecycle_bound and self.collector.observer_lifecycle_ready()
+            lifecycle_ready = getattr(self.collector, 'observer_lifecycle_ready', None)
+            # A provider must explicitly supply this readiness proof. Native
+            # PC keeps its VM initialization gate; scene presence cannot replace it.
+            fallback_ready = (not self._is_native_pc() and lifecycle_bound
+                              and callable(lifecycle_ready) and lifecycle_ready())
             probe = dict(pid=pid, fast_reason=fast_reason,
-                         lifecycle_reason=(self.collector.observer_boot_reason
-                                           if lifecycle_bound
-                                           else 'lifecycle_unbound'),
-                         lifecycle_ready=fallback_ready)
+                         lifecycle_reason=(getattr(self.collector, 'observer_boot_reason', None)
+                                           if lifecycle_bound else 'lifecycle_unbound'),
+                         lifecycle_ready=bool(fallback_ready))
             if probe != self._last_boot_probe:
                 self.audit('observer_game_init_probe', probe)
                 self._last_boot_probe = probe
@@ -104,7 +135,7 @@ class CollectionSession:
         return True
 
     def _finish_connect(self):
-        if self.frida_remote:
+        if self._observer_requested():
             self._attach_observer()
         self._start_capture()
 
@@ -118,17 +149,18 @@ class CollectionSession:
             self.capture = LiveEventCapture(self.collector, self.observer, audit=self.audit)
 
     def _start_pending_lifecycle(self):
-        if self.runtime is None or time.monotonic() < self._next_lifecycle_locate:
+        if (self._is_native_pc() or self.runtime is None
+                or not callable(getattr(self.collector, 'observer_lifecycle_ready', None))
+                or time.monotonic() < self._next_lifecycle_locate):
             raise CaptureRetry('等待游戏初始化')
         try:
             self._start_capture()
         except (BattleChanged, UnsupportedVersion):
             raise
         except (OSError, RuntimeError, UnicodeError) as exc:
-            # Locating classes is read-only, but may require a full scan.
             self._next_lifecycle_locate = time.monotonic() + _LIFECYCLE_LOCATE_RETRY
             self.audit('observer_lifecycle_locate_retry', {
-                'pid': self.collector.core.mc.pid, 'reason': getattr(exc, 'reason', str(exc)),
+                'pid': collector_process(self.collector).pid, 'reason': getattr(exc, 'reason', str(exc)),
             })
             raise CaptureRetry('等待游戏初始化') from exc
 
@@ -138,14 +170,42 @@ class CollectionSession:
         while self.event_status == WAITING_GAME_INIT:
             if cancelled is not None and cancelled():
                 raise InterruptedError('collection cancelled before game initialization')
-            if self._finish_when_game_ready():
+            try:
+                game_ready = self._finish_when_game_ready()
+            except ProcessChanged:
+                if self.runtime is not None and self.capture is not None:
+                    self.runtime.process_changed()
+                    self._drain_archives()
+                raise
+            if game_ready:
                 return
+            if (not self._is_native_pc() and self.runtime is not None
+                    and callable(getattr(self.collector, 'observer_lifecycle_ready', None))):
+                # The headless entry waits before its first public read. Use
+                # the same guarded lifecycle path as desktop collection so
+                # scene readiness and pre-observer counters can be established.
+                try:
+                    self.read()
+                except CaptureRetry:
+                    pass
+                if self.event_status != WAITING_GAME_INIT:
+                    return
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise SampleUnavailable('等待游戏初始化超时')
             time.sleep(min(0.2, remaining))
 
     def _attach_observer(self):
+        # A failed stop can leave live hooks or a native session behind. The
+        # session keeps their ownership across snapshot fallback and must not
+        # construct another observer until every retired owner is released.
+        if not self._retire_observer():
+            self.event_status = 'failed'
+            self.event_error = '旧事件观察者尚未释放，请重试清理后重新连接'
+            self.audit('observer_attach_blocked', {
+                'reason': self.event_error, 'pending_observers': len(self._pending_observers),
+            })
+            return False
         self.event_status, self.event_error = 'attaching', None
         try:
             if self.prepare_observer is not None:
@@ -153,33 +213,47 @@ class CollectionSession:
                 if not ok:
                     raise RuntimeError(detail)
             if self.observer_factory is None:
-                from event_observer import FridaEventObserver
-                self.observer_factory = FridaEventObserver
+                from event_observer import FridaEventObserver, NativePcFridaObserver
+                self.observer_factory = NativePcFridaObserver if self._is_native_pc() else FridaEventObserver
             self.observer = self.observer_factory(self.collector, self.frida_remote)
             self.observer.start()
             self.event_status = 'ready'
             self.audit('observer_ready', {
                 'remote': self.frida_remote, **getattr(self.observer, 'probe_modes', {}),
             })
+            return True
         except Exception as exc:
             self.event_status, self.event_error = 'failed', str(exc)
-            self.audit('observer_error', {'reason': str(exc)})
+            failure = {'reason': str(exc)}
+            script_error = getattr(self.observer, 'script_error', None)
+            if isinstance(script_error, dict) and script_error:
+                failure['script_error'] = dict(script_error)
+            modes = getattr(self.observer, 'probe_modes', None)
+            if isinstance(modes, dict) and isinstance(modes.get('probe_source'), dict):
+                failure['probe_source'] = dict(modes['probe_source'])
+            self.audit('observer_error', failure)
             self._retire_observer()
+            return False
 
     def _retire_observer(self):
         """Remove an unusable observer from capture, not from cleanup ownership."""
         observer, self.observer = self.observer, None
-        if observer is None:
-            return
-        try:
-            observer.stop()
-        except BaseException as cleanup:
-            # Store the owner before audit I/O or an interrupt can escape.
+        if self.capture is not None and self.capture.observer is observer:
+            self.capture.observer = None
+        if observer is not None and observer not in self._pending_observers:
+            # Claim ownership before stop or diagnostic I/O can fail.
             self._pending_observers.append(observer)
-            self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
-            self.audit('observer_cleanup_error', {'reason': str(cleanup)})
-            if not isinstance(cleanup, Exception):
-                raise
+        for pending in tuple(self._pending_observers):
+            try:
+                pending.stop()
+            except BaseException as cleanup:
+                self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
+                self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+                if not isinstance(cleanup, Exception):
+                    raise
+            else:
+                self._pending_observers.remove(pending)
+        return not self._pending_observers
 
     def _prepare_battle_observer(self, observation):
         generation = observation.generation
@@ -188,13 +262,12 @@ class CollectionSession:
         observer_ready = (self.observer is not None
                           and getattr(self.observer, 'status', ObserverStatus.READY) == ObserverStatus.READY)
         if (self.event_status == WAITING_GAME_INIT or
-                previous is None or previous == generation or not self.frida_remote or
+                previous is None or previous == generation or not self._observer_requested() or
                 (observer_ready and not error)):
             return False, self.observer
         # The feed has confirmed a different battle. A failed attempt belongs
         # to this generation even when its first event barrier needs a retry.
         old_status, old_error = self.event_status, error or self.event_error
-        self._retire_observer()
         self._attach_observer()
         self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
         self.audit('observer_retry', dict(generation=generation, previous_status=old_status,
@@ -331,14 +404,16 @@ class CollectionSession:
             return
         now = time.monotonic()
         poll_due = now - self._enemy_last_poll >= 1.0
+        frame_bound = getattr(self.collector, 'enemy_frame_bound', False)
         event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state', 'enemy_damage')
                       if key in stats}
         state = event_data.get('enemy_state')
-        if poll_due or (state is not None and state['complete']) or event_data != self._enemy_event_data:
+        if (frame_bound or poll_due or (state is not None and state['complete'])
+                or event_data != self._enemy_event_data):
             if poll_due:
                 self._enemy_last_poll = now
             try:
-                context = {'frame': sample.get('frame')} if state is not None else {}
+                context = {'frame': sample.get('frame')} if frame_bound or state is not None else {}
                 self._enemy_payload = read(game_time=sample.get('game_time'), our_damage=our_damage,
                                             **event_data, **context)
                 self._enemy_event_data = event_data

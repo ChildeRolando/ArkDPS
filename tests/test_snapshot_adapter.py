@@ -335,6 +335,21 @@ def test_full_cycle_presence_accumulates_only_while_present_and_gap_invalidates(
     assert result['rows']['char_a']['presence_complete'] is False
 
 
+@pytest.mark.parametrize('gap_in_previous_session', [False, True])
+def test_presence_time_and_gap_do_not_cross_adapter_session_boundaries(gap_in_previous_session):
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 0)], 0, 1), roster([CHAR_A], present=(1,), frame=1))
+    adapter.update(sample([row('char_a', 100)], 5, 5), roster([CHAR_A], present=(1,), frame=5))
+    if gap_in_previous_session:
+        adapter.on_gap()
+    adapter.update(dict(sample([row('char_a', 0)], 0, 1), session='next'),
+                   roster([CHAR_A], present=(1,), frame=1))
+    adapter.update(dict(sample([row('char_a', 10)], 1, 2), session='next'),
+                   roster([CHAR_A], present=(1,), frame=2))
+    current = adapter.result()['rows']['char_a']
+    assert current['presence_seconds'] == 1 and current['presence_complete'] is True
+
+
 def test_four_damage_types_and_overkill_totals_are_kept():
     a = BattleStatisticsAdapter()
     a.update(sample([row('char_a', 100, 0, physical=10, arts=20, true=30,

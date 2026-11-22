@@ -188,3 +188,121 @@ def test_verifier_rejects_invalid_enemy_max_hp(value):
                  target='enemy_a', target_instance='12', hp_after=10, enemy_max_hp=value)
     with pytest.raises(ValueError, match='invalid enemy max HP'):
         module.enemy_state_event(event)
+
+
+def pc_capture(directory, *, with_events=True):
+    """Publish through the production session with controlled collector/observer inputs."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from capture_cli import json_value
+    from collection_session import CollectionSession
+    from native_pc.probe_native_pc import KNOWN_FILES
+    from native_pc_collector import BUILD_ID
+    from test_lifecycle_events import native_connection
+
+    runtime, collector, observer, snapshot, state, producer, _, _ = native_connection()
+    details = dict(fixed_module_bytes_match=True, build=dict(known_build=True, files=[
+        dict(file=name, sha256=digest, sha256_matches=True) for name, digest in KNOWN_FILES.items()]))
+    collector.diagnostics = SimpleNamespace(platform='native_pc', connection_ok=True,
+                                            version_actual=BUILD_ID, details=details)
+    collector.connect = lambda **_: None
+    collector.close = collector.locate_lifecycle = observer.start = observer.stop = lambda: None
+    original_lifecycle, original_roster = collector.read_lifecycle, snapshot.read_roster
+    def lifecycle():
+        life = original_lifecycle()
+        life['metadata']['source_build'] = BUILD_ID
+        return life
+    collector.read_lifecycle = lifecycle
+    snapshot.read_roster = lambda: replace(original_roster(), local_player_side=0)
+    original_mark, original_read = observer.mark, observer.read_through
+    observer.mark = lambda: dict(original_mark(), source_build=BUILD_ID)
+    observer.read_through = lambda seq: dict(original_read(seq), source_build=BUILD_ID,
+        partial_damage_version=7, source_attribution_version=1, damage_settlement_ready=True,
+        damage_settlement_unknown=False)
+    base = dict(frame=2, game_time=1, source='char_a', source_character_uid=1)
+    skill = dict(skill_key='skill_1', amount=1)
+    events = [
+        dict(base, sequence=1, kind='skill_start', **skill, proof={'method': 'Character.SwitchToSkillState'}),
+        dict(base, sequence=2, kind='damage', amount=13, target='enemy_a', damage_type=1, target_type=0,
+             real_delta=-8, hp_before=8, hp_after=0, shield_absorbed=1, killed=True),
+        dict(base, sequence=3, kind='damage_settlement', amount=8, settlement_complete=True,
+             target='enemy_a', target_uid='21', damage_type=1, shield_absorbed=1, nominal_amount=13, killed=True),
+        dict(base, sequence=4, kind='healing', amount=4),
+        dict(base, sequence=5, kind='shield_absorbed', amount=3,
+             proof=dict(buff='shining_s_2', before=5, after=2, incoming=3)),
+        dict(base, frame=3, game_time=2, sequence=6, kind='skill_end', **skill,
+             proof={'method': 'Character.SwitchOutFromSkillState'}),
+    ]
+    records = []
+    def audit(kind, data):
+        records.append(json.loads(json.dumps(dict(kind=kind, data=data), default=json_value)))
+    session = CollectionSession(None, None, collector=collector, frida_remote=None,
+                                observer_factory=lambda *_: observer, audit=audit)
+    session.enable_lifecycle(runtime)
+    session.connect()
+    try:
+        session.read()
+        snapshot.frame, snapshot.game_time = 3, 2
+        if with_events:
+            snapshot.damage, state.healing = 13, 4
+            producer.queue.extend(events)
+        session.read()
+    finally:
+        session.close()
+    summary = dict(platform='native_pc', pid=10, process_instance=[10, 1234], game_version=BUILD_ID,
+                   head='test-candidate', error=None)
+    (directory / 'summary.json').write_text(json.dumps(summary))
+    return records
+
+
+def test_pc_four_families_are_reconciled_with_separate_damage_bases(tmp_path):
+    records = pc_capture(tmp_path)
+    (tmp_path / 'capture.jsonl').write_text('\n'.join(map(json.dumps, records)))
+    receipt = module.verify(tmp_path, pc_settlements=True)
+    audit = receipt['native_pc_settlements']
+    assert receipt['native_counter_deltas']['char_a']['damage']['native_delta'] == 13
+    assert audit['settled_hp'] == {'char_a': 8} and audit['settled_enemy_shield'] == {'char_a': 1}
+    assert receipt['shield_totals'] == {'char_a': 3}
+    assert audit['absorbed_by_source'] == {'char_a': 3}
+    assert audit['paired_skill_windows'] == {'char_a': 1} and audit['skill_seconds'] == {'char_a': 1}
+
+
+def test_continuous_empty_pc_window_cannot_attest_to_settlement(tmp_path):
+    records = pc_capture(tmp_path, with_events=False)
+    (tmp_path / 'capture.jsonl').write_text('\n'.join(map(json.dumps, records)))
+    with pytest.raises(ValueError, match='no positive native PC damage'):
+        module.verify(tmp_path, pc_settlements=True)
+
+
+@pytest.mark.parametrize('fault', ['unbound', 'coverage', 'watermark', 'empty', 'heal', 'shield', 'hp',
+                                   'targetless', 'snapshot', 'skill'])
+def test_pc_four_family_receipt_requires_bound_positive_witnesses(tmp_path, fault):
+    records = pc_capture(tmp_path)
+    publication = [r['data'] for r in records if r['kind'] == 'published'][-1]
+    obs = [r['data'] for r in records if r['kind'] == 'lifecycle_observation' and
+           (r['data'].get('events') or {}).get('drain')][-1]
+    drain = obs['events']['drain']
+    events = drain['events']
+    if fault == 'unbound':
+        drain['native_session'] = 'another-battle'
+    elif fault == 'coverage':
+        del drain['shield_unknown']
+    elif fault == 'watermark':
+        obs['events']['before']['epoch'] += 1
+    elif fault == 'empty':
+        events.clear()
+    elif fault == 'heal':
+        events[3]['amount'] = 0
+    elif fault == 'shield':
+        events[4]['amount'] = 0
+    elif fault == 'hp':
+        publication['statistics']['rows']['char_a']['settled_damage']['known_hp_damage'] += 1
+    elif fault == 'targetless':
+        del events[2]['target_uid']
+    elif fault == 'snapshot':
+        publication.update(event_watermark=None, event_status='unavailable')
+    else:
+        events[-1]['skill_key'] = 'different-skill'
+    (tmp_path / 'capture.jsonl').write_text('\n'.join(map(json.dumps, records)))
+    with pytest.raises(ValueError):
+        module.verify(tmp_path, pc_settlements=True)

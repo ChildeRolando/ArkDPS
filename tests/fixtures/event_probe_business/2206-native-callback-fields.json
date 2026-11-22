@@ -1,0 +1,3390 @@
+{
+  "format": 1,
+  "operation": "minimal-real-native-callback-evidence-not-a-synthetic-fixture",
+  "source": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-pc\\runtime\\native-pc\\frida-development\\owned-lifecycle-nested\\prepared-20261122-074927-0cbe5d9d\\capture-frozen.jsonl",
+  "source_sha256": "ab11ea8013c14c1b008381861818d96f7ff47d38b4ea5a7880750bda82f7e907",
+  "payload_sha256": "601fb1ed9de9b01994f7c4d89c503546c0d4b219a7d9c4e50afc5e4de8332277",
+  "assembly": {
+    "assembly_version": 1,
+    "adapter_file": "event_probe_native_pc.js",
+    "runtime_file": "event_probe_runtime.js",
+    "adapter_sha256": "60ec1c61f12d4036f1f986a8181c252fa6c4b1bd6f0e4fa25fb817f2b591ba5f",
+    "runtime_sha256": "11005d98fcbe6522ad36747aef6b71c63718d52b82a9682defda56ebfa531d8a",
+    "adapter_source_sha256": "60ec1c61f12d4036f1f986a8181c252fa6c4b1bd6f0e4fa25fb817f2b591ba5f",
+    "runtime_source_sha256": "11005d98fcbe6522ad36747aef6b71c63718d52b82a9682defda56ebfa531d8a",
+    "assembled_sha256": "032ba1095cd51c1347162e4f183f8111719cc24894c2eee589e97ca4fc2e2765"
+  },
+  "target": {
+    "pid": 65660,
+    "created": 134398045678188197,
+    "exit_code": 259,
+    "image_path": "D:\\games\\Hypergryph Launcher\\games\\Arknights\\Arknights.exe"
+  },
+  "ammo_lifecycle_records": [
+    {
+      "line": 266,
+      "byte_offset": 728467,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 105,
+        "phase": "enter",
+        "call_id": 53,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 313,
+          "native_fixed_time": "44810782720",
+          "game_time": 10.433323383331299,
+          "canonical_sequence": 130
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 0,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 267,
+      "byte_offset": 729648,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 106,
+        "phase": "leave",
+        "call_id": 53,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 313,
+          "native_fixed_time": "44810782720",
+          "game_time": 10.433323383331299,
+          "canonical_sequence": 131
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 0,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 272,
+      "byte_offset": 742317,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 109,
+        "phase": "enter",
+        "call_id": 55,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 314,
+          "native_fixed_time": "44953948160",
+          "game_time": 10.466656684875488,
+          "canonical_sequence": 132
+        },
+        "args": [
+          "0x2b5543d80",
+          1,
+          false
+        ],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 273,
+      "byte_offset": 743521,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 110,
+        "phase": "leave",
+        "call_id": 55,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 314,
+          "native_fixed_time": "44953948160",
+          "game_time": 10.466656684875488,
+          "canonical_sequence": 132
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": true,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1071,
+      "byte_offset": 4561378,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 293,
+        "phase": "enter",
+        "call_id": 147,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillEnd"
+        ],
+        "method_rva": "0x9967a0",
+        "return_address": {
+          "address": "0x7fff28437310",
+          "module": "GameAssembly.dll",
+          "rva": "0x997310"
+        },
+        "clock": {
+          "frame": 2543,
+          "native_fixed_time": "364069713920",
+          "game_time": 84.76658582687378,
+          "canonical_sequence": 831
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": true,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1072,
+      "byte_offset": 4562558,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 294,
+        "phase": "leave",
+        "call_id": 147,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillEnd"
+        ],
+        "method_rva": "0x9967a0",
+        "return_address": {
+          "address": "0x7fff28437310",
+          "module": "GameAssembly.dll",
+          "rva": "0x997310"
+        },
+        "clock": {
+          "frame": 2543,
+          "native_fixed_time": "364069713920",
+          "game_time": 84.76658582687378,
+          "canonical_sequence": 832
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1274,
+      "byte_offset": 5708407,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 305,
+        "phase": "enter",
+        "call_id": 153,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 3772,
+          "native_fixed_time": "540020039680",
+          "game_time": 125.73321342468262,
+          "canonical_sequence": 1026
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1275,
+      "byte_offset": 5709592,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 306,
+        "phase": "leave",
+        "call_id": 153,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnSkillStart"
+        ],
+        "method_rva": "0x996d20",
+        "return_address": {
+          "address": "0x7fff28a3bee6",
+          "module": "GameAssembly.dll",
+          "rva": "0xf9bee6"
+        },
+        "clock": {
+          "frame": 3772,
+          "native_fixed_time": "540020039680",
+          "game_time": 125.73321342468262,
+          "canonical_sequence": 1027
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 1,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1280,
+      "byte_offset": 5722259,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 309,
+        "phase": "enter",
+        "call_id": 155,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 3773,
+          "native_fixed_time": "540163205120",
+          "game_time": 125.7665467262268,
+          "canonical_sequence": 1028
+        },
+        "args": [
+          "0x2b5543d80",
+          1,
+          false
+        ],
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": false,
+          "is_early_finished": false,
+          "trigger_count": 2,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    },
+    {
+      "line": 1281,
+      "byte_offset": 5723466,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 310,
+        "phase": "leave",
+        "call_id": 155,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "BasicSkill.OnCastFinish"
+        ],
+        "method_rva": "0x995cb0",
+        "return_address": {
+          "address": "0x7fff2844dded",
+          "module": "GameAssembly.dll",
+          "rva": "0x9added"
+        },
+        "clock": {
+          "frame": 3773,
+          "native_fixed_time": "540163205120",
+          "game_time": 125.7665467262268,
+          "canonical_sequence": 1028
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2b9c73e00",
+          "class": "CastSkillWithLimitTimes",
+          "owner_instance": "0x2acb95000",
+          "owner_cid": "char_1041_angel2",
+          "source_character_uid": 2147483989,
+          "owner_instance_uid": 697,
+          "skill_key": "skchr_angel2_3",
+          "skill_id": "skchr_angel2_3",
+          "skill_name": "使命必达！",
+          "wait_for_skill_end": true,
+          "is_early_finished": false,
+          "trigger_count": 2,
+          "max_trigger_time": -1,
+          "ability_instance": "0x2b5543d80",
+          "extra_mode": true,
+          "finish_skill_with_progress": true,
+          "extra_sources_instance": "0x2afad4000",
+          "raw_progress_source_instance": "0x0",
+          "current_progress_source_certified": false,
+          "native_generation": 2
+        }
+      }
+    }
+  ],
+  "ammo_canonical_skill_records": [
+    {
+      "event": {
+        "sequence": 38,
+        "frame": 157,
+        "game_time": 5.233328342437744,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "BattleController.OnCharacterFinished"
+        },
+        "skill_key": null,
+        "skill_id": null,
+        "skill_name": null,
+        "skill_reason": 7,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 193,
+        "byte_offset": 330973,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 129,
+        "frame": 306,
+        "game_time": 10.199990272521973,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.SwitchToSkillState"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 262,
+        "byte_offset": 711113,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 131,
+        "frame": 313,
+        "game_time": 10.433323383331299,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillStart"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 268,
+        "byte_offset": 730833,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 132,
+        "frame": 313,
+        "game_time": 10.433323383331299,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillCastSucceed"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 268,
+        "byte_offset": 730833,
+        "drain_event_index": 1
+      }
+    },
+    {
+      "event": {
+        "sequence": 133,
+        "frame": 314,
+        "game_time": 10.466656684875488,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 274,
+        "byte_offset": 744705,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 134,
+        "frame": 314,
+        "game_time": 10.466656684875488,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 274,
+        "byte_offset": 744705,
+        "drain_event_index": 1
+      }
+    },
+    {
+      "event": {
+        "sequence": 832,
+        "frame": 2543,
+        "game_time": 84.76658582687378,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillFinish"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": null,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1073,
+        "byte_offset": 4563743,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1025,
+        "frame": 3765,
+        "game_time": 125.49988031387329,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.SwitchToSkillState"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1269,
+        "byte_offset": 5688547,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1027,
+        "frame": 3772,
+        "game_time": 125.73321342468262,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillStart"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1276,
+        "byte_offset": 5710781,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1028,
+        "frame": 3772,
+        "game_time": 125.73321342468262,
+        "source": "char_1041_angel2",
+        "kind": "skill_start",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnSkillCastSucceed"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1276,
+        "byte_offset": 5710781,
+        "drain_event_index": 1
+      }
+    },
+    {
+      "event": {
+        "sequence": 1029,
+        "frame": 3773,
+        "game_time": 125.7665467262268,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1282,
+        "byte_offset": 5724653,
+        "drain_event_index": 0
+      }
+    },
+    {
+      "event": {
+        "sequence": 1030,
+        "frame": 3773,
+        "game_time": 125.7665467262268,
+        "source": "char_1041_angel2",
+        "kind": "skill_end",
+        "amount": 1,
+        "proof": {
+          "method": "Character.OnAfterSkill"
+        },
+        "skill_key": "skchr_angel2_3",
+        "skill_id": "skchr_angel2_3",
+        "skill_name": "使命必达！",
+        "skill_reason": 1,
+        "source_character_uid": 2147483989
+      },
+      "reference": {
+        "line": 1282,
+        "byte_offset": 5724653,
+        "drain_event_index": 1
+      }
+    }
+  ],
+  "counter_records_near_native_skill_end_unassociated": [
+    {
+      "line": 1049,
+      "byte_offset": 4528260,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 273,
+        "phase": "enter",
+        "call_id": 137,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.ResetCount"
+        ],
+        "method_rva": "0x1004f50",
+        "return_address": {
+          "address": "0x7fff2844a3c2",
+          "module": "GameAssembly.dll",
+          "rva": "0x9aa3c2"
+        },
+        "clock": {
+          "frame": 2541,
+          "native_fixed_time": "363783383040",
+          "game_time": 84.6999192237854,
+          "canonical_sequence": 827
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1050,
+      "byte_offset": 4529175,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 274,
+        "phase": "leave",
+        "call_id": 137,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.ResetCount"
+        ],
+        "method_rva": "0x1004f50",
+        "return_address": {
+          "address": "0x7fff2844a3c2",
+          "module": "GameAssembly.dll",
+          "rva": "0x9aa3c2"
+        },
+        "clock": {
+          "frame": 2541,
+          "native_fixed_time": "363783383040",
+          "game_time": 84.6999192237854,
+          "canonical_sequence": 827
+        },
+        "result": false,
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1051,
+      "byte_offset": 4530095,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 275,
+        "phase": "enter",
+        "call_id": 138,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountEvent"
+        ],
+        "method_rva": "0x1004860",
+        "return_address": {
+          "address": "0x7fff28aa4b55",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004b55"
+        },
+        "clock": {
+          "frame": 2541,
+          "native_fixed_time": "363783383040",
+          "game_time": 84.6999192237854,
+          "canonical_sequence": 827
+        },
+        "args": [
+          4,
+          50,
+          true
+        ],
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1052,
+      "byte_offset": 4531024,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 276,
+        "phase": "leave",
+        "call_id": 138,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountEvent"
+        ],
+        "method_rva": "0x1004860",
+        "return_address": {
+          "address": "0x7fff28aa4b55",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004b55"
+        },
+        "clock": {
+          "frame": 2541,
+          "native_fixed_time": "363783383040",
+          "game_time": 84.6999192237854,
+          "canonical_sequence": 827
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1053,
+      "byte_offset": 4531946,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 277,
+        "phase": "enter",
+        "call_id": 139,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountEvent"
+        ],
+        "method_rva": "0x1004860",
+        "return_address": {
+          "address": "0x7fff28aa4b55",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004b55"
+        },
+        "clock": {
+          "frame": 2541,
+          "native_fixed_time": "363783383040",
+          "game_time": 84.6999192237854,
+          "canonical_sequence": 827
+        },
+        "args": [
+          3,
+          50,
+          true
+        ],
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1054,
+      "byte_offset": 4532875,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 278,
+        "phase": "leave",
+        "call_id": 139,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountEvent"
+        ],
+        "method_rva": "0x1004860",
+        "return_address": {
+          "address": "0x7fff28aa4b55",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004b55"
+        },
+        "clock": {
+          "frame": 2541,
+          "native_fixed_time": "363783383040",
+          "game_time": 84.6999192237854,
+          "canonical_sequence": 827
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1055,
+      "byte_offset": 4533797,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 279,
+        "phase": "enter",
+        "call_id": 140,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.ResetCount"
+        ],
+        "method_rva": "0x1004f50",
+        "return_address": {
+          "address": "0x7fff2844b4d4",
+          "module": "GameAssembly.dll",
+          "rva": "0x9ab4d4"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2aed79ea0",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": true,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1056,
+      "byte_offset": 4534712,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 280,
+        "phase": "enter",
+        "call_id": 141,
+        "parent_call": 140,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.DoResetCount"
+        ],
+        "method_rva": "0x1004270",
+        "return_address": {
+          "address": "0x7fff28aa4f9e",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004f9e"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2aed79ea0",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": true,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1057,
+      "byte_offset": 4535629,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 281,
+        "phase": "enter",
+        "call_id": 142,
+        "parent_call": 141,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountReset"
+        ],
+        "method_rva": "0x10048f0",
+        "return_address": {
+          "address": "0x7fff27a95a2f",
+          "module": null,
+          "rva": null
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2aed79ea0",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1058,
+      "byte_offset": 4536525,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 282,
+        "phase": "leave",
+        "call_id": 142,
+        "parent_call": 141,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountReset"
+        ],
+        "method_rva": "0x10048f0",
+        "return_address": {
+          "address": "0x7fff27a95a2f",
+          "module": null,
+          "rva": null
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2aed79ea0",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1059,
+      "byte_offset": 4537425,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 283,
+        "phase": "leave",
+        "call_id": 141,
+        "parent_call": 140,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.DoResetCount"
+        ],
+        "method_rva": "0x1004270",
+        "return_address": {
+          "address": "0x7fff28aa4f9e",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004f9e"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2aed79ea0",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1060,
+      "byte_offset": 4538346,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 284,
+        "phase": "leave",
+        "call_id": 140,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.ResetCount"
+        ],
+        "method_rva": "0x1004f50",
+        "return_address": {
+          "address": "0x7fff2844b4d4",
+          "module": "GameAssembly.dll",
+          "rva": "0x9ab4d4"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "result": true,
+        "snapshot": {
+          "instance": "0x2aed79ea0",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1061,
+      "byte_offset": 4539265,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 285,
+        "phase": "enter",
+        "call_id": 143,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.ResetCount"
+        ],
+        "method_rva": "0x1004f50",
+        "return_address": {
+          "address": "0x7fff2844b556",
+          "module": "GameAssembly.dll",
+          "rva": "0x9ab556"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": true,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1062,
+      "byte_offset": 4540180,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 286,
+        "phase": "enter",
+        "call_id": 144,
+        "parent_call": 143,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.DoResetCount"
+        ],
+        "method_rva": "0x1004270",
+        "return_address": {
+          "address": "0x7fff28aa4f9e",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004f9e"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 50,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": true,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1063,
+      "byte_offset": 4541097,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 287,
+        "phase": "enter",
+        "call_id": 145,
+        "parent_call": 144,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountReset"
+        ],
+        "method_rva": "0x10048f0",
+        "return_address": {
+          "address": "0x7fff27a95a2f",
+          "module": null,
+          "rva": null
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "args": [],
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1064,
+      "byte_offset": 4541993,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 288,
+        "phase": "leave",
+        "call_id": 145,
+        "parent_call": 144,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountReset"
+        ],
+        "method_rva": "0x10048f0",
+        "return_address": {
+          "address": "0x7fff27a95a2f",
+          "module": null,
+          "rva": null
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1065,
+      "byte_offset": 4542893,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 289,
+        "phase": "leave",
+        "call_id": 144,
+        "parent_call": 143,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.DoResetCount"
+        ],
+        "method_rva": "0x1004270",
+        "return_address": {
+          "address": "0x7fff28aa4f9e",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004f9e"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1066,
+      "byte_offset": 4543814,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 290,
+        "phase": "leave",
+        "call_id": 143,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.ResetCount"
+        ],
+        "method_rva": "0x1004f50",
+        "return_address": {
+          "address": "0x7fff2844b556",
+          "module": "GameAssembly.dll",
+          "rva": "0x9ab556"
+        },
+        "clock": {
+          "frame": 2542,
+          "native_fixed_time": "363926548480",
+          "game_time": 84.73325252532959,
+          "canonical_sequence": 827
+        },
+        "result": true,
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1069,
+      "byte_offset": 4559527,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 291,
+        "phase": "enter",
+        "call_id": 146,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountEvent"
+        ],
+        "method_rva": "0x1004860",
+        "return_address": {
+          "address": "0x7fff28aa4b55",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004b55"
+        },
+        "clock": {
+          "frame": 2543,
+          "native_fixed_time": "364069713920",
+          "game_time": 84.76658582687378,
+          "canonical_sequence": 831
+        },
+        "args": [
+          1,
+          0,
+          false
+        ],
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    },
+    {
+      "line": 1070,
+      "byte_offset": 4560456,
+      "record": {
+        "kind": "owned_skill_lifecycle",
+        "diagnostic_version": 1,
+        "diagnostic_sequence": 292,
+        "phase": "leave",
+        "call_id": 146,
+        "parent_call": null,
+        "thread": 23080,
+        "methods": [
+          "AbilityEventCounter.OnCountEvent"
+        ],
+        "method_rva": "0x1004860",
+        "return_address": {
+          "address": "0x7fff28aa4b55",
+          "module": "GameAssembly.dll",
+          "rva": "0x1004b55"
+        },
+        "clock": {
+          "frame": 2543,
+          "native_fixed_time": "364069713920",
+          "game_time": 84.76658582687378,
+          "canonical_sequence": 831
+        },
+        "result": null,
+        "snapshot": {
+          "instance": "0x2aed79f30",
+          "class": "AbilityEventCounter",
+          "event_count": 0,
+          "max_count": 50,
+          "original_max_count": 50,
+          "max_addition_count": 0,
+          "ready_to_reset": false,
+          "reset_after_end": true,
+          "reset_immediately_when_progress_end": false,
+          "reset_when_attack_finished": false,
+          "expend_per_trigger": 5,
+          "native_generation": 2,
+          "skill_binding": null
+        }
+      }
+    }
+  ],
+  "counter_association_status": "unknown for angel2; no CastLimit Consume/Recover span binding was observed, raw progressSource null in extra mode",
+  "ammo_scope": "Observed CastSkillWithLimitTimes angel2 S3/extra_mode true/finish_skill_with_progress true only. First activation has real BasicSkill.OnSkillEnd; second has no such end before terminal. No count-zero end inference; not generic effect semantics proof.",
+  "nested_kill_groups": [
+    {
+      "frame": 4800,
+      "parent_scope": 566,
+      "child_scope": 568,
+      "raw_child_entry": {
+        "line": 1432,
+        "byte_offset": 6481929,
+        "hp_context_index": 9,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_entry",
+          "sequence": 2134,
+          "frame": 4800,
+          "game_time": 159.99984741210938,
+          "thread": 23080,
+          "parent_scope": 566,
+          "child_scope": null,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730000",
+          "target_uid": 1087,
+          "target_hp": 2895.2002300939057,
+          "parent_hp_before": 7556.1501349725295,
+          "parent_target_hit_hp_before": 7556.1501349725295,
+          "parent_target_hit_uid": 1087,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 2895.2002300939057,
+          "child_real_delta": 0,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_child_return": {
+        "line": 1432,
+        "byte_offset": 6481929,
+        "hp_context_index": 19,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_return",
+          "sequence": 2144,
+          "frame": 4800,
+          "game_time": 159.99984741210938,
+          "thread": 23080,
+          "parent_scope": 566,
+          "child_scope": 568,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730000",
+          "target_uid": 1087,
+          "target_hp": 0,
+          "parent_hp_before": 7556.1501349725295,
+          "parent_target_hit_hp_before": 7556.1501349725295,
+          "parent_target_hit_uid": 1087,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 2895.2002300939057,
+          "child_real_delta": -2895.2002300939057,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_parent_return": {
+        "line": 1432,
+        "byte_offset": 6481929,
+        "hp_context_index": 25,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "parent_return",
+          "sequence": 2150,
+          "frame": 4800,
+          "game_time": 159.99984741210938,
+          "thread": 23080,
+          "parent_scope": 566,
+          "parent_modifier": "0x13d840",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730000",
+          "target_uid": 1087,
+          "target_hp": 0,
+          "parent_hp_before": 7556.1501349725295,
+          "parent_target_hit_hp_before": 7556.1501349725295,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false
+        }
+      },
+      "parent_type": 2,
+      "parent_type_provenance": "unique same-frame/source/target/amount canonical damage.proof.type",
+      "native_child_source_character_uid": null,
+      "native_child_source_uid_status": "null source pointer in actual checkpoint; canonical attribution is separate and preserved below",
+      "canonical_records_same_frame": [
+        {
+          "event": {
+            "sequence": 1121,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": "char_4247_oxi",
+            "kind": "hp_damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Unit.OnTakeDamage",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "hp_before": 7556.1501349725295,
+            "shield_absorbed": 0,
+            "target_instance": "0x2b3730000",
+            "target_type": 0,
+            "damage_type": 2,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 0
+          }
+        },
+        {
+          "event": {
+            "sequence": 1122,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": null,
+            "kind": "enemy_hp",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.SetHpInternal"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "1087",
+            "enemy_max_hp": 14000,
+            "hp_before": 7556.1501349725295,
+            "hp_after": 2895.2002300939057
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 1
+          }
+        },
+        {
+          "event": {
+            "sequence": 1123,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": null,
+            "kind": "enemy_finish",
+            "amount": 0,
+            "proof": {
+              "method": "Enemy.OnFinish"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "1087",
+            "finish_reason": 2,
+            "hp_after": 0
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 2
+          }
+        },
+        {
+          "event": {
+            "sequence": 1124,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": "char_4247_oxi",
+            "kind": "elemental_bar",
+            "amount": 512.7044867584482,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 0,
+              "target": 5
+            },
+            "target_instance": "0x2b3730000",
+            "target_uid": "1087",
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 3
+          }
+        },
+        {
+          "event": {
+            "sequence": 1125,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": null,
+            "kind": "damage_settlement",
+            "amount": 2895.2002300939057,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_uid": "1087",
+            "target_instance": "0x2b3730000",
+            "damage_type": 5,
+            "shield_absorbed": 0,
+            "settlement_complete": true,
+            "nominal_amount": 6999.9998435378075,
+            "killed": true,
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 4
+          }
+        },
+        {
+          "event": {
+            "sequence": 1126,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": null,
+            "kind": "elemental_burst",
+            "amount": 6999.9998435378075,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 5,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "real_delta": -2895.2002300939057,
+            "hp_before": 2895.2002300939057,
+            "hp_after": 0,
+            "killed": true,
+            "target_type": 0,
+            "damage_type": 5,
+            "cancel_reason": 0,
+            "shield_absorbed": 0,
+            "target_instance": "0x2b3730000",
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 5
+          }
+        },
+        {
+          "event": {
+            "sequence": 1127,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": "char_4247_oxi",
+            "kind": "damage_settlement",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_uid": "1087",
+            "target_instance": "0x2b3730000",
+            "damage_type": 2,
+            "shield_absorbed": null,
+            "settlement_complete": false,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 6
+          }
+        },
+        {
+          "event": {
+            "sequence": 1128,
+            "frame": 4800,
+            "game_time": 159.99984741210938,
+            "source": "char_4247_oxi",
+            "kind": "damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "0x2b3730000",
+            "target_type": 0,
+            "damage_type": 2,
+            "mitigation_before": 5790,
+            "mitigation_after": 4660.949904878624,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1432,
+            "byte_offset": 6481929,
+            "drain_event_index": 7
+          }
+        }
+      ],
+      "arithmetic_checks": {
+        "parent_drop_matches_prechild_real": true,
+        "child_drop_matches_child_real": true,
+        "parent_real_unchanged_at_return": true
+      }
+    },
+    {
+      "frame": 4819,
+      "parent_scope": 570,
+      "child_scope": 572,
+      "raw_child_entry": {
+        "line": 1438,
+        "byte_offset": 6531337,
+        "hp_context_index": 9,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_entry",
+          "sequence": 2162,
+          "frame": 4819,
+          "game_time": 160.63318014144897,
+          "thread": 23080,
+          "parent_scope": 570,
+          "child_scope": null,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1033_handax_2",
+          "target_instance": "0x2af94c800",
+          "target_uid": 1104,
+          "target_hp": 2779.425189487869,
+          "parent_hp_before": 7440.375094366493,
+          "parent_target_hit_hp_before": 7440.375094366493,
+          "parent_target_hit_uid": 1104,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 2779.425189487869,
+          "child_real_delta": 0,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_child_return": {
+        "line": 1438,
+        "byte_offset": 6531337,
+        "hp_context_index": 19,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_return",
+          "sequence": 2172,
+          "frame": 4819,
+          "game_time": 160.63318014144897,
+          "thread": 23080,
+          "parent_scope": 570,
+          "child_scope": 572,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1033_handax_2",
+          "target_instance": "0x2af94c800",
+          "target_uid": 1104,
+          "target_hp": 0,
+          "parent_hp_before": 7440.375094366493,
+          "parent_target_hit_hp_before": 7440.375094366493,
+          "parent_target_hit_uid": 1104,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 2779.425189487869,
+          "child_real_delta": -2779.425189487869,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_parent_return": {
+        "line": 1438,
+        "byte_offset": 6531337,
+        "hp_context_index": 25,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "parent_return",
+          "sequence": 2178,
+          "frame": 4819,
+          "game_time": 160.63318014144897,
+          "thread": 23080,
+          "parent_scope": 570,
+          "parent_modifier": "0x13d840",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1033_handax_2",
+          "target_instance": "0x2af94c800",
+          "target_uid": 1104,
+          "target_hp": 0,
+          "parent_hp_before": 7440.375094366493,
+          "parent_target_hit_hp_before": 7440.375094366493,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false
+        }
+      },
+      "parent_type": 2,
+      "parent_type_provenance": "unique same-frame/source/target/amount canonical damage.proof.type",
+      "native_child_source_character_uid": null,
+      "native_child_source_uid_status": "null source pointer in actual checkpoint; canonical attribution is separate and preserved below",
+      "canonical_records_same_frame": [
+        {
+          "event": {
+            "sequence": 1131,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": "char_4247_oxi",
+            "kind": "hp_damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Unit.OnTakeDamage",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1033_handax_2",
+            "hp_before": 7440.375094366493,
+            "shield_absorbed": 0,
+            "target_instance": "0x2af94c800",
+            "target_type": 0,
+            "damage_type": 2,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 0
+          }
+        },
+        {
+          "event": {
+            "sequence": 1132,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": null,
+            "kind": "enemy_hp",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.SetHpInternal"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_instance": "1104",
+            "enemy_max_hp": 12000,
+            "hp_before": 7440.375094366493,
+            "hp_after": 2779.425189487869
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 1
+          }
+        },
+        {
+          "event": {
+            "sequence": 1133,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": null,
+            "kind": "enemy_finish",
+            "amount": 0,
+            "proof": {
+              "method": "Enemy.OnFinish"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_instance": "1104",
+            "finish_reason": 2,
+            "hp_after": 0
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 2
+          }
+        },
+        {
+          "event": {
+            "sequence": 1134,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": "char_4247_oxi",
+            "kind": "elemental_bar",
+            "amount": 512.7044867584482,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 0,
+              "target": 5
+            },
+            "target_instance": "0x2af94c800",
+            "target_uid": "1104",
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 3
+          }
+        },
+        {
+          "event": {
+            "sequence": 1135,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": null,
+            "kind": "damage_settlement",
+            "amount": 2779.425189487869,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_uid": "1104",
+            "target_instance": "0x2af94c800",
+            "damage_type": 5,
+            "shield_absorbed": 0,
+            "settlement_complete": true,
+            "nominal_amount": 6999.9998435378075,
+            "killed": true,
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 4
+          }
+        },
+        {
+          "event": {
+            "sequence": 1136,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": null,
+            "kind": "elemental_burst",
+            "amount": 6999.9998435378075,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 5,
+              "target": 0
+            },
+            "target": "enemy_1033_handax_2",
+            "real_delta": -2779.425189487869,
+            "hp_before": 2779.425189487869,
+            "hp_after": 0,
+            "killed": true,
+            "target_type": 0,
+            "damage_type": 5,
+            "cancel_reason": 0,
+            "shield_absorbed": 0,
+            "target_instance": "0x2af94c800",
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 5
+          }
+        },
+        {
+          "event": {
+            "sequence": 1137,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": "char_4247_oxi",
+            "kind": "damage_settlement",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_uid": "1104",
+            "target_instance": "0x2af94c800",
+            "damage_type": 2,
+            "shield_absorbed": null,
+            "settlement_complete": false,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 6
+          }
+        },
+        {
+          "event": {
+            "sequence": 1138,
+            "frame": 4819,
+            "game_time": 160.63318014144897,
+            "source": "char_4247_oxi",
+            "kind": "damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1033_handax_2",
+            "target_instance": "0x2af94c800",
+            "target_type": 0,
+            "damage_type": 2,
+            "mitigation_before": 5790,
+            "mitigation_after": 4660.949904878624,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1438,
+            "byte_offset": 6531337,
+            "drain_event_index": 7
+          }
+        }
+      ],
+      "arithmetic_checks": {
+        "parent_drop_matches_prechild_real": true,
+        "child_drop_matches_child_real": true,
+        "parent_real_unchanged_at_return": true
+      }
+    },
+    {
+      "frame": 4919,
+      "parent_scope": 581,
+      "child_scope": 583,
+      "raw_child_entry": {
+        "line": 1455,
+        "byte_offset": 6670560,
+        "hp_context_index": 9,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_entry",
+          "sequence": 2218,
+          "frame": 4919,
+          "game_time": 163.96651029586792,
+          "thread": 23080,
+          "parent_scope": 581,
+          "child_scope": null,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730800",
+          "target_uid": 1132,
+          "target_hp": 4678.100190242752,
+          "parent_hp_before": 9339.050095121376,
+          "parent_target_hit_hp_before": 9339.050095121376,
+          "parent_target_hit_uid": 1132,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 4678.100190242752,
+          "child_real_delta": 0,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_child_return": {
+        "line": 1455,
+        "byte_offset": 6670560,
+        "hp_context_index": 19,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_return",
+          "sequence": 2228,
+          "frame": 4919,
+          "game_time": 163.96651029586792,
+          "thread": 23080,
+          "parent_scope": 581,
+          "child_scope": 583,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730800",
+          "target_uid": 1132,
+          "target_hp": 0,
+          "parent_hp_before": 9339.050095121376,
+          "parent_target_hit_hp_before": 9339.050095121376,
+          "parent_target_hit_uid": 1132,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 4678.100190242752,
+          "child_real_delta": -4678.100190242752,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_parent_return": {
+        "line": 1455,
+        "byte_offset": 6670560,
+        "hp_context_index": 25,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "parent_return",
+          "sequence": 2234,
+          "frame": 4919,
+          "game_time": 163.96651029586792,
+          "thread": 23080,
+          "parent_scope": 581,
+          "parent_modifier": "0x13d840",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730800",
+          "target_uid": 1132,
+          "target_hp": 0,
+          "parent_hp_before": 9339.050095121376,
+          "parent_target_hit_hp_before": 9339.050095121376,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false
+        }
+      },
+      "parent_type": 2,
+      "parent_type_provenance": "unique same-frame/source/target/amount canonical damage.proof.type",
+      "native_child_source_character_uid": null,
+      "native_child_source_uid_status": "null source pointer in actual checkpoint; canonical attribution is separate and preserved below",
+      "canonical_records_same_frame": [
+        {
+          "event": {
+            "sequence": 1153,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": "char_4247_oxi",
+            "kind": "hp_damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Unit.OnTakeDamage",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "hp_before": 9339.050095121376,
+            "shield_absorbed": 0,
+            "target_instance": "0x2b3730800",
+            "target_type": 0,
+            "damage_type": 2,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 0
+          }
+        },
+        {
+          "event": {
+            "sequence": 1154,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": null,
+            "kind": "enemy_hp",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.SetHpInternal"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "1132",
+            "enemy_max_hp": 14000,
+            "hp_before": 9339.050095121376,
+            "hp_after": 4678.100190242752
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 1
+          }
+        },
+        {
+          "event": {
+            "sequence": 1155,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": null,
+            "kind": "enemy_finish",
+            "amount": 0,
+            "proof": {
+              "method": "Enemy.OnFinish"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "1132",
+            "finish_reason": 2,
+            "hp_after": 0
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 2
+          }
+        },
+        {
+          "event": {
+            "sequence": 1156,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": "char_4247_oxi",
+            "kind": "elemental_bar",
+            "amount": 512.7044867584482,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 0,
+              "target": 5
+            },
+            "target_instance": "0x2b3730800",
+            "target_uid": "1132",
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 3
+          }
+        },
+        {
+          "event": {
+            "sequence": 1157,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": null,
+            "kind": "damage_settlement",
+            "amount": 4678.100190242752,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_uid": "1132",
+            "target_instance": "0x2b3730800",
+            "damage_type": 5,
+            "shield_absorbed": 0,
+            "settlement_complete": true,
+            "nominal_amount": 6999.9998435378075,
+            "killed": true,
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 4
+          }
+        },
+        {
+          "event": {
+            "sequence": 1158,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": null,
+            "kind": "elemental_burst",
+            "amount": 6999.9998435378075,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 5,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "real_delta": -4678.100190242752,
+            "hp_before": 4678.100190242752,
+            "hp_after": 0,
+            "killed": true,
+            "target_type": 0,
+            "damage_type": 5,
+            "cancel_reason": 0,
+            "shield_absorbed": 0,
+            "target_instance": "0x2b3730800",
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 5
+          }
+        },
+        {
+          "event": {
+            "sequence": 1159,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": "char_4247_oxi",
+            "kind": "damage_settlement",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_uid": "1132",
+            "target_instance": "0x2b3730800",
+            "damage_type": 2,
+            "shield_absorbed": null,
+            "settlement_complete": false,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 6
+          }
+        },
+        {
+          "event": {
+            "sequence": 1160,
+            "frame": 4919,
+            "game_time": 163.96651029586792,
+            "source": "char_4247_oxi",
+            "kind": "damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "0x2b3730800",
+            "target_type": 0,
+            "damage_type": 2,
+            "mitigation_before": 5790,
+            "mitigation_after": 4660.949904878624,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1455,
+            "byte_offset": 6670560,
+            "drain_event_index": 7
+          }
+        }
+      ],
+      "arithmetic_checks": {
+        "parent_drop_matches_prechild_real": true,
+        "child_drop_matches_child_real": true,
+        "parent_real_unchanged_at_return": true
+      }
+    },
+    {
+      "frame": 5300,
+      "parent_scope": 609,
+      "child_scope": 611,
+      "raw_child_entry": {
+        "line": 1512,
+        "byte_offset": 6982707,
+        "hp_context_index": 9,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_entry",
+          "sequence": 2310,
+          "frame": 5300,
+          "game_time": 176.6664981842041,
+          "thread": 23080,
+          "parent_scope": 609,
+          "child_scope": null,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1033_handax_2",
+          "target_instance": "0x2af94c800",
+          "target_uid": 1174,
+          "target_hp": 2678.1001902427524,
+          "parent_hp_before": 7339.050095121376,
+          "parent_target_hit_hp_before": 7339.050095121376,
+          "parent_target_hit_uid": 1174,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 2678.1001902427524,
+          "child_real_delta": 0,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_child_return": {
+        "line": 1512,
+        "byte_offset": 6982707,
+        "hp_context_index": 19,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_return",
+          "sequence": 2320,
+          "frame": 5300,
+          "game_time": 176.6664981842041,
+          "thread": 23080,
+          "parent_scope": 609,
+          "child_scope": 611,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1033_handax_2",
+          "target_instance": "0x2af94c800",
+          "target_uid": 1174,
+          "target_hp": 0,
+          "parent_hp_before": 7339.050095121376,
+          "parent_target_hit_hp_before": 7339.050095121376,
+          "parent_target_hit_uid": 1174,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 2678.1001902427524,
+          "child_real_delta": -2678.1001902427524,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_parent_return": {
+        "line": 1512,
+        "byte_offset": 6982707,
+        "hp_context_index": 25,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "parent_return",
+          "sequence": 2326,
+          "frame": 5300,
+          "game_time": 176.6664981842041,
+          "thread": 23080,
+          "parent_scope": 609,
+          "parent_modifier": "0x13d840",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1033_handax_2",
+          "target_instance": "0x2af94c800",
+          "target_uid": 1174,
+          "target_hp": 0,
+          "parent_hp_before": 7339.050095121376,
+          "parent_target_hit_hp_before": 7339.050095121376,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false
+        }
+      },
+      "parent_type": 2,
+      "parent_type_provenance": "unique same-frame/source/target/amount canonical damage.proof.type",
+      "native_child_source_character_uid": null,
+      "native_child_source_uid_status": "null source pointer in actual checkpoint; canonical attribution is separate and preserved below",
+      "canonical_records_same_frame": [
+        {
+          "event": {
+            "sequence": 1194,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": "char_4247_oxi",
+            "kind": "hp_damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Unit.OnTakeDamage",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1033_handax_2",
+            "hp_before": 7339.050095121376,
+            "shield_absorbed": 0,
+            "target_instance": "0x2af94c800",
+            "target_type": 0,
+            "damage_type": 2,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 0
+          }
+        },
+        {
+          "event": {
+            "sequence": 1195,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": null,
+            "kind": "enemy_hp",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.SetHpInternal"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_instance": "1174",
+            "enemy_max_hp": 12000,
+            "hp_before": 7339.050095121376,
+            "hp_after": 2678.1001902427524
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 1
+          }
+        },
+        {
+          "event": {
+            "sequence": 1196,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": null,
+            "kind": "enemy_finish",
+            "amount": 0,
+            "proof": {
+              "method": "Enemy.OnFinish"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_instance": "1174",
+            "finish_reason": 2,
+            "hp_after": 0
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 2
+          }
+        },
+        {
+          "event": {
+            "sequence": 1197,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": "char_4247_oxi",
+            "kind": "elemental_bar",
+            "amount": 512.7044867584482,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 0,
+              "target": 5
+            },
+            "target_instance": "0x2af94c800",
+            "target_uid": "1174",
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 3
+          }
+        },
+        {
+          "event": {
+            "sequence": 1198,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": null,
+            "kind": "damage_settlement",
+            "amount": 2678.1001902427524,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_uid": "1174",
+            "target_instance": "0x2af94c800",
+            "damage_type": 5,
+            "shield_absorbed": 0,
+            "settlement_complete": true,
+            "nominal_amount": 6999.9998435378075,
+            "killed": true,
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 4
+          }
+        },
+        {
+          "event": {
+            "sequence": 1199,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": null,
+            "kind": "elemental_burst",
+            "amount": 6999.9998435378075,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 5,
+              "target": 0
+            },
+            "target": "enemy_1033_handax_2",
+            "real_delta": -2678.1001902427524,
+            "hp_before": 2678.1001902427524,
+            "hp_after": 0,
+            "killed": true,
+            "target_type": 0,
+            "damage_type": 5,
+            "cancel_reason": 0,
+            "shield_absorbed": 0,
+            "target_instance": "0x2af94c800",
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 5
+          }
+        },
+        {
+          "event": {
+            "sequence": 1200,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": "char_4247_oxi",
+            "kind": "damage_settlement",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1033_handax_2",
+            "target_uid": "1174",
+            "target_instance": "0x2af94c800",
+            "damage_type": 2,
+            "shield_absorbed": null,
+            "settlement_complete": false,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 6
+          }
+        },
+        {
+          "event": {
+            "sequence": 1201,
+            "frame": 5300,
+            "game_time": 176.6664981842041,
+            "source": "char_4247_oxi",
+            "kind": "damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1033_handax_2",
+            "target_instance": "0x2af94c800",
+            "target_type": 0,
+            "damage_type": 2,
+            "mitigation_before": 5790,
+            "mitigation_after": 4660.949904878624,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1512,
+            "byte_offset": 6982707,
+            "drain_event_index": 7
+          }
+        }
+      ],
+      "arithmetic_checks": {
+        "parent_drop_matches_prechild_real": true,
+        "child_drop_matches_child_real": true,
+        "parent_real_unchanged_at_return": true
+      }
+    },
+    {
+      "frame": 5485,
+      "parent_scope": 625,
+      "child_scope": 627,
+      "raw_child_entry": {
+        "line": 1545,
+        "byte_offset": 7204624,
+        "hp_context_index": 9,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_entry",
+          "sequence": 2376,
+          "frame": 5485,
+          "game_time": 182.83315896987915,
+          "thread": 23080,
+          "parent_scope": 625,
+          "child_scope": null,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730800",
+          "target_uid": 1206,
+          "target_hp": 4678.100190242752,
+          "parent_hp_before": 9339.050095121376,
+          "parent_target_hit_hp_before": 9339.050095121376,
+          "parent_target_hit_uid": 1206,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 4678.100190242752,
+          "child_real_delta": 0,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_child_return": {
+        "line": 1545,
+        "byte_offset": 7204624,
+        "hp_context_index": 19,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "child_return",
+          "sequence": 2386,
+          "frame": 5485,
+          "game_time": 182.83315896987915,
+          "thread": 23080,
+          "parent_scope": 625,
+          "child_scope": 627,
+          "parent_modifier": "0x13d840",
+          "child_modifier": "0x13b200",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730800",
+          "target_uid": 1206,
+          "target_hp": 0,
+          "parent_hp_before": 9339.050095121376,
+          "parent_target_hit_hp_before": 9339.050095121376,
+          "parent_target_hit_uid": 1206,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_instance": "0x2acb95800",
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false,
+          "parent_numeric_shield": null,
+          "parent_numeric_shield_unknown": false,
+          "child_hp_before": 4678.100190242752,
+          "child_real_delta": -4678.100190242752,
+          "child_amount": 6999.9998435378075,
+          "child_type": 5,
+          "child_source_instance": "0x0"
+        }
+      },
+      "raw_parent_return": {
+        "line": 1545,
+        "byte_offset": 7204624,
+        "hp_context_index": 25,
+        "record": {
+          "diagnostic_version": 2,
+          "kind": "nested_parent_checkpoint",
+          "phase": "parent_return",
+          "sequence": 2392,
+          "frame": 5485,
+          "game_time": 182.83315896987915,
+          "thread": 23080,
+          "parent_scope": 625,
+          "parent_modifier": "0x13d840",
+          "parent_source": "char_4247_oxi",
+          "parent_source_character_uid": 2147484057,
+          "target": "enemy_1034_laxe_2",
+          "target_instance": "0x2b3730800",
+          "target_uid": 1206,
+          "target_hp": 0,
+          "parent_hp_before": 9339.050095121376,
+          "parent_target_hit_hp_before": 9339.050095121376,
+          "parent_real_delta": -4660.949904878624,
+          "parent_amount": 4660.949904878624,
+          "parent_source_matches": true,
+          "parent_target_matches": true,
+          "parent_target_hit_ambiguous": false,
+          "parent_modifier_reused": false
+        }
+      },
+      "parent_type": 2,
+      "parent_type_provenance": "unique same-frame/source/target/amount canonical damage.proof.type",
+      "native_child_source_character_uid": null,
+      "native_child_source_uid_status": "null source pointer in actual checkpoint; canonical attribution is separate and preserved below",
+      "canonical_records_same_frame": [
+        {
+          "event": {
+            "sequence": 1222,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": "char_4247_oxi",
+            "kind": "hp_damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Unit.OnTakeDamage",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "hp_before": 9339.050095121376,
+            "shield_absorbed": 0,
+            "target_instance": "0x2b3730800",
+            "target_type": 0,
+            "damage_type": 2,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 0
+          }
+        },
+        {
+          "event": {
+            "sequence": 1223,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": null,
+            "kind": "enemy_hp",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.SetHpInternal"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "1206",
+            "enemy_max_hp": 14000,
+            "hp_before": 9339.050095121376,
+            "hp_after": 4678.100190242752
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 1
+          }
+        },
+        {
+          "event": {
+            "sequence": 1224,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": null,
+            "kind": "enemy_finish",
+            "amount": 0,
+            "proof": {
+              "method": "Enemy.OnFinish"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "1206",
+            "finish_reason": 2,
+            "hp_after": 0
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 2
+          }
+        },
+        {
+          "event": {
+            "sequence": 1225,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": "char_4247_oxi",
+            "kind": "elemental_bar",
+            "amount": 512.7044867584482,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 0,
+              "target": 5
+            },
+            "target_instance": "0x2b3730800",
+            "target_uid": "1206",
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 3
+          }
+        },
+        {
+          "event": {
+            "sequence": 1226,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": null,
+            "kind": "damage_settlement",
+            "amount": 4678.100190242752,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_uid": "1206",
+            "target_instance": "0x2b3730800",
+            "damage_type": 5,
+            "shield_absorbed": 0,
+            "settlement_complete": true,
+            "nominal_amount": 6999.9998435378075,
+            "killed": true,
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 4
+          }
+        },
+        {
+          "event": {
+            "sequence": 1227,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": null,
+            "kind": "elemental_burst",
+            "amount": 6999.9998435378075,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 5,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "real_delta": -4678.100190242752,
+            "hp_before": 4678.100190242752,
+            "hp_after": 0,
+            "killed": true,
+            "target_type": 0,
+            "damage_type": 5,
+            "cancel_reason": 0,
+            "shield_absorbed": 0,
+            "target_instance": "0x2b3730800",
+            "mitigation_before": 7000,
+            "mitigation_after": 6999.9998435378075
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 5
+          }
+        },
+        {
+          "event": {
+            "sequence": 1228,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": "char_4247_oxi",
+            "kind": "damage_settlement",
+            "amount": 0,
+            "proof": {
+              "method": "Entity.ApplyModifier"
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_uid": "1206",
+            "target_instance": "0x2b3730800",
+            "damage_type": 2,
+            "shield_absorbed": null,
+            "settlement_complete": false,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 6
+          }
+        },
+        {
+          "event": {
+            "sequence": 1229,
+            "frame": 5485,
+            "game_time": 182.83315896987915,
+            "source": "char_4247_oxi",
+            "kind": "damage",
+            "amount": 4660.949904878624,
+            "proof": {
+              "method": "Entity.ApplyModifier",
+              "type": 2,
+              "target": 0
+            },
+            "target": "enemy_1034_laxe_2",
+            "target_instance": "0x2b3730800",
+            "target_type": 0,
+            "damage_type": 2,
+            "mitigation_before": 5790,
+            "mitigation_after": 4660.949904878624,
+            "source_character_uid": 2147484057
+          },
+          "reference": {
+            "line": 1545,
+            "byte_offset": 7204624,
+            "drain_event_index": 7
+          }
+        }
+      ],
+      "arithmetic_checks": {
+        "parent_drop_matches_prechild_real": true,
+        "child_drop_matches_child_real": true,
+        "parent_real_unchanged_at_return": true
+      }
+    }
+  ],
+  "nested_scope": "Actual run has five ordinary-parent/elemental-child kills, not only three. First three reproduce prior case; all raw values are preserved.",
+  "no_business_changes": true
+}

@@ -30,6 +30,8 @@ jobs:
         run: python -m pytest tests -q --assert=plain
       - name: Build WPF desktop (net10.0-windows)
         run: dotnet build desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj --configuration Release --nologo
+      - name: Verify WPF projections and connection guards without desktop input
+        run: dotnet run --project desktop/ArkDPS.Desktop.Tests/ArkDPS.Desktop.Tests.csproj --configuration Release --no-launch-profile
       - name: Build WPF portable package (the only distribution entry)
         run: python tools/package_windows.py --output runtime/ci-build
       - name: Verify WPF source acceptance
