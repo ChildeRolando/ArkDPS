@@ -17,7 +17,11 @@ import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT),str(ROOT/'tests'),str(ROOT/'acceptance')]
-from tools.package_windows import PACKAGE_ROOT, archive_name, digest
+from tools.package_windows import (
+    FRIDA_SERVER_LICENSE_NAME, FRIDA_SERVER_LICENSE_SHA256, FRIDA_SERVER_PATH,
+    FRIDA_SERVER_SHA256, FRIDA_SERVER_URL, PACKAGE_ROOT, UPDATE_PROTOCOL, archive_name, digest,
+)
+from windows_manifest import require_admin_test_host, verify_executable_manifest
 
 
 def main():
@@ -25,6 +29,7 @@ def main():
     parser.add_argument('archive',type=Path)
     parser.add_argument('--output',type=Path,default=ROOT/'runtime'/'package-validation')
     args=parser.parse_args()
+    require_admin_test_host()
     output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
     install=Path(tempfile.mkdtemp(prefix='clean-install-',dir=output))
     with zipfile.ZipFile(args.archive) as archive:
@@ -37,12 +42,25 @@ def main():
     manifest_path = bundle / 'metadata/release.json'
     manifest=json.loads(manifest_path.read_text('utf-8'))
     assert manifest['format'] == 2
+    if manifest['frida'] is None:
+        assert 'update_protocol' not in manifest
+    else:
+        assert manifest['update_protocol'] == UPDATE_PROTOCOL
     assert args.archive.name == archive_name(manifest['version'], manifest['frida'] is not None)
     assert manifest['target_framework']=='net10.0-windows'
     files = {path.relative_to(bundle).as_posix(): digest(path) for path in bundle.rglob('*')
              if path.is_file() and path != manifest_path}
     assert files == manifest['files']
     assert files['collector/desktop_bridge.py'] == manifest['collector_sha256']
+    server_license_path = f'licenses/{FRIDA_SERVER_LICENSE_NAME}'
+    if manifest['frida'] is None:
+        assert 'frida_server' not in manifest
+        assert FRIDA_SERVER_PATH not in files and server_license_path not in files
+    else:
+        assert manifest['frida_server'] == dict(path=FRIDA_SERVER_PATH, source=FRIDA_SERVER_URL,
+                                                sha256=FRIDA_SERVER_SHA256)
+        assert files[FRIDA_SERVER_PATH] == FRIDA_SERVER_SHA256
+        assert files[server_license_path] == FRIDA_SERVER_LICENSE_SHA256
     # Child WPF/worker must not rely on system Python or machine-wide .NET.
     environment=dict(os.environ,PYTHONHOME='Z:/missing-python',PYTHONPATH='Z:/missing-python',
                      DOTNET_ROOT='Z:/missing-dotnet',DOTNET_ROOT_X64='Z:/missing-dotnet',
@@ -50,6 +68,7 @@ def main():
                      DOTNET_MULTILEVEL_LOOKUP='0',ARKDPS_GIT=shutil.which('git'),
                      PATH=str(Path(os.environ['WINDIR'])/'System32'))
     executable = bundle/'ArkDPS.Desktop.exe'
+    verify_executable_manifest(executable)
     worker = bundle/'collector/desktop_bridge.py'
     original = worker.read_bytes()
     rejection = output/'wrong-worker'
@@ -87,6 +106,7 @@ def main():
             'packaged startup rejects a mismatched worker',
             'self-contained UI with invalid system DOTNET_ROOT, no dotnet/Python on PATH',
             'isolated bundled Python 3.12.10 + Frida 17.26.1',
+            'Android server payload and upstream license match the pinned hashes when events are bundled',
             'old v1 layout -> native WPF v3 -> WPF restart restores the same layout',
             'copied legacy runtime retains history and connection settings',
             'panel settings, theme, locked HUD and 83% opacity retained'],

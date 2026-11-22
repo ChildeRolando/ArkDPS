@@ -6,8 +6,8 @@
 
 - `desktop/ArkDPS.Desktop` 是 .NET 10 / C# / WPF 原生 UI：主窗、统计面板、历史页、连接表单、固定干员报告、HUD、托盘与 PNG 均由 WPF 绘制；不是 Tk 换皮，也没有 WebView。
 - WPF 启动一个 `desktop_bridge.py` 子进程。只有 Python 可以调用 `ConnectionConfig` / `CollectionSession` / `BattleRuntime` / `BattleHistory`；C# 不读游戏内存，不执行 ADB，不重新计算统计或占比。`DesktopState.view` 只调用既有 `render_panel`。
-- GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次；最终 `stopped` 审计写入失败纳入 `cleanup_errors`，即使资源已释放也必须报告。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
-- 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建唯一审计 JSONL 文件，不追加到先前运行的记录。
+- GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。
+- 重定位必须先成功释放旧会话；释放异常保留会话供重试。成功重试后的历史清理异常仍保留并令退出结果非零，不能把“当前句柄释放”误报为“本次没有清理失败”。每次 worker 运行以独占方式创建新的采集日志分段。
 - Python 保留原有单实例设备通道锁；明确的离线验收不占用该设备通道，必须指定独立配置目录。Tk 面板已封存（[ADR 0005](adr/0005-seal-legacy-tk.md)），`app.py` 只路由到 WPF 或无界面 `--capture-seconds`；`--legacy-tk`、`--acceptance-output`、`--self-test` 等旧参数由 argparse 明确报错退出，不会回退到其他界面。
 
 关卡名称由 Python 统一解析：`stage_names.py` 读取随包的 `vendor/ark-source/game_data/catalogs/stage_names.json`，把原生 `stage_id`（如 `Obt/Main/level_main_01-07`）翻译成玩家可读名称（`1-7`）。实时 `stage`、历史 `labels[0]`、PNG 与导出的 `display.stage` 共用同一解析；原始 `stage_id` 原样保留在历史、`stage_raw`、`stage_detail` 与导出中，UI 不改写它。目录缺失、无法解析或与 manifest `data_version` 不一致时，`warnings`/`history_notice` 明确提示版本问题并退回可读短码（如 `rogue6_1-3`），不显示内部路径，也不影响战绩读取。
@@ -50,6 +50,10 @@ PC 启动运行时由 CLI 或 `CollectionWorker` 持有，跨越 `CollectionSess
 
 HUD 在定位、重连、数据过期、战局冻结或等待新局时共享主窗的状态提示。保留旧战况时提示「上次快照」。实时统计恢复后收起提示条，正常排行高度与点击穿透按原设置运行。
 
+桌面采集日志达到 64 MiB 后从下一条完整记录开始新分段。启动和写入需要空间时，按最后写入时间从旧到新清理自动生成的 `wpf-*.jsonl`，将日志总量限制为 512 MiB（含旧版单文件和当前分段）。占用中的文件会跳过。无法腾出空间或无法写入时，桌面 worker 发出日志告警并稍后重试，采集和战绩归档照常执行。手动采集的证据包和 `runtime/history` 使用独立的路径。
+
+`python capture_battles.py --replay <任一分段>` 按顺序读取同一次运行的分段。文件链完整时由原有对账器复算。分段缺失时输出 `coverage: retained_only` 和仍保留的最新发布统计，供诊断使用。每段的首条敌人状态增量都保存可独立解码的前缀。
+
 ## 同包分发
 
 长期目标为 `net10.0-windows` / .NET 10 LTS（官方支持至 2028-11-14），不以 2026-11-10 结束支持的 .NET 8 作为长期基线。支持周期依据 [Microsoft 官方策略](https://dotnet.microsoft.com/en-us/platform/support/policy)。`global.json` 要求 10.0 稳定 SDK 并允许同系列最新 feature band；本轮全局 SDK 仅到 8.0.423，因此使用 SHA-512 核对过的任务本地 SDK 10.0.403 / runtime 10.0.14 构建，没有改写全局 SDK。可用 `ARKDPS_DOTNET` 显式指定 SDK 的 dotnet.exe；不兼容工具链构建失败，不静默降回 net8。
@@ -65,11 +69,11 @@ python tools/package_windows.py --output runtime/packages
 - self-contained .NET/WPF 程序；
 - 固定 CPython 3.12.10 embeddable x64 运行时及其许可；
 - 同一次构建的 Python collector 源码、采集必需 vendor 子集、离线头像；
-- 默认包含固定 Frida 17.26.1 Windows abi3 客户端 wheel、Windows x64 Gadget 及许可。官方压缩包和 DLL 各有固定摘要，来源写入组件与发布清单。运行时只从已验证的包内组件复制到可写目录。`--without-events` 不包含这些组件，明确生成累计快照变体；包不安装设备 Frida 服务，不随包分发用户的 ADB。
+- 标准事件版包含固定版本的 Windows 客户端、Windows x64 观察者组件、MuMu 12 的 Android x86_64 观察者服务及对应许可。选择 MuMu 并启用观察者后，程序为该实例准备服务。模拟器内 Root 和 ADB 由用户配置。构建选项 `--without-events` 生成累计快照版。
 
 Python 和 wheel 下载分别用固定 SHA-256 核验，下载与展开位于新的隔离目录；ZIP 拒绝路径穿越/符号链接/超大展开。Python `._pth` 仅白名单包内目录，不读系统 Python、用户 site-packages 或 `PYTHONPATH`。没有全局 pip install。
 
-`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本；两端不一致明确拒绝。升级时解压新版到新目录，退出旧版后复制 `collector/runtime` 中的用户配置和历史。运行目录必须可写。
+`metadata/release.json` 登记发行版本、载荷文件摘要、源提交和协议。启动时核对包内 worker 摘要及协议，然后握手验证实际响应版本。支持应用内更新的标准便携版将校验完成的完整程序保存于 `.arkdps-update/versions/`。用户确认重启后，旧版先退出采集器并保存设置，原启动入口切换到新版 WPF 及与它匹配的 worker。两个版本共用原启动目录的 `collector/runtime/`。首次从旧版迁移时可通过手动解压并复制该目录保留设置和战绩。便携包需要解压到可写目录。新版桌面入口要求 Windows 管理员权限。尚未要求管理员权限的旧根启动器不能可靠启动新版，本次必须完整 ZIP 迁移一次并使用新目录入口；单次管理员运行旧版完成更新不足以修复后续启动。迁移时，退出旧版后将现有 `collector/runtime/` 整目录复制到已解压的新版中。
 
 ## 可复核验收
 

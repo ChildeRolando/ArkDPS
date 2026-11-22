@@ -139,8 +139,8 @@
     <TextBlock x:Name="ModeLabel" Text="ARKDPS / ORBITAL CONSOLE" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="9,0,12,1"/>
    </StackPanel>
    <StackPanel x:Name="ChromeControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Background="{DynamicResource ChromeControlsSurface}" Margin="4,0,8,0">
-    <Button x:Name="UpdateDownload" Content="发现新版本 · 查看下载" Click="OpenReleaseDownload" Visibility="Collapsed"
-            AutomationProperties.Name="查看新版本下载" Padding="8,3" Margin="0,0,8,0"/>
+    <Button x:Name="UpdateDownload" Content="发现新版本 · 查看下载" Click="ShowUpdateClick" Visibility="Collapsed"
+            Padding="8,3" Margin="0,0,8,0"/>
     <StackPanel x:Name="ChromeLab" Margin="4,0,13,0" VerticalAlignment="Center">
      <TextBlock Text="ORBITAL COMBAT RESEARCH UNIT" FontFamily="{DynamicResource DataFont}" FontSize="11" Foreground="{DynamicResource ChromeInk}"/>
      <TextBlock Text="ORCU / DPS LAB" FontFamily="{DynamicResource DataFont}" FontSize="10" Foreground="{DynamicResource ChromeMuted}" Margin="0,2,0,0"/>
@@ -451,11 +451,16 @@
          <ComboBox x:Name="HudLayoutTarget" AutomationProperties.Name="HUD 源面板" DisplayMemberPath="Label" Width="186"/>
          <Button x:Name="EditHudLayoutButton" Content="调整布局" Click="EditHudLayoutClick" Margin="0" IsEnabled="False"/>
         </WrapPanel>
-        <WrapPanel x:Name="ReleaseSettings" Visibility="Collapsed" Margin="0,8,0,0">
-         <TextBlock x:Name="InstalledVersion" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
-         <Button x:Name="CheckUpdateButton" Content="检查更新" Click="CheckUpdateClick" Margin="0,0,12,0"/>
-         <TextBlock x:Name="UpdateStatus" AutomationProperties.LiveSetting="Polite" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
-        </WrapPanel>
+        <StackPanel x:Name="ReleaseSettings" Visibility="Collapsed" Margin="0,8,0,0">
+         <WrapPanel>
+          <TextBlock x:Name="InstalledVersion" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+          <Button x:Name="CheckUpdateButton" Content="检查更新" Click="CheckUpdateClick" Margin="0,0,12,0"/>
+          <Button x:Name="UpdateAction" Click="UpdateActionClick" Visibility="Collapsed" Margin="0,0,12,0"/>
+          <Button x:Name="UpdateReleasePage" Content="查看发布页" Click="OpenReleaseDownload" Visibility="Collapsed"/>
+         </WrapPanel>
+         <TextBlock x:Name="UpdateStatus" AutomationProperties.LiveSetting="Polite" Foreground="{DynamicResource Muted}" TextWrapping="Wrap"/>
+         <ProgressBar x:Name="UpdateProgressBar" Height="4" Margin="0,6,0,0" Visibility="Collapsed" AutomationProperties.Name="更新下载进度"/>
+        </StackPanel>
        </StackPanel>
       </Border>
       <Border x:Name="ConnectionForm" Grid.Row="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,12,12">
@@ -467,9 +472,13 @@
          <ComboBoxItem Content="明日方舟官方 PC 版" Tag="native_pc"/>
         </ComboBox>
         <StackPanel x:Name="MumuConnectionFields" Margin="0,12,0,0">
-         <CheckBox x:Name="AutoDetect" Content="自动检测认证的 MuMu 实例（多实例时需明确选择）"/>
-         <TextBlock Text="ADB 路径 · 留空自动查找" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="AdbPath" AutomationProperties.Name="ADB 路径" TextChanged="ConnectionAdbChanged"/>
-         <TextBlock Text="实例地址" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/><TextBox x:Name="Serial" ToolTip="多实例时选择检测结果或输入地址；明确地址不会被自动替换" AutomationProperties.Name="实例地址"/>
+         <CheckBox x:Name="AutoDetect"><TextBlock Text="自动检测 MuMu 实例（多实例时手动选择）" TextWrapping="Wrap"/></CheckBox>
+         <TextBlock Text="ADB 路径 · 留空自动查找" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/>
+         <TextBox x:Name="AdbPath" AutomationProperties.Name="ADB 路径" TextChanged="ConnectionInputEdited"
+                  ToolTip="自动查找到的路径会填在这里。手动编辑后，应用设置将使用指定路径。"/>
+         <TextBlock Text="实例地址" Style="{StaticResource FieldLabel}" Margin="0,10,0,4"/>
+         <TextBox x:Name="Serial" TextChanged="ConnectionInputEdited" AutomationProperties.Name="实例地址"
+                  ToolTip="唯一可用实例会自动填入。多实例时选择检测结果；手动输入的地址不会被自动替换。"/>
          <Button x:Name="DetectButton" Content="检测实例" Click="Detect" HorizontalAlignment="Left" Margin="0,12,0,8"/>
          <ListBox x:Name="Instances" MinHeight="46" MaxHeight="140" SelectionChanged="ChooseInstance"/>
         </StackPanel>
@@ -479,23 +488,36 @@
           <Button Content="选择目录" DockPanel.Dock="Right" Click="ChooseNativeGameRoot" Margin="8,0,0,0"/>
           <TextBox x:Name="NativeGameRoot" AutomationProperties.Name="PC 游戏目录" ToolTip="选择包含 Arknights.exe 的目录"/>
          </DockPanel>
-         <TextBlock Text="选择包含 Arknights.exe 的目录。先在鹰角启动器中启动游戏，再应用设置。"
+         <TextBlock Text="选择包含 Arknights.exe 的目录。应用设置后，保持 ArkDPS 开启，再正常重启游戏。"
                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
         </StackPanel>
         <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
        </StackPanel>
       </Border>
       <Border x:Name="ConnectionEventForm" Grid.Row="1" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12">
-       <StackPanel><TextBlock Text="采集能力与诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
-        <CheckBox x:Name="EventsEnabled" Content="启用观察者"/>
+       <StackPanel><TextBlock Text="逐次事件与连接诊断" Style="{StaticResource CardTitle}" FontSize="20"/>
+        <CheckBox x:Name="EventsEnabled" Content="启用逐次战斗事件" Margin="0,10,0,8"/>
         <StackPanel x:Name="MumuEventNotes">
-         <TextBlock Text="连接后，可按游戏事件统计有效伤害、伤害溢出、被减伤率、技能期伤害与覆盖率、接敌 DPS 和护盾实际吸收，并追踪敌人入场、血量变化、重生与离场。"
-                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>
-         <TextBlock Text="关闭或连接失败时，继续使用伤害与治疗累计快照。事件未覆盖的统计显示为未知。"
+         <TextBlock Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,10">
+          <Run Text="1. 先启动 MuMu 实例和游戏，开启模拟器的 ADB 与 Root。"/><LineBreak/>
+          <Run Text="2. 点击「检测实例」。多实例时选择正在游玩的实例。"/><LineBreak/>
+          <Run Text="3. 应用设置，等采集就绪后再进入战斗。"/>
+         </TextBlock>
+         <TextBlock Text="未找到实例时，先检查模拟器是否开启、ADB 是否允许，再重新检测。ADB 路径通常可留空；手动指定的路径与地址会保留。"
                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
         </StackPanel>
-        <TextBlock x:Name="NativeEventNote" Visibility="Collapsed" Text="逐次事件需要先以管理员权限启动 ArkDPS，再启动游戏。采集组件随游戏保留到正常退出。各项统计按已验证的覆盖显示。"
-                   Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+        <StackPanel x:Name="NativeEventNotes" Visibility="Collapsed">
+         <TextBlock x:Name="NativeEventNote" Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,10">
+          <Run Text="1. 选择包含 Arknights.exe 的游戏目录。"/><LineBreak/>
+          <Run Text="2. 保持逐次事件开启，点击「应用设置并重连」。"/><LineBreak/>
+          <Run Text="3. 保持 ArkDPS 开启，正常重启游戏；自动就绪后再战斗。"/>
+         </TextBlock>
+         <TextBlock Text="游戏已经运行：应用后正常退出并重启游戏。等待初始化：进入大厅后稍候，无需反复重连。端口被占用：先退出旧版 ArkDPS（含托盘）；释放后会自动继续等待。"
+                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+        </StackPanel>
+        <TextBlock Text="逐次记录伤害、治疗、实际吸盾与技能起止。关闭后仅使用累计快照；事件未覆盖的指标保留未知。"
+                   Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
+        <TextBlock Text="当前状态" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
         <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         <Button Content="应用设置并重连" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,16,0,0"/>
        </StackPanel>

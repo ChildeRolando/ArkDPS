@@ -12,8 +12,13 @@ public partial class App : System.Windows.Application
 {
     internal static string Root = "";
     internal static string Python = "python.exe";
+    internal static string StateDirectory = "";
     internal static string? Verification;
     internal static ReleaseVersion? InstalledVersion;
+    internal static PortableUpdateHost? UpdateHost;
+    internal static PortableLaunch? UpdateLaunch;
+    internal static UpdateFixture? UpdateVerification;
+    internal static string[] LaunchArguments = [];
     internal static readonly List<string> BridgeArguments = new();
     internal static void ClearConnectionOverrides()
     {
@@ -25,25 +30,52 @@ public partial class App : System.Windows.Application
             else index++;
         }
     }
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         try
         {
-            for (int i = 0; i < e.Args.Length; i++)
+            var arguments = e.Args;
+            var host = PortableUpdateHost.Find(AppContext.BaseDirectory);
+            if (arguments.Length == 2 && arguments[0] == PortableUpdateHost.ApplyOption)
             {
-                string arg = e.Args[i];
+                if (host == null) throw new IOException("找不到 ArkDPS 便携目录。");
+                UpdateHost = host;
+                await host.ApplyAsync(arguments[1]);
+                Shutdown();
+                return;
+            }
+            if (arguments.Length == 2 && arguments[0] == PortableUpdateHost.ChildOption)
+            {
+                if (host == null) throw new IOException("找不到 ArkDPS 便携目录。");
+                UpdateLaunch = PortableUpdateHost.ReadChild(arguments[1]);
+                arguments = UpdateLaunch.Arguments;
+            }
+            else if (host != null && !arguments.Contains("--repo") && !arguments.Contains("--python") &&
+                     host.Redirect(arguments))
+            {
+                Shutdown();
+                return;
+            }
+            LaunchArguments = arguments;
+            string? stateOverride = null;
+            string? updateFixture = null;
+            for (int i = 0; i < arguments.Length; i++)
+            {
+                string arg = arguments[i];
                 switch (arg)
                 {
-                    case "--repo": Root = e.Args[++i]; break;
-                    case "--python": Python = e.Args[++i]; break;
-                    case "--verify": Verification = e.Args[++i]; break;
+                    case "--repo": Root = arguments[++i]; break;
+                    case "--python": Python = arguments[++i]; break;
+                    case "--verify": Verification = arguments[++i]; break;
+                    case "--verify-update": updateFixture = arguments[++i]; break;
                     case "--offline": case "--no-events": BridgeArguments.Add(arg); break;
-                    case "--fixture": case "--state-dir": case "--adb": case "--serial": case "--frida-remote":
+                    case "--state-dir": stateOverride = arguments[++i]; break;
+                    case "--fixture": case "--adb": case "--serial": case "--frida-remote":
                     case "--platform": case "--native-game-root":
-                        BridgeArguments.Add(arg); BridgeArguments.Add(e.Args[++i]); break;
+                        BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--arkframework-root":
-                        BridgeArguments.Add(arg); BridgeArguments.Add(Path.GetFullPath(e.Args[++i])); break;
+                        BridgeArguments.Add(arg); BridgeArguments.Add(Path.GetFullPath(arguments[++i])); break;
                     default: throw new ArgumentException("未知参数：" + arg);
                 }
             }
@@ -57,10 +89,33 @@ public partial class App : System.Windows.Application
                 while (directory != null && !File.Exists(Path.Combine(directory.FullName, "desktop_bridge.py"))) directory = directory.Parent;
                 Root = directory?.FullName ?? throw new IOException("找不到采集器；请使用 start.cmd 启动。");
             }
-            if (BridgeArguments.Contains("--offline") && !BridgeArguments.Contains("--state-dir"))
+            Root = Path.GetFullPath(Root);
+            bool offline = BridgeArguments.Contains("--offline");
+            if (offline && stateOverride == null)
                 throw new ArgumentException("离线验收必须指定独立 --state-dir，不能覆盖产品设置。");
-            if (Verification != null && !BridgeArguments.Contains("--offline"))
+            if (Verification != null && !offline)
                 throw new ArgumentException("--verify 必须使用 --offline");
+            if (updateFixture != null && (!offline || host == null || Verification != null))
+                throw new ArgumentException("--verify-update 必须使用便携包及隔离的离线状态目录。");
+            bool packaged = string.Equals(Root, packagedRoot, StringComparison.OrdinalIgnoreCase);
+            if (packaged && Python == "python.exe")
+                throw new IOException("便携包缺少自带的 Python 运行时。请重新下载完整发布包。");
+            string launchRoot = packaged && host != null ? Path.Combine(host.Root, "collector") : Root;
+            StateDirectory = stateOverride == null
+                ? (packaged ? host?.StateDirectory : null) ?? Path.Combine(Root, "runtime")
+                : Path.GetFullPath(stateOverride, launchRoot);
+            for (int i = 0; i + 1 < BridgeArguments.Count; i++)
+            {
+                if (BridgeArguments[i] == "--fixture" ||
+                    (BridgeArguments[i] == "--adb" && Path.GetDirectoryName(BridgeArguments[i + 1]) is { Length: > 0 }))
+                    BridgeArguments[i + 1] = Path.GetFullPath(BridgeArguments[i + 1], launchRoot);
+            }
+            if (stateOverride != null || packaged)
+            {
+                BridgeArguments.Add("--state-dir");
+                BridgeArguments.Add(StateDirectory);
+            }
+            if (updateFixture != null) UpdateVerification = UpdateFixture.Load(updateFixture, StateDirectory, host!);
             if (Verification is string evidence)
             {
                 Directory.CreateDirectory(evidence);
@@ -76,7 +131,7 @@ public partial class App : System.Windows.Application
                     File.WriteAllText(Path.Combine(evidence, "runtime-failure.txt"), failure.ExceptionObject.ToString());
             }
             string release = Path.Combine(AppContext.BaseDirectory, "metadata", "release.json");
-            if (File.Exists(release) || string.Equals(Root, packagedRoot, StringComparison.OrdinalIgnoreCase))
+            if (File.Exists(release) || packaged)
             {
                 using var manifest=System.Text.Json.JsonDocument.Parse(File.ReadAllText(release));
                 string worker=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(Root,"desktop_bridge.py")))).ToLowerInvariant();
@@ -86,14 +141,32 @@ public partial class App : System.Windows.Application
                     !ReleaseVersion.TryParse(manifest.RootElement.Text("version"), out var version))
                     throw new IOException("安装包两端不匹配；请完整替换同一发布包，不混用旧采集器。");
                 InstalledVersion = version;
+                if (packaged && manifest.RootElement.Number("update_protocol") == 1 &&
+                    manifest.RootElement.Text("frida").Length > 0 &&
+                    !arguments.Contains("--repo") && !arguments.Contains("--python"))
+                    UpdateHost = host;
             }
-            var window = new MainWindow(); MainWindow = window; window.Show();
+            var window = new MainWindow(); MainWindow = window;
+            if (UpdateLaunch?.ReadyPipe != null || UpdateVerification != null)
+            {
+                window.IsEnabled = UpdateLaunch?.ReadyPipe == null;
+                window.ShowActivated = false;
+                if (UpdateLaunch?.Kind == PortableLaunchKind.Probe || UpdateVerification != null)
+                {
+                    window.Opacity = 0;
+                    window.ShowInTaskbar = false;
+                }
+            }
+            window.Show();
             if (InstalledVersion is ReleaseVersion installed)
-                window.InitializeReleaseUpdates(installed, BridgeArguments.Contains("--offline"));
+                window.InitializeReleaseUpdates(installed, offline);
         }
         catch (Exception ex)
         {
             if(Verification!=null){Directory.CreateDirectory(Verification);File.WriteAllText(Path.Combine(Verification,"failure.txt"),ex.ToString());}
+            else if (UpdateLaunch?.ReadyPipe != null || (e.Args.Length > 0 && e.Args[0] == PortableUpdateHost.ApplyOption))
+                UpdateHost?.Log(ex);
+            else if (UpdateVerification != null) UpdateVerification.WriteFailure(ex);
             else MessageBox.Show(ex.Message, "ArkDPS 启动失败");
             Shutdown(1);
         }

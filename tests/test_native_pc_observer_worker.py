@@ -301,9 +301,11 @@ def test_desktop_worker_reads_optional_timeline_in_lobby_only_when_enabled(
     assert bool(polls) == should_read
     assert state.last is None
     if should_read:
-        journals = list((tmp_path / 'runtime' / 'captures').glob('wpf-*.jsonl'))
+        journals = list((state.directory / 'captures').glob('wpf-*.jsonl'))
         assert len(journals) == 1
-        assert polls == [(directory / 'battle_timeline.json', journals[0].with_suffix('.arkframework'))] * 2
+        run = journals[0].name.removesuffix('-part-000001.jsonl')
+        assert polls == [(directory / 'battle_timeline.json',
+                          journals[0].with_name(run + '.arkframework'))] * 2
         assert journals[0].read_text('utf-8').count('timeline not yet available') == 1
 
 

@@ -29,6 +29,7 @@
 
 ## 发布
 
+- [rc.14 发布说明与实机覆盖](release-rc14.md) — PC/MuMu 整合、始终管理员启动、一次迁移与实机验证边界。
 - [Windows WPF 便携包构建与发布验收](windows-release.md) — 当前唯一分发入口：构建、验收、CI 与许可边界。
 - [旧 ARK-14 Tk 候选归档](archive/legacy-tk/windows-release-ark14.md) — 已封存的 PyInstaller/Tk 候选记录，只作历史追溯。
 - [变更日志](../CHANGELOG.md) — 候选版本的变化与交付状态。

@@ -6,11 +6,13 @@
 
 ### ArkDPS 本机 Frida 探针
 
+当前发布整合基线 2208 已通过 CE-5 逐实例扣血、治疗、实际吸盾和技能效果对账，具体数值、源提交及未观测弹药结束的限制见 [rc.14 发布说明](release-rc14.md#pc-实机覆盖)。下面保留早期排障记录，其中的失败与待验收状态属于各自旧候选。
+
 2026-11-22 已在普通官服 PC 新进程中跑通独立 Gadget 启动加载，随后通过 ArkDPS 原有 `CollectionSession` 加载完整 `event_probe_native_pc.js`。一局 CE-5 已完成四类事件对账。正常 CLI 与桌面 worker 现由 `NativePcFridaRuntime` 在连接快照前管理启动和重连。普通 worker 在第二个新游戏进程中自动载入了组件，修正启动阶段访问快照的时序后，已在同一进程验证完整探针重连就绪及清理。[首次启动加载](../runtime/native-pc/frida-development/watch-game-20261122.json) · [完整探针就绪](../runtime/native-pc/frida-development/game-capture-20261122-01/READY.json) · [正常 worker 初始失败](../runtime/native-pc/frida-development/normal-worker-smoke-initial-failure.json) · [正常 worker 重连](../runtime/native-pc/frida-development/normal-worker-smoke-reconnect.json)
 
 官服 PC 的「启用观察者」使用 `NativePcFridaRuntime` 在新游戏启动早期装入固定版本官方 Gadget，再通过本机随机令牌认证连接，将 `NativePcFridaObserver` 与 `event_probe_native_pc.js` 绑定到已验证的 Windows x64 进程。源码与桌面入口共用此默认路径。`--no-events` 关闭观察及启动监听，`--frida-remote` 继续用于 MuMu。
 
-最新生命周期候选已实机连接，首次探针仍有类元数据展开缺陷，见 [2026-11-22 字段表失败及重连](#2026-11-22-字段惰性展开与手动重连)。
+早期生命周期候选曾在首次探针中出现类元数据展开缺陷，见 [2026-11-22 字段表失败及重连](#2026-11-22-字段惰性展开与手动重连)。
 
 PC 探针按匹配构建校验 IL2CPP 字段与方法签名，适配 Microsoft x64 的定点数参数、大型 Modifier 的间接传参与隐藏返回地址。每笔伤害、直接治疗、实际吸盾和技能事件沿用 MuMu 事件种类和顺序。直接治疗记录结算量。数值盾记录同一次回调中的入伤和盾值变化，并保留施盾来源；当前已识别范围沿用 MuMu 的护盾实现。未识别的盾上下文报告覆盖缺口。技能开始和结束按效果回调处理，并保留干员退场的结束证据。
 
@@ -83,7 +85,7 @@ Collector 1.1.0 在每笔直接治疗中新增 `direct_healing.amount` 和 `dire
 
 启动 WPF 或无界面 PC 采集时，传入 `--arkframework-root <框架目录>` 可在开启事件记录时读取 BetterBattle 的 `battle_timeline.json`。ArkDPS 单独保存原始战局的 type 6 持续回复，包括每笔逻辑帧、来源与目标的 ID、实例 UID 和实际量。该局有 46 笔共 366.875，按 MuMu 口径单列，HPS 沿用原生直接治疗。每次读取替换该回放的已录结果，避免重复累计；出现时间线分叉或跳转时，文件中的覆盖状态会反映这一点。回放身份由关卡、种子和创建时间标识，独立于 V2 战局编号。WPF 的文件保存到 `runtime/captures/<运行名>.arkframework/`，无界面采集保存在该次输出目录的 `arkframework/`。
 
-当前公开数据只给出瞬时盾量和层数，没有该次实际吸收与施盾者。技能逐帧状态也缺少同一帧内与伤害的先后顺序。PC 仍不能按 MuMu 口径确认实际吸盾或技能生效、结束。[逐帧状态说明](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/docs/ExternalBridge.md)
+当前公开数据只给出瞬时盾量和层数，没有该次实际吸收与施盾者。技能逐帧状态也缺少同一帧内与伤害的先后顺序。该 ArkFramework 数据源不能按 MuMu 口径确认实际吸盾或技能生效、结束；当前自有 Frida 探针的覆盖见上节。[逐帧状态说明](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/docs/ExternalBridge.md)
 
 源码位于 `native_pc/arkframework/`。用 Windows x64 C++17 编译器及 CMake 3.22 或更高版本构建。`ARKFRAMEWORK_INCLUDE_DIR` 指向含 `ark/plugin.h` 和 `ark/battle.h` 的 SDK 目录。插件针对上面固定提交的宿主 ABI 与 ImGui 版本构建。
 
@@ -98,7 +100,7 @@ ArkDPS 通过原有只读句柄采集游戏的手动操作日志，覆盖部署�
 
 在 WPF 与无界面采集的 JSONL 中，`published` 样本的 `native_action_journal` 字段记录可用状态及日志尾部。`journal_index` 在游戏战局内排序，相邻采样可以重叠。`user_game_time` 使用游戏的 `userFixedPlayTime` 时钟，外层 `frame` 是读取帧。`tail_truncated` 标明已省略更早的原始条目。解析失败保留 `unavailable` 和原因，累计统计仍可发布。手动技能指令与实际技能生效、结束是不同记录，手动操作日志独立于下面的战斗事件覆盖和 `--require-events`。
 
-已验证来源可以通过 `CollectionSession` 的 `observer_factory` 注入观察者，启用战局生命周期并传入 `frida_remote=None`。无界面采集入口 `app.main` 和桌面桥接入口 `desktop_bridge.main` 都接受可信调用方显式传入的 `native_pc_observer_factory`，只在选择 PC 且启用事件观察时传入会话。无界面采集沿用 `--require-events` 验收。观察者启动失败时不写就绪文件，事件流失效时保留失败证据。工厂、启动、失败后的资源释放、下一局重试及状态仍由会话管理。当前 PC 产品使用原生累计快照，发行入口尚未配置可验收的 Windows 逐次事件来源。
+已验证来源可以通过 `CollectionSession` 的 `observer_factory` 注入观察者，启用战局生命周期并传入 `frida_remote=None`。无界面采集入口 `app.main` 和桌面桥接入口 `desktop_bridge.main` 都接受可信调用方显式传入的 `native_pc_observer_factory`，只在选择 PC 且启用事件观察时传入会话。无界面采集沿用 `--require-events` 验收。观察者启动失败时不写就绪文件，事件流失效时保留失败证据。工厂、启动、失败后的资源释放、下一局重试及状态仍由会话管理。当前 PC 发行入口已默认配置自有 Frida 逐次事件来源；原生累计快照与其共用会话和归档。
 
 PC 的原生累计和编队在 `read_lifecycle()` 的一次事务中采集。`BattleFeed` 在这次事务前后分别取观察者水位。两次水位必须同帧、同游戏时间、同序号和同回调世代，且没有正在执行的事件。两个水位、批次以及可选的终局水位必须携带相同的 `native_session` 与 `source_build`，也必须与快照一致。原生战局身份作为不透明值比较，统计与归档继续使用 `feed:generation`。
 
@@ -158,17 +160,25 @@ Android 2.7.91 的实机跟踪确认，维什戴尔、机械师及其召唤物�
 
 卫戍高密度战斗可用 `ARKDPS_COALESCE_ENEMY_HP=1` 试验合并同一实例在同一逻辑帧内的连续回血。只处理前后 HP 精确衔接且最大 HP 已验证的连续正向写入，保留每段首笔，并在其他统计事件或采集水位前提交尾笔。入场、损血、假死、重生与离场仍逐笔观察。默认关闭，启用前后可用同一关卡对照帧时间、更新间隔和结算统计。
 
-开启事件观察后，采集 worker 每 5 秒检查本机事件端点：若转发丢失会重建 `27043 → 27864`；若设备上已有的 `frida-server-17.26.1` 未运行，会尝试启动它。模拟器重启导致采集连接丢失时，worker 每 5 秒自动重新解析实例并重连，不需要手动「重新定位」。这套保活只复用设备上已存在的二进制。启动通过设备端锁串行化，并为每次新启动指定独立的 Frida 临时目录，防止其他服务进程启动时清理仍在使用的 ARM64 探针。健康检查同时确认设备端监听和主机转发可达。若 Frida 返回 `process is not using emulation`，界面保留快照并提示重启设备端 Frida 服务后重新定位。
+标准便携版的观察者启用后，采集 worker 会在连接并确认游戏初始化完成时准备选定实例的事件端点。端点已就绪时复用现有服务。端点不可用时核验设备端文件，必要时从包内准备 Frida 17.26.1 Android x86_64 服务并启动。初次准备失败时保留原始原因，并继续读取快照。
 
-`app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 命令行模式共用 `CollectionSession`。通过进程身份和游戏版本校验后，默认向本机已验证端点 `127.0.0.1:27043` 尝试临时事件观察；`--frida-remote host:port` 可覆盖端点，`--no-events` 显式关闭。API 的默认值同样为该端点，传入 `frida_remote=None` 关闭，可供 ARK-11 设置入口使用。Frida 17.26.1 客户端、同版服务及端口转发须由调用方准备；采集器结束时卸载自己的脚本，不安装或启动服务、不使用 eternalize。
+采集 worker 每 5 秒检查本机事件端点，必要时恢复 `27043 → 27864` 转发和服务。模拟器重启导致采集连接丢失时，worker 会重新解析实例并重连。启动在设备端串行化，每次新启动使用独立的 Frida 临时目录。健康检查同时确认设备端监听和主机转发可达。
 
-连接先校验进程身份与游戏版本，再通过只读内存通道检查已验证的 IL2CPP 构建和稳定的游戏场景。进入已登录的大厅或读到已就绪的战局后才自动挂载观察者。启动页、转场和暂时读不到场景时显示「等待游戏初始化」。启动检查使用已验证的类型和场景地址，按秒重新读取，等待时间本身不能触发挂载。游戏进程变化后会重新检查。
+`app.py` 的窗口、`start.cmd` 和 `--capture-seconds` 共用 `CollectionSession`。默认事件端点为 `127.0.0.1:27043`，`--frida-remote host:port` 可覆盖端点，`--no-events` 或 API 的 `frida_remote=None` 可以关闭事件。源码和命令行采集沿用开发者准备的端点。采集结束时卸载此次会话的脚本。
 
-快照与编队暂时跨帧、`SampleUnavailable` 或 `RosterUnavailable` 会重试，保留观察器队列，不制造事件缺口。基线要求前后标记同帧同时间、序号及回调入口计数一致，并且没有在途回调。后续同样取得稳定配对，再提交有序事件和水位。真实换局/时钟回退拒绝串局；观察器丢失、来源冲突或序列缺口封存事件覆盖，正常采集入口仍可继续原生累计。未知护盾机制关闭覆盖。自然结束只有最终水位已到结束时间时才保持覆盖完整，接敌尾部按结束时间截断。
+连接先校验进程身份与游戏版本，再通过只读内存通道确认已登录大厅或已就绪战局。快速检查未通过时，已定位的战局可继续发布伤害和治疗快照。观察者可以复用战局定位使用的只读读取器确认场景，沿用同一就绪条件。启动页、转场和暂时读不到场景时仍等待，游戏进程变化后重新验证。日志中的 `observer_game_init_probe` 记录快速检查和备用检查的结果。
+
+快照与编队暂时跨帧、`SampleUnavailable` 或 `RosterUnavailable` 会重试，保留观察器队列，不制造事件缺口。基线要求前后标记同帧同时间、序号及回调入口计数一致，并且没有在途回调。战斗中首次接入时，以首个稳定配对为事件覆盖起点，基础快照保留此前已采集的累计。后续同样取得稳定配对，再提交有序事件和水位。真实换局/时钟回退拒绝串局；观察器丢失、来源冲突或序列缺口封存事件覆盖，正常采集入口仍可继续原生累计。未知护盾机制关闭覆盖。自然结束只有最终水位已到结束时间时才保持覆盖完整，接敌尾部按结束时间截断。
 
 输出中的 `statistics` 是统计核心与宿主归并结果；原来的原生 `rows` 仍供现有伤害窗口使用。`event_status` 为 `unavailable`（用户关闭）、`attaching`、`ready`、`recording`、`failed`（启动失败）、`gap`（运行中断）、`finished` 或 `stopped`；`event_error`、`event_watermark` 与每行覆盖字段必须一起保留。依赖缺失、Frida 版本不符、远端不可达或挂载失败时，清理已创建的观察器，保留失败原因，继续原生伤害和治疗快照，护盾与接敌时间保持未知；运行中断只保留已观察的可靠前缀。可恢复的单事件问题（未验证护盾、护盾回调缺少上下文、非玩家来源、无法识别的伤害类型）只把对应护盾或该来源的过量标为未知，不关闭其他干员的伤害、接敌与过量覆盖；只有记录级失败（非法金额、缓冲溢出）才关闭整个事件覆盖，并在 UI/日志中显示实际错误文本。不会在当前局重挂载，下一局新建会话时按认证条件重新尝试。未经认证的游戏版本或无法确认的进程身份仍拒绝整个连接，不发布数值。新字段的显示界面由后续 GUI/HUD 工单负责。
 
 普通命令行采集允许上述降级，`READY.json` 在连接与可选观察器启动/清理完成后写入，并包含 `event_status` 和 `event_error`。验收使用 `--require-events` 要求事件覆盖，启动失败不写 READY，运行缺口记录失败并清理退出；该选项不能与 `--no-events` 合用。`acceptance/run_event_acceptance.ps1` 已固定传入此选项，避免把快照降级误记为事件验收通过。
+
+### 2026-11-21 用户反馈：MuMu 6.8.8 上的事件不可用与游戏闪退
+
+- 用户最初反馈事件不可用。旧便携包带有 Windows Frida 客户端，采集日志显示 MuMu 内的 Frida 服务端找不到或无法执行。rc.11 将设备端服务纳入便携包，由 ArkDPS 准备和启动。
+- 用户在 MuMu 6.8.8 的 Android 15 实例上使用 rc.11，报告唤醒时游戏闪退。送回的采集日志记录了观察者接入断管，以及随后基础快照通道未收到 `memsrv v5` 握手。现有证据缺少 Android 崩溃堆栈，闪退的具体故障点仍未确认。
+- 用户改用 Android 12 实例后反馈恢复正常。该结果来自单个用户的复测。为这次反馈提出的 MuMu 版本门槛方案随 rc.12 和衍生的 rc.13 候选一并撤回。
 
 ## 宿主机实机操作
 

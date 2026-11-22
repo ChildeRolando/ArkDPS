@@ -5,7 +5,7 @@
 ## 目标与边界
 
 - 首版只自动选择已认证的 MuMu 实例；其他安卓设备会列出但不会自动连接，可在连接设置中手动指定。
-- 检测只执行 `adb devices -l`、`getprop`、`settings get secure android_id`、`dumpsys package` 等只读命令；不重启模拟器、不执行 `adb kill-server`、不删除其他工具的端口转发。
+- 检测可通过 `adb connect` 登记 MuMu 管理工具报告的本机实例，用 `adb devices -l`、`getprop` 等命令验证设备。不重启模拟器、不执行 `adb kill-server`、不修改现有端口转发。
 - `adb` 可达不等于统计兼容。连接状态与游戏版本状态分字段报告；版本不匹配时采集器抛出 `UnsupportedVersion`，拒绝发布任何数值。
 
 ## 配置
@@ -27,10 +27,10 @@
 
 ## 自动检测
 
-1. 按“显式配置 → 环境变量 → 常见 MuMu 安装路径 → PATH”解析 `adb.exe`。
-2. 解析 `adb devices -l`，保留 offline / unauthorized / no permissions 等不可访问状态。
+1. 按“显式配置 → 环境变量 → Windows 注册表记录的 MuMu 安装目录 → 常见 MuMu 安装路径 → PATH”解析 `adb.exe`。注册表中的安装目录可以位于任意盘符。
+2. 解析 `adb devices -l`，保留 offline / unauthorized / no permissions 等不可访问状态。用 MuMu 管理工具的 `info -v all` 获取正在运行的实例。仅对设备列表中尚未登记的本机 ADB 地址尝试连接，再重新枚举。
 3. 对可访问设备读取型号与 `android_id`；MuMu 常同时暴露 `127.0.0.1:16384` 与 `emulator-5554`，相同 `android_id` 合并为一个实例，优先选择回环端口。缺失或占位标识（如 `null`）不参与合并；回退硬件序列，两者均缺失时保留独立候选。
-4. MuMu 认证依据：`127.0.0.1:16384+32n` 序列、MuMu 安装目录下的 adb、或设备属性含 mumu/netease。仅因 adb 来自 MuMu 目录不会把 USB 真机误判为 MuMu。
+4. MuMu 认证依据包括管理工具确认的地址、`127.0.0.1:16384+32n` 序列、MuMu 安装目录下的 adb 与模拟器序列，或设备属性含 mumu/netease。仍须成功读取设备身份后才会自动选择。
 5. 结果状态：`ready_unique`（唯一实例自动选中）、`needs_selection`（多实例，等待玩家选择）、`no_instance`、`no_certified_instance`、`adb_missing`、`adb_inaccessible`、`error`。
 
 ## 诊断契约

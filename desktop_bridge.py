@@ -28,10 +28,10 @@ from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_
 from collector import BattleChanged, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
                         DetectionStatus, detect_instances, resolve_configured)
-from desktop_audit import DesktopAuditWriter
+from desktop_audit import DesktopCaptureJournal
 from event_capture import CaptureRetry
 from event_observer import ObserverStatus
-from frida_provision import ensure_frida_endpoint, keep_frida_endpoint
+from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
@@ -128,6 +128,7 @@ class DesktopState:
     """Single-threaded command owner; collector input is queued by its worker."""
     def __init__(self, directory=None):
         directory = Path(directory) if directory else ROOT / 'runtime'
+        self.directory = directory
         self.store = LayoutStore(directory / 'layout.json')
         loaded = self.store.load()
         self.layout = loaded.layout
@@ -625,6 +626,7 @@ class CollectionWorker:
     """Owns the sole CollectionSession, never references WPF or pipe objects."""
     def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE, native_pc_observer_factory=None,
                  arkframework_root=None):
+        self.directory = state.directory
         self.history, self.endpoint = state.history, endpoint
         self.native_pc_observer_factory = native_pc_observer_factory
         self.arkframework_root = Path(arkframework_root) if arkframework_root is not None else None
@@ -642,6 +644,7 @@ class CollectionWorker:
         self.pc_cleanup_error = ''
         self._last_pc_bootstrap = None
         self._bootstrap_audit = None
+        self.pending_history_count = 0
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
@@ -776,19 +779,13 @@ class CollectionWorker:
 
     def run(self):
         try:
+            from capture_cli import json_value
+
             runtime = BattleRuntime()
-            capture_dir = ROOT / 'runtime' / 'captures'
-            capture_dir.mkdir(parents=True, exist_ok=True)
-            path = capture_dir / (
-                f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{uuid4().hex}.jsonl')
-            with path.open('x', encoding='utf-8') as stream:
-                from capture_cli import json_value
-
-                def write_audit(record):
-                    stream.write(json.dumps(record, ensure_ascii=False, default=json_value) + '\n')
-                    stream.flush()
-
-                audit = DesktopAuditWriter(write_audit).write
+            capture_dir = self.directory / 'captures'
+            with DesktopCaptureJournal(capture_dir, encoder=json_value,
+                                       warn=lambda message: self.events.put(('warning', message))) as journal:
+                audit = journal.write
                 self._bootstrap_audit = audit
                 regeneration = None
                 try:
@@ -804,6 +801,18 @@ class CollectionWorker:
                     retries = 0
                     last_retry_audit = float('-inf')
                     last_live_frame = None
+                    bundled_observer = self.endpoint == DEFAULT_FRIDA_REMOTE and BUNDLED_SERVER_ARCHIVE.is_file()
+
+                    def bind_observer_endpoint(target):
+                        nonlocal endpoint_bound
+                        ok, detail = ensure_frida_endpoint(target.adb_path, target.serial, remote=self.endpoint)
+                        endpoint_bound = ok
+                        self.last_endpoint_check = time.monotonic()
+                        audit('frida_endpoint', {'ok': ok, 'detail': detail})
+                        if not ok:
+                            self.events.put(('warning', '事件端点：' + detail))
+                        return ok, detail
+
                     while not self.stop.is_set():
                         next_live_read = None
                         try:
@@ -858,19 +867,16 @@ class CollectionWorker:
                                         target = resolve_configured(config)
                                         current_target = target
                                         self.events.put(('diagnostic', target.diagnostics.as_dict()))
-                                        if enabled:
-                                            ok, detail = ensure_frida_endpoint(target.adb_path, target.serial,
-                                                                               remote=self.endpoint)
-                                            endpoint_bound = ok
-                                            self.last_endpoint_check = time.monotonic()
-                                            audit('frida_endpoint', {'ok': ok, 'detail': detail})
-                                            if not ok:
-                                                self.events.put(('warning', '事件端点：' + detail))
+                                        if enabled and not bundled_observer:
+                                            bind_observer_endpoint(target)
+                                        if enabled and bundled_observer:
+                                            session_kwargs['prepare_observer'] = (
+                                                lambda target=target: bind_observer_endpoint(target))
                                         adb, serial = target.adb_path, target.serial
                                         remote = self.endpoint if enabled else None
                                     self._connect_session(adb, serial, runtime,
                                         frida_remote=remote, **session_kwargs,
-                                        history=self.history, audit=audit,
+                                        history=self.history, audit=audit, state_dir=self.directory,
                                         on_history=lambda: self.events.put(('history', None)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
                                     if self.stop.is_set():
@@ -988,9 +994,11 @@ class CollectionWorker:
                             if regeneration is None:
                                 from native_pc.arkframework_replay import RegenerationRecorder
                                 regeneration = RegenerationRecorder(
-                                    self.arkframework_root / 'battle_timeline.json', path.with_suffix('.arkframework'))
+                                    self.arkframework_root / 'battle_timeline.json',
+                                    capture_dir / f'{journal.run}.arkframework')
                             regeneration.poll_reporting(time.monotonic(), audit)
                         if (usable and current_enabled and current_target is not None
+                                and (not bundled_observer or self.session.event_status != WAITING_GAME_INIT)
                                 and time.monotonic() - self.last_endpoint_check >= 5):
                             started = time.monotonic()
                             observer = self.session.observer
@@ -1028,11 +1036,12 @@ class CollectionWorker:
                     config, enabled = self.effective
                     if regeneration is not None and enabled and config.platform == 'native_pc':
                         regeneration.poll_reporting(time.monotonic(), audit, force=True)
+                    self.pending_history_count = len(runtime.pending_history)
         except Exception as exc:
             self.events.put(('worker_error', str(exc)))
             traceback.print_exc(file=sys.stderr)
 
-    def close(self):
+    def close(self, *, require_history_saved=False):
         with self._request_lock:
             self.stop.set()
             startup = self.pc_runtime
@@ -1044,6 +1053,8 @@ class CollectionWorker:
             self.release()
             self._close_pc_runtime()
         errors = self.retired_errors + [error for error in (self.cleanup_error, self.pc_cleanup_error) if error]
+        if require_history_saved and self.pending_history_count:
+            errors.append(f'{self.pending_history_count} 局战绩尚未保存，更新未应用。')
         if errors:
             raise RuntimeError('；'.join(errors))
 
@@ -1157,7 +1168,12 @@ def serve(input_stream, output, state, worker=None):
             elif not handshake:
                 raise ValueError('必须先完成 hello 握手')
             elif op == 'quit':
-                if worker:
+                require_history_saved = cmd.get('require_history_saved', False)
+                if type(require_history_saved) is not bool:
+                    raise ValueError('require_history_saved 必须是布尔值')
+                if worker and require_history_saved:
+                    worker.close(require_history_saved=True)
+                elif worker:
                     worker.close()
                 result, kind, quit_requested = None, 'bye', True
             elif op == 'detect':
@@ -1174,7 +1190,8 @@ def serve(input_stream, output, state, worker=None):
                         message='官服 PC 无需 ADB 检测；请填写游戏目录并应用连接设置以检查构建和读取权限。',
                         version_expected=None).as_dict()
                 elif platform == 'mumu':
-                    result = detect_instances(cmd.get('adb') or None).diagnostics().as_dict()
+                    result = detect_instances(cmd.get('adb') or None,
+                                              register_mumu=worker is not None).diagnostics().as_dict()
                 else:
                     raise ValueError('platform 必须是 mumu 或 native_pc')
                 kind = 'state'

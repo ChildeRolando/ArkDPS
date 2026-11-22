@@ -1155,21 +1155,66 @@ def test_worker_preserves_final_audit_failure_after_collection_close_retry(tmp_p
 def test_worker_startup_setup_error_is_reported(tmp_path, monkeypatch):
     import desktop_bridge
 
-    blocked_root = tmp_path / 'not-a-directory'
-    blocked_root.write_text('file blocks runtime directory', encoding='utf-8')
-    monkeypatch.setattr(desktop_bridge, 'ROOT', blocked_root)
+    def failed_runtime():
+        raise OSError('battle runtime initialization failed')
+
+    monkeypatch.setattr(desktop_bridge, 'BattleRuntime', failed_runtime)
     state = DesktopState(tmp_path/'state')
     cmd(state, 'connection_apply', config={'platform': 'native_pc', 'native_game_root': 'game'}, events=False)
     state.expect_connection_request(state.connection, 1)
     worker = CollectionWorker(state)
     worker.run()
     kind, error = worker.events.get_nowait()
-    assert kind == 'worker_error' and error
+    assert (kind, error) == ('worker_error', 'battle runtime initialization failed')
     state.accept(kind, error)
     assert state.snapshot()['status'] == 'disconnected'
     assert state.error == error and not state.scanning
     state.accept('sample', sample())
     assert state.last is None  # An old source still cannot repopulate the view.
+    assert worker.session is None
+
+
+def test_unwritable_capture_directory_does_not_stop_live_worker(tmp_path, monkeypatch):
+    import desktop_bridge
+    from types import SimpleNamespace
+
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    (state_dir / 'captures').write_text('file blocks capture directory', encoding='utf-8')
+    state = DesktopState(state_dir)
+    worker = CollectionWorker(state)
+    diagnostics = SimpleNamespace(as_dict=dict, selected_serial='serial', version_actual='test')
+    target = SimpleNamespace(adb_path='adb', serial='serial', diagnostics=diagnostics)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
+
+    class Session:
+        cleanup_errors = {}
+        collector = SimpleNamespace(diagnostics=diagnostics)
+
+        def __init__(self, *_args, audit, **_kwargs):
+            self.audit = audit
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+
+        def connect(self):
+            self.audit('connected', {})
+
+        def read(self):
+            self.audit('published', {})
+            worker.stop.set()
+            return {'state': 2, 'battle_id': 'live', 'frame': 1}
+
+        def close(self):
+            self.audit('stopped', {})
+
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(state.connection, False)
+    worker.run()
+    events = dict(worker.events.queue)
+    assert '采集日志暂不可写' in events['warning']
+    assert events['sample']['frame'] == 1
+    assert 'error' not in events and 'worker_error' not in events
     assert worker.session is None
 
 
@@ -1240,7 +1285,8 @@ def test_worker_paces_advancing_samples_and_preserves_retry_backoff(tmp_path, mo
     assert [sample['frame'] for kind, sample in events if kind == 'sample'] == [10, 20, 20, 30]
 
 
-def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_path, monkeypatch):
+@pytest.mark.parametrize('bundled', [False, True])
+def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_path, monkeypatch, bundled):
     from types import SimpleNamespace
     import desktop_bridge
 
@@ -1248,6 +1294,15 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
     worker = CollectionWorker(state)
     diagnostics = SimpleNamespace(as_dict=dict, selected_serial='serial', version_actual='test')
     target = SimpleNamespace(adb_path='adb', serial='serial', diagnostics=diagnostics)
+    archive = tmp_path / 'server.xz'
+    if bundled:
+        archive.touch()
+    monkeypatch.setattr(desktop_bridge, 'BUNDLED_SERVER_ARCHIVE', archive)
+    startup = []
+
+    def bind(adb, serial, *, remote):
+        startup.append(('prepare', adb, serial, remote))
+        return True, 'ready'
 
     class Session:
         cleanup_errors = {}
@@ -1256,17 +1311,19 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
         event_status = 'waiting_game_init'
         event_error = None
 
-        def __init__(self, *_args, **_kwargs):
-            pass
+        def __init__(self, *_args, prepare_observer=None, **_kwargs):
+            self.prepare_observer = prepare_observer
 
         def enable_lifecycle(self, runtime):
             self.runtime = runtime
 
         def connect(self):
-            pass
+            startup.append('connect')
 
         def read(self):
             if self.observer is None:
+                if self.prepare_observer is not None:
+                    assert self.prepare_observer() == (True, 'ready')
                 self.observer = SimpleNamespace(status='ready', error=None)
                 self.event_status = 'ready'
             else:
@@ -1277,11 +1334,13 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
 
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
-    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', lambda *_args, **_kwargs: (True, 'ready'))
+    monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', bind)
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
     worker.request(worker.effective[0], True)
     worker.run()
 
+    prepare = ('prepare', 'adb', 'serial', worker.endpoint)
+    assert startup == (['connect', prepare] if bundled else [prepare, 'connect'])
     observer_states = []
     while not worker.events.empty():
         kind, value = worker.events.get_nowait()
@@ -1382,7 +1441,7 @@ def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_pa
                 assert 'observer detached' in snapshot['event_text']
             observer_states.append((snapshot['status'], snapshot['observer_status']))
     assert observer_states[:3] == [('waiting', 'ready'), ('waiting', 'failed'), ('waiting', 'ready')]
-    path, = (tmp_path/'runtime'/'captures').glob('wpf-*.jsonl')
+    path, = (tmp_path/'state'/'captures').glob('wpf-*.jsonl')
     journal = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
     assert [item['data']['duration_ms'] for item in journal if item['kind'] == 'frida_keepalive'] == [0, 0, 0, 0]
     retries = [item['data'] for item in journal if item['kind'] == 'capture_retry']
@@ -1436,7 +1495,7 @@ def test_worker_retries_final_cleanup_before_closing_audit_stream(tmp_path, monk
     worker.run()
 
     assert worker.session is None and worker.cleanup_error == ''
-    audit_path = next((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    audit_path = next((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
     events = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
     assert events == [
         {'kind': 'cleanup_attempt', 'data': {'attempt': 1}},
@@ -1494,7 +1553,7 @@ def test_worker_retains_and_reports_session_after_final_cleanup_retries_fail(tmp
     assert 'persistent cleanup failure' in worker.cleanup_error
     with pytest.raises(RuntimeError, match='persistent cleanup failure'):
         worker.close()
-    audit_path = next((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    audit_path = next((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
     assert len(audit_path.read_text('utf-8').splitlines()) == 2
 
 
@@ -1508,7 +1567,7 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
         def now(tz):
             return RealDateTime(2026, 11, 10, 9, 30, 0, tzinfo=tz)
 
-    monkeypatch.setattr(desktop_bridge, 'datetime', FixedDateTime)
+    monkeypatch.setattr('desktop_audit.datetime', FixedDateTime)
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     diagnostics = SimpleNamespace(
         as_dict=lambda: {'status': 'ready'},
@@ -1550,7 +1609,7 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
         assert worker.cleanup_error == ''
         assert worker.session is None
 
-    paths = list((tmp_path/'runtime'/'captures').glob('wpf-*.jsonl'))
+    paths = list((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
     assert len(paths) == 2
     assert len({path.name for path in paths}) == 2
     for audit_path in paths:
@@ -1573,6 +1632,25 @@ def test_quit_ack_is_after_collector_cleanup(tmp_path):
             return super().write(data)
     serve(io.StringIO('{"version":1,"op":"hello"}\n{"version":1,"op":"quit"}\n'), Output(), DesktopState(tmp_path), Worker())
     assert order == ['close']
+
+
+def test_update_quit_rejects_pending_history_after_cleanup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import desktop_bridge
+
+    state = DesktopState(tmp_path / 'state')
+    runtime = SimpleNamespace(pending_history=[object()])
+    monkeypatch.setattr(desktop_bridge, 'BattleRuntime', lambda: runtime)
+    worker = CollectionWorker(state)
+    worker.stop.set()
+    worker.thread.start()
+    output = io.StringIO()
+    serve(io.StringIO('{"version":1,"op":"hello"}\n'
+                      '{"version":1,"op":"quit","require_history_saved":true}\n'
+                      '{"version":1,"op":"quit"}\n'), output, state, worker)
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [reply['kind'] for reply in replies] == ['hello', 'error', 'bye']
+    assert '1 局战绩尚未保存' in replies[1]['error']
 
 
 def test_default_app_entry_routes_to_wpf_not_tk(monkeypatch):
@@ -2186,9 +2264,10 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
 
     class Session:
         cleanup_errors = {}
-        def __init__(self, *_args, audit=None, on_history=None, **_kwargs):
+        def __init__(self, *_args, audit=None, on_history=None, state_dir=None, **_kwargs):
             self.audit = audit
             self.on_history = on_history
+            self.state_dir = state_dir
             self.collector = SimpleNamespace(diagnostics=diagnostics)
             self.runtime = None
             sessions.append(self)
@@ -2206,6 +2285,7 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
     worker.thread.start()
     worker.thread.join()
     assert len(sessions) == 1
+    assert sessions[0].state_dir == tmp_path / 'state'
     sessions[0].on_history()
     events = []
     while True:

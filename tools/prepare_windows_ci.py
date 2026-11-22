@@ -51,4 +51,6 @@ def prepare(api=None):
 
 
 if __name__ == '__main__':
+    from windows_manifest import require_admin_test_host
+    require_admin_test_host()
     print(json.dumps(prepare()))
