@@ -2131,7 +2131,10 @@ public partial class MainWindow
             Require(!label.Contains('/'),"history stage label leaked the native levelId");
             var display=new HistoryItem{Data=item};
             Require(!display.StageDescription.Contains("原始关卡 ID"),"history tooltip leaked the native levelId");
-            Require(display.Summary==$"{item.Text("outcome")} · {item.Text("duration")}" &&
+            string sourceLabel=item.Text("source_label") is {Length:>0} recordedSource
+                ? recordedSource : "来源未记录";
+            Require(display.SourceLabel==sourceLabel &&
+                    display.Summary==$"{sourceLabel} · {item.Text("outcome")} · {item.Text("duration")}" &&
                     !display.Summary.Contains("最后可靠游戏时刻"),"history row leaked practice or timing metadata");
             Require(DateTime.TryParseExact(display.Date,"yyyy-MM-dd HH:mm",System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None,out _),"history timestamp was not displayed to the minute");
