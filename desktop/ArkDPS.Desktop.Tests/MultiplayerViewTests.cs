@@ -69,6 +69,41 @@ internal static class MultiplayerViewTests
     private static Button PlayerButton(MultiplayerView surface, int slot) => Children(surface).OfType<Button>()
         .Single(button => AutomationProperties.GetAutomationId(button) == "MultiplayerPlayer" + slot);
 
+    private static void AssistHeadings()
+    {
+        const string Label = "当前协防战场";
+        var first = Player(1, "101", 111);
+        var second = Player(2, "202", 222);
+        var scene = first["view"]!.DeepClone().AsObject();
+        scene["scope_label"] = Label;
+        scene["title"] = Label + " · 已观察有效伤害 · 接敌 DPS";
+        scene["entries"]!.AsArray().Add(second["view"]!["entries"]![0]!.DeepClone());
+        scene["source"]!.AsObject()["char_same@202"] = second["view"]!["source"]!["char_same@202"]!.DeepClone();
+        scene["share_reason"] = "原生累计未知，以下仅含当前协防战场的已观察结算";
+        foreach (string skin in new[] { "lone-trail", "people", "babel" })
+        foreach (string mode in new[] { "main", "side", "hud", "history" })
+        {
+            Theme.Apply(skin);
+            var panel = new StatisticPanel { IsHistory = mode == "history" };
+            if (mode == "side") panel.ConfigureSideRanking();
+            if (mode == "hud") panel.ConfigureHud();
+            panel.Update(JsonSerializer.SerializeToElement(scene));
+            Check(skin + mode + " visibly identifies the assist battlefield once",
+                panel.Heading.Text.StartsWith(Label + " · ", StringComparison.Ordinal) &&
+                panel.Heading.Text.IndexOf(Label, Label.Length, StringComparison.Ordinal) < 0);
+            Check(skin + mode + " keeps both worker actor identities and values",
+                panel.Rows.Items.Count == 2 && panel.View.Get("entries").Items().Select(row => row.Text("owner_id"))
+                    .SequenceEqual(new[] { "char_same@101", "char_same@202" }) &&
+                ((RowItem)panel.Rows.Items[0]).Entry.Text("display_value") == "worker-111" &&
+                ((RowItem)panel.Rows.Items[1]).Entry.Text("display_value") == "worker-222");
+            panel.Update(JsonSerializer.SerializeToElement(first["view"]));
+            Check(skin + mode + " clears the assist label on the next local view",
+                !panel.Heading.Text.Contains(Label, StringComparison.Ordinal) && panel.Rows.Items.Count == 1);
+            if (mode == "hud") Check(skin + " local HUD keeps its existing exact title",
+                panel.Heading.Text == "有效伤害·接敌DPS");
+        }
+    }
+
     internal static void Run()
     {
         if (Application.Current is null)
@@ -181,6 +216,7 @@ internal static class MultiplayerViewTests
                 Check(skin + " compact layout offers vertical scroll", size.Width > 500 || surface.ScrollableHeight > 0);
             }
         }
+        AssistHeadings();
         Check("headless checks created no windows", Application.Current!.Windows.Count == 0);
         Console.WriteLine($"PASS_MULTIPLAYER_VIEW {passed} assertions (synthetic worker projections; no windows/input/targets)");
     }

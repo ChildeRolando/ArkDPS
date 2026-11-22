@@ -131,11 +131,79 @@ def _event_only_statistics(statistics):
                 event_only_projection=True, totals_complete=False)
 
 
-def _display_statistics(sample):
+def _native_display_source(sample):
+    """Assist shows the evidenced battlefield; other phases still select self."""
+    payload = sample.get('multiplayer')
+    if not isinstance(payload, dict) or payload.get('scope_kind') != 'assist':
+        return _native_local_player(sample)
+    scope, when = payload.get('scope'), payload.get('game_time')
+    if (sample.get('native_counter_scope') != 'events_only'
+            or payload.get('schema_version') != 2 or payload.get('available') is not True
+            or payload.get('native_phase') != 5 or type(payload.get('native_phase')) is not int
+            or type(payload.get('native_round')) is not int or payload['native_round'] < 0
+            or not isinstance(scope, str) or not scope
+            or type(when) not in (int, float) or not math.isfinite(when) or when < 0):
+        return None
+    identity = payload.get('context_identity')
+    if not isinstance(identity, dict) or set(identity) != {'scope_key', 'phase', 'round'}:
+        return None
+    root = identity['scope_key']
+    if (not isinstance(root, str) or not 0 < len(root) <= 2048
+            or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in root)
+            or type(identity['phase']) is not int or identity['phase'] != payload['native_phase']
+            or type(identity['round']) is not int or not 0 <= identity['round'] < 1 << 31
+            or identity['round'] != payload['native_round']):
+        return None
+    players = payload.get('players')
+    if not isinstance(players, (list, tuple)):
+        return None
+    rows, actors = {}, []
+    for player in players:
+        if not isinstance(player, dict):
+            continue
+        uid, statistics = player.get('player_uid'), player.get('statistics')
+        if (not valid_player_uid(uid) or sum(isinstance(other, dict)
+                and other.get('player_uid') == uid for other in players) != 1
+                or not isinstance(statistics, dict)
+                or statistics.get('session') != f'{scope}:{uid}'
+                or statistics.get('game_time') != when
+                or not isinstance(statistics.get('rows'), dict)):
+            continue
+        # A row is displayed only with its own unambiguous actor witness. The
+        # union retains existing owner keys and lanes; no Statistics is replayed.
+        ledgers = {}
+        raw_actors = player.get('actor_ledgers')
+        if not isinstance(raw_actors, (list, tuple)):
+            continue
+        for actor in raw_actors:
+            if isinstance(actor, dict) and isinstance(actor.get('owner_id'), str):
+                owner = actor['owner_id']
+                ledgers[owner] = None if owner in ledgers else actor
+        for owner, row in statistics['rows'].items():
+            actor = ledgers.get(owner)
+            if not isinstance(row, dict) or actor is None:
+                continue
+            actor_uid, cid = actor.get('actor_uid'), actor.get('cid')
+            if (actor.get('player_uid') != uid or row.get('player_uid') != uid
+                    or type(actor_uid) is not int or not 0 < actor_uid <= 0xffffffff
+                    or not isinstance(cid, str) or not cid
+                    or type(row.get('unique_id')) is not int
+                    or row.get('unique_id') != actor_uid or row.get('cid') != cid
+                    or row.get('id') != owner or owner != f'{uid}:{cid}#{actor_uid}'):
+                continue
+            rows[owner] = row
+            actors.append(dict(owner_id=owner, actor_uid=actor_uid, cid=cid,
+                               player_uid=uid, player_side=player.get('player_side')))
+    statistics = dict(sample.get('statistics') or {}, rows=rows, game_time=when,
+                      display_scope_label='当前协防战场')
+    return dict(statistics=statistics, actor_ledgers=actors)
+
+
+def _display_statistics(sample, *, source=None):
     statistics = sample.get('statistics') or {}
     if sample.get('native_counter_scope') != 'events_only':
         return statistics
-    player = _native_local_player(sample)
+    player = source if source is not None else _native_display_source(sample)
     if player is not None:
         return _event_only_statistics(player['statistics'])
     return dict(rows={}, totals_complete=False, native_counter_scope='unavailable',
@@ -149,7 +217,9 @@ def _display_analysis_identity(sample):
     player = _native_local_player(sample)
     payload = sample.get('multiplayer') or {}
     return 'autochess:' + json.dumps([battle_id, payload.get('scope'),
-                                    player['player_uid'] if player else None])
+        payload.get('scope_kind'), payload.get('native_phase'), payload.get('native_round'),
+        'assist_scene' if payload.get('scope_kind') == 'assist' else
+        player['player_uid'] if player else None])
 
 
 def _unknown_player(slot):
@@ -403,6 +473,11 @@ class DesktopState:
 
         terminal = statistics.get('ended') is True or self.lifecycle in ('ended', 'frozen', 'finalizing')
         team_recent, operators = live_damage_rates(statistics, game_time)
+        scope_label = statistics.get('display_scope_label')
+        if scope_label:
+            for operator in operators:
+                row = statistics['rows'][operator['owner_id']]
+                operator.update(player_uid=row['player_uid'], actor_uid=row['unique_id'])
         complete, _, _ = team_status(statistics)
         team_total = team_totals(statistics)['damage'] if complete else None
         if team_total is not None and (not math.isfinite(team_total) or team_total < 0):
@@ -430,6 +505,8 @@ class DesktopState:
             team_recent_dps=team_recent,
             team_average_dps=average if average is not None and math.isfinite(average) else None,
             observed_peak_dps=peak, team_total_damage=team_total, operators=operators)
+        if scope_label:
+            self.live_analysis['scope_label'] = scope_label
         rows = statistics.get('rows') or {}
         if any('partial_damage' in row for row in rows.values()):
             known_damage = [row['damage'] for row in rows.values()
@@ -529,7 +606,8 @@ class DesktopState:
         else:
             reason, note = '', ''
         if statistics.get('event_only_projection') is True:
-            reason = '原生累计未知，以下仅含当前玩家的已观察结算'
+            scope_label = statistics.get('display_scope_label') or '当前玩家'
+            reason = f'原生累计未知，以下仅含{scope_label}的已观察结算'
             note = '已观察结算口径；未覆盖区间保持未知'
         if config.boss_scope:
             reason = statistics['boss_damage_reason'] or reason
@@ -569,6 +647,9 @@ class DesktopState:
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
         view['source'] = source
+        if scope_label := statistics.get('display_scope_label'):
+            view['scope_label'] = scope_label
+            view['title'] = f"{scope_label} · {view['title']}"
         return view
 
     def _actor_view(self, config, statistics, actors, *, side=None, player_uid=None, event=None):
@@ -581,9 +662,10 @@ class DesktopState:
             if owner not in view['source']:
                 continue
             uid = actor.get('uid', actor.get('actor_uid', actor.get('unique_id')))
-            identity = dict(actor_uid=uid, player_side=side, portrait_id=actor.get('cid'))
-            if player_uid is not None:
-                identity['player_uid'] = player_uid
+            identity = dict(actor_uid=uid, player_side=side if side is not None else actor.get('player_side'),
+                            portrait_id=actor.get('cid'))
+            if (owner_uid := player_uid if player_uid is not None else actor.get('player_uid')) is not None:
+                identity['player_uid'] = owner_uid
             view['source'][owner] = dict(view['source'][owner], **identity)
             for entry in view['entries']:
                 if entry['owner_id'] == owner:
@@ -604,10 +686,10 @@ class DesktopState:
             multiplayer = sample.get('multiplayer')
             if (sample.get('native_counter_scope') == 'events_only'
                     and isinstance(multiplayer, dict) and multiplayer.get('schema_version') == 2):
-                statistics = _display_statistics(sample)
-                player = _native_local_player(sample)
+                player = _native_display_source(sample)
+                statistics = _display_statistics(sample, source=player)
                 view = (self._actor_view(self.history_config, statistics, player.get('actor_ledgers'),
-                            side=player.get('player_side'), player_uid=player['player_uid'], event=event)
+                            side=player.get('player_side'), player_uid=player.get('player_uid'), event=event)
                         if player else self.view(self.history_config, statistics, event=event))
             else:
                 view = self.view(self.history_config, record_statistics(self.selected, for_panel=True), event=event)
@@ -688,8 +770,8 @@ class DesktopState:
 
     def snapshot(self):
         sample = self.last or {}
-        stats = _display_statistics(sample)
-        local_player = _native_local_player(sample)
+        local_player = _native_display_source(sample)
+        stats = _display_statistics(sample, source=local_player)
         multiplayer = (_preparing_multiplayer() if self.lifecycle == 'preparing'
                        else sample.get('multiplayer'))
         status, label = self.status()
@@ -727,7 +809,7 @@ class DesktopState:
                     stage_raw=live_stage.raw, stage_detail=live_stage.detail,
                     stage_known=live_stage.known,
                     panels=[self._actor_view(p, stats, local_player.get('actor_ledgers'),
-                                side=local_player.get('player_side'), player_uid=local_player['player_uid'],
+                                side=local_player.get('player_side'), player_uid=local_player.get('player_uid'),
                                 event=live_event) if local_player else self.view(p, stats, None, live_event)
                             for p in self.layout.panels],
                     multiplayer=self.multiplayer_view(multiplayer, event=live_event),

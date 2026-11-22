@@ -5,14 +5,15 @@ from dataclasses import replace
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
-from desktop_bridge import DesktopState, _event_only_statistics
+from desktop_bridge import DesktopState, _event_only_statistics, _native_local_player
 from panel_model import Category, EventAvailability, PanelConfig, Ranking, RateBasis
 from test_multiplayer_integration import CID
 from test_native_pc_autochess_acquisition import ScopedNativeBattle
 
 
-def populated():
+def populated(*, phase=4):
     battle = ScopedNativeBattle()
+    battle.native_phase = phase
     battle.poll()
     battle.advance(2, damage=90000)
     battle.advance(2, [battle.scoped_hit(index, index, index * 100) for index in range(1, 5)])
@@ -169,21 +170,22 @@ def test_events_only_never_falls_back_to_cid_counters_or_another_player(tmp_path
 
 
 def test_slot_and_help_side_changes_never_choose_the_local_identity(tmp_path):
-    sample = deepcopy(populated().runtime.display_sample())
+    sample = deepcopy(populated(phase=5).runtime.display_sample())
     players = sample['multiplayer']['players']
     players[0]['slot'], players[2]['slot'] = players[2]['slot'], players[0]['slot']
     for player in players:
         player['player_side'] = 1
-    sample['multiplayer']['scope_kind'] = 'assist'
-    sample['multiplayer']['native_phase'] = 5
     state = DesktopState(tmp_path)
     state.accept('sample', sample)
     snapshot = state.snapshot()
     assert [player['slot'] for player in snapshot['multiplayer']['players']] == [1, 2, 3, 4]
     assert snapshot['multiplayer']['players'][0]['player_uid'] == '910000003'
-    entry, = snapshot['panels'][0]['entries']
-    assert entry['owner_id'].startswith('910000003:') and entry['value'] == 300
-    assert entry['player_side'] == 1
+    assert _native_local_player(sample)['player_uid'] == '910000003'
+    entries = snapshot['panels'][0]['entries']
+    assert sorted(entry['value'] for entry in entries) == [100, 200, 300, 400]
+    assert {entry['player_uid'] for entry in entries} == {f'91000000{i}' for i in range(1, 5)}
+    assert all(entry['owner_id'].startswith(entry['player_uid'] + ':')
+               and entry['player_side'] == 1 for entry in entries)
 
 
 def test_a_known_account_with_no_single_temporary_side_is_still_rendered(tmp_path):

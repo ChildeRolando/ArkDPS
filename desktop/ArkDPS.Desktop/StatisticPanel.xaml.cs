@@ -536,7 +536,8 @@ public partial class StatisticPanel : UserControl
         string bossReason=bossScope ? value.Text("boss_damage_reason") : "";
         if(bossUnavailable && bossReason.Length==0) bossReason="首领伤害数据不可用。";
         if(IsHud) ApplyHudSkin();
-        Heading.Text=IsHud ? HudTitle(config) : value.Text("title");
+        string scopeLabel=value.Text("scope_label");
+        Heading.Text=IsHud ? (scopeLabel.Length>0 ? scopeLabel+" · " : "")+HudTitle(config) : value.Text("title");
         var knownShare=value.Text("share_scope")=="known";
         PanelKind.Text=IsHud ? share.Label : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
         PanelKind.Visibility=sideRanking||referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
@@ -586,7 +587,11 @@ public partial class StatisticPanel : UserControl
         ReferenceRateHeading.Text=RateHeading.Text;
         ReferenceTotalHeading.Text=config.Text("ranking")=="recent" ? "近期"
             : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
-        if(sideRanking) UpdateSideHeadings(config,category,value.Text("title"));
+        if(sideRanking)
+        {
+            UpdateSideHeadings(config,category,value.Text("title"));
+            if(scopeLabel.Length>0) Heading.Text=scopeLabel+" · "+Heading.Text;
+        }
         Actions.Visibility=IsHistory||IsHud||sideRanking ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud||sideRanking&&PanelId.Length==0 ? Visibility.Collapsed : Visibility.Visible;
         deleteAvailable=canDelete;
