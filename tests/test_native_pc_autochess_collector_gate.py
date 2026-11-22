@@ -15,6 +15,7 @@ import pytest
 from battle_lifecycle import BattleRuntime
 from event_capture import CaptureRetry, LiveEventCapture
 from event_probe import NATIVE_PC_CONTRACT, bind_native_autochess_pair, native_autochess_context_bound
+from native_pc.probe_native_pc import BILIBILI_BUILD_ID, BUILD_ID
 from native_pc.probe_native_pc_battle import NativePcBattleProbe
 from native_pc_collector import NativePcCollector
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
@@ -32,9 +33,9 @@ AUTOCHESS = 'Activities/ACT3AUTOCHESS/level_fixture'
 class GuardedReportProbe(NativePcBattleProbe):
     """Replace only memory acquisition, retaining real battle-serial semantics."""
 
-    def __init__(self, failed_field, stage):
+    def __init__(self, failed_field, stage, source_build):
         self.pid, self.process_instance = 4242, (4242, 123456)
-        self.build = {'known_build': True, 'fixture': True}
+        self.build = {'known_build': True, 'source_build': source_build, 'fixture': True}
         self._identity, self._last_clock = ROOT_VALUES, (0, 0)
         self._serial, self._stage_id = 1, stage
         self.frame = self.when = 0
@@ -67,8 +68,8 @@ class GuardedReportProbe(NativePcBattleProbe):
         pass
 
 
-def fixture(tmp_path, *, failed_field='roster', mode='valid', stage=AUTOCHESS):
-    probe = GuardedReportProbe(failed_field, stage)
+def fixture(tmp_path, *, failed_field='roster', mode='valid', stage=AUTOCHESS, source_build=BUILD_ID):
+    probe = GuardedReportProbe(failed_field, stage, source_build)
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
     collector.connect()
     collector.event_capability = dict(status='ready', error=None)
@@ -104,12 +105,14 @@ def fixture(tmp_path, *, failed_field='roster', mode='valid', stage=AUTOCHESS):
 
 
 @pytest.mark.parametrize('failed_field', ['roster', 'actor_rows'])
-def test_guarded_native_combat_can_reach_existing_event_pipeline_without_legacy_tables(tmp_path, failed_field):
-    collector, probe, observer, commits, records = fixture(tmp_path, failed_field=failed_field)
+@pytest.mark.parametrize('source_build', [BUILD_ID, BILIBILI_BUILD_ID], ids=['official', 'bilibili'])
+def test_guarded_native_combat_can_reach_existing_event_pipeline_without_legacy_tables(tmp_path, failed_field, source_build):
+    collector, probe, observer, commits, records = fixture(tmp_path, failed_field=failed_field, source_build=source_build)
     runtime = BattleRuntime()
     observation = runtime.poll(collector, observer)
     assert observation.kind == 'sample'
     value = runtime.display_sample()
+    assert value['battle_metadata']['source_build'] == source_build
     assert value['native_counter_scope'] == 'events_only'
     assert value['native_snapshot_witnesses'][failed_field] == dict(
         status='unavailable', reason='counter_list_size')
