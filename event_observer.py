@@ -192,23 +192,27 @@ class FridaEventObserver:
         return self._request('read', after=after, through=through)
 
     def commit_events(self, sequence):
-        """Release the prefix only after it was accepted by the host."""
+        """Advance the host cursor and report whether the producer confirmed it."""
         self._committed_sequence = max(sequence, self._committed_sequence)
         if self._committed_sequence <= self._acknowledged_sequence:
-            return
+            return True
+        if self._ack_error:
+            return False
         try:
             reply = self._request('ack', sequence=self._committed_sequence)
         except ObserverReadRetry:
             # A lost response can mean the producer already released this
             # prefix. A future acknowledgement is cumulative and idempotent.
-            return
+            return False
         except RuntimeError as exc:
             self._ack_error = str(exc)
-            return
-        if reply.get('error') or reply.get('acknowledged') != self._committed_sequence:
+            return False
+        acknowledged = reply.get('acknowledged')
+        if reply.get('error') or type(acknowledged) is not int or acknowledged != self._committed_sequence:
             self._ack_error = reply.get('error') or 'observer acknowledgement did not match the committed watermark'
-        else:
-            self._acknowledged_sequence = self._committed_sequence
+            return False
+        self._acknowledged_sequence = acknowledged
+        return True
 
     def _release(self):
         # Both releases must be attempted. Keep failed handles available for a

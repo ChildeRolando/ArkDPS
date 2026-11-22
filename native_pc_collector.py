@@ -11,6 +11,7 @@ import time
 from collector import NativeClockBusy, ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
 from enemy_telemetry import EnemyTelemetry, NativeEnemyObservations, _load_enemy_db, native_enemy_view
+from event_probe import native_autochess_context_bound
 from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
 from native_pc.probe_native_pc_actions import capture_actions
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
@@ -114,6 +115,7 @@ class NativePcCollector:
         self._pending = None
         self._enemy_battle = None
         self._enemy_snapshot = None
+        self._enemy_snapshot_pair = self._enemy_view_scope = self._enemy_scoped_snapshot = None
         self._enemy_catalog = None
         self._enemy_observations = NativeEnemyObservations()
         self._enemy_events = EnemyTelemetry(None)
@@ -123,6 +125,7 @@ class NativePcCollector:
         self._stage_plan_confirmed = None
         self._next_stage_plan = float('-inf')
         self._next_action_journal = float('-inf')
+        self._optional_attempt = self._optional_recovery = None
         self.event_capability = dict(status='unavailable', error=SNAPSHOT_ONLY)
         self.diagnostics = ConnectionDiagnostics(platform='native_pc', version_expected=BUILD_ID,
             native_game_root=str(self.game_root) if self.game_root is not None else None)
@@ -218,16 +221,25 @@ class NativePcCollector:
             raise SampleUnavailable('官服 PC 采集器尚未连接')
 
     def read_lifecycle(self):
+        self._rollback_optional()
         self._pending = None
+        self._enemy_snapshot_pair = None
         self.locate_lifecycle()
-        report = self.process.sample(extra_reader=self._capture)
+        try:
+            report = self.process.sample(extra_reader=self._capture)
+        except BaseException:
+            self._rollback_optional()
+            raise
         status = report['status']
+        if status != 'sample_available':
+            self._rollback_optional()
         if status == 'waiting_for_battle' and report.get('reason') == 'singleton_is_null':
             self._reset_enemy_observation()
             self._reset_stage_plan()
             self._next_action_journal = float('-inf')
             return dict(battle=None, state=None, ready=False, transiting=False, source='', target='')
         if status in ('process_exited', 'process_changed'):
+            self._optional_recovery = None
             self._reset_stage_plan()
             raise ProcessChanged('官服 PC 游戏进程已变化，正在重新连接。')
         if status == 'sample_retry' and report.get('reason') == 'frame_or_lifecycle_changed':
@@ -281,15 +293,28 @@ class NativePcCollector:
             fields = _capture_fields(read, context, event_identity_only=True)
         else:
             fields = _capture_fields(read, context)
+        scope = (tuple(context.get(key) for key in (
+            'battle_controller', 'battle_logger', 'battle_stats', 'level_data', 'stage_id')),
+            context.get('frame'), context.get('game_time'))
+        recovery, self._optional_recovery = self._optional_recovery, None
+        if (recovery is not None and recovery[0] == scope[0]
+                and all(type(current) in (int, float) and type(previous) in (int, float)
+                        and current >= previous for current, previous in zip(scope[1:], recovery[1:]))):
+            # A rejected expensive optional read must not make every retry
+            # expensive. One ordinary core/flow attempt precedes its next try.
+            fields.update(capture_game_flow(read, context))
+            return fields
         now = time.monotonic()
         enemy_due = now >= self._next_enemy
         if enemy_due:
+            self._stage_optional(scope)
             self._next_enemy = now + ENEMY_SAMPLE_INTERVAL
             fields.update(capture_enemies(read, context))
         fields.update(capture_game_flow(read, context))
         # Give each optional witness its own sampling slot and keep it behind
         # the counters, roster, presence and flow.
         if not enemy_due and now >= self._next_stage_plan:
+            self._stage_optional(scope)
             interval = (STAGE_PLAN_RECHECK_INTERVAL if self._stage_plan_confirmed
                         else STAGE_PLAN_RETRY_INTERVAL)
             self._next_stage_plan = now + interval
@@ -299,6 +324,7 @@ class NativePcCollector:
                 fields.update(stage_spawns_status='unavailable', stage_spawns=None,
                               stage_spawns_reason='optional_stage_plan_read_failed')
         elif not enemy_due and self.collect_actions and not event_identity and now >= self._next_action_journal:
+            self._stage_optional(scope)
             self._next_action_journal = now + ACTION_JOURNAL_SAMPLE_INTERVAL
             try:
                 fields.update(capture_actions(read, context))
@@ -306,6 +332,19 @@ class NativePcCollector:
                 fields.update(actions_status='unavailable', actions=None,
                               actions_reason='optional_action_journal_read_failed')
         return fields
+
+    def _stage_optional(self, scope):
+        self._optional_attempt = ((self._next_enemy, self._next_stage_plan, self._next_action_journal),
+                                  self._stage_plan_scope, scope)
+
+    def _rollback_optional(self):
+        attempt, self._optional_attempt = self._optional_attempt, None
+        if attempt is not None:
+            deadlines, plan_scope, scope = attempt
+            self._next_enemy, plan_deadline, self._next_action_journal = deadlines
+            if plan_scope == self._stage_plan_scope:
+                self._next_stage_plan = plan_deadline
+            self._optional_recovery = scope
 
     def _reset_stage_plan(self, scope=None):
         self._stage_plan_scope = scope
@@ -358,6 +397,8 @@ class NativePcCollector:
     def _reset_enemy_observation(self):
         self._enemy_battle = None
         self._enemy_snapshot = None
+        self._enemy_snapshot_pair = self._enemy_view_scope = self._enemy_scoped_snapshot = None
+        self._optional_recovery = None
         self._next_enemy = float('-inf')
         self._enemy_observations.reset()
         self._enemy_events.reset()
@@ -365,6 +406,7 @@ class NativePcCollector:
     def read_guarded_pair(self, lifecycle):
         pending, self._pending = self._pending, None
         if pending is None or pending[0] is not lifecycle:
+            self._rollback_optional()
             raise SnapshotGap('官服 PC 的同帧累计及编队数据已失效')
         report = pending[1]
         raw = report['sample']
@@ -373,6 +415,7 @@ class NativePcCollector:
         event_candidate = bool(missing and raw.get('stage_status') == 'available'
                                and 'AUTOCHESS' in str(raw.get('stage_id', '')).upper())
         if missing and not event_candidate:
+            self._rollback_optional()
             key = missing[0]
             raise SnapshotGap(f'官服 PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
         self._observe_stage_plan(raw)
@@ -407,12 +450,43 @@ class NativePcCollector:
             sample['native_action_journal'] = dict(status=raw['actions_status'],
                                                    reason=raw.get('actions_reason'),
                                                    snapshot=raw.get('actions'))
+        self._enemy_snapshot_pair = sample if 'enemies_status' in raw else None
+        self._optional_attempt = None
         return sample, roster
 
-    def read_enemies(self, *, game_time, frame=None, our_damage=None, **events):
+    @staticmethod
+    def _event_scope_key(identity):
+        if (isinstance(identity, dict) and set(identity) == {'scope_key', 'phase', 'round'}
+                and isinstance(identity['scope_key'], str) and identity['scope_key']
+                and type(identity['phase']) is int and type(identity['round']) is int
+                and identity['round'] >= 0):
+            return identity['scope_key'], identity['phase'], identity['round']
+        return ()
+
+    def bind_enemy_scope(self, sample):
+        """Bind only this pair's native observation after both host marks passed."""
+        paired, self._enemy_snapshot_pair = self._enemy_snapshot_pair, None
+        if paired is sample and native_autochess_context_bound(sample):
+            self._enemy_scoped_snapshot = (
+                self._event_scope_key(sample['autochess_context']['identity']), self._enemy_snapshot)
+
+    def read_enemies(self, *, game_time, frame=None, our_damage=None, event_scope=None, **events):
         saved = self._enemy_snapshot
+        if event_scope is not None:
+            key = self._event_scope_key(event_scope)
+            if key != self._enemy_view_scope:
+                self._enemy_observations.reset()
+                self._enemy_events.reset()
+                self._enemy_view_scope = key
+            if not key:
+                return self._with_stage_plan(native_enemy_view(
+                    {'enemies_reason': 'native_enemy_scope_unverified'},
+                    frame=frame, game_time=game_time, catalog={}), frame)
+            committed = self._enemy_scoped_snapshot
+            saved = committed[1] if committed is not None and committed[0] == key else None
         if saved is None:
-            snapshot = native_enemy_view({}, frame=None, game_time=None, catalog={})
+            raw = ({'enemies_reason': 'native_enemy_scope_unverified'} if event_scope is not None else {})
+            snapshot = native_enemy_view(raw, frame=None, game_time=None, catalog={})
             projected = self._enemy_events.sample_native_snapshot(
                 None, frame=frame, game_time=game_time, **events)
             return self._with_stage_plan(projected if projected is not None else snapshot, frame)
@@ -438,6 +512,7 @@ class NativePcCollector:
 
     def close(self):
         self._pending = None
+        self._optional_attempt = self._optional_recovery = None
         self._next_action_journal = float('-inf')
         self._reset_stage_plan()
         self._reset_enemy_observation()

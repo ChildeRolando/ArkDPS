@@ -22,7 +22,7 @@ _LIFECYCLE_LOCATE_RETRY = 5.0
 class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
                  collector=None, observer_factory=None, prepare_observer=None,
-                 history=None, on_history=None, state_dir=None):
+                 history=None, on_history=None, on_history_result=None, state_dir=None):
         self.collector = (collector if collector is not None else
                           Collector(adb, serial, log=log, state_dir=state_dir))
         self.frida_remote = frida_remote
@@ -51,6 +51,7 @@ class CollectionSession:
         # Display owners get one notification per newly committed record; the
         # callback must not read history itself (the session owns the write).
         self.on_history = on_history
+        self.on_history_result = on_history_result
         self.history_error = None
         self._pending_history = None
         self._observer_generation = None
@@ -392,7 +393,11 @@ class CollectionSession:
                       if isinstance(value, dict)
                       and isinstance(value.get('damage'), (int, float))]
         effective = [value.get('effective_damage') for value in known_rows]
-        if not known_rows:
+        if sample.get('native_counter_scope') == 'events_only':
+            # The shared world supplies target-scoped HP facts. Empty native
+            # player counters cannot establish a zero team-damage baseline.
+            our_damage = None
+        elif not known_rows:
             our_damage = 0.0
         elif all(isinstance(value, (int, float)) and not isinstance(value, bool)
                  for value in effective):
@@ -417,6 +422,10 @@ class CollectionSession:
                 self._enemy_last_poll = now
             try:
                 context = {'frame': sample.get('frame')} if frame_bound or state is not None else {}
+                if sample.get('native_counter_scope') == 'events_only':
+                    # A terminal END context may already be outside the combat
+                    # scope. Use the committed world prefix's own identity.
+                    context.update(allow_partial=True, event_scope=sample.get('enemy_world_scope') or {})
                 self._enemy_payload = read(game_time=sample.get('game_time'), our_damage=our_damage,
                                             **event_data, **context)
                 self._enemy_event_data = event_data
@@ -457,8 +466,11 @@ class CollectionSession:
             else:
                 # Announce before diagnostic I/O so a journal failure cannot hide
                 # a record that is already durable on disk.
-                if result.written and self.on_history is not None:
-                    self.on_history()
+                if result.written:
+                    if self.on_history_result is not None:
+                        self.on_history_result(result)
+                    if self.on_history is not None:
+                        self.on_history()
                 self.audit('history_saved', dict(battle_id=archive['battle_id'], written=result.written,
                            diagnostics=[asdict(d) for d in result.diagnostics]))
 

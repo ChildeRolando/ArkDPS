@@ -16,7 +16,8 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_probe import NativePcProbeContract, bind_native_autochess_pair, contract_for
+from event_probe import (NativePcProbeContract, bind_native_autochess_pair, contract_for,
+                         native_autochess_context_bound)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 
@@ -68,6 +69,65 @@ def _observer_mark(observer):
     if mark.get('retry'):
         raise CaptureRetry('observer clock advanced')
     return mark
+
+
+def _event_barrier(before, sample, after, *, contract=None, capture=None):
+    """Keep counter baselines quiescent; bound an established event-only prefix.
+
+    No cumulative counter is consumed by this exception. Both native marks
+    must still prove the sample's exact clock, owner and complete identity
+    frame; events observed between them are delivered through the real closing
+    sequence and validated by the existing strict batch/replay contract.
+    """
+    contract = contract or contract_for(sample=sample)
+    try:
+        return baseline_barrier(before, sample, after, contract=contract)
+    except BarrierBusy:
+        previous = capture.last_sample if capture is not None else None
+        stream = capture.adapter.event_stream if capture is not None else None
+        if (not isinstance(contract, NativePcProbeContract) or capture is None
+                or capture.closed or capture.baseline_sequence is None
+                or not capture.adapter._events_only or stream is None or stream.closed
+                or not isinstance(previous, dict) or sample.get('state') != 2
+                or previous.get('state') != 2):
+            raise
+        # Each original mark independently has all the canonical active/clock/
+        # binding checks. Neither mark is rewritten to imitate quiescence.
+        opening = baseline_barrier(before, sample, before, contract=contract)
+        closing = baseline_barrier(after, sample, after, contract=contract)
+        if (opening < stream.sequence or closing < opening or after['epoch'] < before['epoch']
+                or (closing > opening and after['epoch'] == before['epoch'])
+                or type(before.get('damage_settlement_scope')) is not int
+                or type(after.get('damage_settlement_scope')) is not int
+                or before['damage_settlement_scope'] < 0
+                or after.get('damage_settlement_scope') != before['damage_settlement_scope']):
+            raise BarrierBusy('native event boundary regressed or changed settlement scope')
+        for mark in (before, after):
+            fixed = mark.get('native_fixed_time')
+            if (type(mark.get('native_frame')) is not int or mark['native_frame'] != sample['frame']
+                    or not isinstance(fixed, str) or not fixed.isascii() or not fixed.isdecimal()
+                    or len(fixed) > 20 or int(fixed) > 0x7FFFFFFFFFFFFFFF
+                    or int(fixed) / (1 << 32) != sample['game_time']):
+                raise BarrierBusy('native event boundary lacks the exact native clock')
+        proof = dict(sample)
+        bind_native_autochess_pair(proof, before, after)
+        current = proof.get('autochess_context') or {}
+        prior = previous.get('autochess_context') or {}
+        previous_metadata = previous.get('battle_metadata') or {}
+        metadata = sample.get('battle_metadata') or {}
+        if (not native_autochess_context_bound(proof)
+                or prior.get('status') not in ('available', 'partial')
+                or current.get('identity') != prior.get('identity')
+                or current.get('self_player_uid') != prior.get('self_player_uid')
+                or [(p['index'], p['uid']) for p in current['players']]
+                   != [(p['index'], p['uid']) for p in prior['players']]
+                or sample.get('native_session', sample.get('session'))
+                   != previous.get('native_session', previous.get('session'))
+                or metadata.get('source_build') != previous_metadata.get('source_build')
+                or sample['frame'] < previous['frame'] or sample['game_time'] < previous['game_time']
+                or ('autochess_context' in sample and sample['autochess_context'] != current)):
+            raise BarrierBusy('native event-only identity is not the established combat scope')
+        return closing
 
 
 class BattleFeed:
@@ -163,7 +223,7 @@ class BattleFeed:
         return sample, roster, events
 
     @staticmethod
-    def _guarded_events(observer, opening, sample):
+    def _guarded_events(observer, opening, sample, capture=None):
         mark, opening_error = opening
         if isinstance(opening_error, (CaptureRetry, ObserverReadRetry)):
             raise CaptureRetry(str(opening_error)) from opening_error
@@ -171,14 +231,17 @@ class BattleFeed:
             return {'error': str(opening_error)}
         try:
             end_mark = _observer_mark(observer)
-            sequence = baseline_barrier(mark, sample, end_mark, contract=contract_for(observer, sample))
+            if not isinstance(contract_for(observer), NativePcProbeContract):
+                capture = None
+            sequence = _event_barrier(mark, sample, end_mark,
+                                     contract=contract_for(observer, sample), capture=capture)
             return dict(before=mark, after=end_mark, sequence=sequence)
         except (BarrierBusy, CaptureRetry, ObserverReadRetry) as exc:
             raise CaptureRetry(str(exc)) from exc
         except Exception as exc:
             return {'error': str(exc)}
 
-    def _read_pair(self, collector, before, observer=None, opening=None):
+    def _read_pair(self, collector, before, observer=None, opening=None, *, capture=None):
         guarded_pair = getattr(collector, 'read_guarded_pair', None)
         if guarded_pair is not None:
             sample, roster = guarded_pair(before)
@@ -210,12 +273,15 @@ class BattleFeed:
         if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
             raise FrameMismatch('游戏时间无效')
         if opening is not None and observer is not None:
-            events = self._guarded_events(observer, opening, sample)
+            events = self._guarded_events(observer, opening, sample, capture)
         if events and 'before' in events and 'after' in events:
             try:
                 bind_native_autochess_pair(sample, events['before'], events['after'])
             except BarrierBusy as exc:
                 raise CaptureRetry(str(exc)) from exc
+            bind_enemy_scope = getattr(collector, 'bind_enemy_scope', None)
+            if callable(bind_enemy_scope):
+                bind_enemy_scope(sample)
         return sample, roster, events
 
     @staticmethod
@@ -327,7 +393,8 @@ class BattleFeed:
                 return observation
             return self.gap('scene_transition')
         try:
-            sample, roster, events = self._read_pair(collector, before, observer, opening)
+            capture = published_capture if published_generation == self.generation else None
+            sample, roster, events = self._read_pair(collector, before, observer, opening, capture=capture)
         except FrameMismatch:
             after = self.current_lifecycle
             exit_metadata = (after.get('metadata') or {}) if after else {}
@@ -481,7 +548,8 @@ class BattleSessions:
         try:
             if evidence.get('error'):
                 raise StreamGap(evidence['error'])
-            sequence = baseline_barrier(evidence['before'], observation.sample, evidence['after'])
+            sequence = _event_barrier(evidence['before'], observation.sample, evidence['after'],
+                                      capture=self.capture if observation.kind == 'sample' else None)
             if sequence != evidence['sequence']:
                 raise StreamGap('event observation barrier was altered')
             self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'],
@@ -705,7 +773,7 @@ class BattleSessions:
             self._merge_metadata({'battle_metadata': observation.lifecycle.get('metadata') or {}})
 
     @staticmethod
-    def _source_attribution(observation, stream=None):
+    def _source_attribution(observation, stream=None, *, capture=None):
         evidence = observation.events or {}
         through = evidence.get('sequence')
         if type(through) is not int:
@@ -718,7 +786,8 @@ class BattleSessions:
         contract = contract_for(sample=sample, descriptor=evidence.get('probe_contract') or drained.get('probe_contract'))
         if contract.bounded_reads_required:
             try:
-                if baseline_barrier(evidence['before'], sample, evidence['after'], contract=contract) != through:
+                if _event_barrier(evidence['before'], sample, evidence['after'],
+                                  contract=contract, capture=capture) != through:
                     return {}
                 contract.validate_batch(sample, through, drained, stream=stream)
             except (KeyError, StreamGap):
@@ -772,7 +841,8 @@ class BattleSessions:
                 self._snapshot_open = False
             else:
                 self.adapter.update(observation.sample, observation.roster,
-                                    **self._source_attribution(observation, self.adapter.event_stream))
+                                    **self._source_attribution(observation, self.adapter.event_stream,
+                                                              capture=self.capture))
                 self._merge_metadata(observation.sample)
             self._events(observation)
             self.latest_sample = deepcopy(observation.sample)
@@ -1002,6 +1072,8 @@ class BattleRuntime:
                       snapshot_revision=result.get('snapshot_revision'),
                       event_watermark=(dict(sequence=stream.sequence, frame=stream.frame,
                                             game_time=stream.game_time) if stream else None))
+        if sample.get('native_counter_scope') == 'events_only':
+            sample['enemy_world_scope'] = self.sessions.adapter.enemy_world_scope
         # consume/gap/finish retain the latest detached player projection. The
         # sample copy above already isolates it from this caller; rebuild only
         # when retention was unavailable, preserving optional-result retries.

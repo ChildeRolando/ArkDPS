@@ -10,7 +10,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from math import isfinite
 
-from autochess_context import lookup_native_actor, native_autochess_scope_id
+from autochess_context import (lookup_native_actor, native_autochess_event_identity,
+                              native_autochess_scope_id)
 from character_catalog import load_character_names
 from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
@@ -233,16 +234,7 @@ class MultiplayerBattleStatistics:
 
     @staticmethod
     def _scope_stamp_identity(event):
-        scope = event.get('native_autochess_scope')
-        if (not isinstance(scope, dict)
-                or type(scope.get('protocol_version')) is not int or scope['protocol_version'] != 1
-                or scope.get('status') != 'available' or scope.get('verified_same_frame') is not True
-                or not isinstance(scope.get('scope_key'), str) or not scope['scope_key']
-                or type(scope.get('phase')) is not int or type(scope.get('round')) is not int
-                or not _integer(scope.get('frame')) or scope['frame'] != event.get('frame')
-                or not _number(scope.get('game_time')) or scope['game_time'] != event.get('game_time')):
-            return None
-        return scope['scope_key'], scope['phase'], scope['round']
+        return native_autochess_event_identity(event)
 
     def _native_event_scope(self, event):
         identity = self._scope_stamp_identity(event)
@@ -548,7 +540,8 @@ class MultiplayerBattleStatistics:
             stats.event_coverage = True
             stats.start_late_event_coverage()
             player.stream = EventStream(stats, session=stats.session,
-                baseline_frame=self._frame, baseline_sequence=sequence)
+                baseline_frame=self._frame, baseline_sequence=sequence,
+                retain_owned_replay_records=True)
             stats.mark_boss_watermark(self._now)
         if self._native_mode:
             self._initialize_native_skills(sample, drained)
@@ -592,6 +585,12 @@ class MultiplayerBattleStatistics:
         payload = contract_for(sample=sample, descriptor=drained.get('probe_contract')).normalize_quality(drained)
         for side, player in self._players.items():
             scoped = dict(payload)
+            if self._native_mode:
+                # Global entry/state/phase history has one shared owner. Player
+                # cores keep their own damage ledgers, not four world journals.
+                for family in ('enemy_entry', 'enemy_state', 'enemy_phase'):
+                    scoped.pop(family + '_ready', None)
+                    scoped.pop(family + '_unknown', None)
             for field in ('unknown_sources', 'engagement_unknown_sources'):
                 if self._native_mode:
                     scoped[field] = [source for cid in payload.get(field) or ()
@@ -809,7 +808,8 @@ class MultiplayerBattleStatistics:
                         # an ignorable passive observation before marking them.
                         unresolved_source_keys = tuple(owner for owner, candidate in player.actors.items()
                             if candidate.cid == event.get('source'))
-                    player.stream.accept(None, unresolved_source_keys, skip_scope, session=player.statistics.session,
+                    world_receipt = (self._native_mode and event['kind'] in ENEMY_STATE_KINDS)
+                    player.stream.accept(None, unresolved_source_keys, skip_scope or world_receipt, session=player.statistics.session,
                         settlement_identity=identity, replay_record=event, **payload)
                 if self._native_mode and state == 'owned' and event['kind'] == 'elemental_bar':
                     self._confirm_scope_bar(event, side, actor)
@@ -828,7 +828,9 @@ class MultiplayerBattleStatistics:
                                      for s, p in self._players.items())
                     if not resolved and unresolved:
                         self._diagnose(event, 'elemental_owner_unverified')
-                self._received[event['sequence']] = deepcopy(event)
+                # _batch detached this record from the producer before any
+                # reduction. All scoped receipt stores retain that same copy.
+                self._received[event['sequence']] = event
             for player in self._players.values():
                 player.stream.watermark(session=player.statistics.session, sequence=sequence,
                     frame=sample['frame'], game_time=sample['game_time'])

@@ -1180,20 +1180,31 @@ class _GadgetObserver(NativePcFridaObserver):
         started = time.monotonic()
         started_perf = time.perf_counter()
         error_type = None
+        reply = None
         try:
             # Include both transport and NativePcBinding validation. The audit
             # write below is outside the measured request wall time.
-            return super()._request(operation, timeout=timeout, **arguments)
+            reply = super()._request(operation, timeout=timeout, **arguments)
+            return reply
         except BaseException as error:
             error_type = type(error).__name__
             raise
         finally:
             try:
-                sink('native_pc_request_timing', dict(
+                receipt = dict(
                     op=operation if operation in ('mark', 'read', 'ack') else 'other',
                     started_monotonic=started, started_perf_counter=started_perf,
                     elapsed_ms=(time.perf_counter() - started_perf) * 1000,
-                    outcome='success' if error_type is None else 'error', error_type=error_type))
+                    outcome='success' if error_type is None else 'error', error_type=error_type)
+                sequence = arguments.get('sequence')
+                if operation == 'ack' and type(sequence) is int:
+                    acknowledged = reply.get('acknowledged') if isinstance(reply, dict) else None
+                    confirmed = (type(acknowledged) is int and acknowledged == sequence
+                                 and not reply.get('error'))
+                    receipt['acknowledgement'] = ('unknown' if error_type else
+                                                  'confirmed' if confirmed else 'rejected')
+                    receipt['ack_sequence'] = sequence
+                sink('native_pc_request_timing', receipt)
             except BaseException:
                 pass  # Optional diagnostics cannot replace a result or exception.
 

@@ -100,6 +100,23 @@ def test_native_same_cid_four_data_uids_belong_to_real_accounts_without_native_t
     assert all(p.stream.received[1] == records[0] for p in meter._players.values())
 
 
+def test_scoped_receipts_keep_the_original_raw_proof_after_input_is_reused():
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0)
+    record = hit(1, 3, 1, proof={'settlement': {'actual': 100}})
+    original = deepcopy(record)
+    consume(meter, 1, [record])
+    record['proof']['settlement']['actual'] = 999
+
+    assert meter._received[1] == original
+    assert all(p.stream.received[1] == original for p in meter._players.values())
+    replayed = consume(meter, 2, [original])
+    assert player(replayed, 3)['observed_damage'] == 100
+    conflict = consume(meter, 2, [record])
+    assert conflict['status'] == 'gap'
+    assert player(conflict, 3)['observed_damage'] == 100
+
+
 def test_help_player_index_three_side_one_stays_the_third_account():
     meter = MultiplayerBattleStatistics()
     members = [member(3, uid=1048780, side=1)]

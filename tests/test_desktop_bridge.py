@@ -2325,11 +2325,11 @@ def test_history_event_refreshes_records_before_the_next_snapshot(tmp_path):
     cmd(state, 'history_refresh')
     selected = state.selected
     new = record(2)
-    state.history.save(new)
+    committed = state.history.save(new)
     assert all(x['battle_id'] != new.battle_id for x in state.snapshot()['history'])
     worker = Worker()
-    # This is exactly what CollectionSession's on_history callback enqueues.
-    worker.events.put(('history', None))
+    # The writer's already-validated result avoids a second archive scan.
+    worker.events.put(('history', committed))
     output = io.StringIO()
     serve(io.StringIO('{"version":1,"op":"hello"}\n{"version":1,"op":"quit"}\n'),
           output, state, worker)
@@ -2354,9 +2354,9 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
 
     class Session:
         cleanup_errors = {}
-        def __init__(self, *_args, audit=None, on_history=None, state_dir=None, **_kwargs):
+        def __init__(self, *_args, audit=None, on_history_result=None, state_dir=None, **_kwargs):
             self.audit = audit
-            self.on_history = on_history
+            self.on_history_result = on_history_result
             self.state_dir = state_dir
             self.collector = SimpleNamespace(diagnostics=diagnostics)
             self.runtime = None
@@ -2376,14 +2376,15 @@ def test_worker_wires_archive_notification_into_the_event_queue(tmp_path, monkey
     worker.thread.join()
     assert len(sessions) == 1
     assert sessions[0].state_dir == tmp_path / 'state'
-    sessions[0].on_history()
+    committed = state.history.save(record(2))
+    sessions[0].on_history_result(committed)
     events = []
     while True:
         try:
             events.append(worker.events.get_nowait())
         except queue.Empty:
             break
-    assert ('history', None) in events
+    assert ('history', committed) in events
 
 
 def event_sample(status, error, statistics):

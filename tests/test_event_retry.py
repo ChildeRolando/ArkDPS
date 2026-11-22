@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from event_capture import CaptureRetry
-from event_observer import ObserverReadRetry
+from event_observer import FridaEventObserver, ObserverReadRetry
 from collector import BattleChanged, ProcessChanged
 from test_collection_session import LiveObserver
 from test_event_capture import event
@@ -389,6 +389,37 @@ def test_native_pending_ack_is_not_sent_to_a_reconnected_observer():
     assert runtime._pending_event_ack is None
     archive, = runtime.sessions.pop_archives()
     assert archive['statistics']['rows']['char_a']['observed_damage'] == 20
+
+
+def test_terminal_ack_confirmation_reaches_runtime_from_the_production_observer(monkeypatch):
+    runtime, collector, observer, snapshot, state, events, _, _ = native_connection()
+    transport = FridaEventObserver(collector, 'unused')
+    attempts = []
+
+    def request(operation, *, sequence):
+        assert operation == 'ack'
+        attempts.append(sequence)
+        if len(attempts) == 1:
+            raise ObserverReadRetry('producer may have released the prefix')
+        return {'acknowledged': sequence}
+
+    monkeypatch.setattr(transport, '_request', request)
+    observer.commit_events = transport.commit_events
+    runtime.poll(collector, observer)
+    snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1., 20.
+    state.battle_state = 3
+    events.queue = [event(1, frame=2, game_time=1., amount=20)]
+    runtime.poll(collector, observer)
+
+    assert transport._committed_sequence == 1 and transport._acknowledged_sequence == 0
+    assert runtime._pending_event_ack is not None
+    assert runtime.sessions.event_status == 'finished'
+    state.active = False
+    runtime.poll(collector, observer)
+    archive, = runtime.sessions.pop_archives()
+    assert archive['statistics']['rows']['char_a']['observed_damage'] == 20
+    assert runtime._pending_event_ack is None and transport._acknowledged_sequence == 1
+    assert attempts == [1, 1]
 
 
 @pytest.mark.parametrize('key', ['native_session', 'source_build'])

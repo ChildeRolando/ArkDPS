@@ -64,7 +64,7 @@ def baseline_barrier(before, sample, after, *, contract=None):
 
 class EventStream:
     def __init__(self, statistics: Statistics, *, session, baseline_frame,
-                 baseline_sequence):
+                 baseline_sequence, retain_owned_replay_records=False):
         if (session != statistics.session or not statistics.baseline_ready
                 or not statistics.event_coverage or statistics.event_coverage_end is not None
                 or not self._nonnegative_int(baseline_frame)
@@ -78,6 +78,9 @@ class EventStream:
         self.frame = baseline_frame
         self.game_time = statistics.now
         self.received = {}
+        # The scoped multiplayer receiver already detached each raw record
+        # from the transport. Its private receipt stores only read that copy.
+        self._retain_owned_replay_records = retain_owned_replay_records
         self.closed = False
 
     @staticmethod
@@ -97,7 +100,9 @@ class EventStream:
         self.sequence = sequence
         self.frame = frame
         self.game_time = game_time
-        self.received[sequence] = deepcopy(replay_record) if replay_record is not None else payload
+        if replay_record is not None and not self._retain_owned_replay_records:
+            payload = deepcopy(replay_record)
+        self.received[sequence] = payload
 
     def _observe_unresolved_source(self, source, source_keys, kind, amount, target_instance, *, damage_type):
         for key in source_keys or (source,):
@@ -108,7 +113,7 @@ class EventStream:
         for key in source_keys or (source,):
             self.statistics.mark_settlement_skill_unassigned(key, method, reason)
 
-    def accept(self, verified_skill_end_owner=None, unresolved_source_keys=(), skip_scope=False, /, *, session, sequence, frame,
+    def accept(self, verified_skill_end_owner=None, unresolved_source_keys=(), skip_scope=False, world_only=False, /, *, session, sequence, frame,
                game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
@@ -150,6 +155,8 @@ class EventStream:
             self._fail('event clock is out of order')
         if type(skip_scope) is not bool:
             self._fail('invalid consumer scope decision')
+        if type(world_only) is not bool:
+            self._fail('invalid world reducer decision')
         if skip_scope:
             # This record belongs to another native phase/round, or its scope
             # cannot be proved. Consume its protocol receipt without letting
@@ -206,7 +213,12 @@ class EventStream:
                 self.statistics.record_damage_settlement(
                     game_time, state, owner, actor, source, target, target_uid, target_instance, amount, shield_absorbed,
                     settlement_complete, damage_type, nominal_amount, mitigation_before, mitigation_after,
-                    killed=killed, settled_after_nested_kill=settled_after_nested_kill)
+                    killed=killed, settled_after_nested_kill=settled_after_nested_kill,
+                    world_only=world_only)
+            elif world_only and kind == 'elemental_bar':
+                # The ordinary settlement-bar reducer below owns the witness;
+                # a shared world has no actor engagement or legacy damage row.
+                pass
             elif settlement_identity == ('summon', None, None):
                 # A proven summon skill never opens a host skill window.
                 pass

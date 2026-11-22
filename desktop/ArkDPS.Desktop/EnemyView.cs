@@ -476,6 +476,7 @@ public partial class MainWindow
         bool hasReading=shownEnemy.ValueKind==JsonValueKind.Object;
         bool nativeCurrentHp=enemy.Text("scope")=="native_pc_current_hp" ||
             shownEnemy.Text("scope")=="native_pc_current_hp";
+        bool observedSubset=shownEnemy.Bool("observed_subset_only");
         var totals=shownEnemy.Get("totals");
         bool totalComplete=EnemyComplete(totals,"total_hp_complete");
         bool remainingComplete=EnemyComplete(totals,"remaining_hp_complete");
@@ -495,6 +496,7 @@ public partial class MainWindow
 
         string enemyStatus=status switch
         {
+            "ready" when observedSubset => "部分敌情 · 已观测",
             "ready" => nativeCurrentHp ? "当前在场快照" : enemy.Bool("enemy_state_complete") ? "事件更新" : "快照读取",
             "locating" => "正在定位敌人",
             "stale" => "敌情快照不完整",
@@ -547,7 +549,7 @@ public partial class MainWindow
         }
         else if(hasReading)
         {
-            hints.Add(entryHint+"已入场总血量含已记录的重生阶段。");
+            hints.Add((observedSubset ? "仅统计已确认的入场实例。" : entryHint)+"已入场总血量含已记录的重生阶段。");
             if(!totalComplete || !remainingComplete || (last.Bool("our_damage_known") && !damageComplete))
                 hints.Add("≥ 表示已知下限，曲线用点线标记。");
             if(totals.Number("planned_count")>0

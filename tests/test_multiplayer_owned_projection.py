@@ -114,9 +114,12 @@ class RichBattle:
         assert value['unknown_attribution']
         for player in value['players']:
             stats = player['statistics']
-            assert len(stats['enemy_state']['events']) == 6
-            assert stats['enemy_entry']['events'][0]['enemy_entry_attributes']['atk'] == 120
-            assert stats['enemy_phases']['instances']['500']['phase_total_hp'] == 2000
+            if self.native:
+                assert not {'enemy_state', 'enemy_entry', 'enemy_phases'} & stats.keys()
+            else:
+                assert len(stats['enemy_state']['events']) == 6
+                assert stats['enemy_entry']['events'][0]['enemy_entry_attributes']['atk'] == 120
+                assert stats['enemy_phases']['instances']['500']['phase_total_hp'] == 2000
             assert stats['enemy_damage']['by_uid']['500']['amount'] == player['observed_damage']
         return value
 
@@ -145,10 +148,11 @@ def test_public_nested_mutation_cannot_change_other_players_core_or_another_snap
     independent = battle.meter.result()
     player = value['players'][0]
     stats = player['statistics']
-    stats['enemy_entry']['events'][0]['enemy_entry_attributes']['atk'] = -1
-    stats['enemy_state']['events'][0]['enemy_entry_attributes']['max_hp'] = -2
-    stats['enemy_state']['events'].pop()
-    stats['enemy_phases']['instances']['500']['phase_total_hp'] = -3
+    if not native:
+        stats['enemy_entry']['events'][0]['enemy_entry_attributes']['atk'] = -1
+        stats['enemy_state']['events'][0]['enemy_entry_attributes']['max_hp'] = -2
+        stats['enemy_state']['events'].pop()
+        stats['enemy_phases']['instances']['500']['phase_total_hp'] = -3
     stats['enemy_damage']['by_uid']['500']['amount'] = -4
     owner = player['actor_ledgers'][0]['owner_id']
     stats['rows'][owner]['settled_damage']['effective_damage_by_type']['physical'] = -5
@@ -162,7 +166,7 @@ def test_public_nested_mutation_cannot_change_other_players_core_or_another_snap
 
 
 def test_next_batch_does_not_revise_a_public_enemy_timeline_or_damage_snapshot():
-    battle = RichBattle()
+    battle = RichBattle(native=False)
     old = battle.populate()
     frozen = deepcopy(old)
     new = battle.feed(6, [battle.event(12, 'enemy_enter', 6, target='600', hp_after=200,
@@ -193,13 +197,14 @@ def test_new_scope_previous_summaries_and_old_public_details_have_independent_ow
     assert_disjoint(old, current)
     assert_disjoint(current, battle.meter, right_objects=True)
     current['previous_rounds'][0]['players'][0]['reasons'].append('mutated past scope')
-    current['players'][2]['statistics']['enemy_entry']['events'][0]['enemy_entry_attributes']['atk'] = -1
+    current['players'][2]['actor_ledgers'][0]['ledger']['effective_damage_by_type']['physical'] = -1
     assert battle.meter.result() == expected and old == frozen
 
 
-def test_full_rich_projection_survives_history_without_sharing_with_public_results(tmp_path):
+@pytest.mark.parametrize('native', [False, True])
+def test_full_rich_projection_survives_history_without_sharing_with_public_results(tmp_path, native):
     data = record().to_dict()
-    battle = RichBattle(session=data['battle_id'])
+    battle = RichBattle(native=native, session=data['battle_id'])
     battle.populate()
     final = battle.meter.finish(5, complete=True)
     original = deepcopy(final)
@@ -214,10 +219,12 @@ def test_full_rich_projection_survives_history_without_sharing_with_public_resul
     assert value == serialized
     assert_disjoint(value, final)
     assert_disjoint(value, battle.meter, right_objects=True)
-    final['players'][0]['statistics']['enemy_entry']['events'][0]['enemy_entry_attributes']['atk'] = -1
-    final['players'][1]['statistics']['enemy_state']['events'].clear()
+    if not native:
+        final['players'][0]['statistics']['enemy_entry']['events'][0]['enemy_entry_attributes']['atk'] = -1
+        final['players'][1]['statistics']['enemy_state']['events'].clear()
+    final['players'][0]['statistics']['enemy_damage']['by_uid']['500']['amount'] = -2
     final['players'][2]['actor_ledgers'][0]['ledger']['observed_damage'] = -1
     assert loaded.last_sample['multiplayer'] == serialized
     assert battle.meter.result() == original
-    value['players'][3]['statistics']['enemy_phases']['instances']['500']['phase_count'] = 999
+    value['players'][3]['statistics']['enemy_damage']['by_uid']['500']['amount'] = 999
     assert loaded.last_sample['multiplayer'] == serialized

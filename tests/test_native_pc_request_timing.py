@@ -150,13 +150,33 @@ def test_ack_timeout_keeps_original_cursor_and_idempotent_request_count(monkeypa
 
     monkeypatch.setattr(NativePcFridaObserver, '_request', request)
     current.set_request_timing_audit(lambda kind, value: records.append(value))
-    current.commit_events(4)
+    assert current.commit_events(4) is False
     assert current._committed_sequence == 4 and current._acknowledged_sequence == 0
-    current.commit_events(4)
-    current.commit_events(4)
+    assert current.commit_events(4) is True
+    assert current.commit_events(4) is True
     assert current._committed_sequence == current._acknowledged_sequence == 4
     assert calls == [('ack', dict(sequence=4)), ('ack', dict(sequence=4))]
     assert [row['outcome'] for row in records] == ['error', 'success']
+    assert [(row['ack_sequence'], row['acknowledgement']) for row in records] == [(4, 'unknown'), (4, 'confirmed')]
+
+
+def test_invalid_ack_reply_is_not_confirmed_even_when_rpc_returns(monkeypatch):
+    current = observer()
+    records, calls = [], []
+
+    def request(self, operation, *, timeout=None, **arguments):
+        calls.append((operation, arguments))
+        return dict(acknowledged=True, private='never logged')
+
+    monkeypatch.setattr(NativePcFridaObserver, '_request', request)
+    current.set_request_timing_audit(lambda kind, value: records.append(value))
+    assert current.commit_events(1) is False
+    assert current.commit_events(1) is False
+    assert current._committed_sequence == 1 and current._acknowledged_sequence == 0
+    assert calls == [('ack', {'sequence': 1})]
+    [record] = records
+    assert record['outcome'] == 'success' and record['acknowledgement'] == 'rejected'
+    assert 'private' not in record
 
 
 @pytest.mark.parametrize('platform,has_interface', [('native_pc', True), ('native_pc', False), ('mumu', True)])

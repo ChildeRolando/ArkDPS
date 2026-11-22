@@ -21,7 +21,7 @@ import traceback
 from uuid import uuid4
 
 from autochess_context import valid_player_uid
-from battle_history import BattleHistory
+from battle_history import BattleHistory, HistoryResult
 from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
@@ -44,6 +44,8 @@ import stage_names
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
+BRIDGE_EVENT_LIMIT = 32
+BRIDGE_EVENT_BUDGET = .025
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
 NATIVE_BUSY_ATTEMPTS = 3
@@ -329,18 +331,40 @@ class DesktopState:
 
     def refresh_history(self):
         result = self.history.list_recent()
-        self.records = {r.battle_id: r for r in result.records}
+        self._install_history(result.records, result.diagnostics)
+
+    def _install_history(self, records, diagnostics):
+        self.records = {r.battle_id: r for r in records}
         history = []
-        for record in result.records:
+        for record in records:
             item = record_display(record)
             # Readable labels and the native id both match, so old records stay searchable.
             item['search'] = ' '.join((*item['labels'], item['date'], ' '.join(record.operator_names),
                                       item['stage_raw'] or '')).casefold()
             history.append(item)
         self._history_index = history
-        self.history_notice = '；'.join(f'{d.code}: {d.message[:160]}' for d in result.diagnostics)
-        if self.selected is None and result.records:
-            self.selected = result.records[0]
+        self.history_notice = '；'.join(f'{d.code}: {d.message[:160]}' for d in diagnostics)
+        if self.selected is None and records:
+            self.selected = records[0]
+
+    def _history_committed(self, result):
+        if not isinstance(result, HistoryResult):
+            # Legacy in-process callers can still explicitly request a rescan;
+            # the collection producer always publishes the committed result.
+            self.refresh_history()
+            return
+        if not result.written:
+            return
+        if result.recent is not None:
+            self._install_history(result.recent, result.diagnostics)
+            return
+        records = dict(self.records)
+        records.update((record.battle_id, record) for record in result.records)
+        def order(record):
+            data = record.display_metadata()
+            return datetime.fromisoformat(data['observed_at'] or data['recorded_at']), record.battle_id
+        recent = sorted(records.values(), key=order, reverse=True)[:100]
+        self._install_history(recent, result.diagnostics)
 
     def accept(self, kind, value):
         if kind == 'worker_error':
@@ -400,9 +424,9 @@ class DesktopState:
         elif kind == 'battle_waiting':
             self.battle_waiting = value
         elif kind == 'history':
-            # A record was committed by the collection owner: re-read the list
-            # now instead of polling the directory on every snapshot.
-            self.refresh_history()
+            # The writer already validated/read back this durable record. Do
+            # not synchronously rescan every archive on the IPC response path.
+            self._history_committed(value)
         elif kind == 'scanning':
             self.scanning = value
             if value:
@@ -1207,7 +1231,7 @@ class CollectionWorker:
                                     self._connect_session(adb, serial, runtime,
                                         frida_remote=remote, **session_kwargs,
                                         history=self.history, audit=audit, state_dir=self.directory,
-                                        on_history=lambda: self.events.put(('history', None)),
+                                        on_history_result=lambda result: self.events.put(('history', result)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
                                     if self.stop.is_set():
                                         continue
@@ -1446,6 +1470,25 @@ class CollectionWorker:
             raise RuntimeError('；'.join(errors))
 
 
+def _drain_worker_events(worker, state):
+    """Bound admission, retaining FIFO samples, transitions and archive commits.
+
+    Every admitted sample still updates analysis. This neither coalesces raw
+    observations nor refreshes their captured_monotonic. A running producer
+    cannot prevent a reply by keeping the queue nonempty. One admitted update
+    may finish after the budget; this is not an interruption of that update.
+    """
+    started = time.perf_counter()
+    for index in range(BRIDGE_EVENT_LIMIT):
+        if index and time.perf_counter() - started >= BRIDGE_EVENT_BUDGET:
+            break
+        try:
+            event = worker.events.get_nowait()
+        except queue.Empty:
+            break
+        state.accept(*event)
+
+
 def serve(input_stream, output, state, worker=None):
     """Versioned UTF-8 JSON Lines: hello, snapshot/state/error, quit/bye."""
     handshake = False
@@ -1534,11 +1577,7 @@ def serve(input_stream, output, state, worker=None):
             cache_response = request_id is not None
             advance('events')
             if worker:
-                while True:
-                    try:
-                        state.accept(*worker.events.get_nowait())
-                    except queue.Empty:
-                        break
+                _drain_worker_events(worker, state)
             advance('command')
             op = cmd['op']
             if op == 'hello':

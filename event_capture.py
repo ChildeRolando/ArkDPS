@@ -95,7 +95,9 @@ def acknowledge_event_batch(observer, sequence):
         raise StreamGap('event probe must support commit acknowledgements')
     if hasattr(observer, 'commit_events'):
         try:
-            observer.commit_events(sequence)
+            # Older providers signal success with None; supported observers
+            # return False when the producer has not confirmed this prefix.
+            return observer.commit_events(sequence) is not False
         except ObserverReadRetry:
             # The host already accepted this prefix. The producer may also
             # have accepted the ack before its response was lost.

@@ -304,6 +304,21 @@ def native_autochess_scope_id(identity, player_accounts):
     return 'autochess:' + sha256(json.dumps(canonical, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
+def native_autochess_event_identity(event):
+    """Read the original capture-time stamp; never stamp a backlog at admission."""
+    scope = event.get('native_autochess_scope')
+    if (not isinstance(scope, dict)
+            or type(scope.get('protocol_version')) is not int or scope['protocol_version'] != 1
+            or scope.get('status') != 'available' or scope.get('verified_same_frame') is not True
+            or not isinstance(scope.get('scope_key'), str) or not scope['scope_key']
+            or type(scope.get('phase')) is not int or type(scope.get('round')) is not int
+            or type(scope.get('frame')) is not int or scope['frame'] < 0
+            or scope['frame'] != event.get('frame')
+            or not _time(scope.get('game_time')) or scope['game_time'] != event.get('game_time')):
+        return None
+    return scope['scope_key'], scope['phase'], scope['round']
+
+
 def lookup_native_actor(context, *, cid, data_uid):
     """Return copied read-only identity evidence, or None; never infer an actor.
 

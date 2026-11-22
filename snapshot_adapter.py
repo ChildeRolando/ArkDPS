@@ -10,8 +10,10 @@ in diagnostics.
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from dataclasses import dataclass, field
 
+from autochess_context import lookup_native_actor, native_autochess_event_identity
 from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -174,6 +176,9 @@ class BattleStatisticsAdapter:
         self.settlement_side: int | None = None
         self.settlement_batch_side: int | None = None
         self.settlement_version = None
+        self._world_identity = self._world_accounts = None
+        self._world_context = self._world_last_context = None
+        self._world_native_session = None
 
     @property
     def active(self) -> bool:
@@ -250,6 +255,12 @@ class BattleStatisticsAdapter:
                 '未能从战局编队建立可靠的统计键归属；拒绝发布累计数据')
         self.owner_map = mapping
         self._events_only = events_only
+        context = sample.get('autochess_context') if events_only else None
+        self._world_identity = (tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round'))
+                                if context is not None else None)
+        self._world_accounts = (self._world_player_accounts(context) if context is not None else None)
+        self._world_context = self._world_last_context = deepcopy(context)
+        self._world_native_session = sample.get('native_session')
         self.statistics = Statistics(session, start)
         self.session = session
         self.coverage_start = start
@@ -334,9 +345,7 @@ class BattleStatisticsAdapter:
 
     def _accept_event(self, **event):
         if self._events_only:
-            # This receiver owns protocol admission/ACK only. The four scoped
-            # existing cores account for amounts after native UID attribution.
-            self.event_stream.accept(None, (), True, **event)
+            self._accept_world_event(event)
             return
         kind = event.get('kind')
         if kind in ENEMY_STATE_KINDS:
@@ -422,6 +431,81 @@ class BattleStatisticsAdapter:
                 self.event_stream.stop()
                 raise StreamGap('event source cannot be registered')
         self.event_stream.accept(verified_skill_end_owner, **event)
+
+    @staticmethod
+    def _world_player_accounts(context):
+        return tuple(sorted((row['index'], row['uid']) for row in context['players']))
+
+    @property
+    def enemy_world_scope(self):
+        """Scope of this shared reducer, including a verified terminal tail."""
+        return dict(self._world_context['identity']) if self._world_context is not None else {}
+
+    def _bind_world_context(self, sample, *, end_state):
+        context = sample.get('autochess_context')
+        if (native_autochess_event_baseline(sample)
+                and tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round')) == self._world_identity
+                and self._world_player_accounts(context) == self._world_accounts):
+            self._world_context = self._world_last_context = deepcopy(context)
+        elif (end_state and self._world_native_session is not None
+              and sample.get('native_session') == self._world_native_session):
+            # A verified terminal handoff closes the old combat prefix. Its
+            # events retain their original scope; END does not retag a backlog.
+            self._world_context = self._world_last_context
+        else:
+            self._world_context = None
+
+    def _world_event_gap(self, event):
+        kind = event.get('kind')
+        if kind in ENEMY_STATE_KINDS:
+            self.statistics.mark_enemy_state_unknown()
+        if kind == 'enemy_enter':
+            self.statistics.mark_enemy_entry_unknown()
+        elif kind == 'enemy_reborn':
+            self.statistics.mark_enemy_phase_unknown()
+        if kind in ('damage_settlement', 'enemy_damage', 'elemental_bar', 'elemental_burst'):
+            self.statistics.observe_enemy_damage(complete=False)
+        if kind in ('elemental_bar', 'elemental_burst') or (kind == 'damage_settlement'
+                                                           and event.get('damage_type') == 5):
+            self.statistics.record_settlement_bar(event.get('target_uid'), event.get('target'),
+                event.get('target_instance'), 'unknown', None, None)
+
+    def _world_settlement_identity(self, event):
+        source = event.get('source')
+        if source is not None and classify_unmapped_source(source) is not None:
+            return 'foreign', None, None
+        member = lookup_native_actor(self._world_context, cid=source,
+                                     data_uid=event.get('source_character_uid'))
+        if member is None:
+            return 'unknown', None, None
+        actor = member
+        if member['is_token']:
+            actor = lookup_native_actor(self._world_context, cid=member['host_key'],
+                                        data_uid=member['host_uid'])
+            if actor is None or actor['is_token'] or actor['player_uid'] != member['player_uid']:
+                return 'unknown', None, None
+        return 'local', f"{actor['player_uid']}:{actor['cid']}#{actor['data_uid']}", actor['data_uid']
+
+    def _accept_world_event(self, event):
+        raw = event.get('replay_record') or event
+        identity = native_autochess_event_identity(raw)
+        payload = {key: value for key, value in event.items() if key != 'native_autochess_scope'}
+        world_kind = event.get('kind') in ENEMY_STATE_KINDS or event.get('kind') in (
+            'damage_settlement', 'elemental_bar', 'elemental_burst', 'enemy_damage')
+        if (identity != self._world_identity or self._world_context is None or not world_kind):
+            self.event_stream.accept(None, (), True, **payload)
+            if world_kind and (identity is None or identity == self._world_identity):
+                self._world_event_gap(event)
+            return
+        if event['kind'] in ENEMY_STATE_KINDS:
+            self.event_stream.accept(**payload)
+        elif event['kind'] in ('enemy_damage', 'elemental_burst'):
+            # Current native settlements are authoritative; the legacy incoming
+            # event is not a second HP deduction.
+            self.event_stream.accept(None, (), True, **payload)
+        else:
+            self.event_stream.accept(None, (), False, True,
+                settlement_identity=self._world_settlement_identity(event), **payload)
 
     def _settlement_identity(self, source, uid):
         """Resolve a hit using its UID and the battle's verified player side."""
@@ -591,6 +675,8 @@ class BattleStatisticsAdapter:
                 self._freeze()
                 self.statistics = None
             self._begin(sample, roster)
+        if self._events_only:
+            self._bind_world_context(sample, end_state=end_state)
         game_time = sample['game_time']
         settling = self.statistics.end_time is not None
         if settling and (frame != self.last_frame or game_time != self.statistics.end_time

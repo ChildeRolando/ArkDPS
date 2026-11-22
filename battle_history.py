@@ -650,6 +650,9 @@ class HistoryResult:
     records: tuple = ()
     diagnostics: tuple = ()
     written: bool = False
+    # Optional catalog from the writer's existing retention scan. `records`
+    # remains the operation result (one committed record for save).
+    recent: tuple | None = None
 
 
 def _unique_keys(pairs):
@@ -759,4 +762,5 @@ class BattleHistory:
                 old_path.unlink()
             except OSError as exc:
                 diagnostics.append(HistoryDiagnostic('prune_failed', str(old_path), str(exc)))
-        return HistoryResult((record,), tuple(diagnostics), written=written)
+        return HistoryResult((record,), tuple(diagnostics), written=written,
+                             recent=tuple(records[:100]))
