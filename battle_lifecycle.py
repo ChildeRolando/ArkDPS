@@ -18,7 +18,8 @@ from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
 from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract,
-                         android_autochess_event_window, android_autochess_mark_context, autochess_scope_detail,
+                         android_autochess_event_window, android_autochess_mark_context,
+                         autochess_root_failure, autochess_scope_detail,
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
@@ -114,7 +115,7 @@ def _observer_mark(observer):
     if mark.get('stopped'):
         raise StreamGap('observer stopped')
     if mark.get('retry'):
-        raise CaptureRetry('observer clock advanced')
+        raise CaptureRetry(autochess_root_failure(mark) or 'observer clock advanced')
     return mark
 
 
@@ -292,7 +293,7 @@ class BattleFeed:
             try:
                 end_mark = observer.mark()
                 if end_mark.get('retry'):
-                    raise CaptureRetry('observer clock advanced')
+                    raise CaptureRetry(autochess_root_failure(end_mark) or 'observer clock advanced')
                 bind_native_autochess_pair(sample, mark, end_mark)
                 sequence = _event_barrier(mark, sample, end_mark,
                                           contract=contract_for(observer, sample), capture=capture)

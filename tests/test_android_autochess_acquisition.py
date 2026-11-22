@@ -7,6 +7,7 @@ import pytest
 from battle_lifecycle import BattleRuntime, autochess_scene
 from collection_session import CollectionSession
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
+from event_capture import CaptureRetry
 from event_observer import ObserverStatus
 from event_probe import (MUMU_AUTOCHESS_CONTRACT, MUMU_CONTRACT, BarrierBusy,
                          ObserverReadRetry, bind_native_autochess_pair, contract_for)
@@ -149,6 +150,26 @@ def test_absent_android_proof_records_reason_without_manufacturing_scope():
     assert observation.sample['autochess_scope_unverified'] is True
     assert observation.sample['autochess_scope_detail'] == 'checked logger owner differs'
     assert 'autochess_context' not in observation.sample
+    assert battle.runtime.feed.autochess_scene is None
+
+
+@pytest.mark.parametrize('retry', [False, True])
+def test_android_root_guard_reaches_panel_or_retry_journal_without_claiming_scope(retry):
+    battle = AndroidAutoChessBattle()
+    battle.context_available = False
+    battle.observer.mark = lambda: dict(battle.mark(), retry=retry, autochess_binding_diagnostic={
+        'status': 'unavailable', 'step': 'root_identity', 'guard': 'stats_class_mismatch',
+        'reason': 'expected BattleStats'})
+    message = 'AutoChess stats_class_mismatch: expected BattleStats'
+    if retry:
+        with pytest.raises(CaptureRetry, match=message):
+            battle.poll()
+        assert battle.commits == []
+    else:
+        observation = battle.poll()
+        assert observation.sample['autochess_scope_detail'] == message
+        assert observation.sample['autochess_scope_unverified'] is True
+        assert 'autochess_context' not in observation.sample
     assert battle.runtime.feed.autochess_scene is None
 
 

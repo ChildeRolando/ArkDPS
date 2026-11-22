@@ -2532,18 +2532,31 @@ installEnemyStateHooks();
 installMitigationHooks();
 installSkillCastStateHook();
 let terminalBoundary=null,terminalGeneration=0;
-function terminalIdentity(controller,controllerClass){
- if(controller.isNull()||!controller.readPointer().equals(controllerClass))return null;
+function terminalIdentity(controller,controllerClass,reject){
+ if(controller.isNull())return reject?.('singleton_empty')??null;
+ const klass=controller.readPointer();
+ if(!klass.equals(controllerClass)){
+  if(!reject)return null;
+  let observed=null;
+  try{if(!klass.isNull())observed=className(klass);}catch(e){/* The mismatch is already proved. */}
+  return reject('controller_class_mismatch',observed);
+ }
  // Use the same two ownership references as the guarded native snapshot.
  const native=controller.add(0x10).readPointer(),logger=controller.add(probeAdapter.loggerOffset).readPointer();
  const level=controller.add(probeAdapter.levelOffset).readPointer();
- if(native.isNull()||logger.isNull()||level.isNull()
-    ||!native.add(0x28).readPointer().equals(controller)
-    ||className(logger.readPointer())!=='BattleLogger'
-    ||!logger.add(0x18).readPointer().equals(controller)
-    ||className(level.readPointer())!=='LevelData')return null;
+ if(native.isNull())return reject?.('native_missing')??null;
+ if(logger.isNull())return reject?.('logger_missing')??null;
+ if(level.isNull())return reject?.('level_missing')??null;
+ if(!native.add(0x28).readPointer().equals(controller))return reject?.('native_owner_mismatch')??null;
+ const loggerClass=className(logger.readPointer());
+ if(loggerClass!=='BattleLogger')return reject?.('logger_class_mismatch',loggerClass)??null;
+ if(!logger.add(0x18).readPointer().equals(controller))return reject?.('logger_owner_mismatch')??null;
+ const levelClass=className(level.readPointer());
+ if(levelClass!=='LevelData')return reject?.('level_class_mismatch',levelClass)??null;
  const stats=logger.add(0x30).readPointer();
- if(stats.isNull()||className(stats.readPointer())!=='BattleStats')return null;
+ if(stats.isNull())return reject?.('stats_missing')??null;
+ const statsClass=className(stats.readPointer());
+ if(statsClass!=='BattleStats')return reject?.('stats_class_mismatch',statsClass)??null;
  return {controller:controller.toString(),native:native.toString(),logger:logger.toString(),
   stats:stats.toString(),level:level.toString()};
 }

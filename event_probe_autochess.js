@@ -515,27 +515,49 @@ function readAutoChessBody(identity,frame,fixed,key){
  }
  nativeAutoBodyCache=null;return readAutoChess(identity,frame,fixed);
 }
-function currentNativeIdentity(){
- if(!nativeControllerClass)return null;
+const nativeRootFailures={
+ controller_class_unavailable:'BattleController class unavailable',
+ singleton_parent_missing:'BattleController singleton parent missing',
+ singleton_statics_missing:'BattleController singleton statics missing',
+ singleton_empty:'BattleController singleton slot empty',
+ controller_class_mismatch:'BattleController object class does not match probe metadata',
+ native_missing:'BattleController native object missing',
+ native_owner_mismatch:'BattleController native object does not point back to the singleton',
+ logger_missing:'BattleController logger missing',
+ logger_class_mismatch:'Logger object class differs from BattleLogger',
+ logger_owner_mismatch:'BattleLogger does not point back to the singleton',
+ level_missing:'BattleController level data missing',
+ level_class_mismatch:'Level object class differs from LevelData',
+ stats_missing:'BattleLogger statistics object missing',
+ stats_class_mismatch:'Statistics object class differs from BattleStats'
+};
+function currentNativeIdentity(reject){
+ if(!nativeControllerClass)return reject?.('controller_class_unavailable')??null;
  const parent=nativeControllerClass.add(0x58).readPointer();
- if(parent.isNull())return null;
+ if(parent.isNull())return reject?.('singleton_parent_missing')??null;
  const statics=parent.add(0xb8).readPointer();
- if(statics.isNull())return null;
+ if(statics.isNull())return reject?.('singleton_statics_missing')??null;
  const controller=statics.readPointer();
- return terminalIdentity(controller,nativeControllerClass);
+ return terminalIdentity(controller,nativeControllerClass,reject);
 }
 function nativeBinding(){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded
  // Windows sampler. The host binds this evidence to its battle serial.
  let step='root_identity';nativeAutoBindingDiagnostic=null;
- const unavailable=reason=>{
+ const unavailable=(reason,guard)=>{
   nativeAutoBodyCache=null;
   nativeAutoBindingDiagnostic={status:'unavailable',step,reason:String(reason).slice(0,300)};
+  if(guard)nativeAutoBindingDiagnostic.guard=guard;
   return null;
  };
+ const rejectRoot=(guard,actualClass)=>{
+  const observed=typeof actualClass==='string'&&/^[A-Za-z0-9_`.<>+]{1,96}$/.test(actualClass)?
+   ' (observed '+actualClass+')':'';
+  return unavailable(nativeRootFailures[guard]+observed,guard);
+ };
  try{
-  const before=currentNativeIdentity();
-  if(before===null)return unavailable('BattleController singleton or class/ownership roots unavailable');
+  const before=currentNativeIdentity(rejectRoot);
+  if(before===null)return null;
   // Android metadata scalar offsets can disagree with its independently
   // verified live layout. Reuse the collector's pinned runtime state slot;
   // the source and host still bracket every ownership root and exact clock.
@@ -566,8 +588,9 @@ function nativeBinding(){
      !stageAddress.readPointer().equals(stagePointer)||str(stagePointer)!==stage||
      enabled&&!stagePointer.readPointer().equals(stageClass)))
    return unavailable('LevelData or stage identity changed during binding');
-  const after=currentNativeIdentity();
-  if(after===null||clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed
+  const after=currentNativeIdentity(rejectRoot);
+  if(after===null)return null;
+  if(clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed
      ||Object.keys(before).some(key=>before[key]!==after[key])
      ||stateAddress.readS32()!==state||!probeAdapter.autoChessReflected&&str(stageAddress.readPointer())!==stage)
    return unavailable('battle roots, clock, state or stage changed during binding');

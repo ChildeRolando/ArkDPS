@@ -280,11 +280,27 @@ def native_autochess_event_baseline(sample):
             and sample['autochess_context']['phase'] in (4, 5, 6))
 
 
+def autochess_root_failure(mark):
+    """Preserve the failed native guard when a mark asks the host to retry."""
+    diagnostic = mark.get('autochess_binding_diagnostic')
+    if not isinstance(diagnostic, dict) or diagnostic.get('status') != 'unavailable':
+        return None
+    guard, reason = diagnostic.get('guard'), diagnostic.get('reason')
+    if not isinstance(guard, str) or not re.fullmatch(r'[a-z_]{1,64}', guard):
+        return None
+    if not isinstance(reason, str) or not reason.strip():
+        return None
+    return f'AutoChess {guard}: {reason.strip().splitlines()[0]}'[:200]
+
+
 def autochess_scope_detail(evidence):
     """Expose failed proof separately from fields that qualify a sample."""
     for name in ('after', 'before'):
         mark = (evidence or {}).get(name) or {}
         context = mark.get('native_autochess_context') or {}
+        failure = autochess_root_failure(mark)
+        if failure:
+            return failure
         diagnostic = mark.get('autochess_binding_diagnostic') or {}
         for report in (context, diagnostic):
             reason = report.get('reason') if isinstance(report, dict) else None

@@ -86,19 +86,62 @@ check('runtime_roots_remain_authoritative_when_dump_metadata_and_terminal_setup_
 });
 
 check('wrong_runtime_owner_backreference_class_or_state_never_borrow_metadata_roots',()=>{
- for(const mutate of [
-  f=>f.write(f.controller.add(0xd8).readPointer().add(0x18),f.ptr(0)),
-  f=>f.write(f.controller.add(0x10).readPointer().add(0x28),f.ptr(0)),
-  f=>f.write(f.controller.add(0xd8),f.ptr(0)),
-  f=>f.write(f.controller.add(0x158),f.ptr(0)),
-  f=>f.write(f.controller.add(0x220),1),
- ]){
+ function replace(f,address,value,scalar=false){
+  const previous=scalar?address.readS32():address.readPointer();f.write(address,value);
+  return ()=>f.write(address,previous);
+ }
+ const cases=[
+  ['controller_class_unavailable',f=>{
+   f.context.guardFixtureClass=f.controllerClass;vm.runInContext('nativeControllerClass=null',f.context);
+   return ()=>vm.runInContext('nativeControllerClass=guardFixtureClass;delete globalThis.guardFixtureClass',f.context);
+  }],
+  ['singleton_parent_missing',f=>replace(f,f.controllerClass.add(0x58),f.ptr(0))],
+  ['singleton_statics_missing',f=>replace(f,f.controllerClass.add(0x58).readPointer().add(0xb8),f.ptr(0))],
+  ['singleton_empty',f=>replace(f,f.controllerClass.add(0x58).readPointer().add(0xb8).readPointer(),f.ptr(0))],
+  ['controller_class_mismatch',f=>replace(f,f.controller,f.center.readPointer())],
+  ['native_missing',f=>replace(f,f.controller.add(0x10),f.ptr(0))],
+  ['native_owner_mismatch',f=>replace(f,f.controller.add(0x10).readPointer().add(0x28),f.ptr(0))],
+  ['logger_missing',f=>replace(f,f.controller.add(0xd8),f.ptr(0))],
+  ['logger_class_mismatch',f=>replace(f,f.controller.add(0xd8).readPointer(),f.controllerClass)],
+  ['logger_owner_mismatch',f=>replace(f,f.controller.add(0xd8).readPointer().add(0x18),f.ptr(0))],
+  ['level_missing',f=>replace(f,f.controller.add(0x158),f.ptr(0))],
+  ['level_class_mismatch',f=>replace(f,f.level,f.controllerClass)],
+  ['stats_missing',f=>replace(f,f.controller.add(0xd8).readPointer().add(0x30),f.ptr(0))],
+  ['stats_class_mismatch',f=>replace(f,f.controller.add(0xd8).readPointer().add(0x30).readPointer(),f.controllerClass)],
+  [null,f=>replace(f,f.controller.add(0x220),1,true)],
+ ];
+ for(const [guard,mutate]of cases){
   const f=owned('all',{fixtureOptions:{loggerMetadataOffset:0xe0,stateMetadataOffset:0x228,stateMetadataKind:17}});
-  assert.equal(packet(f).status,'available');mutate(f);const mark=f.mark();
+  const original=plain(packet(f));assert.equal(original.status,'available');
+  const queue=plain(vm.runInContext('({sequence,acknowledgedSequence,queue})',f.context));
+  const restore=mutate(f);const mark=f.mark();
   assert.equal(mark.retry,true);assert.equal(mark.native_identity,undefined);assert.equal(mark.native_autochess_context,undefined);
+  assert.equal(mark.error,null);assert.equal(mark.stopped,false);
   const diagnostic=mark.autochess_binding_diagnostic;
-  assert.equal(diagnostic.status,'unavailable');assert(['root_identity','controller_state'].includes(diagnostic.step));
+  assert.equal(diagnostic.status,'unavailable');assert.equal(diagnostic.step,guard?'root_identity':'controller_state');
+  assert.equal(diagnostic.guard,guard??undefined,guard||'state has its own diagnostic step');
   assert(diagnostic.reason.length>0&&diagnostic.reason.length<=300);
+  assert.deepEqual(plain(vm.runInContext('({sequence,acknowledgedSequence,queue})',f.context)),queue);
+  restore();const recovered=f.mark();
+  assert.equal(recovered.retry,undefined);assert.equal(recovered.native_autochess_context.status,'available');
+  assert.equal(recovered.native_autochess_context.match_key,original.match_key);
+  assert.deepEqual(plain(recovered.native_autochess_context.memberships),original.memberships);
+  assert.equal(recovered.autochess_binding_diagnostic,undefined,'a successful recovery cannot carry an older guard failure');
+ }
+ // Both owner links must be rechecked at the closing boundary too. Do not
+ // rely on the opening singleton or let an acquired body certify a new root.
+ for(const guard of ['native_owner_mismatch','logger_owner_mismatch']){
+  const f=owned();assert.equal(packet(f).status,'available');
+  const target=guard==='native_owner_mismatch'?f.controller.add(0x10).readPointer().add(0x28):
+   f.controller.add(0xd8).readPointer().add(0x18);
+  const previous=target.readPointer(),prototype=f.ptr(0).constructor.prototype,read=prototype.readPointer;let calls=0;
+  prototype.readPointer=function(){if(this.equals(target)&&++calls===2)f.write(target,f.ptr(0));return read.call(this);};
+  let envelope;try{envelope=f.adapter.readEnvelope();}finally{prototype.readPointer=read;}
+  assert.equal(calls,2);assert.equal(envelope.ready,false);assert.equal(envelope.fields.native_identity,undefined);
+  assert.equal(envelope.fields.native_autochess_context,undefined);
+  assert.equal(envelope.fields.autochess_binding_diagnostic.step,'closing_guard');
+  assert.equal(envelope.fields.autochess_binding_diagnostic.guard,guard);
+  f.write(target,previous);assert.equal(packet(f).status,'available');
  }
 });
 
