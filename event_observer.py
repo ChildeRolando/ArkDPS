@@ -1,5 +1,6 @@
 """Frida event transports sharing bounded reads and commit acknowledgements."""
 from enum import Enum
+import json
 import os
 from hashlib import sha256
 from threading import Event, Lock
@@ -83,9 +84,13 @@ class FridaEventObserver:
             ) from exc
 
     def _probe_source(self):
+        from collector import android_event_layout
+
         assembled = assemble_probe_source('mumu')
-        self._probe_source_manifest = assembled.audit()
-        return self._with_autochess_setting(assembled.source)
+        layout = android_event_layout()
+        self._probe_source_manifest = dict(assembled.audit(), android_battle_layout=layout)
+        prefix = 'globalThis.arkdpsAndroidBattleLayout = ' + json.dumps(layout, separators=(',', ':')) + ';\n'
+        return self._with_autochess_setting(prefix + assembled.source)
 
     def _wake_request(self):
         with self._request_lock:

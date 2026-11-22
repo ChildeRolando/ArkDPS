@@ -4,11 +4,12 @@ const assert=require('node:assert/strict');
 const path=require('node:path');
 const vm=require('node:vm');
 const {world}=require('./native_pc_autochess_context_fixture.js');
-const {fixture}=require('./native_pc_frida_probe_fixture.js');
+const {fixture,LEGACY_ANDROID_FIXTURE_LAYOUT}=require('./native_pc_frida_probe_fixture.js');
 const plain=value=>JSON.parse(JSON.stringify(value)),checks=[];
 function check(name,run){run();checks.push(name);}
 function owned(mode='all',options={}){
- const f=world({platform:'mumu',...options,fixtureOptions:{...options.fixtureOptions,globals:{arkdpsAutoChessMode:mode}}});
+ const f=world({platform:'mumu',...options,fixtureOptions:{...options.fixtureOptions,
+  globals:{...options.fixtureOptions?.globals,arkdpsAutoChessMode:mode}}});
  ['091000001','91000001','083000003','004000004'].forEach((uid,index)=>
   f.write(f.players[index][1].add(0x18),f.text(uid)));
  return f;
@@ -53,12 +54,53 @@ function assertUnknown(f){
  const context=packet(f);assert.equal(context.status,'unknown');assert.equal(context.verified_same_frame,false);
  assert.equal(context.phase,undefined);assert.equal(context.round,undefined);return context;
 }
+// This current-layout witness matches the generated Android bundle, not the
+// historical default constants. The primary host integration passes its own
+// effective production layout through --effective-layout instead of this copy.
+const CURRENT_ANDROID_LAYOUT=Object.freeze({native:16,nativeOwner:40,logger:224,loggerOwner:24,
+ stats:48,level:352,state:552,levelId:24});
+function configuredWorld(layout,mode='all',sourceLayout=layout){
+ const f=owned(mode,{fixtureOptions:{androidBattleLayout:layout,unitManagerOffset:0x2c0,
+  globals:{arkdpsAndroidBattleLayout:sourceLayout}}});
+ const list=f.alloc();f.write(list,f.klass('ListDict`2','Torappu',0));
+ if(layout.logger!==LEGACY_ANDROID_FIXTURE_LAYOUT.logger)f.write(f.controller.add(LEGACY_ANDROID_FIXTURE_LAYOUT.logger),list);
+ if(layout.level!==LEGACY_ANDROID_FIXTURE_LAYOUT.level)f.write(f.controller.add(LEGACY_ANDROID_FIXTURE_LAYOUT.level),list);
+ if(layout.state!==LEGACY_ANDROID_FIXTURE_LAYOUT.state)f.write(f.controller.add(LEGACY_ANDROID_FIXTURE_LAYOUT.state),1);
+ return f;
+}
+function independentSample(f,layout){
+ const native=f.controller.add(layout.native).readPointer(),logger=f.controller.add(layout.logger).readPointer(),
+  stats=logger.add(layout.stats).readPointer(),level=f.controller.add(layout.level).readPointer();
+ const clock=f.controllerClass.add(0xb8).readPointer(),frame=clock.add(0x14).readU32(),
+  fixed=clock.add(0x18).readS64().toString(),stage=level.add(layout.levelId).readPointer();
+ const session=['owned-fixture-boot',567,f.context.Process.id,Number(f.controller.value),Number(stats.value),Number(level.value)].join(':');
+ return {sample:{session,native_session:session,frame,game_time:Number(BigInt(fixed))/4294967296,
+  battle_identity:[Number(f.controller.value),Number(native.value)],observer_logger:Number(logger.value),
+  state:f.controller.add(layout.state).readS32(),rows:[],guard:{complete:true,start:frame,end:frame},
+  battle_metadata:{platform:'android',source_build:'android:2.7.91',
+   stage_id:stage.add(0x14).readUtf16String(stage.add(0x10).readS32())}},
+  fixture_roots:{controller:f.controller.toString(),native:native.toString(),logger:logger.toString(),
+   stats:stats.toString(),level:level.toString()}};
+}
+if(process.argv[2]==='--effective-layout'){
+ const layout=JSON.parse(process.argv[3]),mode=process.argv.includes('--mode')?process.argv[process.argv.indexOf('--mode')+1]:'all';
+ assert(['all','local'].includes(mode));const f=configuredWorld(layout,mode);
+ const before=f.mark(),after=f.mark(),drain=f.context.rpc.exports.readEvents(0,0),independent=independentSample(f,layout);
+ assert.equal(before.native_autochess_context.status,'available');assert.equal(before.native_autochess_context.collection_mode,mode);
+ assert.deepEqual(plain(before.native_identity),independent.fixture_roots);assert.equal(drain.events.length,0);
+ process.stdout.write(JSON.stringify({status:'verified',classification:'owned_effective_layout_not_live',
+  effective_layout:layout,...independent,before,after,drain}));process.exit(0);
+}
 
-check('android_verified_state220_unit_manager2b8_and_real_shared_context',()=>{
- const f=owned();f.write(f.controller.add(0x228),0);const p=packet(f);
+check('current_effective_android_layout_uses_e0_160_228_and_rejects_legacy_listdict_slot',()=>{
+ const f=configuredWorld(CURRENT_ANDROID_LAYOUT),p=packet(f);
  assert.equal(p.status,'available');assert.equal(p.phase,4);assert.equal(p.round,1);
- assert.equal(address(f,f.controller,'m_state').toString(),f.controller.add(0x220).toString());
- assert.equal(address(f,f.controller,'<unitManager>k__BackingField').toString(),f.controller.add(0x2b8).toString());
+ assert.equal(address(f,f.controller,'m_logger').toString(),f.controller.add(0xe0).toString());
+ assert.equal(address(f,f.controller,'m_levelData').toString(),f.controller.add(0x160).toString());
+ assert.equal(address(f,f.controller,'m_state').toString(),f.controller.add(0x228).toString());
+ assert.equal(f.controller.add(0x220).readS32(),1,'the legacy slot contains a state mismatch sentinel');
+ assert.equal(f.context.className(f.controller.add(0x158).readPointer().readPointer()),'ListDict`2');
+ assert.equal(address(f,f.controller,'<unitManager>k__BackingField').toString(),f.controller.add(0x2c0).toString());
  assert.equal(p.players.length,4);assert.equal(p.memberships.length,4);assert.equal(p.self_player_index,4);
  assert.equal(p.match_key,f.manager.toString()+':'+f.center.toString());
  assert.equal(p.players[0].uid,'091000001');assert.equal(p.players[1].uid,'91000001');
@@ -68,9 +110,18 @@ check('android_verified_state220_unit_manager2b8_and_real_shared_context',()=>{
  const constants=f.apiCalls.filter(name=>name==='il2cpp_field_static_get_value').length;
  assert.equal(constants,15,'only the fifteen proved enum literal defaults were read');
  packet(f);assert.equal(f.apiCalls.filter(name=>name==='il2cpp_field_static_get_value').length,15,'immutable enum metadata cached');
+ const old=configuredWorld(CURRENT_ANDROID_LAYOUT,'all',LEGACY_ANDROID_FIXTURE_LAYOUT),failure=old.mark();
+ assert.equal(failure.native_identity,undefined);assert.equal(failure.native_autochess_context,undefined);
+ assert.equal(failure.autochess_binding_diagnostic.guard,'logger_class_mismatch');
+ assert.match(failure.autochess_binding_diagnostic.reason,/ListDict`2/);
+ // Keep the configured current layout's runtime owner checks fully effective.
+ const logger=f.controller.add(CURRENT_ANDROID_LAYOUT.logger).readPointer();
+ f.write(logger.add(CURRENT_ANDROID_LAYOUT.loggerOwner),f.ptr(0));const broken=f.mark();
+ assert.equal(broken.autochess_binding_diagnostic.guard,'logger_owner_mismatch');assert.equal(broken.native_identity,undefined);
+ f.write(logger.add(CURRENT_ANDROID_LAYOUT.loggerOwner),f.controller);assert.equal(packet(f).status,'available');
 });
 
-check('runtime_roots_remain_authoritative_when_dump_metadata_and_terminal_setup_disagree',()=>{
+check('historic_compatibility_layout_can_explicitly_differ_from_dump_metadata',()=>{
  const f=owned('all',{fixtureOptions:{loggerMetadataOffset:0xe0,stateMetadataOffset:0x228,stateMetadataKind:17}});
  const ready=f.messages.find(message=>message.ready===true);
  assert.equal(ready.terminal_error,'Error: unsupported layout BattleController.m_logger',

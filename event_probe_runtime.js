@@ -2542,18 +2542,19 @@ function terminalIdentity(controller,controllerClass,reject){
   return reject('controller_class_mismatch',observed);
  }
  // Use the same two ownership references as the guarded native snapshot.
- const native=controller.add(0x10).readPointer(),logger=controller.add(probeAdapter.loggerOffset).readPointer();
+ const native=controller.add(probeAdapter.nativeOffset??0x10).readPointer();
+ const logger=controller.add(probeAdapter.loggerOffset).readPointer();
  const level=controller.add(probeAdapter.levelOffset).readPointer();
  if(native.isNull())return reject?.('native_missing')??null;
  if(logger.isNull())return reject?.('logger_missing')??null;
  if(level.isNull())return reject?.('level_missing')??null;
- if(!native.add(0x28).readPointer().equals(controller))return reject?.('native_owner_mismatch')??null;
+ if(!native.add(probeAdapter.nativeOwnerOffset??0x28).readPointer().equals(controller))return reject?.('native_owner_mismatch')??null;
  const loggerClass=className(logger.readPointer());
  if(loggerClass!=='BattleLogger')return reject?.('logger_class_mismatch',loggerClass)??null;
- if(!logger.add(0x18).readPointer().equals(controller))return reject?.('logger_owner_mismatch')??null;
+ if(!logger.add(probeAdapter.loggerOwnerOffset??0x18).readPointer().equals(controller))return reject?.('logger_owner_mismatch')??null;
  const levelClass=className(level.readPointer());
  if(levelClass!=='LevelData')return reject?.('level_class_mismatch',levelClass)??null;
- const stats=logger.add(0x30).readPointer();
+ const stats=logger.add(probeAdapter.statsOffset??0x30).readPointer();
  if(stats.isNull())return reject?.('stats_missing')??null;
  const statsClass=className(stats.readPointer());
  if(statsClass!=='BattleStats')return reject?.('stats_class_mismatch',statsClass)??null;

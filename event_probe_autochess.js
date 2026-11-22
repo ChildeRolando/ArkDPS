@@ -558,9 +558,8 @@ function nativeBinding(){
  try{
   const before=currentNativeIdentity(rejectRoot);
   if(before===null)return null;
-  // Android metadata scalar offsets can disagree with its independently
-  // verified live layout. Reuse the collector's pinned runtime state slot;
-  // the source and host still bracket every ownership root and exact clock.
+  // Android supplies the same effective state slot as the guarded host.
+  // Both reads still bracket the ownership roots and exact game clock.
   step='controller_state';
   const stateOffset=probeAdapter.autoChessStateOffset??0x228;
   const stateAddress=ptr(before.controller).add(stateOffset),state=stateAddress.readS32();

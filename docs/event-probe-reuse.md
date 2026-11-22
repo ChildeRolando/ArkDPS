@@ -55,7 +55,7 @@
 
 ### 共同实现与来源字段修复
 
-`event_probe_android2791.js` 与 `event_probe_native_pc.js` 只保留平台元数据、ABI、绑定和屏障适配。宿主通过 `assemble_probe_source` 按固定顺序组合适配器和 `event_probe_runtime.js`，同一次读取计算原始文件、规范化源码、组合源码及实际提交源码摘要。宿主自己的来源描述覆盖生产者同名字段；成功发送源码不等于已安装或已观察到事件。打包白名单包含三份 JS。
+`event_probe_android2791.js` 与 `event_probe_native_pc.js` 只保留平台元数据、ABI、绑定和屏障适配。宿主通过 `assemble_probe_source` 按固定顺序组合适配器和 `event_probe_runtime.js`，同一次读取计算原始文件、规范化源码、组合源码及实际提交源码摘要。MuMu 观察器从已应用版本数据的累计采集器取得战局根、状态和关卡字段偏移，随源码一起提交并在 `probe_source.android_battle_layout` 记录这组生效值。宿主自己的来源描述覆盖生产者同名字段；成功发送源码不等于已安装或已观察到事件。打包白名单包含三份 JS。
 
 机械提取阶段五份完整输出与旧源逐对象相等，原始回执保存在 `runtime/event-probe-reuse-phase1`。后续局部故障修复有意改变错误质量声明，不再把这些错误输出当作不变基线。既有正常场景的完整 JSON 仍绑定提取前摘要；局部缺口、身份变化、丢序、重复与溢出分别检查业务真值。
 

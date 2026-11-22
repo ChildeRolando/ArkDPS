@@ -25,7 +25,7 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
  }
  function obj(k){const p=f.alloc();f.write(p,k);return p;}
  const stringClass=klass('String','System',0);
- if(platform==='mumu')klass('LevelData','Torappu',1,[[0,'levelId',0x18,14]],zero,f.level.readPointer());
+ if(platform==='mumu')klass('LevelData','Torappu',1,[[0,'levelId',f.androidBattleLayout.levelId,14]],zero,f.level.readPointer());
  function text(s){const p=f.managedString(s);f.write(p,stringClass);return p;}
  const listClasses=new Map();
  function listClass(element=zero,key='plain'){
@@ -128,15 +128,16 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
  const unitManager=obj(klass('UnitManager','Torappu.Battle',7,[[1,'<characters>k__BackingField',0x18,21]]));
  f.write(unitManager.add(0x18),container);
  klass('BattleController','Torappu.Battle',515,
-  [[0,'m_state',fixtureOptions.stateMetadataOffset??(platform==='mumu'?0x220:0x228),fixtureOptions.stateMetadataKind??8],
-   [1,'m_logger',fixtureOptions.loggerMetadataOffset??(platform==='mumu'?0xd8:0xe0),18],
-   [2,'m_levelData',platform==='mumu'?0x158:0x160,18],
-   [100,'<unitManager>k__BackingField',platform==='mumu'?0x2b8:0x2c0,18],[110,'m_singletonHost',0x2e8,18]],zero,f.controllerClass);
+  [[0,'m_state',fixtureOptions.stateMetadataOffset??(f.androidBattleLayout?.state??0x228),fixtureOptions.stateMetadataKind??8],
+   [1,'m_logger',fixtureOptions.loggerMetadataOffset??(f.androidBattleLayout?.logger??0xe0),18],
+   [2,'m_levelData',f.androidBattleLayout?.level??0x160,18],
+   [100,'<unitManager>k__BackingField',fixtureOptions.unitManagerOffset??(platform==='mumu'?0x2b8:0x2c0),18],
+   [110,'m_singletonHost',0x2e8,18]],zero,f.controllerClass);
  // Keep the existing singleton parent used by currentNativeIdentity.
  const runtimeParent=f.alloc(),statics=f.alloc();f.write(runtimeParent.add(0xb8),statics);f.write(statics,f.controller);
  f.write(f.controllerClass.add(0x58),runtimeParent);
- f.write(f.controller.add(0x2e8),host);f.write(f.controller.add(platform==='mumu'?0x2b8:0x2c0),unitManager);
- f.write(f.level.add(0x18),text('Activities/ACT3AUTOCHESS/level_act3autochess_m01'));
+ f.write(f.controller.add(0x2e8),host);f.write(f.controller.add(fixtureOptions.unitManagerOffset??(platform==='mumu'?0x2b8:0x2c0)),unitManager);
+ f.write(f.level.add(f.androidBattleLayout?.levelId??0x18),text('Activities/ACT3AUTOCHESS/level_act3autochess_m01'));
  if(token||unknownToken){
   const bObject=klass('BObject','Torappu.Battle',9,[[3,'<playerSide>k__BackingField',0x20,17],
    [4,'<inited>k__BackingField',0x24,2],[5,'<borned>k__BackingField',0x25,2],

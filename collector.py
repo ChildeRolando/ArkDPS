@@ -34,6 +34,15 @@ PORT = 27381
 NATIVE_MANAGED_REFERENCE = 0x28
 
 
+def android_event_layout() -> dict[str, int]:
+    """Expose the effective package layout used by the guarded collector."""
+    fields = gs.BattleControllerFields
+    return dict(native=fields.UNITY_CACHED_PTR, nativeOwner=NATIVE_MANAGED_REFERENCE,
+                logger=fields.M_LOGGER, loggerOwner=LOGGER_CONTROLLER,
+                stats=gs.BattleLoggerFields.STATS, level=fields.LEVEL_DATA,
+                state=fields.M_STATE, levelId=gs.LevelDataFields.LEVEL_ID)
+
+
 class SampleUnavailable(RuntimeError):
     pass
 

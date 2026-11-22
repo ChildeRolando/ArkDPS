@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const path = require('node:path');
+// Historical owned-memory compatibility layout, never the current bundle's
+// effective Android layout. Production must receive its host-selected values.
+const LEGACY_ANDROID_FIXTURE_LAYOUT=Object.freeze({native:0x10,nativeOwner:0x28,logger:0xd8,
+  loggerOwner:0x18,stats:0x30,level:0x158,state:0x220,levelId:0x18});
 function loadProbeSource(sourcePath) {
   const adapter = fs.readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
   if (!adapter.startsWith('// ArkDPS event probe adapter v1;')) return adapter;
@@ -22,7 +26,12 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   fieldApiLeavesTableNull = false, fieldApiStalls = false, lazySkillMethods = false,
   methodCountMismatch = false, methodIteratorMismatch = false, methodOwnerMismatch = false,
   methodApiLeavesTableNull = false, methodApiStalls = false, globals = {},
-  loggerMetadataOffset = loggerOffset, stateMetadataOffset = platform === 'native_pc' ? 0x228 : 0x220} = {}) {
+  loggerMetadataOffset, stateMetadataOffset, androidBattleLayout} = {}) {
+  const candidate=androidBattleLayout??globals.arkdpsAndroidBattleLayout;
+  const physicalLayout=platform==='native_pc'?null:
+    candidate&&typeof candidate==='object'&&Object.keys(LEGACY_ANDROID_FIXTURE_LAYOUT).every(k=>Number.isInteger(candidate[k]))?
+      candidate:LEGACY_ANDROID_FIXTURE_LAYOUT;
+  const physicalLogger=physicalLayout?.logger??loggerOffset,physicalState=physicalLayout?.state??0x228;
   let next = 0x10000;
   const memory = new Map();
   const methods = new Map();
@@ -122,8 +131,8 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const controllerMethods = {OnDestroy: 0, OnCharacterFinished: 2};
   if (stateMethod) controllerMethods.set_state = 1;
   const controllerClass = klass('BattleController', 'Torappu.Battle', {
-    s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerMetadataOffset,
-    m_levelData: platform === 'native_pc' ? 0x160 : 0x158, m_state: stateMetadataOffset,
+    s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerMetadataOffset??physicalLogger,
+    m_levelData: physicalLayout?.level??0x160, m_state: stateMetadataOffset??physicalState,
   }, controllerMethods);
   const character = klass('Character', 'Torappu.Battle', {'<data>k__BackingField': 0x538, m_skill: 0x3c8},
     {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2,
@@ -175,7 +184,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   }
   const parent = alloc(), singletonStatics = alloc(), clockStatics = alloc();
   const controller = alloc(), native = alloc(), logger = alloc(), stats = alloc(), level = alloc();
-  const loggerClass = alloc(), statsClass = alloc(), levelClass = klass('LevelData', 'Torappu', {levelId: 0x18});
+  const loggerClass = alloc(), statsClass = alloc(), levelClass = klass('LevelData', 'Torappu', {levelId: physicalLayout?.levelId??0x18});
   // Typed optional stage reflection needs the actual String field type too.
   // Use reserved bytes in this owned allocation; keep every existing fixture
   // address unchanged so the complete frozen normal-wire oracle stays exact.
@@ -186,12 +195,13 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     write(k.add(0x10), text(name));
   write(controllerClass.add(0x58), parent); write(parent.add(0xb8), singletonStatics);
   write(singletonStatics, controller); write(controllerClass.add(0xb8), clockStatics);
-  write(controller, controllerClass); write(controller.add(0x10), native); write(native.add(0x28), controller);
-  write(controller.add(platform === 'native_pc' ? 0x228 : 0x220), 2);
-  write(controller.add(loggerOffset), logger); write(logger, loggerClass); write(logger.add(0x18), controller);
-  write(logger.add(0x30), stats); write(stats, statsClass);
-  write(controller.add(platform === 'native_pc' ? 0x160 : 0x158), level); write(level, levelClass);
-  write(level.add(0x18), managedString('Obt/Weekly/level_weekly_melee_5'));
+  write(controller, controllerClass); write(controller.add(physicalLayout?.native??0x10), native);
+  write(native.add(physicalLayout?.nativeOwner??0x28), controller);
+  write(controller.add(physicalState), 2);
+  write(controller.add(physicalLogger), logger); write(logger, loggerClass); write(logger.add(physicalLayout?.loggerOwner??0x18), controller);
+  write(logger.add(physicalLayout?.stats??0x30), stats); write(stats, statsClass);
+  write(controller.add(physicalLayout?.level??0x160), level); write(level, levelClass);
+  write(level.add(physicalLayout?.levelId??0x18), managedString('Obt/Weekly/level_weekly_melee_5'));
   function clock(frame, rawTime) { write(clockStatics.add(0x14), frame); write(clockStatics.add(0x18), rawTime); }
   clock(0, 0n);
   const domain = alloc(), assemblyArray = alloc(), assembly = alloc(), image = alloc();
@@ -241,6 +251,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const module = {name: platform === 'native_pc' ? 'GameAssembly.dll' : 'libil2cpp.so',
     base: ptr(0x1000), getExportByName: name => name};
   const context = {
+    ...(platform==='native_pc'?{}:{arkdpsAndroidBattleLayout:{...LEGACY_ANDROID_FIXTURE_LAYOUT}}),
     arkdpsTraceHpContext: traceHpContext,
     arkdpsTraceNestedParent: traceNestedParent,
     Process: {platform: platform === 'native_pc' ? 'windows' : 'linux',
@@ -293,12 +304,13 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     return hook;
   }
   return {context, messages, requests, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,
+    androidBattleLayout:physicalLayout,
     entity, unitClass, character, basicSkill, skillData, buffClass, blockDamage, level, controller, controllerClass,
     apiCalls, fieldTables, methodTables, metadataExports:exports, vm, installSyntheticMitigation, hookTrace, hookAt,
     abilityClass,castSkillClass,skillCastFieldTypes,skillCastMethodTypes,skillCastTypeInfo,characterData,enemyClass};
 }
 
-module.exports = {fixture, loadProbeSource};
+module.exports = {fixture, loadProbeSource, LEGACY_ANDROID_FIXTURE_LAYOUT};
 if (require.main === module) {
 const f = fixture();
 assert.equal(f.messages.at(-1).ready, true);
