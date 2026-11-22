@@ -110,12 +110,39 @@ def native_enemy_view(raw, *, frame, game_time, catalog):
             'hp': hp if hp is not None and hp >= 0 else None,
             'max_hp': None, 'hp_ratio': None, 'hp_known': False,
         })
+        if type(entity.get('player_side')) is int:
+            # Retain the observed value for scope validation. It does not
+            # establish which player's battlefield this enemy belongs to.
+            rows[-1]['native_player_side'] = entity['player_side']
     rows.sort(key=lambda row: int(row['instance_uid']))
     result.update(status='ready', ready=True, error=None, rows=rows)
     if any(isinstance(entity, Mapping) and entity.get('enemy_events_supported') is False
            for entity in entities):
         result['enemy_events_supported'] = False
     return result
+
+
+def defense_enemy_projection(view):
+    """Expose local-account damage alongside an explicitly battlefield-wide list.
+
+    Enemy instance membership is available for the battle. The producer has no
+    verified local-account membership for those enemies, even if one was hit
+    by a local operator. Omit those HP totals and curves from the local view.
+    """
+    def damage_point(point):
+        return {key: point[key] for key in ('game_time', 'our_effective_damage',
+                'our_damage_known', 'our_damage_complete', 'gap_before') if key in point}
+
+    scoped = dict(view, totals={}, hp_scope='local_account_unverified', rows_scope='battlefield')
+    scoped.pop('stage_plan', None)
+    if view.get('damage_scope') == 'local_account':
+        scoped['series'] = [damage_point(point) for point in view.get('series', ())]
+        last = view.get('last_point')
+        scoped['last_point'] = damage_point(last) if last is not None else None
+    else:
+        scoped.update(series=[], last_point=None)
+    scoped['damage_scope'] = 'local_account'
+    return scoped
 
 
 class NativeEnemyObservations:
@@ -827,7 +854,9 @@ class EnemyTelemetry:
             # membership. HP-only or finish-only records cannot invent a seed.
             has_birth = (any(event.get('kind') == 'enemy_enter' for event in events)
                          or isinstance(enemy_entry, Mapping) and bool(enemy_entry.get('events')))
-            if not allow_partial or not (has_birth or self._native_observation is not None):
+            has_local_damage = ((enemy_damage or {}).get('scope') == 'local_account'
+                                and bool(enemy_damage.get('by_uid')))
+            if not allow_partial or not (has_birth or self._native_observation is not None or has_local_damage):
                 return None
         self._native_start = start
         try:
@@ -883,11 +912,13 @@ class EnemyTelemetry:
                     totals.update(total_hp_complete=False, hp_complete=False)
                 if partial:
                     totals.update(total_hp_complete=False, remaining_hp_complete=False,
-                                  hp_complete=False, our_damage_complete=False)
+                                  hp_complete=False)
+                    if (enemy_damage or {}).get('scope') != 'local_account':
+                        totals['our_damage_complete'] = False
         if new_snapshot:
             observed_fields = ('instance_uid', 'eid', 'lifecycle', 'hp', 'last_observed_hp',
                                'peak_observed_hp', 'first_observed_frame', 'last_present_frame',
-                               'last_hp_observed_frame', 'departure_observed_frame')
+                               'last_hp_observed_frame', 'departure_observed_frame', 'native_player_side')
             self._native_observation = {
                 'observed_frame': observed_frame, 'observed_game_time': observed_time,
                 'rows': [{key: row[key] for key in observed_fields if key in row}
@@ -1187,7 +1218,8 @@ class EnemyTelemetry:
             'rows': current,
             'totals': totals,
             'damage_baseline': self._damage_baseline,
-            'damage_scope': 'entered' if enemy_damage is not None else 'legacy',
+            'damage_scope': ('local_account' if (enemy_damage or {}).get('scope') == 'local_account'
+                             else 'entered' if enemy_damage is not None else 'legacy'),
             'series': self.timeline.series(),
             'last_point': self.timeline.last,
         }
@@ -1351,21 +1383,29 @@ class EnemyTelemetry:
                          enemy_damage):
         if enemy_damage is not None:
             by_uid = enemy_damage['by_uid']
-            observed = 0.0
-            complete = enemy_damage['complete'] and entered_coverage
-            counted = set()
-            for row in rows:
-                if row['lifecycle'] not in ENTERED_LIFECYCLES:
-                    continue
-                uid = row['instance_uid']
-                damage = by_uid.get(uid)
-                if uid is None or (damage and damage['eid'] != row['eid']):
-                    complete = False
-                elif damage and uid not in counted:
-                    observed += damage['amount']
-                    counted.add(uid)
+            account_scoped = enemy_damage.get('scope') == 'local_account'
+            complete = enemy_damage['complete']
+            if account_scoped:
+                # Ownership is already resolved in the player's settlement
+                # core. It proves the source, independent of enemy lane or
+                # whether the world roster has been seeded yet.
+                observed = sum(value['amount'] for value in by_uid.values())
+            else:
+                observed = 0.0
+                complete = complete and entered_coverage
+                counted = set()
+                for row in rows:
+                    if row['lifecycle'] not in ENTERED_LIFECYCLES:
+                        continue
+                    uid = row['instance_uid']
+                    damage = by_uid.get(uid)
+                    if uid is None or (damage and damage['eid'] != row['eid']):
+                        complete = False
+                    elif damage and uid not in counted:
+                        observed += damage['amount']
+                        counted.add(uid)
             self.timeline.add(game_time, rows, observed if complete or observed > 0 else None,
-                              planned, replace_current=self._stream_complete is True,
+                              planned, replace_current=account_scoped or self._stream_complete is True,
                               entered_coverage_complete=entered_coverage, damage_complete=complete)
             return
         our_damage = _finite(our_damage, None)

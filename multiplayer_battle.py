@@ -225,6 +225,8 @@ class MultiplayerBattleStatistics:
             self._native_aliases[uid].setdefault(entry.cid, set()).add(source)
         table = {row['index']: row['uid'] for row in context['players']}
         for unknown in context['unknown_memberships']:
+            if classify_unmapped_source(unknown.get('cid')) is not None:
+                continue
             index = unknown.get('player_index', unknown.get('candidate_player_index'))
             uid = table.get(index)
             if uid in self._player_reasons:

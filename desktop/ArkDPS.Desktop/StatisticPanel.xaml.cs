@@ -258,7 +258,7 @@ public partial class StatisticPanel : UserControl
     private bool updating, hold;
     private bool configurationAvailable=true;
     private bool deleteAvailable;
-    private bool referenceStyle, liveToolbar, sideRanking;
+    private bool referenceStyle, liveToolbar, sideRanking, actorRanking;
     private bool sideConfigurationPending;
     private string? appliedHudSkin;
     private HudLayout? hudLayout;
@@ -270,6 +270,15 @@ public partial class StatisticPanel : UserControl
     public string PanelId => view.Get("config").Text("panel_id");
     internal JsonElement View => view;
     public StatisticPanel() { InitializeComponent(); Rows.ItemsSource=items; }
+
+    internal void ConfigureActorRanking()
+    {
+        // Hover/order refreshes call Update directly. Keep this surface policy
+        // here so those refreshes cannot reveal controls hidden by its parent.
+        actorRanking=true;
+        SetConfigurationAvailable(false);
+        Update(view,false);
+    }
 
     internal static bool IsBossScope(JsonElement config) =>
         config.Text("category")=="damage" && config.Bool("boss_only");
@@ -540,13 +549,13 @@ public partial class StatisticPanel : UserControl
         Heading.Text=IsHud ? (scopeLabel.Length>0 ? scopeLabel+" · " : "")+HudTitle(config) : value.Text("title");
         var knownShare=value.Text("share_scope")=="known";
         PanelKind.Text=IsHud ? share.Label : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
-        PanelKind.Visibility=sideRanking||referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
+        PanelKind.Visibility=actorRanking||sideRanking||referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
         PanelKind.ToolTip=IsHud ? share.Description : null;
         Heading.ToolTip=!IsHud ? null : bossScope
             ? string.Join("\n",new[]{Heading.Text,bossReason,share.Description}.Where(text=>text.Length>0))
             : share.Description;
         HudClose.Visibility=IsHud && CloseRequested!=null ? Visibility.Visible : Visibility.Collapsed;
-        Rows.ItemTemplate=(DataTemplate)FindResource(sideRanking ? "SideRow" : IsHud ? "HudRow" : referenceStyle ? "ReferenceRow" : "FullRow");
+        Rows.ItemTemplate=(DataTemplate)FindResource(actorRanking ? "ActorRow" : sideRanking ? "SideRow" : IsHud ? "HudRow" : referenceStyle ? "ReferenceRow" : "FullRow");
         TableHeader.Visibility=sideRanking||IsHud||referenceStyle ? Visibility.Collapsed : Visibility.Visible;
         ReferenceTableHeader.Visibility=referenceStyle ? Visibility.Visible : Visibility.Collapsed;
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
@@ -572,7 +581,7 @@ public partial class StatisticPanel : UserControl
         RateNotice.Visibility=RateNotice.Text.Length>0 ? Visibility.Visible : Visibility.Collapsed;
         RateNoticePanel.Visibility=RateNotice.Visibility;
         RateAction.Content=value.Text("rate_action_label");
-        RateAction.Visibility=!sideRanking && isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
+        RateAction.Visibility=!actorRanking && !sideRanking && isEngagement && action.Length>0 && value.Text("rate_action_label").Length>0 ? Visibility.Visible : Visibility.Collapsed;
         RateHeading.Text=category switch{"healing"=>"HPS","shield"=>"—",_=>"DPS"};
         RankingLabel.ToolTip=category=="shield"
             ? "护盾按实际吸收总量排序。"
@@ -592,7 +601,7 @@ public partial class StatisticPanel : UserControl
             UpdateSideHeadings(config,category,value.Text("title"));
             if(scopeLabel.Length>0) Heading.Text=scopeLabel+" · "+Heading.Text;
         }
-        Actions.Visibility=IsHistory||IsHud||sideRanking ? Visibility.Collapsed : Visibility.Visible;
+        Actions.Visibility=actorRanking||IsHistory||IsHud||sideRanking ? Visibility.Collapsed : Visibility.Visible;
         Selectors.Visibility=IsHud||sideRanking&&PanelId.Length==0 ? Visibility.Collapsed : Visibility.Visible;
         deleteAvailable=canDelete;
         SetConfigurationAvailable(configurationAvailable);
@@ -752,6 +761,7 @@ public partial class StatisticPanel : UserControl
     };
     internal void SetConfigurationAvailable(bool available)
     {
+        available &= !actorRanking;
         bool restoreSelection=configurationAvailable && !available && !updating;
         configurationAvailable=available;
         var config=view.Get("config");

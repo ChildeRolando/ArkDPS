@@ -20,7 +20,7 @@ import time
 import traceback
 from uuid import uuid4
 
-from autochess_context import valid_player_uid
+from autochess_context import native_local_player as _native_local_player, valid_player_uid
 from battle_history import BattleHistory, HistoryResult
 from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
@@ -101,29 +101,6 @@ def team_totals(statistics):
             isinstance(value, (int, float)) and not isinstance(value, bool)
             for value in values) else None)
     return result
-
-
-def _native_local_player(sample):
-    """Select an evidenced account, never a temporary side or display slot."""
-    payload = sample.get('multiplayer')
-    if (sample.get('native_counter_scope') != 'events_only' or not isinstance(payload, dict)
-            or payload.get('schema_version') != 2 or payload.get('available') is not True
-            or payload.get('scope_kind') not in ('defense', 'assist', 'boss')
-            or not valid_player_uid(payload.get('self_player_uid'))
-            or not isinstance(payload.get('scope'), str) or not payload['scope']):
-        return None
-    players = payload.get('players') or ()
-    candidates = [row for row in players if isinstance(row, dict) and row.get('is_local') is True]
-    if len(candidates) != 1:
-        return None
-    player = candidates[0]
-    uid = player.get('player_uid')
-    if (not valid_player_uid(uid) or uid != payload['self_player_uid']
-            or sum(isinstance(row, dict) and row.get('player_uid') == uid
-                                  for row in players) != 1
-            or not isinstance(player.get('statistics'), dict)):
-        return None
-    return player
 
 
 def _event_only_statistics(statistics):

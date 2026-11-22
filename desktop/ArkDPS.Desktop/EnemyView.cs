@@ -466,7 +466,7 @@ public partial class MainWindow
         if(ready || (shownEnemy.ValueKind==JsonValueKind.Undefined && status=="ready" && battleId.Length>0))
         {
             shownEnemy=enemy;
-            EnemyChart.DamageLabel=enemy.Text("damage_scope")=="entered" ? "我方对敌扣血" : "我方有效伤害";
+            EnemyChart.DamageLabel=DamageLabel(enemy.Text("damage_scope"));
             UpdateEnemyRows(enemy.Get("rows"));
             UpdateEnemyChart(enemy.Get("series"));
         }
@@ -477,6 +477,7 @@ public partial class MainWindow
         bool nativeCurrentHp=enemy.Text("scope")=="native_pc_current_hp" ||
             shownEnemy.Text("scope")=="native_pc_current_hp";
         bool observedSubset=shownEnemy.Bool("observed_subset_only");
+        bool localHpUnverified=shownEnemy.Text("hp_scope")=="local_account_unverified";
         var totals=shownEnemy.Get("totals");
         bool totalComplete=EnemyComplete(totals,"total_hp_complete");
         bool remainingComplete=EnemyComplete(totals,"remaining_hp_complete");
@@ -489,8 +490,8 @@ public partial class MainWindow
         EnemyEntered.Text=EnemyReading(totals,"entered_count",entryComplete);
         EnemyTotalHp.Text=EnemyReading(totals,"entered_total_hp",totalComplete);
         EnemyRemaining.Text=EnemyReading(totals,"remaining_hp",remainingComplete);
-        EnemyRemainingScope.Text=nativeCurrentHp ? "当前快照名单" : "仅场上存活实例";
-        EnemyOurDamageLabel.Text=scopedDamage ? "我方对敌扣血" : "我方有效伤害";
+        EnemyRemainingScope.Text=localHpUnverified ? "本家敌人归属未确认" : nativeCurrentHp ? "当前快照名单" : "仅场上存活实例";
+        EnemyOurDamageLabel.Text=DamageLabel(shownEnemy.Text("damage_scope"));
         EnemyOurDamage.Text=last.Bool("our_damage_known")
             ? EnemyReading(last,"our_effective_damage",damageComplete) : "—";
 
@@ -529,7 +530,13 @@ public partial class MainWindow
             JsonValueKind.False => "入场事件覆盖不完整，已入场人数为已确认下限。",
             _ => "已入场人数来自已观察的敌人快照。",
         };
-        if(nativeCurrentHp)
+        if(localHpUnverified)
+        {
+            hints.Add("敌人列表为全场。本家敌人归属缺少证据，入场人数和血量汇总暂缺。");
+            hints.Add("对敌扣血只统计已确认由本家干员造成的 HP 损失。");
+            if(last.Bool("our_damage_known") && !damageComplete) hints.Add("≥ 表示已知下限，曲线用点线标记。");
+        }
+        else if(nativeCurrentHp)
         {
             var plan=enemy.Get("stage_plan");
             if(!blocked && battleId.Length>0 && plan.Get("fixed_count").TryNumber() is double fixedCount && fixedCount>=0)
@@ -586,6 +593,13 @@ public partial class MainWindow
         EnemyChartLegendDamage.Text = EnemyOurDamageLabel.Text + "  " + EnemyOurDamage.Text;
         EnemyChartLegendRemaining.Text = (nativeCurrentHp ? "当前名单 HP  " : "敌方剩余  ") + EnemyRemaining.Text;
     }
+
+    private static string DamageLabel(string scope) => scope switch
+    {
+        "local_account" => "本家对敌扣血",
+        "entered" => "我方对敌扣血",
+        _ => "我方有效伤害",
+    };
 
     private void UpdateEnemyRows(JsonElement data)
     {

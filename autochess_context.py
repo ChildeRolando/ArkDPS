@@ -293,6 +293,30 @@ def _readonly(value):
     return value
 
 
+def native_local_player(sample):
+    """Select the one evidenced account in a committed multiplayer projection."""
+    payload = sample.get('multiplayer')
+    if (sample.get('native_counter_scope') != 'events_only' or not isinstance(payload, dict)
+            or payload.get('schema_version') != 2 or payload.get('available') is not True
+            or payload.get('scope_kind') not in ('defense', 'assist', 'boss')
+            or not valid_player_uid(payload.get('self_player_uid'))
+            or not isinstance(payload.get('scope'), str) or not payload['scope']):
+        return None
+    players = payload.get('players')
+    if not isinstance(players, (list, tuple)):
+        return None
+    local = [row for row in players if isinstance(row, dict) and row.get('is_local') is True]
+    if len(local) != 1:
+        return None
+    player = local[0]
+    uid = player.get('player_uid')
+    if (uid != payload['self_player_uid']
+            or sum(isinstance(row, dict) and row.get('player_uid') == uid for row in players) != 1
+            or not isinstance(player.get('statistics'), dict)):
+        return None
+    return player
+
+
 def native_autochess_scope_id(identity, player_accounts):
     """Encode an already validated root identity and (index, account UID) table.
 

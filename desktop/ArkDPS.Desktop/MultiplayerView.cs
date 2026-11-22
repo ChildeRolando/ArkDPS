@@ -66,7 +66,7 @@ public sealed class MultiplayerView : ScrollViewer
         ranking.VerticalAlignment = VerticalAlignment.Top;
         inspector.VerticalAlignment = VerticalAlignment.Top;
         inspector.CompactReference = true;
-        ranking.SetConfigurationAvailable(false);
+        ranking.ConfigureActorRanking();
         ranking.PinRequested = owner =>
         {
             inspector.Pin(owner, ranking.View);
@@ -185,11 +185,6 @@ public sealed class MultiplayerView : ScrollViewer
         else if (inspector.Owner is { } owner && view.Get("source").Get(owner).ValueKind != JsonValueKind.Object)
             ResetOperator();
         ranking.Update(view, false);
-        ranking.Rows.ItemTemplate = (DataTemplate)ranking.FindResource("ActorRow");
-        ranking.Selectors.Visibility = Visibility.Collapsed;
-        ranking.Actions.Visibility = Visibility.Collapsed;
-        ranking.PanelKind.Visibility = Visibility.Collapsed;
-        ranking.RateAction.Visibility = Visibility.Collapsed;
         if (ranking.Heading.Text.Length == 0) ranking.Heading.Text = "已观察有效伤害 · 接敌 DPS";
         if (ranking.Rows.Items.Count == 0)
         {

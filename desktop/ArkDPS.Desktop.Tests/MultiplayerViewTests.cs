@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -69,6 +70,49 @@ internal static class MultiplayerViewTests
     private static Button PlayerButton(MultiplayerView surface, int slot) => Children(surface).OfType<Button>()
         .Single(button => AutomationProperties.GetAutomationId(button) == "MultiplayerPlayer" + slot);
 
+    private static void StableActorControls()
+    {
+        const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
+        var enter = typeof(StatisticPanel).GetMethod("HoldOrder", Private)!;
+        var leave = typeof(StatisticPanel).GetMethod("ReleaseOrder", Private)!;
+        foreach (string skin in new[] { "lone-trail", "people", "babel" })
+        foreach (var size in new[] { new Size(1380, 760), new Size(440, 360) })
+        {
+            Theme.Apply(skin);
+            var surface = new MultiplayerView();
+            surface.Update(Snapshot());
+            var panel = surface.Ranking;
+            void Arrange()
+            {
+                surface.Measure(size);
+                surface.Arrange(new Rect(size));
+                surface.UpdateLayout();
+            }
+            Arrange();
+            var visibility = panel.Selectors.Visibility;
+            var height = panel.Selectors.DesiredSize.Height;
+            for (int cycle = 0; cycle < 3; cycle++)
+            {
+                // Invoke the existing handlers without dispatching mouse input.
+                enter.Invoke(panel, new object?[] { panel.Rows, null });
+                leave.Invoke(panel, new object?[] { panel.Rows, null });
+                Arrange();
+                Check(skin + size.Width + " actor selector geometry is stable after leaving the bars",
+                    panel.Selectors.Visibility == visibility && panel.Selectors.DesiredSize.Height == height);
+                Check(skin + size.Width + " actor controls remain visibly read only",
+                    panel.Selectors.Visibility == Visibility.Visible && !panel.Category.IsEnabled && !panel.Rate.IsEnabled);
+                Check(skin + size.Width + " internal refresh preserves actor template and hides live actions",
+                    panel.Rows.ItemTemplate == panel.FindResource("ActorRow") && panel.Actions.Visibility == Visibility.Collapsed &&
+                    panel.PanelKind.Visibility == Visibility.Collapsed && panel.RateAction.Visibility == Visibility.Collapsed);
+                surface.Update(Snapshot());
+                Arrange();
+                Check(skin + size.Width + " worker refresh does not toggle the actor selector row",
+                    panel.Selectors.Visibility == visibility && panel.Selectors.DesiredSize.Height == height &&
+                    panel.View.Get("entries").Items().Single().Text("owner_id") == "char_same@101");
+            }
+        }
+    }
+
     private static void AssistHeadings()
     {
         const string Label = "当前协防战场";
@@ -112,6 +156,7 @@ internal static class MultiplayerViewTests
             app.InitializeComponent(); // Resource dictionary only. No Run, Show, target access or input.
         }
         Theme.Apply("lone-trail");
+        StableActorControls();
         var surface = new MultiplayerView();
         string empty = Text(surface);
         Check("empty explains unverified native phase and observation", empty.Contains("卫戍协议") && empty.Contains("事件观察") && empty.Contains("阶段未知"));
@@ -125,7 +170,7 @@ internal static class MultiplayerViewTests
         Check("observed number retains Python display and label", Text(surface).Contains("已观察结算伤害") &&
             Text(surface).Contains("worker-111") && Text(surface).Contains("worker-222"));
         Check("selected player view is worker-owned", surface.Ranking.View.Get("entries").Items().Single().Text("owner_id") == "char_same@101");
-        Check("read only player ranking has no live actions", surface.Ranking.Selectors.Visibility == Visibility.Collapsed &&
+        Check("read only player ranking keeps stable visible selectors without live actions", surface.Ranking.Selectors.Visibility == Visibility.Visible &&
             surface.Ranking.Actions.Visibility == Visibility.Collapsed && !surface.Ranking.Category.IsEnabled && surface.Ranking.Command is null);
         surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
         Check("operator pin preserves CID plus UID owner", surface.DetailInspector.Owner == "char_same@101" && Text(surface).Contains("战斗 UID 101"));

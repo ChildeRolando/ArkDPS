@@ -3,10 +3,12 @@ import math
 import time
 from dataclasses import asdict
 
+from autochess_context import native_local_player
 from battle_history import BattleRecord, HistoryError
 
 from collector import (Collector, SampleUnavailable, BattleChanged, ProcessChanged,
                        UnsupportedVersion, collector_process)
+from enemy_telemetry import defense_enemy_projection
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
 from event_probe import EventProbe
@@ -17,6 +19,26 @@ DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
 WAITING_GAME_INIT = 'waiting_game_init'
 _BOOT_POLL_PERIOD = 1.0
 _LIFECYCLE_LOCATE_RETRY = 5.0
+
+
+def _local_defense_enemy_damage(sample, scope):
+    unknown = dict(scope='local_account', complete=False, by_uid={})
+    if scope.get('phase') != 4:
+        return unknown
+    player = native_local_player(sample)
+    if player is None:
+        return unknown
+    multiplayer = sample['multiplayer']
+    statistics = player['statistics']
+    if (multiplayer.get('scope_kind') != 'defense' or multiplayer.get('context_identity') != scope
+            or statistics.get('session') != f"{multiplayer['scope']}:{player['player_uid']}"
+            or statistics.get('game_time') != sample.get('game_time')):
+        return unknown
+    damage = statistics.get('enemy_damage')
+    if not isinstance(damage, dict):
+        return unknown
+    return dict(damage, scope='local_account', complete=(damage.get('complete') is True
+                                                         and player.get('coverage_complete') is True))
 
 
 class CollectionSession:
@@ -378,6 +400,10 @@ class CollectionSession:
 
     def _attach_enemy(self, sample):
         """Project enemy lifecycle and HP damage at the same committed watermark."""
+        events_only = sample.get('native_counter_scope') == 'events_only'
+        event_scope = sample.get('enemy_world_scope') or {}
+        context_phase = (sample.get('autochess_context') or {}).get('phase')
+        defense = events_only and event_scope.get('phase', context_phase) == 4
         session = sample.get('session')
         if session is not None and session != self._enemy_session:
             self._enemy_session = session
@@ -393,7 +419,7 @@ class CollectionSession:
                       if isinstance(value, dict)
                       and isinstance(value.get('damage'), (int, float))]
         effective = [value.get('effective_damage') for value in known_rows]
-        if sample.get('native_counter_scope') == 'events_only':
+        if events_only:
             # The shared world supplies target-scoped HP facts. Empty native
             # player counters cannot establish a zero team-damage baseline.
             our_damage = None
@@ -415,6 +441,8 @@ class CollectionSession:
         frame_bound = getattr(self.collector, 'enemy_frame_bound', False)
         event_data = {key: stats[key] for key in ('enemy_entry', 'enemy_phases', 'enemy_state', 'enemy_damage')
                       if key in stats}
+        if defense:
+            event_data['enemy_damage'] = _local_defense_enemy_damage(sample, event_scope)
         state = event_data.get('enemy_state')
         if (frame_bound or poll_due or (state is not None and state['complete'])
                 or event_data != self._enemy_event_data):
@@ -422,10 +450,10 @@ class CollectionSession:
                 self._enemy_last_poll = now
             try:
                 context = {'frame': sample.get('frame')} if frame_bound or state is not None else {}
-                if sample.get('native_counter_scope') == 'events_only':
+                if events_only:
                     # A terminal END context may already be outside the combat
                     # scope. Use the committed world prefix's own identity.
-                    context.update(allow_partial=True, event_scope=sample.get('enemy_world_scope') or {})
+                    context.update(allow_partial=True, event_scope=event_scope)
                 self._enemy_payload = read(game_time=sample.get('game_time'), our_damage=our_damage,
                                             **event_data, **context)
                 self._enemy_event_data = event_data
@@ -436,6 +464,9 @@ class CollectionSession:
         enemy = self._enemy_payload or {
             'status': 'starting', 'error': None, 'ready': False,
             'rows': [], 'totals': {}, 'series': []}
+        if defense:
+            sample['enemy'] = defense_enemy_projection(enemy)
+            return
         other_counters = (stats.get('non_team_output') or {}).values()
         other_damage = sum(amount for amount in (row.get('damage') for row in other_counters)
                            if type(amount) in (int, float) and math.isfinite(amount) and amount > 0)

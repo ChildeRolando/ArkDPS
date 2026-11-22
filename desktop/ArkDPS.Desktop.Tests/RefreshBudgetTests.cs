@@ -87,6 +87,18 @@ internal static class RefreshBudgetTests
             Check("partial committed enemy facts are identified without assigning missing damage a zero",
                 window.EnemyStatusText.Text == "部分敌情 · 已观测" && window.EnemyTotalHp.Text == "≥ 100" &&
                 window.EnemyOurDamage.Text == "—");
+            partial["enemy"] = new JsonObject
+            {
+                ["status"] = "ready", ["hp_scope"] = "local_account_unverified", ["rows_scope"] = "battlefield",
+                ["damage_scope"] = "local_account", ["enemy_state_complete"] = true,
+                ["rows"] = new JsonArray(), ["series"] = new JsonArray(), ["totals"] = new JsonObject(),
+                ["last_point"] = new JsonObject { ["our_effective_damage"] = 20,
+                    ["our_damage_known"] = true, ["our_damage_complete"] = true },
+            };
+            window.ApplyState(JsonSerializer.SerializeToElement(partial));
+            Check("defense shows local damage and leaves unverified enemy HP scope blank",
+                window.EnemyTotalHp.Text == "—" && window.EnemyOurDamage.Text == "20" &&
+                window.EnemyOurDamageLabel.Text == "本家对敌扣血" && window.EnemyStatusHint.Text.Contains("敌人列表为全场"));
             Check("refresh checks create no HWND, worker or tray",
                 new WindowInteropHelper(window).Handle == IntPtr.Zero && type.GetField("bridge", Private)!.GetValue(window) is null &&
                 type.GetField("tray", Private)!.GetValue(window) is null);

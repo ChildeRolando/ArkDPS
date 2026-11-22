@@ -106,16 +106,49 @@ def test_committed_world_reaches_enemy_hp_entry_and_damage_without_native_counte
     session._attach_enemy(first)
     battle.advance(1)
     battle.advance(1, [world_event(battle, 1), damage(battle, 2),
-        world_event(battle, 3, 'enemy_hp', hp_before=100, hp_after=80, enemy_max_hp=100)])
+        damage(battle, 3, index=1, amount=35),
+        world_event(battle, 4, 'enemy_hp', hp_before=100, hp_after=45, enemy_max_hp=100)])
     sample = published(battle)
     session._attach_enemy(sample)
     enemy = sample['enemy']
     assert inputs == [None, None]  # No CID native counter or fabricated empty-team zero.
     assert enemy['enemy_state_complete'] is True
-    assert enemy['totals']['entered_total_hp'] == 100
-    assert enemy['rows'][0]['hp'] == 80
+    assert sample['statistics']['enemy_damage']['by_uid'][UID]['amount'] == 55
+    assert enemy['rows'][0]['hp'] == 45  # World observations retain their own scope.
+    assert enemy['rows_scope'] == 'battlefield'
+    assert enemy['hp_scope'] == 'local_account_unverified'
+    assert enemy['totals'] == {} and 'entered_total_hp' not in enemy['last_point']
+    assert all('remaining_hp' not in point for point in enemy['series'])
+    assert enemy['damage_scope'] == 'local_account'
     assert enemy['last_point']['our_effective_damage'] == 20
-    assert enemy['last_point']['our_damage_complete'] is True
+    # This collector fixture starts with nonzero native totals. Its player
+    # event ledger is valid for observed damage, with an unproved prefix.
+    assert enemy['last_point']['our_damage_complete'] is False
+
+
+def test_defense_enemy_damage_requires_current_evidenced_self_account(tmp_path):
+    battle = world_battle(tmp_path)
+    published(battle)
+    battle.advance(1)
+    battle.advance(1, [world_event(battle, 1), damage(battle, 2)])
+    accepted = published(battle)
+    observed = []
+
+    def read_enemies(*, enemy_damage, **_):
+        observed.append(enemy_damage)
+        return {'status': 'starting'}
+
+    session = CollectionSession(None, None, collector=SimpleNamespace(
+        enemy_frame_bound=True, read_enemies=read_enemies))
+    old_round = deepcopy(accepted)
+    old_round['multiplayer']['context_identity']['round'] -= 1
+    ambiguous = deepcopy(accepted)
+    ambiguous['multiplayer']['self_player_uid'] = None
+    for sample in (old_round, ambiguous, accepted):
+        session._attach_enemy(sample)
+    unknown = dict(scope='local_account', complete=False, by_uid={})
+    assert observed[:2] == [unknown, unknown]
+    assert observed[2]['by_uid'][UID]['amount'] == 20
 
 
 @pytest.mark.parametrize('kind', ['enemy_enter', 'enemy_hp', 'damage_settlement'])
