@@ -39,9 +39,9 @@ def accepted_assist(*, phase=5, self_hit=False):
     return battle
 
 
-def state_for(tmp_path, sample):
+def state_for(tmp_path, sample, *, multiplayer_enabled=True):
     state = DesktopState(tmp_path)
-    state.layout = replace(state.layout, panels=(
+    state.layout = replace(state.layout, multiplayer_enabled=multiplayer_enabled, panels=(
         PanelConfig(), PanelConfig(panel_id='effective', effective_only=True)))
     state.accept('sample', sample)
     return state

@@ -171,7 +171,7 @@
        <TextBlock x:Name="EnemyNavLabel" Text="敌情" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
-     <Button x:Name="MultiplayerNav" Tag="multiplayer" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="卫戍四家" AutomationProperties.Name="卫戍四家">
+     <Button x:Name="MultiplayerNav" Tag="multiplayer" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="卫戍四家" AutomationProperties.Name="卫戍四家" Visibility="Collapsed">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
        <Path Data="M 1 1 H 10 V 10 H 1 Z M 15 1 H 24 V 10 H 15 Z M 1 15 H 10 V 24 H 1 Z M 15 15 H 24 V 24 H 15 Z"
              Width="25" Height="24" Stretch="Fill" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.4"/>
@@ -454,6 +454,9 @@
           <ComboBoxItem Content="万 / 亿" Tag="chinese"/>
          </ComboBox>
         </StackPanel>
+        <CheckBox x:Name="MultiplayerEnabledSetting" Content="显示卫戍四家面板" IsChecked="False"
+                  Click="MultiplayerEnabledChanged" Margin="0,10,0,0" AutomationProperties.Name="显示卫戍四家面板"
+                  ToolTip="开启后显示四家防御数据；关闭不影响普通实时统计。"/>
         <WrapPanel Margin="0,8,0,0">
          <TextBlock Text="HUD 布局" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
          <ComboBox x:Name="HudLayoutTarget" AutomationProperties.Name="HUD 源面板" DisplayMemberPath="Label" Width="186"/>

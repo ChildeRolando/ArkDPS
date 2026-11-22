@@ -61,6 +61,8 @@ public partial class MainWindow : Window
     private bool adbPathDetected,serialDetected,fillingDetectedConnection;
     private (string? AdbPath,string? Serial)? workerConnectionTarget;
     private bool syncingHudFooter;
+    private bool multiplayerSettingPending;
+    private bool MultiplayerEnabled=>State.Get("layout").Bool("multiplayer_enabled");
     private object? normalGeometry;
     private bool closingRequested;
     private DispatcherOperation? workAreaLayout;
@@ -315,6 +317,9 @@ public partial class MainWindow : Window
             OperatorTrend.RefreshTheme();
         }
         Skin.SelectedIndex=Theme.IndexOf(theme);
+        MultiplayerEnabledSetting.IsChecked=layout.Bool("multiplayer_enabled");
+        MultiplayerNav.Visibility=MultiplayerEnabled ? Visibility.Visible : Visibility.Collapsed;
+        if(!MultiplayerEnabled && route=="multiplayer") _=Navigate("live");
         EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         bool previousBattle=ShowingPreviousBattle;
@@ -330,7 +335,7 @@ public partial class MainWindow : Window
             panelLayoutChanged = true;
         }
         UpdateHistory();
-        MultiplayerPage.Update(state.Get("multiplayer"));
+        MultiplayerPage.Update(MultiplayerEnabled ? state.Get("multiplayer") : default);
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
@@ -488,6 +493,7 @@ public partial class MainWindow : Window
     }
     private void RefreshLiveAvailability()
     {
+        MultiplayerEnabledSetting.IsEnabled=!multiplayerSettingPending && !workerUnavailable && !closingRequested && !quitting && !updateShutdownPreparing;
         bool available=!workerUnavailable && !ShowingPreviousBattle;
         AddPanelButton.IsEnabled=available;
         foreach(var panel in Panels.Values) panel.SetConfigurationAvailable(available);
@@ -1017,6 +1023,7 @@ public partial class MainWindow : Window
     private async void Navigate(object sender,RoutedEventArgs e)=>await Navigate((string)((Button)sender).Tag);
     internal async Task Navigate(string page)
     {
+        if(page=="multiplayer" && !MultiplayerEnabled) return;
         route=page;LivePage.Visibility=page=="live" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility=page=="history" ? Visibility.Visible : Visibility.Collapsed;
         EnemyPageScroll.Visibility=page=="enemies" ? Visibility.Visible : Visibility.Collapsed;
@@ -1193,6 +1200,20 @@ public partial class MainWindow : Window
     {
         if (applying || !initialized || NumberUnits.SelectedItem is not ComboBoxItem item) return;
         await Command("number_units", new() { ["number_units"] = item.Tag });
+    }
+    private async void MultiplayerEnabledChanged(object sender,RoutedEventArgs e)
+    {
+        if(applying || !initialized || multiplayerSettingPending) return;
+        bool enabled=MultiplayerEnabledSetting.IsChecked==true;
+        multiplayerSettingPending=true;
+        RefreshLiveAvailability();
+        try { await Command("multiplayer_enabled",new(){["enabled"]=enabled}); }
+        finally
+        {
+            multiplayerSettingPending=false;
+            MultiplayerEnabledSetting.IsChecked=MultiplayerEnabled;
+            RefreshLiveAvailability();
+        }
     }
     private void UpdateHistory()
     {

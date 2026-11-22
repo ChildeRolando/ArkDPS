@@ -11,6 +11,7 @@
   "version": 3,
   "theme": "lone-trail",
   "event_observation": true,
+  "multiplayer_enabled": false,
   "side_mode": false,
   "gui": {"x": 60, "y": 70, "width": 1000, "height": 760},
   "panels": [
@@ -33,6 +34,7 @@
 - 首次 GUI 默认尺寸也按当前工作区夹取，避免小屏幕下操作区落到屏外。
 - 首次启动只创建“伤害 / 总伤 / DPS”面板，且不打开 HUD。
 - `side_mode` 保存主窗口的侧边吸附开关，旧布局默认关闭。侧边窗口的位置和高度跟随 MuMu，`gui` 继续保存完整主面板的物理矩形。
+- `multiplayer_enabled` 保存「显示卫戍四家面板」开关，首次使用及旧布局默认关闭。设置即刻生效，本家防御回看和协防统计继续显示在主面板。
 - HUD 透明度可从 0%（不透明）调到 100%（完全透明）。布局中的 `opacity` 保存不透明度，范围 0–1。坐标绝对值上限 100000，尺寸上限 20000。
 
 ## Tk 历史实现与验收（已封存，不作为 WPF 候选证据）

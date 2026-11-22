@@ -58,6 +58,7 @@ BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
     'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
+    'multiplayer_enabled',
 ))
 
 
@@ -770,7 +771,7 @@ class DesktopState:
         if self.selected is None:
             self._history_view_key = self._history_view = None
             return None
-        key = self.selected, self.history_config, self.layout.number_units
+        key = self.selected, self.history_config, self.layout.number_units, self.layout.multiplayer_enabled
         if key != self._history_view_key:
             event_status = self.selected.event_status
             if self.selected.metadata.get('platform') == 'native_pc' and event_status == 'unavailable':
@@ -789,7 +790,8 @@ class DesktopState:
                 view = self.view(self.history_config, record_statistics(self.selected, for_panel=True), event=event)
             self._history_view = dict(
                 record_display(self.selected),
-                view=view, multiplayer=self.multiplayer_view(multiplayer, event=event),
+                view=view, multiplayer=(self.multiplayer_view(multiplayer, event=event)
+                                        if self.layout.multiplayer_enabled else None),
                 event_status=self.selected.event_status, event_error=event.error)
             self._history_view_key = key
         return self._history_view
@@ -912,7 +914,8 @@ class DesktopState:
                                 side=local_player.get('player_side'), player_uid=local_player.get('player_uid'),
                                 event=live_event) if local_player else self.view(p, stats, None, live_event)
                             for p in self.layout.panels],
-                    multiplayer=self.multiplayer_view(multiplayer, event=live_event),
+                    multiplayer=(self.multiplayer_view(multiplayer, event=live_event)
+                                 if self.layout.multiplayer_enabled else None),
                     live_analysis=analysis[0],
                     boss_live_analysis=analysis[1],
                     boss_effective_live_analysis=analysis[2],
@@ -956,6 +959,12 @@ class DesktopState:
             self.persist(replace(self.layout, theme=cmd['theme']))
         elif op == 'number_units':
             self.persist(replace(self.layout, number_units=cmd['number_units']))
+        elif op == 'multiplayer_enabled':
+            enabled = cmd.get('enabled')
+            if type(enabled) is not bool:
+                raise ValueError('卫戍四家开关必须是布尔值')
+            if enabled != self.layout.multiplayer_enabled:
+                self.persist(replace(self.layout, multiplayer_enabled=enabled))
         elif op == 'hud_style':
             panel_id = cmd['panel_id']
             if panel_id not in {p.panel_id for p in self.layout.panels}:

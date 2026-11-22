@@ -1,5 +1,6 @@
 """Bound reply admission without dropping accepted samples or archive commits."""
 from copy import deepcopy
+from dataclasses import replace
 import io
 import json
 import queue
@@ -276,6 +277,7 @@ def test_real_native_end8_archive_notifies_committed_record_once_and_keeps_prepa
     battle.active = False
     assert battle.poll().kind == 'end'
     state = DesktopState(tmp_path)
+    state.layout = replace(state.layout, multiplayer_enabled=True)
     notices, legacy = [], []
     session = CollectionSession(None, None, collector=SimpleNamespace(), history=state.history,
         on_history_result=notices.append, on_history=lambda: legacy.append(True))

@@ -4,6 +4,7 @@ All clocks, callbacks and records are local fixtures; these tests acquire no
 device, open no window and do not replace producer quality declarations.
 """
 from copy import deepcopy
+from dataclasses import replace
 import time
 from types import SimpleNamespace
 
@@ -350,6 +351,7 @@ def test_same_player_snapshot_roundtrips_history_and_uses_shared_desktop_view(tm
     battle = populated_battle()
     live_sample = battle.runtime.display_sample()
     state = DesktopState(tmp_path)
+    state.layout = replace(state.layout, multiplayer_enabled=True)
     calls = []
     render = state.view
 
@@ -389,6 +391,7 @@ def test_same_player_snapshot_roundtrips_history_and_uses_shared_desktop_view(tm
             for p in history['multiplayer']['players']] == [
                 [(e['owner_id'], e['value']) for e in p['view']['entries']] for p in live['players']]
     restarted = DesktopState(tmp_path)
+    restarted.layout = replace(restarted.layout, multiplayer_enabled=True)
     reopened = restarted.snapshot()['history_selected']['multiplayer']
     assert reopened == history['multiplayer']
     assert not state.history.list_recent().diagnostics

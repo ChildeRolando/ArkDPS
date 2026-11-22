@@ -129,6 +129,7 @@ internal static class Program
         ScreenshotCategoryTests.Run();
         HistorySourceLabelTests.Run();
         MultiplayerViewTests.Run();
+        MultiplayerSettingsTests.Run();
         NativePcReadinessTests.Run();
         SamplingRejectionTests.Run();
         RefreshBudgetTests.Run();

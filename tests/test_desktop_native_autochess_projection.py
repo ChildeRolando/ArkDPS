@@ -11,6 +11,13 @@ from test_multiplayer_integration import CID
 from test_native_pc_autochess_acquisition import ScopedNativeBattle
 
 
+def four_player_state(directory):
+    """These renderer-contract cases explicitly enable the optional detail view."""
+    state = DesktopState(directory)
+    state.layout = replace(state.layout, multiplayer_enabled=True)
+    return state
+
+
 def populated(*, phase=4):
     battle = ScopedNativeBattle()
     battle.native_phase = phase
@@ -43,7 +50,7 @@ def test_accepted_four_account_views_and_local_panels_share_the_existing_rendere
     sample = battle.runtime.display_sample()
     assert sample['multiplayer']['self_player_uid'] == '910000003'
     original = deepcopy(sample)
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.layout = replace(state.layout, panels=(PanelConfig(), PanelConfig(panel_id='effective', effective_only=True)))
     state.accept('sample', sample)
     snapshot = state.snapshot()
@@ -79,7 +86,7 @@ def test_accepted_four_account_views_and_local_panels_share_the_existing_rendere
 def test_known_identity_without_events_stays_unknown_even_in_effective_footer(tmp_path):
     battle = ScopedNativeBattle()
     battle.poll()
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.layout = replace(state.layout, panels=(PanelConfig(effective_only=True),))
     state.accept('sample', battle.runtime.display_sample())
     snapshot = state.snapshot()
@@ -93,7 +100,7 @@ def test_known_identity_without_events_stays_unknown_even_in_effective_footer(tm
 @pytest.mark.parametrize('schema_version', [1, 2], ids=['legacy', 'native'])
 @pytest.mark.parametrize('historical', [False, True], ids=['live', 'history'])
 def test_wire_omits_only_raw_player_ledgers_and_keeps_full_rendered_views(tmp_path, schema_version, historical):
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     if historical:
         record, path = saved_native_record(tmp_path, end_phase=True)
         original_bytes = path.read_bytes()
@@ -160,7 +167,7 @@ def test_events_only_never_falls_back_to_cid_counters_or_another_player(tmp_path
     else:
         players[2]['player_uid'] = 'side3'
     sample['statistics']['rows'] = {CID: dict(damage=90000, healing=900, counter_snapshot_complete=True)}
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     snapshot = state.snapshot()
     assert snapshot['panels'][0]['entries'] == [] and snapshot['panels'][0]['source'] == {}
@@ -175,7 +182,7 @@ def test_slot_and_help_side_changes_never_choose_the_local_identity(tmp_path):
     players[0]['slot'], players[2]['slot'] = players[2]['slot'], players[0]['slot']
     for player in players:
         player['player_side'] = 1
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     snapshot = state.snapshot()
     assert [player['slot'] for player in snapshot['multiplayer']['players']] == [1, 2, 3, 4]
@@ -191,7 +198,7 @@ def test_slot_and_help_side_changes_never_choose_the_local_identity(tmp_path):
 def test_a_known_account_with_no_single_temporary_side_is_still_rendered(tmp_path):
     sample = deepcopy(populated().runtime.display_sample())
     sample['multiplayer']['players'][2]['player_side'] = None
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     snapshot = state.snapshot()
     player = snapshot['multiplayer']['players'][2]
@@ -203,7 +210,7 @@ def test_a_known_account_with_no_single_temporary_side_is_still_rendered(tmp_pat
 def test_noncombat_scope_does_not_project_previous_local_amounts(tmp_path, kind):
     sample = deepcopy(populated().runtime.display_sample())
     sample['multiplayer']['scope_kind'] = kind
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     snapshot = state.snapshot()
     assert snapshot['multiplayer']['scope_kind'] == kind
@@ -214,7 +221,7 @@ def test_noncombat_scope_does_not_project_previous_local_amounts(tmp_path, kind)
 def test_genuine_preparing_clears_only_live_four_player_view_and_keeps_history(tmp_path):
     battle = populated()
     sample = battle.runtime.display_sample()
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     battle.native_phase, battle.autochess_epoch = 5, 2
     battle.advance(3)
@@ -236,7 +243,7 @@ def test_genuine_preparing_clears_only_live_four_player_view_and_keeps_history(t
 
 def test_actual_phase_switch_resets_local_trend_and_uses_new_scoped_events(tmp_path):
     battle = populated()
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', battle.runtime.display_sample())
     previous_id = state.snapshot()['live_analysis']['battle_id']
     battle.native_phase, battle.autochess_epoch = 5, 2
@@ -259,7 +266,7 @@ def test_unknown_account_slot_cannot_keep_an_old_players_values(tmp_path):
     payload = deepcopy(populated().runtime.display_sample()['multiplayer'])
     payload['players'][0]['player_uid'] = None
     payload['players'][0]['player_side'] = 3
-    result = DesktopState(tmp_path).multiplayer_view(payload, event=EventAvailability('recording'))
+    result = four_player_state(tmp_path).multiplayer_view(payload, event=EventAvailability('recording'))
     player = result['players'][0]
     assert player['slot'] == 1 and player['player_uid'] is None
     assert 'statistics' not in player and 'actor_ledgers' not in player
@@ -270,7 +277,7 @@ def test_unknown_account_slot_cannot_keep_an_old_players_values(tmp_path):
 def test_unavailable_v2_payload_cannot_retain_old_values_in_its_views(tmp_path):
     payload = deepcopy(populated().runtime.display_sample()['multiplayer'])
     payload['available'] = False
-    result = DesktopState(tmp_path).multiplayer_view(payload)
+    result = four_player_state(tmp_path).multiplayer_view(payload)
     for player in result['players']:
         assert player['display']['damage'] == '未知' and player['observed_damage'] is None
         assert 'statistics' not in player and 'actor_ledgers' not in player
@@ -280,7 +287,7 @@ def test_unavailable_v2_payload_cannot_retain_old_values_in_its_views(tmp_path):
 
 def test_self_account_switch_with_same_battle_clock_resets_display_trend_identity(tmp_path):
     sample = deepcopy(populated().runtime.display_sample())
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     previous = deepcopy(state.snapshot()['live_analysis'])
     for player in sample['multiplayer']['players']:
@@ -323,7 +330,7 @@ def test_native_self_identity_contract_cannot_be_replaced_by_local_flags(tmp_pat
         payload['players'][0]['player_uid'] = payload['self_player_uid']
     sample['statistics']['rows'] = {CID: dict(damage=90000, healing=900, counter_snapshot_complete=True)}
     original = deepcopy(sample)
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     snapshot = state.snapshot()
     assert snapshot['panels'][0]['entries'] == [] and snapshot['panels'][0]['source'] == {}
@@ -342,7 +349,7 @@ def test_damage_empty_gate_keeps_other_family_evidence_in_the_source(tmp_path):
     row = next(iter(local['statistics']['rows'].values()))
     row['shield_absorbed'] = 25
     row['observed_healing'] = 40
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.layout = replace(state.layout, panels=(PanelConfig(category=Category.SHIELD),))
     state.accept('sample', sample)
     view, = state.snapshot()['panels']
@@ -358,7 +365,7 @@ def test_a_real_zero_settlement_is_distinct_from_an_empty_baseline(tmp_path):
     battle.advance(2, [battle.scoped_hit(1, 3, 0)])
     battle.poll()
     sample = battle.runtime.display_sample()
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.layout = replace(state.layout, panels=(PanelConfig(), PanelConfig(panel_id='effective', effective_only=True)))
     state.accept('sample', sample)
     snapshot = state.snapshot()
@@ -374,7 +381,7 @@ def test_incomplete_event_lane_preserves_observed_subset_without_certifying_tota
     row = next(iter(local['statistics']['rows'].values()))
     row['settled_damage'].update(observed_damage_complete=False,
                                 observed_recent_damage_complete=False, reason='区间存在缺口')
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.accept('sample', sample)
     snapshot = state.snapshot()
     panel, = snapshot['panels']
@@ -391,7 +398,7 @@ def test_event_only_recent_value_needs_its_real_bounded_window(tmp_path):
     local = next(player for player in sample['multiplayer']['players'] if player['is_local'])
     row = next(iter(local['statistics']['rows'].values()))
     row['settled_damage']['observed_recent_damage_window'] = [2, 2]
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.layout = replace(state.layout, panels=(PanelConfig(ranking=Ranking.DPS),))
     state.accept('sample', sample)
     snapshot = state.snapshot()
@@ -404,7 +411,7 @@ def test_event_lane_mapping_requires_explicit_display_container_and_preserves_na
     sample = populated().runtime.display_sample()
     local = next(player for player in sample['multiplayer']['players'] if player['is_local'])
     raw = local['statistics']
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     ordinary = state.view(PanelConfig(), raw, event=EventAvailability('recording'))
     assert ordinary['entries'] == [] and ordinary['footer_total'] is None
     state.accept('sample', sample)
@@ -427,7 +434,7 @@ def test_saved_native_history_renders_only_verified_self_without_changing_record
     if end_phase:
         assert record.last_sample['autochess_context']['phase'] == 8
         assert record.last_sample['multiplayer']['native_phase'] == 4
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.command(dict(version=1, op='history_select', battle_id=record.battle_id))
     state.history_config = PanelConfig(panel_id='history', effective_only=effective)
     selected = state.snapshot()['history_selected']
@@ -475,7 +482,7 @@ def test_native_history_consumer_does_not_infer_self_from_bad_late_metadata(tmp_
     stored_sample = BattleRecord.last_sample
     monkeypatch.setattr(BattleRecord, 'last_sample', property(
         lambda value: deepcopy(late_sample) if value is record else stored_sample.fget(value)))
-    state = DesktopState(tmp_path)
+    state = four_player_state(tmp_path)
     state.selected = record
     selected = state.snapshot()['history_selected']
     assert selected['view']['entries'] == [] and selected['view']['source'] == {}

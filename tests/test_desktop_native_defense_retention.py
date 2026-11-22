@@ -24,10 +24,10 @@ def digest(value):
                                      allow_nan=False).encode('utf-8')).hexdigest()
 
 
-def run_chain(tmp_path, monkeypatch, actions):
+def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True):
     """Run real CollectionSession.read + worker FIFO from one owned PC source."""
     state = bridge.DesktopState(tmp_path / 'desktop')
-    state.layout = replace(state.layout, panels=(PanelConfig(),
+    state.layout = replace(state.layout, multiplayer_enabled=multiplayer_enabled, panels=(PanelConfig(),
         PanelConfig(panel_id='effective', effective_only=True)))
     battle = leading_zero_battle(tmp_path / 'raw')
     worker = bridge.CollectionWorker(state)
