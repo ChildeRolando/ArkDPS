@@ -216,19 +216,6 @@ class MultiplayerBattleStatistics:
             events=0, first_sequence=event['sequence'], last_sequence=event['sequence']))
         item['events'] += 1
         item['last_sequence'] = event['sequence']
-        # A missing UID cannot assign an event to a CID peer. It also cannot
-        # certify that peer's skill or engagement coverage. Translate only
-        # uncertainty to each plausible actor; never translate the amount.
-        for player in self._players.values():
-            for owner, actor in player.actors.items():
-                if actor.cid != event.get('source'):
-                    continue
-                player.statistics.observe_unresolved_source(event['kind'], owner,
-                    event.get('amount'), event.get('target_instance'), damage_type=event.get('damage_type'))
-                if event['kind'] in ('skill_start', 'skill_end'):
-                    proof = event.get('proof') or {}
-                    player.statistics.mark_settlement_skill_unassigned(owner,
-                        proof.get('method') if isinstance(proof, dict) else None, event.get('skill_reason'))
         if event.get('kind') == 'damage_settlement':
             self._reasons.add('存在来源UID未确认的结算')
             for player in self._players.values():
@@ -395,6 +382,7 @@ class MultiplayerBattleStatistics:
                     if event.get('kind') in ('skill_start', 'skill_end') and isinstance(proof, dict):
                         payload['skill_method'] = proof.get('method')
                     identity = ('unknown', None, None)
+                    unresolved_source_keys = ()
                     if state == 'owned':
                         if side == player_side:
                             owner, source = _key(actor), _key(entry)
@@ -408,7 +396,13 @@ class MultiplayerBattleStatistics:
                         identity = ('foreign', None, None)
                     elif state not in ('global', 'elemental'):
                         payload['unresolved_source'] = True
-                    player.stream.accept(session=player.statistics.session,
+                        # These verified actors are candidates for uncertainty,
+                        # never recipients of this event's amount or window.
+                        # The receiver decides whether native cast evidence is
+                        # an ignorable passive observation before marking them.
+                        unresolved_source_keys = tuple(owner for owner, candidate in player.actors.items()
+                            if candidate.cid == event.get('source'))
+                    player.stream.accept(None, unresolved_source_keys, session=player.statistics.session,
                         settlement_identity=identity, replay_record=event, **payload)
                 if elemental_before is not None:
                     resolved = any(sum(m.hits for m in p.statistics.settled.values()) > elemental_before[s][0]

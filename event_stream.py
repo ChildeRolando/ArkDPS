@@ -99,7 +99,16 @@ class EventStream:
         self.game_time = game_time
         self.received[sequence] = deepcopy(replay_record) if replay_record is not None else payload
 
-    def accept(self, verified_skill_end_owner=None, /, *, session, sequence, frame,
+    def _observe_unresolved_source(self, source, source_keys, kind, amount, target_instance, *, damage_type):
+        for key in source_keys or (source,):
+            self.statistics.observe_unresolved_source(kind, key, amount, target_instance,
+                                                      damage_type=damage_type)
+
+    def _mark_settlement_skill_unassigned(self, source, source_keys, method, reason):
+        for key in source_keys or (source,):
+            self.statistics.mark_settlement_skill_unassigned(key, method, reason)
+
+    def accept(self, verified_skill_end_owner=None, unresolved_source_keys=(), /, *, session, sequence, frame,
                game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
@@ -197,14 +206,14 @@ class EventStream:
                 # call. An unmatched passive observation cannot affect a CID peer.
                 pass
             elif unresolved_source:
-                self.statistics.observe_unresolved_source(
-                    kind, source, amount, target_instance, damage_type=damage_type)
+                self._observe_unresolved_source(source, unresolved_source_keys,
+                    kind, amount, target_instance, damage_type=damage_type)
             elif (skill_method == 'BasicSkill.OnCastFinish' and self.statistics.settlement_enabled
                   and (settlement_identity is None or settlement_identity[0] != 'local')):
                 # New native state evidence must not upgrade a different actor
                 # merely because its CID still resolves to the same owner.
-                self.statistics.observe_unresolved_source(
-                    kind, source, amount, target_instance, damage_type=damage_type)
+                self._observe_unresolved_source(source, unresolved_source_keys,
+                    kind, amount, target_instance, damage_type=damage_type)
             elif kind == 'enemy_enter':
                 self.statistics.record_enemy_entry(
                     frame, game_time, source, amount, target, target_instance,
@@ -257,11 +266,11 @@ class EventStream:
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, 'unknown', None, None)
             elif kind in ('skill_start', 'skill_end') and (self.statistics.settlement_enabled or native_cast):
                 if native_cast:
-                    self.statistics.observe_unresolved_source(
-                        kind, source, amount, target_instance, damage_type=damage_type)
+                    self._observe_unresolved_source(source, unresolved_source_keys,
+                        kind, amount, target_instance, damage_type=damage_type)
                 if self.statistics.settlement_enabled:
-                    self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
-                                                                     skill_reason)
+                    self._mark_settlement_skill_unassigned(source, unresolved_source_keys,
+                        skill_method or target_instance, skill_reason)
             elif self.statistics.settlement_enabled and kind == 'damage_settlement':
                 self.statistics.settlement_stream_incomplete = True
                 self.statistics.observe_enemy_damage(complete=False)
@@ -274,8 +283,8 @@ class EventStream:
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor)
                 elif (kind in ('skill_start', 'skill_end') and state == 'unknown'
                       and not ignore_passive_native_cast):
-                    self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
-                                                                     skill_reason)
+                    self._mark_settlement_skill_unassigned(source, unresolved_source_keys,
+                        skill_method or target_instance, skill_reason)
             if self.statistics.settlement_enabled and kind in ('enemy_enter', 'enemy_fake_death',
                                                                'enemy_reborn', 'enemy_finish'):
                 self.statistics.clear_settlement_bar(target_instance, kind)

@@ -167,6 +167,22 @@ def test_deferred_result_matches_eager_output_through_gap_identity_reset_and_fin
     assert deferred.finish(3, complete=True) == eager.finish(3, complete=True)
 
 
+def test_no_output_consumption_does_not_materialize_a_player_snapshot(monkeypatch):
+    meter = MultiplayerBattleStatistics()
+    entries = (actor(2), actor(3))
+
+    def unwanted_snapshot():
+        raise AssertionError('no-output event consumption must not build a result')
+
+    with monkeypatch.context() as guarded:
+        guarded.setattr(meter, 'result', unwanted_snapshot)
+        for when, seq, events in ((0, 0, []), (2, 1, [hit(1, 2, 1)])):
+            value = sample(when)
+            assert meter.consume(value, RosterSnapshot(value['frame'], entries), seq,
+                dict(events=events, **QUALITY), mark=QUALITY, return_result=False) is None
+    assert player(meter.result(), 2)['observed_damage'] == 100
+
+
 def test_exact_replay_is_ignored_conflict_or_missing_tail_closes_coverage():
     meter = MultiplayerBattleStatistics()
     entries = [actor(2)]
