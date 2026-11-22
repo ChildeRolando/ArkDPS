@@ -138,6 +138,18 @@ def test_pc_needs_a_nonfuture_seed_and_refuses_a_regressing_event_watermark():
     assert project(telemetry, snapshot(12), 12) is None
 
 
+def test_pc_event_view_yields_to_membership_when_a_hostile_unit_has_no_hooks():
+    telemetry = EnemyTelemetry(None, bootstrap=no_bootstrap)
+    assert project(telemetry, snapshot(), 3) is not None
+    observed = dict(snapshot(6, uid=10, eid='char_143_ghost'), enemy_events_supported=False)
+    assert project(telemetry, observed, 6) is None
+    # The unit can leave without an event. Keep using the collector's snapshots
+    # for this battle even once the unsupported member is gone.
+    assert project(telemetry, snapshot(9), 9) is None
+    telemetry.reset()
+    assert project(telemetry, snapshot(), 3) is not None
+
+
 def test_pc_duplicate_snapshot_and_verified_prefix_do_not_rebuild_or_rescan(monkeypatch):
     telemetry = EnemyTelemetry(None, bootstrap=no_bootstrap)
     seed = snapshot()

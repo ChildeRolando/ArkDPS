@@ -112,6 +112,9 @@ def native_enemy_view(raw, *, frame, game_time, catalog):
         })
     rows.sort(key=lambda row: int(row['instance_uid']))
     result.update(status='ready', ready=True, error=None, rows=rows)
+    if any(isinstance(entity, Mapping) and entity.get('enemy_events_supported') is False
+           for entity in entities):
+        result['enemy_events_supported'] = False
     return result
 
 
@@ -720,6 +723,11 @@ class EnemyTelemetry:
         ``None`` requests the caller's unchanged native snapshot fallback.
         """
         if self._native_events_lost:
+            return None
+        if isinstance(snapshot, Mapping) and snapshot.get('enemy_events_supported') is False:
+            # The event hooks don't track every Unit subtype in the side roster.
+            # Keep using membership snapshots so removals and HP stay observable.
+            self._native_events_lost = True
             return None
         if enemy_state is None:
             self.note_native_gap()
