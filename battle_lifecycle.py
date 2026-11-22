@@ -12,6 +12,7 @@ import math
 import time
 import uuid
 
+from autochess_context import native_autochess_scope_id
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
@@ -20,6 +21,37 @@ from event_probe import (NativePcProbeContract, bind_native_autochess_pair, cont
                          native_autochess_context_bound)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
+
+
+@dataclass(frozen=True)
+class NativeAutoChessScene:
+    match: tuple
+    scope: str
+    phase: int
+    round: int
+
+
+def native_autochess_scene(sample):
+    """Return display identity from a guarded pair, without requiring a drain."""
+    if not native_autochess_context_bound(sample):
+        return None
+    context, metadata = sample['autochess_context'], sample['battle_metadata']
+    identity = context['identity']
+    roots, separator, _ = identity['scope_key'].rpartition(':autochess:')
+    native_session = sample.get('native_session', sample.get('session'))
+    if not (roots and separator and isinstance(native_session, str)):
+        return None
+    process = native_session.split(':', 2)
+    if len(process) != 3 or not all(part.isascii() and part.isdecimal() for part in process[:2]):
+        return None
+    accounts = tuple(sorted((player['index'], player['uid']) for player in context['players']))
+    # A small-round reset increments the native battle serial and the context
+    # epoch. They identify a scope, while guarded roots and process birth bound
+    # this in-memory display cache. A confirmed exit drops same-root matches too.
+    match = (*process[:2], metadata.get('source_build'), metadata['stage_id'], roots, accounts,
+             context.get('self_player_uid'))
+    return NativeAutoChessScene(match, native_autochess_scope_id(identity, accounts),
+                                context['phase'], context['round'])
 
 
 @dataclass(frozen=True)
@@ -146,6 +178,7 @@ class BattleFeed:
         self.native_session = None
         self.terminal = False
         self.current_lifecycle = None
+        self.autochess_scene = None
         self.stage = None
         self.retired_stage = None
         self.autochess_identity = None
@@ -282,6 +315,7 @@ class BattleFeed:
             bind_enemy_scope = getattr(collector, 'bind_enemy_scope', None)
             if callable(bind_enemy_scope):
                 bind_enemy_scope(sample)
+            self.autochess_scene = native_autochess_scene(sample)
         return sample, roster, events
 
     @staticmethod
@@ -321,6 +355,7 @@ class BattleFeed:
         battle. No polling timeout, empty unit list or transport error does.
         """
         self.current_lifecycle = None
+        self.autochess_scene = None
         opening = None
         if getattr(collector, 'read_guarded_pair', None) is not None and observer is not None:
             # The native backend captures the pair in read_lifecycle(). A mark

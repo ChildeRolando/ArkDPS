@@ -26,6 +26,7 @@ public sealed class MultiplayerView : ScrollViewer
     private string scopeIdentity = "";
     private string? selectedPlayerUid;
     private bool defenseAvailable;
+    private bool showingPreviousDefense;
 
     internal string? SelectedPlayerUid => selectedPlayerUid;
     internal StatisticPanel Ranking => ranking;
@@ -91,14 +92,18 @@ public sealed class MultiplayerView : ScrollViewer
         string nextScope = kind + "\u001f" + value.Text("native_round") + "\u001f" + scopeId;
         bool scopeChanged = scopeIdentity != nextScope;
         bool enteringDefense = eligible && !defenseAvailable;
+        bool previousDefense = eligible && value.Bool("previous_defense");
+        bool enteringPreviousDefense = previousDefense && !showingPreviousDefense;
         scopeIdentity = nextScope;
         defenseAvailable = eligible;
+        showingPreviousDefense = previousDefense;
         var incoming = eligible ? value.Get("players").Items().ToArray() : Array.Empty<JsonElement>();
         var known = incoming.Where(player => KnownPlayer(player, incoming)).ToArray();
-        if (scopeChanged || enteringDefense || !eligible)
+        if (scopeChanged || enteringDefense || enteringPreviousDefense || !eligible)
         {
-            selectedPlayerUid = eligible ? PlayerUid(known.FirstOrDefault(player => player.Bool("is_local")))
-                ?? PlayerUid(known.OrderBy(player => player.Number("slot")).FirstOrDefault()) : null;
+            var local = known.Where(player => player.Bool("is_local")).ToArray();
+            selectedPlayerUid = eligible ? (local.Length == 1 ? PlayerUid(local[0]) : null)
+                ?? (previousDefense ? null : PlayerUid(known.OrderBy(player => player.Number("slot")).FirstOrDefault())) : null;
             ResetOperator();
         }
         else if (selectedPlayerUid is not null && !known.Any(player => PlayerUid(player) == selectedPlayerUid))
@@ -113,9 +118,10 @@ public sealed class MultiplayerView : ScrollViewer
         if (eligible) notice.Text = value.Text("status") switch
         {
             "gap" => "观察已中断 · 以下保留中断前已观察数据。" + notice.Text,
-            "ended" => "本轮防御已结束 · " + notice.Text,
+            "ended" when !previousDefense => "本轮防御已结束 · " + notice.Text,
             _ => notice.Text,
         };
+        if (previousDefense) notice.Text = "上轮防御 · 保留已观察数据。" + notice.Text;
         scope.Text = eligible ? "防御四家：已观察结算伤害（含过量） / 观察时段平均 DPS。干员排行：已观察有效伤害 / 接敌 DPS。协防数据单独统计。" : "";
         comparisons.Visibility = selection.Visibility = identity.Visibility = detail.Visibility = scope.Visibility =
             eligible ? Visibility.Visible : Visibility.Collapsed;

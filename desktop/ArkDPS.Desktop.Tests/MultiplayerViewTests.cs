@@ -113,6 +113,75 @@ internal static class MultiplayerViewTests
         }
     }
 
+    private static void RetainedDefenseTransitions()
+    {
+        foreach (string skin in new[] { "lone-trail", "people", "babel" })
+        {
+            Theme.Apply(skin);
+            var surface = new MultiplayerView();
+            var local = Player(2, "202", 222);
+            local["is_local"] = true;
+            var live = Snapshot("defense-retained", new JsonArray(Player(1, "101", 111), local));
+            var retainedNode = JsonNode.Parse(live.GetRawText())!.AsObject();
+            retainedNode["previous_defense"] = true;
+            retainedNode["status"] = "ended";
+            retainedNode["note"] = "战斗准备中，显示已保存的上一轮防御。";
+            var retained = JsonSerializer.SerializeToElement(retainedNode);
+            surface.Update(live);
+            surface.SelectPlayer("account-1");
+            surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
+            Check(skin + " setup manually selects a foreign actor", surface.DetailInspector.Owner == "char_same@101");
+
+            // The worker may never have proved HELP. Entering retained review
+            // still resets once even if the last displayed scope is unchanged.
+            surface.Update(retained);
+            Check(skin + " first retained transition selects evidenced self and clears its old pin",
+                surface.SelectedPlayerUid == "account-2" && surface.DetailInspector.Owner is null && surface.Ranking.Rows.SelectedItem is null);
+            Check(skin + " retained defense keeps values and labels the prior round explicitly",
+                Text(surface).Contains("上轮防御") && Text(surface).Contains("worker-111") && Text(surface).Contains("worker-222") &&
+                !Text(surface).Contains("本轮防御已结束"));
+            surface.SelectPlayer("account-1");
+            surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
+            surface.Update(retained);
+            Check(skin + " repeated retained updates preserve manual player and actor selection",
+                surface.SelectedPlayerUid == "account-1" && surface.DetailInspector.Owner == "char_same@101");
+
+            var assist = ChangeContext(retained, kind: "assist");
+            surface.Update(assist);
+            Check(skin + " active assist suppresses retained defense despite retained flag and old players",
+                surface.SelectedPlayerUid is null && surface.DetailInspector.Owner is null && surface.Ranking.Rows.Items.Count == 0 &&
+                Text(surface).Contains("协防") && !Text(surface).Contains("worker-111"));
+            surface.Update(retained);
+            Check(skin + " assist to prepare retained chain reenters on self without stale details",
+                surface.SelectedPlayerUid == "account-2" && surface.DetailInspector.Owner is null &&
+                surface.Ranking.View.Get("entries").Items().Single().Text("owner_id") == "char_same@202");
+
+            surface.SelectPlayer("account-1");
+            surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
+            var nextLocal = Player(2, "202", 222);
+            nextLocal["is_local"] = true;
+            surface.Update(ChangeContext(Snapshot("defense-next", new JsonArray(Player(1, "101", 111), nextLocal)), nativeRound: 2));
+            Check(skin + " fresh scope cannot reuse the prior retained actor pin",
+                surface.SelectedPlayerUid == "account-2" && surface.DetailInspector.Owner is null && surface.Ranking.Rows.SelectedItem is null);
+
+            var unresolved = JsonNode.Parse(Snapshot("defense-no-self").GetRawText())!.AsObject();
+            unresolved["previous_defense"] = true;
+            var noSelf = JsonSerializer.SerializeToElement(unresolved);
+            surface.Update(noSelf);
+            Check(skin + " retained defense without self proof waits for manual selection",
+                surface.SelectedPlayerUid is null && surface.Ranking.Rows.Items.Count == 0 && !Text(surface).Contains(" · 我方"));
+            Check(skin + " known foreign players remain manually selectable without self proof",
+                PlayerButton(surface, 1).IsEnabled && PlayerButton(surface, 2).IsEnabled);
+            surface.SelectPlayer("account-1");
+            surface.Update(noSelf);
+            Check(skin + " manual foreign choice is retained without claiming it is self",
+                surface.SelectedPlayerUid == "account-1" && surface.Ranking.Rows.Items.Count == 1 && !Text(surface).Contains(" · 我方"));
+            surface.Update(ChangeContext(noSelf, available: false));
+            Check(skin + " retained flag cannot certify unavailable defense",
+                surface.SelectedPlayerUid is null && surface.Ranking.Rows.Items.Count == 0 && !Text(surface).Contains("worker-111"));
+        }
+    }
+
     private static void AssistHeadings()
     {
         const string Label = "当前协防战场";
@@ -157,6 +226,7 @@ internal static class MultiplayerViewTests
         }
         Theme.Apply("lone-trail");
         StableActorControls();
+        RetainedDefenseTransitions();
         var surface = new MultiplayerView();
         string empty = Text(surface);
         Check("empty explains unverified native phase and observation", empty.Contains("卫戍协议") && empty.Contains("事件观察") && empty.Contains("阶段未知"));
