@@ -216,6 +216,9 @@ class CollectionSession:
                 from event_observer import FridaEventObserver, NativePcFridaObserver
                 self.observer_factory = NativePcFridaObserver if self._is_native_pc() else FridaEventObserver
             self.observer = self.observer_factory(self.collector, self.frida_remote)
+            timing = getattr(self.observer, 'set_request_timing_audit', None) if self._is_native_pc() else None
+            if callable(timing):
+                timing(self.audit)
             self.observer.start()
             self.event_status = 'ready'
             self.audit('observer_ready', {

@@ -1166,6 +1166,32 @@ class _GadgetObserver(NativePcFridaObserver):
         self._reserved = False
         self._detach_intent = None
         self.script_error = None
+        self._request_timing_audit = None
+
+    def set_request_timing_audit(self, sink=None):
+        self._request_timing_audit = sink
+
+    def _request(self, operation, *, timeout=None, **arguments):
+        sink = self._request_timing_audit
+        if sink is None:
+            return super()._request(operation, timeout=timeout, **arguments)
+        started = time.monotonic()
+        error_type = None
+        try:
+            # Include both transport and NativePcBinding validation. The audit
+            # write below is outside the measured request wall time.
+            return super()._request(operation, timeout=timeout, **arguments)
+        except BaseException as error:
+            error_type = type(error).__name__
+            raise
+        finally:
+            try:
+                sink('native_pc_request_timing', dict(
+                    op=operation if operation in ('mark', 'read', 'ack') else 'other',
+                    started_monotonic=started, elapsed_ms=(time.monotonic() - started) * 1000,
+                    outcome='success' if error_type is None else 'error', error_type=error_type))
+            except BaseException:
+                pass  # Optional diagnostics cannot replace a result or exception.
 
     def start(self):
         if self.status != ObserverStatus.STOPPED or self.session is not None or self.script is not None or self._reserved:
