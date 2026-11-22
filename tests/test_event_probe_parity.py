@@ -234,14 +234,20 @@ def production_pipeline():
 @pytest.mark.parametrize("platform,contract", BACKENDS)
 @pytest.mark.parametrize("scenario", ["target_return_before_apply_commit", "nonlethal_cap", "lethal_hit",
                                       "full_block_unit_before_shield", "full_block_unit_after_shield",
-                                      "full_block_bad_uid", "unproven_zero_amount",
+                                      "full_block_bad_uid", "zero_nominal_with_hp_damage",
                                       "bad_hp_difference", "changed_target_uid", "clock_changed",
-                                      "duplicate_target_callback", "nested_same_target"])
+                                      "duplicate_target_callback", "nested_same_target",
+                                      "late_amplification_130_after_unit",
+                                      "late_amplification_unrelated_after_unit", "late_attenuation_after_unit",
+                                      "late_amplification_before_unit", "late_amplification_during_unit",
+                                      "late_amplification_old_output", "final_nominal_below_hp",
+                                      "late_amplification_bad_uid", "late_amplification_bad_hp"])
 def test_real_final_apply_settlement_reaches_existing_v7_owner_detail(
         production_pipeline, platform, contract, scenario):
     backend = "native_pc" if platform == "native_pc" else "android"
     report = production_pipeline[backend][scenario]
     batch, mark = report["batch"], report["mark"]
+    inputs = report["inputs"]  # owned fixture inputs, never production quality or proof replacements
     source_record = next(record for record in batch["events"] if record.get("source"))
     assert batch["enemy_damage_ready"] is True and batch["mitigation_ready"] is True
     collector = CanonicalCollector(platform)
@@ -250,7 +256,7 @@ def test_real_final_apply_settlement_reaches_existing_v7_owner_detail(
     capture = LiveEventCapture(collector, observer)
     capture.sample()
     collector.frame, collector.game_time = mark["frame"], mark["game_time"]
-    collector.damage = 40  # owned native cumulative counter, independent of event availability
+    collector.damage = inputs["counter_damage"]  # owned cumulative counter, not an event delta
     observer.quality = deepcopy(batch)
     observer.records, observer.sequence = deepcopy(batch["events"]), mark["sequence"]
     if batch.get("error") or batch.get("stopped"):
@@ -263,31 +269,76 @@ def test_real_final_apply_settlement_reaches_existing_v7_owner_detail(
                         rows_from_statistics(result), event=EventAvailability("recording"))
     detail = view.details_by_owner[collector.cid]
     lane = detail["settled_damage"]
-    assert detail["damage"] == 40
-    if scenario in ("target_return_before_apply_commit", "nonlethal_cap", "lethal_hit",
-                    "full_block_unit_before_shield", "full_block_unit_after_shield"):
-        blocked = scenario.startswith("full_block_")
-        actual = {"target_return_before_apply_commit": 40, "nonlethal_cap": 20,
-                  "lethal_hit": 30}.get(scenario, 40)
+    assert detail["damage"] == pytest.approx(inputs["counter_damage"])
+    if inputs["certified"]:
+        actual = inputs["hp_damage"] + inputs["shield_damage"]
+        nominal = inputs["counter_damage"]
         assert batch["enemy_damage_unknown"] is False
         assert lane["complete"] is True
-        assert lane["known_hp_damage"] == (0 if blocked else actual)
-        assert lane["known_shield_damage"] == (40 if blocked else 0)
-        assert detail["effective_damage"] == actual
+        assert lane["known_hp_damage"] == pytest.approx(inputs["hp_damage"])
+        assert lane["known_shield_damage"] == pytest.approx(inputs["shield_damage"])
+        assert detail["effective_damage"] == pytest.approx(actual)
         assert detail["overkill_damage"] == (10 if scenario == "lethal_hit" else 0)
         assert lane["mitigation_complete"] is True
-        assert lane["observed_mitigation_before"] == 80
-        assert lane["observed_mitigation_after"] == 40
-        assert lane["observed_mitigation_rate"] == 50
-        assert detail["skill_damage"] == 40 and detail["skill_damage_effective"] == actual
+        assert lane["observed_mitigation_before"] == pytest.approx(inputs["formula_before"])
+        assert lane["observed_mitigation_after"] == pytest.approx(nominal)
+        assert lane["observed_mitigation_rate"] == pytest.approx(
+            (1 - nominal / inputs["formula_before"]) * 100)
+        assert detail["skill_damage"] == pytest.approx(nominal)
+        assert detail["skill_damage_effective"] == pytest.approx(actual)
         assert detail["non_skill_damage"] == detail["non_skill_damage_effective"] == 0
         assert detail["skill_split_complete"] and detail["skill_split_effective_complete"]
+        damage, = [record for record in batch["events"] if record["kind"] == "damage"]
+        assert damage["amount"] == pytest.approx(inputs["final_nominal"])
+        if inputs["entry_nominal"] != inputs["final_nominal"] and not inputs["shield_damage"]:
+            assert batch["mitigation_diagnostics"]["emitted_after_adjustment"] == 1
     else:
         assert lane["complete"] is False
         assert detail["effective_damage"] is None
         assert detail["skill_damage_effective"] is None
         assert lane["mitigation_complete"] is False
         assert lane["observed_mitigation_rate"] is None
+
+
+@pytest.mark.parametrize("platform,contract", BACKENDS)
+@pytest.mark.parametrize("scenario", ["target_return_before_apply_commit", "late_amplification_130_after_unit"])
+def test_real_active_skill_has_finite_panel_share_before_end_and_keeps_prefix_at_finish(
+        production_pipeline, platform, contract, scenario):
+    backend = "native_pc" if platform == "native_pc" else "android"
+    report = production_pipeline[backend][scenario]
+    assert not any(record["kind"] == "skill_end" for record in report["active_batch"]["events"])
+    assert any(record["kind"] == "skill_end" for record in report["batch"]["events"])
+    source = next(record for record in report["active_batch"]["events"] if record.get("source"))
+    collector = CanonicalCollector(platform)
+    collector.cid, collector.uid = source["source"], source["source_character_uid"]
+    observer = BoundedObserver(collector, contract, report["initial_batch"])
+    capture = LiveEventCapture(collector, observer)
+    capture.sample()
+    details = []
+    for batch, mark in ((report["active_batch"], report["active_mark"]),
+                        (report["batch"], report["mark"])):
+        collector.frame, collector.game_time = mark["frame"], mark["game_time"]
+        collector.damage = report["inputs"]["counter_damage"]
+        observer.quality = deepcopy(batch)
+        observer.records, observer.sequence = deepcopy(batch["events"]), mark["sequence"]
+        result = capture.sample()
+        view = render_panel(PanelConfig(panel_id="active-skill", effective_only=True),
+                            rows_from_statistics(result), event=EventAvailability("recording"))
+        detail = view.details_by_owner[collector.cid]
+        details.append(detail)
+        assert detail["skill_split_complete"] and detail["skill_split_effective_complete"]
+        assert detail["skill_damage"] == pytest.approx(report["inputs"]["counter_damage"])
+        assert detail["skill_damage_effective"] == pytest.approx(report["inputs"]["hp_damage"])
+        assert detail["non_skill_damage"] == detail["non_skill_damage_effective"] == 0
+        assert detail["skill_damage"] / (detail["skill_damage"] + detail["non_skill_damage"]) == 1
+        assert detail["skill_damage_effective"] / (detail["skill_damage_effective"]
+                                                   + detail["non_skill_damage_effective"]) == 1
+        assert detail["settled_damage"]["observed_hits"] == 1  # full-prefix replay is not another hit
+    for key in ("damage", "effective_damage", "skill_damage", "non_skill_damage",
+                "skill_damage_effective", "non_skill_damage_effective"):
+        assert details[0][key] == details[1][key]
+
+
 @pytest.mark.parametrize("platform,contract", BACKENDS)
 def test_partial_hit_proof_keeps_components_but_not_full_certificate(platform, contract):
     _, _, _, row = run_combat(platform, contract, hp_proof=False)

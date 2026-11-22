@@ -49,7 +49,7 @@ function scenario(platform, order, fault = null) {
   if (fault === 'source_pointer') f.write(modifier, f.unit('char_changed', 88));
   if (fault === 'target_pointer') f.write(modifier.add(0x10), f.unit('enemy_changed', 88));
   if (fault === 'hp_difference') f.write(target.add(0x40), 11n * 4294967296n);
-  if (fault === 'amount_change') f.write(modifier.add(0x30), 41n * 4294967296n);
+  if (fault === 'nominal_less_than_hp') f.write(modifier.add(0x30), 39n * 4294967296n);
   if (fault === 'damage_type') f.write(modifier.add(0x68), 2);
   if (fault === 'cancel_reason') f.write(modifier.add(0x70), 2);
   if (fault === 'cross_frame') f.clock(31, 4294967296n);
@@ -86,7 +86,7 @@ for (const platform of ['android', 'native_pc']) {
     'no_output_callback', 'late_output_after_target', 'target_return_before_apply_commit']) report[platform][order] = scenario(platform, order);
   report[platform].rejected = {};
   for (const fault of ['target_uid', 'source_uid', 'source_id', 'target_id', 'source_pointer',
-    'target_pointer', 'hp_difference', 'amount_change', 'damage_type', 'cancel_reason',
+    'target_pointer', 'hp_difference', 'nominal_less_than_hp', 'damage_type', 'cancel_reason',
     'cross_frame', 'cross_time', 'duplicate_target_callback', 'nested_damage', 'nested_external',
     'nested_healing']) report[platform].rejected[fault] = scenario(platform, 'target_return_before_apply_commit', fault);
 }

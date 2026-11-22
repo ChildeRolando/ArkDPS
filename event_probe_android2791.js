@@ -349,7 +349,7 @@ function beginTargetSettlement(invocation,scope){
   if(![1,2,3].includes(type)||invocation.mod.add(0x60).readS32()!==0)return;
   const sourceUid=source.add(0x18).readU32();if(!sourceUid)return;
   hit.commit={source,sourceUid,sourceClass:source.readPointer(),targetClass:hit.target.readPointer(),
-    targetKey:targetKey(hit.target),modifier:invocation.mod,amount:invocation.amount,type,
+    targetKey:targetKey(hit.target),modifier:invocation.mod,entryAmount:invocation.amount,type,
     when:invocation.when,returned:false,invalid:false};
   invocation.targetSettlementScope=scope;invocation.targetSettlementHit=hit;
  }catch(e){/* Missing target proof keeps strict settlement partial. */}
@@ -391,10 +391,13 @@ function finishTargetSettlement(invocation,when){
  if(!scope||!hit?.commit)return;
  try{
   const amount=fp(scope.mod.add(0x30));
-  if((!targetSettlementIdentity(scope,hit,when)||amount!==hit.commit.amount)&&
+  if(!targetSettlementIdentity(scope,hit,when)&&
      !numericFullBlockSettlement(scope,hit,when,amount)){
    hit.commit.invalid=true;return;
   }
+  // Native listeners may adjust the amount before or after this return.
+  // Keep the measured stage value, never use it as an identity invariant.
+  hit.commit.returnAmount=amount;
   hit.commit.returned=true;hit.commit.returnWhen=when;
  }catch(e){hit.commit.invalid=true;}
 }
@@ -412,15 +415,24 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
   // Its existing numeric-shield certificate is independent of this HP fallback.
   if(commit.returned&&sameMitigationTime(commit.returnWhen,when)&&
      numericFullBlockSettlement(scope,hit,when,amount))return null;
-  if(!commit.returned||commit.amount!==amount||commit.type!==type||
+  if(!commit.returned||commit.type!==type||
      !target?.equals(hit.target)||!sameMitigationTime(commit.returnWhen,when)||
-     !targetSettlementIdentity(scope,hit,when))return reject('target settlement identity, clock or amount changed');
+     !targetSettlementIdentity(scope,hit,when))return reject('target settlement identity or clock changed');
   // OnTakeDamage can return before the engine commits HP and realDelta.
   // Its unique same-scope target/HP-before proof is checked again against
   // the final signed Modifier result and actual HP at ApplyModifier return.
   const evidence=overkillEvidence(scope.mod,target,hit.hpBefore,when.frame);
   if(!evidence||!targetSettlementIdentity(scope,hit,when)||
      fp(scope.mod.add(0x30))!==amount)return reject('target settlement final HP proof unavailable');
+  // Final m_value is the nominal settlement amount. Its earlier stage values
+  // can differ; only the final value must cover the actually witnessed HP and
+  // same-hit numeric shield components. Never infer absorption from a delta.
+  const shield=scope.numericShield>0?scope.numericShield:0;
+  if(!Number.isFinite(amount)||amount<0||amount+0.01<-evidence.real_delta+shield)
+   return reject('final nominal amount contradicts HP or numeric shield consumption');
+  if(amount===0&&evidence.real_delta===0&&!(shield>0)&&
+     (commit.entryAmount>0||commit.returnAmount>0||scope.mitigation?.after>0))
+   return reject('zeroed positive modifier lacks numeric absorption proof');
   scope.targetSettlementEvidence=evidence;
   return evidence;
  }catch(e){return reject('target settlement proof could not be read');}
