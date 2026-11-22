@@ -82,6 +82,36 @@ public partial class MainWindow
         var work = System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea;
         var originalPlayer = new System.Drawing.Rectangle(work.Left + 32, work.Top + 20,
             Math.Min(600, work.Width / 2), Math.Min(680, work.Height - 58));
+        (nint Handle, long Style, double Opacity, int[] Bounds, string Diagnostic) CaptureHudBaseline()
+        {
+            var handle = Native.Handle(hud);
+            long style = Native.ExStyle(hud);
+            double opacity = hud.Opacity;
+            var bounds = Native.Bounds(hud);
+            string diagnostic = JsonSerializer.Serialize(new
+            {
+                present = Huds.TryGetValue(hud.PanelId, out var current), same_instance = current == hud,
+                hwnd = handle.ToInt64(), style, opacity, bounds, hud.Locked, hud.DisplayScale,
+                working_area = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea,
+                status = State.Text("status"), status_text = Status.Text,
+                notice = ((Grid)hud.Content).Children.OfType<HudStatusNotice>().Single().Message,
+                config = hud.Panel.View.Get("config"), footer_total = hud.Panel.View.Get("footer_total"),
+                entries = hud.Panel.View.Get("entries").Items().Select(entry => new
+                {
+                    owner_id = entry.Text("owner_id"), value = entry.Get("value"), rate = entry.Get("rate")
+                }).ToArray()
+            });
+            return (handle, style, opacity, bounds, diagnostic);
+        }
+        void RequireHudUnchanged((nint Handle, long Style, double Opacity, int[] Bounds, string Diagnostic) before,
+                                 string phase)
+        {
+            var after = CaptureHudBaseline();
+            Require(Huds.TryGetValue(hud.PanelId, out var current) && current == hud &&
+                    before.Handle == after.Handle && before.Style == after.Style && before.Opacity == after.Opacity &&
+                    before.Bounds.SequenceEqual(after.Bounds),
+                    $"{phase} changed a running HUD; before={before.Diagnostic}; after={after.Diagnostic}");
+        }
         try
         {
             await Command("panel_update", new() { ["config"] = sourceConfig });
@@ -96,10 +126,17 @@ public partial class MainWindow
                 panel_id = secondId, category = "healing", ranking = "dps", rate_basis = "recent_5s"
             }});
             await Settle();
-            var hudHandle = Native.Handle(hud);
-            long hudStyle = Native.ExStyle(hud);
-            double hudOpacity = hud.Opacity;
-            var hudBounds = Native.Bounds(hud);
+            // This fixture is a single recorded sample. Let the worker's real
+            // age threshold settle its notice before testing window geometry.
+            for (int wait = 0; State.Text("status") != "stale" && wait < 50; wait++)
+            {
+                await Task.Delay(100);
+                await Command("snapshot");
+            }
+            await Settle();
+            Require(State.Text("status") == "stale",
+                $"static side fixture did not reach its stable stale state: {CaptureHudBaseline().Diagnostic}");
+            var initialHud = CaptureHudBaseline();
 
             fixture.Show();
             Native.Place(fixture, originalPlayer);
@@ -108,6 +145,7 @@ public partial class MainWindow
             SetSideMode(true);
             await SavePlacement();
             await Settle();
+            RequireHudUnchanged(initialHud, "entering side mode");
             var expected = SideAttachment.GetPlacement(default, Native.Handle(this), SideWidth);
             var current = Native.Bounds(this);
             Require(expected.State == EmulatorPlacementState.Attached && expected.Bounds is { } rectangle &&
@@ -228,6 +266,10 @@ public partial class MainWindow
                     "side boss filter could not leave a scope with unavailable data");
 
             await Command("panel_update", new() { ["config"] = sourceConfig });
+            await Settle();
+            // Controls above legitimately resize rows/notices and can clamp a
+            // HUD into the work area. Subsequent checks change only side geometry.
+            var sideOnlyHud = CaptureHudBaseline();
             int minimumSideWidth = (int)Math.Round(280 * VisualTreeHelper.GetDpi(fixture).DpiScaleX);
             var widePlayer = new System.Drawing.Rectangle(work.Left, originalPlayer.Top,
                 work.Width - minimumSideWidth, originalPlayer.Height);
@@ -319,10 +361,10 @@ public partial class MainWindow
             await Settle();
             Require(TargetSummary.Child is ScrollViewer { ScrollableHeight: > 0 },
                     "short side enemy tab did not scroll to its lower unit cards");
-            Require(Huds.TryGetValue(hud.PanelId, out var sameHud) && sameHud == hud &&
-                    hudHandle == Native.Handle(hud) && hudStyle == Native.ExStyle(hud) &&
-                    hudOpacity == hud.Opacity && hudBounds.SequenceEqual(Native.Bounds(hud)),
-                    "changing main window mode changed a running HUD");
+            RequireHudUnchanged(sideOnlyHud, "moving and minimizing the side window");
+            SetSideMode(false);
+            await Settle();
+            RequireHudUnchanged(sideOnlyHud, "leaving side mode");
         }
         finally
         {
