@@ -76,7 +76,7 @@ def event_label(status, error=None):
 
 def _native_clock_busy(error):
     """Only typed acquisition evidence qualifies; messages and RPC retries do not."""
-    busy = False
+    leaf_busy = False
     seen = set()
     while error is not None and id(error) not in seen and len(seen) < 16:
         seen.add(id(error))
@@ -84,9 +84,9 @@ def _native_clock_busy(error):
             return False
         if not isinstance(error, (CaptureRetry, ObserverReadRetry, BarrierBusy, NativeClockBusy)):
             return False
-        busy |= isinstance(error, (BarrierBusy, NativeClockBusy))
+        leaf_busy = isinstance(error, (BarrierBusy, NativeClockBusy))
         error = error.__cause__
-    return busy and error is None
+    return leaf_busy and error is None
 
 
 def team_totals(statistics):
