@@ -38,6 +38,9 @@ def launch(args=None):
                 value = getattr(args, name, None)
                 if value:
                     command += ['--' + name.replace('_', '-'), value]
+            framework_root = getattr(args, 'arkframework_root', None)
+            if framework_root:
+                command += ['--arkframework-root', str(Path(framework_root).absolute())]
             endpoint = getattr(args, 'frida_remote', None)
             if endpoint == '':
                 command.append('--no-events')

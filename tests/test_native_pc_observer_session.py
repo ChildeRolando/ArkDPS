@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE
+from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
 from event_observer import ObserverStatus
 
 
@@ -64,7 +64,7 @@ def test_trusted_pc_factory_uses_existing_lifecycle_capture_without_android_boot
     assert collector.calls[-2:] == ['observer_stop', 'close']
 
 
-@pytest.mark.parametrize('remote', [None, DEFAULT_FRIDA_REMOTE, 'explicit-android-endpoint'])
+@pytest.mark.parametrize('remote', ['', DEFAULT_FRIDA_REMOTE, 'explicit-android-endpoint'])
 def test_default_pc_remains_snapshot_only_even_with_an_android_endpoint(monkeypatch, remote):
     import event_observer
 
@@ -78,6 +78,56 @@ def test_default_pc_remains_snapshot_only_even_with_an_android_endpoint(monkeypa
         assert current.observer is current.capture.observer is None
         assert current.event_status == 'unavailable'
         assert current.event_error == 'snapshot only'
+        assert collector.calls == ['connect', 'lifecycle']
+    finally:
+        current.close()
+
+
+def test_default_pc_selects_native_frida_without_android_transport(monkeypatch):
+    import event_observer
+
+    monkeypatch.setattr(event_observer, 'NativePcFridaObserver', TrustedObserver)
+    current, collector = session()
+    current.connect()
+    try:
+        assert isinstance(current.observer, TrustedObserver)
+        assert current.event_status == 'ready'
+        assert collector.calls == ['connect', 'observer_start', 'lifecycle']
+    finally:
+        current.close()
+
+
+def test_native_pc_cold_start_waits_for_checked_runtime_before_loading_observer(monkeypatch):
+    import collection_session
+
+    current, collector = session(TrustedObserver)
+    clock = SimpleNamespace(now=0)
+    collector.observer_boot_ready = lambda: clock.now >= 1
+    audit = []
+    current.audit = lambda kind, payload: audit.append((kind, payload))
+    monkeypatch.setattr(collection_session.time, 'monotonic', lambda: clock.now)
+    monkeypatch.setattr(collection_session.time, 'sleep', lambda duration: setattr(clock, 'now', clock.now + duration))
+    current.connect()
+    try:
+        assert current.event_status == WAITING_GAME_INIT
+        assert current.observer is current.capture is None
+        assert collector.calls == ['connect']
+        assert ('observer_waiting_game_init', {'pid': 123}) in audit
+        current.wait_for_game_init(wait_seconds=2)
+        assert current.event_status == 'ready'
+        assert collector.calls == ['connect', 'observer_start', 'lifecycle']
+        assert ('observer_game_init_ready', {'pid': 123}) in audit
+    finally:
+        current.close()
+
+
+def test_disabled_native_pc_does_not_poll_boot_or_attach_observer():
+    current, collector = session(remote='')
+    collector.observer_boot_ready = lambda: pytest.fail('disabled observer polled game initialization')
+    current.connect()
+    try:
+        assert current.event_status == 'unavailable'
+        assert current.observer is None
         assert collector.calls == ['connect', 'lifecycle']
     finally:
         current.close()

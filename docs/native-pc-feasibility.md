@@ -1,5 +1,7 @@
 # ArkDPS 官服 PC 只读适配可行性报告
 
+2026-11-22 已在普通官服 PC 中跑通 ArkDPS 独立的 Frida Gadget 启动加载，不依赖 ArkFramework。一局 CE-5 记录了 1477 条有序事件，逐干员伤害、74 笔直接治疗、5 笔实际吸盾及 41 个技能窗口完成对账。正常 CLI 和桌面 worker 已接入启动管理，普通 worker 已验证组件加载、完整探针重连和清理。晚接入的普通 attach 在 17.24.3、17.26.1 与 17.27.4 中仍失败。普通实际 HP 结算、过量及其他盾类型保留各自覆盖限制。[实机与启动加载证据](event-capture.md#arkdps-本机-frida-探针)
+
 评估日期 2026-11-21。目标是鹰角启动器国服 Windows x64 客户端，验收基线为 ArkDPS rc.8 的 MuMu 功能。**原生只读累计采集已实机验证可行**，覆盖伤害、非零治疗、稀音召唤伤害、干员撤退再部署、倍速、暂停、同图重开及胜负结算。Windows 的逐事件来源仍有缺口，现有证据支持接入累计统计，完整数值齐平仍取决于逐事件和产品验收。[MuMu 产品基线](v1-design.md) · [PC 实验记录](native-pc-research.md)
 
 当前便携候选 `270abede362b22675b172e94c8442f16ca751de6` 增加 PC 敌人观测帧。干净源码的 382 项 Python 回归、137 项无窗口 C# 断言及 WPF 发布构建通过。包内 Python 和源码对四份实机记录的 710 个独立敌情观测点得出相同结果。确认了 123 次离场观测，其中 55 个实例的最后已知 HP 为正。ZIP 完整性和包内清单核对通过。ZIP SHA-256 为 `2deb62596ec668c657c9ccd4dac9983247360bfb75ca25962aac8930a8cbb15b`。构建时 NuGet 漏洞元数据源不可用。[当前便携候选](../runtime/native-pc/product-270abed/ArkDPS-1.0.0-rc.8-win-x64.zip) · [包内敌人观测帧回执](../runtime/native-pc/enemy-observation-frames/package-738d87743d4e/receipt.json)
@@ -214,11 +216,13 @@ MuMu 的事件来源与精度见[事件采集约定](event-capture.md)和[统计
 
 在迁移 PC 事件消费前，核对了 rc.8 发布提交 `1ce748582a9dcf8c6d072837ea6462d36149eb32` 的包内清单。rc.8 已支持技能期与非技能期输出拆分，合成事件的 WPF 验收也覆盖了该项。完整齐平仍需 PC 提供可对账的技能边界。累计模式可独立使用。[rc.8 WPF 回执](../../arkdps-observer-cold-start/runtime/rc8-release/1ce748582a9dcf8c6d072837ea6462d36149eb32/wpf-source/receipt.json)
 
-另核查了 Mon4terTeam 的 ArkFramework fork。V2 为 PC 提供带逻辑帧和序号的进程内伤害记录。当前 Web 文件可导出累计和按帧汇总的曲线，外部桥接发布最新快照。公开的 11 份 SK-5 回放快照只有状态字段，保留为离线对照，逐次结算仍缺实机源。[接口核查](native-pc-research.md#2026-11-21--mon4terteam-arkframework-接口)
+Mon4terTeam 的 ArkFramework V2 提供带逻辑帧和序号的进程内结算记录。ArkDPS 的 SDK 插件已在普通官服 PC 客户端录完一局 CE-5，268 笔伤害和 23 笔直接治疗与 BetterBattle 回放逐笔吻合。回放单列的生命回复在 V2 中缺失，部分伤害缺攻击来源。现有 V2 协议缺少实际吸盾量、施盾者及技能起止事件。[接口核查](native-pc-research.md#2026-11-21--mon4terteam-arkframework-接口) · [实机对账](event-capture.md#arkframework-v2-逐笔采集插件)
 
 再次核对匹配构建的 `BattleVerboseRecorder`，确实声明了 `m_detailLogs`，记录项含帧、来源、目标和修饰器。五份普通战斗录制的 1831 个有效样本里，该记录器均为空。已核对的 ArkHelper `BattleSnapshot` 序号用于避免读到写入一半的快照，接口提供分类累计与覆盖标记，没有逐笔结算或技能开始和结束队列。普通模式的有效伤害、盾吸收及技能期因此仍缺可独立核实的连续事件源。其他模式是否会提供完整记录须单独采样。[普通战斗采样回执](../runtime/native-pc/2026-11-21-battle/ordinary-battles-verbose-recorder.verified.json)
 
 对匹配构建的磁盘元数据与 `GameAssembly.dll` 做了只读核对。`BattleLogger.m_logs` 保留带游戏时间的手动部署、撤退和技能指令，可用于下一步核对人工操作。`charStats` 和 `skillTrigStats` 保存计数，`CharAdvancedStats.snapshots` 保存属性、天赋和技能配置，普通事件池保存回调集合。这些已定位字段缺少逐击伤害、自动技能起止和护盾实际吸收的事件记录。
+
+2026-11-21 扩展复核了 `runtime/native-pc/2026-11-21-battle/` 中全部含有效样本的 17 份原生只读录制。筛选 `kind=observation`、`status=sample_available` 后得到 4,003 份样本，所有 `sample.verbose_recorder_present` 均为 `false`。这一总数包含上文五份录制。匹配构建的详细记录项声明了 HP 变化和技能施放，普通战斗的技能触发统计按干员与技能保存计数。随后验证的逐笔伤害和直接治疗来自 ArkFramework V2。
 
 ## 接入边界
 

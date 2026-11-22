@@ -18,6 +18,13 @@ from . import probe_native_pc as access
 BATTLE_CLASS_SLOT_RVA = 0x8B0FC40
 CLASS_DEFINITION_TABLE_RVA = 0x8FD7890
 BATTLE_TYPE_INDEX = 10185
+# This exact build's Runtime::Init holds this Baselib recursive lock until its
+# final work has completed (owner/depth cleared at RVAs 0x435035/0x43503C).
+# The done byte alone is early (written at 0x434D6A); the reference count alone
+# is also early. Shutdown holds the same lock and sets the adjacent byte.
+RUNTIME_INIT_LOCK_RVA = 0x8F97EC8  # uint64 Baselib thread ID, then signed depth
+RUNTIME_INIT_FLAGS_RVA = 0x8FD7C00  # initialized, shutting down: individual bools
+RUNTIME_INIT_COUNT_RVA = 0x8FD7F88  # signed initialization reference count
 CLASS_PARENT = 0x58
 CLASS_STATICS = 0xB8
 CLASS_FIELDS = 0x80
@@ -221,6 +228,9 @@ class NativePcBattleProbe:
                          'module_bytes_mismatch', 'unsupported_build')
             self._module_range(BATTLE_CLASS_SLOT_RVA, 8)
             self._module_range(CLASS_DEFINITION_TABLE_RVA, 8)
+            self._module_range(RUNTIME_INIT_LOCK_RVA, 12)
+            self._module_range(RUNTIME_INIT_FLAGS_RVA, 2)
+            self._module_range(RUNTIME_INIT_COUNT_RVA, 4)
             self._require_process_alive()
         except access.ApiFailure as error:
             self.close()
@@ -234,6 +244,15 @@ class NativePcBattleProbe:
     def battle_identity(self):
         """Return checked roots in process without adding addresses to reports."""
         return self._identity
+
+    def battle_serial_for(self, identity, frame, fixed_time, stage_id):
+        """Predict this guarded identity's serial without advancing sampler state."""
+        identity_changed = identity != self._identity
+        stage_changed = (not identity_changed and stage_id is not None and self._stage_id is not None
+                         and stage_id != self._stage_id)
+        clock_reset = (self._last_clock is not None
+                       and (frame < self._last_clock[0] or fixed_time < self._last_clock[1]))
+        return self._serial + int(identity_changed or stage_changed or clock_reset)
 
     def process_alive(self):
         """Return false only for confirmed exit; preserve query failures.
@@ -288,6 +307,41 @@ class NativePcBattleProbe:
         if not singleton_fields or not clock_fields:
             raise ResearchFailure('waiting_game_init', 'static_storage_uninitialized')
         return klass, parent, singleton_fields, clock_fields
+
+    def _observer_runtime_state(self):
+        initialized, shutdown = self.reader.read(self.base + RUNTIME_INIT_FLAGS_RVA, 2)
+        _require(initialized in (0, 1) and shutdown in (0, 1), 'invalid_runtime_init_flags')
+        owner, depth = struct.unpack('<Qi', self.reader.read(self.base + RUNTIME_INIT_LOCK_RVA, 12))
+        count, = struct.unpack('<i', self.reader.read(self.base + RUNTIME_INIT_COUNT_RVA, 4))
+        # The owner is a Baselib thread ID, not an address. Nonzero is busy.
+        _require(depth >= 0, 'invalid_runtime_init_lock_depth')
+        return initialized, shutdown, owner, depth, count
+
+    def observer_boot_ready(self):
+        """Wait for completed IL2CPP initialization and checked class/statics."""
+        self.reader.reset_budget()
+        self._require_process_alive()
+        try:
+            before = self._observer_runtime_state()
+            initialized, shutdown, owner, depth, count = before
+            if not initialized or shutdown or owner or depth or count <= 0:
+                # Do not mistake a held lock or an in-progress shutdown for a
+                # complete VM. A stable negative count outside either is bad
+                # runtime state, not a normal initialization wait.
+                if count < 0 and not shutdown and not owner and not depth:
+                    _require(self._observer_runtime_state() != before, 'invalid_runtime_init_count')
+                return False
+            binding_ready = True
+            try:
+                self._binding()
+            except ResearchFailure as exc:
+                if exc.status != 'waiting_game_init':
+                    raise
+                binding_ready = False
+            after = self._observer_runtime_state()
+            return binding_ready and after == before
+        finally:
+            self._require_process_alive()
 
     @staticmethod
     def _battle_fields(raw):
@@ -494,11 +548,7 @@ class NativePcBattleProbe:
                  'frame_or_lifecycle_changed', 'sample_retry')
         identity = (battle, native, logger, stats, level)
         identity_changed = identity != self._identity
-        stage_changed = (not identity_changed and metadata['stage_id'] is not None and self._stage_id is not None
-                         and metadata['stage_id'] != self._stage_id)
-        if identity_changed or stage_changed or (self._last_clock is not None
-                and (frame < self._last_clock[0] or fixed_time < self._last_clock[1])):
-            self._serial += 1
+        self._serial = self.battle_serial_for(identity, frame, fixed_time, metadata['stage_id'])
         self._identity, self._last_clock = identity, (frame, fixed_time)
         if identity_changed or metadata['stage_id'] is not None:
             self._stage_id = metadata['stage_id']

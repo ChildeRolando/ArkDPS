@@ -12,14 +12,54 @@ from sample_data import sample
 
 
 def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='native_pc',
-               provider_state='recording', publish=True, observer_display_attributes=True):
+               provider_state='recording', publish=True, observer_display_attributes=True,
+               arkframework_root=None, bootstrap_pending=False, bootstrap_pending_state='starting'):
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     state = DesktopState(tmp_path / 'state')
     state.command(dict(version=1, op='panel_update',
                        config=dict(state.layout.panels[0].to_dict(), rate_basis='engagement')))
     worker = CollectionWorker(state, endpoint='expert-android-endpoint',
+                              arkframework_root=arkframework_root,
                               native_pc_observer_factory=factory)
     calls = []
+
+    class Startup:
+        checks = 0
+        phase = 'ready'
+        @staticmethod
+        def observer_factory(*_args):
+            pytest.fail('the in-memory worker session only forwards this provider')
+
+        def start(self):
+            calls.append(('pc_startup', 'started'))
+
+        def close(self):
+            calls.append(('pc_startup', 'closed'))
+
+        def retry(self):
+            calls.append(('pc_startup', 'retry'))
+
+        @property
+        def is_pending(self):
+            return self.phase != 'ready'
+
+        def describe(self):
+            self.checks += 1
+            if bootstrap_pending:
+                calls.append(('pc_bootstrap_state', bootstrap_pending_state if self.checks == 1 else 'ready'))
+                if self.checks == 1:
+                    worker.last_connect_attempt = float('-inf')
+                    self.phase = bootstrap_pending_state
+                    return {'status': bootstrap_pending_state}
+            self.phase = 'ready'
+            return {'status': 'ready'}
+
+    def startup(game_root, runtime_dir):
+        calls.append(('pc_startup_created', game_root, runtime_dir))
+        return Startup()
+
+    import capture_cli
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', startup)
 
     def diagnostic(source):
         return ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform=source,
@@ -29,8 +69,8 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
 
-        def __init__(self, root):
-            calls.append(('native_collector', root))
+        def __init__(self, root, *, collect_actions):
+            calls.append(('native_collector', root, collect_actions))
 
     class Session:
         cleanup_errors = {}
@@ -40,9 +80,9 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
             self.is_pc = collector is not None
             self.provider = kwargs.get('observer_factory')
             calls.append(('session', self.is_pc, adb, serial, frida_remote, self.provider))
-            assert frida_remote is None if self.is_pc else frida_remote == (
+            assert frida_remote == (None if enabled else '') if self.is_pc else frida_remote == (
                 worker.endpoint if enabled else None)
-            active = self.provider is not None if self.is_pc else enabled
+            active = enabled
             failed = active and provider_state == 'failed'
             self.event_status = 'failed' if failed else 'ready' if active else 'unavailable'
             self.event_error = 'trusted provider unavailable' if failed else None
@@ -64,7 +104,7 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
             if not publish or self.reads > 1:
                 worker.stop.set()
                 return None
-            if self.provider is not None or not self.is_pc and enabled:
+            if enabled:
                 self.event_status = provider_state
             return dict(sample(), state=2, frame=1, battle_id='synthetic-source-battle',
                         event_status=self.event_status, event_error=self.event_error)
@@ -103,6 +143,7 @@ def trusted_factory(*_args):
 
 def test_configured_pc_provider_is_forwarded_without_android_and_publishes_recording(tmp_path, monkeypatch):
     state, calls, events = run_worker(tmp_path, monkeypatch, factory=trusted_factory)
+    assert ('native_collector', 'recorded-game-root', True) in calls
     assert ('session', True, None, None, None, trusted_factory) in calls
     assert not any(call[0].startswith(('android_', 'resolve_')) for call in calls)
     assert ('observer', ('ready', None)) in events
@@ -120,6 +161,81 @@ def test_configured_pc_provider_ready_before_baseline_is_not_snapshot_only(tmp_p
     assert snapshot['event_text'] == '事件已就绪 · 等待同帧基线'
     assert '正在建立' in snapshot['panels'][0]['rate_reason']
     assert '缺少接敌速率' not in snapshot['panels'][0]['rate_reason']
+
+
+def test_default_pc_frida_starts_bootstrap_before_collector_and_preserves_transport(tmp_path, monkeypatch):
+    state, calls, events = run_worker(tmp_path, monkeypatch)
+    created = next(call for call in calls if call[0] == 'session')
+    assert created[1:5] == (True, None, None, None) and callable(created[5])
+    assert calls.index(('pc_startup', 'started')) < calls.index(('native_collector', 'recorded-game-root', True))
+    assert calls.index(('closed', True)) < calls.index(('pc_startup', 'closed'))
+    assert ('observer', ('ready', None)) in events
+    assert state.snapshot()['event_status'] == 'recording'
+
+
+@pytest.mark.parametrize('pending_state', ['starting', 'waiting_for_endpoint', 'waiting_for_process', 'loading'])
+def test_pending_pc_startup_defers_snapshot_access_without_recreating_watcher(tmp_path, monkeypatch, pending_state):
+    _, calls, events = run_worker(tmp_path, monkeypatch, bootstrap_pending=True,
+                                  bootstrap_pending_state=pending_state)
+    assert calls.count(('pc_startup', 'started')) == 1
+    assert calls.index(('pc_bootstrap_state', pending_state)) < calls.index(('pc_bootstrap_state', 'ready'))
+    assert calls.index(('pc_bootstrap_state', 'ready')) < calls.index(('native_collector', 'recorded-game-root', True))
+    assert ('observer', ('attaching', None)) in events
+
+
+def test_pc_startup_survives_same_source_retries_and_stops_on_mumu(tmp_path, monkeypatch):
+    import capture_cli
+    calls = []
+
+    class Startup:
+        def start(self):
+            calls.append('start')
+
+        def close(self):
+            calls.append('close')
+
+        def observer_factory(self, *_args):
+            pass
+
+    startup = Startup()
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args: startup)
+    worker = CollectionWorker(DesktopState(tmp_path))
+    config = ConnectionConfig(platform='native_pc', native_game_root='recorded-game-root')
+    first = worker._pc_provider(config, True)
+    assert worker._pc_provider(config, True) == first
+    assert calls == ['start']
+    assert worker._pc_provider(ConnectionConfig(platform='mumu'), True) is None
+    assert calls == ['start', 'close']
+    assert worker.pc_runtime is None
+
+
+def test_failed_pc_startup_cleanup_retains_owner_and_historical_failure(tmp_path, monkeypatch):
+    import capture_cli
+
+    class Startup:
+        calls = 0
+
+        def start(self):
+            pass
+
+        def observer_factory(self, *_args):
+            pass
+
+        def close(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError('owned loader call is pending')
+
+    startup = Startup()
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args: startup)
+    worker = CollectionWorker(DesktopState(tmp_path))
+    worker._pc_provider(ConnectionConfig(platform='native_pc', native_game_root='game'), True)
+    with pytest.raises(RuntimeError, match='owned loader call is pending'):
+        worker._pc_provider(ConnectionConfig(platform='mumu'), True)
+    assert worker.pc_runtime is startup
+    assert worker._pc_provider(ConnectionConfig(platform='mumu'), True) is None
+    assert worker.pc_runtime is None
+    assert len(worker.retired_errors) == 1 and 'owned loader call is pending' in worker.retired_errors[0]
 
 
 def test_pc_provider_without_optional_display_attributes_uses_session_state(tmp_path, monkeypatch):
@@ -143,10 +259,11 @@ def test_pc_provider_startup_failure_retains_real_failure_without_snapshot_label
     assert 'trusted provider unavailable' in snapshot['panels'][0]['rate_reason']
 
 
-@pytest.mark.parametrize('factory,enabled', [(None, True), (trusted_factory, False)])
+@pytest.mark.parametrize('factory,enabled', [(None, False), (trusted_factory, False)])
 def test_pc_without_enabled_internal_provider_preserves_snapshot_only(tmp_path, monkeypatch, factory, enabled):
     state, calls, events = run_worker(tmp_path, monkeypatch, factory=factory, enabled=enabled)
-    assert ('session', True, None, None, None, None) in calls
+    assert ('native_collector', 'recorded-game-root', enabled) in calls
+    assert ('session', True, None, None, '', None) in calls
     assert ('observer', ('snapshot_only', None)) in events
     assert state.snapshot()['event_text'] == '官服 PC 累计快照 · 逐事件不可用'
 
@@ -160,6 +277,54 @@ def test_native_factory_does_not_change_android_endpoint_or_observer_path(tmp_pa
     assert ('resolve_android',) in calls
     assert (('android_endpoint', 'expert-android-endpoint') in calls) is enabled
     assert state.snapshot()['observer_status'] == ('ready' if enabled else 'disabled')
+
+
+@pytest.mark.parametrize('platform,enabled,configure_root,should_read', [
+    ('native_pc', True, True, True),
+    ('native_pc', True, False, False),
+    ('native_pc', False, True, False),
+    ('mumu', True, True, False),
+])
+def test_desktop_worker_reads_optional_timeline_in_lobby_only_when_enabled(
+        tmp_path, monkeypatch, platform, enabled, configure_root, should_read):
+    from native_pc.arkframework_replay import RegenerationRecorder
+
+    polls = []
+    def poll(recorder):
+        polls.append((recorder.timeline_path, recorder.output_dir))
+        raise FileNotFoundError('timeline not yet available')
+
+    monkeypatch.setattr(RegenerationRecorder, 'poll', poll)
+    directory = tmp_path / 'ArkFramework' if configure_root else None
+    state, _, _ = run_worker(tmp_path, monkeypatch, platform=platform, enabled=enabled,
+                             arkframework_root=directory, publish=False)
+    assert bool(polls) == should_read
+    assert state.last is None
+    if should_read:
+        journals = list((tmp_path / 'runtime' / 'captures').glob('wpf-*.jsonl'))
+        assert len(journals) == 1
+        assert polls == [(directory / 'battle_timeline.json', journals[0].with_suffix('.arkframework'))] * 2
+        assert journals[0].read_text('utf-8').count('timeline not yet available') == 1
+
+
+def test_source_launcher_preserves_framework_directory_argument(tmp_path, monkeypatch):
+    import desktop_launcher
+
+    executable = tmp_path / 'ArkDPS.Desktop.exe'
+    executable.touch()
+    project = tmp_path / 'desktop' / 'ArkDPS.Desktop.csproj'
+    project.parent.mkdir()
+    monkeypatch.setattr(desktop_launcher, 'ROOT', tmp_path)
+    monkeypatch.setattr(desktop_launcher, 'PROJECT', project)
+    monkeypatch.setattr(desktop_launcher, 'EXECUTABLE', executable)
+    calls = []
+    def launch(args, *, cwd):
+        calls.append(args)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(desktop_launcher.subprocess, 'run', launch)
+    framework = tmp_path / 'Ark Framework'
+    assert desktop_launcher.launch(SimpleNamespace(arkframework_root=framework, platform='native_pc')) == 0
+    assert calls[0][-4:] == ['--platform', 'native_pc', '--arkframework-root', str(framework)]
 
 
 @pytest.mark.parametrize('factory,flags', [
@@ -180,8 +345,8 @@ def test_bridge_main_forwards_explicit_factory_and_preserves_entry_modes(tmp_pat
             calls.append(('lock_closed',))
 
     class Worker:
-        def __init__(self, state, *, endpoint, native_pc_observer_factory=None):
-            calls.append(('worker', endpoint, native_pc_observer_factory))
+        def __init__(self, state, *, endpoint, native_pc_observer_factory=None, arkframework_root=None):
+            calls.append(('worker', endpoint, native_pc_observer_factory, arkframework_root))
             self.thread = SimpleNamespace(start=lambda: calls.append(('started',)))
 
         def request(self, config, enabled):
@@ -203,13 +368,14 @@ def test_bridge_main_forwards_explicit_factory_and_preserves_entry_modes(tmp_pat
     monkeypatch.setattr(desktop_bridge.sys, 'stderr', StringIO())
     monkeypatch.setattr(desktop_bridge.sys, 'argv', [
         'desktop_bridge.py', '--state-dir', str(tmp_path / 'state'),
-        '--platform', 'native_pc', '--native-game-root', 'recorded-game-root', *flags])
+        '--platform', 'native_pc', '--native-game-root', 'recorded-game-root',
+        '--arkframework-root', str(tmp_path / 'framework'), *flags])
     desktop_bridge.main(native_pc_observer_factory=factory)
 
     if '--offline' in flags:
         assert calls == [('served', False)]
     else:
-        assert ('worker', desktop_bridge.DEFAULT_FRIDA_REMOTE, factory) in calls
+        assert ('worker', desktop_bridge.DEFAULT_FRIDA_REMOTE, factory, tmp_path / 'framework') in calls
         assert ('request', 'native_pc', '--no-events' not in flags) in calls
         assert ('started',) in calls and ('served', True) in calls
         assert calls[-2:] == [('closed',), ('lock_closed',)]

@@ -57,14 +57,14 @@ class CollectionSession:
         self.runtime.record = lambda observation: self.audit('lifecycle_observation', observation)
 
     def _is_native_pc(self):
-        return getattr(self.collector.diagnostics, 'platform', None) == 'native_pc'
+        diagnostics = getattr(self.collector, 'diagnostics', None)
+        return getattr(diagnostics, 'platform', None) == 'native_pc'
 
     def _observer_requested(self):
         if self._is_native_pc():
-            # PC providers are explicitly supplied by a trusted caller. A
-            # Frida endpoint never selects the Android observer for this route.
-            return (self.runtime is not None and self.observer_factory is not None
-                    and self.frida_remote is None)
+            # Native Windows observation has no remote Android endpoint.
+            # The empty string is the explicit --no-events sentinel.
+            return self.runtime is not None and self.frida_remote is None
         return bool(self.frida_remote)
 
     def connect(self):
@@ -77,6 +77,12 @@ class CollectionSession:
             self.event_error = getattr(self.collector, 'event_capability', {}).get('error')
             if self.observer_factory is not None and not self._observer_requested():
                 self.event_error = '官服 PC 观察者需要生命周期模式及 frida_remote=None'
+            if self._observer_requested() and callable(getattr(self.collector, 'observer_boot_ready', None)):
+                self.event_status, self.event_error = WAITING_GAME_INIT, None
+                self._next_boot_check = float('-inf')
+                if not self._finish_when_game_ready():
+                    self.audit('observer_waiting_game_init', {'pid': process.pid})
+                return
             self._finish_connect()
             return
         if not self.frida_remote:
@@ -98,7 +104,7 @@ class CollectionSession:
         if not self.collector.observer_boot_ready():
             self._next_boot_check = now + _BOOT_POLL_PERIOD
             return False
-        self.audit('observer_game_init_ready', {'pid': self.collector.core.mc.pid})
+        self.audit('observer_game_init_ready', {'pid': collector_process(self.collector).pid})
         self._finish_connect()
         return True
 
@@ -125,36 +131,57 @@ class CollectionSession:
             time.sleep(min(0.2, remaining))
 
     def _attach_observer(self):
+        # A failed stop can leave live hooks or a native session behind. The
+        # session keeps their ownership across snapshot fallback and must not
+        # construct another observer until every retired owner is released.
+        if not self._retire_observer():
+            self.event_status = 'failed'
+            self.event_error = '旧事件观察者尚未释放，请重试清理后重新连接'
+            self.audit('observer_attach_blocked', {
+                'reason': self.event_error, 'pending_observers': len(self._pending_observers),
+            })
+            return False
         self.event_status, self.event_error = 'attaching', None
         try:
             if self.observer_factory is None:
-                from event_observer import FridaEventObserver
-                self.observer_factory = FridaEventObserver
+                from event_observer import FridaEventObserver, NativePcFridaObserver
+                self.observer_factory = NativePcFridaObserver if self._is_native_pc() else FridaEventObserver
             self.observer = self.observer_factory(self.collector, self.frida_remote)
             self.observer.start()
             self.event_status = 'ready'
             self.audit('observer_ready', {
                 'remote': self.frida_remote, **getattr(self.observer, 'probe_modes', {}),
             })
+            return True
         except Exception as exc:
             self.event_status, self.event_error = 'failed', str(exc)
-            self.audit('observer_error', {'reason': str(exc)})
+            failure = {'reason': str(exc)}
+            script_error = getattr(self.observer, 'script_error', None)
+            if isinstance(script_error, dict) and script_error:
+                failure['script_error'] = dict(script_error)
+            self.audit('observer_error', failure)
             self._retire_observer()
+            return False
 
     def _retire_observer(self):
         """Remove an unusable observer from capture, not from cleanup ownership."""
         observer, self.observer = self.observer, None
-        if observer is None:
-            return
-        try:
-            observer.stop()
-        except BaseException as cleanup:
-            # Store the owner before audit I/O or an interrupt can escape.
+        if self.capture is not None and self.capture.observer is observer:
+            self.capture.observer = None
+        if observer is not None and observer not in self._pending_observers:
+            # Claim ownership before stop or diagnostic I/O can fail.
             self._pending_observers.append(observer)
-            self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
-            self.audit('observer_cleanup_error', {'reason': str(cleanup)})
-            if not isinstance(cleanup, Exception):
-                raise
+        for pending in tuple(self._pending_observers):
+            try:
+                pending.stop()
+            except BaseException as cleanup:
+                self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
+                self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+                if not isinstance(cleanup, Exception):
+                    raise
+            else:
+                self._pending_observers.remove(pending)
+        return not self._pending_observers
 
     def _prepare_battle_observer(self, observation):
         generation = observation.generation
@@ -168,7 +195,6 @@ class CollectionSession:
         # The feed has confirmed a different battle. A failed attempt belongs
         # to this generation even when its first event barrier needs a retry.
         old_status, old_error = self.event_status, error or self.event_error
-        self._retire_observer()
         self._attach_observer()
         self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
         self.audit('observer_retry', dict(generation=generation, previous_status=old_status,

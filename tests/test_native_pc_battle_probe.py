@@ -108,6 +108,11 @@ def runtime(monkeypatch, tmp_path):
         {'known_build': True}, [('known_code', 0x1000, b'known')]))
     api = FakeApi(tmp_path)
     api.write(api.base + 0x1000, b'known')
+    # Explicitly seed a completed, unlocked VM; BattleController alone is not
+    # sufficient evidence that the IL2CPP initialization routine has finished.
+    api.put(api.base + battle.RUNTIME_INIT_FLAGS_RVA, '<BB', 1, 0)
+    api.put(api.base + battle.RUNTIME_INIT_LOCK_RVA, '<Qi', 0, 0)
+    api.put(api.base + battle.RUNTIME_INIT_COUNT_RVA, '<i', 1)
     klass = api.klass('BattleController', 'Torappu.Battle', 515, battle.BATTLE_FIELDS)
     parent = api.klass('SingletonMonoBehaviour`1', 'Torappu')
     logger_class = api.klass('BattleLogger', 'Torappu.Battle', 46, battle.LOGGER_FIELDS)
@@ -152,6 +157,105 @@ def runtime(monkeypatch, tmp_path):
                               controller=controller, native=native, logger=logger,
                               stats=stats, level=level, stage=stage, string_class=string_class,
                               pause=pause, key_set=key_set, key_list=key_list)
+
+
+def test_observer_waits_for_checked_class_and_statics_before_attach(runtime):
+    root, api, p = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.put(api.base + battle.BATTLE_CLASS_SLOT_RVA, '<Q', 0)
+        assert probe.observer_boot_ready() is False
+        api.put(api.base + battle.BATTLE_CLASS_SLOT_RVA, '<Q', p['klass'])
+        api.put(p['klass'] + battle.CLASS_STATICS, '<Q', 0)
+        assert probe.observer_boot_ready() is False
+        api.put(p['klass'] + battle.CLASS_STATICS, '<Q', p['clock'])
+        assert probe.observer_boot_ready() is True
+        assert probe.battle_identity is None and probe._serial == 0
+
+
+def test_observer_boot_check_preserves_unsupported_layout_and_process_change(runtime):
+    root, api, p = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.put(p['klass'] + battle.CLASS_FIELD_COUNT, '<H', 514)
+        with pytest.raises(battle.ResearchFailure, match='field_count_mismatch'):
+            probe.observer_boot_ready()
+        api.created += 1
+        with pytest.raises(battle.ResearchFailure, match='process_creation_time_changed'):
+            probe.observer_boot_ready()
+
+
+@pytest.mark.parametrize('flags,owner,depth,count', [
+    ((0, 0), 0, 0, 0), ((0, 0), 123, 1, 1), ((1, 0), 123, 1, 1),
+    ((1, 0), 123, 0, 1), ((1, 0), 0, 1, 1), ((1, 0), 0, 0, 0),
+    ((1, 0), 0x123456789ABCDEF0, 1, 1), ((1, 0), 123, 1, -1),
+    ((1, 1), 0, 0, 0), ((1, 1), 123, 1, -1),
+])
+def test_observer_boot_waits_for_finished_vm_even_with_valid_battle_statics(
+        runtime, flags, owner, depth, count):
+    root, api, _ = runtime
+    with battle.NativePcBattleProbe(root, api) as probe:
+        probe._binding()  # The old readiness criterion already passes.
+        api.put(api.base + battle.RUNTIME_INIT_FLAGS_RVA, '<BB', *flags)
+        api.put(api.base + battle.RUNTIME_INIT_LOCK_RVA, '<Qi', owner, depth)
+        api.put(api.base + battle.RUNTIME_INIT_COUNT_RVA, '<i', count)
+        assert probe.observer_boot_ready() is False
+
+
+@pytest.mark.parametrize('field,values,reason', [
+    ('flags', (2, 0), 'invalid_runtime_init_flags'),
+    ('flags', (1, 2), 'invalid_runtime_init_flags'),
+    ('lock', (0, -1), 'invalid_runtime_init_lock_depth'),
+    ('count', (-1,), 'invalid_runtime_init_count'),
+])
+def test_observer_boot_does_not_hide_invalid_vm_state_as_waiting(runtime, field, values, reason):
+    root, api, _ = runtime
+    rva, format = {
+        'flags': (battle.RUNTIME_INIT_FLAGS_RVA, '<BB'),
+        'lock': (battle.RUNTIME_INIT_LOCK_RVA, '<Qi'),
+        'count': (battle.RUNTIME_INIT_COUNT_RVA, '<i'),
+    }[field]
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.put(api.base + rva, format, *values)
+        with pytest.raises(battle.ResearchFailure, match=reason):
+            probe.observer_boot_ready()
+
+
+@pytest.mark.parametrize('change', ['shutdown', 'count', 'lock', 'invalid_flags'])
+def test_observer_boot_rechecks_vm_state_around_class_validation(runtime, change):
+    root, api, _ = runtime
+
+    def mutate(address, size):
+        if address == api.base + battle.BATTLE_CLASS_SLOT_RVA:
+            if change == 'shutdown':
+                api.put(api.base + battle.RUNTIME_INIT_FLAGS_RVA, '<BB', 1, 1)
+            elif change == 'count':
+                api.put(api.base + battle.RUNTIME_INIT_COUNT_RVA, '<i', 2)
+            elif change == 'lock':
+                api.put(api.base + battle.RUNTIME_INIT_LOCK_RVA, '<Qi', 123, 1)
+            else:
+                api.put(api.base + battle.RUNTIME_INIT_FLAGS_RVA, '<BB', 1, 2)
+
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.on_read = mutate
+        if change == 'invalid_flags':
+            with pytest.raises(battle.ResearchFailure, match='invalid_runtime_init_flags'):
+                probe.observer_boot_ready()
+        else:
+            assert probe.observer_boot_ready() is False
+
+
+@pytest.mark.parametrize('rva', [battle.RUNTIME_INIT_FLAGS_RVA, battle.RUNTIME_INIT_LOCK_RVA,
+                                 battle.RUNTIME_INIT_COUNT_RVA])
+def test_observer_boot_preserves_vm_state_read_failures(runtime, rva):
+    root, api, _ = runtime
+
+    def fail(address, size):
+        if address == api.base + rva:
+            raise battle.access.ApiFailure('ReadProcessMemory', 299, 0)
+
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.on_read = fail
+        with pytest.raises(battle.access.ApiFailure):
+            probe.observer_boot_ready()
 
 
 def test_stable_native_sample_preserves_raw_counter_sign_and_closes_handle(runtime):

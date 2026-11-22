@@ -2,7 +2,7 @@
 
 Run from the repository, not an extracted download. Inputs land in a fresh empty
 folder; hashes are pinned here. Nothing installs into the developer's Python.
-The full package includes the optional Frida client, NOT a server or ADB.
+The full package includes the Frida client and native PC Gadget, not a server or ADB.
 """
 from __future__ import annotations
 import argparse
@@ -21,6 +21,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from release_identity import candidate_head
+# The vendored upstream also owns a regular package named tools.
+sys.path.insert(0, str(ROOT / 'tools'))
+from frida_gadget_asset import stage_gadget, gadget_metadata
 DEFAULT_VERSION = '1.0.0-rc.8'
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
@@ -38,7 +41,7 @@ BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'bat
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
            'stage_names.py', 'stats_core.py', 'native_pc_collector.py',
-           'event_probe_android2791.js')
+           'event_probe_android2791.js', 'event_probe_native_pc.js')
 
 
 def digest(path):
@@ -76,7 +79,8 @@ def archive_name(version, with_events):
     return f'ArkDPS-{version}-win-x64{suffix}.zip'
 
 
-def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None, with_events=True):
+def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
+          frida_gadget_archive=None, with_events=True):
     if not RELEASE_VERSION.fullmatch(version) or any(
             int(part) > 2147483647 for part in re.findall(r'[0-9]+', version)):
         raise ValueError('Use a version such as 1.0.0 or 1.0.0-rc.1')
@@ -117,7 +121,17 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     for name in BACKEND:
         shutil.copy2(ROOT / name, collector / name)
     for name in ('assets', 'vendor', 'native_pc'):
-        shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        # The separately built ArkFramework DLL belongs to its host, outside the Python worker.
+        ignored = ('__pycache__', '*.pyc', 'arkframework') if name == 'native_pc' else ('__pycache__', '*.pyc')
+        if name == 'vendor':
+            # Only the full variant receives a verified Gadget. A local source
+            # cache must never leak it into a snapshot-only archive.
+            ignored += ('frida',)
+        shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns(*ignored))
+    if with_events:
+        component_dir = collector / 'vendor' / 'frida'
+        stage_gadget(component_dir / FRIDA_VERSION, source_archive=frida_gadget_archive)
+        shutil.copy2(ROOT / 'vendor/frida/COPYING', component_dir / 'COPYING')
     notices = bundle / 'licenses'
     notices.mkdir()
     for name in ('LICENSE', 'THIRD_PARTY.md'):
@@ -132,11 +146,16 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     # Python LICENSE.txt and Frida dist-info/licenses/COPYING stay in their archives.
     metadata = bundle / 'metadata'
     metadata.mkdir()
+    pc_instructions = (
+        '官服 PC 请填写 Arknights.exe 所在目录。逐次事件需要以管理员权限先启动 ArkDPS，再启动游戏。\n'
+        'PC 事件组件随游戏保留到正常退出，仅通过本机认证端点连接。关闭观察者可只采累计。\n'
+        if with_events else
+        '本包仅包含累计快照。官服 PC 请填写 Arknights.exe 所在目录，并关闭「启用观察者」。\n')
     (bundle / 'README.txt').write_text(
         f'ArkDPS {version} · Windows x64\n\n'
         '解压到可写目录，双击 ArkDPS.Desktop.exe。无需安装 Python 或 .NET。\n'
         '在设置中选择 MuMu 或官服 PC。MuMu 需要开启 Root，并使用已适配的安卓游戏 2.7.91。\n'
-        '官服 PC 请填写 Arknights.exe 所在目录。当前支持匹配构建的只读累计统计。\n'
+        f'{pc_instructions}'
         '包内不含 ADB、模拟器或 Frida server。\n\n'
         '更新可在设置页检查。发现新版后点击「查看下载」打开 GitHub Release。\n'
         '升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
@@ -151,6 +170,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         collector_sha256=digest(collector/'desktop_bridge.py'), python='3.12.10',
         python_source=PYTHON_URL, python_archive_sha256=PYTHON_SHA256,
         frida=FRIDA_VERSION if with_events else None, frida_wheel_sha256=FRIDA_SHA256 if with_events else None,
+        native_pc_gadget=gadget_metadata() if with_events else None,
         files={str(p.relative_to(bundle)).replace('\\','/'):digest(p) for p in sorted(bundle.rglob('*')) if p.is_file()})
     assert_no_tk_files(manifest['files'])
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
@@ -180,10 +200,12 @@ def main():
     parser.add_argument('--version', default=DEFAULT_VERSION)
     parser.add_argument('--python-zip',type=Path)
     parser.add_argument('--frida-wheel',type=Path)
+    parser.add_argument('--frida-gadget-archive',type=Path, help='verified official PC Gadget XZ input')
     parser.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
     args=parser.parse_args()
     build(args.output.resolve(), version=args.version, python_zip=args.python_zip,
-          frida_wheel=args.frida_wheel, with_events=not args.without_events)
+          frida_wheel=args.frida_wheel, frida_gadget_archive=args.frida_gadget_archive,
+          with_events=not args.without_events)
 
 
 if __name__=='__main__':

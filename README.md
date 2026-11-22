@@ -7,7 +7,7 @@ ArkDPS 是《明日方舟》的 Windows 战斗统计工具。作战时可以查�
 1. 前往 [GitHub Releases](https://github.com/ChildeRolando/ArkDPS/releases)，下载 Windows x64 便携包 `ArkDPS-<版本>-win-x64.zip`。
 2. 将 ZIP 解压到可写目录，启动 `ArkDPS.Desktop.exe`。便携包自带运行环境，无需另外安装 Python 或 .NET。
 3. 在「连接设置」选择平台。**MuMu 12** 需要启用 Root，并运行适配的安卓客户端 **2.7.91**。有多个实例时，选游戏所在的实例。**官服 PC** 选择包含 `Arknights.exe` 的游戏目录，使用已通过构建校验的 Windows x64 客户端。
-4. 进入战斗开始采集。若 Windows 拒绝官服 PC 的只读句柄，从管理员 PowerShell 启动 ArkDPS 后重试。
+4. 官服 PC 的逐次事件需要**先以管理员权限启动 ArkDPS，再启动游戏**；已在运行时正常退出并重启游戏。观察者就绪后进入战斗。关闭观察者可只采累计。
 
 ## 便携版使用指南
 
@@ -19,7 +19,11 @@ ArkDPS 是《明日方舟》的 Windows 战斗统计工具。作战时可以查�
 
 MuMu 的「启用观察者」可以补充有效伤害、被减伤率、技能期伤害与覆盖率、接敌 DPS、实际护盾吸收和敌人入场等事件数据，需要在模拟器中准备 Frida 服务。观察者未连接时仍可读取伤害和治疗累计，未覆盖的事件指标显示为未知。可查看连接诊断或点击「重连观察者」。[观察者准备说明](docs/windows-release.md#观察者)
 
-官服 PC 使用只读采集，支持分类伤害、治疗、召唤物归属、独立 HUD 与战绩。在开局和编队成员采样完整时，可查看全周期 DPS/HPS。敌情显示当前在场敌人的 HP 和当前名单 HP 合计，实例详情保留已观测最高 HP。关卡配置通过核对后也会显示固定波次计数。最大 HP、逐次伤害、护盾吸收及技能期仍缺少可靠数据。[官服 PC 实机证据与覆盖范围](docs/native-pc-feasibility.md)
+官服 PC 的累计采样支持分类伤害、治疗、召唤物归属、独立 HUD 与战绩。在开局和编队成员采样完整时，可查看全周期 DPS/HPS。敌情显示当前在场敌人的 HP 和当前名单 HP 合计，实例详情保留已观测最高 HP。关卡配置通过核对后也会显示固定波次计数。逐次结算由事件观察者提供。[官服 PC 实机证据与覆盖范围](docs/native-pc-feasibility.md)
+
+官服 PC 的「启用观察者」使用 ArkDPS 自己的 Frida Gadget 启动加载和 PC 探针，已完成一局 CE-5 实机逐次伤害、直接治疗、闪灵护盾吸收及技能窗口对账。普通 worker 已验证探针就绪和重连清理。有效扣血、过量及其他盾机制保留各自的证据限制。[探针实现与实机覆盖](docs/event-capture.md#arkdps-本机-frida-探针)
+
+已有 ArkFramework V2 环境时，可单独加载 ArkDPS 的 `ArkDPS.Collector.dll`，将框架发布的逐笔伤害和直接治疗写入 `exports/ArkDPS/`。官服 PC 的一局 CE-5 实测中，268 笔伤害和 23 笔直接治疗均与同局 BetterBattle 回放逐笔吻合。1.1 版插件分别记录结算治疗量和实际回血。启动 ArkDPS 时传入 `--arkframework-root <框架目录>` 并开启事件记录，还可按笔保存 BetterBattle 回放中的持续回复。当前桌面战绩使用原生累计数据。[实机记录与覆盖范围](docs/event-capture.md#arkframework-v2-逐笔采集插件)
 
 ## 退出与升级
 
@@ -30,6 +34,8 @@ MuMu 的「启用观察者」可以补充有效伤害、被减伤率、技能期
 ## 从源码运行
 
 安装 Python 和 .NET 10 SDK 后，双击仓库根目录的 [start.cmd](start.cmd)。`main` 与预发布包可能对应不同提交，实际版本所用的源码见 [GitHub Releases](https://github.com/ChildeRolando/ArkDPS/releases) 中的构建提交。
+
+源码运行官服 PC 事件采集前，在项目 Python 环境安装 `requirements-windows.txt`，再执行 `python tools/frida_gadget_asset.py` 准备经校验的官方 Gadget。完整便携包构建时会加入该组件。采集组件只在本机通过随机令牌连接，随游戏正常退出结束。
 
 ## 了解更多
 

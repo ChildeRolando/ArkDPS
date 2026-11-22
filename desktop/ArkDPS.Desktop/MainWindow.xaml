@@ -494,7 +494,7 @@
          <TextBlock Text="关闭或连接失败时，继续使用伤害与治疗累计快照。事件未覆盖的统计显示为未知。"
                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
         </StackPanel>
-        <TextBlock x:Name="NativeEventNote" Visibility="Collapsed" Text="PC 版当前提供伤害与治疗累计快照。护盾吸收、有效伤害、技能期和接敌统计显示为未知。"
+        <TextBlock x:Name="NativeEventNote" Visibility="Collapsed" Text="逐次事件需要先以管理员权限启动 ArkDPS，再启动游戏。采集组件随游戏保留到正常退出。各项统计按已验证的覆盖显示。"
                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
         <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         <Button Content="应用设置并重连" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,16,0,0"/>

@@ -5,15 +5,74 @@ import pytest
 from battle_history import BattleHistory
 from battle_lifecycle import BattleRuntime
 from collection_session import CollectionSession
-from collector import ProcessChanged, SampleUnavailable, UnsupportedVersion
+from collector import ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
 from event_capture import CaptureRetry
-from native_pc.probe_native_pc_battle import ResearchFailure
+from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
 from native_pc_collector import BUILD_ID, NativePcCollector
 from panel_model import Category, PanelConfig, Ranking, RateBasis, render_panel, rows_from_statistics
 
 
 OPERATOR = 'char_336_folivo'
 TOKEN = 'token_10010_folivo_car'
+
+
+def frida_binding_fixture():
+    process = object.__new__(NativePcBattleProbe)
+    process.pid, process.process_instance = 123, (123, 456)
+    process._identity = process._last_clock = process._stage_id = None
+    process._serial = 0
+    process.process_alive = lambda: True
+    collector = NativePcCollector(None)
+    collector.process = process
+    mark = dict(frame=10, game_time=1.0, native_process_pid=123, native_fixed_time=str(1 << 32),
+                native_stage_id='Obt/Main/level_main_01-07',
+                native_identity=dict(zip(('controller', 'native', 'logger', 'stats', 'level'),
+                                         map(hex, (0x10000, 0x20000, 0x30000, 0x40000, 0x50000)))))
+    return collector, process, mark
+
+
+def test_frida_opening_binding_predicts_without_advancing_native_serial():
+    collector, process, mark = frida_binding_fixture()
+    before = collector.observer_binding(**mark)
+    assert process._serial == 0 and process.battle_identity is None
+    identity = tuple(int(mark['native_identity'][key], 16)
+                     for key in ('controller', 'native', 'logger', 'stats', 'level'))
+    process._serial = process.battle_serial_for(identity, mark['frame'], 1 << 32, mark['native_stage_id'])
+    process._identity, process._last_clock = identity, (10, 1 << 32)
+    process._stage_id = mark['native_stage_id']
+    assert process._serial == 1
+    assert collector.observer_binding(**mark) == before
+    assert before['native_session'].startswith('123:456:')
+    assert before['source_build'] == BUILD_ID
+    reset = dict(mark, frame=0, game_time=0., native_fixed_time='0')
+    assert collector.observer_binding(**reset) != before
+    assert process._serial == 1
+
+
+def test_frida_different_roots_produce_binding_rejected_by_independent_sample():
+    from event_stream import StreamGap, validate_event_binding
+
+    collector, _, mark = frida_binding_fixture()
+    accepted = collector.observer_binding(**mark)
+    wrong = dict(mark, native_identity={**mark['native_identity'], 'stats': '0x60000'})
+    unverified = collector.observer_binding(**wrong)
+    assert accepted != unverified
+    sample = dict(session=accepted['native_session'],
+                  battle_metadata=dict(platform='native_pc', source_build=BUILD_ID))
+    with pytest.raises(StreamGap, match='different or unverified'):
+        validate_event_binding(sample, unverified)
+
+
+@pytest.mark.parametrize('changed', [
+    dict(native_process_pid=124), dict(frame=True), dict(game_time=float('nan')),
+    dict(native_fixed_time='4294967297'), dict(native_stage_id=''),
+    dict(native_identity={}), dict(native_identity=dict(controller='0x10000', native='0x20000',
+                                                      logger='0x30000', stats='0x40000', level='0x50001')),
+])
+def test_frida_binding_rejects_malformed_clock_identity_or_pid(changed):
+    collector, _, mark = frida_binding_fixture()
+    with pytest.raises(SnapshotGap):
+        collector.observer_binding(**dict(mark, **changed))
 
 
 class Probe:
@@ -79,7 +138,7 @@ def test_finish_outcome_reaches_history_without_publishing_opening_hint(
                    start, finish, ABSENT, ABSENT])
     history = BattleHistory(tmp_path)
     session = CollectionSession(None, None, collector=NativePcCollector(tmp_path, probe_factory=lambda _: probe),
-                                frida_remote=None, history=history)
+                                frida_remote='', history=history)
     session.enable_lifecycle()
     session.connect()
     for _ in range(6):
@@ -108,7 +167,7 @@ def test_recovered_opening_still_has_no_battle_mode_evidence(tmp_path, incomplet
     probe = Probe([opening(), first, recovered, sample(120, 7., state=3), ABSENT])
     history = BattleHistory(tmp_path)
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+    session = CollectionSession(None, None, collector=collector, frida_remote='', history=history)
     session.enable_lifecycle()
     session.connect()
     with pytest.raises(CaptureRetry):
@@ -167,7 +226,7 @@ def test_guarded_pair_publishes_and_archives_once_across_same_stage_restart(tmp_
     history = BattleHistory(tmp_path)
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
     updates = []
-    session = CollectionSession(None, None, collector=collector, frida_remote=None,
+    session = CollectionSession(None, None, collector=collector, frida_remote='',
                                 history=history, on_history=lambda: updates.append(True))
     session.enable_lifecycle()
     session.connect()
@@ -234,7 +293,7 @@ def test_native_full_cycle_integrates_owner_presence_and_survives_history(tmp_pa
                    full_cycle_sample(180, 210., 33., state=3), ABSENT])
     history = BattleHistory(tmp_path)
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+    session = CollectionSession(None, None, collector=collector, frida_remote='', history=history)
     session.enable_lifecycle()
     session.connect()
     assert session.read()['statistics']['rows'] == {}
@@ -283,7 +342,7 @@ def test_native_full_cycle_requires_a_zero_opening_and_contiguous_membership(tmp
     finish_frame = later['sample']['frame'] + 30
     probe = Probe([start, *extra, later, full_cycle_sample(finish_frame, 60., 15.)])
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    session = CollectionSession(None, None, collector=collector, frida_remote=None)
+    session = CollectionSession(None, None, collector=collector, frida_remote='')
     session.enable_lifecycle()
     session.connect()
     session.read()
@@ -305,7 +364,7 @@ def test_native_full_cycle_does_not_divide_a_retained_counter_by_new_presence(tm
     probe = Probe([full_cycle_sample(4, owner_present=False), full_cycle_sample(30, 0., 0.),
                    full_cycle_sample(60, 30., 15.), missing, full_cycle_sample(120, 60., 30.)])
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    session = CollectionSession(None, None, collector=collector, frida_remote=None)
+    session = CollectionSession(None, None, collector=collector, frida_remote='')
     session.enable_lifecycle()
     session.connect()
     for _ in range(3):
@@ -325,7 +384,7 @@ def test_missing_roster_does_not_advance_or_archive_and_marks_gap(tmp_path):
     missing['sample'].update(roster_status='unavailable', roster=None)
     probe = Probe([sample(30, 100.), missing, sample(90, 300., presence=False)])
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    session = CollectionSession(None, None, collector=collector, frida_remote=None,
+    session = CollectionSession(None, None, collector=collector, frida_remote='',
                                 history=BattleHistory(tmp_path))
     session.enable_lifecycle()
     session.connect()
@@ -353,7 +412,7 @@ def test_reused_native_roots_keep_new_battle_separate_after_missing_first_roster
     probe = Probe([first, reset, recovered])
     history = BattleHistory(tmp_path)
     session = CollectionSession(None, None, collector=NativePcCollector(tmp_path, probe_factory=lambda _: probe),
-                                frida_remote=None, history=history)
+                                frida_remote='', history=history)
     session.enable_lifecycle()
     session.connect()
     old = session.read()
@@ -382,7 +441,7 @@ def test_process_restart_archives_once_without_publishing_unreliable_practice(tm
 
     def connect(probe):
         collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-        session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+        session = CollectionSession(None, None, collector=collector, frida_remote='', history=history)
         session.enable_lifecycle(runtime)
         session.connect()
         return session
@@ -426,7 +485,7 @@ def test_enemy_snapshot_retains_its_frame_and_clears_at_battle_boundary(tmp_path
     recovered['sample']['enemies']['entities'][0]['hp'] = 300.
     probe = Probe([first, sample(60, 150.), sample(90, 200.), recovered, ABSENT, sample(3, 0.)])
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    session = CollectionSession(None, None, collector=collector, frida_remote=None)
+    session = CollectionSession(None, None, collector=collector, frida_remote='')
     session.enable_lifecycle()
     session.connect()
 
@@ -621,7 +680,7 @@ def test_stage_plan_only_reaches_enemy_view_not_statistics_or_history(tmp_path):
     history = BattleHistory(tmp_path / 'history')
     probe = Probe([planned_sample(3), planned_sample(6), ABSENT])
     collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
-    session = CollectionSession(None, None, collector=collector, frida_remote=None, history=history)
+    session = CollectionSession(None, None, collector=collector, frida_remote='', history=history)
     session.enable_lifecycle()
     session.connect()
     first, confirmed = session.read(), session.read()
@@ -663,3 +722,74 @@ def test_stage_capture_is_separate_from_enemy_and_after_existing_fields(tmp_path
     now[0] = 1.3
     collector._capture(None, {})
     assert calls == ['core', 'flow', 'stage']
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_action_journal_has_its_own_bounded_sampling_slot(tmp_path, monkeypatch, enabled):
+    import native_pc_collector as native
+
+    now, calls = [0.], []
+    monkeypatch.setattr(native.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(native, '_capture_fields', lambda *_: {'core': True})
+    monkeypatch.setattr(native, 'capture_game_flow', lambda *_: {})
+    monkeypatch.setattr(native, 'capture_enemies', lambda *_: {'enemies_status': 'available'})
+    monkeypatch.setattr(native, 'capture_stage_spawns', lambda *_: {'stage_spawns_status': 'available'})
+
+    def capture_journal(*_):
+        calls.append(now[0])
+        if len(calls) == 1:
+            raise ResearchFailure('unsupported_layout', 'optional_read_budget_exhausted')
+        return {'actions_status': 'available', 'actions': {'records': []}}
+
+    monkeypatch.setattr(native, 'capture_actions', capture_journal)
+    collector = NativePcCollector(tmp_path, collect_actions=enabled)
+    attempts = []
+    for tick in (0., .2, .4, .6, 1., 1.2, 1.4, 1.5):
+        now[0] = tick
+        fields = collector._capture(None, {})
+        assert fields['core'] is True
+        if 'actions_status' in fields:
+            assert 'enemies_status' not in fields and 'stage_spawns_status' not in fields
+            attempts.append(fields['actions_status'])
+    assert attempts == (['unavailable', 'available'] if enabled else [])
+    assert calls == ([.4, 1.4] if enabled else [])
+
+
+def test_native_action_records_are_audited_without_enabling_combat_events(tmp_path):
+    command = dict(journal_index=0, operation='manual_skill', user_game_time=1.5,
+                   data_unique_id=10, id=OPERATOR)
+    journal = dict(scope='manual_spawn_withdraw_skill_journal',
+                   timestamp_basis='BattleController.userFixedPlayTime',
+                   exact_frames_available=False, records=[command])
+    first = sample(60, 100.)
+    first['sample'].update(actions_status='available', actions=journal)
+    unavailable = sample(90, 150.)
+    unavailable['sample'].update(actions_status='unavailable', actions=None,
+                                 actions_reason='manual_actions_changed_during_read')
+    new_battle = sample(3, 0.)
+    new_battle['sample']['battle_serial'] = 2
+    probe = Probe([first, unavailable, ABSENT, new_battle])
+    audits = []
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    session = CollectionSession(None, None, collector=collector, frida_remote='',
+                                audit=lambda kind, payload: audits.append((kind, payload)))
+    session.enable_lifecycle()
+    session.connect()
+    try:
+        initial = session.read()
+        assert initial['native_action_journal'] == dict(status='available', reason=None, snapshot=journal)
+        assert initial['event_status'] == 'unavailable'
+        assert initial['event_watermark'] is None
+        later = session.read()
+        assert later['statistics']['rows'][OPERATOR]['damage'] == 150.
+        assert later['native_action_journal'] == dict(status='unavailable', snapshot=None,
+                                                    reason='manual_actions_changed_during_read')
+        with pytest.raises(CaptureRetry):
+            session.read()
+        next_battle = session.read()
+        assert next_battle['battle_id'] != initial['battle_id']
+        assert 'native_action_journal' not in next_battle
+        published = [payload for kind, payload in audits if kind == 'published']
+        assert published[0]['native_action_journal']['snapshot'] == journal
+    finally:
+        session.close()

@@ -73,6 +73,289 @@ def test_cli_retries_and_writes_ready_raw_journal_and_summary(tmp_path, monkeypa
     assert kinds == ['metadata', 'observer_ready', 'retry', 'published', 'coverage_closed']
 
 
+@pytest.mark.parametrize('startup_failed,required', [(False, True), (True, True), (True, False)])
+def test_pc_cli_owns_startup_before_connect_and_releases_it_last(
+        tmp_path, monkeypatch, startup_failed, required):
+    stub_git_and_clock(monkeypatch)
+    args = options(tmp_path)
+    args.platform, args.native_game_root, args.frida_remote = 'native_pc', str(tmp_path / 'game'), None
+    args.require_events = required
+    calls = []
+
+    class Startup:
+        def start(self):
+            calls.append('arm')
+
+        def wait_ready(self, timeout, cancelled=None):
+            assert calls == ['arm']
+            calls.append('wait_ready')
+            if startup_failed:
+                raise RuntimeError('PC component missing')
+
+        def observer_factory(self, *_args):
+            pytest.fail('the in-memory session only forwards the observer factory')
+
+        def describe(self):
+            return {'status': 'failed' if startup_failed else 'ready'}
+
+        @property
+        def is_failed(self):
+            return startup_failed
+
+        def close(self):
+            calls.append('startup_close')
+
+    startup = Startup()
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args: startup)
+
+    class PcSession(Session):
+        def __init__(self, adb, serial, *, collector, observer_factory, **kwargs):
+            assert observer_factory == startup.observer_factory
+            self.collector = collector
+            super().__init__(adb, serial, **kwargs)
+
+        def connect(self):
+            assert calls[:2] == ['arm', 'wait_ready']
+            calls.append('connect')
+            super().connect()
+            if startup_failed:
+                self.event_status, self.event_error = 'failed', 'PC component missing'
+
+        def close(self):
+            calls.append('session_close')
+            super().close()
+
+    if startup_failed and required:
+        with pytest.raises(RuntimeError, match='PC component missing'):
+            capture_cli.run_capture(args, session_factory=PcSession)
+        assert 'connect' not in calls
+        assert not (args.output_dir / 'READY.json').exists()
+    else:
+        summary = capture_cli.run_capture(args, session_factory=PcSession)
+        assert summary['error'] is None
+        ready = json.loads((args.output_dir / 'READY.json').read_text())
+        assert ready['event_status'] == ('failed' if startup_failed else 'ready')
+    assert calls[-2:] == ['session_close', 'startup_close']
+
+
+@pytest.mark.parametrize('permanent', [False, True])
+def test_pc_connect_bounds_initial_access_denial_after_verified_bootstrap(monkeypatch, permanent):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    calls = []
+    collector = SimpleNamespace(process=None,
+        diagnostics=SimpleNamespace(code='native_permission_denied', details={}))
+
+    def connect():
+        calls.append(clock.now)
+        if permanent or len(calls) == 1:
+            raise SampleUnavailable('initial read access denied')
+
+    current = SimpleNamespace(collector=collector, connect=connect)
+    startup = SimpleNamespace(wait_ready=lambda *_args, **_kwargs: None)
+    if permanent:
+        with pytest.raises(SampleUnavailable, match='initial read access denied'):
+            capture_cli._connect_pc_after_bootstrap(current, startup, timeout=30, cancelled=None)
+        assert 5 <= clock.now <= 5.2
+    else:
+        capture_cli._connect_pc_after_bootstrap(current, startup, timeout=30, cancelled=None)
+        assert len(calls) == 2 and clock.now == .1
+
+
+@pytest.mark.parametrize('phase', ['before_ready', 'after_ready', 'connect_success',
+                                   'connect_failure', 'retry_sleep'])
+def test_pc_connect_cancellation_prevents_later_waits_and_attempts(monkeypatch, phase):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    stopped = [phase == 'before_ready']
+    calls = []
+    collector = SimpleNamespace(process=None,
+        diagnostics=SimpleNamespace(code='native_unavailable', details={'reason': 'module_not_unique'}))
+
+    def wait_ready(timeout, cancelled=None):
+        calls.append('ready')
+        if phase == 'after_ready':
+            stopped[0] = True
+
+    def connect():
+        calls.append('connect')
+        if phase == 'connect_success':
+            collector.process = object()
+            stopped[0] = True
+            return
+        if phase == 'connect_failure':
+            stopped[0] = True
+        raise SampleUnavailable('module still initializing')
+
+    def sleep(duration):
+        calls.append('sleep')
+        clock.now += duration
+        stopped[0] = True
+
+    monkeypatch.setattr(capture_cli.time, 'sleep', sleep)
+    with pytest.raises(InterruptedError):
+        capture_cli._connect_pc_after_bootstrap(
+            SimpleNamespace(collector=collector, connect=connect),
+            SimpleNamespace(wait_ready=wait_ready), timeout=2, cancelled=lambda: stopped[0])
+    assert calls == {
+        'before_ready': [], 'after_ready': ['ready'],
+        'connect_success': ['ready', 'connect'], 'connect_failure': ['ready', 'connect'],
+        'retry_sleep': ['ready', 'connect', 'sleep'],
+    }[phase]
+    if phase == 'connect_success':
+        assert collector.process is not None  # Caller still owns cleanup after cancellation.
+
+
+@pytest.mark.parametrize('ready_elapsed', [1, 1.5])
+def test_pc_connect_does_not_start_after_readiness_uses_positive_budget(monkeypatch, ready_elapsed):
+    clock = stub_git_and_clock(monkeypatch)
+    calls = []
+
+    def wait_ready(timeout, cancelled=None):
+        assert timeout == 1
+        clock.now += ready_elapsed
+
+    with pytest.raises(TimeoutError, match='wait budget'):
+        capture_cli._connect_pc_after_bootstrap(
+            SimpleNamespace(connect=lambda: calls.append('connect')),
+            SimpleNamespace(wait_ready=wait_ready), timeout=1, cancelled=None)
+    assert calls == []
+
+
+@pytest.mark.parametrize('oversleep', [0, .2])
+def test_pc_connect_retries_share_remaining_readiness_budget(monkeypatch, oversleep):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    attempts, sleeps = [], []
+    failure = SampleUnavailable('module not initialized within shared budget')
+    collector = SimpleNamespace(process=None,
+        diagnostics=SimpleNamespace(code='native_unavailable', details={'reason': 'module_not_unique'}))
+
+    def wait_ready(timeout, cancelled=None):
+        clock.now = .95
+
+    def connect():
+        attempts.append(clock.now)
+        raise failure
+
+    def sleep(duration):
+        sleeps.append(duration)
+        clock.now += duration + oversleep
+
+    monkeypatch.setattr(capture_cli.time, 'sleep', sleep)
+    with pytest.raises(SampleUnavailable) as caught:
+        capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+            SimpleNamespace(wait_ready=wait_ready), timeout=1, cancelled=None)
+    assert caught.value is failure
+    assert attempts == [.95] and sleeps == pytest.approx([.05])
+
+
+@pytest.mark.parametrize('ready_elapsed,timeout,end', [(3, 4, 4), (27, 30, 30), (1, 8, 6)])
+def test_pc_connect_access_grace_never_extends_shared_budget_or_retries_after_grace(
+        monkeypatch, ready_elapsed, timeout, end):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    attempts = []
+    failure = SampleUnavailable('verified startup access denial')
+    collector = SimpleNamespace(process=None,
+        diagnostics=SimpleNamespace(code='native_permission_denied', details={}))
+
+    def connect():
+        attempts.append(clock.now)
+        raise failure
+
+    startup = SimpleNamespace(wait_ready=lambda *_args, **_kwargs: setattr(clock, 'now', ready_elapsed))
+    with pytest.raises(SampleUnavailable) as caught:
+        capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+                                               startup, timeout=timeout, cancelled=None)
+    assert caught.value is failure
+    assert attempts and max(attempts) < end and clock.now == pytest.approx(end)
+
+
+@pytest.mark.parametrize('result', ['success', 'module_initializing', 'access_denied', 'not_ready'])
+def test_pc_connect_zero_budget_allows_only_one_immediate_ready_check(monkeypatch, result):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    calls = []
+    collector = SimpleNamespace(process=None, diagnostics=SimpleNamespace(
+        code='native_permission_denied' if result == 'access_denied' else 'native_unavailable',
+        details={'reason': 'module_not_unique'}))
+
+    def wait_ready(timeout, cancelled=None):
+        calls.append('ready')
+        assert timeout == 0
+        if result == 'not_ready':
+            raise TimeoutError('not immediately ready')
+
+    def connect():
+        calls.append('connect')
+        if result != 'success':
+            raise SampleUnavailable('initial connection unavailable')
+
+    current, startup = SimpleNamespace(collector=collector, connect=connect), SimpleNamespace(wait_ready=wait_ready)
+    if result == 'success':
+        capture_cli._connect_pc_after_bootstrap(current, startup, timeout=0, cancelled=None)
+    else:
+        with pytest.raises(TimeoutError if result == 'not_ready' else SampleUnavailable):
+            capture_cli._connect_pc_after_bootstrap(current, startup, timeout=0, cancelled=None)
+    assert calls == (['ready'] if result == 'not_ready' else ['ready', 'connect'])
+    assert clock.now == 0
+
+
+@pytest.mark.parametrize('already_owned', [False, True])
+def test_pc_connect_does_not_retry_after_initial_attempt_owns_a_process(monkeypatch, already_owned):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    owner = object()
+    collector = SimpleNamespace(process=owner if already_owned else None,
+        diagnostics=SimpleNamespace(code='native_unavailable', details={'reason': 'module_not_unique'}))
+    calls = []
+    failure = SampleUnavailable('connected process has further initialization failure')
+
+    def connect():
+        calls.append('connect')
+        collector.process = owner
+        raise failure
+
+    with pytest.raises(SampleUnavailable) as caught:
+        capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+            SimpleNamespace(wait_ready=lambda *_args, **_kwargs: None), timeout=5, cancelled=None)
+    assert caught.value is failure and collector.process is owner
+    assert calls == ['connect'] and clock.now == 0
+
+
+@pytest.mark.parametrize('typed_version_error,code', [
+    (True, 'native_permission_denied'), (True, 'native_unavailable'),
+    (False, 'native_unsupported_build'), (False, 'native_root_required'),
+])
+def test_pc_connect_keeps_permanent_failure_without_retry(monkeypatch, typed_version_error, code):
+    from collector import SampleUnavailable, UnsupportedVersion
+    clock = stub_git_and_clock(monkeypatch)
+    calls = []
+    failure = (UnsupportedVersion if typed_version_error else SampleUnavailable)('permanent checked failure')
+    collector = SimpleNamespace(process=None,
+        diagnostics=SimpleNamespace(code=code, details={'reason': 'module_not_unique'}))
+
+    def connect():
+        calls.append('connect')
+        raise failure
+
+    with pytest.raises(type(failure)) as caught:
+        capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+            SimpleNamespace(wait_ready=lambda *_args, **_kwargs: None), timeout=5, cancelled=None)
+    assert caught.value is failure and calls == ['connect'] and clock.now == 0
+
+
+@pytest.mark.parametrize('timeout', [-1, float('nan'), float('inf'), True, '1'])
+def test_pc_connect_rejects_invalid_budget_before_bootstrap(monkeypatch, timeout):
+    stub_git_and_clock(monkeypatch)
+    with pytest.raises(ValueError, match='finite and nonnegative'):
+        capture_cli._connect_pc_after_bootstrap(
+            SimpleNamespace(connect=lambda: pytest.fail('invalid budget connected')),
+            SimpleNamespace(wait_ready=lambda *_args, **_kwargs: pytest.fail('invalid budget waited')),
+            timeout=timeout, cancelled=None)
+
+
 def test_cli_retains_failure_evidence_and_cleans_up(tmp_path, monkeypatch):
     stub_git_and_clock(monkeypatch)
     Session.failed = True
@@ -197,7 +480,61 @@ def test_app_rejects_disabled_events_in_event_acceptance(tmp_path, monkeypatch):
     assert exc.value.code == 2
 
 
-def test_native_headless_entry_uses_saved_platform_and_never_starts_observer(tmp_path, monkeypatch):
+def test_arkframework_path_selects_pc_for_source_launcher(tmp_path, monkeypatch):
+    import app
+    import desktop_launcher
+    received = []
+    monkeypatch.setattr(desktop_launcher, 'launch', received.append)
+    monkeypatch.setattr(app.sys, 'argv', ['app.py', '--arkframework-root', str(tmp_path)])
+    app.main()
+    assert received[0].platform == 'native_pc'
+    assert received[0].arkframework_root == tmp_path
+    monkeypatch.setattr(app.sys, 'argv', ['app.py', '--platform', 'mumu',
+                                           '--arkframework-root', str(tmp_path)])
+    with pytest.raises(SystemExit):
+        app.main()
+
+
+def test_optional_replay_failure_does_not_interrupt_headless_pc_capture(tmp_path, monkeypatch):
+    from native_pc import arkframework_replay
+
+    stub_git_and_clock(monkeypatch)
+    args = options(tmp_path)
+    args.platform = 'native_pc'
+    args.native_game_root = str(tmp_path / 'game')
+    args.arkframework_root = tmp_path / 'framework'
+    args.frida_remote = None
+    args.require_events = False
+    calls = []
+
+    class UpdatingReplay(arkframework_replay.RegenerationRecorder):
+        def __init__(self, timeline_path, output_dir):
+            assert timeline_path == args.arkframework_root / 'battle_timeline.json'
+            assert output_dir == args.output_dir / 'arkframework'
+            super().__init__(timeline_path, output_dir)
+
+        def poll_if_due(self, now, *, force=False):
+            calls.append(force)
+            if not force:
+                raise ValueError('timeline being rewritten')
+            return args.output_dir / 'arkframework' / 'regeneration-fixture.json'
+
+    def session(adb, serial, *, collector, observer_factory, **kwargs):
+        assert callable(observer_factory)
+        return Session(adb, serial, **kwargs)
+
+    monkeypatch.setattr(arkframework_replay, 'RegenerationRecorder', UpdatingReplay)
+    summary = capture_cli.run_capture(args, session_factory=session,
+                                      native_pc_observer_factory=lambda *_args: None)
+    assert summary['error'] is None and summary['samples'] == 1
+    assert calls[0] is False and calls[-1] is True
+    audit = [json.loads(line)['kind'] for line in
+             (args.output_dir / 'capture.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert audit.count('arkframework_timeline_unavailable') == 1
+    assert audit.count('arkframework_regeneration_saved') == 1
+
+
+def test_native_headless_entry_uses_saved_platform_and_allows_event_acceptance(tmp_path, monkeypatch):
     import app
     from connection import ConnectionConfig, ConnectionConfigStore
 
@@ -224,12 +561,11 @@ def test_native_headless_entry_uses_saved_platform_and_never_starts_observer(tmp
     assert received[0].platform == 'native_pc'
     assert received[0].native_game_root == game_root
     assert received[0].frida_remote is received[0].adb is received[0].serial is None
+    assert received[0].collect_native_actions is True
 
     monkeypatch.setattr(app.sys, 'argv', ['app.py', '--capture-seconds', '1', '--require-events'])
-    with pytest.raises(SystemExit) as exc:
-        app.main()
-    assert exc.value.code == 2
-    assert len(received) == 1
+    app.main()
+    assert len(received) == 2 and received[-1].require_events is True
 
 
 @pytest.mark.parametrize('mode', ['ready', 'failed', 'disabled'])
@@ -266,8 +602,13 @@ def test_headless_pc_observer_uses_the_event_acceptance_path(tmp_path, monkeypat
         snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1., 20.
         events.queue = [event(1, 2, 1., 20)]
 
+    def create_collector(root, *, collect_actions):
+        assert root == str(tmp_path / 'game')
+        assert collect_actions is (mode != 'disabled')
+        return collector
+
     monkeypatch.setattr(capture_cli.time, 'sleep', advance)
-    monkeypatch.setattr(native_pc_collector, 'NativePcCollector', lambda _: collector)
+    monkeypatch.setattr(native_pc_collector, 'NativePcCollector', create_collector)
     monkeypatch.setattr(app, 'ROOT', tmp_path)
     monkeypatch.setattr(app.socket, 'socket', lambda: SimpleNamespace(
         bind=lambda _: None, listen=lambda _: None, close=lambda: None))

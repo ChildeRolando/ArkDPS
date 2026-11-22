@@ -4,6 +4,100 @@
 
 ## 官服 PC 观察者接入
 
+### ArkDPS 本机 Frida 探针
+
+2026-11-22 已在普通官服 PC 新进程中跑通独立 Gadget 启动加载，随后通过 ArkDPS 原有 `CollectionSession` 加载完整 `event_probe_native_pc.js`。一局 CE-5 已完成四类事件对账。正常 CLI 与桌面 worker 现由 `NativePcFridaRuntime` 在连接快照前管理启动和重连。普通 worker 在第二个新游戏进程中自动载入了组件，修正启动阶段访问快照的时序后，已在同一进程验证完整探针重连就绪及清理。[首次启动加载](../runtime/native-pc/frida-development/watch-game-20261122.json) · [完整探针就绪](../runtime/native-pc/frida-development/game-capture-20261122-01/READY.json) · [正常 worker 初始失败](../runtime/native-pc/frida-development/normal-worker-smoke-initial-failure.json) · [正常 worker 重连](../runtime/native-pc/frida-development/normal-worker-smoke-reconnect.json)
+
+官服 PC 的「启用观察者」使用 `NativePcFridaRuntime` 在新游戏启动早期装入固定版本官方 Gadget，再通过本机随机令牌认证连接，将 `NativePcFridaObserver` 与 `event_probe_native_pc.js` 绑定到已验证的 Windows x64 进程。源码与桌面入口共用此默认路径。`--no-events` 关闭观察及启动监听，`--frida-remote` 继续用于 MuMu。
+
+最新生命周期候选已实机连接，首次探针仍有类元数据展开缺陷，见 [2026-11-22 字段表失败及重连](#2026-11-22-字段惰性展开与手动重连)。
+
+PC 探针按匹配构建校验 IL2CPP 字段与方法签名，适配 Microsoft x64 的定点数参数、大型 Modifier 的间接传参与隐藏返回地址。每笔伤害、直接治疗、实际吸盾和技能事件沿用 MuMu 事件种类和顺序。直接治疗记录结算量。数值盾记录同一次回调中的入伤和盾值变化，并保留施盾来源；当前已识别范围沿用 MuMu 的护盾实现。未识别的盾上下文报告覆盖缺口。技能开始和结束按效果回调处理，并保留干员退场的结束证据。
+
+`mark/read/ack` 队列保留确认前的记录，回调在途计数与世代约束同帧累计。PC 标记还带进程编号、五个战局所有权引用、关卡和原始 Q32.32 时钟。主机使用采样器相同的战局切换规则计算候选绑定，再要求独立的受守卫快照与前后两份标记一致。只在这次核对通过后入账。启动时等待类和静态数据初始化，版本、身份或调用约定不符时停止发布对应事件。
+
+2026-11-21 的 `edf396b` 工作树候选已通过生产脚本的受控执行测试，覆盖伤害、治疗、两笔实际吸盾、技能起止、确认重读与跨局隔离。真实 Windows 自建 C++ 子进程中的 Frida 回归确认了大型结构返回和参数解析。官服 PC 实机尚未连通：旧进程与用户重启后的大厅进程均在加载 Frida agent 时返回 `ProcessNotRespondingError`，探针脚本未执行。管理员令牌、所需访问句柄及所检查的进程策略已核对；相同环境能连接自建进程。独立 Frida 17.27.4 对照同样失败。失败原因仍待定位。诊断与自建进程回执保存在本机 `runtime/native-pc/frida-development/`，它们没有认证官服战斗覆盖。
+
+2026-11-22 继续按官方 Frida 源码、Gadget/GumJS 文档、Windows 消息 Hook 文档及 ArkFramework 启动器源码扩展验证。结果按运行对象分开记录：
+
+| 路径 | 自有进程 | 已运行的官服 PC |
+| --- | --- | --- |
+| 本机 attach，17.26.1、17.27.4 与旧加载器版本 17.24.3 | 能建立会话 | 均在探针执行前失败 |
+| 官方 Gadget，由普通远程 `LoadLibraryW` 加载 | 17.26.1、17.27.4 均能认证连接并执行脚本 | 加载线程结束，未观察到 Gadget 模块或监听 |
+| 指定窗口线程的 `WH_GETMESSAGE` 引导 | 管理员控制通过，Hook 与桥接 DLL 正常清理 | 桥接 DLL 未载入、回调未执行，Hook 与配置已清理 |
+| 指定窗口线程的 `WH_CALLWNDPROC` 引导 | 管理员控制通过，消息传递和清理正常 | `WM_NULL` 正常返回，但桥接 DLL 未载入、回调未执行，临时资源已清理 |
+| 官方静态 GumJS 17.26.1 嵌入自建宿主 | JS、Interceptor、消息往返与卸载通过 | 尚未加载 |
+
+在我们自己的诊断进程里跟踪 Windows 线程创建返回值，观察到游戏中的 Frida 工作线程以 `0xDEADC0DE` 提前退出。对相同 Windows 模块入口的只读比较还发现，目标中的 `LdrInitializeThunk` 和 `NtCreateThreadEx` 与控制进程不同。现有证据不能确认具体拦截模块或分支。游戏窗口未最小化、未挂起，限时 `WM_NULL` 响应正常。自有进程通过证明测试路径可工作，不证明官服游戏内兼容。[线程返回记录](../runtime/native-pc/frida-development/thread-result-tracer-game.json) · [窗口线程失败记录](../runtime/native-pc/frida-development/hook-control/game-window-thread.json) · [窗口响应记录](../runtime/native-pc/frida-development/ui-game-result.json) · [嵌入 GumJS 控制](../runtime/native-pc/frida-development/gumjs-own-control/receipt.json)
+
+独立启动加载实验已通过。`watch-gadget.py` 先按构建、可执行文件完整路径和创建时间核对目标，只接受开始等待之后的新进程；观察到新游戏约 15.8 毫秒后，约 51.6 毫秒开始普通 `LoadLibraryW` 调用。官方 Gadget 随后成功认证并执行控制脚本，返回同一 PID 的 Windows x64 身份。实验不修改游戏目录。Gadget 按游戏进程生命周期保留，只在本机带随机令牌监听。退出采集时脚本和会话可释放，组件随游戏正常退出结束。相同路径的自有进程控制与管理员复测验证了正常退出后的监听和配置清理。[自有启动控制](../runtime/native-pc/frida-development/watch-owned2-admin.json) · [新游戏启动实测](../runtime/native-pc/frida-development/watch-game-20261122.json) · [Gadget 官方文档](https://frida.re/docs/gadget/) · [GumJS 官方接口](https://github.com/frida/frida-gum/blob/17.26.1/bindings/gumjs/gumscript.h)
+
+本轮 CE-5 的独立验证基线为第 6 帧，结束为第 6066 帧，共 954 份有效样本。原始事件序号 1–1477 连续，基线前 3 条单独保留，不将基线前时段认证为完整覆盖。
+
+| 实测项目 | 结果 |
+| --- | --- |
+| 逐次伤害 | 244 笔对外结算按 MuMu 口径与逐干员原生累计一致。另有 167 笔自伤保留在原始日志，未计入对外伤害。 |
+| 直接治疗 | 74 笔名义治疗合计 53868.298883；同笔实际 HP 回复合计 14424.249665，与原生全局治疗 14424.25 在 Float32 累加误差内一致。 |
+| 实际吸盾 | 5 笔闪灵二技能各吸收 316.5，合计 1582.5，入伤、盾值变化及施盾来源均有原始证据。 |
+| 技能窗口 | 41 个窗口与统计结果一致，其中 39 个有明确结束回调，2 个在战斗结束时截断。重复开始通知未重复计窗。 |
+
+五笔护盾样本均为破盾，未认证非破盾部分吸收或其他盾类型。本轮 244 条普通 `damage_settlement` 的严格 HP 证据仍不完整；其中 242 笔相邻伤害事件有 HP 前后证据，两笔仍未知。该证据门槛与 MuMu 原探针相同，统计保留有效扣血、过量及相关技能统计的不完整状态。该实测支持以上已观察机制，不认证所有游戏机制。[逐笔对账及原始摘要](../runtime/native-pc/frida-development/game-capture-20261122-01/independent-audit-709d131497/receipt.json) · [继承的结算证据门槛分析](../runtime/native-pc/frida-development/game-capture-20261122-01/independent-audit-709d131497/settlement-emitter-analysis.json)
+
+#### 2026-11-22 生命周期候选启动失败
+
+候选 `2c2133f3e5a8222cc6e7276f1e4e3179f0aaa57c` 在用户重启官服游戏后进入 `process_failed/startup_failed`，错误为 `WinError 299`；租约仍为 `loading`、`pending_loader=false`，本机 27382 端点未监听。本次未建立事件连接。已保存的状态不能唯一判断失败发生于首次模块准备还是线程结束后的模块验证。[原始失败回执](../runtime/native-pc/frida-development/live-299-20261122-124213/receipt.json) · [启动状态记录](../runtime/native-pc/frida-development/live-299-20261122-124213/bootstrap-events.jsonl)
+
+代码审计发现，原型在进入加载前等待模块查询和 Windows loader export 就绪，迁移后的首次 Gadget 查询却在等待循环外；此外，线程结束后的模块查询失败也不能作为重新加载的依据。返修须分别覆盖提交前的有界准备重试、提交后继续验证原操作，直接回归入口为 `tests/test_native_pc_windows_loader.py`，约束见[加载的两个阶段](native-pc-frida-state-machine.md#windows-加载的两个阶段)。该候选此前 742 项回归和自有进程控制通过，不认证本次官服启动；后续候选连接结果见下节，原 CE-5 对账范围及覆盖缺口保持原记录。
+
+#### 2026-11-22 冷启动就绪与重复重试缺陷
+
+发行候选 `10d66b60e089514d8a7ac0ca0d4d6e07c103a982`（`1.0.0-rc.2026112202`）已在新游戏实例冷启动加载、认证并最终达到完整探针就绪，手动重连后也再次就绪。但首次就绪前发生 15 次 `access violation accessing 0x10`，脚本失败后的主动清理被误归为端点故障，使认证世代从 1 增至 16，手动重连后为 17。本轮证明建立过完整探针连接，同时保留初始化准入及清理归因缺陷，不是完整生命周期验收通过。[不可覆写的实机回执](../runtime/native-pc/desktop-fsm-fix-20261122-130142/observed-game-52372-receipt.json) · [原始启动记录](../runtime/native-pc/desktop-fsm-fix-20261122-130142/observed-game-52372-startup.jsonl)
+
+返修在原类绑定前后验证初始化计数、晚期字节、退出字节及初始化锁 owner/depth，完成初始化且元组稳定后才准入。类枚举新增空行防护，必需类、布局和其他读取错误仍保留失败；受控空行可复现相同地址异常，不能据此唯一定位这 15 次现场异常。主动清理使用物理会话独立的释放意图，迟到旧回调无副作用，真实当前会话断线仍按资源释放后重新认证处理。[初始化及断开约束](native-pc-frida-state-machine.md#探针初始化与断开归因)列出对应回归。上述返修的离线和自有进程控制结果不能替代返修包的新实机验证。
+
+#### 2026-11-22 字段惰性展开与手动重连
+
+候选 `b49ccd0bf96fe1b9e386b96aeb49e96d33e47390`（`1.0.0-rc.2026112203`）在真实新游戏进程中完成组件加载和认证，首次完整探针在 `fieldOffsets`（14:68）至 `<eval>`（163）的 `BasicSkill` 字段检查处报 `access violation accessing 0x10`。该路径在字段数非零时直接读取尚未展开的 `Class.fields`。全局 VM 门槛通过不能代替各个类的元数据准备。此次主动清理没有制造伪断线重试，认证世代保持 1；手动重连后为 2，完整探针就绪。首次失败仍保留，此结果不等于完整生命周期验收通过。[实机错误与重连回执](../runtime/native-pc/desktop-fsm-fix-20261122-132153/lazy-field-failure/receipt.json) · [保留原始堆栈的启动记录](../runtime/native-pc/desktop-fsm-fix-20261122-132153/lazy-field-failure/startup.jsonl)
+
+返修将字段与方法统一改为官方元数据 API 枚举，触发 `SetupFields` / `SetupMethods`，随后保留数量、原表、声明类及名称、偏移、签名的硬校验，不把缺失改成等待，也不通过 `il2cpp_runtime_class_init` 执行静态构造。元数据接口可能写入缓存或分配静态存储。[字段及方法的离线代码证明](../runtime/native-pc/desktop-fsm-fix-20261122-132153/il2cpp-lazy-metadata-binary-proof.json)与受控夹具分别覆盖二进制机制和实际 JS；该返修仍须独立实机验证，不以旧候选的手动重连成功代替首次初始化验证。
+
+### ArkFramework V2 逐笔采集插件
+
+`ArkDPS.Collector.dll` 由 ArkDPS 构建，以 `damage_meter.dll` 为直接依赖。后者在战斗结算时生成带全局序号、逻辑帧和帧内序号的 V2 事件。ArkDPS 每次从上次写入的序号继续读取，保留来源、召唤物宿主、目标、计算量、实际 HP 变化量和覆盖标记。`kind=2` 表示伤害或治疗结算，其中 `damage_type=4` 表示上游识别出的治疗。`kind=3` 表示元素积累。上游未提供实际吸盾量、施盾者或技能的生效和结束回调，计算量与实际扣血之间的差额不能归作吸盾。[上游 V2 契约](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/include/ark/battle.h)
+
+每次加载插件都会在框架根目录的 `exports/ArkDPS/` 创建一份 UTF-8 JSONL。首行记录宿主 PID、进程创建时间和测试宿主标记。`batch.events` 保留 V2 原始记录，`partial`、`overrun` 或 `gap` 表示覆盖受限。中途加载时首批可能含服务保留的本局早期记录。V2 的 `battle` 是该服务自己的战局编号。当前 DLL 单独交付，WPF 战绩仍使用 ArkDPS 原生累计。实机操作见[演习步骤](native-pc-player-test-guide.md#arkframework-逐笔伤害与治疗)。
+
+2026-11-21 官服 PC 实测，CE-5 从开局第 0 帧录到结束第 6049 帧。采集文件的 PID 和进程创建时间与本次游戏一致，`test_host=false`。本局序号从 1 连续到 1162，批次未报告缺口或溢出。与 BetterBattle 同局回放按逻辑帧、来源、目标和实际量逐笔核对，同帧重复命中保留重数。
+
+| 结算 | 笔数 | 实际量合计 |
+| --- | ---: | ---: |
+| 对敌伤害 | 230 | 221,000.00 |
+| 我方承伤 | 38 | 14,281.72 |
+| 闪灵直接治疗 | 23 | 11,879.85 |
+
+按两份文件各自的原始顺序逐行比较，排除回放单列的 46 笔持续回复后，291 笔的帧、来源、目标和实际量依次相同。53 个逻辑帧各有多笔伤疗，共 115 笔，单帧最多 4 笔。第 388 帧的序号 63 是 30.78 物理伤害，序号 64 是闪灵对米格鲁实际回血 500。该基准保留同帧重复命中，可供独立 PC 事件源核验顺序。本局没有可核验的实际吸盾和技能生效、结束记录。
+
+这 291 笔在回放中全部匹配。第 388 帧闪灵治疗米格鲁，结算治疗量 727.95，实际回血 500。另有 8 笔元素积累单独记录。10 笔对敌伤害和全部 38 笔我方承伤缺少攻击方 ID。本次原始 JSONL、结束帧回放与终局累计保存在本机 `runtime/native-pc/2026-11-21-battle/arkframework-ce5-34020/`。
+
+Collector 1.1.0 在每笔直接治疗中新增 `direct_healing.amount` 和 `direct_healing.actual_hp_restored`。前者是 MuMu 统计治疗使用的结算量，后者是实际回血。1.1.0 在受控宿主回放后，也在同一官服游戏进程重新加载，从 V2 读回上局留存的 1,162 条事件。两份实机文件的进程创建时间一致，序号均为 1–1162，每条事件的原有字段都相同。闪灵的 23 笔结算量合计 16,742.85，实际回血合计 11,879.85。两次加载对应同一局，只统计一次。本次候选基于 `edf396b` 工作树，实机客户端的 GameAssembly SHA-256 前缀为 `cf7956bf88a6`。
+
+启动 WPF 或无界面 PC 采集时，传入 `--arkframework-root <框架目录>` 可在开启事件记录时读取 BetterBattle 的 `battle_timeline.json`。ArkDPS 单独保存原始战局的 type 6 持续回复，包括每笔逻辑帧、来源与目标的 ID、实例 UID 和实际量。该局有 46 笔共 366.875，按 MuMu 口径单列，HPS 沿用原生直接治疗。每次读取替换该回放的已录结果，避免重复累计；出现时间线分叉或跳转时，文件中的覆盖状态会反映这一点。回放身份由关卡、种子和创建时间标识，独立于 V2 战局编号。WPF 的文件保存到 `runtime/captures/<运行名>.arkframework/`，无界面采集保存在该次输出目录的 `arkframework/`。
+
+当前公开数据只给出瞬时盾量和层数，没有该次实际吸收与施盾者。技能逐帧状态也缺少同一帧内与伤害的先后顺序。PC 仍不能按 MuMu 口径确认实际吸盾或技能生效、结束。[逐帧状态说明](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/docs/ExternalBridge.md)
+
+源码位于 `native_pc/arkframework/`。用 Windows x64 C++17 编译器及 CMake 3.22 或更高版本构建。`ARKFRAMEWORK_INCLUDE_DIR` 指向含 `ark/plugin.h` 和 `ark/battle.h` 的 SDK 目录。插件针对上面固定提交的宿主 ABI 与 ImGui 版本构建。
+
+```powershell
+cmake -S native_pc/arkframework -B runtime/native-pc/arkframework-build -DARKFRAMEWORK_INCLUDE_DIR="D:/src/ArkFramework/include"
+cmake --build runtime/native-pc/arkframework-build --config Release
+```
+
+### 原生快照与同帧观察者
+
+ArkDPS 通过原有只读句柄采集游戏的手动操作日志，覆盖部署、撤退和手动技能指令。它和累计数据共用战局与逻辑帧守卫，单次最多读最近 64 条原始日志记录。WPF 在连接设置中使用「记录手动操作」，无界面采集使用 `--no-events` 关闭。
+
+在 WPF 与无界面采集的 JSONL 中，`published` 样本的 `native_action_journal` 字段记录可用状态及日志尾部。`journal_index` 在游戏战局内排序，相邻采样可以重叠。`user_game_time` 使用游戏的 `userFixedPlayTime` 时钟，外层 `frame` 是读取帧。`tail_truncated` 标明已省略更早的原始条目。解析失败保留 `unavailable` 和原因，累计统计仍可发布。手动技能指令与实际技能生效、结束是不同记录，手动操作日志独立于下面的战斗事件覆盖和 `--require-events`。
+
 已验证来源可以通过 `CollectionSession` 的 `observer_factory` 注入观察者，启用战局生命周期并传入 `frida_remote=None`。无界面采集入口 `app.main` 和桌面桥接入口 `desktop_bridge.main` 都接受可信调用方显式传入的 `native_pc_observer_factory`，只在选择 PC 且启用事件观察时传入会话。无界面采集沿用 `--require-events` 验收。观察者启动失败时不写就绪文件，事件流失效时保留失败证据。工厂、启动、失败后的资源释放、下一局重试及状态仍由会话管理。当前 PC 产品使用原生累计快照，发行入口尚未配置可验收的 Windows 逐次事件来源。
 
 PC 的原生累计和编队在 `read_lifecycle()` 的一次事务中采集。`BattleFeed` 在这次事务前后分别取观察者水位。两次水位必须同帧、同游戏时间、同序号和同回调世代，且没有正在执行的事件。两个水位、批次以及可选的终局水位必须携带相同的 `native_session` 与 `source_build`，也必须与快照一致。原生战局身份作为不透明值比较，统计与归档继续使用 `feed:generation`。
@@ -13,6 +107,8 @@ PC 观察者须实现 `read_through(sequence)` 和 `commit_events(sequence)`，�
 确认响应超时后，消费端保留已经入账的事件和已完成的归档。后续可以确认同一战局新入账的水位，或在确认观察者身份、战局和水位后重试原确认。重读的 PC 事件按首次接受的原始记录校验。内容一致的重读不重复入账，编队补齐后的归属只用于新事件。原始记录冲突时，该批次不能用于归属或入账。初次累计基线已覆盖的旧记录不计入逐次统计。发布端确认操作必须可重复，并且只能释放对应战局中已确认的前缀。
 
 PC 敌情使用已验证的敌人名单作为起点，复用同一个事件归并器处理 HP 变化、重生、最大 HP 和离场。合格事件仍可更新敌情，过期的名单快照单独保留观测时间和状态。敌人事件发生缺口后回退到原生名单和 HP。只有从零帧、空名单开始且入场和状态事件完整、各实例容量明确时，才能认证已入场总 HP。关卡计划仍使用独立证据。
+
+对于在同一采集窗口内确实发生伤害、治疗、实际吸盾和完整技能起止的 PC 战斗，可用 `python acceptance/verify_live_events.py <无界面采集目录> --pc-settlements` 核对 `summary.json` 和 `capture.jsonl`。报告分别核算原生累计增量、实际扣血、吸盾和技能持续时间。报告的结论限于输入日志的数值和顺序，实机来源仍须由对应战斗的采集记录确认。
 
 当前测试通过同一会话核对伤害、治疗、护盾和技能期事件入账、终局以及单次归档。负对照覆盖迟到或错局的水位和批次、跨回调重试、缺少覆盖声明、错误的终局身份，以及缺少有界读取或提交确认。敌情投影也通过了快照过期时事件继续推进、真实缺口退回快照、重复前缀保留和总 HP 覆盖的离线对照。Windows 实时逐次事件来源仍待实机验收。
 

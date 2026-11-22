@@ -523,8 +523,11 @@ public partial class MainWindow : Window
         NativeConnectionFields.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
         MumuEventNotes.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
         NativeEventNote.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
-        EventsEnabled.IsEnabled=!native;
-        EventsEnabled.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
+        EventsEnabled.Content="启用观察者";
+        if(native && App.BridgeArguments.Contains("--arkframework-root"))
+        {
+            NativeEventNote.Text="ArkDPS Frida 探针在游戏结算时采集事件，需以管理员权限启动。另按 BetterBattle 回放记录持续回复。";
+        }
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
             or "--frida-remote" or "--platform" or "--native-game-root")
             ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。"

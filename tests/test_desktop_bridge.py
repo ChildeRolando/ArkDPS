@@ -1807,12 +1807,12 @@ def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed
         details={'win32_error': 5} if denied else {})
     class NativeCollector:
         diagnostics = diagnostic
-        def __init__(self, root):
+        def __init__(self, root, *, collect_actions):
             calls.append(('collector', root))
     class Session:
         cleanup_errors = {}
         def __init__(self, adb, serial, *, collector, frida_remote, **kwargs):
-            assert adb is serial is frida_remote is None
+            assert adb is serial is None and frida_remote == ''
             self.collector = collector
             calls.append(('session',))
         def enable_lifecycle(self, runtime):
@@ -1834,7 +1834,7 @@ def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed
     monkeypatch.setattr(desktop_bridge, 'resolve_configured', forbidden)
     monkeypatch.setattr(desktop_bridge, 'ensure_frida_endpoint', forbidden)
     monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', forbidden)
-    worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), True)
+    worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), False)
     worker.run()
     events = list(worker.events.queue)
     assert calls == [('collector', 'game'), ('session',), ('close',)]
@@ -1858,7 +1858,7 @@ def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
     from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     state = DesktopState(tmp_path / 'state')
-    worker = CollectionWorker(state)
+    worker = CollectionWorker(state, native_pc_observer_factory=lambda *_args: None)
     calls, sessions = [], []
     configs = {
         'mumu': ConnectionConfig(adb_path='adb', serial='mumu-serial', auto_detect=False),
@@ -1869,7 +1869,7 @@ def test_worker_switches_native_and_mumu_only_after_releasing_old_session(
                                      selected_serial='mumu-serial', version_actual='build')
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
-        def __init__(self, root):
+        def __init__(self, root, *, collect_actions):
             calls.append(('native_collector', root))
     class Session:
         cleanup_errors = {}
@@ -1942,7 +1942,7 @@ def test_native_permanent_connect_failures_wait_for_user_but_absence_recovers(
     clock, attempts, explicit = [0.0], [], []
     monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
     class NativeCollector:
-        def __init__(self, root):
+        def __init__(self, root, *, collect_actions):
             attempts.append(clock[0])
             failed = len(attempts) == 1
             self.diagnostics = ConnectionDiagnostics(
@@ -1989,7 +1989,7 @@ def test_native_process_change_releases_old_handle_and_reconnects(tmp_path, monk
     calls = []
     class NativeCollector:
         diagnostics = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform='native_pc')
-        def __init__(self, root):
+        def __init__(self, root, *, collect_actions):
             calls.append('open')
     class Session:
         cleanup_errors = {}
@@ -2047,7 +2047,7 @@ def test_new_source_apply_wins_over_old_session_recovery(
 
     class NativeCollector:
         diagnostics = diagnostic('native_pc')
-        def __init__(self, root):
+        def __init__(self, root, *, collect_actions):
             pass
 
     class Session:
@@ -2100,6 +2100,7 @@ def test_new_source_apply_wins_over_old_session_recovery(
 
 @pytest.mark.parametrize('saved_platform,args,expected', [
     ('mumu', ['--native-game-root', 'override-game'], 'native_pc'),
+    ('mumu', ['--arkframework-root', 'framework root'], 'native_pc'),
     ('native_pc', [], 'native_pc'),
     ('native_pc', ['--platform', 'mumu'], 'mumu'),
     ('native_pc', ['--platform', 'mumu', '--native-game-root', 'override-game'], 'mumu'),

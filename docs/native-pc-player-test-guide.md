@@ -2,7 +2,23 @@
 
 **先开记录，再按卡片打。** 把采样想成每隔一小会儿抄一次游戏里的记分牌。它能记住当时的累计分，也能看出后来多了多少。两次抄表之间发生了几次命中、哪一次打破了盾，需要游戏另留一条逐次记录。下面把现在能采到的项目和需要额外数据的项目写清楚。
 
-## 开打前看一眼
+## ArkDPS 本机 Frida 探针
+
+当前源码已接入 ArkDPS 自己的 Windows x64 Frida 探针和启动管理。先以管理员权限启动 ArkDPS、选择官服 PC 并启用观察者，再正常启动游戏。等待观察者就绪后进入战斗。2026-11-22 已完成 CE-5 的逐次伤害、直接治疗、闪灵吸盾及技能窗口对账，普通 worker 已验证重连和清理。组件按游戏进程生命周期保留。[加载方式与实机覆盖](event-capture.md#arkdps-本机-frida-探针)
+
+## ArkFramework 逐笔伤害与治疗
+
+1. 在已提供 `ark.battle.events.v2` 的 ArkFramework 环境里，把 `ArkDPS.Collector.dll` 放入框架根目录的 `plugins`。在插件管理器加载 `ArkDPS Collector`。它依赖同一环境中的 `damage_meter.dll`。
+2. 打开框架根目录的 `exports/ArkDPS/`，确认本次新建了 `events-*.jsonl`，首行是 `header`，且 `test_host` 为 `false`。出现这份文件说明采集器已打开事件服务。DLL 随宿主运行。
+3. 进 **CE-5 演习**，带一名能稳定承伤的重装和一名单体医疗。把重装放在医疗范围内，等它受伤并被实际治疗几次，打到结算。记下重装与医疗名字，保留这一份 JSONL。此局用来确认逐笔伤害和非零治疗，协议中没有护盾吸收和技能起止事件。
+
+从源码同时记录持续回复时，在仓库根目录运行下面的命令，把目录换为本机的 ArkFramework 根目录。在桌面连接设置启用「记录手动操作与持续回复」。采集器按原始回放的每笔实际回复保存，已有 CE-5 样本可以直接复核。
+
+```powershell
+python app.py --platform native_pc --arkframework-root 'E:\Desktop\ArkFramework\ArkFramework'
+```
+
+## 原生累计采样前的准备
 
 - 保持官服游戏正常打开。所有下方命令都在**管理员 PowerShell** 里整条复制执行。每条命令会自动取一个不同的文件名。
 - 看到 `recording` 再切回游戏。一个采样结束后再开下一个。能演习就演习，关闭代理指挥。

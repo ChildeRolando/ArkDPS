@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import math
 from pathlib import Path
+import re
 import struct
 import time
 
@@ -10,6 +12,7 @@ from collector import ProcessChanged, SampleUnavailable, SnapshotGap, Unsupporte
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
 from enemy_telemetry import EnemyTelemetry, NativeEnemyObservations, _load_enemy_db, native_enemy_view
 from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
+from native_pc.probe_native_pc_actions import capture_actions
 from native_pc.probe_native_pc_battle import NativePcBattleProbe, ResearchFailure
 from native_pc.probe_native_pc_enemies import capture_enemies
 from native_pc.probe_native_pc_flow import capture_game_flow, finish_transition
@@ -22,11 +25,12 @@ from source_classification import classify_unmapped_source
 
 
 BUILD_ID = 'win-x64:' + KNOWN_FILES['GameAssembly.dll']
-SNAPSHOT_ONLY = '官服 PC 当前提供累计统计。逐次伤害、技能期与护盾吸收暂无数据。'
+SNAPSHOT_ONLY = '官服 PC 事件观察尚未连接，当前显示原生累计统计。'
 ENEMY_SAMPLE_INTERVAL = 1.0
 ENEMY_MAX_AGE = 2.5
 STAGE_PLAN_RETRY_INTERVAL = 1.0
 STAGE_PLAN_RECHECK_INTERVAL = 5.0
+ACTION_JOURNAL_SAMPLE_INTERVAL = 1.0
 
 
 def _flow(report):
@@ -97,9 +101,10 @@ class NativePcCollector:
 
     enemy_frame_bound = True
 
-    def __init__(self, game_root, *, probe_factory=None):
+    def __init__(self, game_root, *, probe_factory=None, collect_actions=True):
         self.game_root = Path(game_root).expanduser() if game_root else None
         self.probe_factory = probe_factory or NativePcBattleProbe
+        self.collect_actions = collect_actions
         self.process = None
         self._pending = None
         self._enemy_battle = None
@@ -112,6 +117,7 @@ class NativePcCollector:
         self._stage_plan_candidate = None
         self._stage_plan_confirmed = None
         self._next_stage_plan = float('-inf')
+        self._next_action_journal = float('-inf')
         self.event_capability = dict(status='unavailable', error=SNAPSHOT_ONLY)
         self.diagnostics = ConnectionDiagnostics(platform='native_pc', version_expected=BUILD_ID,
             native_game_root=str(self.game_root) if self.game_root is not None else None)
@@ -156,6 +162,52 @@ class NativePcCollector:
         diag.message = '官服 PC 已连接 · 只读累计统计'
         diag.details = {'build': self.process.build, 'fixed_module_bytes_match': True}
 
+    def observer_binding(self, *, frame, game_time, native_identity, native_stage_id,
+                         native_process_pid, native_fixed_time):
+        """Name a probe mark for independent validation by the guarded sample.
+
+        The opening mark precedes the native read. It predicts the sampler's
+        next serial using the same transition rule, without updating its state.
+        The capture barrier then requires the independently sampled identity,
+        exact clock and both marks to agree before any event is accepted.
+        """
+        process = self.process
+        if process is None or not process.process_alive():
+            raise ProcessChanged('官服 PC 游戏进程已退出，无法确认事件归属。')
+        if (type(native_process_pid) is not int or native_process_pid != process.pid
+                or not isinstance(native_identity, dict)
+                or set(native_identity) != {'controller', 'native', 'logger', 'stats', 'level'}):
+            raise SnapshotGap('官服 PC Frida 的进程或战局根无效。')
+        roots = []
+        for key in ('controller', 'native', 'logger', 'stats', 'level'):
+            value = native_identity[key]
+            if not isinstance(value, str) or re.fullmatch(r'0x[0-9a-fA-F]{1,16}', value) is None:
+                raise SnapshotGap('官服 PC Frida 的战局根格式无效。')
+            address = int(value, 16)
+            if not 0x10000 <= address <= 0x00007FFFFFFFFFFF or address % 8:
+                raise SnapshotGap('官服 PC Frida 的战局根范围无效。')
+            roots.append(address)
+        if (type(frame) is not int or not 0 <= frame <= 0xFFFFFFFF
+                or type(game_time) not in (int, float) or not math.isfinite(game_time)
+                or not 0 <= game_time <= 864000
+                or not isinstance(native_fixed_time, str)
+                or re.fullmatch(r'[0-9]{1,20}', native_fixed_time) is None
+                or int(native_fixed_time) > 0x7FFFFFFFFFFFFFFF
+                or int(native_fixed_time) / (1 << 32) != game_time
+                or not isinstance(native_stage_id, str) or not native_stage_id):
+            raise SnapshotGap('官服 PC Frida 的原始逻辑时钟或关卡无效。')
+        identity = tuple(roots)
+        serial = process.battle_serial_for(identity, frame, int(native_fixed_time), native_stage_id)
+        words = (*identity, serial)
+        digest = hashlib.sha256(struct.pack(f'<{len(words)}Q', *words)).hexdigest()
+        return dict(native_session=':'.join(map(str, (*process.process_instance, digest))),
+                    source_build=BUILD_ID)
+
+    def observer_boot_ready(self):
+        if self.process is None:
+            raise SampleUnavailable('官服 PC 采集器尚未连接。')
+        return self.process.observer_boot_ready()
+
     def locate_lifecycle(self):
         if self.process is None:
             raise SampleUnavailable('官服 PC 采集器尚未连接')
@@ -168,6 +220,7 @@ class NativePcCollector:
         if status == 'waiting_for_battle' and report.get('reason') == 'singleton_is_null':
             self._reset_enemy_observation()
             self._reset_stage_plan()
+            self._next_action_journal = float('-inf')
             return dict(battle=None, state=None, ready=False, transiting=False, source='', target='')
         if status in ('process_exited', 'process_changed'):
             self._reset_stage_plan()
@@ -218,8 +271,8 @@ class NativePcCollector:
             self._next_enemy = now + ENEMY_SAMPLE_INTERVAL
             fields.update(capture_enemies(read, context))
         fields.update(capture_game_flow(read, context))
-        # Never combine the two expensive optional witnesses. Keep the existing
-        # counters, roster, presence and flow ahead of configuration work.
+        # Give each optional witness its own sampling slot and keep it behind
+        # the counters, roster, presence and flow.
         if not enemy_due and now >= self._next_stage_plan:
             interval = (STAGE_PLAN_RECHECK_INTERVAL if self._stage_plan_confirmed
                         else STAGE_PLAN_RETRY_INTERVAL)
@@ -229,6 +282,13 @@ class NativePcCollector:
             except (ApiFailure, ResearchFailure):
                 fields.update(stage_spawns_status='unavailable', stage_spawns=None,
                               stage_spawns_reason='optional_stage_plan_read_failed')
+        elif not enemy_due and self.collect_actions and now >= self._next_action_journal:
+            self._next_action_journal = now + ACTION_JOURNAL_SAMPLE_INTERVAL
+            try:
+                fields.update(capture_actions(read, context))
+            except (ApiFailure, ResearchFailure):
+                fields.update(actions_status='unavailable', actions=None,
+                              actions_reason='optional_action_journal_read_failed')
         return fields
 
     def _reset_stage_plan(self, scope=None):
@@ -315,6 +375,10 @@ class NativePcCollector:
                       damage_basis='client character counters; includes overkill; excludes healing',
                       read_ms=report.get('acquisition', {}).get('duration_ms'),
                       observed_at=time.time(), captured_monotonic=time.monotonic())
+        if self.collect_actions and 'actions_status' in raw:
+            sample['native_action_journal'] = dict(status=raw['actions_status'],
+                                                   reason=raw.get('actions_reason'),
+                                                   snapshot=raw.get('actions'))
         return sample, roster
 
     def read_enemies(self, *, game_time, frame=None, our_damage=None, **events):
@@ -346,6 +410,7 @@ class NativePcCollector:
 
     def close(self):
         self._pending = None
+        self._next_action_journal = float('-inf')
         self._reset_stage_plan()
         self._reset_enemy_observation()
         if self.process is not None:

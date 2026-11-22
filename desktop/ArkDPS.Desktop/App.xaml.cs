@@ -42,6 +42,8 @@ public partial class App : System.Windows.Application
                     case "--fixture": case "--state-dir": case "--adb": case "--serial": case "--frida-remote":
                     case "--platform": case "--native-game-root":
                         BridgeArguments.Add(arg); BridgeArguments.Add(e.Args[++i]); break;
+                    case "--arkframework-root":
+                        BridgeArguments.Add(arg); BridgeArguments.Add(Path.GetFullPath(e.Args[++i])); break;
                     default: throw new ArgumentException("未知参数：" + arg);
                 }
             }
