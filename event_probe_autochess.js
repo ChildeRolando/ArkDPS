@@ -16,7 +16,8 @@ function autoCollectionMode(scope_key,phase){
  // Only a proven combat scope can latch a preference. Terminal observations
  // retain the completed combat's effective mode until another combat starts.
  if([4,5,6].includes(phase)&&nativeAutoEffective?.scope_key!==scope_key)
-  nativeAutoEffective={scope_key,mode:nativeAutoDesiredMode};
+  nativeAutoEffective={scope_key,mode:phase===4&&probeAdapter.supportsAutoChessAllDefense!==true?
+   'local':nativeAutoDesiredMode};
  return nativeAutoEffective?.mode??nativeAutoDesiredMode;
 }
 function autoEventOwner(event){

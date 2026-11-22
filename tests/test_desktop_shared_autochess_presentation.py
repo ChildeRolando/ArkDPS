@@ -46,6 +46,7 @@ def accepted_inputs(platform):
 
 def state_for(tmp_path, monkeypatch, platform):
     state = bridge.DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc' if platform == 'native_pc' else 'mumu')
     state.layout = replace(state.layout, multiplayer_enabled=True)
     samples, scenes = accepted_inputs(platform)
     monkeypatch.setattr(bridge, 'autochess_scene', lambda sample: scenes.get(sample.get('_scene_tag')))
@@ -54,6 +55,18 @@ def state_for(tmp_path, monkeypatch, platform):
 
 def values(state):
     return [entry['value'] for entry in state.snapshot()['panels'][0]['entries']]
+
+
+def comparison(state):
+    snapshot = state.snapshot()
+    if state.effective_connection.platform == 'native_pc':
+        assert snapshot['multiplayer_supported'] is True
+        return snapshot['multiplayer']
+    assert snapshot['multiplayer_supported'] is snapshot['multiplayer_active'] is False
+    assert snapshot['multiplayer'] is None
+    # The shared retained model still drives the own-account main panel. Only
+    # the PC-only comparison wire lane is suppressed for Android.
+    return state._presented_battle()[1]
 
 
 def receive(state, sample, scene):
@@ -78,17 +91,17 @@ def test_shared_defense_cache_with_or_without_assist_replaces_only_on_next_accep
     state.accept('autochess_scene', scenes['prepare'])
     retained = state.snapshot()
     assert values(state) == [300] and '上一场防御' in retained['status_text']
-    assert retained['multiplayer']['previous_defense'] is True
-    assert retained['multiplayer']['scope'] == samples['defense_hits']['multiplayer']['scope']
+    assert comparison(state)['previous_defense'] is True
+    assert comparison(state)['scope'] == samples['defense_hits']['multiplayer']['scope']
     state.accept('autochess_scene', scenes['next_defense'])
     assert values(state) == [300] and '等待本轮防御数据' in state.snapshot()['status_text']
     state.accept('lifecycle', 'playing')
     state.accept('sample', samples['next_defense'])
-    assert values(state) == [300] and state.snapshot()['multiplayer']['previous_defense'] is True
-    assert state.snapshot()['multiplayer']['scope'] == samples['defense_hits']['multiplayer']['scope']
+    assert values(state) == [300] and comparison(state)['previous_defense'] is True
+    assert comparison(state)['scope'] == samples['defense_hits']['multiplayer']['scope']
     state.accept('sample', samples['next_hits'])
     assert values(state) == [21]
-    assert not state.snapshot()['multiplayer'].get('previous_defense')
+    assert not comparison(state).get('previous_defense')
     assert samples == originals
 
 
@@ -105,11 +118,11 @@ def test_same_scope_empty_rebaseline_does_not_replace_a_useful_defense_or_look_c
     state.accept('sample', empty)
     snapshot = state.snapshot()
     assert values(state) == [300]
-    assert snapshot['multiplayer']['previous_defense'] is True
+    assert comparison(state)['previous_defense'] is True
     assert '上一场防御' in snapshot['status_text']
     assert state.last is empty and empty == original
     state.accept('autochess_scene', scenes['prepare'])
-    assert values(state) == [300] and state.snapshot()['multiplayer']['previous_defense'] is True
+    assert values(state) == [300] and comparison(state)['previous_defense'] is True
 
 
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
@@ -118,11 +131,11 @@ def test_first_empty_defense_still_shows_identities_without_inventing_output(tmp
     receive(state, samples['defense'], scenes['defense'])
     snapshot = state.snapshot()
     assert values(state) == []
-    assert snapshot['multiplayer']['scope'] == samples['defense']['multiplayer']['scope']
-    assert not snapshot['multiplayer'].get('previous_defense')
-    assert [p['player_uid'] for p in snapshot['multiplayer']['players']] == [
+    assert comparison(state)['scope'] == samples['defense']['multiplayer']['scope']
+    assert not comparison(state).get('previous_defense')
+    assert [p['player_uid'] for p in comparison(state)['players']] == [
         p['player_uid'] for p in samples['defense']['multiplayer']['players']]
-    assert all(p['observed_damage'] is None for p in snapshot['multiplayer']['players'])
+    assert all(p['observed_damage'] is None for p in comparison(state)['players'])
 
 
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
@@ -140,11 +153,12 @@ def test_any_evidenced_player_settlement_can_replace_prior_defense(tmp_path, mon
         native=context(5, native_round=5)))
     receive(state, current, scenes['next_hits'])
     snapshot = state.snapshot()
-    assert snapshot['multiplayer']['scope'] == current['multiplayer']['scope']
-    assert not snapshot['multiplayer'].get('previous_defense')
+    assert comparison(state)['scope'] == current['multiplayer']['scope']
+    assert not comparison(state).get('previous_defense')
     assert values(state) == []  # Foreign output never becomes the local account.
-    assert snapshot['multiplayer']['players'][2]['observed_damage'] is None
-    assert snapshot['multiplayer']['players'][0]['view']['entries'][0]['value'] == 7
+    assert comparison(state)['players'][2]['observed_damage'] is None
+    projected = state.multiplayer_view(current['multiplayer'])
+    assert projected['players'][0]['view']['entries'][0]['value'] == 7
 
 
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
@@ -163,7 +177,7 @@ def test_shared_reconnect_barrier_keeps_same_target_defense_and_rejects_old_queu
     state.accept('connection_source', dict(revision=2, platform=config.platform))
     state.accept('autochess_scene', scenes['prepare'])
     assert values(state) == [300]
-    assert state.snapshot()['multiplayer']['previous_defense'] is True
+    assert comparison(state)['previous_defense'] is True
     different = (replace(config, native_game_root='different-PC') if platform == 'native_pc'
                  else replace(config, serial='127.0.0.1:16416'))
     state.expect_connection_request(different, 3)
@@ -180,7 +194,7 @@ def test_legacy_mumu_without_a_proven_scene_keeps_its_existing_last_sample_behav
     assert state._autochess_scene is state._defense_sample is None
     assert state.last is samples['assist_hits']
     assert '保留上一局统计' in state.snapshot()['status_text']
-    assert state.snapshot()['multiplayer'].get('previous_defense') is not True
+    assert state.snapshot()['multiplayer'] is None
 
 
 @pytest.mark.parametrize('platform', ['mumu', 'native_pc'])
@@ -360,9 +374,10 @@ def test_actual_android_accepted_context_restores_defense_after_small_controller
         assert readings(views['assist_hits']) == [4000, 3000, 2000, 1000]
     assert readings(views['prepare']) == [300]
     assert '上一场防御' in views['prepare']['status_text']
-    assert views['prepare']['multiplayer']['previous_defense'] is True
+    assert views['prepare']['multiplayer'] is None and views['prepare']['multiplayer_supported'] is False
     assert readings(views['next_defense']) == [300]
-    assert views['next_defense']['multiplayer']['previous_defense'] is True
+    assert views['next_defense']['multiplayer'] is None
+    assert '上一场防御' in views['next_defense']['status_text']
     assert readings(views['next_hits']) == [21]
     scenes = [scene for kind, scene in events if kind == 'autochess_scene']
     assert None not in scenes  # A small-round singleton absence is not a match exit.
@@ -373,7 +388,8 @@ def test_actual_android_accepted_context_restores_defense_after_small_controller
 def test_actual_android_ordinary_stage_proof_clears_the_retained_defense(tmp_path, monkeypatch):
     state, views, events = run_android_worker(tmp_path, monkeypatch,
         ['defense', 'defense_hits', 'prepare', 'ordinary_stage'])
-    assert views['prepare']['multiplayer']['previous_defense'] is True
+    assert views['prepare']['multiplayer'] is None
+    assert '上一场防御' in views['prepare']['status_text']
     assert any(kind == 'autochess_scene' and value is None for kind, value in events)
     assert state._defense_sample is None
     assert not (views['ordinary_stage']['multiplayer'] or {}).get('previous_defense')
@@ -385,9 +401,8 @@ def test_android_unaccepted_assist_and_new_defense_restore_the_existing_result(t
     assert '当前协防战场' in views['assist_busy']['status_text']
     assert (views['assist_busy']['multiplayer'] or {}).get('scope_kind') != 'defense'
     assert [entry['value'] for entry in views['prepare']['panels'][0]['entries']] == [300]
-    assert views['prepare']['multiplayer']['previous_defense'] is True
-    assert views['next_defense_busy']['multiplayer']['previous_defense'] is True
-    assert views['next_defense_busy']['multiplayer']['scope'] == views['defense_hits']['multiplayer']['scope']
+    assert views['prepare']['multiplayer'] is None and '上一场防御' in views['prepare']['status_text']
+    assert views['next_defense_busy']['multiplayer'] is None
     assert '等待本轮防御数据' in views['next_defense_busy']['status_text']
-    assert state._defense_sample['multiplayer']['scope'] == views['defense_hits']['multiplayer']['scope']
+    assert state._defense_sample['multiplayer']['players'][2]['observed_damage'] == 300
     assert len([value for kind, value in events if kind == 'sample']) == 2

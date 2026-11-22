@@ -38,7 +38,7 @@ def test_android_probe_and_guarded_collector_share_the_installed_layout():
     assert result['status'] == 'verified' and result['effective_layout'] == layout
     sample = result['sample']
     context, sequence = android_autochess_event_window(sample, result['before'], result['after'])
-    assert context['phase'] == 4 and context['collection_mode'] == 'all'
+    assert context['phase'] == 4 and context['collection_mode'] == 'local'
     assert len(context['players']) == 4 and len(context['memberships']) == 4
     sample.update(autochess_context=context, native_counter_scope='events_only')
     contract = contract_for(observer, sample)

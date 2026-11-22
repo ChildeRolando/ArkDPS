@@ -38,7 +38,7 @@ public sealed class MultiplayerView : ScrollViewer
         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         Margin = new Thickness(12, 0, 12, 8);
-        AutomationProperties.SetName(this, "卫戍四家统计");
+        AutomationProperties.SetName(this, "卫戍队友DPS");
         AutomationProperties.SetAutomationId(this, "MultiplayerPage");
         var body = new StackPanel();
         Content = body;
@@ -122,7 +122,7 @@ public sealed class MultiplayerView : ScrollViewer
             _ => notice.Text,
         };
         if (previousDefense) notice.Text = "上轮防御 · 保留已观察数据。" + notice.Text;
-        scope.Text = eligible ? "防御四家：已观察结算伤害（含过量） / 观察时段平均 DPS。干员排行：已观察有效伤害 / 接敌 DPS。协防数据单独统计。" : "";
+        scope.Text = eligible ? "队伍展示已观察结算伤害（含过量）和观察时段平均 DPS。干员排行展示已观察有效伤害和接敌 DPS。协防数据单独统计。" : "";
         comparisons.Visibility = selection.Visibility = identity.Visibility = detail.Visibility = scope.Visibility =
             eligible ? Visibility.Visible : Visibility.Collapsed;
         foreach (var player in players)
@@ -151,11 +151,11 @@ public sealed class MultiplayerView : ScrollViewer
 
     private static string EmptyNotice(string kind) => kind switch
     {
-        "assist" => "当前为协防阶段，协防数据单独统计；四家防御 DPS 暂不显示。",
-        "boss" => "当前为首领阶段，四家防御 DPS 暂不显示。",
-        "prepare" => "当前处于准备阶段，等待进入防御阶段后查看四家 DPS。",
+        "assist" => "当前为协防阶段，协防数据单独统计。卫戍队友DPS暂不显示。",
+        "boss" => "当前为首领阶段，卫戍队友DPS暂不显示。",
+        "prepare" => "当前处于准备阶段，等待进入防御阶段后查看卫戍队友DPS。",
         "defense" => "当前防御数据尚不可用，等待可核实的玩家与事件证据。",
-        _ => "尚未取得卫戍协议原生阶段证据，当前阶段未知；等待事件观察。仅在确认防御阶段后显示四家 DPS。",
+        _ => "尚未取得卫戍协议原生阶段证据，当前阶段未知。等待事件观察。仅在确认防御阶段后显示卫戍队友DPS。",
     };
 
     private static string? PlayerUid(JsonElement player) => player.Get("player_uid").ValueKind == JsonValueKind.String

@@ -825,6 +825,7 @@ class DesktopState:
                 record_display(self.selected),
                 view=view, multiplayer=(self.multiplayer_view(multiplayer, event=event)
                                         if self.layout.multiplayer_enabled and
+                                         self.selected.metadata.get('platform') == 'native_pc' and
                                         (multiplayer or {}).get('collection_mode') != 'local' else None),
                 event_status=self.selected.event_status, event_error=event.error)
             self._history_view_key = key
@@ -901,11 +902,13 @@ class DesktopState:
     def snapshot(self):
         sample, multiplayer, analysis, presentation_note = self._presented_battle()
         desired = self.layout.multiplayer_enabled
+        supported = self.effective_connection.platform == 'native_pc'
         scene = self._autochess_scene
         active = desired
         if scene is not None and scene.phase in (4, 5, 6, 7, 8) and scene.collection_mode in ('all', 'local'):
             active = scene.collection_mode == 'all'
-        scope_unverified = (scene is None and sample.get('native_counter_scope') != 'events_only'
+        active = supported and active
+        scope_unverified = (supported and scene is None and sample.get('native_counter_scope') != 'events_only'
                             and 'AUTOCHESS' in str((sample.get('battle_metadata') or {}).get('stage_id', '')).upper())
         local_player = _native_display_source(sample)
         stats = _display_statistics(sample, source=local_player)
@@ -955,7 +958,8 @@ class DesktopState:
                                 side=local_player.get('player_side'), player_uid=local_player.get('player_uid'),
                                 event=live_event) if local_player else self.view(p, stats, None, live_event)
                             for p in self.layout.panels],
-                    multiplayer_active=active, multiplayer_mode_pending=active != desired,
+                    multiplayer_supported=supported, multiplayer_active=active,
+                    multiplayer_mode_pending=supported and active != desired,
                     multiplayer_scope_unverified=scope_unverified,
                     multiplayer_scope_detail=sample.get('autochess_scope_detail') if scope_unverified else None,
                     multiplayer=(self.multiplayer_view(multiplayer, event=live_event)
@@ -1006,7 +1010,7 @@ class DesktopState:
         elif op == 'multiplayer_enabled':
             enabled = cmd.get('enabled')
             if type(enabled) is not bool:
-                raise ValueError('卫戍四家开关必须是布尔值')
+                raise ValueError('卫戍队友DPS开关必须是布尔值')
             if enabled != self.layout.multiplayer_enabled:
                 self.persist(replace(self.layout, multiplayer_enabled=enabled))
         elif op == 'hud_style':

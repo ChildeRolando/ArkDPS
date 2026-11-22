@@ -86,7 +86,7 @@ if(process.argv[2]==='--effective-layout'){
  const layout=JSON.parse(process.argv[3]),mode=process.argv.includes('--mode')?process.argv[process.argv.indexOf('--mode')+1]:'all';
  assert(['all','local'].includes(mode));const f=configuredWorld(layout,mode);
  const before=f.mark(),after=f.mark(),drain=f.context.rpc.exports.readEvents(0,0),independent=independentSample(f,layout);
- assert.equal(before.native_autochess_context.status,'available');assert.equal(before.native_autochess_context.collection_mode,mode);
+ assert.equal(before.native_autochess_context.status,'available');assert.equal(before.native_autochess_context.collection_mode,'local');
  assert.deepEqual(plain(before.native_identity),independent.fixture_roots);assert.equal(drain.events.length,0);
  process.stdout.write(JSON.stringify({status:'verified',classification:'owned_effective_layout_not_live',
   effective_layout:layout,...independent,before,after,drain}));process.exit(0);
@@ -95,6 +95,8 @@ if(process.argv[2]==='--effective-layout'){
 check('current_effective_android_layout_uses_e0_160_228_and_rejects_legacy_listdict_slot',()=>{
  const f=configuredWorld(CURRENT_ANDROID_LAYOUT),p=packet(f);
  assert.equal(p.status,'available');assert.equal(p.phase,4);assert.equal(p.round,1);
+ assert.equal(p.collection_mode,'local','Android defense cannot opt into the PC all-player collector');
+ assert.equal(vm.runInContext('nativeAutoDesiredMode',f.context),'all','platform capability does not rewrite the preference');
  assert.equal(address(f,f.controller,'m_logger').toString(),f.controller.add(0xe0).toString());
  assert.equal(address(f,f.controller,'m_levelData').toString(),f.controller.add(0x160).toString());
  assert.equal(address(f,f.controller,'m_state').toString(),f.controller.add(0x228).toString());
@@ -321,7 +323,7 @@ check('help_player_index_and_side_are_distinct_and_modes_latch_only_next_verifie
  }
  f.write(address(f,f.machine,'<gameCurrentStateId>k__BackingField'),4);
  f.write(address(f,f.center,'<currentRound>k__BackingField'),2);
- assert.equal(packet(f).collection_mode,'all');
+ assert.equal(packet(f).collection_mode,'local','returning to defense remains local even when the desired preference is all');
 });
 
 check('event_original_scope_clock_proof_local_pruning_and_single_ack_retained',()=>{

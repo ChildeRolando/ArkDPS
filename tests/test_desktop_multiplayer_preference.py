@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from battle_share import json_bytes
+from battle_history import BattleRecord
+from connection import ConnectionConfig
 from desktop_bridge import DesktopState, PROTOCOL_VERSION, serve
 from layout_store import GuiGeometry, HudPlacement, Layout, LayoutStore
 from panel_model import PanelConfig
@@ -126,6 +128,7 @@ def test_switch_on_off_on_reuses_live_and_cached_history_without_mutating_export
     record, path = saved_native_record(tmp_path, end_phase=True)
     sample = populated().runtime.display_sample()
     state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
     state.accept('sample', sample)
     original, recorded, original_bytes = deepcopy(sample), record.to_dict(), path.read_bytes()
     off = state.snapshot()
@@ -176,6 +179,7 @@ def test_off_hides_detail_but_keeps_assist_scene_and_retained_self_panels(tmp_pa
 
 def test_actual_worker_command_toggles_wire_detail_without_requesting_reconnect(tmp_path):
     state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
     sample = populated().runtime.display_sample()
     state.accept('sample', sample)
     original = deepcopy(sample)
@@ -199,3 +203,49 @@ def test_actual_worker_command_toggles_wire_detail_without_requesting_reconnect(
     assert replies[2]['state']['multiplayer'] is None
     assert replies[0]['state']['panels'] == replies[1]['state']['panels'] == replies[2]['state']['panels']
     assert state.last is sample and sample == original
+
+
+def test_non_pc_capability_hides_old_all_payload_without_changing_main_or_pc_preference(tmp_path):
+    state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
+    toggle(state, True)
+    sample = populated().runtime.display_sample()
+    original = deepcopy(sample)
+    state.accept('sample', sample)
+    pc = state.snapshot()
+    assert pc['multiplayer_supported'] and pc['multiplayer_active']
+    saved = state.store.path.read_bytes()
+    state.effective_connection = ConnectionConfig(platform='mumu')
+    hidden = state.snapshot()
+    assert hidden['multiplayer_supported'] is hidden['multiplayer_active'] is False
+    assert hidden['multiplayer_mode_pending'] is hidden['multiplayer_scope_unverified'] is False
+    assert hidden['multiplayer'] is None
+    for key in ('panels', 'totals', 'enemy', 'live_analysis', 'boss_live_analysis', 'boss_effective_live_analysis'):
+        assert hidden[key] == pc[key]
+    assert hidden['layout']['multiplayer_enabled'] is True
+    assert state.store.path.read_bytes() == saved and sample == original
+    state.effective_connection = ConnectionConfig(platform='native_pc')
+    restored = state.snapshot()
+    assert restored['multiplayer'] == pc['multiplayer'] and restored['multiplayer_active']
+    assert restored['multiplayer_supported'] is True
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android', None])
+def test_history_four_lane_requires_recorded_pc_platform_and_keeps_archive_and_self_view(tmp_path, platform):
+    record, path = saved_native_record(tmp_path, end_phase=True)
+    raw = record.to_dict()
+    if platform is None:
+        raw['metadata'].pop('platform', None)
+    else:
+        raw['metadata']['platform'] = platform
+    selected = BattleRecord.from_dict(raw)
+    state = DesktopState(tmp_path)
+    state.selected = selected
+    before, archive = selected.to_dict(), path.read_bytes()
+    toggle(state, True)
+    for connection in ('mumu', 'native_pc'):
+        state.effective_connection = ConnectionConfig(platform=connection)
+        view = state.snapshot()['history_selected']
+        assert [row['value'] for row in view['view']['entries']] == [300]
+        assert (view['multiplayer'] is not None) is (platform == 'native_pc')
+    assert selected.to_dict() == before and path.read_bytes() == archive

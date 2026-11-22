@@ -6,6 +6,7 @@ import pytest
 
 from battle_history import BattleHistory, BattleRecord
 from battle_share import json_bytes
+from connection import ConnectionConfig
 from desktop_bridge import DesktopState, _native_local_player
 from panel_model import PanelConfig
 from test_autochess_context import member
@@ -41,6 +42,7 @@ def accepted_assist(*, phase=5, self_hit=False):
 
 def state_for(tmp_path, sample, *, multiplayer_enabled=True):
     state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
     state.layout = replace(state.layout, multiplayer_enabled=multiplayer_enabled, panels=(
         PanelConfig(), PanelConfig(panel_id='effective', effective_only=True)))
     state.accept('sample', sample)

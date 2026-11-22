@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
+from connection import ConnectionConfig
 from desktop_bridge import DesktopState, _event_only_statistics, _native_local_player
 from panel_model import Category, EventAvailability, PanelConfig, Ranking, RateBasis
 from test_multiplayer_integration import CID
@@ -14,6 +15,7 @@ from test_native_pc_autochess_acquisition import ScopedNativeBattle
 def four_player_state(directory):
     """These renderer-contract cases explicitly enable the optional detail view."""
     state = DesktopState(directory)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
     state.layout = replace(state.layout, multiplayer_enabled=True)
     return state
 

@@ -12,6 +12,7 @@ import pytest
 
 from battle_history import BattleRecord
 from battle_lifecycle import BattleRuntime
+from connection import ConnectionConfig
 from desktop_bridge import DesktopState
 from panel_model import Ranking, RateBasis
 from roster import CharacterEntry, RosterSnapshot
@@ -351,6 +352,7 @@ def test_same_player_snapshot_roundtrips_history_and_uses_shared_desktop_view(tm
     battle = populated_battle()
     live_sample = battle.runtime.display_sample()
     state = DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
     state.layout = replace(state.layout, multiplayer_enabled=True)
     calls = []
     render = state.view

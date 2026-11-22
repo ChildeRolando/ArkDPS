@@ -53,6 +53,7 @@ const probeAdapter={
  factoryArgument(args,index){return args[index+1];},
  factoryStorage(args){return args[0];},
  scopedModifierTrace:true,directHealingProof:true,
+ supportsAutoChessAllDefense:true,
  setAutoChessMode,
  eventCollectionOwner:autoEventOwner,
  stampClock(when){stampAutoChessClock(when);},

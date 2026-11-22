@@ -171,11 +171,11 @@
        <TextBlock x:Name="EnemyNavLabel" Text="敌情" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
-     <Button x:Name="MultiplayerNav" Tag="multiplayer" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="卫戍四家" AutomationProperties.Name="卫戍四家" Visibility="Collapsed">
+     <Button x:Name="MultiplayerNav" Tag="multiplayer" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="卫戍队友DPS" AutomationProperties.Name="卫戍队友DPS" Visibility="Collapsed">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
        <Path Data="M 1 1 H 10 V 10 H 1 Z M 15 1 H 24 V 10 H 15 Z M 1 15 H 10 V 24 H 1 Z M 15 15 H 24 V 24 H 15 Z"
              Width="25" Height="24" Stretch="Fill" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.4"/>
-       <TextBlock x:Name="MultiplayerNavLabel" Text="卫戍四家" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
+       <TextBlock x:Name="MultiplayerNavLabel" Text="卫戍队友DPS" FontSize="17" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
       </StackPanel>
      </Button>
      <Button x:Name="HistoryNav" Tag="history" Click="Navigate" Style="{StaticResource ResearchNav}" ToolTip="历史战绩" AutomationProperties.Name="历史战绩">
@@ -454,9 +454,9 @@
           <ComboBoxItem Content="万 / 亿" Tag="chinese"/>
          </ComboBox>
         </StackPanel>
-        <CheckBox x:Name="MultiplayerEnabledSetting" Content="统计卫戍四家" IsChecked="False"
-                  Click="MultiplayerEnabledChanged" Margin="0,10,0,0" AutomationProperties.Name="统计卫戍四家"
-                  ToolTip="关闭时只统计本家，保留敌情。战斗中修改，从下一小局生效。"/>
+        <CheckBox x:Name="MultiplayerEnabledSetting" Content="统计卫戍队友DPS" IsChecked="False" IsEnabled="False"
+                  Click="MultiplayerEnabledChanged" Margin="0,10,0,0" AutomationProperties.Name="统计卫戍队友DPS"
+                  ToolTipService.ShowOnDisabled="True" ToolTip="卫戍队友DPS仅支持官服 PC"/>
         <TextBlock x:Name="MultiplayerSettingStatus" Style="{StaticResource FieldLabel}" Margin="0,4,0,0"
                    Visibility="Collapsed" TextWrapping="Wrap"/>
         <WrapPanel Margin="0,8,0,0">

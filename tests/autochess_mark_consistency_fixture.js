@@ -45,7 +45,8 @@ function verifyPostClosingStampConsistency(){
   assert.equal(context.status,'available');assert.equal(context.scope_key,observed.scope_key,
    'retry must not manufacture another epoch by moving back to the old body');
   assert.equal(context.phase,transition==='phase'?5:4);assert.equal(context.round,transition==='round'?2:1);
-  assert.equal(context.collection_mode,'all');assert.equal(oldContext.collection_mode,'local');
+  assert.equal(context.collection_mode,platform==='mumu'&&transition==='round'?'local':'all');
+  assert.equal(oldContext.collection_mode,'local');
   const batch=f.context.rpc.exports.readEvents(0,1);
   assert.deepEqual(plain(batch.events),original,'old records retain their original scope and amount');
   assert.equal(f.context.rpc.exports.ackEvents(1).acknowledged,1);

@@ -284,13 +284,30 @@ const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
 function entityId(p){if(p.isNull())throw new Error('missing source entity');const id=str(p.add(0x148).readPointer());if(!id)throw new Error('missing source identity');return id;}
+const sourceCharacterLineage=new Map();
+function isCharacterSourceClass(klass){
+ const base=sourceCharacterClasses.character;
+ if(klass.equals(base))return true;
+ const key=klass.toString();
+ if(sourceCharacterLineage.has(key))return sourceCharacterLineage.get(key);
+ let current=klass;
+ for(let depth=0;depth<10&&!current.isNull();depth++){
+  if(current.equals(base)){
+   sourceCharacterLineage.set(key,true);
+   return true;
+  }
+  current=current.add(0x58).readPointer();
+ }
+ // Class metadata is stable, but a failed or truncated walk proves nothing.
+ if(current.isNull())sourceCharacterLineage.set(key,false);
+ return false;
+}
 function sourceCharacterUid(source,sourceId){
  if(!sourceCharacterClasses||!sourceId||!own(sourceId))return;
  try{
-  // This is the roster's Character.data UID. BObject.instanceUid has a
-  // different lifetime and must not be substituted for roster identity.
-  // The statistics key can differ from the roster prefab (transformed unit).
-  if(source.isNull()||!source.readPointer().equals(sourceCharacterClasses.character))return;
+  // The verified Character.data field is inherited by Token, including
+  // enemy-side tokens. Its data UID belongs to the roster identity domain.
+  if(source.isNull()||!isCharacterSourceClass(source.readPointer()))return;
   const data=source.add(0x538).readPointer();
   if(data.isNull()||!data.readPointer().equals(sourceCharacterClasses.data))return;
   const uid=data.add(0x6c).readU32();

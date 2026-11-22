@@ -33,7 +33,8 @@ internal static class MultiplayerSettingsTests
         },
     };
 
-    private static JsonElement Snapshot(bool? enabled, string theme, bool? active = null, bool scopeUnverified = false)
+    private static JsonElement Snapshot(bool? enabled, string theme, bool? active = null, bool scopeUnverified = false,
+        string platform = "native_pc", bool? supported = true)
     {
         var selected = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "Fixtures", "native-ce5-healing.selected.json")))!.AsObject();
@@ -45,9 +46,10 @@ internal static class MultiplayerSettingsTests
         {
             ["protocol"] = 1, ["layout"] = layout, ["battle_id"] = "optional-live-battle", ["game_time"] = 216,
             ["multiplayer_active"] = active, ["multiplayer_mode_pending"] = active.HasValue && active != enabled,
+            ["multiplayer_supported"] = supported,
             ["multiplayer_scope_unverified"] = scopeUnverified,
             ["status"] = "live", ["status_text"] = "正在统计", ["warnings"] = new JsonArray(), ["error"] = "",
-            ["effective_connection_config"] = new JsonObject { ["platform"] = "mumu" },
+            ["effective_connection_config"] = new JsonObject { ["platform"] = platform },
             ["observer_status"] = "ready", ["event_status"] = "recording",
             ["panels"] = new JsonArray(live), ["history"] = new JsonArray(), ["history_selected"] = selected,
             ["multiplayer"] = new JsonObject { ["scope_kind"] = "defense", ["scope"] = "optional-defense", ["native_round"] = 1,
@@ -84,10 +86,24 @@ internal static class MultiplayerSettingsTests
                 string? owner = window.LiveInspector.Owner, historyOwner = window.HistoryInspector.Owner;
                 window.ApplyState(Snapshot(true, skin));
                 Check(skin + " confirmed worker preference enables nav and synchronizes checkbox",
-                    window.MultiplayerEnabledSetting.IsChecked == true && window.MultiplayerNav.Visibility == Visibility.Visible);
+                    window.MultiplayerEnabledSetting.IsChecked == true && window.MultiplayerNav.Visibility == Visibility.Visible &&
+                    window.MultiplayerNavLabel.Text == "卫戍队友DPS" &&
+                    window.MultiplayerEnabledSetting.Content?.ToString() == "统计卫戍队友DPS");
                 window.Navigate("multiplayer").GetAwaiter().GetResult();
                 Check(skin + " enabled route shows four-player page with evidenced local choice",
-                    window.MultiplayerPage.Visibility == Visibility.Visible && window.MultiplayerPage.SelectedPlayerUid == "910000001");
+                    window.MultiplayerPage.Visibility == Visibility.Visible && window.MultiplayerPage.SelectedPlayerUid == "910000001" &&
+                    window.PageTitle.Text == "卫戍队友DPS");
+                window.ContentRoot.Measure(new Size(1320, 900));
+                window.ContentRoot.Arrange(new Rect(0, 0, 1320, 900));
+                type.GetMethod("ArrangePanels", Private)!.Invoke(window, null);
+                window.ContentRoot.UpdateLayout();
+                var navContent = (FrameworkElement)window.MultiplayerNav.Content;
+                double captionRoom = window.MultiplayerNav.ActualWidth - window.MultiplayerNav.Padding.Left -
+                    window.MultiplayerNav.Padding.Right - window.MultiplayerNav.BorderThickness.Left -
+                    window.MultiplayerNav.BorderThickness.Right;
+                Check(skin + " full teammate DPS navigation caption fits its existing expanded layout",
+                    window.MultiplayerNavLabel.Visibility == Visibility.Visible && captionRoom > 0 &&
+                    navContent.DesiredSize.Width <= captionRoom);
                 window.MultiplayerPage.SelectPlayer("910000002");
                 window.MultiplayerPage.Ranking.Rows.SelectedItem = window.MultiplayerPage.Ranking.Rows.Items[0];
                 Check(skin + " setup pins the manually selected foreign actor", window.MultiplayerPage.DetailInspector.Owner == "910000002:char_same#2");
@@ -121,13 +137,47 @@ internal static class MultiplayerSettingsTests
                 window.ApplyState(Snapshot(true, skin, active: false));
                 Check(skin + " pending on keeps the local round and explains the next combat",
                     window.MultiplayerEnabledSetting.IsChecked == true && window.MultiplayerNav.Visibility == Visibility.Collapsed &&
-                    window.MultiplayerSettingStatus.Visibility == Visibility.Visible && window.MultiplayerSettingStatus.Text.Contains("统计四家"));
+                    window.MultiplayerSettingStatus.Visibility == Visibility.Visible && window.MultiplayerSettingStatus.Text.Contains("统计卫戍队友DPS"));
 
                 window.ApplyState(Snapshot(false, skin, scopeUnverified: true));
                 Check(skin + " a legacy AutoChess sample identifies the unverified collection scope",
                     window.MultiplayerNav.Visibility == Visibility.Collapsed &&
                     window.MultiplayerSettingStatus.Visibility == Visibility.Visible &&
                     window.MultiplayerSettingStatus.Text.Contains("未确认"));
+
+                window.ApplyState(Snapshot(true, skin, active: true));
+                window.Navigate("multiplayer").GetAwaiter().GetResult();
+                foreach (bool claimedSupport in new[] { false, true })
+                {
+                    window.ApplyState(Snapshot(true, skin, active: true, scopeUnverified: true,
+                        platform: "mumu", supported: claimedSupport));
+                    Check(skin + " MuMu hides even a previously all-mode defense and preserves the saved PC checkbox",
+                        window.MultiplayerEnabledSetting.IsChecked == true && !window.MultiplayerEnabledSetting.IsEnabled &&
+                        window.MultiplayerNav.Visibility == Visibility.Collapsed && window.LivePage.Visibility == Visibility.Visible &&
+                        window.MultiplayerPage.DetailInspector.Owner is null && window.MultiplayerPage.Ranking.Rows.Items.Count == 0);
+                    Check(skin + " unsupported setting has visible and accessible platform feedback instead of pending mode text",
+                        window.MultiplayerSettingStatus.Visibility == Visibility.Visible &&
+                        window.MultiplayerSettingStatus.Text == "卫戍队友DPS仅支持官服 PC" &&
+                        window.MultiplayerEnabledSetting.ToolTip?.ToString() == "卫戍队友DPS仅支持官服 PC" &&
+                        System.Windows.Controls.ToolTipService.GetShowOnDisabled(window.MultiplayerEnabledSetting));
+                    window.Navigate("multiplayer").GetAwaiter().GetResult();
+                    window.MultiplayerEnabledSetting.IsChecked = false;
+                    type.GetMethod("MultiplayerEnabledChanged", Private)!.Invoke(window,
+                        new object[] { window.MultiplayerEnabledSetting, new RoutedEventArgs() });
+                    Check(skin + " unsupported route and stale click cannot change the stored PC preference or ordinary views",
+                        type.GetField("route", Private)!.GetValue(window) as string == "live" &&
+                        window.MultiplayerEnabledSetting.IsChecked == true && window.State.Get("layout").Bool("multiplayer_enabled") &&
+                        panel.View.GetRawText() == live && window.HistoryPanel.View.GetRawText() == history &&
+                        type.GetField("recoveryTask", Private)!.GetValue(window) is null);
+                }
+                window.ApplyState(Snapshot(true, skin, active: true, supported: null));
+                Check(skin + " missing platform capability fails closed despite an old all-mode payload",
+                    !window.MultiplayerEnabledSetting.IsEnabled && window.MultiplayerNav.Visibility == Visibility.Collapsed);
+                window.ApplyState(Snapshot(true, skin, active: true));
+                Check(skin + " returning to PC restores the existing preference without a foreign actor pin",
+                    window.MultiplayerEnabledSetting.IsEnabled && window.MultiplayerEnabledSetting.IsChecked == true &&
+                    window.MultiplayerNav.Visibility == Visibility.Visible && window.MultiplayerPage.SelectedPlayerUid == "910000001" &&
+                    window.MultiplayerPage.DetailInspector.Owner is null && window.MultiplayerSettingStatus.Visibility == Visibility.Collapsed);
 
                 window.ApplyState(Snapshot(false, skin));
                 window.MultiplayerEnabledSetting.IsChecked = true;

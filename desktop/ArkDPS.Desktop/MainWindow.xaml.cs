@@ -62,13 +62,16 @@ public partial class MainWindow : Window
     private (string? AdbPath,string? Serial)? workerConnectionTarget;
     private bool syncingHudFooter;
     private bool multiplayerSettingPending;
+    private const string MultiplayerPcOnly="卫戍队友DPS仅支持官服 PC";
     private bool MultiplayerEnabled=>State.Get("layout").Bool("multiplayer_enabled");
-    private bool MultiplayerActive=>State.Get("multiplayer_active").ValueKind switch
+    private bool MultiplayerSupported=>State.Bool("multiplayer_supported") &&
+        State.Get("effective_connection_config").Text("platform")=="native_pc";
+    private bool MultiplayerActive=>MultiplayerSupported && (State.Get("multiplayer_active").ValueKind switch
     {
         JsonValueKind.True=>true,
         JsonValueKind.False=>false,
         _=>MultiplayerEnabled,
-    };
+    });
     private object? normalGeometry;
     private bool closingRequested;
     private DispatcherOperation? workAreaLayout;
@@ -325,14 +328,17 @@ public partial class MainWindow : Window
         Skin.SelectedIndex=Theme.IndexOf(theme);
         MultiplayerEnabledSetting.IsChecked=layout.Bool("multiplayer_enabled");
         MultiplayerNav.Visibility=MultiplayerActive ? Visibility.Visible : Visibility.Collapsed;
-        bool scopeUnverified=state.Bool("multiplayer_scope_unverified");
+        bool scopeUnverified=MultiplayerSupported && state.Bool("multiplayer_scope_unverified");
         string scopeDetail=state.Text("multiplayer_scope_detail");
         string scopeNotice=scopeDetail.Length==0 ? "卫戍阶段或本家身份未确认，等待有效小局数据"
             : "卫戍身份未确认 · "+scopeDetail;
-        MultiplayerSettingStatus.Visibility=state.Bool("multiplayer_mode_pending") || scopeUnverified
+        MultiplayerEnabledSetting.ToolTip=MultiplayerSupported
+            ? "关闭时只统计本家，保留敌情。战斗中修改，从下一小局生效。" : MultiplayerPcOnly;
+        System.Windows.Automation.AutomationProperties.SetHelpText(MultiplayerEnabledSetting, MultiplayerEnabledSetting.ToolTip.ToString());
+        MultiplayerSettingStatus.Visibility=!MultiplayerSupported || state.Bool("multiplayer_mode_pending") || scopeUnverified
             ? Visibility.Visible : Visibility.Collapsed;
-        MultiplayerSettingStatus.Text=scopeUnverified ? scopeNotice
-            : MultiplayerEnabled ? "下一小局开始统计四家" : "下一小局开始只统计本家";
+        MultiplayerSettingStatus.Text=!MultiplayerSupported ? MultiplayerPcOnly : scopeUnverified ? scopeNotice
+            : MultiplayerEnabled ? "下一小局开始统计卫戍队友DPS" : "下一小局开始只统计本家";
         if(!MultiplayerActive && route=="multiplayer") _=Navigate("live");
         EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
@@ -507,7 +513,7 @@ public partial class MainWindow : Window
     }
     private void RefreshLiveAvailability()
     {
-        MultiplayerEnabledSetting.IsEnabled=!multiplayerSettingPending && !workerUnavailable && !closingRequested && !quitting && !updateShutdownPreparing;
+        MultiplayerEnabledSetting.IsEnabled=MultiplayerSupported && !multiplayerSettingPending && !workerUnavailable && !closingRequested && !quitting && !updateShutdownPreparing;
         bool available=!workerUnavailable && !ShowingPreviousBattle;
         AddPanelButton.IsEnabled=available;
         foreach(var panel in Panels.Values) panel.SetConfigurationAvailable(available);
@@ -687,7 +693,7 @@ public partial class MainWindow : Window
         bool wide = width >= 1320;
         bool scrollLive = narrow || ContentRoot.ActualHeight < (wide ? 640 : 960);
         bool narrowOverview = width < 920;
-        NavigationColumn.Width = new GridLength(Theme.IsBabel ? (narrow ? 86 : 172) : (narrow ? 92 : 208));
+        NavigationColumn.Width = new GridLength(Theme.IsBabel ? (narrow ? 86 : 184) : (narrow ? 92 : 208));
         BrandBadge.Width = NavigationColumn.Width.Value - (narrow ? 5 : 6);
         if (narrow) Skin.Padding = new Thickness(8, 24, Theme.IsBabel ? 20 : 27, 4);
         else Skin.ClearValue(Control.PaddingProperty);
@@ -1045,8 +1051,8 @@ public partial class MainWindow : Window
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         bool live=page=="live";
         SubpageHeader.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
-        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","multiplayer"=>"卫戍四家","settings"=>"设置",_=>"实时战况"};
-        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","multiplayer"=>"本小局四家输出 · 分家查看干员","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
+        PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","multiplayer"=>"卫戍队友DPS","settings"=>"设置",_=>"实时战况"};
+        PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","multiplayer"=>"本小局队友输出 · 分玩家查看干员","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
         SetNavState(page);
         AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         ArrangePanels();
@@ -1218,6 +1224,11 @@ public partial class MainWindow : Window
     private async void MultiplayerEnabledChanged(object sender,RoutedEventArgs e)
     {
         if(applying || !initialized || multiplayerSettingPending) return;
+        if(!MultiplayerSupported)
+        {
+            MultiplayerEnabledSetting.IsChecked=MultiplayerEnabled;
+            return;
+        }
         bool enabled=MultiplayerEnabledSetting.IsChecked==true;
         multiplayerSettingPending=true;
         RefreshLiveAvailability();

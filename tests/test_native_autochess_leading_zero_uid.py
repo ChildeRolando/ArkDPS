@@ -137,6 +137,7 @@ def test_leading_zero_accounts_reach_real_collector_ui_and_end8_history(tmp_path
         assert player['actor_ledgers'][0]['owner_id'] == owner
         assert player['statistics']['session'].endswith(':' + LEADING_UIDS[index - 1])
     state = DesktopState(tmp_path / 'desktop')
+    state.effective_connection = replace(state.effective_connection, platform='native_pc')
     state.layout = replace(state.layout, multiplayer_enabled=True,
                            panels=(PanelConfig(), PanelConfig(panel_id='effective', effective_only=True)))
     state.accept('sample', sample)
