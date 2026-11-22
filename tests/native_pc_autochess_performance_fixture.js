@@ -173,5 +173,9 @@ check('dictionary_version_is_the_same_guarded_value_not_a_second_read',()=>{
  const witness=read.guards.find(([kind,address])=>kind==='i'&&address.equals(f.dict.add(0x2c)));
  assert.equal(header.dictVersion,witness[2]);
 });
+check('post_closing_stamp_phase_and_round_changes_never_commit_an_older_body',()=>{
+ const {verifyPostClosingStampConsistency}=require('./autochess_mark_consistency_fixture.js');
+ assert.equal(verifyPostClosingStampConsistency().length,4);
+});
 console.log(JSON.stringify({status:'verified',classification:'owned_memory_not_live',checks,counts,
  note:'Production parser/adapter only. Full-read oracle clears body cache; no copied adapter or ignored prototype dependency. Read counts do not claim game FPS.'}));

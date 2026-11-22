@@ -574,7 +574,25 @@ function nativeBinding(){
   step='clock';
   if(BigInt(fixed)<0n)return unavailable('negative game clock');
   step='clock_stamp';
-  damageSettlementStamp(frame,Number(BigInt(fixed))/4294967296);
+  const stamped=damageSettlementStamp(frame,Number(BigInt(fixed))/4294967296);
+  const eventScope=stamped.native_autochess_scope;
+  if(enabled&&!auto.error&&eventScope?.status==='available'){
+   const prefix=['controller','native','logger','stats','level'].map(k=>ptr(before[k]).toString()).join(':')+':autochess:';
+   const headerKey=[auto.header.manager,auto.header.status,auto.header.model,auto.header.machine,auto.header.center]
+    .map(p=>p.toString()).join(':');
+   // The stamp has its own closing guard and may observe a same-clock phase
+   // transition after the body closed. Never commit that older body by moving
+   // the scope backwards again. Unknown cold/retired caches are not evidence
+   // against a newly verified complete body and still permit initial binding.
+   if(eventScope.protocol_version!==1||eventScope.verified_same_frame!==true||
+      eventScope.frame!==frame||eventScope.game_time!==Number(BigInt(fixed))/4294967296||
+      typeof eventScope.scope_key!=='string'||!eventScope.scope_key.startsWith(prefix)||
+      eventScope.phase!==auto.header.phase||eventScope.round!==auto.header.round||
+      nativeAutoScope?.headerKey!==headerKey||nativeAutoScope?.fingerprint!==auto.fingerprint){
+    nativeAutoCache=null;
+    return unavailable('verified event stamp changed after the AutoChess body closing guard');
+   }
+  }
   const key=[before.controller,before.native,before.logger,before.stats,before.level,stage].join(':');
   if(nativeLastBinding&&(nativeLastBinding.key!==key||frame<nativeLastBinding.frame
      ||BigInt(fixed)<BigInt(nativeLastBinding.fixed)))nativeGeneration++;

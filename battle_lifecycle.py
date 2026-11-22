@@ -17,10 +17,12 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract, bind_native_autochess_pair, contract_for,
-                         autochess_scope_detail, native_autochess_context_bound)
+from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract,
+                         android_autochess_event_window, android_autochess_mark_context, autochess_scope_detail,
+                         bind_native_autochess_pair, contract_for, native_autochess_context_bound)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
+from roster import RosterSnapshot
 
 
 @dataclass(frozen=True)
@@ -119,12 +121,19 @@ def _observer_mark(observer):
 def _event_barrier(before, sample, after, *, contract=None, capture=None):
     """Keep counter baselines quiescent; bound an established event-only prefix.
 
-    No cumulative counter is consumed by this exception. Both native marks
-    must still prove the sample's exact clock, owner and complete identity
-    frame; events observed between them are delivered through the real closing
-    sequence and validated by the existing strict batch/replay contract.
+    Event-only paths use sequence and ownership proof from their original
+    marks. The Android clock window uses an independent root read. The
+    same-frame path still requires the established scope and its exact clock.
     """
     contract = contract or contract_for(sample=sample)
+    if 'autochess_snapshot_anchor' in sample:
+        anchor = sample['autochess_snapshot_anchor']
+        if not isinstance(contract, MuMuAutoChessProbeContract) or not isinstance(anchor, dict):
+            raise BarrierBusy('invalid Android AutoChess event window evidence')
+        context, sequence = android_autochess_event_window(sample, before, after, anchor=anchor)
+        if sample['autochess_context'] != context:
+            raise BarrierBusy('Android AutoChess event window does not match the published scope')
+        return sequence
     try:
         return baseline_barrier(before, sample, after, contract=contract)
     except BarrierBusy:
@@ -248,6 +257,27 @@ class BattleFeed:
         sample = collector.read()
         if metadata:
             sample['battle_metadata'] = deepcopy(metadata)
+        if (sample.get('state') == 2 and (metadata or {}).get('platform') == 'android'
+                and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
+                and android_autochess_mark_context(sample, mark) is not None):
+            # A separately guarded counter read binds roots; the exact closing
+            # producer clock and its event-only prefix supply published time.
+            try:
+                end_mark = _observer_mark(observer)
+            except ObserverReadRetry as exc:
+                raise CaptureRetry(str(exc)) from exc
+            context, sequence = android_autochess_event_window(sample, mark, end_mark)
+            anchor = {key: sample[key] for key in ('frame', 'game_time')}
+            # Exact zero counters can prove an initial point only when the
+            # entire event barrier also covers the counter frame.
+            if (any(mark[key] != end_mark[key] for key in ('frame', 'game_time', 'sequence', 'epoch'))
+                    or anchor['frame'] != context['frame'] or anchor['game_time'] != context['game_time']):
+                sample.update(rows=[], global_total=None, global_heal=None, sum_damage=None)
+            sample.update(frame=context['frame'], game_time=context['game_time'],
+                          native_counter_scope='events_only', autochess_context=context,
+                          autochess_snapshot_anchor=anchor)
+            return (sample, RosterSnapshot(sample['frame']),
+                    dict(before=mark, after=end_mark, sequence=sequence))
         if mark is not None and events is None:
             try:
                 # Skip the roster transaction when the guarded counters already
@@ -330,7 +360,8 @@ class BattleFeed:
             events = self._guarded_events(observer, opening, sample, capture)
         if events and 'before' in events and 'after' in events:
             try:
-                bind_native_autochess_pair(sample, events['before'], events['after'])
+                if 'autochess_snapshot_anchor' not in sample:
+                    bind_native_autochess_pair(sample, events['before'], events['after'])
             except BarrierBusy as exc:
                 raise CaptureRetry(str(exc)) from exc
             bind_enemy_scope = getattr(collector, 'bind_enemy_scope', None)

@@ -161,6 +161,71 @@ def _android_autochess_scope_key(sample, payload):
     return None
 
 
+def android_autochess_mark_context(sample, mark):
+    """Normalize a mark at its own clock against the Android collector roots."""
+    from autochess_context import normalize_native_autochess
+
+    if not isinstance(mark, dict) or mark.get('retry'):
+        return None
+    scope = _android_autochess_scope_key(sample, mark)
+    if scope is None:
+        return None
+    context = normalize_native_autochess(mark.get('native_autochess_context'),
+                expected_frame=mark.get('frame'), expected_game_time=mark.get('game_time'),
+                expected_scope_key=scope)
+    if context.get('status') in ('available', 'partial') and context.get('match_key'):
+        return context
+    return None
+
+
+def android_autochess_event_window(sample, before, after, *, anchor=None):
+    """Prove an event-only watermark around an independent Android snapshot.
+
+    Each mark attests its own frame. The counter snapshot attests the battle
+    roots and an intervening clock, but contributes no cumulative amounts.
+    """
+    from event_stream import baseline_barrier
+
+    metadata = sample.get('battle_metadata') or {}
+    if (sample.get('state') != 2 or metadata.get('platform') != 'android'
+            or 'AUTOCHESS' not in str(metadata.get('stage_id', '')).upper()):
+        raise BarrierBusy('an Android AutoChess event window requires a playing battle')
+    contexts = []
+    for mark in (before, after):
+        context = android_autochess_mark_context(sample, mark)
+        if context is None:
+            raise BarrierBusy('Android AutoChess event mark failed independent binding')
+        check = dict(sample, frame=context['frame'], game_time=context['game_time'],
+                     autochess_context=context, native_counter_scope='events_only')
+        baseline_barrier(mark, check, mark, contract=MUMU_AUTOCHESS_CONTRACT)
+        contexts.append(context)
+    opening, closing = contexts
+    clock_fields = ('frame', 'game_time')
+    if ({k: v for k, v in opening.items() if k not in clock_fields}
+            != {k: v for k, v in closing.items() if k not in clock_fields}):
+        raise BarrierBusy('Android AutoChess identity changed across the event window')
+
+    original = sample if anchor is None else anchor
+    frame, game_time = original.get('frame'), original.get('game_time')
+    guard = sample.get('guard')
+    if (type(frame) is not int or type(game_time) not in (int, float) or not isfinite(game_time)
+            or not isinstance(guard, dict) or guard.get('complete') is not True
+            or not guard.get('start') == guard.get('end') == frame
+            or not opening['frame'] <= frame <= closing['frame']
+            or not opening['game_time'] <= game_time <= closing['game_time']
+            or any(context['frame'] == frame and context['game_time'] != game_time
+                   for context in contexts)):
+        raise BarrierBusy('Android AutoChess counter clock is outside the event window')
+    settlement_scope = before.get('damage_settlement_scope')
+    if (after['sequence'] < before['sequence'] or after['epoch'] < before['epoch']
+            or (after['sequence'] > before['sequence'] and after['epoch'] == before['epoch'])
+            or type(settlement_scope) is not int or settlement_scope < 0
+            or type(after.get('damage_settlement_scope')) is not int
+            or after['damage_settlement_scope'] != settlement_scope):
+        raise BarrierBusy('Android AutoChess event window regressed or changed settlement scope')
+    return closing, after['sequence']
+
+
 def bind_native_autochess_pair(sample, before, after):
     """Attach identity evidence only after the ordinary paired barrier accepted.
 
