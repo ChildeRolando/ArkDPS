@@ -16,7 +16,7 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_probe import contract_for
+from event_probe import NativePcProbeContract, contract_for
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 
@@ -208,16 +208,24 @@ class BattleFeed:
         return sample, roster, events
 
     @staticmethod
-    def _drain(observer, evidence, sample):
-        if evidence is not None and 'error' not in evidence:
+    def _drain(observer, evidence, sample, *, capture=None):
+        if evidence is not None:
             try:
                 contract = contract_for(observer, sample)
+                native_pc = isinstance(contract, NativePcProbeContract)
+                if native_pc and capture is not None and capture.closed:
+                    # This battle cannot accept or acknowledge any more events.
+                    # Leave the observer available for the next battle's baseline.
+                    return None
+                if 'error' in evidence:
+                    return evidence
                 evidence['probe_contract'] = contract.describe()
                 if (contract.bounded_reads_required
                         and not (callable(getattr(observer, 'read_through', None))
                                  and callable(getattr(observer, 'commit_events', None)))):
                     raise StreamGap('event probe must support bounded reads and commit acknowledgements')
-                evidence['drain'] = read_event_batch(observer, evidence['sequence'])
+                baseline = native_pc and (capture is None or capture.baseline_sequence is None)
+                evidence['drain'] = read_event_batch(observer, evidence['sequence'], baseline=baseline)
                 contract.validate_binding(sample, evidence['drain'])
             except CaptureRetry:
                 raise
@@ -226,7 +234,7 @@ class BattleFeed:
         return evidence
 
     def acquire(self, collector, observer=None, *, published_generation=0,
-                preparing_generation=None):
+                preparing_generation=None, published_capture=None):
         """Bracket cumulative/roster reads with the live singleton and flow.
 
         Failed reads are unknown. Only an observed null/destroyed singleton,
@@ -278,7 +286,8 @@ class BattleFeed:
                     self.current_lifecycle = before
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
-                    events = self._drain(observer, events, sample)
+                    capture = published_capture if self.generation == published_generation else None
+                    events = self._drain(observer, events, sample, capture=capture)
                     sample['native_session'] = sample['session']
                     sample['session'] = f'{self.id}:{self.generation}'
                     self.terminal = True
@@ -328,7 +337,9 @@ class BattleFeed:
         # leave the previous prefix for the next accepted combat watermark.
         # A same-controller round reset can still prove the old stream ended
         # at its last accepted watermark, without draining preparation events.
-        events = events if preparing else self._drain(observer, events, sample)
+        capture = published_capture if generation == published_generation else None
+        if not preparing:
+            events = self._drain(observer, events, sample, capture=capture)
         round_reset = None
         if clock_reset and events is not None and 'sequence' in events:
             drained = events.get('drain') or {}
@@ -832,7 +843,8 @@ class BattleRuntime:
     def _acquire(self, collector, observer):
         return self.feed.acquire(collector, observer,
                                  published_generation=self.sessions.generation,
-                                 preparing_generation=self.sessions.preparing_generation)
+                                 preparing_generation=self.sessions.preparing_generation,
+                                 published_capture=self.sessions.capture)
 
     def _acknowledge_observation(self, observation, observer, consumed):
         """Release accepted data without turning a lost ack response into a gap."""

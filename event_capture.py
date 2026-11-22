@@ -63,14 +63,19 @@ class CaptureRetry(RuntimeError):
     """No stable frame was obtained; queued events remain available."""
 
 
-def read_event_batch(observer, sequence):
+def read_event_batch(observer, sequence, *, baseline=False):
     contract = contract_for(observer)
     if (contract.bounded_reads_required
             and not (callable(getattr(observer, 'read_through', None))
                      and callable(getattr(observer, 'commit_events', None)))):
         raise StreamGap('event probe must support bounded reads and commit acknowledgements')
     try:
-        if hasattr(observer, 'read_through'):
+        read_baseline = getattr(observer, 'read_baseline', None) if baseline else None
+        if callable(read_baseline):
+            batch = read_baseline(sequence)
+            if not (batch.get('error') or batch.get('stopped')) and batch.get('events') != []:
+                raise StreamGap('event baseline did not return an empty window')
+        elif hasattr(observer, 'read_through'):
             batch = observer.read_through(sequence)
         else:
             batch = observer.drain()

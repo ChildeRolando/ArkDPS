@@ -143,6 +143,35 @@ def test_busy_native_opening_keeps_events_pending_for_the_next_guarded_pair():
     assert runtime.sessions.adapter.result()['rows']['char_a']['observed_damage'] == 20
 
 
+@pytest.mark.parametrize('defer_baseline', [False, True])
+def test_native_baseline_releases_retained_events_from_the_previous_round(defer_baseline):
+    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    collector.event_capability = dict(status='ready', error=None)
+    read_through = observer.read_through
+
+    def read_baseline(sequence):
+        return dict(read_through(sequence), events=[])
+
+    observer.read_baseline = read_baseline
+    snapshot.frame, snapshot.game_time = 5106, 170
+    runtime.poll(collector, observer)
+    # The old round was replaced before its final event could be accepted.
+    events.queue = [event(1, 5106, 170)]
+    snapshot.frame, snapshot.game_time, snapshot.damage = 45, 1.5, 0
+    runtime.poll(collector, observer, prepare_observer=lambda _: (defer_baseline, observer))
+    assert runtime.sessions.generation == 2
+    assert runtime.display_sample()['event_status'] == 'recording'
+    assert commits == [0, 1]
+
+    snapshot.frame, snapshot.game_time, snapshot.damage = 60, 2, 40
+    events.queue = [event(2, 60, 2, 40)]
+    runtime.poll(collector, observer)
+    result = runtime.display_sample()
+    assert result['statistics']['rows']['char_a']['observed_damage'] == 40
+    assert result['event_watermark']['sequence'] == 2
+    assert commits == [0, 1, 2]
+
+
 @pytest.mark.parametrize('clock', [
     {'sequence': 3},
     {'frame': 4},
@@ -150,7 +179,7 @@ def test_busy_native_opening_keeps_events_pending_for_the_next_guarded_pair():
     {'game_time': 1.5},
 ])
 def test_native_batch_cannot_publish_or_acknowledge_events_beyond_its_watermark(clock):
-    runtime, collector, observer, snapshot, _, events, _, commits = native_connection()
+    runtime, collector, observer, snapshot, _, events, calls, commits = native_connection()
     runtime.poll(collector, observer)
     snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1, 20
     first = event(1, 2, 1, 20)
@@ -173,6 +202,17 @@ def test_native_batch_cannot_publish_or_acknowledge_events_beyond_its_watermark(
     assert row['observed_damage'] == 20
     assert result['event_watermark']['sequence'] == 1
     assert not runtime.sessions.adapter.statistics.settlement_enabled
+    assert commits == [0, 1]
+
+    # A permanent gap must keep native counters advancing without requesting
+    # the same rejected event payload on each poll.
+    reads = calls.count('batch')
+    snapshot.frame, snapshot.game_time, snapshot.damage = 4, 3, 70
+    runtime.poll(collector, observer)
+    result = runtime.display_sample()
+    assert result['event_status'] == 'gap'
+    assert result['statistics']['rows']['char_a']['damage'] == 70
+    assert calls.count('batch') == reads
     assert commits == [0, 1]
 
 

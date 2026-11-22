@@ -184,9 +184,12 @@ class FridaEventObserver:
         return self._request('mark', timeout=self.terminal_mark_timeout)
 
     def read_through(self, sequence):
+        return self._read_event_range(self._committed_sequence, sequence)
+
+    def _read_event_range(self, after, through):
         if self._ack_error:
             raise RuntimeError(self._ack_error)
-        return self._request('read', after=self._committed_sequence, through=sequence)
+        return self._request('read', after=after, through=through)
 
     def commit_events(self, sequence):
         """Release the prefix only after it was accepted by the host."""
@@ -251,6 +254,11 @@ class NativePcFridaObserver(FridaEventObserver):
             raise ValueError('官服 PC Frida 使用本机进程，frida_remote 必须为 None')
         super().__init__(collector, remote)
         self.binding = NativePcBinding(collector)
+
+    def read_baseline(self, sequence):
+        # Obtain the bound quality and advance the producer's readable
+        # watermark without transferring events at or before the baseline.
+        return self._read_event_range(sequence, sequence)
 
     def _message(self, message, data):
         payload = message.get('payload')

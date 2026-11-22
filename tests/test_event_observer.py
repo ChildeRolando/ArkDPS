@@ -167,6 +167,24 @@ def test_terminal_mark_uses_short_deadline_without_changing_normal_requests(monk
     assert requests == [('mark', {'timeout': .5}), ('mark', {})]
 
 
+def test_native_baseline_reads_only_the_watermark_before_releasing_the_prefix(monkeypatch):
+    observer = NativePcFridaObserver(collector(VersionStatus.COMPATIBLE))
+    requests = []
+
+    def request(operation, **arguments):
+        requests.append((operation, arguments))
+        if operation == 'read':
+            return {'events': list(range(arguments['after'] + 1, arguments['through'] + 1))}
+        return {'acknowledged': arguments['sequence']}
+
+    monkeypatch.setattr(observer, '_request', request)
+    assert observer.read_baseline(50)['events'] == []
+    assert requests == [('read', {'after': 50, 'through': 50})]
+    observer.commit_events(50)
+    assert observer.read_through(51)['events'] == [51]
+    assert requests[1:] == [('ack', {'sequence': 50}), ('read', {'after': 50, 'through': 51})]
+
+
 def native_collector():
     value = collector(VersionStatus.COMPATIBLE)
     value.process = SimpleNamespace(pid=123, process_instance=(123, 456), process_alive=lambda: True)
