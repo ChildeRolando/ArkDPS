@@ -868,26 +868,40 @@ class NativePcFridaRuntime:
             self._connect(frida, record)
 
     def _remove_credentials(self, record):
-        # Revoke readiness before disk cleanup; readers never see ready+None.
-        if not self._cancel.is_set():
-            self._state(RuntimeState.WAITING_PROCESS, loaded=False)
-        else:
-            self._module_loaded = False
-        if self.lease_path.exists() and json.loads(self.lease_path.read_text(encoding='utf-8')) != record:
-            raise RuntimeFailure('lease_conflict', 'Changed PC Frida lease was preserved')
-        if self.config_path.exists():
-            if _digest(self.config_path) != record['config_sha256']:
-                raise RuntimeFailure('credential_conflict', 'Changed PC Frida credentials were preserved')
-            self.config_path.unlink()
-        if self.lease_path.exists():
-            self.lease_path.unlink()
         with self._condition:
+            # Waiting means cleanup has committed. Keep disk ownership, lease
+            # revocation and its public state in one transition so describe()
+            # cannot publish waiting with credentials still awaiting deletion.
+            if not self._cancel.is_set():
+                self._state(RuntimeState.STARTING, loaded=False)
+            else:
+                self._module_loaded = False
+            try:
+                if self.lease_path.exists() and json.loads(self.lease_path.read_text(encoding='utf-8')) != record:
+                    raise RuntimeFailure('lease_conflict', 'Changed PC Frida lease was preserved')
+                if self.config_path.exists():
+                    if _digest(self.config_path) != record['config_sha256']:
+                        raise RuntimeFailure('credential_conflict', 'Changed PC Frida credentials were preserved')
+                    self.config_path.unlink()
+                if self.lease_path.exists():
+                    self.lease_path.unlink()
+            except Exception as exc:
+                failure = exc if isinstance(exc, RuntimeFailure) else RuntimeFailure(
+                    'credential_cleanup_failed', f'PC Frida 旧进程凭据清理失败；请重试（{exc}）')
+                self._state(RuntimeState.CLEANUP_PENDING if self._cancel.is_set() else RuntimeState.FAILED,
+                            failure.code, str(failure))
+                if failure is exc:
+                    raise
+                raise failure from exc
             self._lease = None
             self._authenticated_birth = None
             # Preserve the watch window across OWN exits, including births
             # between polls. Only the initial foreign-port wait delays arming.
-            self._assert_invariants()
-            self._condition.notify_all()
+            if not self._cancel.is_set():
+                self._state(RuntimeState.WAITING_PROCESS, loaded=False)
+            else:
+                self._assert_invariants()
+                self._condition.notify_all()
 
     def _ready(self, record):
         self._verify_endpoint(record)
@@ -1043,10 +1057,18 @@ class NativePcFridaRuntime:
         if self._pending_loader is not None:
             self._finish_loader()
             return
+        if self.status == RuntimeState.FAILED and not self._retry_requested:
+            return
         if self._lease is not None and not self._alive(self._lease):
-            self._state(RuntimeState.WAITING_PROCESS, loaded=False)
+            self._state(RuntimeState.STARTING, loaded=False)
             if self._observers:
                 return
+            with self._condition:
+                self._check_cancelled()
+                # One explicit retry authorizes one cleanup attempt. Retain
+                # its intent while observers still own resources, then consume
+                # it before any operation that can fail again.
+                self._retry_requested = False
             self._release_endpoint()
             self._remove_credentials(self._lease)
             return
