@@ -80,6 +80,11 @@ public partial class MainWindow
     {
         var firstPanel = PanelHost.Children.OfType<StatisticPanel>().FirstOrDefault();
         SideFriendly.Update(DisplayedBattleId, firstPanel?.View ?? default, PcReadiness);
+        if(SamplingRejected && SideFriendly.RankingPanel.Rows.Items.Count==0)
+        {
+            SideFriendly.RankingPanel.Empty.Text=State.Text("status_text");
+            SideFriendly.RankingPanel.Empty.Visibility=Visibility.Visible;
+        }
     }
 
     private void UpdateSidePlacement(bool placeFallback = false, bool allowMinimize = true)

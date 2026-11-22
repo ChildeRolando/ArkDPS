@@ -20,6 +20,7 @@ import time
 import traceback
 from uuid import uuid4
 
+from autochess_context import valid_player_uid
 from battle_history import BattleHistory
 from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
@@ -81,19 +82,13 @@ def team_totals(statistics):
     return result
 
 
-def _player_uid(value):
-    return (isinstance(value, str) and 1 <= len(value) <= 20
-            and value.isascii() and value.isdecimal() and value[0] != '0'
-            and int(value) < 1 << 64)
-
-
 def _native_local_player(sample):
     """Select an evidenced account, never a temporary side or display slot."""
     payload = sample.get('multiplayer')
     if (sample.get('native_counter_scope') != 'events_only' or not isinstance(payload, dict)
             or payload.get('schema_version') != 2 or payload.get('available') is not True
             or payload.get('scope_kind') not in ('defense', 'assist', 'boss')
-            or not _player_uid(payload.get('self_player_uid'))
+            or not valid_player_uid(payload.get('self_player_uid'))
             or not isinstance(payload.get('scope'), str) or not payload['scope']):
         return None
     players = payload.get('players') or ()
@@ -102,7 +97,7 @@ def _native_local_player(sample):
         return None
     player = candidates[0]
     uid = player.get('player_uid')
-    if (not _player_uid(uid) or uid != payload['self_player_uid']
+    if (not valid_player_uid(uid) or uid != payload['self_player_uid']
             or sum(isinstance(row, dict) and row.get('player_uid') == uid
                                   for row in players) != 1
             or not isinstance(player.get('statistics'), dict)):
@@ -236,6 +231,7 @@ class DesktopState:
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
         self.native_pc_bootstrap = None
+        self.sampling_rejection = None
         self._waiting_for_connection_sample = False
         self.battle_waiting = False
         self.scanning = False
@@ -278,6 +274,7 @@ class DesktopState:
         if self._awaiting_source and kind != 'history':
             return
         if kind == 'sample':
+            self.sampling_rejection = None
             self._waiting_for_connection_sample = False
             if self.last is not None and observation_age(self.last) > 2:
                 self.analysis_interrupted = True
@@ -305,6 +302,10 @@ class DesktopState:
             self.observer_status, self.observer_error = value
         elif kind == 'native_pc_bootstrap':
             self.native_pc_bootstrap = value
+        elif kind == 'sampling_rejection':
+            self.sampling_rejection = (dict(code='mapping_unavailable', reason=value['reason'][:200])
+                if isinstance(value, dict) and value.get('code') == 'mapping_unavailable'
+                and isinstance(value.get('reason'), str) and value['reason'].strip() else None)
         elif kind == 'lifecycle':
             self.lifecycle = value
         elif kind == 'battle_waiting':
@@ -331,6 +332,7 @@ class DesktopState:
         # readiness as permission to start a game for this new request.
         self._awaiting_source = True
         self.native_pc_bootstrap = None
+        self.sampling_rejection = None
         self.observer_status = self.observer_error = None
         self.event_status = self.event_error = None
         self.diagnostic = None
@@ -356,6 +358,7 @@ class DesktopState:
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
         self.native_pc_bootstrap = None
+        self.sampling_rejection = None
         self.battle_waiting = None
         self.scanning = True
         self._source_request_revision = None
@@ -473,6 +476,13 @@ class DesktopState:
             return 'locating', '正在定位 · 保留最后有效记录'
         if self.error:
             return 'disconnected', '连接断开 / 读取中断 · 显示最后有效记录'
+        if self.sampling_rejection:
+            label = '当前样本未通过归属校验：' + self.sampling_rejection['reason']
+            if self.last:
+                label += ' · 保留最后有效记录'
+                if observation_age(self.last) > 2:
+                    return 'stale', '数据已过期 · ' + label
+            return 'sampling_rejected', label
         if self._waiting_for_connection_sample:
             return ('frozen', '等待新连接的可靠样本 · 上次快照') if self.last else (
                 'waiting', '等待新连接的可靠样本')
@@ -614,7 +624,7 @@ class DesktopState:
                 continue
             if native:
                 uid = player.get('player_uid')
-                if (not _player_uid(uid) or sum(row.get('player_uid') == uid
+                if (not valid_player_uid(uid) or sum(row.get('player_uid') == uid
                         for row in raw_players if isinstance(row, dict)) != 1):
                     player = _unknown_player(position)
                 elif payload.get('available') is not True:
@@ -689,6 +699,7 @@ class DesktopState:
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
                     observer_status=self.observer_status, event_status=self.event_status,
                     native_pc_bootstrap=self.native_pc_bootstrap,
+                    sampling_rejection=self.sampling_rejection,
                     event_text=event_label(event_status, event_error),
                     battle_id=sample.get('battle_id', sample.get('session')),
                     game_time=stats.get('game_time', sample.get('game_time')),
@@ -983,7 +994,12 @@ class CollectionWorker:
             capture_dir = self.directory / 'captures'
             with DesktopCaptureJournal(capture_dir, encoder=json_value,
                                        warn=lambda message: self.events.put(('warning', message))) as journal:
-                audit = journal.write
+                sampling_observation = None
+                def audit(kind, value):
+                    nonlocal sampling_observation
+                    if kind == 'lifecycle_observation':
+                        sampling_observation = (value.feed, value.sequence, value.kind)
+                    journal.write(kind, value)
                 self._bootstrap_audit = audit
                 regeneration = None
                 try:
@@ -999,7 +1015,14 @@ class CollectionWorker:
                     retries = 0
                     last_retry_audit = float('-inf')
                     last_live_frame = None
+                    last_sampling_rejection = None
                     bundled_observer = self.endpoint == DEFAULT_FRIDA_REMOTE and BUNDLED_SERVER_ARCHIVE.is_file()
+
+                    def publish_sampling_rejection(value):
+                        nonlocal last_sampling_rejection
+                        if value != last_sampling_rejection:
+                            last_sampling_rejection = value
+                            self.events.put(('sampling_rejection', value))
 
                     def bind_observer_endpoint(target):
                         nonlocal endpoint_bound
@@ -1035,6 +1058,8 @@ class CollectionWorker:
                             self.last_connect_attempt = time.monotonic()
                             self.events.put(('connection_source', {
                                 'revision': revision, 'platform': config.platform}))
+                            last_sampling_rejection = None
+                            self.events.put(('sampling_rejection', None))
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
@@ -1145,10 +1170,12 @@ class CollectionWorker:
                                 self.events.put(('observer', observer_state))
                             runtime = self.session.runtime
                             started = time.monotonic()
+                            sampling_observation = None
                             try:
                                 sample = self.session.read()
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
+                                    publish_sampling_rejection(None)
                                     self.events.put(('sample', sample))
                                     if sample.get('state') == 2 and sample.get('frame') is not None:
                                         frame = (sample.get('battle_id'), sample['frame'])
@@ -1158,6 +1185,17 @@ class CollectionWorker:
                             except CaptureRetry as exc:
                                 lifecycle = runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
+                                if isinstance(exc, MappingRetry):
+                                    reason = str(exc).partition('\n')[0].strip()[:200]
+                                    publish_sampling_rejection(dict(code='mapping_unavailable',
+                                                                    reason=reason or '归属证据尚未确认'))
+                                elif (sampling_observation is not None
+                                        and sampling_observation[0] == runtime.feed.id
+                                        and sampling_observation[1] == runtime.sessions.sequence
+                                        and sampling_observation[2] in ('preparing', 'waiting', 'end', 'terminal')):
+                                    # _read_lifecycle reports successfully consumed non-sample
+                                    # observations as retries. A gap or an old state is not proof.
+                                    publish_sampling_rejection(None)
                                 if lifecycle == 'playing' or isinstance(exc, MappingRetry):
                                     retries += 1
                                     now = time.monotonic()

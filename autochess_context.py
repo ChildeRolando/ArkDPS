@@ -21,7 +21,7 @@ PHASE_NAMES = {0: 'NONE', 1: 'LOADING', 2: 'SP_PREPARE', 3: 'PREPARE',
                101: 'BOSS_PREPARE_WAITING', 102: 'PREPARE_RESTART',
                103: 'SP_PREPARE_RESTART', 104: 'BOSS_BATTLE_RESTART'}
 _CID = re.compile(r'[A-Za-z0-9_#.-]{1,128}\Z')
-_PLAYER_UID = re.compile(r'[1-9][0-9]{0,19}\Z')
+_PLAYER_UID = re.compile(r'[0-9]{1,20}\Z')
 _PAGE_FIELDS = ('pages', 'page', 'sampling', 'source_frames', 'sampled_frames')
 
 
@@ -47,9 +47,11 @@ def _cid(value):
     return isinstance(value, str) and _CID.fullmatch(value) is not None
 
 
-def _player_uid(value):
+def valid_player_uid(value):
+    """Validate opaque account text; never rewrite its leading zeros or identity."""
     return (isinstance(value, str) and _PLAYER_UID.fullmatch(value) is not None
-            and int(value) < 1 << 64)
+            and any(character != '0' for character in value)
+            and (len(value) < 20 or value <= '18446744073709551615'))
 
 
 def _display(value, maximum):
@@ -74,7 +76,7 @@ def _players(rows):
     result, indices, uids = [], set(), set()
     for row in rows:
         if (not isinstance(row, dict) or not _integer(row.get('index'), 1, 4)
-                or not _player_uid(row.get('uid'))
+                or not valid_player_uid(row.get('uid'))
                 or not _display(row.get('nick_name'), 128)
                 or not _display(row.get('nick_number'), 32)):
             return None, 'invalid_player_identity'
@@ -325,6 +327,6 @@ def lookup_native_actor(context, *, cid, data_uid):
     if len(matches) != 1 or matches[0].get('cid') != cid:
         return None
     actor = matches[0]
-    if not _player_uid(actor.get('player_uid')) or actor.get('actor_key') != [actor['player_uid'], data_uid]:
+    if not valid_player_uid(actor.get('player_uid')) or actor.get('actor_key') != [actor['player_uid'], data_uid]:
         return None
     return _readonly(dict(actor, context_identity=context['identity']))

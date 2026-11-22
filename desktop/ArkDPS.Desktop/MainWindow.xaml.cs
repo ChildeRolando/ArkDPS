@@ -84,6 +84,8 @@ public partial class MainWindow : Window
         ? State.Get("effective_connection_config") : State.Get("connection_config");
     private bool UsingNativePc=>EffectiveConnectionConfig.Text("platform")=="native_pc";
     private NativePcReadiness PcReadiness=>NativePcReadiness.From(State);
+    private bool SamplingRejected=>State.Get("sampling_rejection").Text("code")=="mapping_unavailable" &&
+        (State.Text("status") is "sampling_rejected" or "stale") && State.Text("error").Length==0 && !PcReadiness.IsError;
     private string SelectedConnectionPlatform=>(ConnectionPlatform.SelectedItem as ComboBoxItem)?.Tag as string ?? "mumu";
     private readonly ConnectionDetection connectionDetection = new();
     private string HistorySelectionId=>cachedHistorySelection?.Id ?? State.Get("history_selected").Text("battle_id");
@@ -317,7 +319,7 @@ public partial class MainWindow : Window
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         bool previousBattle=ShowingPreviousBattle;
         bool panelLayoutChanged=ApplyLiveSnapshot(state,previousBattle,changed || unitsChanged);
-        Footer.Text=PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text");
+        Footer.Text=SamplingRejected ? state.Text("status_text") : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text");
         if(!initialized)
         {
             Native.Restore(this,layout.Get("gui"));
@@ -332,7 +334,7 @@ public partial class MainWindow : Window
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
-            PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text"),state.Text("event_text"),
+            SamplingRejected ? state.Text("status_text") : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text"),state.Text("event_text"),
             UsingNativePc ? state.Get("native_pc_bootstrap").Text("error") : "",
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected"),
             diag.Text("message"),diag.Text("error"),diag.Text("code")
@@ -411,12 +413,17 @@ public partial class MainWindow : Window
         RefreshLiveAvailability();
         return panelLayoutChanged;
     }
-    private void UpdateBabelMasthead(string status,bool observing)
+    private void UpdateBabelMasthead(string status,bool observing,string workerLabel)
     {
         bool waiting=status=="waiting" || State.Bool("battle_waiting") || State.Text("battle_id").Length==0;
         string title, subtitle;
         var readiness=PcReadiness;
-        if(readiness.Active)
+        if(SamplingRejected)
+        {
+            title="采样暂不可用";
+            subtitle=workerLabel;
+        }
+        else if(readiness.Active)
         {
             title=readiness.IsError ? "PC 监听异常" : "PC 事件采集";
             subtitle=readiness.Label;
@@ -445,6 +452,11 @@ public partial class MainWindow : Window
         if(PcReadiness.Active && panel.Rows.Items.Count==0)
         {
             panel.Empty.Text=PcReadiness.Label;
+            panel.Empty.Visibility=Visibility.Visible;
+        }
+        if(SamplingRejected && panel.Rows.Items.Count==0)
+        {
+            panel.Empty.Text=State.Text("status_text");
             panel.Empty.Visibility=Visibility.Visible;
         }
         if(Huds.TryGetValue(id,out var hud))
@@ -489,7 +501,7 @@ public partial class MainWindow : Window
             State.Get("layout").Get("event_observation").ValueKind==JsonValueKind.False);
         bool observing=!disabled && status is not ("disconnected" or "reconnecting" or "locating")
             && (observer=="ready" || (observer.Length==0 && coverage=="recording"));
-        UpdateBabelMasthead(status,observing);
+        UpdateBabelMasthead(status,observing,workerLabel);
         string phase=status switch
         {
             "waiting" => "等待进入战斗",
@@ -498,6 +510,7 @@ public partial class MainWindow : Window
         };
         (string label,Brush light) = UsingNativePc ? status switch
         {
+            "sampling_rejected" => (workerLabel,StatusAmber),
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" or "locating" => (workerLabel,StatusAmber),
             "waiting" => ("PC 版 · 等待进入战斗",StatusAmber),
@@ -505,6 +518,7 @@ public partial class MainWindow : Window
             _ => (workerLabel,StatusGray),
         } : status switch
         {
+            "sampling_rejected" => (workerLabel,StatusAmber),
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" => (workerLabel,StatusAmber),
             "locating" => (disabled ? workerLabel : "正在连接观察者",StatusAmber),
@@ -519,7 +533,7 @@ public partial class MainWindow : Window
             _ => ($"等待观察·{phase}",StatusAmber),
         };
         var readiness=PcReadiness;
-        if(readiness.Active && status is not ("stale" or "reconnecting"))
+        if(readiness.Active && !SamplingRejected && status is not ("stale" or "reconnecting"))
             (label,light)=(readiness.Label,readiness.IsError ? StatusRed : StatusAmber);
         if(ShowingPreviousBattle) label="上次快照 · "+label;
         Status.Text=label;

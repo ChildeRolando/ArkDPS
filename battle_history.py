@@ -13,7 +13,7 @@ import re
 import tempfile
 from threading import RLock
 
-from autochess_context import MAX_MEMBERSHIPS, PHASE_NAMES, native_autochess_scope_id
+from autochess_context import MAX_MEMBERSHIPS, PHASE_NAMES, native_autochess_scope_id, valid_player_uid
 
 
 POLICIES = {
@@ -88,10 +88,6 @@ def _validate_multiplayer(payload, battle_id, duration):
     if payload is None:
         return
 
-    def player_uid(value):
-        return (isinstance(value, str) and re.fullmatch(r'[1-9][0-9]{0,19}', value) is not None
-                and int(value) < 1 << 64)
-
     def text(value, maximum):
         return isinstance(value, str) and 0 < len(value) <= maximum
 
@@ -157,7 +153,7 @@ def _validate_multiplayer(payload, battle_id, duration):
             _require(type(slot) is int and slot in range(1, 5) and slot not in slots,
                      'duplicate or invalid native multiplayer slot')
             slots.add(slot)
-            _require(uid is None or player_uid(uid) and uid not in uids,
+            _require(uid is None or valid_player_uid(uid) and uid not in uids,
                      'duplicate or invalid native multiplayer player UID')
             if uid is not None:
                 accounts.append((slot, uid))
