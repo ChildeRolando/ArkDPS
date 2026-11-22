@@ -176,6 +176,45 @@ def test_runtime_preserves_busy_as_retry_without_creating_a_gap(tmp_path, cause)
     assert recorded == [] and runtime.sessions.sequence == 0
 
 
+@pytest.mark.parametrize('opening_kind,eligible', [
+    ('none', True), ('barrier', True), ('wrapped_barrier', True),
+    ('observer', False), ('capture', False), ('transport', False),
+])
+def test_real_dual_acquisition_failures_preserve_opening_cause_before_retry(
+        tmp_path, opening_kind, eligible):
+    collector, probe, observed, commits, _ = fixture(tmp_path)
+    runtime = BattleRuntime()
+    recorded = []
+    runtime.record = recorded.append
+    opening = {
+        'none': None, 'barrier': BarrierBusy('opening busy'),
+        'wrapped_barrier': CaptureRetry('opening wrapper'),
+        'observer': ObserverReadRetry('generic opening retry'),
+        'capture': CaptureRetry('generic opening retry'),
+        'transport': OSError('opening transport failed'),
+    }[opening_kind]
+    if opening_kind == 'wrapped_barrier':
+        opening.__cause__ = BarrierBusy('verified opening busy')
+    original_mark = observed.mark
+    def mark():
+        if opening is not None:
+            raise opening
+        return original_mark()
+    observed.mark = mark
+    busy = NativeClockBusy('closing native clock changed')
+    def read_lifecycle():
+        raise busy
+    collector.read_lifecycle = read_lifecycle
+    with pytest.raises(CaptureRetry) as caught:
+        runtime.poll(collector, observed)
+    assert caught.value.__cause__ is busy
+    assert busy.__cause__ is opening
+    assert bridge._native_clock_busy(caught.value) is eligible
+    assert recorded == [] and runtime.feed.current_lifecycle is None
+    assert runtime.sessions.sequence == 0 and runtime.sessions.adapter is None
+    assert commits == [] and probe.reads == 0
+
+
 def test_three_attempts_then_original_wait_bounds_sustained_busy(tmp_path, monkeypatch):
     _, starts, waits, _, _ = run_worker(tmp_path, monkeypatch, ['barrier'] * 7)
     assert waits == pytest.approx([.005, .005, .2, .005, .005, .2, .005, .2])

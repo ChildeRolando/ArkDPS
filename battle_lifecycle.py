@@ -263,7 +263,16 @@ class BattleFeed:
                 opening = (_observer_mark(observer), None)
             except Exception as exc:
                 opening = (None, exc)
-        before = collector.read_lifecycle()
+        from collector import NativeClockBusy
+        try:
+            before = collector.read_lifecycle()
+        except NativeClockBusy as exc:
+            # Both boundaries failed before any observation was consumed. Keep
+            # the earlier opening failure so a typed native busy cannot hide a
+            # transport error from the worker's conservative retry classifier.
+            if opening is not None and opening[1] is not None:
+                raise exc from opening[1]
+            raise
         self.current_lifecycle = before
         metadata = before.get('metadata') or {}
         stage = metadata.get('stage_id') if metadata.get('evidence') else None
