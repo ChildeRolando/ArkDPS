@@ -294,22 +294,27 @@ class MultiplayerBattleStatistics:
                                 baseline_frame=player.stream.baseline_frame, initial_drain=initial)
 
     def consume(self, sample, roster: RosterSnapshot, sequence=None, drained=None, *, mark=None,
-                round_id=None):
+                round_id=None, return_result=True):
         stage = str((sample.get('battle_metadata') or {}).get('stage_id') or '')
         if 'AUTOCHESS' not in stage.upper():
             return None
+        self._consume(sample, roster, sequence, drained, mark=mark, round_id=round_id)
+        if return_result:
+            return self.result()
+
+    def _consume(self, sample, roster, sequence, drained, *, mark, round_id):
         if (not _number(sample.get('game_time')) or not _integer(sample.get('frame'))
                 or not isinstance(roster, RosterSnapshot) or roster.frame != sample['frame']):
             self.gap('快照或编队短读')
-            return self.result()
+            return
         base = round_id if round_id is not None else sample.get('session')
         if not isinstance(base, str) or not base:
             self.gap('小局身份未确认')
-            return self.result()
+            return
         if base in self._retired_rounds:
-            return self.result()
+            return
         if (base, sample.get('session'), sample.get('native_session')) in self._retired_identities:
-            return self.result()
+            return
         reason = None
         if self._base_round != base:
             reason = '小局切换'
@@ -324,10 +329,10 @@ class MultiplayerBattleStatistics:
         if reason is not None:
             self._begin(sample, base, reason)
         elif self._ended:
-            return self.result()
+            return
         self._bind(roster)
         if self._closed:
-            return self.result()
+            return
         drained = drained or {}
         if sequence is None:
             sequence = (mark or {}).get('sequence', drained.get('sequence'))
@@ -338,20 +343,20 @@ class MultiplayerBattleStatistics:
                 self._now, self._frame = sample['game_time'], sample['frame']
                 for player in self._players.values():
                     player.statistics.advance(self._now)
-            return self.result()
+            return
         if drained.get('error') or drained.get('stopped'):
             self.gap(str(drained.get('error') or '事件观察已停止'))
-            return self.result()
+            return
         quality = mark if mark is not None else drained
         version = drained.get('partial_damage_version', quality.get('partial_damage_version'))
         if type(version) is not int or version not in SUPPORTED_SETTLEMENT_VERSIONS:
             self._reasons.add('未取得支持的结算事件版本')
             if self._baseline is not None:
                 self.gap('结算事件版本丢失或不受支持')
-            return self.result()
+            return
         if self._settlement_version is not None and version != self._settlement_version:
             self.gap('结算事件版本发生变化')
-            return self.result()
+            return
         ready = quality.get('damage_settlement_ready', quality.get('enemy_damage_ready'))
         unknown = quality.get('damage_settlement_unknown', quality.get('enemy_damage_unknown'))
         if ready is not True or unknown is not False:
@@ -366,7 +371,7 @@ class MultiplayerBattleStatistics:
                 player.statistics.advance(self._now)
             self._start_events(sequence, version)
             self._quality(sample, drained, quality, initial=True)
-            return self.result()
+            return
         try:
             events, pending = self._batch(sample, sequence, drained)
             self._quality(sample, drained, quality, initial=False)
@@ -421,7 +426,7 @@ class MultiplayerBattleStatistics:
             self._now, self._frame = sample['game_time'], sample['frame']
         except (StreamGap, ValueError, TypeError, OverflowError) as exc:
             self.gap(str(exc))
-        return self.result()
+        return
 
     def gap(self, reason='采集缺口'):
         if not self._players or self._ended:

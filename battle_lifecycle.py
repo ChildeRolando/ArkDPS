@@ -403,7 +403,7 @@ class BattleSessions:
                 from multiplayer_battle import MultiplayerBattleStatistics
                 self.multiplayer = MultiplayerBattleStatistics()
             self._multiplayer_call('consume', observation.sample, observation.roster, sequence,
-                                   drained, mark=mark, round_id=self.battle_id)
+                                   drained, mark=mark, round_id=self.battle_id, return_result=False)
         except Exception as exc:
             self.multiplayer_error = str(exc)
 

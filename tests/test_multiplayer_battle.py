@@ -149,6 +149,24 @@ def test_missing_skill_actor_uid_preserves_uncertainty_without_charging_a_cid_pe
     assert player(value, 4)['actor_ledgers'][0]['ledger']['skill_split_complete'] is True
 
 
+def test_deferred_result_matches_eager_output_through_gap_identity_reset_and_finish():
+    eager, deferred = MultiplayerBattleStatistics(), MultiplayerBattleStatistics()
+    entries = [actor(2), actor(3)]
+    cases = [(sample(0), entries, 0, []),
+             (sample(2), entries, 1, [hit(1, 2, 1)]),
+             (sample(3), entries, 3, [hit(3, 3, 3)]),  # Missing seq2 retains the prefix.
+             (sample(0, session='round-2'), [actor(2, uid=222)], 3, []),
+             (sample(3, session='round-2'), [actor(2, uid=222)], 4,
+              [hit(4, 2, 2, 50, uid=222)])]
+    for value, actors, sequence, events in cases:
+        roster = RosterSnapshot(value['frame'], tuple(actors), local_player_side=3)
+        batch = dict(events=events, **QUALITY)
+        expected = eager.consume(value, roster, sequence, batch, mark=QUALITY)
+        assert deferred.consume(value, roster, sequence, batch, mark=QUALITY, return_result=False) is None
+        assert deferred.result() == expected
+    assert deferred.finish(3, complete=True) == eager.finish(3, complete=True)
+
+
 def test_exact_replay_is_ignored_conflict_or_missing_tail_closes_coverage():
     meter = MultiplayerBattleStatistics()
     entries = [actor(2)]
