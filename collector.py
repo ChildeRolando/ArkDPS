@@ -38,6 +38,10 @@ class SampleUnavailable(RuntimeError):
     pass
 
 
+class NativeClockBusy(SampleUnavailable):
+    """The native sample's complete closing clock/lifecycle bracket changed."""
+
+
 class SnapshotGap(SampleUnavailable):
     """A verified observation is missing, with snapshot coverage interrupted."""
 

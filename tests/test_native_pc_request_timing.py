@@ -26,7 +26,7 @@ def test_default_sink_is_none_and_uses_no_clock_or_extra_call(monkeypatch):
     def forbidden():
         raise AssertionError('disabled timing must not read a clock')
 
-    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=forbidden))
+    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=forbidden, perf_counter=forbidden))
     monkeypatch.setattr(NativePcFridaObserver, '_request', request)
     token = object()
     assert current._request('read', timeout=.125, token=token) is result
@@ -50,14 +50,14 @@ def test_timing_preserves_inputs_return_identity_and_records_only_bounded_labels
         records.append((kind, value))
         clock[0] += 900  # Sink work is excluded from the reported duration.
 
-    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: 10., perf_counter=lambda: clock[0]))
     monkeypatch.setattr(NativePcFridaObserver, '_request', request)
     current.set_request_timing_audit(sink)
     assert current._request(operation, timeout=timeout, token=token, after=17, through=22) is result
     assert calls == [(current, operation, timeout, dict(token=token, after=17, through=22))]
     assert records == [('native_pc_request_timing', dict(
         op=operation if operation in ('mark', 'read', 'ack') else 'other',
-        started_monotonic=10.0, elapsed_ms=125.0, outcome='success', error_type=None))]
+        started_monotonic=10.0, started_perf_counter=10.0, elapsed_ms=125.0, outcome='success', error_type=None))]
 
 
 @pytest.mark.parametrize('failure', [ObserverReadRetry('private timeout details'), RuntimeError('private binding details'), KeyboardInterrupt('private cancel details')])
@@ -71,13 +71,13 @@ def test_request_exception_instance_and_type_survive_without_logging_its_message
         calls.append(operation)
         raise failure
 
-    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: 20., perf_counter=lambda: next(ticks)))
     monkeypatch.setattr(NativePcFridaObserver, '_request', request)
     current.set_request_timing_audit(lambda kind, value: records.append((kind, value)))
     with pytest.raises(type(failure)) as caught:
         current._request('read')
     assert caught.value is failure and calls == ['read']
-    assert records == [('native_pc_request_timing', dict(op='read', started_monotonic=20.,
+    assert records == [('native_pc_request_timing', dict(op='read', started_monotonic=20., started_perf_counter=20.,
         elapsed_ms=250., outcome='error', error_type=type(failure).__name__))]
 
 
@@ -126,7 +126,7 @@ def test_real_native_binding_failure_is_inside_the_request_measurement(monkeypat
         raise failure
 
     monkeypatch.setattr(FridaEventObserver, '_request', transport)
-    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: 30., perf_counter=lambda: clock[0]))
     current.binding = SimpleNamespace(bind=bind)
     current.set_request_timing_audit(lambda kind, value: records.append(value))
     with pytest.raises(ObserverReadRetry) as caught:
@@ -135,7 +135,7 @@ def test_real_native_binding_failure_is_inside_the_request_measurement(monkeypat
     assert calls == [('transport', 'mark', .5, {}), ('bind', 'mark', reply)]
     record, = records
     assert record['elapsed_ms'] == pytest.approx(300) and record['error_type'] == 'ObserverReadRetry'
-    assert set(record) == {'op', 'started_monotonic', 'elapsed_ms', 'outcome', 'error_type'}
+    assert set(record) == {'op', 'started_monotonic', 'started_perf_counter', 'elapsed_ms', 'outcome', 'error_type'}
 
 
 def test_ack_timeout_keeps_original_cursor_and_idempotent_request_count(monkeypatch):
@@ -187,7 +187,8 @@ def test_sink_can_be_disabled_after_use_without_reading_the_clock(monkeypatch):
     calls = []
     current.set_request_timing_audit(lambda *_: pytest.fail('disabled sink called'))
     current.set_request_timing_audit()
-    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: pytest.fail('disabled clock read')))
+    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=lambda: pytest.fail('disabled clock read'),
+                                                     perf_counter=lambda: pytest.fail('disabled precise clock read')))
     monkeypatch.setattr(NativePcFridaObserver, '_request', lambda self, op, **kwargs: calls.append(op))
     current._request('ack')
     assert calls == ['ack']

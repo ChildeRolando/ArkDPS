@@ -8,7 +8,7 @@ import re
 import struct
 import time
 
-from collector import ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
+from collector import NativeClockBusy, ProcessChanged, SampleUnavailable, SnapshotGap, UnsupportedVersion
 from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
 from enemy_telemetry import EnemyTelemetry, NativeEnemyObservations, _load_enemy_db, native_enemy_view
 from native_pc.probe_native_pc import ApiFailure, KNOWN_FILES
@@ -230,6 +230,8 @@ class NativePcCollector:
         if status in ('process_exited', 'process_changed'):
             self._reset_stage_plan()
             raise ProcessChanged('官服 PC 游戏进程已变化，正在重新连接。')
+        if status == 'sample_retry' and report.get('reason') == 'frame_or_lifecycle_changed':
+            raise NativeClockBusy('官服 PC 战局正在准备或跨帧重试（frame_or_lifecycle_changed）')
         if status in ('waiting_game_init', 'battle_not_ready', 'sample_retry'):
             raise SampleUnavailable(f'官服 PC 战局正在准备或跨帧重试（{report.get("reason")}）')
         if status != 'sample_available':

@@ -1160,6 +1160,8 @@ class NativePcFridaRuntime:
 
 
 class _GadgetObserver(NativePcFridaObserver):
+    native_clock_busy_retry = True
+
     def __init__(self, collector, remote, *, runtime):
         super().__init__(collector, remote)
         self.runtime = runtime
@@ -1176,6 +1178,7 @@ class _GadgetObserver(NativePcFridaObserver):
         if sink is None:
             return super()._request(operation, timeout=timeout, **arguments)
         started = time.monotonic()
+        started_perf = time.perf_counter()
         error_type = None
         try:
             # Include both transport and NativePcBinding validation. The audit
@@ -1188,7 +1191,8 @@ class _GadgetObserver(NativePcFridaObserver):
             try:
                 sink('native_pc_request_timing', dict(
                     op=operation if operation in ('mark', 'read', 'ack') else 'other',
-                    started_monotonic=started, elapsed_ms=(time.monotonic() - started) * 1000,
+                    started_monotonic=started, started_perf_counter=started_perf,
+                    elapsed_ms=(time.perf_counter() - started_perf) * 1000,
                     outcome='success' if error_type is None else 'error', error_type=error_type))
             except BaseException:
                 pass  # Optional diagnostics cannot replace a result or exception.

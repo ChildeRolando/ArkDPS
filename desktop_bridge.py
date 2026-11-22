@@ -26,12 +26,13 @@ from battle_lifecycle import BattleRuntime, MappingRetry
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
-from collector import BattleChanged, ROOT
+from collector import BattleChanged, NativeClockBusy, SnapshotGap, ROOT
 from connection import (ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
                         DetectionStatus, detect_instances, resolve_configured)
 from desktop_audit import DesktopCaptureJournal
 from event_capture import CaptureRetry
-from event_observer import ObserverStatus
+from event_observer import ObserverReadRetry, ObserverStatus
+from event_probe import BarrierBusy, NATIVE_PC_CONTRACT
 from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from metrics import observation_age
@@ -45,6 +46,9 @@ MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
+NATIVE_BUSY_ATTEMPTS = 3
+NATIVE_BUSY_BUDGET = .04
+NATIVE_BUSY_REST = .005
 NATIVE_ACTION_REQUIRED_CODES = frozenset((
     'native_permission_denied', 'native_root_required', 'native_unsupported_build',
 ))
@@ -68,6 +72,21 @@ def event_label(status, error=None):
               'finished': '事件观察结束 · 保留已覆盖区间'}
     labels['snapshot_only'] = '官服 PC 累计快照 · 逐事件不可用'
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
+
+
+def _native_clock_busy(error):
+    """Only typed acquisition evidence qualifies; messages and RPC retries do not."""
+    busy = False
+    seen = set()
+    while error is not None and id(error) not in seen and len(seen) < 16:
+        seen.add(id(error))
+        if isinstance(error, (MappingRetry, SnapshotGap, BattleChanged)):
+            return False
+        if not isinstance(error, (CaptureRetry, ObserverReadRetry, BarrierBusy, NativeClockBusy)):
+            return False
+        busy |= isinstance(error, (BarrierBusy, NativeClockBusy))
+        error = error.__cause__
+    return busy and error is None
 
 
 def team_totals(statistics):
@@ -1016,6 +1035,7 @@ class CollectionWorker:
                     last_retry_audit = float('-inf')
                     last_live_frame = None
                     last_sampling_rejection = None
+                    clock_burst = None
                     bundled_observer = self.endpoint == DEFAULT_FRIDA_REMOTE and BUNDLED_SERVER_ARCHIVE.is_file()
 
                     def publish_sampling_rejection(value):
@@ -1036,6 +1056,7 @@ class CollectionWorker:
 
                     while not self.stop.is_set():
                         next_live_read = None
+                        clock_retry_delay = None
                         try:
                             revision, config, enabled = self._next_request()
                         except queue.Empty:
@@ -1059,6 +1080,7 @@ class CollectionWorker:
                             self.events.put(('connection_source', {
                                 'revision': revision, 'platform': config.platform}))
                             last_sampling_rejection = None
+                            clock_burst = None
                             self.events.put(('sampling_rejection', None))
                             self.events.put(('scanning', True))
                             if self.release():
@@ -1169,6 +1191,30 @@ class CollectionWorker:
                                 last_observer_state = observer_state
                                 self.events.put(('observer', observer_state))
                             runtime = self.session.runtime
+                            feed, sessions = runtime.feed, runtime.sessions
+                            consume_sequence = sessions.sequence
+                            clock_retry = (current_config.platform == 'native_pc' and current_enabled
+                                and self.native_pc_observer_factory is None and self.arkframework_root is None
+                                and getattr(self.session.observer, 'native_clock_busy_retry', False) is True
+                                and getattr(self.session.observer, 'contract', None) is NATIVE_PC_CONTRACT)
+                            if clock_retry:
+                                owner = (current_revision, self.session, self.session.observer, runtime, feed, sessions)
+                                if clock_burst is not None and (self.stop.is_set() or current_revision != self._request_revision):
+                                    clock_burst = None
+                                    continue
+                                same_owner = (clock_burst is not None and owner[0] == clock_burst[0][0]
+                                    and all(left is right for left, right in zip(owner[1:], clock_burst[0][1:])))
+                                read_perf = time.perf_counter()
+                                if same_owner:
+                                    if read_perf - clock_burst[1] >= NATIVE_BUSY_BUDGET:
+                                        clock_burst = None
+                                        self.stop.wait(COLLECTION_PERIOD)
+                                        continue
+                                    clock_burst = (owner, clock_burst[1], clock_burst[2] + 1)
+                                else:
+                                    clock_burst = (owner, read_perf, 1)
+                            else:
+                                clock_burst = None
                             started = time.monotonic()
                             sampling_observation = None
                             try:
@@ -1185,6 +1231,18 @@ class CollectionWorker:
                             except CaptureRetry as exc:
                                 lifecycle = runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
+                                # A failed read may already have consumed a native
+                                # pre-observer frame. Never accelerate that path.
+                                if (clock_retry and self.session is owner[1]
+                                        and self.session.observer is owner[2]
+                                        and self.session.runtime is runtime and runtime.feed is feed
+                                        and runtime.sessions is sessions and sessions.sequence == consume_sequence
+                                        and sampling_observation is None
+                                        and not self.stop.is_set() and current_revision == self._request_revision
+                                        and _native_clock_busy(exc)
+                                        and clock_burst[2] < NATIVE_BUSY_ATTEMPTS
+                                        and time.perf_counter() + NATIVE_BUSY_REST < clock_burst[1] + NATIVE_BUSY_BUDGET):
+                                    clock_retry_delay = NATIVE_BUSY_REST
                                 if isinstance(exc, MappingRetry):
                                     reason = str(exc).partition('\n')[0].strip()[:200]
                                     publish_sampling_rejection(dict(code='mapping_unavailable',
@@ -1228,6 +1286,8 @@ class CollectionWorker:
                                     current_config.platform == 'native_pc'
                                     and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
                                 usable = False
+                            if clock_retry_delay is None:
+                                clock_burst = None
                             if usable:
                                 battle_waiting = runtime.feed.battle_waiting
                                 if battle_waiting is not None and battle_waiting != last_battle_waiting:
@@ -1267,7 +1327,8 @@ class CollectionWorker:
                         # Pace successful live reads start-to-start, with a short
                         # rest even if capture took longer than the whole period.
                         # Idle, paused and retry paths keep their existing backoff.
-                        delay = (COLLECTION_PERIOD if next_live_read is None else
+                        delay = (clock_retry_delay if clock_retry_delay is not None else
+                                 COLLECTION_PERIOD if next_live_read is None else
                                  max(COLLECTION_MIN_REST, next_live_read - time.monotonic()))
                         self.stop.wait(delay)
                 finally:
