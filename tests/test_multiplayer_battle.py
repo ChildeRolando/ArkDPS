@@ -129,6 +129,26 @@ def test_conflicting_or_mismatched_uid_is_not_guessed_by_character_name(problem)
     assert len(value['unknown_attribution']) == 1
 
 
+@pytest.mark.parametrize('kind', ['skill_start', 'skill_end'])
+def test_missing_skill_actor_uid_preserves_uncertainty_without_charging_a_cid_peer(kind):
+    meter = MultiplayerBattleStatistics()
+    other = 'char_140_whitew'
+    entries = [actor(2), actor(3), actor(4, cid=other)]
+    consume(meter, 0, entries)
+    uncertain = dict(hit(1, 2, 1, 0), kind=kind, skill_key='skill_test')
+    uncertain.pop('source_character_uid')
+    value = consume(meter, 4, entries, [uncertain,
+        hit(2, 2, 2), hit(3, 3, 3), hit(4, 4, 4, cid=other)])
+    assert value['status'] == 'observing'
+    assert [player(value, side)['observed_damage'] for side in (2, 3, 4)] == [100, 100, 100]
+    for side in (2, 3):
+        lane = player(value, side)['actor_ledgers'][0]['ledger']
+        assert lane['skill_split_complete'] is False
+        assert lane['skill_damage_unverified_share'] == 1
+        assert lane['observed_non_skill_damage'] is None
+    assert player(value, 4)['actor_ledgers'][0]['ledger']['skill_split_complete'] is True
+
+
 def test_exact_replay_is_ignored_conflict_or_missing_tail_closes_coverage():
     meter = MultiplayerBattleStatistics()
     entries = [actor(2)]

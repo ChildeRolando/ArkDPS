@@ -216,6 +216,19 @@ class MultiplayerBattleStatistics:
             events=0, first_sequence=event['sequence'], last_sequence=event['sequence']))
         item['events'] += 1
         item['last_sequence'] = event['sequence']
+        # A missing UID cannot assign an event to a CID peer. It also cannot
+        # certify that peer's skill or engagement coverage. Translate only
+        # uncertainty to each plausible actor; never translate the amount.
+        for player in self._players.values():
+            for owner, actor in player.actors.items():
+                if actor.cid != event.get('source'):
+                    continue
+                player.statistics.observe_unresolved_source(event['kind'], owner,
+                    event.get('amount'), event.get('target_instance'), damage_type=event.get('damage_type'))
+                if event['kind'] in ('skill_start', 'skill_end'):
+                    proof = event.get('proof') or {}
+                    player.statistics.mark_settlement_skill_unassigned(owner,
+                        proof.get('method') if isinstance(proof, dict) else None, event.get('skill_reason'))
         if event.get('kind') == 'damage_settlement':
             self._reasons.add('存在来源UID未确认的结算')
             for player in self._players.values():
