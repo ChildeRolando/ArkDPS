@@ -23,7 +23,7 @@ const cfg={methods:[]};let clock;let skillF=null;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;
 let terminalMethods=null;
-let sourceCharacterClasses=null;
+let sourceCharacterClasses=null,settlementCharacterClass=null;
 let skillCastStateMethods=null,skillCastStateReady=false;
 function uniqueMethod(klass,name,argCount) {
  const matches=[];
@@ -167,6 +167,7 @@ try{
   }else found[name]=k;
  }
  for(const name of wanted)if(!found[name])throw new Error('class not found '+name);
+ settlementCharacterClass=found.Character;
  expectFields(found.Entity,{'m_hp':0x40,'<id>k__BackingField':0x148});
  expectFields(found.Buff,{'m_source':0x18,'m_blackboard':0xb8,'<key>k__BackingField':0x208,'<instanceUid>k__BackingField':0x218,'<hasShield>k__BackingField':0x27c});
  expectFields(found.Modifier,{'m_source':0x10,'m_target':0x20,'m_originalSource':0x30,'m_value':0x40,'realDelta':0x58,'<targetType>k__BackingField':0x70,'<damageType>k__BackingField':0x78,'<cancelReason>k__BackingField':0x80});
@@ -321,15 +322,78 @@ function observeDamageSettlementController(identity,{starting=false}={}){
  damageSettlementController??=key;
 }
 function markDamageSettlementUnknown(when,reason){
+ if(!enemyDamageReady)return;
  if(when.settlementScope!==damageSettlementScope)return;
  enemyDamageUnknown=true;
  damageSettlementIssue??={frame:when.frame,game_time:when.game_time,sequence,reason};
 }
 // An actor-local proof gap needs more than a cached character id. Preserve
 // the exact ApplyModifier/owner/target scope; this anchor never supplies HP.
+// Qualify the enemy-HP ledger independently from proving a hit's HP amount.
+// Character/token targets may legitimately have BObject UID zero before Born;
+// their stable native class/identity excludes them without an enemy certificate.
+function readSettlementDomain(target,modifier,when){
+ if(!enemyDamageReady)return {kind:'disabled'};
+ const point={kind:'unknown',target,modifier,when};
+ try{
+  point.type=modifier.add(0x68).readS32();point.targetType=modifier.add(0x60).readS32();
+  if(!target||target.isNull())return point;
+  point.id=targetKey(target);point.klass=target.readPointer();point.uid=target.add(0x18).readU32();
+  if(!point.id||point.klass.isNull()||!Number.isInteger(point.uid)||point.uid<0||point.uid>0xffffffff||
+     !enemyEntryConfig?.assignable(enemyEntryConfig.bObject,point.klass))return point;
+  if(point.id.startsWith('enemy_')||point.id.startsWith('trap_'))point.kind='potential';
+  else if(!enemyEntryConfig.assignable(enemyEntryConfig.enemy,point.klass)&&
+          (point.id.startsWith('token_')||point.id.startsWith('char_')&&settlementCharacterClass&&
+           enemyEntryConfig.assignable(settlementCharacterClass,point.klass)))point.kind='unrelated';
+ }catch(e){/* Unreadable or unknown identity is never proof of an unrelated target. */}
+ return point;
+}
+function settlementDamageOperation(point){
+ return !!point&&point.targetType===0&&[1,2,3,5].includes(point.type);
+}
+function sameSettlementDomain(a,b){
+ return !!a&&!!b&&a.kind!=='unknown'&&b.kind!=='unknown'&&
+  a.modifier.equals(b.modifier)&&a.target.equals(b.target)&&a.klass.equals(b.klass)&&
+  a.id===b.id&&a.uid===b.uid&&a.type===b.type&&a.targetType===b.targetType&&
+  !!a.when&&!!b.when&&sameMitigationTime(a.when,b.when);
+}
+function observeSettlementDomain(scope,point){
+ if(!enemyDamageReady)return;
+ if(!scope)return;
+ const entry=scope.settlementDomainEntry;
+ if(settlementDamageOperation(point)&&point.kind==='potential')scope.settlementDomainPotential=true;
+ if(point.kind==='unknown'||entry&&!sameSettlementDomain(entry,point))scope.settlementDomainUncertain=true;
+ if(scope.tracksModifier&&scope.source&&own(scope.source)&&
+    (settlementDamageOperation(entry)||settlementDamageOperation(point))&&
+    (scope.settlementDomainPotential||scope.settlementDomainUncertain))scope.settlementCandidate=true;
+}
+function captureSettlementDomain(scope){
+ if(!enemyDamageReady)return;
+ scope.settlementDomainEntry=readSettlementDomain(scope.target,scope.mod,scope.when);
+ observeSettlementDomain(scope,scope.settlementDomainEntry);
+}
+function settlementScopeQualification(scope,when,target=scope.target){
+ if(!enemyDamageReady)return 'disabled';
+ let current;
+ try{current=readSettlementDomain(scope.mod.add(0x10).readPointer(),scope.mod,when);}
+ catch(e){current={kind:'unknown'};}
+ observeSettlementDomain(scope,current);
+ if(target&&(!current.target||!target.equals(current.target)))
+  observeSettlementDomain(scope,readSettlementDomain(target,scope.mod,when));
+ const parent=scope.modifierScope;
+ if(parent&&parent!==scope)observeSettlementDomain(parent,current);
+ if(scope.settlementDomainUncertain||parent?.settlementDomainUncertain)return 'unknown';
+ if(scope.settlementDomainPotential||parent?.settlementDomainPotential)return 'potential';
+ const entry=scope.settlementDomainEntry;
+ if(!sameSettlementDomain(entry,current))return 'unknown';
+ if(current.kind==='unrelated')return 'outside';
+ // Known non-HP operations do not require enemy damage certificates.
+ if(current.type===4&&current.targetType===0||current.type===0&&current.targetType===5)return 'outside';
+ return 'unknown';
+}
 function captureSettlementAnchor(scope,type){
  if(!enemyDamageReady||![1,2,3].includes(type)||!scope.source||!own(scope.source)||
-    scope.mod.add(0x60).readS32()!==0||knownNonEnemyTarget(scope.target))return;
+    scope.mod.add(0x60).readS32()!==0||settlementScopeQualification(scope,scope.when)==='outside')return;
  scope.settlementCandidate=true;
  try{
   const source=scope.nativeModifierSource,target=scope.target;
@@ -360,11 +424,16 @@ function stableSettlementAnchor(scope,when,requireActor=true){
  }catch(e){return false;}
 }
 function noteSettlementProofGap(scope,when,reason){
+ if(!enemyDamageReady)return;
+ const qualification=settlementScopeQualification(scope,when);
+ if(qualification==='outside')return;
  scope.settlementFailureReason??=reason;
- if(!stableSettlementAnchor(scope,when))
+ if(qualification==='unknown'||!stableSettlementAnchor(scope,when))
   markDamageSettlementUnknown(when||scope.when,reason);
 }
 function finalizeUnverifiedSettlement(scope,when){
+ if(!enemyDamageReady)return;
+ if(scope.settlementDomainEntry&&settlementScopeQualification(scope,when)==='outside')return;
  if(!scope.settlementCandidate||scope.settlementRecordEmitted||scope.settlementNoConsumption)return;
  let amount=null;
  try{amount=fp(scope.mod.add(0x30));}catch(e){/* Entry evidence still requires an explicit gap. */}
@@ -372,7 +441,7 @@ function finalizeUnverifiedSettlement(scope,when){
  if(!scope.settlementFailureReason&&!(amount>0)&&!(a?.entryAmount>0))return;
  const reason=scope.settlementFailureReason||'missing same-hit target or output settlement proof';
  noteSettlementProofGap(scope,when,reason);
- if(!stableSettlementAnchor(scope,when))return;
+ if(settlementScopeQualification(scope,when)!=='potential'||!stableSettlementAnchor(scope,when))return;
  // Required amount zero is the pre-existing incomplete-record placeholder,
  // never a certificate of zero HP consumption. Actual and nominal stay absent.
  damageSettlement(scope,a.target,0,when,{identity:a.identity,type:a.type,unverified:true});
@@ -603,6 +672,9 @@ function finishTargetSettlement(invocation,when){
  }catch(e){hit.commit.invalid=true;}
 }
 function verifiedTargetSettlement(scope,target,when,amount,type){
+ if(!enemyDamageReady)return null;
+ const qualification=settlementScopeQualification(scope,when,target);
+ if(qualification==='outside')return null;
  function reject(reason){
   scope.targetCommitRejected=true;
   noteSettlementProofGap(scope,when,reason);
@@ -610,6 +682,7 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
  }
  try{
   const hit=scope.targetHit,commit=hit?.commit;
+  if(qualification==='unknown')return reject('unverified enemy settlement domain');
   if(scope.settlementAnchor&&!stableSettlementAnchor(scope,when,false))
    return reject('modifier scope identity or clock changed');
   if(!commit)return null;
@@ -991,6 +1064,9 @@ function knownNonEnemyTarget(target){
 }
 function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed,evidenceMethod}={}) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
+ const qualification=settlementScopeQualification(scope,when,target);
+ if(qualification==='outside')return;
+ if(qualification==='unknown'){noteSettlementProofGap(scope,when,'unverified enemy settlement domain');return;}
  try{
   const damageType=type??scope.mod.add(0x68).readS32();
   if(![1,2,3,5].includes(damageType))return;
@@ -1029,6 +1105,10 @@ function flushOutputSettlement(scope,when) {
  scope.outputSettlement=null;
 }
 function matchOutputSettlement(output,scope,source) {
+ if(!enemyDamageReady)return false;
+ const qualification=settlementScopeQualification(output,output.when);
+ if(qualification==='outside')return false;
+ if(qualification==='unknown'){noteSettlementProofGap(scope||output,output.when,'unverified output settlement domain');return false;}
  if(!source||!scope||scope.mitigationModifierReused||!scope.nativeModifierSource?.equals(source)||
     !scope.target?.equals(output.target)||!sameMitigationTime(scope.when,output.when))return false;
  const uid=damageTargetUid(output.target);
@@ -1037,7 +1117,7 @@ function matchOutputSettlement(output,scope,source) {
   output.settlementType=output.mod.add(0x68).readS32();
   output.settlementIdentity=enemyDamageIdentity(output.target,uid);
  }
- catch(e){markDamageSettlementUnknown(output.when,String(e));return false;}
+ catch(e){noteSettlementProofGap(scope||output,output.when,String(e));return false;}
  if(!output.settlementIdentity)return false;
  if(scope.settlementAmbiguous)return true;
  const previous=scope.outputSettlement;
@@ -1065,6 +1145,10 @@ function verifiedNoConsumption(scope,output,evidence,killed,real) {
         !scope.numericShieldUnknown&&!scope.unmatchedShield&&!(scope.numericShield>0);
 }
 function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null) {
+ if(!enemyDamageReady)return false;
+ const qualification=settlementScopeQualification(scope,when,target);
+ if(qualification==='outside')return false;
+ if(qualification==='unknown'){noteSettlementProofGap(scope,when,'unverified enemy settlement domain');return false;}
  if(scope.settlementAnchor&&!stableSettlementAnchor(scope,when,false)){
   scope.targetCommitRejected=true;noteSettlementProofGap(scope,when,'modifier scope identity or clock changed');return false;
  }
@@ -1073,7 +1157,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
     !scope.target?.equals(target)||!scope.settlementTargetUid||
     damageTargetUid(target)!==scope.settlementTargetUid)return false;
  if(scope.mitigationModifierReused){
-  if(!knownNonEnemyTarget(target))markDamageSettlementUnknown(when,'reused damage modifier');
+  noteSettlementProofGap(scope,when,'reused damage modifier');
   return false;
  }
  const output=scope.outputSettlement;
@@ -1992,6 +2076,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      // args[0] is the hidden IL2CPP `this` receiver; modifier is args[1].
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();if(traceHpContext)this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
+     captureSettlementDomain(this);
      try{
       const source=this.mod.readPointer();
       this.nativeModifierSource=source;
@@ -2001,13 +2086,13 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      this.modifierScope=damageModifier(this.tid,this.mod);
+     if(this.modifierScope)observeSettlementDomain(this.modifierScope,this.settlementDomainEntry);
      traceModifierPhase(this,'enter');
      if(this.name==='Entity.OnAfterOutputDamage'&&enemyDamageReady){
-      if(this.sourceReadFailed&&!knownNonEnemyTarget(this.target))
-       markDamageSettlementUnknown(this.when,'missing output source identity');
+      if(this.sourceReadFailed)noteSettlementProofGap(this,this.when,'missing output source identity');
       if(this.source&&own(this.source)){
        if(this.modifierScope?.mitigationModifierReused){
-        if(!knownNonEnemyTarget(this.target))markDamageSettlementUnknown(this.when,'reused output modifier');
+        noteSettlementProofGap(this.modifierScope||this,this.when,'reused output modifier');
        }else if(!matchOutputSettlement(this,this.modifierScope,this.nativeModifierSource))
         damageSettlement(this,this.target,this.real,this.when);
       }
@@ -2033,6 +2118,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      if(traceHpContext)try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      if(this.name==='Unit.OnTakeDamage'&&this.source){
       const scope=damageModifier(this.tid,this.mod);
+      if(scope)observeSettlementDomain(scope,readSettlementDomain(this.target,this.mod,this.when));
       if(scope&&scope.source===this.source&&sameMitigationTime(scope.when,this.when)){
        if(scope.targetHit)scope.targetHitAmbiguous=true;
        else{
@@ -2047,6 +2133,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
+     captureSettlementDomain(this);
      observeNestedTargetSettlement(this);
      try{
       const source=this.mod.readPointer();
@@ -2055,8 +2142,8 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       this.source=this.nativeSourceNull?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
     }catch(e){this.source=null;this.sourceReadFailed=true;}
-    if(enemyDamageReady&&this.sourceReadFailed&&!knownNonEnemyTarget(this.target))
-     markDamageSettlementUnknown(this.when,'missing modifier source identity');
+    if(enemyDamageReady&&this.sourceReadFailed)
+     noteSettlementProofGap(this,this.when,'missing modifier source identity');
     if(enemyDamageReady&&this.nativeSourceNull){
       try{
        if(this.mod.add(0x68).readS32()===5)this.burstTarget=enemyDamageIdentity(this.target);
@@ -2281,7 +2368,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
    }catch(e){
     if(this.skillStart||this.skillEnd){skillUnknown=true;}
     else if(this.name==='Entity.ApplyModifier'){
-     if(enemyDamageReady&&this.tracksModifier&&!knownNonEnemyTarget(this.target))
+     if(enemyDamageReady&&this.tracksModifier)
       noteSettlementProofGap(this,endStamp,'modifier callback could not verify final settlement');
      if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}
     }
@@ -2291,7 +2378,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      if(this.outputSettlement){
       if(endStamp&&sameMitigationTime(endStamp,this.when)&&!this.mitigationModifierReused)
        flushOutputSettlement(this,endStamp);
-      else markDamageSettlementUnknown(this.when,'output did not share the modifier clock');
+      else noteSettlementProofGap(this,endStamp,'output did not share the modifier clock');
      }
      finalizeUnverifiedSettlement(this,endStamp);
      leaveModifier(this);

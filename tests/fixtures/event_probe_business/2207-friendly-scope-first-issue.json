@@ -1,0 +1,14 @@
+{
+  "format": 1,
+  "source_head": "a7d2c222ceccb328d2df271f1298da1e1c293975",
+  "source_prefix_bytes": 119013883,
+  "source_prefix_sha256": "11f1994a45a5e700f637701c3dda22277a0f46bb2456b71351ffcab179d3d950",
+  "line_number": 723,
+  "byte_offset": 4197769,
+  "raw_line_file": "2207-friendly-scope-first-issue.jsonl",
+  "raw_line_bytes": 12952,
+  "raw_line_sha256": "e8edb1495a3c67cd88979562e0a2e33c9c989355f5fb5ed5b01aa654fdcbe71e",
+  "event_sequence": 54,
+  "scope": "Original failed standard 2207 row; global unknown is not rewritten.",
+  "native_target_bobject_uid": "Not present in this raw damage event. Synthetic UID controls must be labeled separately."
+}
