@@ -11,6 +11,8 @@ from test_enemy_lifecycle_telemetry import enemy
 
 
 class Collector(SnapshotCollector):
+    observer_boot_reason = None
+
     def __init__(self, calls):
         super().__init__()
         self.calls = calls
@@ -20,6 +22,9 @@ class Collector(SnapshotCollector):
 
     def observer_boot_ready(self):
         return True
+
+    def observer_lifecycle_ready(self):
+        return False
 
     def locate_lifecycle(self):
         self.calls.append('lifecycle')
@@ -174,15 +179,16 @@ def test_lifecycle_waits_for_game_signal_then_attaches_once_before_battle(monkey
         assert current.event_status == 'waiting_game_init'
         assert current.observer is None and current.capture is None
         for now in (0.2, 3.0, 25.0):
-            with pytest.raises(CaptureRetry, match='等待游戏初始化'):
+            with pytest.raises(CaptureRetry, match='lifecycle'):
                 current.read()
-        assert calls == ['transport', 'check', 'check', 'check']
+        assert calls == ['transport', 'check', 'lifecycle', 'check', 'check']
         now, initialized = 26.0, True
         with pytest.raises(CaptureRetry, match='lifecycle'):
             current.read()
         assert current.event_status == 'ready'
-        assert calls == ['transport', 'check', 'check', 'check', 'check', 'attach', 'lifecycle']
-        assert [kind for kind, _ in records if kind.startswith('observer_')] == [
+        assert calls == ['transport', 'check', 'lifecycle', 'check', 'check', 'check', 'attach']
+        assert [kind for kind, _ in records if kind.startswith('observer_')
+                and kind != 'observer_game_init_probe'] == [
             'observer_waiting_game_init', 'observer_game_init_ready', 'observer_ready']
         monkeypatch.setattr(collector, 'read_lifecycle', lifecycle)
         assert current.read()['event_status'] == 'recording'

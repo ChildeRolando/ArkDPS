@@ -1241,7 +1241,8 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                 observed = detail['observed_' + key] = lane.get('observed_' + key)
                 detail[key] = observed if split else None
             if not split:
-                reason = lane.get('skill_split_reason') or lane.get('reason')
+                reason = (lane.get('reason') or lane.get('skill_split_reason')
+                          or row.damage_scope_reason or row.skill_split_reason)
                 if reason or lane.get('observed_hits'):
                     detail['skill_split' + suffix + '_reason'] = reason or '部分命中缺少技能窗口证据'
     return detail

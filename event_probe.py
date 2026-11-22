@@ -1,7 +1,51 @@
 """Public event-probe contract and compatibility boundary; no statistics writes."""
 from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
 from math import isfinite
 from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class AssembledProbeSource:
+    """Host-owned source bytes and provenance, before any Frida transport."""
+    source: str
+    adapter_file: str
+    runtime_file: str
+    adapter_sha256: str
+    runtime_sha256: str
+    adapter_source_sha256: str
+    runtime_source_sha256: str
+    assembled_sha256: str
+
+    def audit(self):
+        return dict(assembly_version=1, adapter_file=self.adapter_file,
+                    runtime_file=self.runtime_file, adapter_sha256=self.adapter_sha256,
+                    runtime_sha256=self.runtime_sha256,
+                    adapter_source_sha256=self.adapter_source_sha256,
+                    runtime_source_sha256=self.runtime_source_sha256,
+                    assembled_sha256=self.assembled_sha256)
+
+
+def assemble_probe_source(platform, *, directory=None):
+    """Compose the fixed adapter/runtime boundary; never rewrite source tokens."""
+    names = {'mumu': 'event_probe_android2791.js', 'native_pc': 'event_probe_native_pc.js'}
+    if platform not in names:
+        raise ValueError('unsupported event probe source platform')
+    directory = Path(__file__).resolve().parent if directory is None else Path(directory)
+    adapter_name, runtime_name = names[platform], 'event_probe_runtime.js'
+    adapter_path, runtime_path = directory / adapter_name, directory / runtime_name
+    adapter_bytes, runtime_bytes = adapter_path.read_bytes(), runtime_path.read_bytes()
+    # Hash and compile the same single read, even if files change concurrently.
+    normalize = lambda raw: raw.decode('utf-8').replace('\r\n', '\n').replace('\r', '\n')
+    adapter, runtime = normalize(adapter_bytes), normalize(runtime_bytes)
+    if not adapter.startswith('// ArkDPS event probe adapter v1; loaded with event_probe_runtime.js.\n'):
+        raise ValueError('unsupported event probe adapter source format')
+    source = adapter + '\n' + runtime
+    digest = lambda text: sha256(text.encode('utf-8')).hexdigest()
+    return AssembledProbeSource(source, adapter_name, runtime_name,
+                                sha256(adapter_bytes).hexdigest(), sha256(runtime_bytes).hexdigest(),
+                                digest(adapter), digest(runtime), digest(source))
 
 
 class ObserverReadRetry(RuntimeError):
@@ -35,11 +79,12 @@ def ready_probe_modes(payload):
     """Retain installation diagnostics, without certifying observed hit coverage."""
     booleans = ('coalesce_enemy_hp', 'trace_hp_context', 'source_character_uid_ready', 'skill_ready',
                 'mitigation_ready', 'mitigation_no_event_ready', 'mitigation_factory_ready',
-                'enemy_entry_ready', 'enemy_phase_ready', 'enemy_state_ready', 'enemy_max_hp_ready')
+                'enemy_entry_ready', 'enemy_phase_ready', 'enemy_state_ready', 'enemy_max_hp_ready',
+                'skill_cast_state_ready')
     errors = ('source_character_uid_error', 'skill_finish_error', 'mitigation_error',
               'mitigation_no_event_error', 'mitigation_factory_error', 'terminal_error',
               'enemy_entry_error', 'enemy_phase_error', 'enemy_state_error', 'enemy_max_hp_error',
-              'stage_object_finish_error')
+              'stage_object_finish_error', 'skill_cast_state_error')
     result = {key: payload[key] for key in booleans if type(payload.get(key)) is bool}
     result.update({key: payload[key] for key in errors if key in payload
                    and (payload[key] is None or isinstance(payload[key], str))})

@@ -3,8 +3,17 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
+const path = require('node:path');
+function loadProbeSource(sourcePath) {
+  const adapter = fs.readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
+  if (!adapter.startsWith('// ArkDPS event probe adapter v1;')) return adapter;
+  const runtime = fs.readFileSync(path.join(path.dirname(sourcePath), 'event_probe_runtime.js'), 'utf8')
+    .replace(/\r\n?/g, '\n');
+  return adapter + '\n' + runtime;
+}
+
 function fixture({platform = 'native_pc', sourcePath = process.argv[2],
-  settlement = false, traceHpContext = false,
+  settlement = false, traceHpContext = false, traceNestedParent = false, skillCastState = false,
   loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, nullClassIndex = null,
   unreadableClassIndex = null, extraNullRow = false, lazySkillFields = false,
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
@@ -94,9 +103,11 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     m_levelData: platform === 'native_pc' ? 0x160 : 0x158, m_state: 0x228,
   }, controllerMethods);
   const character = klass('Character', 'Torappu.Battle', {'<data>k__BackingField': 0x538, m_skill: 0x3c8},
-    {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2});
-  const basicSkill = klass('BasicSkill', 'Torappu.Battle', {m_owner: 0xa8, m_data: 0xb0}, {Tick:0});
-  const bObject = settlement ? klass('BObject', 'Torappu.Battle', {
+    {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2,
+      ...(skillCastState?{SwitchToSkillState:0,OnSkillCastSucceed:0}:{})});
+  const basicSkill = klass('BasicSkill', 'Torappu.Battle', {m_owner: 0xa8, m_data: 0xb0,
+    ...(skillCastState?{m_waitForSkillEnd:0x98}:{})}, {Tick:0,...(skillCastState?{OnCastFinish:3}:{})});
+  const bObject = settlement || skillCastState ? klass('BObject', 'Torappu.Battle', {
     '<instanceUid>k__BackingField': 0x18, '<borned>k__BackingField': 0x25,
     '<isDisappeared>k__BackingField': 0x26,
   }, {Born: 0, OnRecycle: 0}) : null;
@@ -111,6 +122,34 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   }
   const skillData = klass('SkillData', 'Torappu', {prefabKey: 0x50, skillId: 0x18, name: 0x10});
   const characterData = klass('BattleCharacterData', 'Torappu.Battle', {uniqueId: 0x6c});
+  const skillCastFieldTypes=new Map(),skillCastMethodTypes=new Map(),skillCastTypeInfo=new Map();
+  let abilityClass=null,castSkillClass=null;
+  if(skillCastState){
+    const options=typeof skillCastState==='object'?skillCastState:{};
+    abilityClass=klass('Ability','Torappu.Battle',{});
+    castSkillClass=klass('CastSkillWithLimitTimes','Torappu.Battle',{});
+    function type(name,namespace,{valueType=false,size=0,byRef=false,isEnum=false,klassPointer=null}={}){
+      const k=klassPointer||klass(name,namespace,{}),t=alloc();
+      skillCastTypeInfo.set(t.toString(),{klass:k,valueType,size,byRef,isEnum});
+      skillCastTypeInfo.set(k.toString(),{klass:k,valueType,size,byRef,isEnum});
+      return t;
+    }
+    const boolean=type('Boolean','System',{valueType:true,size:1});
+    const integer=type('Int32','System',{valueType:true,size:4});
+    const voidType=type('Void','System',{valueType:true});
+    const ability=type('Ability','Torappu.Battle',{klassPointer:abilityClass,byRef:!!options.abilityByRef});
+    const reason=type('FinishReason','',{valueType:true,size:options.reasonSize||4,isEnum:!options.reasonNotEnum,byRef:!!options.reasonByRef});
+    const last=options.lastInt?integer:options.lastByRef?type('Boolean','System',{valueType:true,size:1,byRef:true}):boolean;
+    const fields=fieldTables.get(basicSkill.toString());
+    for(let i=0;i<fields.count;i++){
+      const field=fields.table.add(i*32);
+      if(field.readPointer().readCString()==='m_waitForSkillEnd')skillCastFieldTypes.set(field.toString(),options.waitInt?integer:boolean);
+    }
+    for(const m of methodTables.get(basicSkill.toString()).records){
+      if(m.add(0x18).readPointer().readCString()==='OnCastFinish')skillCastMethodTypes.set(m.toString(),
+        {parameters:[ability,reason,last],result:voidType,flags:options.staticMethod?452|0x10:452});
+    }
+  }
   const parent = alloc(), singletonStatics = alloc(), clockStatics = alloc();
   const controller = alloc(), native = alloc(), logger = alloc(), stats = alloc(), level = alloc();
   const loggerClass = alloc(), statsClass = alloc(), levelClass = klass('LevelData', 'Torappu', {levelId: 0x18});
@@ -137,6 +176,8 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       index === nullClassIndex || index >= classes.length ? ptr(0) : classes[index],
     il2cpp_method_get_param_count: method => methods.get(method.toString()),
     il2cpp_class_is_assignable_from: (base, candidate) => base.equals(candidate) ||
+      skillCastState && base.equals(basicSkill) && candidate.equals(castSkillClass) ||
+      skillCastState && base.equals(entity) && [unitClass,character,enemyClass].filter(Boolean).some(k=>k.equals(candidate)) ||
       bObject !== null && base.equals(bObject) && [entity, unitClass, character, enemyClass].some(k => k.equals(candidate)),
     il2cpp_class_get_fields: (k,iterator) => {
       const metadata=fieldTables.get(k.toString()),index=iterator.readU64().toNumber();
@@ -155,10 +196,24 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       return methodIteratorMismatch&&k.equals(basicSkill)?methodTables.get(entity.toString()).records[0]:metadata.records[index];
     },
   };
+  if(skillCastState)Object.assign(exports,{
+    il2cpp_class_from_type:t=>skillCastTypeInfo.get(t.toString()).klass,
+    il2cpp_type_is_byref:t=>!!skillCastTypeInfo.get(t.toString()).byRef,
+    il2cpp_class_get_namespace:k=>k.add(0x18).readPointer(),
+    il2cpp_field_get_type:f=>skillCastFieldTypes.get(f.toString()),
+    il2cpp_field_get_flags:()=>typeof skillCastState==='object'&&skillCastState.waitStatic?0x10:1,
+    il2cpp_class_is_valuetype:k=>!!skillCastTypeInfo.get(k.toString())?.valueType,
+    il2cpp_class_is_enum:k=>!!skillCastTypeInfo.get(k.toString())?.isEnum,
+    il2cpp_class_value_size:k=>skillCastTypeInfo.get(k.toString())?.size??0,
+    il2cpp_method_get_param:(m,i)=>skillCastMethodTypes.get(m.toString()).parameters[i],
+    il2cpp_method_get_return_type:m=>skillCastMethodTypes.get(m.toString()).result,
+    il2cpp_method_get_flags:m=>skillCastMethodTypes.get(m.toString()).flags,
+  });
   const module = {name: platform === 'native_pc' ? 'GameAssembly.dll' : 'libil2cpp.so',
     base: ptr(0x1000), getExportByName: name => name};
   const context = {
     arkdpsTraceHpContext: traceHpContext,
+    arkdpsTraceNestedParent: traceNestedParent,
     Process: {platform: platform === 'native_pc' ? 'windows' : 'linux',
       arch: platform === 'native_pc' ? 'x64' : 'arm64', id: 1234,
       getModuleByName: () => module, findModuleByAddress: () => module},
@@ -174,7 +229,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     }}, ptr, recv: () => {}, send: value => messages.push(value), rpc: {},
   };
   vm.createContext(context);
-  const source = fs.readFileSync(sourcePath, 'utf8');
+  const source = loadProbeSource(sourcePath);
   vm.runInContext(source, context);
   function callback(name, owner) {
     const code = callbacks.get(name + '@' + owner);
@@ -209,10 +264,11 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   }
   return {context, messages, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,
     entity, unitClass, character, basicSkill, skillData, buffClass, blockDamage, level, controller, controllerClass,
-    apiCalls, fieldTables, methodTables, vm, installSyntheticMitigation, hookTrace, hookAt};
+    apiCalls, fieldTables, methodTables, vm, installSyntheticMitigation, hookTrace, hookAt,
+    abilityClass,castSkillClass,skillCastFieldTypes,skillCastMethodTypes,skillCastTypeInfo,characterData,enemyClass};
 }
 
-module.exports = {fixture};
+module.exports = {fixture, loadProbeSource};
 if (require.main === module) {
 const f = fixture();
 assert.equal(f.messages.at(-1).ready, true);

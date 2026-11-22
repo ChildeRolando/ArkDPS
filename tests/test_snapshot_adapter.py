@@ -386,6 +386,59 @@ def test_ordered_event_barrier_and_gap_do_not_change_native_totals():
     assert not result['event_coverage_complete']
 
 
+def test_late_event_barrier_preserves_native_history_and_uses_its_own_coverage():
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100)], 0, 1), paired(BASE, 1))
+    adapter.update(sample([row('char_a', 150)], 2, 2), paired(BASE, 2))
+    native = adapter.result()['rows']['char_a']
+    with pytest.raises(ValueError, match='event barrier does not match'):
+        adapter.start_events(session='battle-1', frame=2, sequence=4)
+    with pytest.raises(ValueError, match='frame 1 != 2'):
+        adapter.start_events(session='battle-1', frame=1, sequence=4, allow_late_baseline=True)
+    assert adapter.result()['rows']['char_a'] == native
+
+    adapter.start_events(session='battle-1', frame=2, sequence=4, allow_late_baseline=True)
+    adapter.statistics.partial_damage_enabled = True
+    adapter.accept_event(session='battle-1', sequence=5, frame=2, game_time=2,
+                         source='char_a', kind='shield_absorbed', amount=3)
+    result = adapter.result()
+    operator = result['rows']['char_a']
+    assert result['coverage_start'] == 0
+    assert result['overkill_coverage_start'] == operator['shield_coverage_start'] == 2
+    assert operator['partial_damage']['shield_observation_window'] == (2, 2)
+    assert operator['shield_absorbed'] == 3
+    assert operator['damage'] == native['damage'] == 150
+    assert operator['recent_damage_window'] == native['recent_damage_window'] == (0, 2)
+    assert operator['recent_overkill_damage'] is None
+    assert operator['overkill_damage'] is None and not operator['overkill_coverage_complete']
+    assert operator['effective_damage'] is None
+    assert not operator['skill_coverage_complete'] and not operator['skill_split_complete']
+    assert operator['skill_split_reason'] == '观察者就绪前已有伤害'
+
+    # The settlement lane can still certify the interval it actually covers.
+    stats = adapter.statistics
+    stats.settlement_enabled = stats.settlement_sides_known = True
+    stats.damage_settlement_version = 7
+    operator = stats.result()['rows']['char_a']
+    assert operator['settled_damage']['complete']
+    assert operator['settled_damage']['effective_damage'] == 0
+    assert operator['effective_damage'] is None and not operator['overkill_coverage_complete']
+
+
+def test_paused_late_event_barrier_accepts_first_source_metadata_on_native_frame():
+    unknown_token = entry('token_unknown', 3, token=True)
+    players = replace(roster([CHAR_A, unknown_token], frame=1), local_player_side=0)
+    adapter = BattleStatisticsAdapter()
+    adapter.update(sample([row('char_a', 100)], 0, 1), players)
+    second = sample([row('char_a', 150)], 2, 2)
+    players = paired(players, 2)
+    adapter.update(second, players)
+    assert adapter.update(second, players, source_attribution=True, settlement_version=7) is None
+    adapter.start_events(session='battle-1', frame=2, sequence=4, allow_late_baseline=True)
+    assert adapter.statistics.settlement_sides_known
+    assert adapter.result()['rows']['char_a']['damage'] == 150
+
+
 def test_event_stream_cannot_continue_after_mapping_conflict():
     token = entry('token_a', 3, token=True, host_key='char_a', host_uid=1)
     changed = entry('token_a', 3, token=True, host_key='char_b', host_uid=2)

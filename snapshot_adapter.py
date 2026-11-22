@@ -282,8 +282,8 @@ class BattleStatisticsAdapter:
         self.last_roster_frame = roster.frame
         self.session_switches += 1
 
-    def start_events(self, *, session, frame, sequence):
-        """Start only after the producer proves its barrier follows this baseline."""
+    def start_events(self, *, session, frame, sequence, allow_late_baseline=False):
+        """Start at the guarded frame, normally the initial native baseline."""
         reasons = []
         if self.statistics is None:
             reasons.append('no statistics baseline')
@@ -293,7 +293,8 @@ class BattleStatisticsAdapter:
             reasons.append(f'session {session!r} != {self.session!r}')
         if frame != self.last_frame:
             reasons.append(f'frame {frame} != {self.last_frame}')
-        if self.last_game_time != self.coverage_start:
+        late = self.last_game_time != self.coverage_start
+        if late and not allow_late_baseline:
             reasons.append(f'time {self.last_game_time} != coverage start {self.coverage_start}')
         if self.owner_map.unknown_token_cids and not self.source_attribution:
             reasons.append('unknown token sources: ' + ', '.join(sorted(self.owner_map.unknown_token_cids)))
@@ -311,6 +312,8 @@ class BattleStatisticsAdapter:
         except ValueError:
             self.statistics.event_coverage = False
             raise
+        if late:
+            self.statistics.start_late_event_coverage()
         self.last_result = self.statistics.result()
 
     def accept_event(self, *, refresh_result=True, **event):
@@ -480,6 +483,13 @@ class BattleStatisticsAdapter:
         for event in events:
             if not isinstance(event, dict) or event.get('kind') not in SOURCE_EVENTS:
                 continue
+            proof = event.get('proof')
+            method = (proof['method'] if isinstance(proof, dict) and isinstance(proof.get('method'), str)
+                      else event.get('skill_method'))
+            if event.get('kind') == 'skill_end' and method == 'BasicSkill.OnCastFinish':
+                # Cast state is supplemental actor evidence, not evidence that
+                # this native instance contributes to a cumulative source row.
+                continue
             source = event.get('source')
             uid = event.get('source_character_uid')
             if not isinstance(source, str) or not source or type(uid) is not int or not 0 < uid <= 0xffffffff:
@@ -501,6 +511,24 @@ class BattleStatisticsAdapter:
                 self.statistics.mark_overkill_unknown(source)
                 self.statistics.mark_engagement_unknown(source)
                 self.statistics.invalidate_source_total(source)
+
+    def _update_event_sources(self, roster, roster_map, events, settlement_version):
+        self.source_attribution = True
+        if type(settlement_version) is int:
+            self.settlement_version = settlement_version
+        side = roster.local_player_side if type(roster.local_player_side) is int else None
+        if self.settlement_version in (4, 5, 6, 7):
+            # Guard changes the controller's side while the previous round is
+            # still retiring. Keep the first verified side for this round.
+            if self.settlement_side is None:
+                self.settlement_side = side
+            self.settlement_batch_side = side if side == self.settlement_side else None
+            self.statistics.settlement_sides_known = self.settlement_side is not None
+        else:
+            if side is not None:
+                self.settlement_sides.add(side)
+            self.statistics.settlement_sides_known = len(self.settlement_sides) == 1
+        self._bind_event_sources(roster, roster_map, events)
 
     def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False,
                source_events=(), source_attribution=False, settlement_version=None) -> AdapterUpdate | None:
@@ -539,28 +567,18 @@ class BattleStatisticsAdapter:
                 self.statistics = None
                 self._begin(sample, roster)
             elif game_time == self.last_game_time:
+                if (frame == self.last_frame and source_attribution and not self.source_attribution
+                        and self.event_stream is None):
+                    # A paused battle can expose its first event barrier on
+                    # the last native frame. Keep its counters and accept the
+                    # paired roster as event-source evidence for that barrier.
+                    self._update_event_sources(roster, build_owner_map(roster), (), settlement_version)
                 return None
         if self.last_frame is not None and frame == self.last_frame and not terminal and not settling:
             return None
         roster_map = build_owner_map(roster)
-        self.source_attribution |= source_attribution
-        if self.source_attribution:
-            if type(settlement_version) is int:
-                self.settlement_version = settlement_version
-            side = roster.local_player_side if type(roster.local_player_side) is int else None
-            if self.settlement_version in (4, 5, 6, 7):
-                # Guard changes the controller's side while the previous round
-                # is still retiring. The side of a round is fixed at its first
-                # verified roster. Events in a contradicting batch stay unassigned.
-                if self.settlement_side is None:
-                    self.settlement_side = side
-                self.settlement_batch_side = side if side == self.settlement_side else None
-                self.statistics.settlement_sides_known = self.settlement_side is not None
-            else:
-                if side is not None:
-                    self.settlement_sides.add(side)
-                self.statistics.settlement_sides_known = len(self.settlement_sides) == 1
-            self._bind_event_sources(roster, roster_map, source_events)
+        if self.source_attribution or source_attribution:
+            self._update_event_sources(roster, roster_map, source_events, settlement_version)
         # New roster evidence can map tokens that were not attributable when
         # the session started. Never change an existing mapping in-place.
         for cid, owner in roster_map.owners.items():

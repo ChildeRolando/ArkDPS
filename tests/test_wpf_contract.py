@@ -8,6 +8,7 @@ from xml.etree import ElementTree
 
 import pytest
 from desktop_launcher import worker_python
+from event_probe import assemble_probe_source
 from layout_store import THEMES
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -206,7 +207,7 @@ def test_wpf_user_facing_numbers_use_at_most_one_decimal():
 
 
 def test_probe_declares_all_quality_counters_before_use():
-    js = (ROOT/'event_probe_android2791.js').read_text('utf-8')
+    js = assemble_probe_source('mumu').source
     for name in ('unknownSources', 'engagementUnknownSources', 'skippedUnattributed'):
         assert any(token in js for token in
                    (f'let {name}=', f'let {name} =', f'const {name}=', f'const {name} =')), name

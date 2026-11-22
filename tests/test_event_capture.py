@@ -1,7 +1,7 @@
 import pytest
-from pathlib import Path
 
 from event_capture import CaptureRetry, LiveEventCapture, read_terminal_mark
+from event_probe import assemble_probe_source
 from event_stream import StreamGap
 from roster import CharacterEntry, RosterSnapshot
 from roster import RosterUnavailable
@@ -521,7 +521,7 @@ def test_unknown_source_keeps_coverage_and_only_hides_its_overkill():
 
 
 def test_probe_records_hp_evidence_only_after_onleave():
-    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    js = assemble_probe_source('mumu').source
     start = js.index('for(const m of cfg.methods.filter(shouldObserveCallback))')
     production = js[start:js.index('\ninstallEnemyEntryHooks();', start)]
     enter, leave = production.split('onLeave(){', 1)
@@ -534,7 +534,7 @@ def test_probe_records_hp_evidence_only_after_onleave():
 
 
 def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
-    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    js = assemble_probe_source('mumu').source
     assert 'scopes[index].mod.equals(modifier)' in js
     assert 'scope.source===this.source&&sameMitigationTime(scope.when,this.when)' in js
     assert 'if(scope.targetHit)scope.targetHitAmbiguous=true' in js
@@ -613,7 +613,7 @@ def test_elemental_burst_counts_actual_enemy_hp_once(burst_source, scoped_settle
 
 
 def test_probe_hooks_character_skill_windows_and_keeps_them_out_of_onenter():
-    js = (Path(__file__).resolve().parents[1] / 'event_probe_android2791.js').read_text('utf-8')
+    js = assemble_probe_source('mumu').source
     assert "wanted=new Set([" in js and "'Character'" in js and "'BasicSkill'" in js
     assert "'skill_start'" in js and "'skill_end'" in js
     assert 'OnSkillStart' in js and 'OnSkillFinish' in js and 'OnAfterSkill' in js

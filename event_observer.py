@@ -1,13 +1,13 @@
 """Frida event transports sharing bounded reads and commit acknowledgements."""
 from enum import Enum
 import os
-from pathlib import Path
+from hashlib import sha256
 from threading import Event, Lock
 from types import SimpleNamespace
 
 from connection import VersionStatus
 from event_probe import (MUMU_CONTRACT, NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry,
-                         ready_probe_modes)
+                         ready_probe_modes, assemble_probe_source)
 
 
 class ObserverStatus(str, Enum):
@@ -43,6 +43,7 @@ class FridaEventObserver:
         self.script = None
         self.ready = Event()
         self.probe_modes = {}
+        self._probe_source_manifest = {}
         self.cleanup_errors = {}
         self._request_lock = Lock()
         self._request_id = 0
@@ -67,7 +68,9 @@ class FridaEventObserver:
             ) from exc
 
     def _probe_source(self):
-        return Path(__file__).with_name('event_probe_android2791.js').read_text(encoding='utf-8')
+        assembled = assemble_probe_source('mumu')
+        self._probe_source_manifest = assembled.audit()
+        return assembled.source
 
     def _wake_request(self):
         with self._request_lock:
@@ -89,6 +92,8 @@ class FridaEventObserver:
                     pending.done.set()
         elif isinstance(payload, dict) and payload.get('ready'):
             self.probe_modes = ready_probe_modes(payload)
+            if self._probe_source_manifest:
+                self.probe_modes["probe_source"] = dict(self._probe_source_manifest)
             self.ready.set()
 
     def _detached(self, reason, *_args):
@@ -109,6 +114,7 @@ class FridaEventObserver:
         self.error = None
         self.ready.clear()
         self.probe_modes = {}
+        self._probe_source_manifest = {}
         self._committed_sequence = self._acknowledged_sequence = 0
         self._ack_error = None
         try:
@@ -122,6 +128,8 @@ class FridaEventObserver:
                 source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
             if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '1':
                 source = 'globalThis.arkdpsCoalesceEnemyHp = true;\n' + source
+            self._probe_source_manifest['submitted_sha256'] = sha256(source.encode('utf-8')).hexdigest()
+            self.probe_modes['probe_source'] = dict(self._probe_source_manifest)
             self.script = self.session.create_script(source)
             self.script.on('message', self._message)
             self.script.load()
@@ -269,7 +277,9 @@ class NativePcFridaObserver(FridaEventObserver):
         if not self.collector.process.process_alive():
             raise RuntimeError('官服 PC 游戏进程已退出，请重新连接')
         self.binding.reset()
-        return Path(__file__).with_name('event_probe_native_pc.js').read_text(encoding='utf-8')
+        assembled = assemble_probe_source('native_pc')
+        self._probe_source_manifest = assembled.audit()
+        return assembled.source
 
     def _request(self, operation, *, timeout=None, **arguments):
         result = super()._request(operation, timeout=timeout, **arguments)

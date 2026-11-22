@@ -63,7 +63,15 @@ function scenario(platform, order, fault = null) {
   const damage = batch.events.find(event => event.kind === 'damage');
   if (fault) {
     assert(!settlement || settlement.settlement_complete === false, 'fault must not certify settlement: ' + fault);
-    assert.equal(batch.enemy_damage_unknown, true, 'rejected proof cannot become an empty complete zero: ' + fault);
+    const local=['hp_difference','nominal_less_than_hp','cancel_reason','duplicate_target_callback',
+      'nested_damage','nested_external','nested_healing'].includes(fault);
+    assert.equal(batch.enemy_damage_unknown,!local,'proof locality keeps source/clock failures global: '+fault);
+    if(local){
+      const unknown=batch.events.filter(event=>event.kind==='damage_settlement'&&!event.settlement_complete);
+      assert(unknown.length>0,'localized gap must emit an explicit incomplete hit');
+      assert(unknown.every(event=>event.source_character_uid===1010&&
+        typeof event.proof.settlement_unknown_reason==='string'),'localized records retain owner and reason');
+    }
     return {mark, batch, raw_damage: damage, settlement: settlement ?? null, synthetic: 'owned contradictory proof: ' + fault};
   }
   assert(settlement);

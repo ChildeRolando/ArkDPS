@@ -403,6 +403,44 @@ def test_cli_writes_ready_only_after_cold_start_observer_attaches(tmp_path, monk
     assert collector.calls.count('attach') == 1
 
 
+def test_cli_wait_preserves_native_counters_before_lifecycle_observer_readiness(tmp_path, monkeypatch):
+    clock = stub_git_and_clock(monkeypatch)
+    args = options(tmp_path)
+    args.wait_battle_seconds = 3
+    collector = Collector([])
+    monkeypatch.setattr(collector, 'observer_boot_ready', lambda: False)
+    monkeypatch.setattr(collector, 'observer_lifecycle_ready', lambda: clock.now >= 1)
+    original_read = collector.read
+
+    def read():
+        if clock.now >= 1:
+            collector.frame, collector.game_time, collector.damage = 2, 1, 120
+        return original_read()
+
+    monkeypatch.setattr(collector, 'read', read)
+
+    def factory(adb, serial, **kwargs):
+        return CollectionSession(adb, serial, collector=collector,
+                                 observer_factory=LiveObserver, **kwargs)
+
+    summary = capture_cli.run_capture(args, session_factory=factory)
+    records = [json.loads(line) for line in
+               (args.output_dir / 'capture.jsonl').read_text(encoding='utf-8').splitlines()]
+    attached = next(i for i, item in enumerate(records) if item['kind'] == 'observer_ready')
+    early = [item['data'] for item in records[:attached] if item['kind'] == 'published']
+    assert early and early[0]['statistics']['rows']['char_a']['damage'] == 100
+    assert all(item['event_status'] == 'waiting_game_init' and item['event_watermark'] is None
+               for item in early)
+    assert ('observer_game_init_ready', {'pid': 123, 'source': 'lifecycle'}) in [
+        (item['kind'], item['data']) for item in records]
+    assert collector.calls.count('attach') == 1
+    assert summary['error'] is None
+    row = summary['last_sample']['statistics']['rows']['char_a']
+    assert row['damage'] == 120 and row['shield_coverage_start'] == 1
+    assert row['observed_damage'] == 0
+    assert row['skill_split_reason'] == '观察者就绪前已有伤害'
+
+
 @pytest.mark.parametrize('require_events', [False, True])
 def test_cli_start_failure_reports_readiness_and_optionally_continues_snapshots(tmp_path, monkeypatch,
                                                                             require_events):

@@ -23,5 +23,12 @@ def test_actual_callback_order_and_identity_failures_keep_source_certificates_ho
         rejected = report[backend]["rejected"]
         assert len(rejected) == 16
         for reason, evidence in rejected.items():
-            assert evidence["batch"]["enemy_damage_unknown"] is True, reason
+            local = reason in {"hp_difference", "nominal_less_than_hp", "cancel_reason",
+                               "duplicate_target_callback", "nested_damage", "nested_external", "nested_healing"}
+            assert evidence["batch"]["enemy_damage_unknown"] is (not local), reason
+            if local:
+                unknown = [hit for hit in evidence["batch"]["events"]
+                           if hit["kind"] == "damage_settlement" and not hit["settlement_complete"]]
+                assert unknown and all(hit["source_character_uid"] == 1010 for hit in unknown)
+                assert all(hit["proof"]["settlement_unknown_reason"] for hit in unknown)
             assert evidence["settlement"] is None or evidence["settlement"]["settlement_complete"] is False

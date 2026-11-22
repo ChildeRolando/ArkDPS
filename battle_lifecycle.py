@@ -401,7 +401,8 @@ class BattleSessions:
             if sequence != evidence['sequence']:
                 raise StreamGap('event observation barrier was altered')
             self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'],
-                                mark=evidence['after'])
+                                mark=evidence['after'],
+                                allow_late_baseline=observation.kind == 'sample')
             self._last_event_mark = evidence['after']
             self.event_status = 'recording'
             return True
@@ -834,9 +835,7 @@ class BattleRuntime:
             raise
         except (SampleUnavailable, RosterUnavailable, FrameMismatch, ReadFailure) as exc:
             if isinstance(exc, ProcessChanged):
-                self._pending_event_ack = None
-                self.feed.current_lifecycle = None
-                self._consume(self.feed._end('process_changed'))
+                self.process_changed()
                 raise
             if isinstance(exc, BattleChanged):
                 self._pending_event_ack = None
@@ -849,6 +848,11 @@ class BattleRuntime:
             self._consume(self.feed.gap('read_unavailable'))
             raise
         return observation
+
+    def process_changed(self):
+        self._pending_event_ack = None
+        self.feed.current_lifecycle = None
+        self._consume(self.feed._end('process_changed'))
 
     def disconnected(self, reason):
         self._pending_event_ack = None

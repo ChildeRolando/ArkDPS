@@ -18,6 +18,7 @@ from source_classification import classify_unmapped_source
 NATIVE_DAMAGE_TYPES = {1: 'physical', 2: 'arts', 3: 'true', 5: 'elemental'}
 DAMAGE_TYPE_KEYS = ('physical', 'arts', 'elemental', 'true')
 DAMAGE_SCOPE_MISMATCH = '伤害事件与原生累计的统计范围不一致'
+PRE_OBSERVER_DAMAGE = '观察者就绪前已有伤害'
 ENEMY_STATE_KINDS = frozenset({
     'enemy_enter', 'enemy_hp', 'enemy_fake_death', 'enemy_reborn', 'enemy_finish',
 })
@@ -266,6 +267,7 @@ class Statistics:
         self.now = start_time
         self.end_time = None
         self.event_coverage = event_coverage
+        self.event_coverage_start = start_time
         self.event_coverage_end = None
         self.event_coverage_broken = False
         self.baseline_ready = False
@@ -600,7 +602,7 @@ class Statistics:
     def _settlement_row(self, owner, *, boss=False):
         meters = self.settled_boss if boss else self.settled
         meter = meters.get(owner) or DamageSettlement()
-        end = self.partial_watermark if self.partial_watermark is not None else self.start_time
+        end = self.partial_watermark if self.partial_watermark is not None else self.event_coverage_start
         stream_complete = (self.event_coverage and not self.event_coverage_broken
                            and end == self.now and not self.settlement_stream_incomplete
                            and (self.damage_settlement_version >= 6 or not self.settlement_unscoped)
@@ -608,9 +610,29 @@ class Statistics:
         missing = self.settlement_missing.get(owner, 0)
         if boss:
             missing = self.settlement_boss_missing.get(owner, 0) + (missing if self.damage_settlement_version < 6 else 0)
-        row = meter.result(self.start_time, self.now, end, stream_complete=stream_complete,
+        row = meter.result(self.event_coverage_start, self.now, end, stream_complete=stream_complete,
                            missing_hits=missing, live=self.end_time is None, boss=boss,
                            include_overkill=self.damage_settlement_version >= 7)
+        # Classification accepted while an effect was live remains an observed
+        # component. A later missing endpoint cannot certify the whole window.
+        skill_reason = self.skill_incomplete.get(owner)
+        if skill_reason is None and (self.skill_unknown or owner in self.settlement_skill_unassigned
+                                     or any(identity[0] == owner for identity in self.settlement_skill_incomplete)):
+            skill_reason = '技能事件覆盖不完整'
+        if skill_reason is None:
+            live = self.end_time is None and self.event_coverage_end is None
+            for (candidate_owner, _actor), window in self.settlement_skill_active.items():
+                if candidate_owner == owner:
+                    # Existing ordinary effects can be clipped by a reliable
+                    # battle boundary. New native wait evidence certifies only
+                    # its open interval, until an actual end is observed.
+                    window_live = live or not self._is_ammo_window(window)
+                    skill_reason = self._unconfirmed_skill_reason(window, live=window_live)
+                    if skill_reason is not None:
+                        break
+        if skill_reason is not None:
+            row.update(skill_split_complete=False, skill_split_effective_complete=False,
+                       skill_split_reason=skill_reason)
         if not self.settlement_sides_known:
             row['reason'] = '当前玩家阵营未确认'
             if 'overkill_unknown_reason' in row:
@@ -629,7 +651,7 @@ class Statistics:
         self._time(game_time)
         if (source is not None or amount != 0 or isinstance(amount, bool)
                 or not self._enemy_identity(eid, instance_uid)
-                or not self.start_time <= game_time <= self.now):
+                or not self.event_coverage_start <= game_time <= self.now):
             raise ValueError('invalid enemy entry')
         if instance_uid in self.enemy_entries:
             # The event stream already handles retries of the same sequence.
@@ -654,7 +676,7 @@ class Statistics:
                             hp_before, hp_after, phase_total_hp, phase_count, phase_from_birth):
         values = (amount, hp_before, hp_after, phase_total_hp)
         if (source is not None or not self._enemy_identity(eid, instance_uid)
-                or not self.start_time <= game_time <= self.now
+                or not self.event_coverage_start <= game_time <= self.now
                 or not all(isinstance(value, (int, float)) and not isinstance(value, bool)
                            and isfinite(value) and value >= 0 for value in values)
                 or amount <= 0
@@ -688,7 +710,7 @@ class Statistics:
                 or not self._enemy_identity(eid, instance_uid)
                 or source is not None
                 or (kind != 'enemy_reborn' and (amount != 0 or isinstance(amount, bool)))
-                or not self.start_time <= game_time <= self.now
+                or not self.event_coverage_start <= game_time <= self.now
                 or self.enemy_state_identities.get(instance_uid, eid) != eid):
             raise ValueError('invalid enemy state identity or amount')
         if (any(value is not None and (not self._optional_number(value) or value < 0)
@@ -830,6 +852,11 @@ class Statistics:
             if state['totals_valid']:
                 state['totals_time'] = self.now
 
+    def start_late_event_coverage(self):
+        """Scope the first paired event barrier without resetting native counters."""
+        self.event_coverage_start = self.last_event_time = self.now
+        self.initial_damage = {source: state['values']['damage'] for source, state in self.sources.items()}
+
     def invalidate_events(self, end_time=None, *, complete=False):
         """Close event coverage at the last reliable game time.
 
@@ -870,10 +897,34 @@ class Statistics:
         return total
 
     @staticmethod
-    def _unconfirmed_skill_reason(window, *, live=False):
+    def _is_ammo_window(window):
+        return window is not None and 'skchr_angel2_3' in (window['key'], window['id'])
+
+    @staticmethod
+    def _validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id):
+        if method == 'BasicSkill.OnCastFinish':
+            if (kind != 'skill_end' or type(wait_for_end) is not bool
+                    or type(reason) is not int or not -(1 << 31) <= reason < (1 << 31)
+                    or not any(isinstance(value, str) and value for value in (key, skill_id))):
+                raise ValueError('invalid native skill cast state')
+        elif wait_for_end is not None:
+            raise ValueError('native skill state is only valid for a cast-return observation')
+
+    @staticmethod
+    def _native_cast_window_matches(window, source, key, skill_id, actor):
+        if window is None or source != window['source'] or actor != window.get('actor'):
+            return False
+        identity = {key, skill_id} - {None}
+        active_identity = {window['key'], window['id']} - {None}
+        return bool(identity and active_identity and not active_identity.isdisjoint(identity))
+
+    @classmethod
+    def _unconfirmed_skill_reason(cls, window, *, live=False):
         if window is None or ('cast_completed_at' not in window and 'movement_at' not in window):
             return None
-        if 'skchr_angel2_3' in (window['key'], window['id']):
+        if cls._is_ammo_window(window):
+            if live and window['effect_started'] and window.get('native_wait_for_skill_end') is True:
+                return None
             return '未观察到弹药技能的实际结束'
         if live and window['effect_started']:
             # The observed portion of a confirmed activation is a usable window.
@@ -895,23 +946,29 @@ class Statistics:
         for owner, window in tuple(self.skill_active.items()):
             # A reliable battle end clips any window that was valid while open.
             confirmed = battle_end and self._unconfirmed_skill_reason(window, live=True) is None
+            # A cast-return state witness proves the observed open effect, not
+            # an unobserved effect end. Old ordinary battle clipping is intact.
+            if self._is_ammo_window(window):
+                confirmed = False
             self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
 
     def _record_skill_transition(self, owner, source, kind, game_time, *,
-                                 key, skill_id, name, method, reason):
+                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None):
         self._apply_skill_transition(
             self.skill_active, owner, source, kind, game_time, key=key, skill_id=skill_id,
-            name=name, method=method, reason=reason, close=self._close_skill_window)
+            name=name, method=method, reason=reason, wait_for_end=wait_for_end,
+            close=self._close_skill_window, actor=actor)
 
     def record_settlement_skill(self, owner, actor, source, kind, game_time, *,
-                                key, skill_id, name, method, reason):
+                                key, skill_id, name, method, reason, wait_for_end=None):
         def close(identity, _time, _reason, *, confirmed):
             window = self.settlement_skill_active.pop(identity)
             if not confirmed and self._unconfirmed_skill_reason(window):
                 self.settlement_skill_incomplete.add(identity)
         self._apply_skill_transition(
             self.settlement_skill_active, (owner, actor), source, kind, game_time,
-            key=key, skill_id=skill_id, name=name, method=method, reason=reason, close=close)
+            key=key, skill_id=skill_id, name=name, method=method, reason=reason,
+            wait_for_end=wait_for_end, close=close, actor=actor)
 
     def mark_settlement_skill_unassigned(self, source, method, reason):
         owner = self.owners.get(source)
@@ -926,7 +983,8 @@ class Statistics:
         self.settlement_skill_unassigned.add(owner)
 
     def _apply_skill_transition(self, active, identity_key, source, kind, game_time, *,
-                                key, skill_id, name, method, reason, close):
+                                key, skill_id, name, method, reason, close, wait_for_end=None, actor=None):
+        self._validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id)
         window = active.get(identity_key)
         identity = {key, skill_id} - {None}
         active_identity = {window['key'], window['id']} - {None} if window is not None else set()
@@ -947,11 +1005,23 @@ class Statistics:
             if window is None:
                 active[identity_key] = {
                     'start': game_time, 'source': source, 'key': key, 'id': skill_id,
-                    'name': name, 'effect_started': effect_started}
+                    'name': name, 'effect_started': effect_started, 'actor': actor}
             elif source == window['source'] and same_skill and effect_started:
                 window['effect_started'] = True
             return
+        if method == 'BasicSkill.OnCastFinish' and not self._native_cast_window_matches(
+                window, source, key, skill_id, actor):
+            if wait_for_end is True:
+                raise ValueError('native cast state has no matching skill activation')
+            return
         if window is None or source != window['source'] or not same_skill:
+            if method == 'BasicSkill.OnCastFinish' and wait_for_end is True:
+                raise ValueError('native cast state has no matching skill activation')
+            return
+        if method == 'BasicSkill.OnCastFinish':
+            # This native return observes cast state, never an effect endpoint.
+            window.setdefault('cast_completed_at', game_time)
+            window['native_wait_for_skill_end'] = wait_for_end
             return
         if method == 'Character.OnAfterSkill' and type(reason) is int and reason == 1:
             # Ability.FinishReason.INTERRUPTED can end the cast action while
@@ -1225,7 +1295,7 @@ class Statistics:
               killed=None, target_type=None, damage_type=None,
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-              verified_skill_end_owner=None, skill_method=None,
+              verified_skill_end_owner=None, skill_method=None, skill_wait_for_end=None, skill_actor=None,
               mitigation_before=None, mitigation_after=None, settled_after_nested_kill=False):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
@@ -1250,6 +1320,8 @@ class Statistics:
                  'hp_damage', 'skill_start', 'skill_end')
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
+        self._validate_skill_cast_state(kind, skill_method or target_instance, skill_reason,
+                                        skill_wait_for_end, skill_key, skill_id)
         owner = self.owners.get(source)
         if kind == 'skill_end' and owner is None:
             owner = verified_skill_end_owner
@@ -1272,13 +1344,14 @@ class Statistics:
         if kind not in ('damage', 'elemental_burst', 'hp_damage') and any(value is not None for value in evidence):
             raise ValueError('damage evidence is only valid for damage, burst, or hp_damage')
         payload = (game_time, source, kind, amount, evidence, target_instance, owner,
-                   skill_key, skill_id, skill_name, skill_reason, skill_method,
+                   skill_key, skill_id, skill_name, skill_reason, skill_method, skill_wait_for_end, skill_actor,
                    mitigation_before, mitigation_after, settled_after_nested_kill)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
             return
-        if self.end_time is not None or not self.start_time <= game_time <= self.now or game_time < self.last_event_time:
+        if (self.end_time is not None or not self.event_coverage_start <= game_time <= self.now
+                or game_time < self.last_event_time):
             raise ValueError('event outside ordered observation')
         self.events[event_id] = payload
         self.last_event_time = game_time
@@ -1366,7 +1439,8 @@ class Statistics:
         if kind in ('skill_start', 'skill_end'):
             self._record_skill_transition(
                 owner, source, kind, game_time, key=skill_key, skill_id=skill_id,
-                name=skill_name, method=skill_method or target_instance, reason=skill_reason)
+                name=skill_name, method=skill_method or target_instance, reason=skill_reason,
+                wait_for_end=skill_wait_for_end, actor=skill_actor)
             return
         if kind == 'hp_damage':
             friendly = (isinstance(target, str)
@@ -1502,7 +1576,8 @@ class Statistics:
         if not registered and meter is None and reason is None:
             reason = '尚无可核对的原生累计'
         meter = meter or BossDamage()
-        observed_from = self.start_time if self.boss_observed_from is None else self.boss_observed_from
+        observed_from = (self.event_coverage_start if self.boss_observed_from is None
+                         else self.boss_observed_from)
         live = self.end_time is None and self.event_coverage_end is None
         scoped = meter.result(
             observed_from, end if end is not None else observed_from,
@@ -1513,8 +1588,8 @@ class Statistics:
         return scoped, reason
 
     def _partial_row(self, owner, row, observed, burst, sources):
-        end = max(self.last_event_time, self.partial_watermark or self.start_time)
-        start = max(self.start_time, self.now - 5)
+        end = max(self.last_event_time, self.partial_watermark or self.event_coverage_start)
+        start = max(self.event_coverage_start, self.now - 5)
         comparable_damage = (row['counter_snapshot_complete'] and not self.partial_unattributed_damage
                              and owner not in self.partial_unquantified_damage)
         total = row['damage'] if comparable_damage else None
@@ -1526,11 +1601,11 @@ class Statistics:
                          else None)
         meter = self.partial_damage.get(owner) or PartialDamage()
         partial = meter.result(observed, total, row['observed_mitigation_after'] or 0.0, start, end,
-                               recent_native=recent_native, include_start=start == self.start_time,
+                               recent_native=recent_native, include_start=start == self.event_coverage_start,
                                reconcile_scope=self.reconcile_damage_scope)
         absorbed = self.shields.get(owner)
         partial['observed_shield_absorbed'] = absorbed
-        partial['shield_observation_window'] = (self.start_time, end) if absorbed is not None else None
+        partial['shield_observation_window'] = (self.event_coverage_start, end) if absorbed is not None else None
         if row.get('damage_scope_reason'):
             # These events cannot be used as a subset of the native damage
             # ledger. Shield and healing still have independent evidence.
@@ -1555,6 +1630,7 @@ class Statistics:
 
     def result(self):
         """Return per-owner values and explicit coverage; unknown is None."""
+        late_events = self.event_coverage_start > self.start_time
         owners = set(self.owners.values())
         if self.settlement_enabled:
             owners.update(self.settled)
@@ -1564,6 +1640,7 @@ class Statistics:
         for owner in owners:
             sources = [s for s, o in self.owners.items() if o == owner and s in self.sources]
             registered = [s for s, o in self.owners.items() if o == owner]
+            pre_observer_damage = late_events and any(self.initial_damage.get(s, 0.0) > 0 for s in registered)
             # Totals completeness never borrows rate-window continuity: a
             # settlement or battle boundary retires rates, not final counters.
             complete = (not self.settlement_enabled or bool(registered)) and all(
@@ -1606,7 +1683,7 @@ class Statistics:
                                 and owner not in self.engagement_incomplete)
             row = {'coverage_start': self.start_time,
                    'counter_snapshot_complete': complete,
-                   'shield_coverage_start': self.start_time if self.event_coverage else None,
+                   'shield_coverage_start': self.event_coverage_start if self.event_coverage else None,
                    'event_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                           else self.end_time if self.event_coverage else None),
                    'event_coverage_complete': coverage_complete,
@@ -1620,7 +1697,7 @@ class Statistics:
                    'overkill_type_complete': overkill_type_known,
                    'overkill_unknown_reason': overkill_unknown_reason,
                    'overkill_coverage_complete': overkill_known,
-                   'overkill_coverage_start': self.start_time if self.event_coverage else None,
+                   'overkill_coverage_start': self.event_coverage_start if self.event_coverage else None,
                    'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                              else self.end_time if self.event_coverage else None)}
             row.update(self._mitigation_result(owner, registered, complete=complete))
@@ -1658,7 +1735,8 @@ class Statistics:
                     row['recent_overkill_damage'] = (
                         sum(value for when, owner_key, value in self.overkill_events
                             if owner_key == owner and start <= when <= self.now)
-                        if overkill_known and row['recent_damage_window'] is not None
+                        if overkill_known and start >= self.event_coverage_start
+                        and row['recent_damage_window'] is not None
                         else None)
                 state = self.engagement.get((owner, kind))
                 if state:
@@ -1730,6 +1808,8 @@ class Statistics:
                 reason = ('事件观察未建立' if not self.event_coverage else
                           '事件覆盖已结束' if not coverage_complete else
                           skill_incomplete_reason or '技能事件覆盖不完整')
+            elif pre_observer_damage:
+                reason = PRE_OBSERVER_DAMAGE
             elif not covers_total:
                 reason = '技能窗口未覆盖全部伤害事件'
             elif not burst_complete:
@@ -1738,7 +1818,8 @@ class Statistics:
                 reason = None
             split_skill_overkill = self.skill_overkill.get(owner, 0.0)
             split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
-            split_complete = skill_known and covers_total and burst_complete and not scope_mismatch
+            split_complete = (skill_known and covers_total and burst_complete
+                              and not scope_mismatch and not pre_observer_damage)
             effective_split_known = split_complete and overkill_known
             row['skill_damage'] = skill_value if skill_known and not scope_mismatch else None
             row['non_skill_damage'] = non_skill_value if skill_known and not scope_mismatch else None
@@ -1754,7 +1835,7 @@ class Statistics:
             row['skill_active_seconds'] = (
                 self._skill_active_seconds(owner)
                 if self.event_coverage and skill_incomplete_reason is None else None)
-            row['skill_coverage_complete'] = skill_known
+            row['skill_coverage_complete'] = skill_known and not late_events
             row['skill_split_complete'] = split_complete
             row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason
@@ -1783,6 +1864,10 @@ class Statistics:
                             overkill_type_complete=lane['overkill_coverage_complete'],
                             recent_overkill_damage=None,
                         )
+            if pre_observer_damage:
+                row.update(effective_damage=None, overkill_damage=None, overkill_damage_by_type=None,
+                           overkill_coverage_complete=False, overkill_type_complete=False,
+                           overkill_unknown_reason=PRE_OBSERVER_DAMAGE)
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())
@@ -1796,7 +1881,7 @@ class Statistics:
             'overkill_damage': (sum(row['overkill_damage'] for row in rows.values())
                                 if overkill_complete else None),
             'overkill_coverage_complete': overkill_complete,
-            'overkill_coverage_start': self.start_time if self.event_coverage else None,
+            'overkill_coverage_start': self.event_coverage_start if self.event_coverage else None,
             'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                       else self.end_time if self.event_coverage else None),
         }

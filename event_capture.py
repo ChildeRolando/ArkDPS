@@ -242,7 +242,7 @@ class LiveEventCapture:
                 and enemy_damage_quality.get('enemy_damage_unknown') is not True
                 and (self.initial_drain or statistics.enemy_damage is not None)))
 
-    def ingest(self, sample, roster, sequence, drained, *, mark=None):
+    def ingest(self, sample, roster, sequence, drained, *, mark=None, allow_late_baseline=False):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.
 
         Acquisition has already bracketed the singleton and updated the native
@@ -256,7 +256,7 @@ class LiveEventCapture:
             if self.baseline_sequence is None:
                 self.baseline_sequence = sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],
-                                          sequence=sequence)
+                                          sequence=sequence, allow_late_baseline=allow_late_baseline)
             stream = self.adapter.event_stream
             if drained.get('error'):
                 raise StreamGap(f"observer callback error: {drained['error']}")

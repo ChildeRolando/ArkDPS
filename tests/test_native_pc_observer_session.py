@@ -116,7 +116,7 @@ def test_native_pc_cold_start_waits_for_checked_runtime_before_loading_observer(
         current.wait_for_game_init(wait_seconds=2)
         assert current.event_status == 'ready'
         assert collector.calls == ['connect', 'observer_start', 'lifecycle']
-        assert ('observer_game_init_ready', {'pid': 123}) in audit
+        assert ('observer_game_init_ready', {'pid': 123, 'source': 'build_metadata'}) in audit
     finally:
         current.close()
 

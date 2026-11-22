@@ -1,6 +1,7 @@
 // Execute the actual MuMu queue API functions with a retained pre-baseline hit.
 const fs=require('node:fs'),vm=require('node:vm');
-const source=fs.readFileSync(process.argv[2],'utf8');
+const {loadProbeSource}=require('./native_pc_frida_probe_fixture.js');
+const source=loadProbeSource(process.argv[2]);
 function section(start,end){
  const from=source.indexOf('function '+start+'('),to=source.indexOf('function '+end+'(',from+1);
  if(from<0||to<0)throw Error('Production queue function missing');
@@ -10,7 +11,8 @@ const context={};vm.createContext(context);
 vm.runInContext(`
  let sequence=2,epoch=2,active=0,fatal=null,stopped=false;
  let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
- let frame=1,game_time=0;const coalesceEnemyHp=false,activeHooks=new Map(),hpContext=[];
+ let frame=1,game_time=0;const coalesceEnemyHp=false,traceNestedParent=false,activeHooks=new Map(),hpContext=[];
+ const probeAdapter={readEnvelope:()=>({fields:{},ready:true}),markEnvelope:()=>({fields:{},ready:true})};
  const queue=[
   {sequence:1,frame:6000,game_time:200,source:'char_a',kind:'damage',amount:999},
   {sequence:2,frame:1,game_time:0,source:'char_a',kind:'damage',amount:7}

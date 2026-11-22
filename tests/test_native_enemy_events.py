@@ -1,5 +1,6 @@
 """PC snapshot/event projection only; no target or Android reader is used."""
 from copy import deepcopy
+from unittest.mock import Mock
 
 import pytest
 
@@ -158,6 +159,16 @@ def test_pc_duplicate_snapshot_and_verified_prefix_do_not_rebuild_or_rescan(monk
     assert project(telemetry, None, 9, records)['snapshot_observation']['stale'] is True
 
 
+class ReadyEnemyProbe(Probe):
+    """The synthetic battle reports model a VM that has already initialized."""
+
+    boot_checks = 0
+
+    def observer_boot_ready(self):
+        self.boot_checks += 1
+        return True
+
+
 def native_report(frame, hp=100.):
     report = sample(frame, 0.)
     report['sample'].update(enemies_status='available', enemies={
@@ -172,13 +183,18 @@ def native_report(frame, hp=100.):
 def test_normal_session_enemy_projection_forwards_committed_events_and_preserves_fallback(tmp_path, monkeypatch):
     now = [10.]
     monkeypatch.setattr('native_pc_collector.time.monotonic', lambda: now[0])
-    collector = NativePcCollector(tmp_path, probe_factory=lambda _: Probe([
+    probe = ReadyEnemyProbe([
         native_report(3), native_report(6), sample(9, 0.), native_report(12), native_report(15),
-    ]))
-    session = CollectionSession(None, None, collector=collector, frida_remote=None)
+    ])
+    collector = NativePcCollector(tmp_path, probe_factory=lambda _: probe)
+    unavailable = Mock(side_effect=RuntimeError('synthetic observer unavailable'))
+    session = CollectionSession(None, None, collector=collector, frida_remote=None,
+                                observer_factory=unavailable)
     session.enable_lifecycle()
     session.connect()
     try:
+        assert probe.boot_checks == 1
+        unavailable.assert_called_once_with(collector, None)
         original = session.read()
         fallback = deepcopy(original['enemy'])
         assert fallback['scope'] == 'native_pc_current_hp'
@@ -269,7 +285,7 @@ def test_bound_native_observer_reaches_enemy_view_through_normal_session(tmp_pat
     now = [10.]
     monkeypatch.setattr('native_pc_collector.time.monotonic', lambda: now[0])
 
-    class MutableProbe(Probe):
+    class MutableProbe(ReadyEnemyProbe):
         report = native_report(3)
 
         def sample(self, *, extra_reader, idle_reader=None):
@@ -320,6 +336,7 @@ def test_bound_native_observer_reaches_enemy_view_through_normal_session(tmp_pat
     session.enable_lifecycle()
     session.connect()
     try:
+        assert probe.boot_checks == 1
         first = session.read()
         assert first['event_status'] == 'recording'
         assert first['enemy']['scope'] == 'native_pc_enemy_events'

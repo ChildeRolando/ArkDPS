@@ -100,7 +100,7 @@ class EventStream:
                cancel_reason=None, shield_absorbed=None, target_instance=None,
                target_uid=None, enemy_damage_owner=None,
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-               skill_method=None,
+               skill_method=None, skill_wait_for_end=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
                enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None,
                mitigation_before=None, mitigation_after=None,
@@ -115,7 +115,7 @@ class EventStream:
                        target, real_delta, hp_before, hp_after, killed,
                        target_type, damage_type, cancel_reason, shield_absorbed,
                        target_instance, target_uid, enemy_damage_owner,
-                       skill_key, skill_id, skill_name, skill_reason, skill_method,
+                       skill_key, skill_id, skill_name, skill_reason, skill_method, skill_wait_for_end,
                        phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
                        finish_reason, enemy_max_hp, mitigation_before, mitigation_after,
                        source_character_uid, unresolved_source, settled_after_nested_kill,
@@ -133,7 +133,27 @@ class EventStream:
                 or not isfinite(game_time) or game_time < self.game_time
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
+        ignore_passive_native_cast = False
+        native_cast = (skill_method or target_instance) == 'BasicSkill.OnCastFinish'
+        skill_actor = (settlement_identity[2] if settlement_identity and settlement_identity[0] == 'local'
+                       else source_character_uid if not self.statistics.settlement_enabled else None)
         try:
+            if native_cast:
+                self.statistics._validate_skill_cast_state(
+                    kind, 'BasicSkill.OnCastFinish', skill_reason, skill_wait_for_end, skill_key, skill_id)
+                if self.statistics.settlement_enabled:
+                    state, owner, actor = settlement_identity or ('unknown', None, None)
+                    matches = (state == 'local' and actor is not None
+                               and self.statistics._native_cast_window_matches(
+                                   self.statistics.skill_active.get(owner), source, skill_key, skill_id, actor)
+                               and self.statistics._native_cast_window_matches(
+                                   self.statistics.settlement_skill_active.get((owner, actor)),
+                                   source, skill_key, skill_id, actor))
+                    if not matches:
+                        if skill_wait_for_end is False:
+                            ignore_passive_native_cast = True
+                        else:
+                            raise ValueError('native cast state has no matching actor activation')
             if self.statistics.settlement_enabled and kind == 'damage_settlement':
                 state, owner, actor = settlement_identity or ('unknown', None, None)
                 self.statistics.record_damage_settlement(
@@ -143,7 +163,17 @@ class EventStream:
             elif settlement_identity == ('summon', None, None):
                 # A proven summon skill never opens a host skill window.
                 pass
+            elif ignore_passive_native_cast:
+                # A false return can follow a real finish inside the native
+                # call. An unmatched passive observation cannot affect a CID peer.
+                pass
             elif unresolved_source:
+                self.statistics.observe_unresolved_source(
+                    kind, source, amount, target_instance, damage_type=damage_type)
+            elif (skill_method == 'BasicSkill.OnCastFinish' and self.statistics.settlement_enabled
+                  and (settlement_identity is None or settlement_identity[0] != 'local')):
+                # New native state evidence must not upgrade a different actor
+                # merely because its CID still resolves to the same owner.
                 self.statistics.observe_unresolved_source(
                     kind, source, amount, target_instance, damage_type=damage_type)
             elif kind == 'enemy_enter':
@@ -168,9 +198,19 @@ class EventStream:
                     shield_absorbed=shield_absorbed, target_instance=target_instance,
                     skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
                     skill_reason=skill_reason, skill_method=skill_method,
+                    skill_wait_for_end=skill_wait_for_end,
+                    skill_actor=skill_actor,
                     verified_skill_end_owner=verified_skill_end_owner,
                     mitigation_before=mitigation_before, mitigation_after=mitigation_after,
                     settled_after_nested_kill=settled_after_nested_kill)
+            if (self.statistics.settlement_enabled and settlement_identity and not ignore_passive_native_cast
+                    and kind in ('skill_start', 'skill_end') and settlement_identity[0] == 'local'
+                    and settlement_identity[2] is not None):
+                _state, owner, actor = settlement_identity
+                self.statistics.record_settlement_skill(
+                    owner, actor, source, kind, game_time, key=skill_key, skill_id=skill_id,
+                    name=skill_name, method=skill_method or target_instance, reason=skill_reason,
+                    wait_for_end=skill_wait_for_end)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':
@@ -186,9 +226,13 @@ class EventStream:
                     self.statistics.mark_overkill_unknown(source)
                 if kind == 'elemental_bar':
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, 'unknown', None, None)
-            elif self.statistics.settlement_enabled and kind in ('skill_start', 'skill_end'):
-                self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
-                                                                 skill_reason)
+            elif kind in ('skill_start', 'skill_end') and (self.statistics.settlement_enabled or native_cast):
+                if native_cast:
+                    self.statistics.observe_unresolved_source(
+                        kind, source, amount, target_instance, damage_type=damage_type)
+                if self.statistics.settlement_enabled:
+                    self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
+                                                                     skill_reason)
             elif self.statistics.settlement_enabled and kind == 'damage_settlement':
                 self.statistics.settlement_stream_incomplete = True
                 self.statistics.observe_enemy_damage(complete=False)
@@ -199,11 +243,8 @@ class EventStream:
                 state, owner, actor = settlement_identity
                 if kind == 'elemental_bar':
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor)
-                elif kind in ('skill_start', 'skill_end') and state == 'local' and actor is not None:
-                    self.statistics.record_settlement_skill(
-                        owner, actor, source, kind, game_time, key=skill_key, skill_id=skill_id,
-                        name=skill_name, method=skill_method or target_instance, reason=skill_reason)
-                elif kind in ('skill_start', 'skill_end') and state == 'unknown':
+                elif (kind in ('skill_start', 'skill_end') and state == 'unknown'
+                      and not ignore_passive_native_cast):
                     self.statistics.mark_settlement_skill_unassigned(source, skill_method or target_instance,
                                                                      skill_reason)
             if self.statistics.settlement_enabled and kind in ('enemy_enter', 'enemy_fake_death',
