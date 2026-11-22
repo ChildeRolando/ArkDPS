@@ -16,7 +16,9 @@ function androidAutoChessEnvelope(current){
  const binding=nativeBinding();
  if(binding&&/AUTOCHESS/i.test(binding.native_stage_id))return {fields:binding,
   ready:!current||binding.native_frame===current.frame&&Number(BigInt(binding.native_fixed_time))/4294967296===current.game_time};
- return {fields:{},ready:binding!==null||!nativeAutoStage?.enabled};
+ return {fields:binding===null&&nativeAutoBindingDiagnostic?
+  {autochess_binding_diagnostic:{...nativeAutoBindingDiagnostic}}:{},
+  ready:binding!==null||!nativeAutoStage?.enabled};
 }
 const probeAdapter={
  moduleName:'libil2cpp.so',imageSizeType:'ulong',requiredClasses:[],allowNullClassRows:false,
@@ -29,7 +31,8 @@ const probeAdapter={
  factoryArgument(args,index){return args[index];},
  factoryStorage(args,invocation){return invocation.context.x8;},
  scopedModifierTrace:false,directHealingProof:false,
- autoChessReflected:true,setAutoChessMode,eventCollectionOwner:autoEventOwner,
+ autoChessReflected:true,autoChessStateOffset:0x220,autoChessStageOffset:0x18,
+ setAutoChessMode,eventCollectionOwner:autoEventOwner,
  stampClock(when){stampAutoChessClock(when);},
  baselineEnvelope(fields,records,acknowledged,through){return discardedAutoChessSkills(fields,records,acknowledged,through);},
  readEnvelope(){return androidAutoChessEnvelope();},

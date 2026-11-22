@@ -18,7 +18,7 @@ from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
 from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract, bind_native_autochess_pair, contract_for,
-                         native_autochess_context_bound)
+                         autochess_scope_detail, native_autochess_context_bound)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 
@@ -350,6 +350,7 @@ class BattleFeed:
                 raise CaptureRetry('MuMu AutoChess scope is temporarily unverified')
             if getattr(observer, 'provides_autochess_context', False):
                 sample['autochess_scope_unverified'] = True
+                sample['autochess_scope_detail'] = autochess_scope_detail(events)
         return sample, roster, events
 
     @staticmethod

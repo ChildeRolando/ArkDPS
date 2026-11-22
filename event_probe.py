@@ -215,6 +215,19 @@ def native_autochess_event_baseline(sample):
             and sample['autochess_context']['phase'] in (4, 5, 6))
 
 
+def autochess_scope_detail(evidence):
+    """Expose failed proof separately from fields that qualify a sample."""
+    for name in ('after', 'before'):
+        mark = (evidence or {}).get(name) or {}
+        context = mark.get('native_autochess_context') or {}
+        diagnostic = mark.get('autochess_binding_diagnostic') or {}
+        for report in (context, diagnostic):
+            reason = report.get('reason') if isinstance(report, dict) else None
+            if isinstance(reason, str) and reason.strip():
+                return reason.strip().splitlines()[0][:200]
+    return '阶段证据尚未通过采集快照归属校验'
+
+
 def ready_probe_modes(payload):
     """Retain installation diagnostics, without certifying observed hit coverage."""
     booleans = ('coalesce_enemy_hp', 'trace_hp_context', 'source_character_uid_ready', 'skill_ready',

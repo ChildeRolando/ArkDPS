@@ -8,7 +8,7 @@ const {fixture}=require('./native_pc_frida_probe_fixture.js');
 const plain=value=>JSON.parse(JSON.stringify(value)),checks=[];
 function check(name,run){run();checks.push(name);}
 function owned(mode='all',options={}){
- const f=world({platform:'mumu',...options,fixtureOptions:{globals:{arkdpsAutoChessMode:mode}}});
+ const f=world({platform:'mumu',...options,fixtureOptions:{...options.fixtureOptions,globals:{arkdpsAutoChessMode:mode}}});
  ['091000001','91000001','083000003','004000004'].forEach((uid,index)=>
   f.write(f.players[index][1].add(0x18),f.text(uid)));
  return f;
@@ -68,6 +68,48 @@ check('android_verified_state220_unit_manager2b8_and_real_shared_context',()=>{
  const constants=f.apiCalls.filter(name=>name==='il2cpp_field_static_get_value').length;
  assert.equal(constants,15,'only the fifteen proved enum literal defaults were read');
  packet(f);assert.equal(f.apiCalls.filter(name=>name==='il2cpp_field_static_get_value').length,15,'immutable enum metadata cached');
+});
+
+check('runtime_roots_remain_authoritative_when_dump_metadata_and_terminal_setup_disagree',()=>{
+ const f=owned('all',{fixtureOptions:{loggerMetadataOffset:0xe0,stateMetadataOffset:0x228,stateMetadataKind:17}});
+ const ready=f.messages.find(message=>message.ready===true);
+ assert.equal(ready.terminal_error,'Error: unsupported layout BattleController.m_logger',
+  'the observed optional terminal setup failure remains unchanged');
+ assert.equal(field(f,f.controller,'m_logger').add(24).readS32(),0xe0);
+ assert.equal(field(f,f.controller,'m_state').add(24).readS32(),0x228);
+ f.write(field(f,f.level,'levelId').add(24),0x28); // Conflicting optional dump metadata, runtime remains verified +0x18.
+ f.write(f.controller.add(0x228),1); // Actual Android speed, not battle state.
+ const mark=f.mark();assert.equal(mark.native_autochess_context.status,'available');
+ assert.equal(mark.native_identity.logger,f.controller.add(0xd8).readPointer().toString());
+ assert.equal(mark.native_autochess_context.phase,4);assert.equal(mark.autochess_binding_diagnostic,undefined);
+ assert.equal(f.controller.add(0x220).readS32(),2);
+});
+
+check('wrong_runtime_owner_backreference_class_or_state_never_borrow_metadata_roots',()=>{
+ for(const mutate of [
+  f=>f.write(f.controller.add(0xd8).readPointer().add(0x18),f.ptr(0)),
+  f=>f.write(f.controller.add(0x10).readPointer().add(0x28),f.ptr(0)),
+  f=>f.write(f.controller.add(0xd8),f.ptr(0)),
+  f=>f.write(f.controller.add(0x158),f.ptr(0)),
+  f=>f.write(f.controller.add(0x220),1),
+ ]){
+  const f=owned('all',{fixtureOptions:{loggerMetadataOffset:0xe0,stateMetadataOffset:0x228,stateMetadataKind:17}});
+  assert.equal(packet(f).status,'available');mutate(f);const mark=f.mark();
+  assert.equal(mark.retry,true);assert.equal(mark.native_identity,undefined);assert.equal(mark.native_autochess_context,undefined);
+  const diagnostic=mark.autochess_binding_diagnostic;
+  assert.equal(diagnostic.status,'unavailable');assert(['root_identity','controller_state'].includes(diagnostic.step));
+  assert(diagnostic.reason.length>0&&diagnostic.reason.length<=300);
+ }
+});
+
+check('runtime_stage_class_failure_is_diagnosed_without_fabricating_phase_or_weakening_body',()=>{
+ const f=owned();f.write(f.level.add(0x18).readPointer(),f.controllerClass);
+ const mark=f.mark();assert.equal(mark.native_identity,undefined);assert.equal(mark.native_autochess_context,undefined);
+ assert.equal(mark.autochess_binding_diagnostic.step,'stage_metadata');
+ assert.match(mark.autochess_binding_diagnostic.reason,/stage identifier is not System.String/);
+ const body=owned();body.write(field(body,body.manager,'dataCenter').add(8).readPointer().add(8),8<<16);
+ const failed=body.mark();assert(failed.native_identity);assert.equal(failed.native_autochess_context.status,'unknown');
+ assert.match(failed.native_autochess_context.reason,/AutoChess field type AutoChessGameManager.dataCenter/);
 });
 
 check('actual_reflected_non_pc_field_offsets_and_noncontiguous_scope_guards',()=>{

@@ -21,7 +21,8 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
   fieldApiLeavesTableNull = false, fieldApiStalls = false, lazySkillMethods = false,
   methodCountMismatch = false, methodIteratorMismatch = false, methodOwnerMismatch = false,
-  methodApiLeavesTableNull = false, methodApiStalls = false, globals = {}} = {}) {
+  methodApiLeavesTableNull = false, methodApiStalls = false, globals = {},
+  loggerMetadataOffset = loggerOffset, stateMetadataOffset = platform === 'native_pc' ? 0x228 : 0x220} = {}) {
   let next = 0x10000;
   const memory = new Map();
   const methods = new Map();
@@ -121,8 +122,8 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const controllerMethods = {OnDestroy: 0, OnCharacterFinished: 2};
   if (stateMethod) controllerMethods.set_state = 1;
   const controllerClass = klass('BattleController', 'Torappu.Battle', {
-    s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerOffset,
-    m_levelData: platform === 'native_pc' ? 0x160 : 0x158, m_state: platform === 'native_pc' ? 0x228 : 0x220,
+    s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerMetadataOffset,
+    m_levelData: platform === 'native_pc' ? 0x160 : 0x158, m_state: stateMetadataOffset,
   }, controllerMethods);
   const character = klass('Character', 'Torappu.Battle', {'<data>k__BackingField': 0x538, m_skill: 0x3c8},
     {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2,
@@ -175,6 +176,12 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const parent = alloc(), singletonStatics = alloc(), clockStatics = alloc();
   const controller = alloc(), native = alloc(), logger = alloc(), stats = alloc(), level = alloc();
   const loggerClass = alloc(), statsClass = alloc(), levelClass = klass('LevelData', 'Torappu', {levelId: 0x18});
+  // Typed optional stage reflection needs the actual String field type too.
+  // Use reserved bytes in this owned allocation; keep every existing fixture
+  // address unchanged so the complete frozen normal-wire oracle stays exact.
+  const levelIdType=levelClass.add(0x1800);
+  write(levelIdType,ptr(0));write(levelIdType.add(8),14<<16);
+  write(fieldTables.get(levelClass.toString()).table.add(8),levelIdType);
   for (const [k, name] of [[loggerClass, 'BattleLogger'], [statsClass, 'BattleStats']])
     write(k.add(0x10), text(name));
   write(controllerClass.add(0x58), parent); write(parent.add(0xb8), singletonStatics);

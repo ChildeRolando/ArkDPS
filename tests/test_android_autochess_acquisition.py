@@ -140,6 +140,18 @@ def test_absent_android_proof_never_uses_the_scoped_mode_or_account_ledger():
     assert contract_for(battle.observer, sample) is MUMU_CONTRACT
 
 
+def test_absent_android_proof_records_reason_without_manufacturing_scope():
+    battle = AndroidAutoChessBattle()
+    battle.context_available = False
+    battle.observer.mark = lambda: dict(battle.mark(), autochess_binding_diagnostic={
+        'status': 'unavailable', 'step': 'root_identity', 'reason': 'checked logger owner differs'})
+    observation = battle.poll()
+    assert observation.sample['autochess_scope_unverified'] is True
+    assert observation.sample['autochess_scope_detail'] == 'checked logger owner differs'
+    assert 'autochess_context' not in observation.sample
+    assert battle.runtime.feed.autochess_scene is None
+
+
 def test_android_local_and_all_share_scope_account_ledger_and_single_ack():
     battle = AndroidAutoChessBattle()
     assert battle.poll().kind == 'sample'

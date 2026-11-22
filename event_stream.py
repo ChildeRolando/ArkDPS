@@ -56,7 +56,11 @@ def baseline_barrier(before, sample, after, *, contract=None):
                 or (shared_scope and before['damage_settlement_scope'] != after['damage_settlement_scope'])
                 or sample['frame'] != after['frame']
                 or sample['game_time'] != after['game_time']):
-            raise BarrierBusy('baseline crossed an event or game frame')
+            changed = [key for key in ('sequence', 'epoch', 'frame', 'game_time') if before[key] != after[key]]
+            if shared_scope and before['damage_settlement_scope'] != after['damage_settlement_scope']:
+                changed.append('damage_settlement_scope')
+            changed.extend('snapshot_' + key for key in ('frame', 'game_time') if sample[key] != after[key])
+            raise BarrierBusy('baseline crossed an event or game frame (' + ', '.join(changed) + ')')
     except (KeyError, TypeError):
         raise StreamGap('incomplete producer mark or baseline') from None
     return after['sequence']

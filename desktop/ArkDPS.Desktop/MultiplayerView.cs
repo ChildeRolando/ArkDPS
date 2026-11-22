@@ -83,7 +83,7 @@ public sealed class MultiplayerView : ScrollViewer
         Update(default);
     }
 
-    internal void Update(JsonElement value)
+    internal void Update(JsonElement value, string scopeNotice = "")
     {
         snapshot = value;
         string kind = value.Text("scope_kind");
@@ -114,7 +114,7 @@ public sealed class MultiplayerView : ScrollViewer
         string note = value.Text("note");
         notice.Text = eligible
             ? note.Length > 0 ? note : "防御阶段 · 按真实玩家 UID 分别查看输出。选择玩家，再选择干员查看详情。"
-            : EmptyNotice(kind == "defense" && scopeId.Length == 0 ? "unknown" : kind);
+            : scopeNotice.Length > 0 ? scopeNotice : EmptyNotice(kind == "defense" && scopeId.Length == 0 ? "unknown" : kind);
         if (eligible) notice.Text = value.Text("status") switch
         {
             "gap" => "观察已中断 · 以下保留中断前已观察数据。" + notice.Text,

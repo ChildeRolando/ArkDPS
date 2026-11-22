@@ -11,4 +11,4 @@ def test_android_autochess_typed_metadata_scope_and_mode_contract():
         cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
     result = json.loads(completed.stdout)
     assert result['status'] == 'verified'
-    assert len(result['checks']) == 9
+    assert len(result['checks']) == 12

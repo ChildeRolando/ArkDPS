@@ -3,6 +3,7 @@
 // managed metadata reads only; no game getter, class initializer or new hook.
 const nativeAutoLayouts=new Map();
 let nativeAutoStage=null,nativeAutoCache=null,nativeAutoEpoch=0,nativeAutoScope=null;
+let nativeAutoBindingDiagnostic=null;
 let nativeAutoDesiredMode=globalThis.arkdpsAutoChessMode===undefined?'all':globalThis.arkdpsAutoChessMode;
 if(!['all','local'].includes(nativeAutoDesiredMode))throw new Error('invalid AutoChess collection mode');
 let nativeAutoEffective=null,nativeAutoOwners=null;
@@ -462,6 +463,7 @@ function stampAutoChessClock(when){
   let phase,round;
   if(probeAdapter.autoChessReflected){
    if(!read.p(ptr(before.level)).equals(nativeAutoStage.levelClass))throw new Error('AutoChess level class changed');
+   if(!read.p(stagePointer).equals(nativeAutoStage.stageClass))throw new Error('AutoChess stage String class changed');
    const a=cached.addresses,p=cached.playerAddresses;
    const pointers=[[a.controllerHost,cached.host],[a.hostDict,cached.dict],[a.managerStatus,cached.status],
     [a.managerCenter,cached.center],[a.statusModel,cached.model],[a.modelMachine,cached.machine],
@@ -515,12 +517,6 @@ function readAutoChessBody(identity,frame,fixed,key){
 }
 function currentNativeIdentity(){
  if(!nativeControllerClass)return null;
- if(probeAdapter.autoChessReflected){
-  const fields=autoControllerLayout();
-  // These two roots are independently read by the existing Android host.
-  // A changed root layout cannot be reinterpreted by this optional feature.
-  if(fields.m_logger.offset!==probeAdapter.loggerOffset||fields.m_levelData.offset!==probeAdapter.levelOffset)return null;
- }
  const parent=nativeControllerClass.add(0x58).readPointer();
  if(parent.isNull())return null;
  const statics=parent.add(0xb8).readPointer();
@@ -528,38 +524,56 @@ function currentNativeIdentity(){
  const controller=statics.readPointer();
  return terminalIdentity(controller,nativeControllerClass);
 }
-function autoControllerLayout(){
- return autoLayout(nativeControllerClass,'BattleController','Torappu.Battle',0,
-  [[0,'m_logger',0xd8,[18]],[0,'m_levelData',0x158,[18]],[0,'m_state',0x220,[8]]]);
-}
 function nativeBinding(){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded
  // Windows sampler. The host binds this evidence to its battle serial.
+ let step='root_identity';nativeAutoBindingDiagnostic=null;
+ const unavailable=reason=>{
+  nativeAutoBodyCache=null;
+  nativeAutoBindingDiagnostic={status:'unavailable',step,reason:String(reason).slice(0,300)};
+  return null;
+ };
  try{
   const before=currentNativeIdentity();
-  if(before===null){nativeAutoBodyCache=null;return null;}
-  const stateOffset=probeAdapter.autoChessReflected?autoControllerLayout().m_state.offset:0x228;
+  if(before===null)return unavailable('BattleController singleton or class/ownership roots unavailable');
+  // Android metadata scalar offsets can disagree with its independently
+  // verified live layout. Reuse the collector's pinned runtime state slot;
+  // the source and host still bracket every ownership root and exact clock.
+  step='controller_state';
+  const stateOffset=probeAdapter.autoChessStateOffset??0x228;
   const stateAddress=ptr(before.controller).add(stateOffset),state=stateAddress.readS32();
-  if(state!==2&&state!==3){nativeAutoBodyCache=null;return null;}
-  const level=ptr(before.level),levelClass=probeAdapter.autoChessReflected?level.readPointer():null,
-   levelOffset=probeAdapter.autoChessReflected?
-   autoLayout(levelClass,'LevelData','Torappu',0,[[0,'levelId',0x18,[14]]]).levelId.offset:0x18;
-  const stageAddress=level.add(levelOffset),stage=str(stageAddress.readPointer());
-  if(typeof stage!=='string'||!stage.length){nativeAutoBodyCache=null;return null;}
+  if(state!==2&&state!==3)return unavailable('BattleController is not PLAYING or FINISHED');
+  step='stage_metadata';
+  const level=ptr(before.level),levelClass=probeAdapter.autoChessReflected?level.readPointer():null;
+  const stageAddress=level.add(probeAdapter.autoChessStageOffset??0x18),stagePointer=stageAddress.readPointer(),stage=str(stagePointer);
+  if(typeof stage!=='string'||!stage.length)return unavailable('LevelData stage identifier unavailable');
   const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
   const enabled=/AUTOCHESS/i.test(stage);
+  let stageClass=null;
+  if(enabled&&probeAdapter.autoChessReflected){
+   stageClass=stagePointer.readPointer();
+   if(!autoIdentity(stageClass,'String','System'))return unavailable('AutoChess stage identifier is not System.String');
+  }
   const stageKey=[before.controller,before.native,before.logger,before.stats,before.level,stage].join(':');
   if(nativeAutoStage?.key!==stageKey){nativeAutoCache=null;nativeAutoBodyCache=null;}
-  nativeAutoStage={key:stageKey,enabled,stageAddress,levelClass,stagePointer:stageAddress.readPointer()};
+  nativeAutoStage={key:stageKey,enabled,stageAddress,levelClass,stageClass,
+   stagePointer:probeAdapter.autoChessReflected?stagePointer:stageAddress.readPointer()};
   const bodyKey=stageKey+'#'+nativeAutoStage.stagePointer.toString();
   if(!enabled)nativeAutoBodyCache=null;
   const auto=enabled?readAutoChessBody(before,frame,fixed,bodyKey):null;
+  step='closing_guard';
+  if(probeAdapter.autoChessReflected&&(!level.readPointer().equals(levelClass)||
+     !stageAddress.readPointer().equals(stagePointer)||str(stagePointer)!==stage||
+     enabled&&!stagePointer.readPointer().equals(stageClass)))
+   return unavailable('LevelData or stage identity changed during binding');
   const after=currentNativeIdentity();
   if(after===null||clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed
      ||Object.keys(before).some(key=>before[key]!==after[key])
-     ||stateAddress.readS32()!==state||probeAdapter.autoChessReflected&&!level.readPointer().equals(levelClass)
-     ||str(stageAddress.readPointer())!==stage){nativeAutoBodyCache=null;return null;}
-  if(BigInt(fixed)<0n){nativeAutoBodyCache=null;return null;}
+     ||stateAddress.readS32()!==state||!probeAdapter.autoChessReflected&&str(stageAddress.readPointer())!==stage)
+   return unavailable('battle roots, clock, state or stage changed during binding');
+  step='clock';
+  if(BigInt(fixed)<0n)return unavailable('negative game clock');
+  step='clock_stamp';
   damageSettlementStamp(frame,Number(BigInt(fixed))/4294967296);
   const key=[before.controller,before.native,before.logger,before.stats,before.level,stage].join(':');
   if(nativeLastBinding&&(nativeLastBinding.key!==key||frame<nativeLastBinding.frame
@@ -573,5 +587,5 @@ function nativeBinding(){
     {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto}:null;
   }
   return result;
- }catch(e){nativeAutoBodyCache=null;return null;}
+ }catch(e){return unavailable(e);}
 }

@@ -932,6 +932,7 @@ class DesktopState:
                             for p in self.layout.panels],
                     multiplayer_active=active, multiplayer_mode_pending=active != desired,
                     multiplayer_scope_unverified=scope_unverified,
+                    multiplayer_scope_detail=sample.get('autochess_scope_detail') if scope_unverified else None,
                     multiplayer=(self.multiplayer_view(multiplayer, event=live_event)
                                  if active and (multiplayer or {}).get('collection_mode') != 'local' else None),
                     live_analysis=analysis[0],

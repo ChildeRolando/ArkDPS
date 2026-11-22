@@ -326,9 +326,12 @@ public partial class MainWindow : Window
         MultiplayerEnabledSetting.IsChecked=layout.Bool("multiplayer_enabled");
         MultiplayerNav.Visibility=MultiplayerActive ? Visibility.Visible : Visibility.Collapsed;
         bool scopeUnverified=state.Bool("multiplayer_scope_unverified");
+        string scopeDetail=state.Text("multiplayer_scope_detail");
+        string scopeNotice=scopeDetail.Length==0 ? "卫戍阶段或本家身份未确认，等待有效小局数据"
+            : "卫戍身份未确认 · "+scopeDetail;
         MultiplayerSettingStatus.Visibility=state.Bool("multiplayer_mode_pending") || scopeUnverified
             ? Visibility.Visible : Visibility.Collapsed;
-        MultiplayerSettingStatus.Text=scopeUnverified ? "卫戍阶段或本家身份未确认，等待有效小局数据"
+        MultiplayerSettingStatus.Text=scopeUnverified ? scopeNotice
             : MultiplayerEnabled ? "下一小局开始统计四家" : "下一小局开始只统计本家";
         if(!MultiplayerActive && route=="multiplayer") _=Navigate("live");
         EventStatus.Text=state.Text("event_text");
@@ -346,7 +349,7 @@ public partial class MainWindow : Window
             panelLayoutChanged = true;
         }
         UpdateHistory();
-        MultiplayerPage.Update(MultiplayerActive ? state.Get("multiplayer") : default);
+        MultiplayerPage.Update(MultiplayerActive ? state.Get("multiplayer") : default, scopeUnverified ? scopeNotice : "");
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
