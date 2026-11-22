@@ -16,6 +16,7 @@ from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import ENEMY_STATE_KINDS, Statistics
 from event_stream import EventStream, StreamGap
+from event_probe import native_autochess_event_baseline
 from source_classification import classify_unmapped_source
 
 DAMAGE_TYPES = ('physical', 'arts', 'true', 'elemental')
@@ -135,6 +136,7 @@ class BattleStatisticsAdapter:
     """One live battle at a time; callers create a new adapter per process."""
 
     def __init__(self):
+        self._events_only = False
         self.snapshot_revision = 0
         self.event_stream = None
         self._character_names = load_character_names()
@@ -238,11 +240,16 @@ class BattleStatisticsAdapter:
         self.event_stream = None
         session = sample['session']
         start = sample['game_time']
-        mapping = build_owner_map(roster)
-        if not mapping.owners:
+        events_only = native_autochess_event_baseline(sample)
+        if sample.get('native_counter_scope') == 'events_only' and not events_only:
+            raise MappingUnavailable(
+                '卫戍身份或阶段尚未取得可靠事件基线；拒绝回退到按角色名累计')
+        mapping = OwnerMap() if events_only else build_owner_map(roster)
+        if not mapping.owners and not events_only:
             raise MappingUnavailable(
                 '未能从战局编队建立可靠的统计键归属；拒绝发布累计数据')
         self.owner_map = mapping
+        self._events_only = events_only
         self.statistics = Statistics(session, start)
         self.session = session
         self.coverage_start = start
@@ -326,6 +333,11 @@ class BattleStatisticsAdapter:
                 self.last_result = self.statistics.result()
 
     def _accept_event(self, **event):
+        if self._events_only:
+            # This receiver owns protocol admission/ACK only. The four scoped
+            # existing cores account for amounts after native UID attribution.
+            self.event_stream.accept(None, (), True, **event)
+            return
         kind = event.get('kind')
         if kind in ENEMY_STATE_KINDS:
             self.event_stream.accept(**event)
@@ -586,7 +598,7 @@ class BattleStatisticsAdapter:
                 self.statistics = None
                 self._begin(sample, roster)
             elif game_time == self.last_game_time:
-                if (frame == self.last_frame and source_attribution and not self.source_attribution
+                if (not self._events_only and frame == self.last_frame and source_attribution and not self.source_attribution
                         and self.event_stream is None):
                     # A paused battle can expose its first event barrier on
                     # the last native frame. Keep its counters and accept the
@@ -595,6 +607,22 @@ class BattleStatisticsAdapter:
                 return None
         if self.last_frame is not None and frame == self.last_frame and not terminal and not settling:
             return None
+        if self._events_only:
+            # Advance only the shared clock. CID rows remain raw diagnostics;
+            # they never become a per-player zero or cumulative counter.
+            if settling:
+                return None
+            self.statistics.snapshot(game_time, {})
+            if terminal and self.statistics.end_time is None:
+                self.statistics.finish(game_time)
+            self.last_frame, self.last_game_time = frame, game_time
+            self.last_roster, self.last_roster_frame = roster, roster.frame
+            self.presence_complete = False
+            self.missing_fields.add('native_player_counters')
+            self.snapshot_revision += 1
+            self.last_result = self.statistics.result()
+            return AdapterUpdate(self.session, game_time, self.result(roster),
+                                 missing_fields=('native_player_counters',), roster_frame=roster.frame)
         roster_map = build_owner_map(roster)
         if self.source_attribution or source_attribution:
             self._update_event_sources(roster, roster_map, source_events, settlement_version)
@@ -805,6 +833,9 @@ class BattleStatisticsAdapter:
             self.unknown_sources or self.owner_map.unknown_token_cids
             or self.owner_map.ambiguous_cids or self.mapping_conflicts
             or self.missing_fields)
+        if self._events_only:
+            result['totals_complete'] = False
+            result['native_counter_scope'] = 'unavailable'
         result['adapter_session'] = self.session
         result['snapshot_revision'] = self.snapshot_revision
         return result

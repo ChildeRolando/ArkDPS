@@ -108,7 +108,7 @@ class EventStream:
         for key in source_keys or (source,):
             self.statistics.mark_settlement_skill_unassigned(key, method, reason)
 
-    def accept(self, verified_skill_end_owner=None, unresolved_source_keys=(), /, *, session, sequence, frame,
+    def accept(self, verified_skill_end_owner=None, unresolved_source_keys=(), skip_scope=False, /, *, session, sequence, frame,
                game_time, source, kind, amount,
                target=None, real_delta=None, hp_before=None, hp_after=None,
                killed=None, target_type=None, damage_type=None,
@@ -148,6 +148,15 @@ class EventStream:
                 or not isfinite(game_time) or game_time < self.game_time
                 or (frame == self.frame and game_time != self.game_time)):
             self._fail('event clock is out of order')
+        if type(skip_scope) is not bool:
+            self._fail('invalid consumer scope decision')
+        if skip_scope:
+            # This record belongs to another native phase/round, or its scope
+            # cannot be proved. Consume its protocol receipt without letting
+            # old elemental bars, skills or amounts touch this scoped core.
+            # Positional-only: a producer field cannot select this path.
+            self._record_receipt(sequence, frame, game_time, payload, replay_record)
+            return
         if (self.statistics.settlement_enabled and settlement_identity
                 and settlement_identity[0] == 'foreign'):
             # The roster/UID proved this event belongs to another player.

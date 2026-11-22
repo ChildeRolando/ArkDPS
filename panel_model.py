@@ -333,15 +333,27 @@ class PanelSourceRow:
     damage_scope_reason: str | None = None
     mitigation_unknown_reason: str | None = None
     observed_mitigation_rate: float | None = None
+    # Display-only opt-in for a verified player's event ledger. Native
+    # cumulative counters stay absent in the stored Statistics result.
+    event_only_projection: bool = False
+
+    @property
+    def event_damage_unknown(self) -> bool:
+        lane = self.settled_damage or {}
+        return self.event_only_projection and not any(
+            type(lane.get(key)) is int and lane[key] > 0 for key in ('nominal_hits', 'observed_hits'))
 
     @property
     def has_settled_overkill(self) -> bool:
         return self.settled_damage is not None and 'overkill_coverage_complete' in self.settled_damage
 
     def total(self, category: Category) -> float | None:
+        if category is Category.DAMAGE and self.event_damage_unknown:
+            return None
         damage = self.damage
         if damage is None and (self.source_complete or self.settled_damage is not None):
-            damage = (self.settled_damage.get('observed_boss_damage') if self.settled_damage is not None
+            damage = (self.settled_damage.get('observed_damage' if self.event_only_projection
+                                             else 'observed_boss_damage') if self.settled_damage is not None
                       else self.partial_damage.get('observed_boss_damage'))
         shield = self.shield
         if shield is None and self.source_complete:
@@ -351,16 +363,25 @@ class PanelSourceRow:
                 Category.SHIELD: shield}[category]
 
     def recent(self, category: Category) -> float | None:
+        if category is Category.DAMAGE and self.event_damage_unknown:
+            return None
         damage = self.recent_damage
         if damage is None and (self.source_complete or self.settled_damage is not None):
-            damage = (self.settled_damage.get('observed_boss_recent_damage') if self.settled_damage is not None
+            damage = (self.settled_damage.get('observed_recent_damage' if self.event_only_projection
+                                             else 'observed_boss_recent_damage') if self.settled_damage is not None
                       else self.partial_damage.get('observed_boss_recent_damage'))
+            if (self.event_only_projection and self.settled_damage is not None
+                    and (self.settled_damage.get('observed_damage') is None
+                         or not _valid_window(self.recent_window(Category.DAMAGE)))):
+                damage = None
         return {Category.DAMAGE: damage,
                 Category.HEALING: self.recent_healing,
                 Category.SHIELD: self.recent_shield}[category]
 
     def engagement(self, category: Category) -> float | None:
         if category is Category.DAMAGE:
+            if self.event_damage_unknown:
+                return None
             if self.settled_damage is not None:
                 rate = self.settled_damage.get('engagement_damage')
                 return rate if _finite(rate) and rate >= 0 else None
@@ -382,6 +403,8 @@ class PanelSourceRow:
 
     def effective_recent(self) -> float | None:
         """近期有效 DPS：近期速率减去窗口内过量量摊到每秒。"""
+        if self.event_damage_unknown:
+            return None
         if self.settled_damage is not None:
             rate = self.settled_damage.get('recent_effective_damage')
             return rate if _valid_window(self.effective_recent_window()) and _finite(rate) and rate >= 0 else None
@@ -396,6 +419,8 @@ class PanelSourceRow:
 
     def effective_observed(self) -> float | None:
         """接敌有效 DPS：有效事件量除以活跃秒数，不是把量直接当成每秒。"""
+        if self.event_damage_unknown:
+            return None
         if self.settled_damage is not None:
             rate = self.settled_damage.get('engagement_effective_damage')
             return rate if _finite(rate) and rate >= 0 else None
@@ -434,7 +459,8 @@ class PanelSourceRow:
                 or self.presence_seconds <= 0 or not self.presence_complete):
             return None
         if category is Category.DAMAGE and self.settled_damage is not None and (effective or self.damage is None):
-            certificate = 'complete' if effective else 'observed_boss_damage_complete'
+            certificate = ('complete' if effective else 'observed_damage_complete'
+                           if self.event_only_projection else 'observed_boss_damage_complete')
             if self.settled_damage.get(certificate) is not True:
                 return None
         elif not self.counter_complete or not self.source_complete:
@@ -473,6 +499,9 @@ class PanelSourceRow:
         return None
 
     def recent_window(self, category: Category) -> tuple[float, float] | None:
+        if (category is Category.DAMAGE and self.event_only_projection
+                and self.recent_damage is None and self.settled_damage is not None):
+            return self.settled_damage.get('observed_recent_damage_window')
         return {Category.DAMAGE: self.recent_damage_window,
                 Category.HEALING: self.recent_healing_window,
                 Category.SHIELD: self.recent_shield_window}[category]
@@ -648,6 +677,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             source_complete=owner not in unresolved and unresolved.isdisjoint(sources),
             partial_damage=partial,
             settled_damage=settled,
+            event_only_projection=(result.get('event_only_projection') is True
+                                   and result.get('native_counter_scope') == 'unavailable'),
             damage_scope_reason=scope_reason,
             mitigation_unknown_reason=row.get('mitigation_unknown_reason'),
             observed_mitigation_rate=row.get('observed_mitigation_rate'),
@@ -814,15 +845,22 @@ def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool 
     windows = []
     for owner, row in sorted((statistics.get('rows') or {}).items()):
         settled = _settled_damage(row) if effective else None
+        observed = (statistics.get('event_only_projection') is True
+                    and statistics.get('native_counter_scope') == 'unavailable'
+                    and row.get('recent_damage') is None and not effective)
+        if observed:
+            settled = _settled_damage(row)
         rate = row.get('recent_damage')
         window = row.get('recent_damage_window')
         certified = (row.get('counter_snapshot_complete') is True
                      and _valid_window(window) and 0 <= window[0] < window[1] == game_time
                      and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
         if settled is not None:
-            rate = settled.get('recent_effective_damage')
-            window = settled.get('recent_effective_damage_window')
-            certified = (settled.get('recent_effective_damage_complete', settled.get('complete')) is True
+            rate_key = 'observed_recent_damage' if observed else 'recent_effective_damage'
+            rate = settled.get(rate_key)
+            window = settled.get(rate_key + '_window')
+            certified = (settled.get(rate_key + '_complete', settled.get('complete')) is True
+                         and (not observed or settled.get('observed_damage') is not None)
                          and _valid_window(window) and 0 <= window[0] < window[1] == game_time
                          and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
         elif certified and effective:
@@ -869,6 +907,8 @@ def settled_boss_damage_rates(statistics: Mapping, game_time: float, *, effectiv
 
 
 def _effective_damage(row: PanelSourceRow) -> float | None:
+    if row.event_damage_unknown:
+        return None
     if row.settled_damage is not None:
         effective = row.settled_damage.get('effective_damage')
         return effective if _finite(effective) and effective >= 0 else None
@@ -910,7 +950,8 @@ def _effective_by_type(row: PanelSourceRow) -> dict | None:
 def _damage_by_type(row: PanelSourceRow) -> Mapping:
     if row.settled_damage is not None:
         if row.damage is None:
-            observed = row.settled_damage.get('observed_boss_damage')
+            observed = row.settled_damage.get('observed_damage' if row.event_only_projection
+                                              else 'observed_boss_damage')
             return _observed_damage_types(row.settled_damage.get('damage_by_type'), observed) or {}
         return row.damage_by_type
     if row.damage is None and not row.damage_scope_reason and row.source_complete:
@@ -977,6 +1018,8 @@ def _rate_display(row: PanelSourceRow, category: Category, rate: float | None,
                   full_cycle: bool = False,
                   number_units: str = DEFAULT_NUMBER_UNITS) -> tuple[str, str, str]:
     """Classify one row's rate column without inventing a value."""
+    if category is Category.DAMAGE and row.event_damage_unknown:
+        return 'unknown', '—', '尚未观察到可归属的伤害结算'
     if _finite(rate):
         return 'value', f'{format_compact(rate, number_units)}/s', ''
     if full_cycle:
@@ -1103,6 +1146,11 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
         return coverage
     complete = lane.get('complete') is True
     reason = lane.get('reason') or '仅统计已核实的命中'
+    if row.event_only_projection:
+        for key, certificate in (('observed_damage', 'observed_damage_complete'),
+                                 ('observed_recent_damage', 'observed_recent_damage_complete')):
+            if lane.get(certificate) is not True and _finite(lane.get(key)):
+                coverage[key] = dict(failed_share=None, basis=None, reason=reason)
     typed = _effective_by_type(row)
     effective = _effective_damage(row)
     hits = lane.get('observed_hits')
@@ -1262,6 +1310,7 @@ def render_panel(config: PanelConfig,
     rows = list(rows)
     category, ranking = config.category, config.ranking
     effective = config.effective_only and category is Category.DAMAGE
+    observed_only = category is Category.DAMAGE and any(row.event_only_projection for row in rows)
     recent_ranking = ranking is Ranking.RECENT or (
         ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S)
     engagement_ranking = ranking is Ranking.DPS and config.rate_basis is RateBasis.ENGAGEMENT
@@ -1291,20 +1340,26 @@ def render_panel(config: PanelConfig,
     total_gap = ('shield' if category is Category.SHIELD else
                  'recent_effective_damage' if effective and ranking is Ranking.RECENT else
                  'effective_damage' if effective else
+                 'observed_recent_damage' if observed_only and ranking is Ranking.RECENT else
+                 'observed_damage' if observed_only else
                  'recent_boss_damage' if config.boss_scope and ranking is Ranking.RECENT else
                  'boss_damage' if config.boss_scope else None)
     rate_gap = {
         RateBasis.RECENT_5S: ('recent_effective_damage' if effective else
+                             'observed_recent_damage' if observed_only else
                              'recent_boss_damage' if config.boss_scope else None),
         RateBasis.ENGAGEMENT: ('engagement_effective_damage' if effective else
                                'engagement' if category is Category.DAMAGE else 'engagement_healing'),
         RateBasis.FULL_CYCLE: ('effective_damage' if effective else
+                              'observed_damage' if observed_only else
                               'boss_damage' if config.boss_scope else None),
     }[config.rate_basis] if rate_supported else None
     ranking_gap = rate_gap if ranking is Ranking.DPS else total_gap
 
     def metric_complete(row: PanelSourceRow, basis: RateBasis | None = None,
                         *, recent: bool = False) -> bool:
+        if category is Category.DAMAGE and row.event_damage_unknown:
+            return False
         if category is Category.DAMAGE and basis is RateBasis.ENGAGEMENT and row.settled_damage is not None:
             no_events = (row.settled_damage.get('complete') is True
                          and row.settled_damage.get('observed_hits') == 0)
@@ -1326,6 +1381,13 @@ def render_panel(config: PanelConfig,
             if not recent and basis is not RateBasis.RECENT_5S and row.damage is None:
                 return (row.settled_damage.get('observed_boss_damage_complete') is True
                         and (basis is not RateBasis.FULL_CYCLE or row.presence_complete))
+        if row.event_only_projection and row.settled_damage is not None and category is Category.DAMAGE:
+            if recent or basis is RateBasis.RECENT_5S:
+                return (row.settled_damage.get('observed_recent_damage_complete') is True
+                        and row.recent(category) is not None and _valid_window(row.recent_window(category)))
+            return (row.settled_damage.get('observed_damage_complete') is True
+                    and row.total(category) is not None
+                    and (basis is not RateBasis.FULL_CYCLE or row.presence_complete))
         if not row.source_complete:
             return False
         if recent or basis is RateBasis.RECENT_5S:
@@ -1478,6 +1540,8 @@ def render_panel(config: PanelConfig,
                     CATEGORY_LABELS[category] + ' · ' + ranking_label(category, ranking))
     if config.boss_scope:
         metric_label = '仅首领 · ' + metric_label
+    if observed_only:
+        metric_label = '已观察 · ' + metric_label
 
     details = {owner: _owner_detail(row, rate_reason=rate_reason)
                for owner, row in row_by_owner.items()}

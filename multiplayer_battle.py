@@ -1,7 +1,7 @@
 """Round-scoped Autochess observations, using the ordinary statistics core.
 
-This module never manufactures native cumulative counters. A player side is a
-BattlePlayerData key inside one identity epoch, not a persistent person ID.
+This module never manufactures native cumulative counters. Legacy player sides
+remain round-local keys; verified native contexts use actual player account IDs.
 Call consume only after the owning capture accepted its guarded event batch.
 """
 from __future__ import annotations
@@ -10,16 +10,18 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from math import isfinite
 
+from autochess_context import lookup_native_actor, native_autochess_scope_id
 from character_catalog import load_character_names
 from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
-from event_probe import contract_for
+from event_probe import contract_for, event_processing_payload
 from roster import CharacterEntry, RosterSnapshot
 from source_classification import classify_unmapped_source
 from stats_core import ENEMY_STATE_KINDS, Statistics
 
 
 MAX_PREVIOUS_ROUNDS = 8
+MAX_BASELINE_SKILL_EVENTS = 1024
 SUPPORTED_SETTLEMENT_VERSIONS = (3, 4, 5, 6, 7)
 
 
@@ -40,6 +42,9 @@ class _Player:
     statistics: Statistics
     stream: EventStream | None = None
     actors: dict[str, CharacterEntry] = field(default_factory=dict)
+    slot: int | None = None
+    player_uid: str | None = None
+    player_name: str | None = None
 
 
 class MultiplayerBattleStatistics:
@@ -75,8 +80,53 @@ class MultiplayerBattleStatistics:
         self._from_start = False
         self._sample_session = self._native_session = None
         self._settlement_version = None
+        self._native_mode = False
+        self._context = self._active_context = None
+        self._context_fingerprint = None
+        self._retired_contexts = set()
+        self._retired_event_scopes = set()
+        self._native_entries = {}
+        self._native_aliases = {}
+        self._player_reasons = {}
+        self._scope_foreign_events = 0
+        self._scope_unknown_targets = set()
+        self._scope_unknown_all_targets = False
+        self._scope_verified_targets = set()
+        self._terminal_tail = False
+        self._initial_skill_pending = set()
 
-    def _begin(self, sample, round_id, reason):
+    @staticmethod
+    def _native_fingerprint(context, sample):
+        if (not isinstance(context, dict) or context.get('status') not in ('available', 'partial')
+                or context.get('verified_same_frame') is not True
+                or context.get('frame') != sample['frame']
+                or context.get('game_time') != sample['game_time']):
+            return None
+        identity = context.get('identity')
+        if (not isinstance(identity, dict) or set(identity) != {'scope_key', 'phase', 'round'}
+                or identity != {key: context.get(key) for key in identity}
+                or not isinstance(identity['scope_key'], str) or not identity['scope_key']
+                or type(identity['phase']) is not int or type(identity['round']) is not int):
+            return None
+        players = context.get('players')
+        if not isinstance(players, list) or not players:
+            return None
+        table = []
+        for player in players:
+            if (not isinstance(player, dict) or type(player.get('index')) is not int
+                    or player['index'] not in range(1, 5)
+                    or not isinstance(player.get('uid'), str) or not player['uid']):
+                return None
+            table.append((player['index'], player['uid']))
+        if len({slot for slot, _ in table}) != len(table) or len({uid for _, uid in table}) != len(table):
+            return None
+        return identity['scope_key'], identity['phase'], identity['round'], tuple(sorted(table))
+
+    def _source_key(self, entry, player_key):
+        return f'{player_key}:{entry.cid}#{entry.unique_id}' if self._native_mode else _key(entry)
+
+    def _begin(self, sample, round_id, reason, *, context=None):
+        new_context = self._native_fingerprint(context, sample) if context is not None else None
         if self._players:
             old_identity = (self._base_round, self._sample_session, self._native_session)
             new_identity = (round_id, sample.get('session'), sample.get('native_session'))
@@ -98,23 +148,33 @@ class MultiplayerBattleStatistics:
                 self._previous_pruned += 1
             if round_id != self._base_round:
                 self._retired_rounds.add(self._base_round)
+            if self._context_fingerprint is not None and self._context_fingerprint != new_context:
+                self._retired_contexts.add(self._context_fingerprint)
+                self._retired_event_scopes.add(self._context_fingerprint[:3])
         self._enabled = True
         self._base_round = round_id
         self._epoch += 1
-        self._scope = f'{round_id}:players:{self._epoch}'
+        self._native_mode = context is not None
+        self._context = self._active_context = deepcopy(context)
+        self._context_fingerprint = new_context
+        self._scope = (native_autochess_scope_id(context['identity'], self._context_fingerprint[3]) if self._native_mode
+            else f'{round_id}:players:{self._epoch}')
         self._start = self._now = sample['game_time']
         self._frame = sample['frame']
         self._from_start = self._start <= 1 and self._frame <= 30
         self._sample_session = sample.get('session')
         self._native_session = sample.get('native_session')
         self._players = {}
-        for side in range(1, 5):
-            stats = Statistics(f'{self._scope}:{side}', self._start)
+        slots = ([(row['uid'], row['index'], row['nick_name']) for row in context['players']]
+                 if self._native_mode else [(side, None, None) for side in range(1, 5)])
+        for key, slot, name in slots:
+            stats = Statistics(f'{self._scope}:{key}', self._start)
             stats.settlement_sides_known = True
             # An empty counter snapshot establishes the clock only. No source
             # receives a fabricated damage/healing counter.
             stats.snapshot(self._start, {})
-            self._players[side] = _Player(stats)
+            self._players[key] = _Player(stats, slot=slot,
+                player_uid=key if self._native_mode else None, player_name=name)
         self._roster = {}
         self._operators = {}
         self._received = {}
@@ -126,6 +186,230 @@ class MultiplayerBattleStatistics:
         self._reasons = set()
         self._unknown = {}
         self._settlement_version = None
+        self._native_entries = {}
+        self._native_aliases = {key: {} for key in self._players}
+        self._player_reasons = {key: set() for key in self._players}
+        self._scope_foreign_events = 0
+        self._scope_unknown_targets = set()
+        self._scope_unknown_all_targets = False
+        self._scope_verified_targets = set()
+        self._initial_skill_pending = set()
+
+    def _bind_native(self, context):
+        self._context = self._active_context = deepcopy(context)
+        for row in context['players']:
+            self._players[row['uid']].player_name = row['nick_name']
+        entries = {}
+        for member in context['memberships']:
+            uid = member['player_uid']
+            if uid not in self._players:
+                continue
+            entry = CharacterEntry(member['cid'], member['data_uid'], member['is_token'],
+                member['is_predefined'], member['host_key'], member['host_uid'], member['player_side'])
+            entries[entry.unique_id] = uid, entry
+            if not entry.is_token:
+                player = self._players[uid]
+                owner = self._source_key(entry, uid)
+                if owner not in player.actors and self._baseline is not None:
+                    self._initial_skill_pending.add(owner)
+                player.actors[owner] = entry
+                player.statistics.register_source(owner, owner)
+        self._native_entries = entries
+        for uid, entry in entries.values():
+            host = entries.get(entry.host_uid) if entry.is_token else (uid, entry)
+            if host is None or host[0] != uid:
+                continue
+            source, owner = self._source_key(entry, uid), self._source_key(host[1], uid)
+            self._players[uid].statistics.register_source(source, owner)
+            self._native_aliases[uid].setdefault(entry.cid, set()).add(source)
+        table = {row['index']: row['uid'] for row in context['players']}
+        for unknown in context['unknown_memberships']:
+            index = unknown.get('player_index', unknown.get('candidate_player_index'))
+            uid = table.get(index)
+            if uid in self._player_reasons:
+                self._player_reasons[uid].add('该玩家存在未核实的角色归属')
+            else:
+                self._reasons.add('存在无法按玩家隔离的角色归属缺证')
+
+    @staticmethod
+    def _scope_stamp_identity(event):
+        scope = event.get('native_autochess_scope')
+        if (not isinstance(scope, dict)
+                or type(scope.get('protocol_version')) is not int or scope['protocol_version'] != 1
+                or scope.get('status') != 'available' or scope.get('verified_same_frame') is not True
+                or not isinstance(scope.get('scope_key'), str) or not scope['scope_key']
+                or type(scope.get('phase')) is not int or type(scope.get('round')) is not int
+                or not _integer(scope.get('frame')) or scope['frame'] != event.get('frame')
+                or not _number(scope.get('game_time')) or scope['game_time'] != event.get('game_time')):
+            return None
+        return scope['scope_key'], scope['phase'], scope['round']
+
+    def _native_event_scope(self, event):
+        identity = self._scope_stamp_identity(event)
+        if self._active_context is None or identity is None:
+            return 'event_scope_unverified'
+        if identity == self._context_fingerprint[:3]:
+            return None
+        if self._terminal_tail or identity in self._retired_event_scopes:
+            return 'foreign_scope'
+        return 'event_scope_mismatch'
+
+    @staticmethod
+    def _native_initial_point(sample):
+        rows = sample.get('rows')
+        return (sample['frame'] == 0 and sample['game_time'] == 0
+                and _number(sample.get('global_total')) and sample['global_total'] == 0
+                and _number(sample.get('global_heal')) and sample['global_heal'] == 0
+                and isinstance(rows, (list, tuple))
+                and all(isinstance(row, dict) and _number(row.get('damage'))
+                        and _number(row.get('healing')) and row['damage'] == row['healing'] == 0
+                        for row in rows))
+
+    @staticmethod
+    def _same_native_roots(left, right):
+        # Canonical root keys have already been bound by the acquisition owner.
+        # Only compare their five-root prefix, never decode player/actor IDs.
+        parts = [key.rpartition(':autochess:') for key in (left, right)]
+        return (all(separator and epoch.isascii() and epoch.isdecimal() and len(epoch) <= 16
+                    and (epoch == '0' or not epoch.startswith('0'))
+                    and int(epoch) <= 9007199254740991 for _, separator, epoch in parts)
+                and parts[0][0] == parts[1][0])
+
+    def _initialize_native_skills(self, sample, drained):
+        discarded = drained.get('baseline_discarded_skill_events')
+        retained = drained.get('events')
+        complete = (drained.get('baseline_discarded_skill_events_complete') is True
+                    and isinstance(discarded, list) and len(discarded) <= MAX_BASELINE_SKILL_EVENTS
+                    and isinstance(retained, list) and len(retained) <= MAX_BASELINE_SKILL_EVENTS)
+        if not self._native_initial_point(sample) or not complete:
+            for player in self._players.values():
+                for owner in player.actors:
+                    player.statistics.mark_settlement_skill_unassigned(owner, 'native_baseline', None)
+            if not complete:
+                self._reasons.add('初始技能事件前缀证据不完整')
+        # These records are uncertainty witnesses only. They do not open a
+        # window, enter EventStream.received, or credit any pre-baseline amount.
+        for group, start_summary in ((discarded, True), (retained, False)):
+            if not isinstance(group, list):
+                continue
+            for event in group[:MAX_BASELINE_SKILL_EVENTS]:
+                if not isinstance(event, dict):
+                    continue
+                if start_summary:
+                    # The native baseline protocol already selected starts and
+                    # omits kind/amount. Do not invent an event to replay them.
+                    if 'kind' in event and event['kind'] != 'skill_start':
+                        self._reasons.add('初始技能前缀类型未确认')
+                        continue
+                elif event.get('kind') != 'skill_start':
+                    continue
+                sequence = event.get('sequence')
+                if not _integer(sequence) or sequence > self._baseline:
+                    self._reasons.add('初始技能前缀序号未确认')
+                    continue
+                identity = self._scope_stamp_identity(event)
+                if identity is None:
+                    self._reasons.add('初始技能前缀阶段身份未确认')
+                    # An unreadable scope cannot certify a foreign discard.
+                    # A real cached start with this exact current CID/data UID
+                    # is only a candidate for local initial-state uncertainty.
+                else:
+                    current = self._context_fingerprint[:3]
+                    if (identity[1:] != current[1:] or identity[0] != current[0]
+                            and not self._same_native_roots(identity[0], current[0])):
+                        continue
+                data_uid = event.get('source_character_uid')
+                evidence = lookup_native_actor(self._context, cid=event.get('source'), data_uid=data_uid)
+                if evidence is None:
+                    self._reasons.add('初始技能前缀存在角色UID缺证')
+                    continue
+                if evidence['is_token']:
+                    # A summon never supplies a host's activation window.
+                    continue
+                uid, entry = self._native_entries[data_uid]
+                self._players[uid].statistics.mark_settlement_skill_unassigned(
+                    self._source_key(entry, uid), 'native_baseline', None)
+
+    def _mark_initial_skill_unknown(self, player_key, owner):
+        if owner in self._initial_skill_pending:
+            self._players[player_key].statistics.mark_settlement_skill_unassigned(
+                owner, 'native_baseline', None)
+            self._initial_skill_pending.discard(owner)
+
+    @staticmethod
+    def _scope_target(event):
+        uid, instance = event.get('target_uid'), event.get('target_instance')
+        if (isinstance(uid, str) and 0 < len(uid) <= 128
+                and isinstance(instance, str) and 0 < len(instance) <= 128):
+            return uid, instance
+        return None
+
+    def _observe_scope_uncertainty(self, event):
+        # Unknown scope can hide an intervening bar. A later source-null hit
+        # cannot inherit an older owner until the shared core confirms a new
+        # current-scope bar for that exact target. No amount is calculated here.
+        if (event.get('kind') in ('elemental_bar', 'elemental_burst')
+                or event.get('kind') == 'damage_settlement' and event.get('damage_type') == 5):
+            target = self._scope_target(event)
+            if target is None:
+                self._scope_unknown_all_targets = True
+                self._scope_verified_targets.clear()
+            else:
+                self._scope_unknown_targets.add(target)
+                self._scope_verified_targets.discard(target)
+        data_uid = event.get('source_character_uid')
+        evidence = self._native_entries.get(data_uid) if type(data_uid) is int else None
+        if evidence is not None and evidence[1].cid == event.get('source'):
+            uid, entry = evidence
+            self._player_reasons[uid].add('该玩家存在阶段或轮次身份未核实的事件')
+            if event.get('kind') in ('skill_start', 'skill_end') and not entry.is_token:
+                source = self._source_key(entry, uid)
+                # This uncertainty is about scope, not native-cast semantics.
+                # Ordinary current-scope casts still go through EventStream.
+                self._players[uid].statistics.mark_settlement_skill_unassigned(
+                    source, 'native_autochess_scope_unverified', None)
+            return
+        self._reasons.add('存在阶段或轮次身份未核实的事件')
+
+    def _confirm_scope_bar(self, event, player_key, actor):
+        target = self._scope_target(event)
+        if target is None:
+            return
+        owner = self._source_key(actor, player_key)
+        bar = self._players[player_key].statistics.settlement_bars.get(target[0])
+        if bar is not None and bar[1:] == (target[1], 'local', owner, actor.unique_id):
+            self._scope_unknown_targets.discard(target)
+            self._scope_verified_targets.add(target)
+
+    def _native_identity(self, event):
+        scope = self._native_event_scope(event)
+        if scope is not None:
+            return scope, None, None, None
+        source = event.get('source')
+        if source is None and event.get('damage_type') == 5 and event.get('kind') in ('damage_settlement', 'elemental_burst'):
+            target = self._scope_target(event)
+            if (target is None or target in self._scope_unknown_targets
+                    or self._scope_unknown_all_targets and target not in self._scope_verified_targets):
+                return 'elemental_scope_unverified', None, None, None
+            return 'elemental', None, None, None
+        if source is not None and classify_unmapped_source(source) is not None:
+            return 'non_team', None, None, None
+        if source is None and (event.get('kind') in ENEMY_STATE_KINDS or event.get('kind') == 'enemy_damage'):
+            return 'global', None, None, None
+        data_uid = event.get('source_character_uid')
+        if type(data_uid) is not int or data_uid <= 0:
+            return 'source_uid_missing', None, None, None
+        evidence = lookup_native_actor(self._active_context, cid=source, data_uid=data_uid)
+        if evidence is None:
+            return 'source_uid_unmapped', None, None, None
+        player_uid, entry = self._native_entries[data_uid]
+        actor = entry
+        if entry.is_token:
+            host = self._native_entries.get(entry.host_uid)
+            if (host is None or host[0] != player_uid or host[1].cid != entry.host_key or host[1].is_token):
+                return 'token_host_unverified', None, None, None
+            actor = host[1]
+        return 'owned', player_uid, actor, entry
 
     @staticmethod
     def _operator_map(roster):
@@ -174,6 +458,8 @@ class MultiplayerBattleStatistics:
             player.statistics.register_source(owner, owner)
 
     def _identity(self, event):
+        if self._native_mode:
+            return self._native_identity(event)
         source = event.get('source')
         if (source is None and event.get('damage_type') == 5
                 and event.get('kind') in ('damage_settlement', 'elemental_burst')):
@@ -216,12 +502,38 @@ class MultiplayerBattleStatistics:
             events=0, first_sequence=event['sequence'], last_sequence=event['sequence']))
         item['events'] += 1
         item['last_sequence'] = event['sequence']
+        if self._native_mode:
+            affected = set()
+            if reason.startswith('event_scope_') or reason == 'elemental_scope_unverified':
+                self._observe_scope_uncertainty(event)
+                return
+            if event.get('kind') != 'damage_settlement':
+                # Let the canonical receiver decide passive native casts and
+                # source-local skill uncertainty before changing any quality.
+                return
+            table = {row['index']: row['uid'] for row in self._context['players']}
+            source_uid = event.get('source_character_uid')
+            for row in self._context['unknown_memberships']:
+                if (type(source_uid) is int and row.get('data_uid') == source_uid
+                        or source_uid is None and row.get('cid') == event.get('source')):
+                    uid = table.get(row.get('player_index', row.get('candidate_player_index')))
+                    if uid in self._players:
+                        affected.add(uid)
+            if not affected:
+                affected = {uid for uid, player in self._players.items()
+                    if any(entry.cid == event.get('source') for entry in player.actors.values())}
+            if affected:
+                for uid in affected:
+                    self._player_reasons[uid].add('该玩家存在来源UID未确认的事件')
+            else:
+                self._reasons.add('存在无法按玩家隔离的来源UID缺证')
+            return
         if event.get('kind') == 'damage_settlement':
             self._reasons.add('存在来源UID未确认的结算')
             for player in self._players.values():
                 player.statistics.settlement_stream_incomplete = True
 
-    def _start_events(self, sequence, version):
+    def _start_events(self, sequence, version, *, sample, drained):
         self._baseline = self._sequence = sequence
         self._settlement_version = version
         for player in self._players.values():
@@ -233,6 +545,8 @@ class MultiplayerBattleStatistics:
             player.stream = EventStream(stats, session=stats.session,
                 baseline_frame=self._frame, baseline_sequence=sequence)
             stats.mark_boss_watermark(self._now)
+        if self._native_mode:
+            self._initialize_native_skills(sample, drained)
 
     def _batch(self, sample, through, drained):
         """Validate the entire ordered prefix before any player's accounting."""
@@ -274,22 +588,33 @@ class MultiplayerBattleStatistics:
         for side, player in self._players.items():
             scoped = dict(payload)
             for field in ('unknown_sources', 'engagement_unknown_sources'):
-                scoped[field] = [
-                    _key(entry) for entries in self._roster.values() for entry in entries
-                    if entry.player_side == side and entry.cid in (payload.get(field) or ())]
+                if self._native_mode:
+                    scoped[field] = [source for cid in payload.get(field) or ()
+                                     for source in self._native_aliases[side].get(cid, ())]
+                else:
+                    scoped[field] = [
+                        _key(entry) for entries in self._roster.values() for entry in entries
+                        if entry.player_side == side and entry.cid in (payload.get(field) or ())]
             apply_event_quality(player.statistics, scoped, damage_quality,
                                 baseline_frame=player.stream.baseline_frame, initial_drain=initial)
 
     def consume(self, sample, roster: RosterSnapshot, sequence=None, drained=None, *, mark=None,
-                round_id=None, return_result=True):
+                round_id=None, return_result=True, terminal=False):
         stage = str((sample.get('battle_metadata') or {}).get('stage_id') or '')
         if 'AUTOCHESS' not in stage.upper():
             return None
-        self._consume(sample, roster, sequence, drained, mark=mark, round_id=round_id)
+        self._terminal_tail = False
+        try:
+            self._consume(sample, roster, sequence, drained, mark=mark, round_id=round_id, terminal=terminal)
+        finally:
+            self._terminal_tail = False
         if return_result:
             return self.result()
 
-    def _consume(self, sample, roster, sequence, drained, *, mark, round_id):
+    def _consume(self, sample, roster, sequence, drained, *, mark, round_id, terminal):
+        if type(terminal) is not bool:
+            self.gap('终局投影标记无效')
+            return
         if (not _number(sample.get('game_time')) or not _integer(sample.get('frame'))
                 or not isinstance(roster, RosterSnapshot) or roster.frame != sample['frame']):
             self.gap('快照或编队短读')
@@ -298,12 +623,53 @@ class MultiplayerBattleStatistics:
         if not isinstance(base, str) or not base:
             self.gap('小局身份未确认')
             return
-        if base in self._retired_rounds:
+        native_requested = (self._native_mode or 'autochess_context' in sample
+                            or sample.get('native_counter_scope') == 'events_only')
+        if terminal and native_requested:
+            # A lifecycle-owned terminal handoff closes the last combat scope;
+            # END/SETTLE/unknown snapshots cannot create a new measurement.
+            if not self._native_mode or self._context['phase'] not in (4, 5, 6):
+                return
+            if self._ended:
+                return
+            metadata = sample.get('battle_metadata') or {}
+            abandoned = (metadata.get('outcome') == 'abandoned'
+                         and isinstance(metadata.get('evidence'), str)
+                         and bool(metadata['evidence'].strip()))
+            trusted = (base == self._base_round and sample.get('session') == self._sample_session
+                       and isinstance(self._native_session, str) and bool(self._native_session)
+                       and sample.get('native_session') == self._native_session
+                       and sample['game_time'] >= self._now and sample['frame'] >= self._frame
+                       and (type(sample.get('state')) is int and sample['state'] == 3 or abandoned))
+            if not trusted:
+                self.gap('终局缺少同原生会话、时钟及结束状态证明')
+                return
+            self._terminal_tail = True
+            # Keep the original witness and its original frame/time. Each tail
+            # record still needs its own matching scope and capture-time stamp;
+            # this is not a new-frame roster proof or a retagged current sample.
+            self._active_context = self._context
+        elif (base in self._retired_rounds
+              or (base, sample.get('session'), sample.get('native_session')) in self._retired_identities):
             return
-        if (base, sample.get('session'), sample.get('native_session')) in self._retired_identities:
+        context = sample.get('autochess_context') if native_requested else None
+        fingerprint = self._native_fingerprint(context, sample) if native_requested else None
+        if not self._terminal_tail and fingerprint in self._retired_contexts:
             return
+        if not self._terminal_tail and native_requested and fingerprint is None:
+            # Never fall back to side-based legacy identity after a native
+            # context was declared. Existing streams can receipt this unknown
+            # interval without applying its events to the last known actors.
+            if not self._native_mode:
+                if self._players:
+                    self.gap('原生卫戍上下文未确认')
+                return
+            self._active_context = None
+            self._reasons.add('原生卫戍上下文未确认')
         reason = None
-        if self._base_round != base:
+        if self._terminal_tail:
+            reason = None
+        elif self._base_round != base:
             reason = '小局切换'
         elif (sample.get('session') != self._sample_session
               or self._native_session is not None and sample.get('native_session') is not None
@@ -311,13 +677,22 @@ class MultiplayerBattleStatistics:
             reason = '采集会话或原生小局身份切换'
         elif sample['game_time'] < self._now or sample['frame'] < self._frame:
             reason = '游戏时钟重新开始'
+        elif fingerprint is not None and (not self._native_mode or fingerprint != self._context_fingerprint):
+            reason = '原生卫戍阶段、轮次或玩家身份切换'
         else:
-            reason = self._identity_change(roster)
+            reason = None if native_requested else self._identity_change(roster)
         if reason is not None:
-            self._begin(sample, base, reason)
+            if native_requested and fingerprint is None:
+                self.gap('新小局缺少已验证的原生卫戍上下文')
+                return
+            self._begin(sample, base, reason, context=context if native_requested else None)
         elif self._ended:
             return
-        self._bind(roster)
+        if self._native_mode:
+            if fingerprint is not None and not self._terminal_tail:
+                self._bind_native(context)
+        else:
+            self._bind(roster)
         if self._closed:
             return
         drained = drained or {}
@@ -354,9 +729,18 @@ class MultiplayerBattleStatistics:
             self._now, self._frame = sample['game_time'], sample['frame']
             self._start = self._now
             self._from_start &= self._start <= 1 and self._frame <= 30
+            if self._native_mode:
+                # A short clock is insufficient: counters may already include
+                # output, and an old journal prefix is not this phase's start.
+                self._from_start &= (sequence == 0 and not drained.get('events')
+                    and _number(sample.get('global_total')) and sample['global_total'] == 0
+                    and _number(sample.get('global_heal')) and sample['global_heal'] == 0
+                    and all(isinstance(row, dict) and _number(row.get('damage'))
+                            and _number(row.get('healing')) and row['damage'] == row['healing'] == 0
+                            for row in sample.get('rows', ())))
             for player in self._players.values():
                 player.statistics.advance(self._now)
-            self._start_events(sequence, version)
+            self._start_events(sequence, version, sample=sample, drained=drained)
             self._quality(sample, drained, quality, initial=True)
             return
         try:
@@ -370,22 +754,40 @@ class MultiplayerBattleStatistics:
             self._now, self._frame = sample['game_time'], sample['frame']
             for event in events:
                 state, side, actor, entry = self._identity(event)
-                if state not in ('owned', 'global', 'non_team', 'elemental'):
+                skip_scope = state in ('foreign_scope', 'event_scope_unverified',
+                                       'event_scope_mismatch', 'elemental_scope_unverified')
+                if state == 'foreign_scope':
+                    self._scope_foreign_events += 1
+                elif state not in ('owned', 'global', 'non_team', 'elemental'):
                     self._diagnose(event, state)
+                pending_skill_owner = None
+                skill_damage = event['kind'] in ('damage_settlement', 'damage', 'hp_damage', 'elemental_burst')
+                if self._native_mode and state == 'owned':
+                    owner = self._source_key(actor, side)
+                    if owner in self._initial_skill_pending:
+                        if event['kind'] == 'skill_start' and not entry.is_token:
+                            pending_skill_owner = owner
+                        elif skill_damage:
+                            self._mark_initial_skill_unknown(side, owner)
                 elemental_before = None
                 if state == 'elemental' and event['kind'] == 'damage_settlement':
                     elemental_before = {s: (sum(m.hits for m in p.statistics.settled.values()),
                         p.statistics.settlement_unassigned['hits']) for s, p in self._players.items()}
                 for player_side, player in self._players.items():
-                    payload = {key: value for key, value in event.items() if key != 'proof'}
-                    proof = event.get('proof')
-                    if event.get('kind') in ('skill_start', 'skill_end') and isinstance(proof, dict):
-                        payload['skill_method'] = proof.get('method')
+                    if self._native_mode and state == 'elemental' and skill_damage:
+                        # Ask the existing local bar witness which owner's
+                        # initial skill state may affect this source-null hit.
+                        # The shared core still decides attribution and amount.
+                        bar = player.statistics.settlement_bars.get(event.get('target_uid'))
+                        if (bar is not None and bar[1] == event.get('target_instance')
+                                and bar[2] == 'local'):
+                            self._mark_initial_skill_unknown(player_side, bar[3])
+                    payload = event_processing_payload(event)
                     identity = ('unknown', None, None)
                     unresolved_source_keys = ()
                     if state == 'owned':
                         if side == player_side:
-                            owner, source = _key(actor), _key(entry)
+                            owner, source = self._source_key(actor, side), self._source_key(entry, side)
                             player.statistics.register_source(source, owner)
                             payload['source'] = source
                             identity = ('summon', None, None) if entry.is_token and event['kind'] in (
@@ -394,7 +796,7 @@ class MultiplayerBattleStatistics:
                             identity = ('foreign', None, None)
                     elif state == 'non_team':
                         identity = ('foreign', None, None)
-                    elif state not in ('global', 'elemental'):
+                    elif state not in ('global', 'elemental') and not skip_scope:
                         payload['unresolved_source'] = True
                         # These verified actors are candidates for uncertainty,
                         # never recipients of this event's amount or window.
@@ -402,8 +804,18 @@ class MultiplayerBattleStatistics:
                         # an ignorable passive observation before marking them.
                         unresolved_source_keys = tuple(owner for owner, candidate in player.actors.items()
                             if candidate.cid == event.get('source'))
-                    player.stream.accept(None, unresolved_source_keys, session=player.statistics.session,
+                    player.stream.accept(None, unresolved_source_keys, skip_scope, session=player.statistics.session,
                         settlement_identity=identity, replay_record=event, **payload)
+                if self._native_mode and state == 'owned' and event['kind'] == 'elemental_bar':
+                    self._confirm_scope_bar(event, side, actor)
+                if pending_skill_owner is not None:
+                    # The ordinary receiver, including native/ammo rules, owns
+                    # proof of an actual effect. Do not manufacture a start.
+                    window = self._players[side].statistics.settlement_skill_active.get(
+                        (pending_skill_owner, actor.unique_id))
+                    if (window is not None and window.get('effect_started') is True
+                            and window.get('source') == self._source_key(entry, side)):
+                        self._initial_skill_pending.discard(pending_skill_owner)
                 if elemental_before is not None:
                     resolved = any(sum(m.hits for m in p.statistics.settled.values()) > elemental_before[s][0]
                                    for s, p in self._players.items())
@@ -465,15 +877,19 @@ class MultiplayerBattleStatistics:
             ledgers.append(dict(cid=entry.cid, source_character_uid=entry.unique_id,
                                 unique_id=entry.unique_id, uid=entry.unique_id, actor_uid=entry.unique_id,
                                 name=name, owner_id=owner, ledger=deepcopy(lane)))
+            if self._native_mode:
+                ledgers[-1]['player_uid'] = side
+                row['player_uid'] = side
         observed = [item['ledger'] for item in ledgers if item['ledger'].get('nominal_hits', 0)]
         has_output = bool(observed)
-        reasons = set(self._reasons)
+        player_reasons = self._player_reasons.get(side, set())
+        reasons = set(self._reasons) | player_reasons
         reasons.add('没有按该玩家独立读取的原生累计')
         if not has_output:
             reasons.add('未观察到可按UID归属的名义结算')
         if not self._from_start:
             reasons.add('仅覆盖已观察游戏时间窗口')
-        complete = (has_output and self._from_start and not self._reasons
+        complete = (has_output and self._from_start and not self._reasons and not player_reasons
                     and all(lane.get('observed_damage_complete') for lane in observed))
         values = lambda field: [lane[field] for lane in observed if lane.get(field) is not None]
         def total(field):
@@ -483,7 +899,7 @@ class MultiplayerBattleStatistics:
                          for entry in entries)
         end = (player.statistics.event_coverage_end if player.statistics.event_coverage_end is not None
                else self._now)
-        return dict(player_side=side, label=f'本局阵营 {side}',
+        result = dict(player_side=side, label=f'本局阵营 {side}',
             is_local=(side == self._local_side) if self._local_side is not None and known_side else None,
             status=('unknown' if not has_output else 'observed' if complete else 'partial'),
             damage=None, dps=None, recent_dps=None,
@@ -494,12 +910,37 @@ class MultiplayerBattleStatistics:
                                         if lane.get('observed_recent_damage_window') is not None), None),
             coverage_complete=bool(complete), reasons=sorted(reasons),
             statistics=stats, actor_ledgers=ledgers)
+        if self._native_mode:
+            sides = {entry.player_side for uid, entry in self._native_entries.values() if uid == side}
+            result.update(slot=player.slot, player_uid=side, player_name=player.player_name,
+                player_side=next(iter(sides)) if len(sides) == 1 else None,
+                label=player.player_name or f'玩家 {player.slot}',
+                is_local=(side == self._context['self_player_uid'])
+                         if self._context['self_player_uid'] is not None else None)
+        return result
+
+    @staticmethod
+    def _unknown_slot(slot):
+        # A display placeholder is not a statistics bucket or a made-up UID.
+        return dict(slot=slot, player_uid=None, player_name=None, player_side=None,
+            label=f'玩家 {slot}', is_local=None, status='unknown',
+            damage=None, dps=None, recent_dps=None,
+            observed_damage=None, observed_dps=None, observed_recent_dps=None,
+            observed_window=None, observed_recent_window=None,
+            coverage_complete=False, reasons=['玩家身份未确认'],
+            statistics=None, actor_ledgers=[])
 
     def _result(self, *, include_previous):
         if not self._enabled or not self._players:
             return None
-        players = [self._player_result(side, self._players[side]) for side in range(1, 5)]
-        observed_sides = [player['player_side'] for player in players if player['observed_damage'] is not None]
+        if self._native_mode:
+            by_slot = {player.slot: self._player_result(uid, player) for uid, player in self._players.items()}
+            players = [by_slot.get(slot) or self._unknown_slot(slot) for slot in range(1, 5)]
+            observed_sides = sorted({player['player_side'] for player in players
+                if player['observed_damage'] is not None and player['player_side'] in range(1, 5)})
+        else:
+            players = [self._player_result(side, self._players[side]) for side in range(1, 5)]
+            observed_sides = [player['player_side'] for player in players if player['observed_damage'] is not None]
         result = dict(schema_version=1, available=True,
             status='ended' if self._ended else 'gap' if self._closed else 'observing',
             round_id=self._scope, source_round_id=self._base_round, identity_epoch=self._epoch,
@@ -508,6 +949,19 @@ class MultiplayerBattleStatistics:
             note='编号仅对当前小局有效。结算伤害来自已观察事件，平均 DPS 按观察到的游戏时长计算；未知表示证据不足。',
             players=players, unknown_attribution=list(deepcopy(self._unknown).values()),
             reasons=sorted(self._reasons))
+        if self._native_mode:
+            phase = self._context['phase']
+            context_available = self._active_context is not None
+            result.update(schema_version=2, scope=self._scope, available=context_available,
+                scope_kind=({2: 'prepare', 3: 'prepare', 4: 'defense', 5: 'assist', 6: 'boss'}.get(phase, 'unknown')
+                            if context_available else 'unknown'),
+                native_phase=phase, native_round=self._context['round'],
+                context_identity=deepcopy(self._context['identity']),
+                self_player_uid=self._context['self_player_uid'],
+                observed_player_slots=[p['slot'] for p in players if p['observed_damage'] is not None],
+                scope_foreign_events=self._scope_foreign_events,
+                unknown_memberships=deepcopy(self._context['unknown_memberships']),
+                note='玩家身份来自当前原生上下文。伤害来自同阶段同轮次的已观察事件，DPS按观察游戏时长计算；未知表示证据不足。')
         if include_previous:
             result['previous_rounds'] = deepcopy(self._previous)
             result['previous_rounds_pruned'] = self._previous_pruned

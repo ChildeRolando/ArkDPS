@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Markup;
 
 namespace ArkDPS.Desktop;
 
@@ -22,10 +23,11 @@ public sealed class MultiplayerView : ScrollViewer
     private readonly StatisticPanel ranking = new();
     private readonly Inspector inspector = new();
     private JsonElement snapshot;
-    private string round = "";
-    private int selectedSide = 1;
+    private string scopeIdentity = "";
+    private string? selectedPlayerUid;
+    private bool defenseAvailable;
 
-    internal int SelectedSide => selectedSide;
+    internal string? SelectedPlayerUid => selectedPlayerUid;
     internal StatisticPanel Ranking => ranking;
     internal Inspector DetailInspector => inspector;
 
@@ -46,7 +48,7 @@ public sealed class MultiplayerView : ScrollViewer
         AutomationProperties.SetAutomationId(notice, "MultiplayerNotice");
         body.Children.Add(notice);
         body.Children.Add(scope);
-        players = Enumerable.Range(1, 4).Select(side => new PlayerButton(side, SelectPlayer)).ToArray();
+        players = Enumerable.Range(1, 4).Select(slot => new PlayerButton(slot, SelectPlayer)).ToArray();
         foreach (var player in players) comparisons.Children.Add(player);
         comparisons.Margin = new Thickness(-3, 0, -3, 14);
         body.Children.Add(comparisons);
@@ -83,43 +85,85 @@ public sealed class MultiplayerView : ScrollViewer
     internal void Update(JsonElement value)
     {
         snapshot = value;
-        string nextRound = value.Text("round_id");
-        if (round != nextRound)
+        string kind = value.Text("scope_kind");
+        string scopeId = value.Get("scope").ValueKind == JsonValueKind.String ? value.Text("scope") : "";
+        bool eligible = kind == "defense" && value.Bool("available") && !string.IsNullOrWhiteSpace(scopeId);
+        string nextScope = kind + "\u001f" + value.Text("native_round") + "\u001f" + scopeId;
+        bool scopeChanged = scopeIdentity != nextScope;
+        bool enteringDefense = eligible && !defenseAvailable;
+        scopeIdentity = nextScope;
+        defenseAvailable = eligible;
+        var incoming = eligible ? value.Get("players").Items().ToArray() : Array.Empty<JsonElement>();
+        var known = incoming.Where(player => KnownPlayer(player, incoming)).ToArray();
+        if (scopeChanged || enteringDefense || !eligible)
         {
-            round = nextRound;
-            int localSide = (int)value.Get("players").Items().FirstOrDefault(item => item.Bool("is_local")).Number("player_side", 1);
-            selectedSide = localSide is >= 1 and <= 4 ? localSide : 1;
+            selectedPlayerUid = eligible ? PlayerUid(known.FirstOrDefault(player => player.Bool("is_local")))
+                ?? PlayerUid(known.OrderBy(player => player.Number("slot")).FirstOrDefault()) : null;
             ResetOperator();
         }
-        bool available = value.Bool("available");
+        else if (selectedPlayerUid is not null && !known.Any(player => PlayerUid(player) == selectedPlayerUid))
+        {
+            selectedPlayerUid = null;
+            ResetOperator();
+        }
         string note = value.Text("note");
-        notice.Text = note.Length > 0 ? note : available
-            ? "按本小局分别查看四家输出。选择一家，再选择干员查看详情。"
-            : "进入卫戍协议战斗并启用事件观察后，可在这里比较四家输出。没有事件或身份无法核实时显示未知。";
-        notice.Text = value.Text("status") switch
+        notice.Text = eligible
+            ? note.Length > 0 ? note : "防御阶段 · 按真实玩家 UID 分别查看输出。选择玩家，再选择干员查看详情。"
+            : EmptyNotice(kind == "defense" && scopeId.Length == 0 ? "unknown" : kind);
+        if (eligible) notice.Text = value.Text("status") switch
         {
             "gap" => "观察已中断 · 以下保留中断前已观察数据。" + notice.Text,
-            "ended" => "本小局已结束 · " + notice.Text,
+            "ended" => "本轮防御已结束 · " + notice.Text,
             _ => notice.Text,
         };
-        scope.Text = "四家对照：已观察结算伤害（含过量） / 观察时段平均 DPS。干员排行：已观察有效伤害 / 接敌 DPS。第 1—4 家编号仅对本小局有效。";
-        var incoming = value.Get("players").Items().ToArray();
+        scope.Text = eligible ? "防御四家：已观察结算伤害（含过量） / 观察时段平均 DPS。干员排行：已观察有效伤害 / 接敌 DPS。协防数据单独统计。" : "";
+        comparisons.Visibility = selection.Visibility = identity.Visibility = detail.Visibility = scope.Visibility =
+            eligible ? Visibility.Visible : Visibility.Collapsed;
         foreach (var player in players)
-            player.Update(incoming.FirstOrDefault(item => item.Number("player_side") == player.Side), player.Side == selectedSide);
+        {
+            var matches = incoming.Where(item => item.Number("slot") == player.Slot).ToArray();
+            var item = matches.Length == 1 ? matches[0] : default;
+            bool knownIdentity = KnownPlayer(item, incoming);
+            player.Update(item, knownIdentity && PlayerUid(item) == selectedPlayerUid, knownIdentity);
+        }
         UpdateSelected();
         ArrangeComparison();
     }
 
-    internal void SelectPlayer(int side)
+    internal void SelectPlayer(string playerUid)
     {
-        if (side is < 1 or > 4) return;
-        if (selectedSide != side)
+        if (!defenseAvailable) return;
+        var incoming = snapshot.Get("players").Items().ToArray();
+        if (!incoming.Any(player => PlayerUid(player) == playerUid && KnownPlayer(player, incoming))) return;
+        if (selectedPlayerUid != playerUid)
         {
-            selectedSide = side;
+            selectedPlayerUid = playerUid;
             ResetOperator();
         }
         Update(snapshot);
     }
+
+    private static string EmptyNotice(string kind) => kind switch
+    {
+        "assist" => "当前为协防阶段，协防数据单独统计；四家防御 DPS 暂不显示。",
+        "boss" => "当前为首领阶段，四家防御 DPS 暂不显示。",
+        "prepare" => "当前处于准备阶段，等待进入防御阶段后查看四家 DPS。",
+        "defense" => "当前防御数据尚不可用，等待可核实的玩家与事件证据。",
+        _ => "尚未取得卫戍协议原生阶段证据，当前阶段未知；等待事件观察。仅在确认防御阶段后显示四家 DPS。",
+    };
+
+    private static string? PlayerUid(JsonElement player) => player.Get("player_uid").ValueKind == JsonValueKind.String
+        && !string.IsNullOrWhiteSpace(player.Text("player_uid")) ? player.Text("player_uid") : null;
+
+    private static bool KnownPlayer(JsonElement player, JsonElement[] incoming) => PlayerUid(player) is { } uid
+        && player.Get("slot").ValueKind == JsonValueKind.Number
+        && player.Get("slot").TryGetInt32(out int slot) && slot is >= 1 and <= 4
+        && incoming.Count(item => PlayerUid(item) == uid) == 1
+        && incoming.Count(item => item.Number("slot") == slot) == 1;
+
+    private static string PlayerLabel(JsonElement player) => PlayerUid(player) is { } uid
+        ? (player.Text("player_name") is { Length: > 0 } name ? name + " · " : "") + "UID " + uid
+        : "玩家身份未知";
 
     private void ResetOperator()
     {
@@ -129,9 +173,10 @@ public sealed class MultiplayerView : ScrollViewer
 
     private void UpdateSelected()
     {
-        var player = snapshot.Get("players").Items().FirstOrDefault(item => item.Number("player_side") == selectedSide);
-        string label = player.Text("label");
-        selection.Text = (label.Length > 0 ? label : $"第 {selectedSide} 家") + " · 干员排行";
+        var player = defenseAvailable && selectedPlayerUid is not null
+            ? snapshot.Get("players").Items().FirstOrDefault(item => PlayerUid(item) == selectedPlayerUid) : default;
+        selection.Text = !defenseAvailable ? "" : selectedPlayerUid is null
+            ? "请选择已确认身份的玩家" : PlayerLabel(player) + " · 干员排行";
         var view = player.Get("view");
         // Losing a player's view clears the old UID immediately. The inspector
         // intentionally keeps ordinary live pins across missing rows elsewhere.
@@ -154,7 +199,8 @@ public sealed class MultiplayerView : ScrollViewer
             ranking.Empty.Visibility = Visibility.Visible;
         }
         inspector.Update(view);
-        UpdateIdentity(inspector.Owner);
+        if (defenseAvailable) UpdateIdentity(inspector.Owner);
+        else identity.Text = "";
     }
 
     private void UpdateIdentity(string? owner)
@@ -192,29 +238,55 @@ public sealed class MultiplayerView : ScrollViewer
 
     private sealed class PlayerButton : Button
     {
-        internal int Side { get; }
+        // Unavailable identities remain readable data. Keep the product button
+        // vocabulary without fading the card's readings or its surface.
+        private static readonly ControlTemplate PlayerTemplate = (ControlTemplate)XamlReader.Parse("""
+            <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="Button">
+             <Border x:Name="edge" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+               Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+               BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource ControlRadius}" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Top"/>
+             </Border>
+             <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="edge" Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="edge" Property="BorderBrush" Value="{DynamicResource Focus}"/><Setter TargetName="edge" Property="BorderThickness" Value="2"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="edge" Property="Opacity" Value="0.82"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Cursor" Value="Arrow"/></Trigger>
+             </ControlTemplate.Triggers>
+            </ControlTemplate>
+            """);
+        internal int Slot { get; }
+        private string? playerUid;
         private readonly TextBlock title = Label("", 16, "Ink", true);
+        private readonly TextBlock accountIdentity = Label("UID 未知", 12, "Muted");
         private readonly TextBlock state = Label("", 12, "Muted");
         private readonly TextBlock[] captions = new TextBlock[3];
         private readonly TextBlock[] readings = new TextBlock[3];
         private static readonly (string Key, string Label)[] Metrics =
             { ("damage", "结算伤害"), ("dps", "时段平均 DPS"), ("recent_dps", "近 5 秒 DPS") };
 
-        internal PlayerButton(int side, Action<int> select)
+        internal PlayerButton(int slot, Action<string> select)
         {
-            Side = side;
+            Slot = slot;
+            SetResourceReference(StyleProperty, typeof(Button));
+            Template = PlayerTemplate;
             Margin = new Thickness(3, 0, 3, 6);
             Padding = new Thickness(12, 10, 12, 11);
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
             VerticalContentAlignment = VerticalAlignment.Top;
-            AutomationProperties.SetAutomationId(this, "MultiplayerPlayer" + side);
+            AutomationProperties.SetAutomationId(this, "MultiplayerPlayer" + slot);
             ToolTipService.SetShowsToolTipOnKeyboardFocus(this, true);
+            ToolTipService.SetShowOnDisabled(this, true);
             var body = new StackPanel();
             title.TextWrapping = TextWrapping.Wrap;
+            accountIdentity.TextWrapping = TextWrapping.Wrap;
+            accountIdentity.Margin = new Thickness(0, 3, 0, 0);
+            accountIdentity.SetResourceReference(TextBlock.FontFamilyProperty, "DataFont");
             state.TextWrapping = TextWrapping.NoWrap;
             state.TextTrimming = TextTrimming.CharacterEllipsis;
             state.Margin = new Thickness(0, 3, 0, 10);
             body.Children.Add(title);
+            body.Children.Add(accountIdentity);
             body.Children.Add(state);
             for (int index = 0; index < Metrics.Length; index++)
             {
@@ -231,16 +303,19 @@ public sealed class MultiplayerView : ScrollViewer
                 body.Children.Add(row);
             }
             Content = body;
-            Click += (_, _) => select(side);
+            Click += (_, _) => { if (playerUid is not null) select(playerUid); };
         }
 
-        internal void Update(JsonElement player, bool selected)
+        internal void Update(JsonElement player, bool selected, bool knownIdentity)
         {
-            string label = player.Text("label");
-            title.Text = (label.Length > 0 ? label : $"第 {Side} 家") + (player.Bool("is_local") ? " · 我方" : "");
+            playerUid = knownIdentity ? PlayerUid(player) : null;
+            IsEnabled = knownIdentity;
+            title.Text = knownIdentity ? (player.Text("player_name") is { Length: > 0 } name ? name : "玩家")
+                + (player.Bool("is_local") ? " · 我方" : "") : "玩家身份未知";
+            accountIdentity.Text = playerUid is not null ? "UID " + playerUid : "UID 未知";
             string status = player.Text("status");
             string coverage = player.Get("display").Text("coverage");
-            state.Text = coverage.Length > 0 ? coverage : status switch
+            state.Text = !knownIdentity ? "等待可靠的玩家身份" : coverage.Length > 0 ? coverage : status switch
             {
                 "complete" => "完整覆盖", "partial" => "部分覆盖", "observed" => "已观察 · 完整性未知",
                 "waiting" => "等待事件", "unknown" => "身份或事件未知", "unavailable" => "数据不可用",
@@ -250,9 +325,9 @@ public sealed class MultiplayerView : ScrollViewer
             for (int index = 0; index < Metrics.Length; index++)
             {
                 var metric = Metrics[index];
-                bool exact = IsNumber(player.Get(metric.Key));
+                bool exact = knownIdentity && IsNumber(player.Get(metric.Key));
                 string key = exact ? metric.Key : "observed_" + metric.Key;
-                bool known = IsNumber(player.Get(key));
+                bool known = knownIdentity && IsNumber(player.Get(key));
                 captions[index].Text = metric.Label;
                 string formatted = player.Get("display").Text(metric.Key);
                 readings[index].Text = known ? (formatted.Length > 0 ? formatted : (!exact ? "已观察 " : "") + player.Ui(key)) : "未知";
@@ -264,8 +339,8 @@ public sealed class MultiplayerView : ScrollViewer
             string reasons = string.Join("；", player.Get("reasons").Items().Select(item => item.Text()).Where(text => text.Length > 0));
             string description = string.Join(" · ", descriptions);
             string window = player.Text("window_text");
-            ToolTip = title.Text + " · " + state.Text + "\n" + description + (window.Length > 0 ? "\n" + window : "") + (reasons.Length > 0 ? "\n" + reasons : "");
-            AutomationProperties.SetName(this, title.Text + "，" + state.Text + "，" + description + (selected ? "，已选择" : "，选择查看干员"));
+            ToolTip = title.Text + " · " + accountIdentity.Text + " · " + state.Text + "\n" + description + (window.Length > 0 ? "\n" + window : "") + (reasons.Length > 0 ? "\n" + reasons : "");
+            AutomationProperties.SetName(this, title.Text + "，" + accountIdentity.Text + "，" + state.Text + "，" + description + (selected ? "，已选择" : knownIdentity ? "，选择查看干员" : ""));
             AutomationProperties.SetHelpText(this, reasons);
         }
 

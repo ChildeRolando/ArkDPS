@@ -16,7 +16,7 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_probe import NativePcProbeContract, contract_for
+from event_probe import NativePcProbeContract, bind_native_autochess_pair, contract_for
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 
@@ -87,6 +87,7 @@ class BattleFeed:
         self.current_lifecycle = None
         self.stage = None
         self.retired_stage = None
+        self.autochess_identity = None
 
     def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None):
         self.sequence += 1
@@ -118,6 +119,7 @@ class BattleFeed:
         self.identity = self.clock = self.frame = self.native_session = None
         self.stage = None
         self.terminal = False
+        self.autochess_identity = None
         return self._emit('end', sample, roster, reason=reason, events=events)
 
     def _read_marked_snapshot(self, collector, observer):
@@ -205,6 +207,11 @@ class BattleFeed:
             raise FrameMismatch('游戏时间无效')
         if opening is not None and observer is not None:
             events = self._guarded_events(observer, opening, sample)
+        if events and 'before' in events and 'after' in events:
+            try:
+                bind_native_autochess_pair(sample, events['before'], events['after'])
+            except BarrierBusy as exc:
+                raise CaptureRetry(str(exc)) from exc
         return sample, roster, events
 
     @staticmethod
@@ -227,6 +234,8 @@ class BattleFeed:
                 baseline = native_pc and (capture is None or capture.baseline_sequence is None)
                 evidence['drain'] = read_event_batch(observer, evidence['sequence'], baseline=baseline)
                 contract.validate_binding(sample, evidence['drain'])
+            except (BarrierBusy, ObserverReadRetry) as exc:
+                raise CaptureRetry(str(exc)) from exc
             except CaptureRetry:
                 raise
             except Exception as exc:
@@ -329,10 +338,18 @@ class BattleFeed:
         frame_reset = (metadata.get('platform') == 'native_pc' and self.frame is not None
                        and sample['frame'] < self.frame)
         clock_reset = same_native and self.clock is not None and (now < self.clock or frame_reset)
-        changed = not same_native or clock_reset
+        context = sample.get('autochess_context') or {}
+        native_context_known = context.get('status') in ('available', 'partial')
+        context_identity = context.get('identity') if native_context_known else None
+        scope_changed = context_identity is not None and context_identity != self.autochess_identity
+        changed = not same_native or clock_reset or scope_changed
         generation = self.generation + int(changed)
         preparing = (generation > published_generation and roster.present_known
                      and not roster.entries and not sample['rows'])
+        if native_context_known:
+            # A proven native combat phase may have no local BattlePlayerData.
+            # Its typed actor/player evidence travels on the event interface.
+            preparing = context['phase'] not in (4, 5, 6)
         # Preparation has no owner baseline. Keep the observer attached and
         # leave the previous prefix for the next accepted combat watermark.
         # A same-controller round reset can still prove the old stream ended
@@ -353,6 +370,10 @@ class BattleFeed:
             self.stage = stage
         self.identity, self.clock, self.frame = identity, now, sample['frame']
         self.native_session = sample['session']
+        if context_identity is not None:
+            self.autochess_identity = deepcopy(context_identity)
+        elif not same_native or clock_reset:
+            self.autochess_identity = None
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
         if preparing:
@@ -403,7 +424,8 @@ class BattleSessions:
                 from multiplayer_battle import MultiplayerBattleStatistics
                 self.multiplayer = MultiplayerBattleStatistics()
             self._multiplayer_call('consume', observation.sample, observation.roster, sequence,
-                                   drained, mark=mark, round_id=self.battle_id, return_result=False)
+                                   drained, mark=mark, round_id=self.battle_id, return_result=False,
+                                   terminal=observation.kind == 'terminal')
         except Exception as exc:
             self.multiplayer_error = str(exc)
 

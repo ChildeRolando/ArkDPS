@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from math import isfinite
+import re
 from typing import Any, Protocol
 
 
@@ -73,6 +74,91 @@ class EventProbe(Protocol):
     def read_through(self, sequence: int) -> dict: ...
     def commit_events(self, sequence: int): ...
     def stop(self): ...
+
+
+def event_processing_payload(record):
+    """Remove transport evidence while retaining the untouched replay record.
+
+    Native AutoChess scope is checked by the acquisition/attribution boundary;
+    it is not a Statistics event argument and cannot supply an event amount.
+    """
+    payload = {key: value for key, value in record.items()
+               if key not in ('proof', 'native_autochess_scope')}
+    proof = record.get('proof')
+    if (payload.get('kind') in ('skill_start', 'skill_end')
+            and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
+        payload['skill_method'] = proof['method']
+    return payload
+
+
+def _autochess_scope_key(payload):
+    """Check the root part against the mark already bound to the native sample."""
+    raw = payload.get('native_autochess_context')
+    roots = payload.get('native_identity')
+    if not isinstance(raw, dict) or not isinstance(roots, dict):
+        return None
+    try:
+        values = []
+        for name in ('controller', 'native', 'logger', 'stats', 'level'):
+            value = roots[name]
+            if not isinstance(value, str) or not re.fullmatch(r'0x[0-9a-fA-F]{1,16}', value):
+                return None
+            number = int(value, 16)
+            if not 0x10000 <= number <= 0x7FFFFFFFFFFF or number % 8:
+                return None
+            values.append(hex(number))
+        prefix = ':'.join(values) + ':autochess:'
+        key = raw.get('scope_key')
+        if not isinstance(key, str) or not key.startswith(prefix):
+            return None
+        epoch = key[len(prefix):]
+        if not re.fullmatch(r'0|[1-9][0-9]{0,15}', epoch) or int(epoch) > 9007199254740991:
+            return None
+        return key
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def bind_native_autochess_pair(sample, before, after):
+    """Attach identity evidence only after the ordinary native barrier accepted.
+
+    Older recordings remain on their existing contract. New native envelopes
+    must prove one complete identity frame; research pages are never merged.
+    """
+    metadata = sample.get('battle_metadata') or {}
+    if (metadata.get('platform') != 'native_pc'
+            or 'AUTOCHESS' not in str(metadata.get('stage_id', '')).upper()
+            or not any('native_autochess_context' in mark for mark in (before, after))):
+        return
+    from autochess_context import normalize_native_autochess
+    contexts = [normalize_native_autochess(mark.get('native_autochess_context'),
+                    expected_frame=sample['frame'], expected_game_time=sample['game_time'],
+                    expected_scope_key=_autochess_scope_key(mark)) for mark in (before, after)]
+    known = [item.get('status') in ('available', 'partial') for item in contexts]
+    if any(known) and (not all(known) or contexts[0] != contexts[1]):
+        raise BarrierBusy('native AutoChess identity changed across the snapshot')
+    sample['autochess_context'] = contexts[0]
+    # These CID-keyed counters cannot be split into per-player cumulative
+    # amounts, even when the native damage rows themselves are nonempty.
+    sample['native_counter_scope'] = 'events_only'
+
+
+def native_autochess_event_baseline(sample):
+    """Whether this accepted PC frame supplies a combat identity baseline."""
+    context = sample.get('autochess_context') or {}
+    metadata = sample.get('battle_metadata') or {}
+    identity = context.get('identity') or {}
+    return bool(sample.get('native_counter_scope') == 'events_only'
+                and metadata.get('platform') == 'native_pc'
+                and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
+                and context.get('status') in ('available', 'partial')
+                and context.get('verified_same_frame') is True
+                and context.get('frame') == sample.get('frame')
+                and context.get('game_time') == sample.get('game_time')
+                and context.get('phase') in (4, 5, 6)
+                and isinstance(identity.get('scope_key'), str) and identity['scope_key']
+                and identity.get('phase') == context.get('phase')
+                and identity.get('round') == context.get('round'))
 
 
 def ready_probe_modes(payload):
@@ -200,6 +286,16 @@ class NativePcProbeContract(ProbeContract):
         if any(not isinstance(payload, dict) or payload.get('native_session') != session
                or payload.get('source_build') != build for payload in payloads):
             raise StreamGap('observer data belongs to a different or unverified native PC battle or build')
+        context = sample.get('autochess_context') or {}
+        identity = context.get('identity') if context.get('status') in ('available', 'partial') else None
+        if identity:
+            for payload in payloads:
+                raw = payload.get('native_autochess_context') or {}
+                if (raw.get('protocol_version') != 1 or raw.get('status') != 'available'
+                        or raw.get('verified_same_frame') is not True
+                        or _autochess_scope_key(payload) != identity['scope_key']
+                        or raw.get('phase') != identity['phase'] or raw.get('round') != identity['round']):
+                    raise BarrierBusy('native AutoChess phase or round changed before the bounded read')
 
     def terminal_identity_matches(self, sample, boundary):
         # Native marks/boundaries must instead carry the checked session/build.

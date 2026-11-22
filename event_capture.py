@@ -7,7 +7,7 @@ from collections import deque
 
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
-from event_probe import contract_for
+from event_probe import bind_native_autochess_pair, contract_for, event_processing_payload
 from roster import RosterUnavailable
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
@@ -216,6 +216,7 @@ class LiveEventCapture:
             raise CaptureRetry('snapshot and roster are from different frames')
         try:
             sequence = baseline_barrier(before, sample, after, contract=contract_for(self.observer, sample))
+            bind_native_autochess_pair(sample, before, after)
         except BarrierBusy as exc:
             raise CaptureRetry(str(exc)) from exc
         except StreamGap:
@@ -224,6 +225,9 @@ class LiveEventCapture:
         try:
             try:
                 drained = read_event_batch(self.observer, sequence)
+                contract_for(self.observer, sample).validate_binding(sample, drained)
+            except (BarrierBusy, ObserverReadRetry) as exc:
+                raise CaptureRetry(str(exc)) from exc
             except CaptureRetry:
                 raise
             except Exception as exc:
@@ -306,11 +310,7 @@ class LiveEventCapture:
                     # Native replays were compared against the original record
                     # before this frame's roster could change its attribution.
                     continue
-                payload = {k: v for k, v in event.items() if k != 'proof'}
-                proof = event.get('proof')
-                if (payload.get('kind') in ('skill_start', 'skill_end')
-                        and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
-                    payload['skill_method'] = proof['method']
+                payload = event_processing_payload(event)
                 self.adapter.accept_event(session=sample['session'], refresh_result=False,
                                           replay_record=event if contract.raw_replay else None, **payload)
             self.initial_drain = False
@@ -321,6 +321,10 @@ class LiveEventCapture:
             self.adapter.last_result = self.adapter.statistics.result()
             self.last_sample = sample
             return self.adapter.result()
+        except (BarrierBusy, ObserverReadRetry) as exc:
+            # Admission has not consumed an event: a later native scope needs
+            # a new paired snapshot, while the retained prefix stays replayable.
+            raise CaptureRetry(str(exc)) from exc
         except MappingUnavailable as exc:
             if self.baseline_sequence is None and self.adapter.statistics is None:
                 raise CaptureRetry(str(exc)) from exc

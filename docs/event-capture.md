@@ -8,6 +8,12 @@
 
 当前发布整合基线 2208 已通过 CE-5 逐实例扣血、治疗、实际吸盾和技能效果对账，具体数值、源提交及未观测弹药结束的限制见 [rc.14 发布说明](release-rc14.md#pc-实机覆盖)。下面保留早期排障记录，其中的失败与待验收状态属于各自旧候选。
 
+卫戍四家候选新增原生身份接口，仍待新包实机验收。`event_probe_native_pc.js` 在既有 envelope 的五根与精确时钟边界内读取完整玩家、ChessInst 和 data UID；每个事件的阶段 scope 在原始时钟处生成，不能在延迟入队时用当前阶段补标签。`nativeGeneration` 的原有进程/战局绑定保持独立。接收端通过 `autochess_context.py` 校验完整单帧身份，再把同一份已接受批次送入各玩家已有统计核心；没有复制 MuMu 的金额、技能或减伤公式。
+
+中途建立基线时，基线前事件仍不重放。探针仅从未确认队列附带有界的技能起点身份证据，用于把相应 UID 的技能分类标为未知，不补技能窗口或金额。仅零帧、零时钟、零累计且前缀证据完整时可确认初态；缺少证据时保留逐次伤害，技能与非技能占比不伪装为完整。
+
+2026-11-22 的只读实机诊断已核验原生 `BATTLE=4`、`HELP_BATTLE=5`、四家账号表及各家的角色 data UID。第 4 轮分帧页中读取到四组共 15 名角色；协防又确认同一 `playerIndex=3` 的 `side` 从 3 变成 1。这些页仅是各自同帧的诊断证据，没有拼成一份生产名单，也不认证逐次伤害完整覆盖。最终诊断保存 3528 条样本；第 13 轮替换心跳文件遇到 Windows 拒绝访问而结束，失败状态与已保存数据摘要均保留。本机证据位于 `runtime/autochess-live-rc15/round-watch-20261122-204540-308181/`。较早的协防回放、身份诊断和合成 Node/生命周期测试均不能替代新 PC 采集端的防御四家实机对账。
+
 2026-11-22 已在普通官服 PC 新进程中跑通独立 Gadget 启动加载，随后通过 ArkDPS 原有 `CollectionSession` 加载完整 `event_probe_native_pc.js`。一局 CE-5 已完成四类事件对账。正常 CLI 与桌面 worker 现由 `NativePcFridaRuntime` 在连接快照前管理启动和重连。普通 worker 在第二个新游戏进程中自动载入了组件，修正启动阶段访问快照的时序后，已在同一进程验证完整探针重连就绪及清理。[首次启动加载](../runtime/native-pc/frida-development/watch-game-20261122.json) · [完整探针就绪](../runtime/native-pc/frida-development/game-capture-20261122-01/READY.json) · [正常 worker 初始失败](../runtime/native-pc/frida-development/normal-worker-smoke-initial-failure.json) · [正常 worker 重连](../runtime/native-pc/frida-development/normal-worker-smoke-reconnect.json)
 
 官服 PC 的「启用观察者」使用 `NativePcFridaRuntime` 在新游戏启动早期装入固定版本官方 Gadget，再通过本机随机令牌认证连接，将 `NativePcFridaObserver` 与 `event_probe_native_pc.js` 绑定到已验证的 Windows x64 进程。源码与桌面入口共用此默认路径。`--no-events` 关闭观察及启动监听，`--frida-remote` 继续用于 MuMu。

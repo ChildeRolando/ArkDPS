@@ -29,7 +29,8 @@ internal static class MultiplayerViewTests
 
     private static JsonObject Player(int side, string uid, int amount) => new()
     {
-        ["player_side"] = side, ["label"] = "第 " + side + " 家", ["status"] = "partial",
+        ["slot"] = side, ["player_uid"] = "account-" + side, ["player_name"] = "玩家昵称" + side,
+        ["player_side"] = side, ["label"] = "不得沿用的阵营编号 " + side, ["status"] = "partial",
         ["coverage_complete"] = false, ["damage"] = null, ["observed_damage"] = amount,
         ["dps"] = null, ["observed_dps"] = 15.5, ["recent_dps"] = null, ["observed_recent_dps"] = 1.5,
         ["display"] = new JsonObject { ["damage"] = "worker-" + amount, ["dps"] = "15.5", ["recent_dps"] = "1.5", ["coverage"] = "已观察 · 证据不完整" },
@@ -52,9 +53,21 @@ internal static class MultiplayerViewTests
     private static JsonElement Snapshot(string round = "round-a", JsonArray? players = null) =>
         JsonSerializer.SerializeToElement(new JsonObject
         {
-            ["available"] = true, ["round_id"] = round,
+            ["available"] = true, ["scope"] = round, ["scope_kind"] = "defense", ["native_round"] = 1,
             ["players"] = players ?? new JsonArray(Player(1, "101", 111), Player(2, "202", 222)),
         });
+
+    private static JsonElement ChangeContext(JsonElement source, string kind = "defense", int nativeRound = 1, bool available = true)
+    {
+        var value = JsonNode.Parse(source.GetRawText())!;
+        value["scope_kind"] = kind;
+        value["native_round"] = nativeRound;
+        value["available"] = available;
+        return JsonSerializer.SerializeToElement(value);
+    }
+
+    private static Button PlayerButton(MultiplayerView surface, int slot) => Children(surface).OfType<Button>()
+        .Single(button => AutomationProperties.GetAutomationId(button) == "MultiplayerPlayer" + slot);
 
     internal static void Run()
     {
@@ -66,12 +79,14 @@ internal static class MultiplayerViewTests
         Theme.Apply("lone-trail");
         var surface = new MultiplayerView();
         string empty = Text(surface);
-        Check("empty explains mode and observation", empty.Contains("卫戍协议") && empty.Contains("事件观察") && empty.Contains("未知"));
+        Check("empty explains unverified native phase and observation", empty.Contains("卫戍协议") && empty.Contains("事件观察") && empty.Contains("阶段未知"));
         Check("four comparable selectable slots always exist", Children(surface).OfType<Button>().Count(button =>
             AutomationProperties.GetAutomationId(button).StartsWith("MultiplayerPlayer", StringComparison.Ordinal)) == 4);
         Check("empty slots never manufacture zero", !empty.Contains("0 DPS") && !empty.Contains("总伤 0"));
 
         surface.Update(Snapshot());
+        Check("player cards identify actual UID and nickname without side guessing", Text(PlayerButton(surface, 1)).Contains("玩家昵称1") &&
+            Text(PlayerButton(surface, 1)).Contains("UID account-1") && !Text(surface).Contains("不得沿用的阵营编号"));
         Check("observed number retains Python display and label", Text(surface).Contains("已观察结算伤害") &&
             Text(surface).Contains("worker-111") && Text(surface).Contains("worker-222"));
         Check("selected player view is worker-owned", surface.Ranking.View.Get("entries").Items().Single().Text("owner_id") == "char_same@101");
@@ -83,14 +98,20 @@ internal static class MultiplayerViewTests
             Children(surface.DetailInspector).OfType<Image>().Any(image => image.Source is not null) && surface.DetailInspector.Owner == "char_same@101");
         Check("actor row exposes complete UID separately from the name", ((RowItem)surface.Ranking.Rows.Items[0]).ActorIdentity == "UID 101" &&
             surface.Ranking.Rows.ItemTemplate == surface.Ranking.FindResource("ActorRow"));
-        surface.SelectPlayer(2);
+        surface.SelectPlayer("account-2");
         Check("choosing another player clears previous pin", surface.DetailInspector.Owner is null && surface.Ranking.Rows.SelectedItem is null);
         Check("same CID in another player keeps separate actor", surface.Ranking.View.Get("entries").Items().Single().Text("owner_id") == "char_same@202");
         surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
         surface.Update(Snapshot());
-        Check("same round updates retain correct actor pin", surface.SelectedSide == 2 && surface.DetailInspector.Owner == "char_same@202");
+        Check("same scope updates retain correct actor pin by player UID", surface.SelectedPlayerUid == "account-2" && surface.DetailInspector.Owner == "char_same@202");
+        var moved = Player(2, "202", 222);
+        moved["slot"] = 4;
+        moved["player_side"] = 1;
+        surface.Update(Snapshot(players: new JsonArray(Player(1, "101", 111), moved)));
+        Check("same real UID moving slots or changing temporary side retains its actor", surface.SelectedPlayerUid == "account-2" &&
+            surface.DetailInspector.Owner == "char_same@202" && Text(PlayerButton(surface, 4)).Contains("UID account-2"));
         surface.Update(Snapshot("round-b"));
-        Check("new round resets selected player and actor even if IDs recur", surface.SelectedSide == 1 && surface.DetailInspector.Owner is null && surface.Ranking.Rows.SelectedItem is null);
+        Check("new scope resets selected player and actor even if IDs recur", surface.SelectedPlayerUid == "account-1" && surface.DetailInspector.Owner is null && surface.Ranking.Rows.SelectedItem is null);
         surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
         surface.Update(Snapshot("round-b", new JsonArray(Player(2, "202", 222))));
         Check("missing selected view clears stale actor details", surface.DetailInspector.Owner is null && surface.Ranking.Rows.Items.Count == 0 &&
@@ -100,8 +121,49 @@ internal static class MultiplayerViewTests
         var local = Player(2, "202", 222);
         local["is_local"] = true;
         surface.Update(Snapshot("round-c", new JsonArray(Player(1, "101", 111), local)));
-        Check("new round initially opens the known local player", surface.SelectedSide == 2 &&
+        Check("new scope initially opens the known local player UID", surface.SelectedPlayerUid == "account-2" &&
             surface.Ranking.View.Get("entries").Items().Single().Text("owner_id") == "char_same@202");
+
+        surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
+        surface.Update(ChangeContext(Snapshot("round-c", new JsonArray(Player(1, "101", 111), (JsonObject)local.DeepClone())), nativeRound: 2));
+        Check("native round changes clear pins independently of scope string", surface.DetailInspector.Owner is null && surface.Ranking.Rows.SelectedItem is null);
+        foreach (var (phase, label) in new[] { ("assist", "协防"), ("boss", "首领"), ("prepare", "准备"), ("unknown", "阶段未知") })
+        {
+            surface.Update(Snapshot());
+            surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
+            surface.Update(ChangeContext(Snapshot(), kind: phase));
+            Check(phase + " explains its phase instead of defense output", Text(surface).Contains(label) && !Text(surface).Contains("worker-111"));
+            Check(phase + " clears old player values and actor detail", surface.SelectedPlayerUid is null &&
+                surface.DetailInspector.Owner is null && surface.Ranking.Rows.Items.Count == 0);
+        }
+        surface.Update(Snapshot());
+        surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
+        surface.Update(ChangeContext(Snapshot(), available: false));
+        Check("unavailable defense ignores old players still present in DTO", surface.SelectedPlayerUid is null &&
+            surface.Ranking.Rows.Items.Count == 0 && surface.DetailInspector.Owner is null && !Text(surface).Contains("worker-111"));
+        var legacy = JsonNode.Parse(Snapshot().GetRawText())!;
+        legacy.AsObject().Remove("scope_kind");
+        legacy["current_state"] = 4; // Raw state numbers cannot substitute for verified phase semantics.
+        surface.Update(JsonSerializer.SerializeToElement(legacy));
+        Check("legacy DTO is unknown despite available and raw BATTLE state", Text(surface).Contains("阶段未知") &&
+            surface.Ranking.Rows.Items.Count == 0 && !Text(surface).Contains("worker-111"));
+        var invalidScope = JsonNode.Parse(Snapshot().GetRawText())!;
+        invalidScope["scope"] = new JsonObject { ["phase"] = 4 };
+        surface.Update(JsonSerializer.SerializeToElement(invalidScope));
+        Check("non-string scope cannot become trusted defense scope", Text(surface).Contains("阶段未知") && surface.Ranking.Rows.Items.Count == 0);
+        var unidentified = Player(1, "101", 111);
+        unidentified["player_uid"] = null;
+        unidentified["player_name"] = "昵称不能替代身份";
+        surface.Update(Snapshot("unknown-player", new JsonArray(unidentified)));
+        Check("missing UID remains identity unknown rather than side or nickname", Text(PlayerButton(surface, 1)).Contains("玩家身份未知") &&
+            !Text(surface).Contains("昵称不能替代身份") && !Text(surface).Contains("worker-111") && surface.SelectedPlayerUid is null);
+        Check("unknown identity cannot select a player or inspect its actors", !PlayerButton(surface, 1).IsEnabled && surface.Ranking.Rows.Items.Count == 0);
+        Check("unknown identity retains the native product button theme", PlayerButton(surface, 1).Style == surface.FindResource(typeof(Button)));
+        var duplicated = Player(2, "202", 222);
+        duplicated["player_uid"] = "account-1";
+        surface.Update(Snapshot("duplicate-player", new JsonArray(Player(1, "101", 111), duplicated)));
+        Check("ambiguous duplicate player UID cannot cross-select actor data", surface.SelectedPlayerUid is null &&
+            surface.Ranking.Rows.Items.Count == 0 && !Text(surface).Contains("worker-111") && !Text(surface).Contains("worker-222"));
 
         foreach (string skin in new[] { "lone-trail", "people", "babel" })
         {

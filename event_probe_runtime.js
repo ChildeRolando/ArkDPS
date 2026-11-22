@@ -313,6 +313,16 @@ function damageSettlementStamp(frame,game_time){
  }
  const sample={frame,game_time,settlementScope:damageSettlementScope};
  damageSettlementClock=sample;
+ if(typeof probeAdapter.stampClock==='function'){
+  try{
+   probeAdapter.stampClock(sample);
+   if(sample.native_autochess_scope&&typeof sample.native_autochess_scope==='object')
+    sample.native_autochess_scope={...sample.native_autochess_scope};
+  }catch(e){
+   sample.native_autochess_scope={protocol_version:1,status:'unknown',verified_same_frame:false,
+    frame,game_time,reason:'native scope observation failed'};
+  }
+ }
  return sample;
 }
 function observeDamageSettlementController(identity,{starting=false}={}){
@@ -922,6 +932,11 @@ function enqueueEvent(source,kind,amount,when,proof,evidence){
  }
  const event={sequence:++sequence,frame:when.frame,game_time:when.game_time,source,kind,amount,proof};
  if(evidence)Object.assign(event,evidence);
+ // A delayed/coalesced record retains the scope observed with its own clock.
+ // Reading the current scope here would move an old tail into the next round.
+ if(Object.prototype.hasOwnProperty.call(when,'native_autochess_scope'))
+  event.native_autochess_scope=when.native_autochess_scope&&typeof when.native_autochess_scope==='object'
+   ?{...when.native_autochess_scope}:when.native_autochess_scope;
  queue.push(event);
  return event;
 }
@@ -940,6 +955,74 @@ function resetEnemyHpCoalescing(){
  flushCoalescedEnemyHp();
  enemyHpBirths.clear();
 }
+// Baseline evidence describes only already observed, unacknowledged queue
+// records. Platform adapters opt in through their envelope metadata; this
+// helper performs no native reads, event replay, clock or cursor updates.
+function discardedAutoChessSkills(fields,records,acknowledged,through){
+ if(!fields||!Object.prototype.hasOwnProperty.call(fields,'native_autochess_context'))return {};
+ const result={baseline_discarded_skill_events:[],baseline_discarded_skill_events_complete:true};
+ if(!Array.isArray(records)||records.length>100000||!Number.isSafeInteger(acknowledged)||acknowledged<0||
+    !Number.isSafeInteger(through)||through<acknowledged){result.baseline_discarded_skill_events_complete=false;return result;}
+ // These are identities of already observed queue records, not native reads.
+ function scopeKey(scope,frame,game_time){
+  if(!scope||scope.protocol_version!==1||scope.status!=='available'||scope.verified_same_frame!==true||
+     scope.frame!==frame||scope.game_time!==game_time||!Number.isSafeInteger(frame)||frame<0||
+     !Number.isFinite(game_time)||game_time<0||![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(scope.phase)||
+     !Number.isSafeInteger(scope.round)||scope.round<0||typeof scope.scope_key!=='string')return null;
+  const parts=scope.scope_key.split(':');
+  if(parts.length!==7||parts[5]!=='autochess'||!/^(0|[1-9][0-9]{0,15})$/.test(parts[6])||
+     !Number.isSafeInteger(Number(parts[6])))return null;
+  for(const root of parts.slice(0,5)){
+   if(!/^0x[0-9a-f]{1,16}$/.test(root))return null;
+   const number=BigInt(root);if(number<0x10000n||number>0x7fffffffffffn||number%8n)return null;
+   if('0x'+number.toString(16)!==root)return null;
+  }
+  // Epoch changes alone do not prove a foreign actor: the same roots and
+  // phase/round may have discarded an earlier start during a clock reset.
+  return JSON.stringify([parts.slice(0,5),scope.phase,scope.round]);
+ }
+ const current=fields.native_autochess_context;
+ let currentKey=scopeKey(current,current?.frame,current?.game_time);
+ if(currentKey!==null&&(fields.native_frame!==current.frame||typeof fields.native_fixed_time!=='string'||
+    !/^[0-9]{1,20}$/.test(fields.native_fixed_time)||
+    Number(BigInt(fields.native_fixed_time))/4294967296!==current.game_time))currentKey=null;
+ const roots=fields.native_identity;
+ if(currentKey!==null&&(!roots||['controller','native','logger','stats','level'].map(name=>roots[name]).join(':')+
+    ':autochess:'!==current.scope_key.slice(0,current.scope_key.lastIndexOf(':')+1)))currentKey=null;
+ const seen=new Set();let expected=acknowledged+1;
+ for(const event of records){
+  if(!event||!Number.isSafeInteger(event.sequence)){result.baseline_discarded_skill_events_complete=false;continue;}
+  if(event.sequence<=acknowledged||event.sequence>through)continue;
+  if(event.sequence!==expected)result.baseline_discarded_skill_events_complete=false;
+  expected=Math.max(expected,event.sequence+1);
+  if(event.kind!=='skill_start'||event.proof?.method==='BasicSkill.OnCastFinish')continue;
+  const scope=event.native_autochess_scope,eventKey=scopeKey(scope,event.frame,event.game_time);
+  if(currentKey!==null&&eventKey!==null&&currentKey!==eventKey)continue;
+  const identity=scope&&typeof scope==='object'?
+   [scope.protocol_version,scope.status,scope.verified_same_frame,scope.scope_key,scope.phase,scope.round]:null;
+  const key=JSON.stringify([event.source,event.source_character_uid,identity]);
+  if(seen.has(key))continue;
+  if(result.baseline_discarded_skill_events.length>=512){result.baseline_discarded_skill_events_complete=false;break;}
+  seen.add(key);
+  const evidence={};
+  for(const field of ['sequence','frame','game_time','source','source_character_uid','proof','native_autochess_scope']){
+   if(Object.prototype.hasOwnProperty.call(event,field)&&event[field]!==undefined)
+    evidence[field]=event[field]&&typeof event[field]==='object'?JSON.parse(JSON.stringify(event[field])):event[field];
+  }
+  result.baseline_discarded_skill_events.push(evidence);
+ }
+ if(expected<=through)result.baseline_discarded_skill_events_complete=false;
+ return result;
+}
+function sameNativeEventScope(left,right){
+ const a=left.native_autochess_scope,b=right.native_autochess_scope;
+ if(a===undefined&&b===undefined)return true;
+ return !!a&&!!b&&a.protocol_version===1&&b.protocol_version===1
+  &&a.status==='available'&&b.status==='available'
+  &&a.verified_same_frame===true&&b.verified_same_frame===true
+  &&typeof a.scope_key==='string'&&a.scope_key.length>0&&a.scope_key===b.scope_key
+  &&a.phase===b.phase&&a.round===b.round;
+}
 function recordEnemyHp(write,when,method,hp,maxHp){
  const {key,evidence,hpBefore,maxHpBefore}=write;
  if(maxHp!==null)evidence.enemy_max_hp=maxHp;
@@ -953,7 +1036,8 @@ function recordEnemyHp(write,when,method,hp,maxHp){
      &&0<hpBefore&&hpBefore<hp&&hp<=maxHp){
    const run=enemyHpRun;
    if(run&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
-      &&run.when.frame===when.frame&&run.when.game_time===when.game_time&&run.after===hpBefore){
+      &&run.when.frame===when.frame&&run.when.game_time===when.game_time
+      &&sameNativeEventScope(run.when,when)&&run.after===hpBefore){
     if(run.tail)run.tail.evidence.hp_after=hp;
     else run.tail={when,method,evidence};
     run.after=hp;
@@ -992,6 +1076,15 @@ function readEvents(after,through){
  if(!envelope.ready)return result;
  if(error||stopped)return result;
  result.events=queue.slice(after-acknowledgedSequence,through-acknowledgedSequence);
+ if(after===through&&typeof probeAdapter.baselineEnvelope==='function'){
+  try{
+   Object.assign(result,probeAdapter.baselineEnvelope(envelope.fields,queue,acknowledgedSequence,through));
+  }catch(e){
+   result.baseline_discarded_skill_events=[];
+   result.baseline_discarded_skill_events_complete=false;
+   result.baseline_discarded_skill_events_error=String(e);
+  }
+ }
  result.hp_context=hpContext.filter(item=>after<item.eventSequence&&item.eventSequence<=through)
   .map(item=>item.context);
  readThroughSequence=Math.max(readThroughSequence,through);
