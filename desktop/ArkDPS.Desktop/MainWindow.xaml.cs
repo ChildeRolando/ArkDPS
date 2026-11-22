@@ -325,8 +325,11 @@ public partial class MainWindow : Window
         Skin.SelectedIndex=Theme.IndexOf(theme);
         MultiplayerEnabledSetting.IsChecked=layout.Bool("multiplayer_enabled");
         MultiplayerNav.Visibility=MultiplayerActive ? Visibility.Visible : Visibility.Collapsed;
-        MultiplayerSettingStatus.Visibility=state.Bool("multiplayer_mode_pending") ? Visibility.Visible : Visibility.Collapsed;
-        MultiplayerSettingStatus.Text=MultiplayerEnabled ? "下一小局开始统计四家" : "下一小局开始只统计本家";
+        bool scopeUnverified=state.Bool("multiplayer_scope_unverified");
+        MultiplayerSettingStatus.Visibility=state.Bool("multiplayer_mode_pending") || scopeUnverified
+            ? Visibility.Visible : Visibility.Collapsed;
+        MultiplayerSettingStatus.Text=scopeUnverified ? "卫戍阶段或本家身份未确认，等待有效小局数据"
+            : MultiplayerEnabled ? "下一小局开始统计四家" : "下一小局开始只统计本家";
         if(!MultiplayerActive && route=="multiplayer") _=Navigate("live");
         EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));

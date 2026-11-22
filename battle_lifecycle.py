@@ -17,7 +17,7 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_probe import (NativePcProbeContract, bind_native_autochess_pair, contract_for,
+from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract, bind_native_autochess_pair, contract_for,
                          native_autochess_context_bound)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
@@ -32,27 +32,39 @@ class NativeAutoChessScene:
     collection_mode: str | None = None
 
 
-def native_autochess_scene(sample):
+def autochess_scene(sample):
     """Return display identity from a guarded pair, without requiring a drain."""
     if not native_autochess_context_bound(sample):
         return None
     context, metadata = sample['autochess_context'], sample['battle_metadata']
     identity = context['identity']
     roots, separator, _ = identity['scope_key'].rpartition(':autochess:')
-    native_session = sample.get('native_session', sample.get('session'))
-    if not (roots and separator and isinstance(native_session, str)):
+    session = sample.get('native_session', sample.get('session'))
+    if not (roots and separator and isinstance(session, str)):
         return None
-    process = native_session.split(':', 2)
-    if len(process) != 3 or not all(part.isascii() and part.isdecimal() for part in process[:2]):
+    if metadata.get('platform') == 'android':
+        parts = session.split(':')
+        if len(parts) != 6 or not parts[0] or not all(p.isascii() and p.isdecimal() for p in parts[1:]):
+            return None
+        process = parts[:3]
+    else:
+        parts = session.split(':', 2)
+        if len(parts) != 3 or not all(p.isascii() and p.isdecimal() for p in parts[:2]):
+            return None
+        process = parts[:2]
+    match_key = context.get('match_key', roots)
+    if not match_key:
         return None
     accounts = tuple(sorted((player['index'], player['uid']) for player in context['players']))
-    # A small-round reset increments the native battle serial and the context
-    # epoch. They identify a scope, while guarded roots and process birth bound
-    # this in-memory display cache. A confirmed exit drops same-root matches too.
-    match = (*process[:2], metadata.get('source_build'), metadata['stage_id'], roots, accounts,
+    # The verified game manager and data center survive small-round controller
+    # changes. Older PC records remain tied to their guarded battle roots.
+    match = (*process, metadata.get('source_build'), metadata['stage_id'], match_key, accounts,
              context.get('self_player_uid'))
     return NativeAutoChessScene(match, native_autochess_scope_id(identity, accounts),
                                 context['phase'], context['round'], context.get('collection_mode'))
+
+
+native_autochess_scene = autochess_scene  # Existing offline fixture entry point.
 
 
 @dataclass(frozen=True)
@@ -118,7 +130,7 @@ def _event_barrier(before, sample, after, *, contract=None, capture=None):
     except BarrierBusy:
         previous = capture.last_sample if capture is not None else None
         stream = capture.adapter.event_stream if capture is not None else None
-        if (not isinstance(contract, NativePcProbeContract) or capture is None
+        if (not isinstance(contract, (NativePcProbeContract, MuMuAutoChessProbeContract)) or capture is None
                 or capture.closed or capture.baseline_sequence is None
                 or not capture.adapter._events_only or stream is None or stream.closed
                 or not isinstance(previous, dict) or sample.get('state') != 2
@@ -151,6 +163,8 @@ def _event_barrier(before, sample, after, *, contract=None, capture=None):
         if (not native_autochess_context_bound(proof)
                 or prior.get('status') not in ('available', 'partial')
                 or current.get('identity') != prior.get('identity')
+                or current.get('match_key') != prior.get('match_key')
+                or current.get('collection_mode') != prior.get('collection_mode')
                 or current.get('self_player_uid') != prior.get('self_player_uid')
                 or [(p['index'], p['uid']) for p in current['players']]
                    != [(p['index'], p['uid']) for p in prior['players']]
@@ -180,6 +194,7 @@ class BattleFeed:
         self.terminal = False
         self.current_lifecycle = None
         self.autochess_scene = None
+        self.autochess_exited = False
         self.stage = None
         self.retired_stage = None
         self.autochess_identity = None
@@ -220,7 +235,7 @@ class BattleFeed:
         self.autochess_identity = None
         return self._emit('end', sample, roster, reason=reason, events=events)
 
-    def _read_marked_snapshot(self, collector, observer):
+    def _read_marked_snapshot(self, collector, observer, *, metadata=None, capture=None):
         events = None
         mark = None
         if observer is not None:
@@ -231,6 +246,8 @@ class BattleFeed:
             except Exception as exc:
                 events = {'error': str(exc)}
         sample = collector.read()
+        if metadata:
+            sample['battle_metadata'] = deepcopy(metadata)
         if mark is not None and events is None:
             try:
                 # Skip the roster transaction when the guarded counters already
@@ -246,7 +263,9 @@ class BattleFeed:
                 end_mark = observer.mark()
                 if end_mark.get('retry'):
                     raise CaptureRetry('observer clock advanced')
-                sequence = baseline_barrier(mark, sample, end_mark, contract=contract_for(observer, sample))
+                bind_native_autochess_pair(sample, mark, end_mark)
+                sequence = _event_barrier(mark, sample, end_mark,
+                                          contract=contract_for(observer, sample), capture=capture)
                 events = dict(before=mark, after=end_mark, sequence=sequence)
             except BarrierBusy:
                 raise
@@ -286,7 +305,8 @@ class BattleFeed:
             deadline = time.monotonic() + .04
             for attempt in range(3):
                 try:
-                    sample, roster, events = self._read_marked_snapshot(collector, observer)
+                    sample, roster, events = self._read_marked_snapshot(
+                        collector, observer, metadata=before.get('metadata'), capture=capture)
                     break
                 except BarrierBusy as exc:
                     if attempt == 2 or time.monotonic() >= deadline:
@@ -316,7 +336,20 @@ class BattleFeed:
             bind_enemy_scope = getattr(collector, 'bind_enemy_scope', None)
             if callable(bind_enemy_scope):
                 bind_enemy_scope(sample)
-            self.autochess_scene = native_autochess_scene(sample)
+            self.autochess_scene = autochess_scene(sample)
+        metadata = sample.get('battle_metadata') or {}
+        stage = metadata.get('stage_id')
+        if (metadata.get('platform') == 'android' and self.autochess_scene is None
+                and isinstance(stage, str) and 'AUTOCHESS' in stage.upper()):
+            if self.autochess_identity is not None and stage == self.stage:
+                # A failed optional read cannot downgrade an established
+                # event-only prefix, including at a terminal snapshot.
+                if sample.get('state') == 3:
+                    from collector import SampleUnavailable
+                    raise SampleUnavailable('MuMu AutoChess terminal scope is temporarily unverified')
+                raise CaptureRetry('MuMu AutoChess scope is temporarily unverified')
+            if getattr(observer, 'provides_autochess_context', False):
+                sample['autochess_scope_unverified'] = True
         return sample, roster, events
 
     @staticmethod
@@ -336,7 +369,8 @@ class BattleFeed:
                         and not (callable(getattr(observer, 'read_through', None))
                                  and callable(getattr(observer, 'commit_events', None)))):
                     raise StreamGap('event probe must support bounded reads and commit acknowledgements')
-                baseline = native_pc and (capture is None or capture.baseline_sequence is None)
+                scoped = native_pc or sample.get('native_counter_scope') == 'events_only'
+                baseline = scoped and (capture is None or capture.baseline_sequence is None)
                 evidence['drain'] = read_event_batch(observer, evidence['sequence'], baseline=baseline)
                 contract.validate_binding(sample, evidence['drain'])
             except (BarrierBusy, ObserverReadRetry) as exc:
@@ -357,6 +391,7 @@ class BattleFeed:
         """
         self.current_lifecycle = None
         self.autochess_scene = None
+        self.autochess_exited = False
         opening = None
         if getattr(collector, 'read_guarded_pair', None) is not None and observer is not None:
             # The native backend captures the pair in read_lifecycle(). A mark
@@ -380,6 +415,8 @@ class BattleFeed:
         stage = metadata.get('stage_id') if metadata.get('evidence') else None
         stage_changed = bool(stage and self.stage and stage != self.stage)
         battle = before['battle']
+        self.autochess_exited = (isinstance(stage, str) and bool(stage) and 'AUTOCHESS' not in stage.upper()
+                                 or battle is None and getattr(collector, 'autochess_absence_is_exit', False))
         if battle is None:
             observation = self._end('battle_absent', observer=observer)
             self.retired = self.retired_clock = None
@@ -532,7 +569,10 @@ class BattleSessions:
         # The acquisition owner has already accepted this barrier. Player views
         # consume the same ordered prefix and never acquire or acknowledge again.
         try:
-            metadata = (observation.sample or {}).get('battle_metadata') or {}
+            sample = observation.sample or {}
+            if sample.get('autochess_scope_unverified'):
+                return
+            metadata = sample.get('battle_metadata') or {}
             stage = metadata.get('stage_id') or self.metadata.get('stage_id') or ''
             if not isinstance(stage, str) or 'AUTOCHESS' not in stage.upper():
                 return

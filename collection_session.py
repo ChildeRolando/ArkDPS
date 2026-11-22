@@ -241,7 +241,7 @@ class CollectionSession:
                 from event_observer import FridaEventObserver, NativePcFridaObserver
                 self.observer_factory = NativePcFridaObserver if self._is_native_pc() else FridaEventObserver
             self.observer = self.observer_factory(self.collector, self.frida_remote)
-            if self.autochess_enabled is not None and self._is_native_pc():
+            if self.autochess_enabled is not None:
                 configure = getattr(self.observer, 'set_autochess_setting', None)
                 if callable(configure):
                     configure(self.autochess_enabled)
@@ -456,7 +456,7 @@ class CollectionSession:
                 self._enemy_last_poll = now
             try:
                 context = {'frame': sample.get('frame')} if frame_bound or state is not None else {}
-                if events_only:
+                if events_only and frame_bound:
                     # A terminal END context may already be outside the combat
                     # scope. Use the committed world prefix's own identity.
                     context.update(allow_partial=True, event_scope=event_scope)

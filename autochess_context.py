@@ -22,6 +22,7 @@ PHASE_NAMES = {0: 'NONE', 1: 'LOADING', 2: 'SP_PREPARE', 3: 'PREPARE',
                103: 'SP_PREPARE_RESTART', 104: 'BOSS_BATTLE_RESTART'}
 _CID = re.compile(r'[A-Za-z0-9_#.-]{1,128}\Z')
 _PLAYER_UID = re.compile(r'[0-9]{1,20}\Z')
+_MATCH_KEY = re.compile(r'0x[0-9a-f]{1,16}:0x[0-9a-f]{1,16}\Z')
 _PAGE_FIELDS = ('pages', 'page', 'sampling', 'source_frames', 'sampled_frames')
 
 
@@ -228,6 +229,11 @@ def normalize_native_autochess(payload, *, expected_frame, expected_game_time,
         reasons.append('invalid_self_player_index')
     if 'collection_mode' in payload and payload['collection_mode'] not in ('all', 'local'):
         reasons.append('invalid_collection_mode')
+    if 'match_key' in payload:
+        key = payload['match_key']
+        if (not isinstance(key, str) or not _MATCH_KEY.fullmatch(key)
+                or any(int(pointer, 16) < 0x10000 or int(pointer, 16) % 8 for pointer in key.split(':'))):
+            reasons.append('invalid_match_key')
     if any(field in payload for field in _PAGE_FIELDS):
         reasons.append('paged_context')
     rows = payload.get('memberships')
@@ -287,6 +293,8 @@ def normalize_native_autochess(payload, *, expected_frame, expected_game_time,
                 coverage_complete=not unknown)
     if 'collection_mode' in payload:
         result['collection_mode'] = payload['collection_mode']
+    if 'match_key' in payload:
+        result['match_key'] = payload['match_key']
     return result
 
 

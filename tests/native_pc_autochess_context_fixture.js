@@ -5,13 +5,15 @@ const vm=require('node:vm');
 const {fixture}=require('./native_pc_frida_probe_fixture.js');
 const sourcePath=path.join(__dirname,'..','event_probe_native_pc.js');
 
-function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=false,unknownToken=false,rolesPerPlayer=1,fixtureOptions={}}={}){
- const f=fixture({sourcePath,...fixtureOptions}),zero=f.ptr(0),NS='Torappu.Battle.AutoChess';
+function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=false,unknownToken=false,rolesPerPlayer=1,fixtureOptions={},platform='native_pc'}={}){
+ const actualSource=platform==='mumu'?path.join(__dirname,'..','event_probe_android2791.js'):sourcePath;
+ const f=fixture({platform,sourcePath:actualSource,...fixtureOptions}),zero=f.ptr(0),NS='Torappu.Battle.AutoChess';
  const adapter=vm.runInContext('probeAdapter',f.context);
  const oldMark=f.context.rpc.exports.mark();
  assert.equal(oldMark.native_autochess_context,undefined,'ordinary stages must not read an absent host');
  function type(kind,data=zero){const p=f.alloc();f.write(p,data);f.write(p.add(8),kind<<16);return p;}
  function klass(name,ns,count,fields=[],parent=zero,existing=null){
+  if(platform==='mumu'){fields=fields.map((field,index)=>[index,...field.slice(1)]);count=fields.length;}
   const k=existing||f.alloc(),table=f.alloc();
   f.write(k.add(0x10),f.text(name));f.write(k.add(0x18),f.text(ns));
   f.write(k.add(0x124),count);f.write(k.add(0x80),table);f.write(k.add(0x58),parent);
@@ -23,6 +25,7 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
  }
  function obj(k){const p=f.alloc();f.write(p,k);return p;}
  const stringClass=klass('String','System',0);
+ if(platform==='mumu')klass('LevelData','Torappu',1,[[0,'levelId',0x18,14]],zero,f.level.readPointer());
  function text(s){const p=f.managedString(s);f.write(p,stringClass);return p;}
  const listClasses=new Map();
  function listClass(element=zero,key='plain'){
@@ -81,6 +84,27 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
  const roleList=pairs(roles,21),battleData=obj(klass('AutoChessBattleDataModel',NS,53,[[1,'battleChessInsts',0x20,21]]));
  f.write(battleData.add(0x20),roleList);
  const machine=obj(klass('AutoChessGameStateMachine','',13,[[1,'<gameCurrentStateId>k__BackingField',0x5c,17]]));
+ let phaseEnum=null;const enumValues=new Map();
+ if(platform==='mumu'){
+  const names={NONE:0,LOADING:1,SP_PREPARE:2,PREPARE:3,BATTLE:4,HELP_BATTLE:5,BOSS_BATTLE:6,
+   SETTLE:7,END:8,PAUSE:9,BATTLE_WAITING:100,BOSS_PREPARE_WAITING:101,PREPARE_RESTART:102,
+   SP_PREPARE_RESTART:103,BOSS_BATTLE_RESTART:104};
+  phaseEnum=klass('AutoChessGameStateType','Torappu',16,[[0,'value__',0x10,8]],klass('Enum','System',0));
+  f.write(phaseEnum.add(0x124),16);
+  const table=phaseEnum.add(0x80).readPointer();let index=1;
+  for(const [name,value]of Object.entries(names)){
+   const field=table.add(index++*32),t=type(17,phaseEnum);
+   f.write(t.add(8),(17<<16)|0x50);f.write(field,f.text(name));f.write(field.add(8),t);
+   f.write(field.add(16),phaseEnum);f.write(field.add(24),0);enumValues.set(field.toString(),value);
+  }
+  const machineType=machine.readPointer().add(0x80).readPointer().add(8).readPointer();
+  f.write(machineType,phaseEnum);
+  f.metadataExports.il2cpp_class_from_type=t=>t.readPointer();
+  f.metadataExports.il2cpp_field_static_get_value=(field,out)=>{
+   assert(enumValues.has(field.toString()),'only proved literal metadata can be read');
+   f.write(out,enumValues.get(field.toString()));
+  };
+ }
  f.write(machine.add(0x5c),4);
  const model=obj(klass('AutoChessGameStateModel','',13,[[0,'m_stateMachine',0x18,18]]));f.write(model.add(0x18),machine);
  const status=obj(klass('AutoChessGameStatus',NS,62,[[0,'m_stateModel',0x10,18]]));f.write(status.add(0x10),model);
@@ -104,11 +128,13 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
  const unitManager=obj(klass('UnitManager','Torappu.Battle',7,[[1,'<characters>k__BackingField',0x18,21]]));
  f.write(unitManager.add(0x18),container);
  klass('BattleController','Torappu.Battle',515,
-  [[100,'<unitManager>k__BackingField',0x2c0,18],[110,'m_singletonHost',0x2e8,18]],zero,f.controllerClass);
+  [[0,'m_state',platform==='mumu'?0x220:0x228,8],[1,'m_logger',platform==='mumu'?0xd8:0xe0,18],
+   [2,'m_levelData',platform==='mumu'?0x158:0x160,18],
+   [100,'<unitManager>k__BackingField',platform==='mumu'?0x2b8:0x2c0,18],[110,'m_singletonHost',0x2e8,18]],zero,f.controllerClass);
  // Keep the existing singleton parent used by currentNativeIdentity.
  const runtimeParent=f.alloc(),statics=f.alloc();f.write(runtimeParent.add(0xb8),statics);f.write(statics,f.controller);
  f.write(f.controllerClass.add(0x58),runtimeParent);
- f.write(f.controller.add(0x2e8),host);f.write(f.controller.add(0x2c0),unitManager);
+ f.write(f.controller.add(0x2e8),host);f.write(f.controller.add(platform==='mumu'?0x2b8:0x2c0),unitManager);
  f.write(f.level.add(0x18),f.managedString('Activities/ACT3AUTOCHESS/level_act3autochess_m01'));
  if(token||unknownToken){
   const bObject=klass('BObject','Torappu.Battle',9,[[3,'<playerSide>k__BackingField',0x20,17],
@@ -122,7 +148,7 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
   f.write(container.add(0x10),array);f.write(container.add(0x20),1);
  }
  const apiCount=f.apiCalls.length;
- return {...f,adapter,machine,center,manager,dict,playerList,players,roles,roleData,roleList,apiCount,
+ return {...f,adapter,machine,center,manager,dict,playerList,players,roles,roleData,roleList,apiCount,phaseEnum,enumValues,
   text,klass,data,list,pairs,mark:()=>f.context.rpc.exports.mark(),
   stamp(when={frame:0,game_time:0}){adapter.stampClock(when);return when;}};
 }

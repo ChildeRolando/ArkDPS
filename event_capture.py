@@ -226,8 +226,10 @@ class LiveEventCapture:
             raise
         try:
             try:
-                drained = read_event_batch(self.observer, sequence)
-                contract_for(self.observer, sample).validate_binding(sample, drained)
+                contract = contract_for(self.observer, sample)
+                drained = read_event_batch(self.observer, sequence,
+                    baseline=contract.raw_replay and self.baseline_sequence is None)
+                contract.validate_binding(sample, drained)
             except (BarrierBusy, ObserverReadRetry) as exc:
                 raise CaptureRetry(str(exc)) from exc
             except CaptureRetry:

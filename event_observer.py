@@ -33,6 +33,7 @@ def _while_live(operation, released):
 
 class FridaEventObserver:
     contract = MUMU_CONTRACT
+    provides_autochess_context = True
 
     def __init__(self, collector, remote):
         self.collector = collector
@@ -51,6 +52,20 @@ class FridaEventObserver:
         self._committed_sequence = 0
         self._acknowledged_sequence = 0
         self._ack_error = None
+        self._autochess_enabled = None
+
+    def set_autochess_setting(self, enabled):
+        """Read the worker's latest preference at existing observation boundaries."""
+        self._autochess_enabled = enabled
+
+    def _with_autochess_setting(self, source):
+        if self._autochess_enabled is None:
+            return source
+        mode = 'all' if self._autochess_enabled() else 'local'
+        return f'globalThis.arkdpsAutoChessMode = "{mode}";\n' + source
+
+    def _mark_options(self):
+        return {} if self._autochess_enabled is None else {'autochess_enabled': self._autochess_enabled()}
 
     request_timeout = 5.0
     terminal_mark_timeout = 0.5
@@ -70,7 +85,7 @@ class FridaEventObserver:
     def _probe_source(self):
         assembled = assemble_probe_source('mumu')
         self._probe_source_manifest = assembled.audit()
-        return assembled.source
+        return self._with_autochess_setting(assembled.source)
 
     def _wake_request(self):
         with self._request_lock:
@@ -177,14 +192,17 @@ class FridaEventObserver:
                 self._pending_request = None
 
     def mark(self):
-        return self._request('mark')
+        return self._request('mark', **self._mark_options())
 
     def read_terminal_mark(self):
         # The battle already ended. An optional proof must not hold up archiving.
-        return self._request('mark', timeout=self.terminal_mark_timeout)
+        return self._request('mark', timeout=self.terminal_mark_timeout, **self._mark_options())
 
     def read_through(self, sequence):
         return self._read_event_range(self._committed_sequence, sequence)
+
+    def read_baseline(self, sequence):
+        return self._read_event_range(sequence, sequence)
 
     def _read_event_range(self, after, through):
         if self._ack_error:
@@ -258,16 +276,6 @@ class NativePcFridaObserver(FridaEventObserver):
             raise ValueError('官服 PC Frida 使用本机进程，frida_remote 必须为 None')
         super().__init__(collector, remote)
         self.binding = NativePcBinding(collector)
-        self._autochess_enabled = None
-
-    def set_autochess_setting(self, enabled):
-        """Read the worker's latest preference at existing observation boundaries."""
-        self._autochess_enabled = enabled
-
-    def read_baseline(self, sequence):
-        # Obtain the bound quality and advance the producer's readable
-        # watermark without transferring events at or before the baseline.
-        return self._read_event_range(sequence, sequence)
 
     def _message(self, message, data):
         payload = message.get('payload')
@@ -296,13 +304,8 @@ class NativePcFridaObserver(FridaEventObserver):
         self.binding.reset()
         assembled = assemble_probe_source('native_pc')
         self._probe_source_manifest = assembled.audit()
-        if self._autochess_enabled is None:
-            return assembled.source
-        mode = 'all' if self._autochess_enabled() else 'local'
-        return f'globalThis.arkdpsAutoChessMode = "{mode}";\n' + assembled.source
+        return self._with_autochess_setting(assembled.source)
 
     def _request(self, operation, *, timeout=None, **arguments):
-        if operation == 'mark' and self._autochess_enabled is not None:
-            arguments['autochess_enabled'] = self._autochess_enabled()
         result = super()._request(operation, timeout=timeout, **arguments)
         return self.binding.bind(operation, result)

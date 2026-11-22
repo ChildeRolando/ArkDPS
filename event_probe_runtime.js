@@ -660,7 +660,7 @@ function observeNestedTargetSettlement(invocation){
   for(const previous of activeModifiers.get(invocation.tid)||[]){
    if(previous.target?.equals(invocation.target)&&sameMitigationTime(previous.when,invocation.when)){
     previous.nestedTargetCheckpoint=previous.targetSettlementNested?null:
-      captureParentBeforeNestedKill(previous,invocation);
+      captureParentBeforeNestedSettlement(previous,invocation);
     previous.targetSettlementNested=true;
    }
   }
@@ -697,7 +697,7 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
    return reject('modifier scope identity or clock changed');
   if(!commit)return null;
   if(scope.targetSettlementNested){
-   const nested=verifiedParentBeforeNestedKill(scope,target,when,amount,type);
+   const nested=verifiedParentBeforeNestedSettlement(scope,target,when,amount,type);
    if(nested){scope.targetSettlementEvidence=nested;return nested;}
    return reject('nested modifier changed target settlement scope');
   }
@@ -831,12 +831,14 @@ function damageTargetUid(target){
  if(!enemyEntryConfig||!target||target.isNull())return null;
  try{return target.add(0x18).readU32()||null;}catch(e){return null;}
 }
-function captureParentBeforeNestedKill(parent,child){
+function captureParentBeforeNestedSettlement(parent,child){
  try{
   const hit=parent.targetHit,commit=hit?.commit;
   if(!commit?.returned||!sameMitigationTime(commit.returnWhen,child.when)||
-     !targetSettlementIdentity(parent,hit,child.when)||
-     child.mod.add(0x68).readS32()!==5||!child.mod.readPointer().isNull()||
+     !targetSettlementIdentity(parent,hit,child.when))return null;
+  const childType=child.mod.add(0x68).readS32();
+  const ordinary=[1,2,3].includes(childType);
+  if((!ordinary&&(childType!==5||!child.mod.readPointer().isNull()))||
      child.mod.add(0x60).readS32()!==0||child.mod.add(0x70).readS32()!==0||
      damageTargetUid(child.target)!==hit.uid||!child.mod.add(0x10).readPointer().equals(hit.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
@@ -848,12 +850,34 @@ function captureParentBeforeNestedKill(parent,child){
      !Number.isFinite(amount)||amount+0.01<-real)return null;
   // This is the parent's signed native result at the child's entry, paired
   // with the target-side HP-before. Nominal damage never supplies its HP.
-  return {child,when:child.when,uid:hit.uid,real,hpBefore:hit.hpBefore,hpAfter:hp};
+  return {child,ordinary,when:child.when,uid:hit.uid,real,hpBefore:hit.hpBefore,hpAfter:hp};
  }catch(e){return null;}
 }
-function verifiedParentBeforeNestedKill(scope,target,when,amount,type){
+function rememberNestedOrdinarySettlement(child,when,evidence,event){
+ // The child supplies its own checked target callback and signed result.
+ // Never recover either hit by subtracting nominal values or final HP totals.
+ if(event?.settlement_complete!==true||!child.targetSettlementEvidence||
+    child.targetSettlementEvidence!==evidence||child.targetSettlementNested||
+    evidence.shield_absorbed!==0||!(evidence.real_delta<0)||
+    !(evidence.hp_before>evidence.hp_after)||!(evidence.hp_after>0)||
+    event.amount!==-evidence.real_delta)return;
+ const scopes=activeModifiers.get(child.tid);
+ if(!scopes||scopes.length<2||scopes[scopes.length-1]!==child)return;
+ const parents=scopes.slice(0,-1).filter(parent=>
+  parent.nestedTargetCheckpoint?.ordinary&&parent.nestedTargetCheckpoint.child===child);
+ for(const parent of parents){
+  const checkpoint=parent.nestedTargetCheckpoint;
+  parent.nestedOrdinarySettlement=parents.length===1&&parent.nestedOrdinarySettlement===undefined&&
+    checkpoint.hpAfter===evidence.hp_before&&sameMitigationTime(checkpoint.when,when)?
+    {child,when,uid:checkpoint.uid,hpBefore:evidence.hp_before,
+     hpAfter:evidence.hp_after,real:evidence.real_delta}:null;
+ }
+}
+function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
  try{
-  const checkpoint=scope.nestedTargetCheckpoint,kill=scope.nestedElementalKill,hit=scope.targetHit;
+  const checkpoint=scope.nestedTargetCheckpoint,hit=scope.targetHit;
+  const kill=checkpoint?.ordinary?scope.nestedOrdinarySettlement:scope.nestedElementalKill;
+  const childAfter=checkpoint?.ordinary?kill?.hpAfter:0;
   if(!checkpoint||!kill||kill.child!==checkpoint.child||!kill.child.settlementRecordEmitted||
      checkpoint.uid!==kill.uid||kill.hpBefore!==checkpoint.hpAfter||
      !sameMitigationTime(checkpoint.when,when)||!sameMitigationTime(kill.when,when)||
@@ -861,11 +885,11 @@ function verifiedParentBeforeNestedKill(scope,target,when,amount,type){
      !target?.equals(hit.target)||!targetSettlementIdentity(scope,hit,when)||
      fp(scope.mod.add(0x48))!==checkpoint.real||fp(scope.mod.add(0x30))!==amount||
      !Number.isFinite(amount)||amount+0.01<-checkpoint.real||
-     targetHp(target)!==0||scope.numericShieldUnknown||scope.unmatchedShield||scope.numericShield>0||
+     targetHp(target)!==childAfter||scope.numericShieldUnknown||scope.unmatchedShield||scope.numericShield>0||
      shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
   scope.nestedParentSettlementProof={target_uid:String(kill.uid),parent_real_delta:checkpoint.real,
    parent_hp_before:checkpoint.hpBefore,parent_hp_after:checkpoint.hpAfter,
-   child_hp_before:kill.hpBefore,child_hp_after:0,child_real_delta:kill.real};
+   child_hp_before:kill.hpBefore,child_hp_after:childAfter,child_real_delta:kill.real};
   return {target:hit.commit.targetKey,real_delta:checkpoint.real,
    hp_before:checkpoint.hpBefore,hp_after:checkpoint.hpAfter,killed:false,
    target_type:0,damage_type:type,cancel_reason:0,shield_absorbed:0};
@@ -1336,6 +1360,8 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
                    evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
  if(event)scope.settlementRecordEmitted=true;
+ if(event&&targetCommit&&capturedHp&&[1,2,3].includes(type))
+  rememberNestedOrdinarySettlement(scope,when,exactEvidence,event);
  return true;
 }
 function settleSourcelessBurst(scope,evidence,when,amount,reduction) {

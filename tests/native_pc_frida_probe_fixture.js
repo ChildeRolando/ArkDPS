@@ -9,7 +9,9 @@ function loadProbeSource(sourcePath) {
   if (!adapter.startsWith('// ArkDPS event probe adapter v1;')) return adapter;
   const runtime = fs.readFileSync(path.join(path.dirname(sourcePath), 'event_probe_runtime.js'), 'utf8')
     .replace(/\r\n?/g, '\n');
-  return adapter + '\n' + runtime;
+  const autochess = fs.readFileSync(path.join(path.dirname(sourcePath), 'event_probe_autochess.js'), 'utf8')
+    .replace(/\r\n?/g, '\n');
+  return autochess + '\n' + adapter + '\n' + runtime;
 }
 
 function fixture({platform = 'native_pc', sourcePath = process.argv[2],
@@ -120,7 +122,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   if (stateMethod) controllerMethods.set_state = 1;
   const controllerClass = klass('BattleController', 'Torappu.Battle', {
     s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerOffset,
-    m_levelData: platform === 'native_pc' ? 0x160 : 0x158, m_state: 0x228,
+    m_levelData: platform === 'native_pc' ? 0x160 : 0x158, m_state: platform === 'native_pc' ? 0x228 : 0x220,
   }, controllerMethods);
   const character = klass('Character', 'Torappu.Battle', {'<data>k__BackingField': 0x538, m_skill: 0x3c8},
     {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2,
@@ -178,7 +180,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   write(controllerClass.add(0x58), parent); write(parent.add(0xb8), singletonStatics);
   write(singletonStatics, controller); write(controllerClass.add(0xb8), clockStatics);
   write(controller, controllerClass); write(controller.add(0x10), native); write(native.add(0x28), controller);
-  write(controller.add(0x228), 2);
+  write(controller.add(platform === 'native_pc' ? 0x228 : 0x220), 2);
   write(controller.add(loggerOffset), logger); write(logger, loggerClass); write(logger.add(0x18), controller);
   write(logger.add(0x30), stats); write(stats, statsClass);
   write(controller.add(platform === 'native_pc' ? 0x160 : 0x158), level); write(level, levelClass);
@@ -285,7 +287,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   }
   return {context, messages, requests, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,
     entity, unitClass, character, basicSkill, skillData, buffClass, blockDamage, level, controller, controllerClass,
-    apiCalls, fieldTables, methodTables, vm, installSyntheticMitigation, hookTrace, hookAt,
+    apiCalls, fieldTables, methodTables, metadataExports:exports, vm, installSyntheticMitigation, hookTrace, hookAt,
     abilityClass,castSkillClass,skillCastFieldTypes,skillCastMethodTypes,skillCastTypeInfo,characterData,enemyClass};
 }
 

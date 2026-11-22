@@ -18,23 +18,25 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize("platform,adapter", [
     ("mumu", "event_probe_android2791.js"), ("native_pc", "event_probe_native_pc.js")])
 def test_source_composition_and_component_hashes_bind_the_same_bytes(platform, adapter, tmp_path):
-    for name in (adapter, "event_probe_runtime.js"):
+    context = "event_probe_autochess.js"
+    for name in (context, adapter, "event_probe_runtime.js"):
         # Production checkout/package may contain CRLF. Compilation matches
         # the existing read_text boundary; file hashes still bind raw bytes.
         raw = (ROOT / name).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (tmp_path / name).write_bytes(raw)
     assembled = assemble_probe_source(platform, directory=tmp_path)
     manifest = assembled.audit()
-    assert manifest["assembly_version"] == 1
+    assert manifest["assembly_version"] == 2
     assert manifest["adapter_file"] == adapter
     assert manifest["runtime_file"] == "event_probe_runtime.js"
-    for key, name in (("adapter", adapter), ("runtime", "event_probe_runtime.js")):
+    assert manifest["context_file"] == context
+    for key, name in (("context", context), ("adapter", adapter), ("runtime", "event_probe_runtime.js")):
         raw = (tmp_path / name).read_bytes()
         assert manifest[key + "_sha256"] == hashlib.sha256(raw).hexdigest()
         normalized = raw.decode().replace("\r\n", "\n")
         assert manifest[key + "_source_sha256"] == hashlib.sha256(normalized.encode()).hexdigest()
-    expected = (tmp_path / adapter).read_text(encoding="utf-8") + "\n" + (
-        tmp_path / "event_probe_runtime.js").read_text(encoding="utf-8")
+    expected = "\n".join((tmp_path / name).read_text(encoding="utf-8")
+                         for name in (context, adapter, "event_probe_runtime.js"))
     assert assembled.source == expected
     assert manifest["assembled_sha256"] == hashlib.sha256(expected.encode()).hexdigest()
 

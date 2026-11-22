@@ -332,6 +332,7 @@ class Collector:
             self.core.bc_addr, u64(values[1], L.STATS), u64(values[0], B.LEVEL_DATA))))
         return dict(session=session, frame=frame, game_time=game_time,
             battle_identity=(self.core.bc_addr, u64(values[0], B.UNITY_CACHED_PTR)),
+            observer_logger=u64(values[0], B.M_LOGGER),
             damage_basis='client character counters; includes overkill; excludes healing',
             state=state, speed=i32(values[0], B.M_SPEED_LEVEL), rows=rows,
             global_total=abs(global_total), sum_damage=sum(r['damage'] for r in rows),

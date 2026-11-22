@@ -11,19 +11,29 @@ function classMethods(k,error){
  if(n>2000)throw new Error(error);
  return Array.from({length:n},(_,i)=>a.add(i*8).readPointer());
 }
+let nativeControllerClass=null,nativeGeneration=0,nativeLastBinding=null;
+function androidAutoChessEnvelope(current){
+ const binding=nativeBinding();
+ if(binding&&/AUTOCHESS/i.test(binding.native_stage_id))return {fields:binding,
+  ready:!current||binding.native_frame===current.frame&&Number(BigInt(binding.native_fixed_time))/4294967296===current.game_time};
+ return {fields:{},ready:binding!==null||!nativeAutoStage?.enabled};
+}
 const probeAdapter={
  moduleName:'libil2cpp.so',imageSizeType:'ulong',requiredClasses:[],allowNullClassRows:false,
  controllerFields:{s_fixedFrameCnt:0x14,s_fixedPlayTime:0x18},
- validateClasses(){},
+ validateClasses(found){nativeControllerClass=found.BattleController;},
  validateTerminalController(k){expectFields(k,{m_logger:0xd8,m_levelData:0x158});},
  terminalRequired:false,loggerOffset:0xd8,levelOffset:0x158,
  clockRegressed(previous,frame,game_time){return frame<previous.frame&&game_time<previous.game_time;},
- onClockRegression(){},
+ onClockRegression(){nativeGeneration++;nativeLastBinding=null;},
  factoryArgument(args,index){return args[index];},
  factoryStorage(args,invocation){return invocation.context.x8;},
  scopedModifierTrace:false,directHealingProof:false,
- readEnvelope(){return {fields:{},ready:true};},
- markEnvelope(){return {fields:{},ready:true};},
+ autoChessReflected:true,setAutoChessMode,eventCollectionOwner:autoEventOwner,
+ stampClock(when){stampAutoChessClock(when);},
+ baselineEnvelope(fields,records,acknowledged,through){return discardedAutoChessSkills(fields,records,acknowledged,through);},
+ readEnvelope(){return androidAutoChessEnvelope();},
+ markEnvelope(current){return androidAutoChessEnvelope(current);},
  enterTerminalStateHook(){},observeTerminalState(){},leaveTerminalStateHook(){},
  terminalInstallFailed(error){cfg.terminalError=String(error);}
 };

@@ -22,7 +22,7 @@ from uuid import uuid4
 
 from autochess_context import native_local_player as _native_local_player, valid_player_uid
 from battle_history import BattleHistory, HistoryResult
-from battle_lifecycle import BattleRuntime, MappingRetry, native_autochess_scene
+from battle_lifecycle import BattleRuntime, MappingRetry, autochess_scene
 from battle_share import (json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
@@ -296,6 +296,7 @@ class DesktopState:
         self._defense_sample = None
         self._defense_analysis = (None, None, None)
         self._requested_native_root = None
+        self._requested_connection = self.connection
         self.last_frame = None
         self.last_progress = 0.
         self.live_analysis = None
@@ -376,7 +377,7 @@ class DesktopState:
             self._autochess_scene_announced = True
             self._set_autochess_scene(value)
         elif kind == 'sample':
-            scene = native_autochess_scene(value) if self._autochess_scene_announced else None
+            scene = autochess_scene(value) if self._autochess_scene_announced else None
             if scene != self._autochess_scene:
                 # A late terminal DTO may finish the cached defense. It cannot
                 # take over the live assist or reset the current presentation.
@@ -436,9 +437,13 @@ class DesktopState:
                 self.analysis_interrupted = True
 
     def expect_connection_request(self, config, revision):
-        if (self._source_request_platform == 'native_pc' and
-                (config.platform != 'native_pc' or config.native_game_root != self._requested_native_root)):
+        prior = self._requested_connection
+        changed = (config.platform != prior.platform or
+                   (config.native_game_root != prior.native_game_root if config.platform == 'native_pc' else
+                    (config.adb_path, config.serial) != (prior.adb_path, prior.serial)))
+        if changed:
             self._set_autochess_scene(None)
+        self._requested_connection = config
         self._requested_native_root = config.native_game_root
         self._source_request_platform = config.platform
         self._source_request_revision = revision if type(revision) is int else None
@@ -875,6 +880,8 @@ class DesktopState:
         active = desired
         if scene is not None and scene.phase in (4, 5, 6, 7, 8) and scene.collection_mode in ('all', 'local'):
             active = scene.collection_mode == 'all'
+        scope_unverified = (scene is None and sample.get('native_counter_scope') != 'events_only'
+                            and 'AUTOCHESS' in str((sample.get('battle_metadata') or {}).get('stage_id', '')).upper())
         local_player = _native_display_source(sample)
         stats = _display_statistics(sample, source=local_player)
         if multiplayer and multiplayer.get('previous_defense') is True:
@@ -924,6 +931,7 @@ class DesktopState:
                                 event=live_event) if local_player else self.view(p, stats, None, live_event)
                             for p in self.layout.panels],
                     multiplayer_active=active, multiplayer_mode_pending=active != desired,
+                    multiplayer_scope_unverified=scope_unverified,
                     multiplayer=(self.multiplayer_view(multiplayer, event=live_event)
                                  if active and (multiplayer or {}).get('collection_mode') != 'local' else None),
                     live_analysis=analysis[0],
@@ -1257,18 +1265,10 @@ class CollectionWorker:
 
                     def publish_autochess_scene(runtime, *, exited=False):
                         nonlocal last_autochess_scene
-                        if current_config.platform != 'native_pc':
-                            return
                         feed = runtime.feed
                         scene = None if exited else getattr(feed, 'autochess_scene', None)
-                        if scene is None and not exited:
-                            lifecycle = getattr(feed, 'current_lifecycle', None)
-                            metadata = (lifecycle or {}).get('metadata') or {}
-                            stage = metadata.get('stage_id')
-                            if not (lifecycle and lifecycle['battle'] is None
-                                    or metadata.get('evidence') and isinstance(stage, str) and stage
-                                    and 'AUTOCHESS' not in stage.upper()):
-                                return  # A short read is not an exit or a phase transition.
+                        if scene is None and not (exited or getattr(feed, 'autochess_exited', False)):
+                            return  # A short read is not an exit or a phase transition.
                         if scene != last_autochess_scene:
                             last_autochess_scene = scene
                             self.events.put(('autochess_scene', scene))
@@ -1315,7 +1315,7 @@ class CollectionWorker:
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
-                                    session_kwargs = {}
+                                    session_kwargs = {'autochess_enabled': self.autochess_enabled}
                                     pc_provider = self._pc_provider(config, enabled,
                                         explicit_retry=explicit_retry_pending)
                                     explicit_retry_pending = False
@@ -1333,7 +1333,6 @@ class CollectionWorker:
                                         session_bootstrap_generation = bootstrap.get('ready_generation')
                                     if config.platform == 'native_pc':
                                         from native_pc_collector import NativePcCollector
-                                        session_kwargs['autochess_enabled'] = self.autochess_enabled
                                         session_kwargs['collector'] = NativePcCollector(
                                             config.native_game_root, collect_actions=enabled,
                                             event_identity_only=(enabled and self.arkframework_root is None

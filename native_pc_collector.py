@@ -104,6 +104,7 @@ class NativePcCollector:
     """Own the read handle and stage the pair acquired under one frame guard."""
 
     enemy_frame_bound = True
+    autochess_absence_is_exit = True
 
     def __init__(self, game_root, *, probe_factory=None, collect_actions=True, event_identity_only=False):
         self.game_root = Path(game_root).expanduser() if game_root else None

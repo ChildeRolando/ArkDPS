@@ -18,14 +18,19 @@ class AssembledProbeSource:
     adapter_source_sha256: str
     runtime_source_sha256: str
     assembled_sha256: str
+    context_file: str
+    context_sha256: str
+    context_source_sha256: str
 
     def audit(self):
-        return dict(assembly_version=1, adapter_file=self.adapter_file,
+        return dict(assembly_version=2, adapter_file=self.adapter_file,
                     runtime_file=self.runtime_file, adapter_sha256=self.adapter_sha256,
                     runtime_sha256=self.runtime_sha256,
                     adapter_source_sha256=self.adapter_source_sha256,
                     runtime_source_sha256=self.runtime_source_sha256,
-                    assembled_sha256=self.assembled_sha256)
+                    assembled_sha256=self.assembled_sha256, context_file=self.context_file,
+                    context_sha256=self.context_sha256,
+                    context_source_sha256=self.context_source_sha256)
 
 
 def assemble_probe_source(platform, *, directory=None):
@@ -42,11 +47,15 @@ def assemble_probe_source(platform, *, directory=None):
     adapter, runtime = normalize(adapter_bytes), normalize(runtime_bytes)
     if not adapter.startswith('// ArkDPS event probe adapter v1; loaded with event_probe_runtime.js.\n'):
         raise ValueError('unsupported event probe adapter source format')
-    source = adapter + '\n' + runtime
+    context_name = 'event_probe_autochess.js'
+    context_bytes = (directory / context_name).read_bytes()
+    context = normalize(context_bytes)
+    source = '\n'.join((context, adapter, runtime))
     digest = lambda text: sha256(text.encode('utf-8')).hexdigest()
     return AssembledProbeSource(source, adapter_name, runtime_name,
                                 sha256(adapter_bytes).hexdigest(), sha256(runtime_bytes).hexdigest(),
-                                digest(adapter), digest(runtime), digest(source))
+                                digest(adapter), digest(runtime), digest(source),
+                                context_name, sha256(context_bytes).hexdigest(), digest(context))
 
 
 class ObserverReadRetry(RuntimeError):
@@ -93,6 +102,8 @@ def event_processing_payload(record):
 
 def _autochess_scope_key(payload):
     """Check the root part against the mark already bound to the native sample."""
+    if not isinstance(payload, dict):
+        return None
     raw = payload.get('native_autochess_context')
     roots = payload.get('native_identity')
     if not isinstance(raw, dict) or not isinstance(roots, dict):
@@ -119,24 +130,61 @@ def _autochess_scope_key(payload):
         return None
 
 
+def _android_autochess_scope_key(sample, payload):
+    """Bind the producer's Android roots to the collector's guarded snapshot."""
+    scope = _autochess_scope_key(payload)
+    metadata = sample.get('battle_metadata') or {}
+    if scope is None or payload.get('native_stage_id') != metadata.get('stage_id'):
+        return None
+    context = payload['native_autochess_context']
+    fixed = payload.get('native_fixed_time')
+    if (not isinstance(fixed, str) or not fixed.isascii() or not fixed.isdecimal()
+            or len(fixed) > 20 or int(fixed) > 0x7FFFFFFFFFFFFFFF
+            or type(payload.get('native_frame')) is not int or payload['native_frame'] < 0
+            or payload['native_frame'] != context.get('frame')
+            or int(fixed) / (1 << 32) != context.get('game_time')):
+        return None
+    try:
+        controller, native = sample['battle_identity']
+        session = sample.get('native_session', sample.get('session'))
+        pid, session_controller, stats, level = map(int, session.rsplit(':', 4)[-4:])
+        roots = payload['native_identity']
+        if (pid > 0 and type(payload.get('native_process_pid')) is int
+                and payload['native_process_pid'] == pid and session_controller == controller and
+                all(type(expected) is int and expected > 0 and int(roots[key], 16) == expected
+                    for key, expected in (('controller', controller), ('native', native),
+                                          ('logger', sample.get('observer_logger')),
+                                          ('stats', stats), ('level', level)))):
+            return scope
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    return None
+
+
 def bind_native_autochess_pair(sample, before, after):
-    """Attach identity evidence only after the ordinary native barrier accepted.
+    """Attach identity evidence only after the ordinary paired barrier accepted.
 
     Older recordings remain on their existing contract. New native envelopes
     must prove one complete identity frame; research pages are never merged.
     """
     metadata = sample.get('battle_metadata') or {}
-    if (metadata.get('platform') != 'native_pc'
+    platform = metadata.get('platform')
+    if (platform not in ('native_pc', 'android')
             or 'AUTOCHESS' not in str(metadata.get('stage_id', '')).upper()
             or not any('native_autochess_context' in mark for mark in (before, after))):
         return
     from autochess_context import normalize_native_autochess
     contexts = [normalize_native_autochess(mark.get('native_autochess_context'),
                     expected_frame=sample['frame'], expected_game_time=sample['game_time'],
-                    expected_scope_key=_autochess_scope_key(mark)) for mark in (before, after)]
-    known = [item.get('status') in ('available', 'partial') for item in contexts]
+                    expected_scope_key=(_android_autochess_scope_key(sample, mark) if platform == 'android'
+                                        else _autochess_scope_key(mark)))
+                for mark in (before, after)]
+    known = [item.get('status') in ('available', 'partial')
+             and (platform != 'android' or item.get('match_key') is not None) for item in contexts]
     if any(known) and (not all(known) or contexts[0] != contexts[1]):
-        raise BarrierBusy('native AutoChess identity changed across the snapshot')
+        raise BarrierBusy('AutoChess identity changed across the snapshot')
+    if platform == 'android' and not all(known):
+        return  # Unproved Android observations keep their legacy contract.
     sample['autochess_context'] = contexts[0]
     # These CID-keyed counters cannot be split into per-player cumulative
     # amounts, even when the native damage rows themselves are nonempty.
@@ -144,12 +192,13 @@ def bind_native_autochess_pair(sample, before, after):
 
 
 def native_autochess_context_bound(sample):
-    """Whether this PC frame has independently bound AutoChess identity."""
+    """Whether this accepted frame carries independently bound AutoChess identity."""
     context = sample.get('autochess_context') or {}
     metadata = sample.get('battle_metadata') or {}
     identity = context.get('identity') or {}
     return bool(sample.get('native_counter_scope') == 'events_only'
-                and metadata.get('platform') == 'native_pc'
+                and (metadata.get('platform') == 'native_pc'
+                     or metadata.get('platform') == 'android' and isinstance(context.get('match_key'), str))
                 and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
                 and context.get('status') in ('available', 'partial')
                 and context.get('verified_same_frame') is True
@@ -291,16 +340,7 @@ class NativePcProbeContract(ProbeContract):
         if any(not isinstance(payload, dict) or payload.get('native_session') != session
                or payload.get('source_build') != build for payload in payloads):
             raise StreamGap('observer data belongs to a different or unverified native PC battle or build')
-        context = sample.get('autochess_context') or {}
-        identity = context.get('identity') if context.get('status') in ('available', 'partial') else None
-        if identity:
-            for payload in payloads:
-                raw = payload.get('native_autochess_context') or {}
-                if (raw.get('protocol_version') != 1 or raw.get('status') != 'available'
-                        or raw.get('verified_same_frame') is not True
-                        or _autochess_scope_key(payload) != identity['scope_key']
-                        or raw.get('phase') != identity['phase'] or raw.get('round') != identity['round']):
-                    raise BarrierBusy('native AutoChess phase or round changed before the bounded read')
+        _validate_autochess_scope(sample, payloads, _autochess_scope_key)
 
     def terminal_identity_matches(self, sample, boundary):
         # Native marks/boundaries must instead carry the checked session/build.
@@ -308,12 +348,37 @@ class NativePcProbeContract(ProbeContract):
         return True
 
 
+def _validate_autochess_scope(sample, payloads, scope_key):
+    context = sample.get('autochess_context') or {}
+    identity = context.get('identity') if context.get('status') in ('available', 'partial') else None
+    if identity:
+        for payload in payloads:
+            raw = (payload.get('native_autochess_context') or {}) if isinstance(payload, dict) else {}
+            if (not isinstance(raw, dict) or raw.get('protocol_version') != 1 or raw.get('status') != 'available'
+                    or raw.get('verified_same_frame') is not True
+                    or scope_key(payload) != identity['scope_key']
+                    or raw.get('phase') != identity['phase'] or raw.get('round') != identity['round']
+                    or raw.get('match_key') != context.get('match_key')
+                    or raw.get('collection_mode') != context.get('collection_mode')):
+                raise BarrierBusy('AutoChess identity, phase or round changed before the bounded read')
+
+
+@dataclass(frozen=True)
+class MuMuAutoChessProbeContract(ProbeContract):
+    def validate_binding(self, sample, *payloads):
+        if not native_autochess_context_bound(sample):
+            raise StreamGap('missing bound MuMu AutoChess identity')
+        _validate_autochess_scope(sample, payloads, lambda payload: _android_autochess_scope_key(sample, payload))
+
+
 LEGACY_CONTRACT = ProbeContract('legacy-events')
 # Existing MuMu queue/baseline/replay/ack semantics remain unchanged. Current
 # probes require explicit quality, independently of those source-proof choices.
 MUMU_CONTRACT = ProbeContract('frida-events-v1', strict_quality=True)
 NATIVE_PC_CONTRACT = NativePcProbeContract('native-pc-frida-v1', True, True, True, True, True)
-_CONTRACTS = {c.name: c for c in (LEGACY_CONTRACT, MUMU_CONTRACT, NATIVE_PC_CONTRACT)}
+MUMU_AUTOCHESS_CONTRACT = MuMuAutoChessProbeContract(
+    'mumu-autochess-frida-v1', True, True, True, False, True)
+_CONTRACTS = {c.name: c for c in (LEGACY_CONTRACT, MUMU_CONTRACT, NATIVE_PC_CONTRACT, MUMU_AUTOCHESS_CONTRACT)}
 
 
 def _validate_contract(contract):
@@ -370,6 +435,9 @@ def contract_for(probe=None, sample=None, descriptor=None):
                 raise StreamGap('native PC probe contract cannot weaken verified proof')
             return contract
         return NATIVE_PC_CONTRACT
+    if (isinstance(metadata, dict) and metadata.get('platform') == 'android'
+            and native_autochess_context_bound(sample)):
+        return MUMU_AUTOCHESS_CONTRACT
     return contract
 
 

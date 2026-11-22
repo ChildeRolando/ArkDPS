@@ -192,14 +192,16 @@ def native_collector():
     return value
 
 
-def test_native_observer_reads_scope_preference_at_start_and_existing_marks(monkeypatch):
+@pytest.mark.parametrize('platform', ('native_pc', 'mumu'))
+def test_observer_reads_scope_preference_at_start_and_existing_marks(monkeypatch, platform):
     value = native_collector()
-    value.diagnostics.platform = 'native_pc'
-    observer = NativePcFridaObserver(value)
+    value.diagnostics.platform = platform
+    observer = NativePcFridaObserver(value) if platform == 'native_pc' else FridaEventObserver(value, 'fixture')
     calls, sources = [], []
     choices = [False]
     monkeypatch.setattr(observer, 'start', lambda: sources.append(observer._probe_source()))
-    monkeypatch.setattr(observer.binding, 'bind', lambda _op, result: result)
+    if platform == 'native_pc':
+        monkeypatch.setattr(observer.binding, 'bind', lambda _op, result: result)
 
     def request(self, operation, *, timeout=None, **arguments):
         calls.append((operation, timeout, arguments))

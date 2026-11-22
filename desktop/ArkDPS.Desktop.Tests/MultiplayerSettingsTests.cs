@@ -33,7 +33,7 @@ internal static class MultiplayerSettingsTests
         },
     };
 
-    private static JsonElement Snapshot(bool? enabled, string theme, bool? active = null)
+    private static JsonElement Snapshot(bool? enabled, string theme, bool? active = null, bool scopeUnverified = false)
     {
         var selected = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "Fixtures", "native-ce5-healing.selected.json")))!.AsObject();
@@ -45,6 +45,7 @@ internal static class MultiplayerSettingsTests
         {
             ["protocol"] = 1, ["layout"] = layout, ["battle_id"] = "optional-live-battle", ["game_time"] = 216,
             ["multiplayer_active"] = active, ["multiplayer_mode_pending"] = active.HasValue && active != enabled,
+            ["multiplayer_scope_unverified"] = scopeUnverified,
             ["status"] = "live", ["status_text"] = "正在统计", ["warnings"] = new JsonArray(), ["error"] = "",
             ["effective_connection_config"] = new JsonObject { ["platform"] = "mumu" },
             ["observer_status"] = "ready", ["event_status"] = "recording",
@@ -121,6 +122,12 @@ internal static class MultiplayerSettingsTests
                 Check(skin + " pending on keeps the local round and explains the next combat",
                     window.MultiplayerEnabledSetting.IsChecked == true && window.MultiplayerNav.Visibility == Visibility.Collapsed &&
                     window.MultiplayerSettingStatus.Visibility == Visibility.Visible && window.MultiplayerSettingStatus.Text.Contains("统计四家"));
+
+                window.ApplyState(Snapshot(false, skin, scopeUnverified: true));
+                Check(skin + " a legacy AutoChess sample identifies the unverified collection scope",
+                    window.MultiplayerNav.Visibility == Visibility.Collapsed &&
+                    window.MultiplayerSettingStatus.Visibility == Visibility.Visible &&
+                    window.MultiplayerSettingStatus.Text.Contains("未确认"));
 
                 window.ApplyState(Snapshot(false, skin));
                 window.MultiplayerEnabledSetting.IsChecked = true;
