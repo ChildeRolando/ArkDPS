@@ -22,6 +22,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
+try:
+    import winreg
+except ImportError:
+    winreg = None
+
 ROOT = Path(__file__).resolve().parent
 DEFAULT_ADB = r'C:\Program Files\Netease\MuMu Player 12\nx_main\adb.exe'
 PACKAGE = 'com.hypergryph.arknights'
@@ -34,6 +39,7 @@ MUMU_ADB_CANDIDATES = (
     r'C:\Program Files\Netease\MuMuPlayer-12.0\shell\adb.exe',
     r'C:\Program Files\Netease\MuMu Player 12\nx_device\12.0\shell\adb.exe',
 )
+_MUMU_UNINSTALL_KEY = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer'
 # MuMu 12 exposes each instance through a loopback port; multi-instance ports
 # are spaced by 32. The emulator-* alias is deduplicated by instance id.
 _MUMU_PORT = re.compile(r'^127\.0\.0\.1:(\d+)$')
@@ -336,16 +342,36 @@ def _run(runner: Runner | SubprocessRunner, args: Sequence[str],
         raise CommandError(str(exc)) from exc
 
 
+def _is_mumu_install(root: Path) -> bool:
+    return any((root / executable).is_file() for executable in (
+        'nx_main/MuMuNxMain.exe', 'shell/MuMuPlayer.exe', 'MuMuPlayer.exe',
+    ))
+
+
+def _registered_mumu_roots() -> Iterable[Path]:
+    if winreg is None:
+        return
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(hive, _MUMU_UNINSTALL_KEY, 0, winreg.KEY_READ | view) as key:
+                    location, _ = winreg.QueryValueEx(key, 'InstallLocation')
+                if isinstance(location, str):
+                    root = Path(os.path.expandvars(location.strip().strip('"')))
+                    if root.is_absolute() and _is_mumu_install(root):
+                        yield root
+            except OSError:
+                continue
+
+
 def adb_candidates(explicit: str | None = None) -> list[str]:
-    found: list[str] = []
-    for item in (explicit, os.environ.get('MULTICA_ADB'), os.environ.get('ADB_PATH'),
-                 *MUMU_ADB_CANDIDATES):
-        if item and item not in found:
-            found.append(item)
-    which = shutil.which('adb')
-    if which and which not in found:
-        found.append(which)
-    return found
+    candidates = [explicit, os.environ.get('MULTICA_ADB'), os.environ.get('ADB_PATH')]
+    for root in dict.fromkeys(_registered_mumu_roots()):
+        candidates.extend((str(root / 'nx_main' / 'adb.exe'), str(root / 'shell' / 'adb.exe')))
+        candidates.extend(str(path) for path in sorted(root.glob('nx_device/*/shell/adb.exe')))
+    candidates.extend(MUMU_ADB_CANDIDATES)
+    candidates.append(shutil.which('adb'))
+    return list(dict.fromkeys(path for path in candidates if path))
 
 
 def resolve_adb_path(explicit: str | None = None) -> str | None:
@@ -355,22 +381,24 @@ def resolve_adb_path(explicit: str | None = None) -> str | None:
     return None
 
 
+def _mumu_root_for_adb(adb: str) -> Path | None:
+    directory = Path(adb).parent
+    if directory.name.lower() not in ('nx_main', 'shell'):
+        return None
+    root = directory.parent
+    return root.parent.parent if root.parent.name.lower() == 'nx_device' else root
+
+
 def _mumu_manager_tools(adb: str) -> Iterable[tuple[Path, Path]]:
-    visited = set()
-    for candidate in dict.fromkeys((adb, *MUMU_ADB_CANDIDATES)):
-        directory = Path(candidate).parent
-        if directory.name.lower() not in ('nx_main', 'shell'):
+    root = _mumu_root_for_adb(adb)
+    roots = []
+    if root is not None and (adb in MUMU_ADB_CANDIDATES or _is_mumu_install(root)):
+        roots.append(root)
+    roots.extend(_registered_mumu_roots())
+    roots.extend(_mumu_root_for_adb(candidate) for candidate in MUMU_ADB_CANDIDATES)
+    for root in dict.fromkeys(roots):
+        if root is None:
             continue
-        root = directory.parent
-        if root.parent.name.lower() == 'nx_device':
-            root = root.parent.parent
-        # A custom adb path is accepted separately from the MuMu manager.
-        # Look beside it only when the installation also contains MuMu itself.
-        if candidate not in MUMU_ADB_CANDIDATES and not (root / 'nx_main' / 'MuMuNxMain.exe').is_file():
-            continue
-        if root in visited:
-            continue
-        visited.add(root)
         for folder in (root / 'nx_main', root / 'shell', root):
             for name in ('mumu-cli.exe', 'MuMuManager.exe'):
                 tool = folder / name
@@ -470,7 +498,10 @@ def _adb_is_mumu(adb_path: str | None) -> bool:
     if not adb_path:
         return False
     normalized = adb_path.lower().replace('/', '\\')
-    return 'mumu' in normalized or 'netease' in normalized
+    if 'mumu' in normalized or 'netease' in normalized:
+        return True
+    root = _mumu_root_for_adb(adb_path)
+    return root is not None and _is_mumu_install(root)
 
 
 def _query_identity(run: Runner, adb: str, serial: str) -> tuple[dict, str]:
@@ -561,6 +592,7 @@ def detect_instances(adb_path: str | None = None, runner: Runner | None = None, 
         return DetectionResult(DetectionStatus.NO_INSTANCE, adb,
                                message=('已发现运行中的 MuMu，ADB 尚未识别设备。请检查模拟器的 ADB 调试设置。'
                                         if reported else '未发现任何安卓设备。请先启动 MuMu 并开启 ADB 调试。'))
+    adb_from_mumu = _adb_is_mumu(adb)
     enriched: list[AdbDevice] = []
     for device in devices:
         if not device.accessible:
@@ -571,7 +603,7 @@ def detect_instances(adb_path: str | None = None, runner: Runner | None = None, 
         identity, problem = _query_identity(run, adb, device.serial)
         emulator_serial = bool(_MUMU_PORT.match(device.serial)) or             device.serial.startswith('emulator-')
         certified = (_listed_loopback(device.serial) in reported or _is_mumu_serial(device.serial) or
-                     (_adb_is_mumu(adb) and emulator_serial) or
+                     (adb_from_mumu and emulator_serial) or
                      any('mumu' in identity.get(k, '').lower() or
                          'netease' in identity.get(k, '').lower()
                          for k in ('model', 'product', 'device')))
