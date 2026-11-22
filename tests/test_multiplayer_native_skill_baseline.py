@@ -50,6 +50,31 @@ def test_fresh_zero_baseline_does_not_infer_missing_skill_state_from_global_old_
     assert lane(result, 3)['skill_damage_unverified_share'] == 0
 
 
+@pytest.mark.parametrize('witnesses', [
+    {'actor_rows': {'status': 'unavailable', 'reason': 'counter_list_size'}},
+    {'actor_rows': {'status': 'not_requested', 'reason': 'native_event_identity'}},
+    {'actor_rows': {'status': None}}, {}, None])
+def test_empty_rows_without_available_native_counter_witness_do_not_certify_initial_skill_state(witnesses):
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0, native_snapshot_witnesses=witnesses)
+    result = consume(meter, 1, [hit(1, 3, 1, 100)])
+    observed = lane(result, 3)
+    assert observed['observed_damage'] == 100
+    assert observed['skill_split_complete'] is False
+    assert observed['observed_non_skill_damage'] is None
+    assert observed['skill_damage_unverified_share'] == 1
+
+
+def test_available_empty_native_counter_rows_still_certify_fresh_initial_skill_state():
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0, native_snapshot_witnesses={
+        'actor_rows': {'status': 'available', 'reason': None},
+        'roster': {'status': 'unavailable', 'reason': 'counter_list_size'}})
+    result = consume(meter, 1, [hit(1, 3, 1, 100)])
+    assert lane(result, 3)['skill_split_complete'] is True
+    assert lane(result, 3)['observed_non_skill_damage'] == 100
+
+
 @pytest.mark.parametrize('field,bad', [('baseline_discarded_skill_events_complete', None),
     ('baseline_discarded_skill_events_complete', False),
     ('baseline_discarded_skill_events_complete', 1), ('baseline_discarded_skill_events', None)])

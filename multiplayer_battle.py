@@ -256,6 +256,11 @@ class MultiplayerBattleStatistics:
 
     @staticmethod
     def _native_initial_point(sample):
+        if 'native_snapshot_witnesses' in sample:
+            witnesses = sample['native_snapshot_witnesses']
+            actor_rows = witnesses.get('actor_rows') if isinstance(witnesses, dict) else None
+            if not isinstance(actor_rows, dict) or actor_rows.get('status') != 'available':
+                return False
         rows = sample.get('rows')
         return (sample['frame'] == 0 and sample['game_time'] == 0
                 and _number(sample.get('global_total')) and sample['global_total'] == 0
