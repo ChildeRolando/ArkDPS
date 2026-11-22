@@ -377,6 +377,39 @@ const shieldByFrame=new Map();
 // Modifier& is borrowed only during the same-thread ApplyModifier invocation.
 // The pointer may be reused later, so retain no target evidence after return.
 const activeModifiers=new Map();
+let tracedModifierSequence=0,scopedTraceCount=0,scopedTraceDropped=0;
+const SCOPED_TRACE_LIMIT=4096;
+// Optional, bounded research trace. It never changes event sequence or amount.
+function traceModifierPhase(invocation,phase){
+ if(!traceHpContext||!invocation.mod)return;
+ if(scopedTraceCount>=SCOPED_TRACE_LIMIT){scopedTraceDropped++;return;}
+ const diagnostic={diagnostic_version:1,phase,hook:invocation.name,thread:invocation.tid,
+  sequence:++hpSequence,frame:invocation.when?.frame,game_time:invocation.when?.game_time};
+ try{
+  const scope=invocation.tracksModifier?invocation:damageModifier(invocation.tid,invocation.mod);
+  const target=invocation.mod.add(0x10).readPointer(),source=invocation.mod.readPointer();
+  diagnostic.modifier_scope=scope?.traceModifierId??null;
+  diagnostic.modifier_instance=invocation.mod.toString();
+  diagnostic.source=invocation.source??null;
+  diagnostic.source_instance=source.toString();
+  diagnostic.target=targetKey(target);diagnostic.target_instance=target.toString();
+  diagnostic.target_uid=damageTargetUid(target);
+  diagnostic.real_delta_entry=invocation.real??null;
+  diagnostic.real_delta_current=fp(invocation.mod.add(0x48));
+  diagnostic.amount_current=fp(invocation.mod.add(0x30));
+  diagnostic.hp_before=invocation.hpBefore??null;diagnostic.hp_current=targetHp(target);
+  diagnostic.output_real=scope?.outputSettlement?.real??null;
+  diagnostic.target_hit=!!scope?.targetHit;
+  diagnostic.target_hit_ambiguous=!!scope?.targetHitAmbiguous;
+  diagnostic.output_ambiguous=!!scope?.outputAmbiguous;
+  diagnostic.modifier_reused=!!scope?.mitigationModifierReused;
+  diagnostic.source_matches_scope=!!scope?.nativeModifierSource?.equals(source);
+  diagnostic.target_matches_scope=!!scope?.target?.equals(target);
+  diagnostic.scope_target_uid=scope?.settlementTargetUid??null;
+ }catch(error){diagnostic.read_error=String(error);}
+ scopedTraceCount++;
+ recordHpContext(diagnostic,false);
+}
 function damageModifier(thread,modifier){
  const scopes=activeModifiers.get(thread)||[];
  for(let index=scopes.length-1;index>=0;index--){
@@ -393,6 +426,7 @@ function enterModifier(scope){
   scope.mitigationModifierReused=true;
  }
  scopes.push(scope);activeModifiers.set(scope.tid,scopes);scope.tracksModifier=true;
+ if(traceHpContext)scope.traceModifierId=++tracedModifierSequence;
 }
 function leaveModifier(scope){
  const scopes=activeModifiers.get(scope.tid);
@@ -400,6 +434,93 @@ function leaveModifier(scope){
  const index=scopes.lastIndexOf(scope);
  if(index!==-1)scopes.splice(index,1);
  if(!scopes.length)activeModifiers.delete(scope.tid);
+}
+function beginTargetSettlement(invocation,scope){
+ try{
+  if(knownNonEnemyTarget(invocation.target))return;
+  const hit=scope.targetHit,source=invocation.mod.readPointer();
+  if(!hit||scope.targetHitAmbiguous||!scope.target?.equals(invocation.target)||
+     !scope.mod.equals(invocation.mod)||!scope.nativeModifierSource?.equals(source)||
+     !hit.uid||hit.uid!==scope.settlementTargetUid||!sameMitigationTime(scope.when,invocation.when))return;
+  const type=invocation.mod.add(0x68).readS32();
+  if(![1,2,3].includes(type)||invocation.mod.add(0x60).readS32()!==0)return;
+  const sourceUid=source.add(0x18).readU32();if(!sourceUid)return;
+  hit.commit={source,sourceUid,sourceClass:source.readPointer(),targetClass:hit.target.readPointer(),
+    targetKey:targetKey(hit.target),modifier:invocation.mod,amount:invocation.amount,type,
+    when:invocation.when,returned:false,invalid:false};
+  invocation.targetSettlementScope=scope;invocation.targetSettlementHit=hit;
+ }catch(e){/* Missing target proof keeps strict settlement partial. */}
+}
+function targetSettlementIdentity(scope,hit,when,allowShieldCancel=false){
+ const commit=hit?.commit;
+ return !!commit&&!commit.invalid&&scope.targetHit===hit&&!scope.targetHitAmbiguous&&
+  !scope.outputAmbiguous&&!scope.settlementAmbiguous&&!scope.mitigationModifierReused&&
+  sameMitigationTime(scope.when,when)&&sameMitigationTime(commit.when,when)&&
+  damageModifier(scope.tid,scope.mod)===scope&&scope.mod.equals(commit.modifier)&&
+  scope.nativeModifierSource?.equals(commit.source)&&scope.mod.readPointer().equals(commit.source)&&
+  commit.source.add(0x18).readU32()===commit.sourceUid&&entityId(commit.source)===scope.source&&
+  commit.source.readPointer().equals(commit.sourceClass)&&hit.target.readPointer().equals(commit.targetClass)&&
+  targetKey(hit.target)===commit.targetKey&&scope.target?.equals(hit.target)&&
+  scope.mod.add(0x10).readPointer().equals(hit.target)&&damageTargetUid(hit.target)===hit.uid&&
+  hit.uid===scope.settlementTargetUid&&scope.mod.add(0x60).readS32()===0&&
+  scope.mod.add(0x68).readS32()===commit.type&&(allowShieldCancel||scope.mod.add(0x70).readS32()===0);
+}
+function numericFullBlockSettlement(scope,hit,when,amount){
+ const absorbed=scope.numericShield,incoming=scope.firstShieldIncoming;
+ return !scope.targetSettlementNested&&amount===0&&!scope.numericShieldUnknown&&!scope.unmatchedShield&&
+  Number.isFinite(absorbed)&&absorbed>0&&Number.isFinite(incoming)&&
+  Math.abs(absorbed-incoming)<=Math.max(0.01,incoming*1e-6)&&
+  targetSettlementIdentity(scope,hit,when,true)&&fp(scope.mod.add(0x30))===0&&
+  fp(scope.mod.add(0x48))===0&&targetHp(hit.target)===hit.hpBefore;
+}
+function observeNestedTargetSettlement(invocation){
+ try{
+  if(!invocation.target||invocation.target.isNull()||
+     ![1,2,3,4,5].includes(invocation.mod.add(0x68).readS32()))return;
+  for(const previous of activeModifiers.get(invocation.tid)||[]){
+   if(previous.target?.equals(invocation.target)&&sameMitigationTime(previous.when,invocation.when))
+    previous.targetSettlementNested=true;
+  }
+ }catch(e){/* No target certificate is added from unreadable callbacks. */}
+}
+function finishTargetSettlement(invocation,when){
+ const scope=invocation.targetSettlementScope,hit=invocation.targetSettlementHit;
+ if(!scope||!hit?.commit)return;
+ try{
+  const amount=fp(scope.mod.add(0x30));
+  if((!targetSettlementIdentity(scope,hit,when)||amount!==hit.commit.amount)&&
+     !numericFullBlockSettlement(scope,hit,when,amount)){
+   hit.commit.invalid=true;return;
+  }
+  hit.commit.returned=true;hit.commit.returnWhen=when;
+ }catch(e){hit.commit.invalid=true;}
+}
+function verifiedTargetSettlement(scope,target,when,amount,type){
+ function reject(reason){
+  scope.targetCommitRejected=true;
+  markDamageSettlementUnknown(when,reason);
+  return null;
+ }
+ try{
+  const hit=scope.targetHit,commit=hit?.commit;
+  if(!commit)return null;
+  if(scope.targetSettlementNested)return reject('nested modifier changed target settlement scope');
+  // A fully witnessed block can zero m_value during the target callback.
+  // Its existing numeric-shield certificate is independent of this HP fallback.
+  if(commit.returned&&sameMitigationTime(commit.returnWhen,when)&&
+     numericFullBlockSettlement(scope,hit,when,amount))return null;
+  if(!commit.returned||commit.amount!==amount||commit.type!==type||
+     !target?.equals(hit.target)||!sameMitigationTime(commit.returnWhen,when)||
+     !targetSettlementIdentity(scope,hit,when))return reject('target settlement identity, clock or amount changed');
+  // OnTakeDamage can return before the engine commits HP and realDelta.
+  // Its unique same-scope target/HP-before proof is checked again against
+  // the final signed Modifier result and actual HP at ApplyModifier return.
+  const evidence=overkillEvidence(scope.mod,target,hit.hpBefore,when.frame);
+  if(!evidence||!targetSettlementIdentity(scope,hit,when)||
+     fp(scope.mod.add(0x30))!==amount)return reject('target settlement final HP proof unavailable');
+  scope.targetSettlementEvidence=evidence;
+  return evidence;
+ }catch(e){return reject('target settlement proof could not be read');}
 }
 function shieldModifier(thread,modifier,target,when){
  if(!modifier)return null;
@@ -610,13 +731,13 @@ function recordEnemyHp(write,when,method,hp,maxHp){
  }
  record(null,'enemy_hp',0,when,{method},evidence);
 }
-function recordHpContext(context){
+function recordHpContext(context,flush=true){
  if(stopped||fatal)return;
  if(hpContext.length>=HP_CONTEXT_BUFFER_LIMIT){
   hpContextDropped++;
   return;
  }
- if(coalesceEnemyHp)flushCoalescedEnemyHp();
+ if(flush&&coalesceEnemyHp)flushCoalescedEnemyHp();
  // Diagnostics do not advance the authoritative sequence. Attach late
  // diagnostics to the next event so repeating a read returns the same slice.
  hpContext.push({eventSequence:Math.max(sequence,readThroughSequence+1),context});
@@ -627,6 +748,7 @@ function readEvents(after,through){
  const error=fatal||(valid?null:'event read range is unavailable');
  const binding=nativeBinding();
  const result={events:[],hp_context:[],hp_context_dropped:hpContextDropped,error,stopped,
+  scoped_trace_count:scopedTraceCount,scoped_trace_dropped:scopedTraceDropped,
   ...eventQuality(),...binding,retry:binding===null};
  if(binding===null)return result;
  if(error||stopped)return result;
@@ -701,7 +823,7 @@ function knownNonEnemyTarget(target){
  const key=targetKey(target);
  return key&&!key.startsWith('enemy_')&&!key.startsWith('trap_');
 }
-function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed}={}) {
+function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed,evidenceMethod}={}) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
  try{
   const damageType=type??scope.mod.add(0x68).readS32();
@@ -718,7 +840,8 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
    evidence.nominal_amount=nominal;
   if(nested)evidence.settled_after_nested_kill=true;
   if(typeof killed==='boolean')evidence.killed=killed;
-  record(scope.source,'damage_settlement',real===0?0:-real,when,{method:scope.name},
+  const proof={method:scope.name};if(evidenceMethod)proof.evidence_method=evidenceMethod;
+  record(scope.source,'damage_settlement',real===0?0:-real,when,proof,
          {...evidence,...reduction},scope.sourceCharacterUid);
  }catch(e){markDamageSettlementUnknown(when,String(e));}
 }
@@ -771,9 +894,12 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
   return false;
  }
  const output=scope.outputSettlement;
+ const targetCommit=!!exactEvidence&&scope.targetSettlementEvidence===exactEvidence;
  // Signed result from the exact output callback or a checked elemental
  // ApplyModifier. Do not promote the nominal value of an unmatched callback.
- const real=scope.settlementAmbiguous?null:output?.real??exactEvidence?.real_delta;
+ const real=scope.settlementAmbiguous||
+  (scope.targetCommitRejected||scope.targetHit?.commit?.invalid)&&!exactEvidence?.settled_after_nested_kill?null:
+  targetCommit?exactEvidence.real_delta:output?.real??exactEvidence?.real_delta;
  const shield=scope.numericShield;
  const shieldIncoming=scope.firstShieldIncoming;
  // The shield hook witnessed incoming damage before the engine zeroed
@@ -782,7 +908,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
     (real===0||real==null&&fp(scope.mod.add(0x48))===0&&
      Math.abs(shield-shieldIncoming)<=Math.max(0.01,shieldIncoming*1e-6));
  const settledAmount=shieldedZero?shieldIncoming:amount;
- const nativeAmount=shieldedZero?shieldIncoming:output?.amount??amount;
+ const nativeAmount=shieldedZero?shieldIncoming:targetCommit?amount:output?.amount??amount;
  const tolerance=Math.max(0.01,Math.abs(settledAmount)*1e-6);
  if(output&&output.settlementType!==type){
   flushOutputSettlement(scope,when);
@@ -799,7 +925,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
     Number.isFinite(exactEvidence.hp_before)&&Number.isFinite(exactEvidence.hp_after)&&
     Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,Math.abs(real)*1e-6)&&
     (type===5&&exactEvidence.hp_before===scope.hpBefore||
-     output&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
+     (targetCommit||output)&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
      !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===hit.hpBefore);
  let killed;
  if(capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0&&real<0)killed=true;
@@ -822,8 +948,9 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  const pair=consistent&&shieldedZero?shieldMitigationEvidence(scope,type,shieldIncoming):
        consistent&&(real<0||absorbed>0||nested)?reduction:undefined;
  scope.outputSettlement=null;
- damageSettlement(output||scope,target,settledReal,when,{nominal,shield:absorbed,type,nested,unverified,killed,
+ damageSettlement(targetCommit?scope:output||scope,target,settledReal,when,{nominal,shield:absorbed,type,nested,unverified,killed,
                    identity:output?.settlementIdentity,reduction:pair,
+                   evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
  return true;
 }
@@ -1626,6 +1753,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      this.modifierScope=damageModifier(this.tid,this.mod);
+     traceModifierPhase(this,'enter');
      if(this.name==='Entity.OnAfterOutputDamage'&&enemyDamageReady){
       if(this.sourceReadFailed&&!knownNonEnemyTarget(this.target))
        markDamageSettlementUnknown(this.when,'missing output source identity');
@@ -1659,14 +1787,19 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       const scope=damageModifier(this.tid,this.mod);
       if(scope&&scope.source===this.source&&sameMitigationTime(scope.when,this.when)){
        if(scope.targetHit)scope.targetHitAmbiguous=true;
-       else scope.targetHit={target:this.target,hpBefore:this.hpBefore,uid:damageTargetUid(this.target)};
+       else{
+        scope.targetHit={target:this.target,hpBefore:this.hpBefore,uid:damageTargetUid(this.target)};
+        beginTargetSettlement(this,scope);
+       }
       }
      }
+     traceModifierPhase(this,'enter');
      return;
     }
     if(this.name==='Entity.ApplyModifier'){
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
+     observeNestedTargetSettlement(this);
      try{
       const source=this.mod.readPointer();
       this.nativeModifierSource=source;
@@ -1695,6 +1828,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        catch(e){/* The normal bar record still has its target pointer. */}
       }
      }
+     traceModifierPhase(this,'enter');
      return;
     }
     this.bb=args[1];this.shieldModifierRef=args[2];
@@ -1755,6 +1889,8 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      return;
     }
      if(!sameMitigationTime(end,this.when))throw new Error('callback crossed frame');
+    if(this.name==='Unit.OnTakeDamage')finishTargetSettlement(this,end);
+    traceModifierPhase(this,'leave');
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
      if(!this.target||this.target.isNull())return;
@@ -1863,8 +1999,13 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        reduction=mitigationEvidence(this,type,amount);
        if(reduction)evidence=Object.assign(evidence||{},reduction);
       }catch(e){/* Missing formula evidence affects only mitigation. */}
-      settleDamage(this,damageTarget,end,amount,type,reduction,
-                   evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null);
+      const targetEvidence=verifiedTargetSettlement(this,damageTarget,end,amount,type);
+      if(targetEvidence){
+       evidence={...evidence,...targetEvidence};
+       proof.evidence_method='Unit.OnTakeDamage+Entity.ApplyModifier';
+      }
+      settleDamage(this,damageTarget,end,amount,type,reduction,targetEvidence||
+                   (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
      }
      try{
       const event=record(this.source,kind,amount,end,proof,evidence,this.sourceCharacterUid);
@@ -1883,7 +2024,11 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
     }
    }catch(e){
     if(this.skillStart||this.skillEnd){skillUnknown=true;}
-    else if(this.name==='Entity.ApplyModifier'){if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}}
+    else if(this.name==='Entity.ApplyModifier'){
+     if(enemyDamageReady&&this.tracksModifier&&!knownNonEnemyTarget(this.target))
+      markDamageSettlementUnknown(this.when,'modifier callback could not verify final settlement');
+     if(this.source)unknownSources.add(this.source);else{skippedUnattributed++;}
+    }
     else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);if(this.shieldScope)this.shieldScope.numericShieldUnknown=true;}
    }finally{
     if(this.tracksModifier){
@@ -2029,7 +2174,8 @@ function enemyEntryQuality(frame){
   stage_object_finish_error:cfg.stageObjectFinishError||null};
 }
 function eventQuality(frame){
- return {unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
+ return {quality_contract_version:1,
+  unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   source_attribution_version:1,
   partial_damage_version:7,
   source_character_uid_ready:sourceCharacterClasses!==null,
@@ -2037,7 +2183,8 @@ function eventQuality(frame){
   shield_unknown:shieldUnknown,damage_unknown:damageUnknown,engagement_unknown:engagementUnknown,
   skill_unknown:skillUnknown||!cfg.skillReady,skill_ready:!skillUnknown&&cfg.skillReady,
   ...damageSettlementQuality(),
-  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
+  // Global hook availability only; each hit still needs its own matched pair.
+  mitigation_ready:mitigationReady,mitigation_unknown:!mitigationReady,mitigation_error:cfg.mitigationError||null,
   mitigation_diagnostics:mitigationDiagnostics(),...enemyEntryQuality(frame)};
 }
 function markEvents(){
@@ -2085,6 +2232,7 @@ send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  source_character_uid_ready:sourceCharacterClasses!==null,source_character_uid_error:cfg.sourceCharacterUidError||null,
  skill_finish_error:cfg.skillFinishError||null,
  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
+ mitigation_diagnostics:mitigationDiagnostics(),
  mitigation_no_event_ready:mitigationNoEventReady,mitigation_no_event_error:cfg.mitigationNoEventError||null,
  mitigation_factory_ready:mitigationFactoryReady,mitigation_factory_error:cfg.mitigationFactoryError||null,
  terminal_error:cfg.terminalError||null,

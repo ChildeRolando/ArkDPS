@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function fixture({loggerOffset = 0xe0, stateMethod = true, nullClassIndex = null,
+function fixture({platform = 'native_pc', sourcePath = process.argv[2],
+  settlement = false, traceHpContext = false,
+  loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, nullClassIndex = null,
   unreadableClassIndex = null, extraNullRow = false, lazySkillFields = false,
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
   fieldApiLeavesTableNull = false, fieldApiStalls = false, lazySkillMethods = false,
@@ -14,6 +16,8 @@ function fixture({loggerOffset = 0xe0, stateMethod = true, nullClassIndex = null
   const methods = new Map();
   const hooks = new Map();
   const callbacks = new Map();
+  const hookTrace = [];
+  let rejectedHook = null;
   const messages = [];
   const fieldTables = new Map(),methodTables=new Map(),apiCalls=[];
   class Pointer {
@@ -86,11 +90,18 @@ function fixture({loggerOffset = 0xe0, stateMethod = true, nullClassIndex = null
   const controllerMethods = {OnDestroy: 0, OnCharacterFinished: 2};
   if (stateMethod) controllerMethods.set_state = 1;
   const controllerClass = klass('BattleController', 'Torappu.Battle', {
-    s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerOffset, m_levelData: 0x160, m_state: 0x228,
+    s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerOffset,
+    m_levelData: platform === 'native_pc' ? 0x160 : 0x158, m_state: 0x228,
   }, controllerMethods);
   const character = klass('Character', 'Torappu.Battle', {'<data>k__BackingField': 0x538, m_skill: 0x3c8},
     {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2});
   const basicSkill = klass('BasicSkill', 'Torappu.Battle', {m_owner: 0xa8, m_data: 0xb0}, {Tick:0});
+  const bObject = settlement ? klass('BObject', 'Torappu.Battle', {
+    '<instanceUid>k__BackingField': 0x18, '<borned>k__BackingField': 0x25,
+    '<isDisappeared>k__BackingField': 0x26,
+  }, {Born: 0, OnRecycle: 0}) : null;
+  const enemyClass = settlement ? klass('Enemy', 'Torappu.Battle', {m_currentTile: 0x360},
+    {_UpdatePlayerSideAndMapLayer: 0}) : null;
   if(lazySkillFields)write(basicSkill.add(0x80),ptr(0));
   if(lazySkillMethods)write(basicSkill.add(0x98),ptr(0));
   if(fieldOwnerMismatch)write(fieldTables.get(basicSkill.toString()).table.add(16),entity);
@@ -109,8 +120,9 @@ function fixture({loggerOffset = 0xe0, stateMethod = true, nullClassIndex = null
   write(singletonStatics, controller); write(controllerClass.add(0xb8), clockStatics);
   write(controller, controllerClass); write(controller.add(0x10), native); write(native.add(0x28), controller);
   write(controller.add(0x228), 2);
-  write(controller.add(0xe0), logger); write(logger, loggerClass); write(logger.add(0x18), controller);
-  write(logger.add(0x30), stats); write(stats, statsClass); write(controller.add(0x160), level); write(level, levelClass);
+  write(controller.add(loggerOffset), logger); write(logger, loggerClass); write(logger.add(0x18), controller);
+  write(logger.add(0x30), stats); write(stats, statsClass);
+  write(controller.add(platform === 'native_pc' ? 0x160 : 0x158), level); write(level, levelClass);
   write(level.add(0x18), managedString('Obt/Weekly/level_weekly_melee_5'));
   function clock(frame, rawTime) { write(clockStatics.add(0x14), frame); write(clockStatics.add(0x18), rawTime); }
   clock(0, 0n);
@@ -124,6 +136,8 @@ function fixture({loggerOffset = 0xe0, stateMethod = true, nullClassIndex = null
     il2cpp_image_get_class: (_image, index) => index === unreadableClassIndex ? ptr(0x10) :
       index === nullClassIndex || index >= classes.length ? ptr(0) : classes[index],
     il2cpp_method_get_param_count: method => methods.get(method.toString()),
+    il2cpp_class_is_assignable_from: (base, candidate) => base.equals(candidate) ||
+      bObject !== null && base.equals(bObject) && [entity, unitClass, character, enemyClass].some(k => k.equals(candidate)),
     il2cpp_class_get_fields: (k,iterator) => {
       const metadata=fieldTables.get(k.toString()),index=iterator.readU64().toNumber();
       if(index===0&&!(fieldApiLeavesTableNull&&k.equals(basicSkill)))write(k.add(0x80),metadata.table);
@@ -141,19 +155,26 @@ function fixture({loggerOffset = 0xe0, stateMethod = true, nullClassIndex = null
       return methodIteratorMismatch&&k.equals(basicSkill)?methodTables.get(entity.toString()).records[0]:metadata.records[index];
     },
   };
-  const module = {name: 'GameAssembly.dll', base: ptr(0x1000), getExportByName: name => name};
+  const module = {name: platform === 'native_pc' ? 'GameAssembly.dll' : 'libil2cpp.so',
+    base: ptr(0x1000), getExportByName: name => name};
   const context = {
-    Process: {platform: 'windows', arch: 'x64', id: 1234, getModuleByName: () => module, findModuleByAddress: () => module},
+    arkdpsTraceHpContext: traceHpContext,
+    Process: {platform: platform === 'native_pc' ? 'windows' : 'linux',
+      arch: platform === 'native_pc' ? 'x64' : 'arm64', id: 1234,
+      getModuleByName: () => module, findModuleByAddress: () => module},
     NativeFunction: function(name) {
       if (!(name in exports)) throw Error('Missing fixture API ' + name);
       return (...args)=>{apiCalls.push(name);return exports[name](...args);};
     },
     Memory: {alloc}, Interceptor: {attach: (address, callback) => {
-      hooks.set(address.toString(), callback); return {detach: () => hooks.delete(address.toString())};
+      if (address.toString() === rejectedHook) throw Error('synthetic mitigation hook installation failure');
+      hookTrace.push({operation: 'attach', address: address.toString()});
+      hooks.set(address.toString(), callback);
+      return {detach: () => {hookTrace.push({operation: 'detach', address: address.toString()}); hooks.delete(address.toString());}};
     }}, ptr, recv: () => {}, send: value => messages.push(value), rpc: {},
   };
   vm.createContext(context);
-  const source = fs.readFileSync(process.argv[2], 'utf8');
+  const source = fs.readFileSync(sourcePath, 'utf8');
   vm.runInContext(source, context);
   function callback(name, owner) {
     const code = callbacks.get(name + '@' + owner);
@@ -170,11 +191,29 @@ function fixture({loggerOffset = 0xe0, stateMethod = true, nullClassIndex = null
     write(p.add(0x48), BigInt(Math.round(real * 4294967296)));
     write(p.add(0x60), 0); write(p.add(0x68), type); write(p.add(0x70), 0); return p;
   }
+  function installSyntheticMitigation({fail = false} = {}) {
+    const plan = {outer: alloc(), internal: alloc(), final: alloc(), damageType: 0x18};
+    const before = hooks.size;
+    if (fail) rejectedHook = plan.internal.toString();
+    context.syntheticMitigationPlan = plan;
+    // Supply owned stand-in method addresses, then execute the actual source
+    // installer. Never assign mitigationReady or an unknown flag in a test.
+    vm.runInContext('mitigationMethods=syntheticMitigationPlan;cfg.mitigationError=null;installMitigationHooks();', context);
+    rejectedHook = null;
+    return {synthetic: true, installed_hook_delta: hooks.size - before};
+  }
+  function hookAt(address) {
+    const hook = hooks.get(address.toString());
+    assert(hook, 'Production callback installed at synthetic address ' + address);
+    return hook;
+  }
   return {context, messages, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,
     entity, unitClass, character, basicSkill, skillData, buffClass, blockDamage, level, controller, controllerClass,
-    apiCalls, fieldTables, methodTables, vm};
+    apiCalls, fieldTables, methodTables, vm, installSyntheticMitigation, hookTrace, hookAt};
 }
 
+module.exports = {fixture};
+if (require.main === module) {
 const f = fixture();
 assert.equal(f.messages.at(-1).ready, true);
 const first = f.context.rpc.exports.mark();
@@ -332,3 +371,4 @@ assert.throws(()=>fixture({lazySkillMethods:true,methodApiStalls:true}),/method 
 assert.throws(()=>fixture({lazySkillMethods:true,methodOwnerMismatch:true}),/missing or ambiguous method set_state/);
 console.log(JSON.stringify({events: 7, shield_amounts: [40, 25], direct_healing: 80,
   damage: 40, queue_ack: true, identity_rollback: true, windows_sret: [7, 8]}));
+}

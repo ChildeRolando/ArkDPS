@@ -6,6 +6,8 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 from connection import VersionStatus
+from event_probe import (MUMU_CONTRACT, NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry,
+                         ready_probe_modes)
 
 
 class ObserverStatus(str, Enum):
@@ -14,10 +16,6 @@ class ObserverStatus(str, Enum):
     INCOMPATIBLE = 'incompatible'
     STOPPED = 'stopped'
     FAILED = 'failed'
-
-
-class ObserverReadRetry(RuntimeError):
-    """A live observer did not deliver a response within the request window."""
 
 
 def _while_live(operation, released):
@@ -34,6 +32,8 @@ def _while_live(operation, released):
 
 
 class FridaEventObserver:
+    contract = MUMU_CONTRACT
+
     def __init__(self, collector, remote):
         self.collector = collector
         self.remote = remote
@@ -88,13 +88,7 @@ class FridaEventObserver:
                     pending.response = payload.get('result')
                     pending.done.set()
         elif isinstance(payload, dict) and payload.get('ready'):
-            self.probe_modes = {
-                key: payload[key] for key in ('coalesce_enemy_hp', 'trace_hp_context',
-                                              'source_character_uid_ready')
-                if type(payload.get(key)) is bool
-            }
-            if isinstance(payload.get('source_character_uid_error'), str):
-                self.probe_modes['source_character_uid_error'] = payload['source_character_uid_error']
+            self.probe_modes = ready_probe_modes(payload)
             self.ready.set()
 
     def _detached(self, reason, *_args):
@@ -242,12 +236,13 @@ class FridaEventObserver:
 class NativePcFridaObserver(FridaEventObserver):
     """Use the local Windows device and independently bind every PC prefix."""
 
+    contract = NATIVE_PC_CONTRACT
+
     def __init__(self, collector, remote=None):
         if remote is not None:
             raise ValueError('官服 PC Frida 使用本机进程，frida_remote 必须为 None')
         super().__init__(collector, remote)
-        self._generation_sessions = {}
-        self._session_generations = {}
+        self.binding = NativePcBinding(collector)
 
     def _message(self, message, data):
         payload = message.get('payload')
@@ -273,44 +268,9 @@ class NativePcFridaObserver(FridaEventObserver):
     def _probe_source(self):
         if not self.collector.process.process_alive():
             raise RuntimeError('官服 PC 游戏进程已退出，请重新连接')
-        self._generation_sessions.clear()
-        self._session_generations.clear()
+        self.binding.reset()
         return Path(__file__).with_name('event_probe_native_pc.js').read_text(encoding='utf-8')
 
     def _request(self, operation, *, timeout=None, **arguments):
         result = super()._request(operation, timeout=timeout, **arguments)
-        if operation not in ('mark', 'read') or result.get('error') or result.get('stopped'):
-            return result
-        if result.get('retry'):
-            raise ObserverReadRetry('官服 PC Frida 战局或时钟正在变化，请重试当前采集')
-        generation = result.get('native_generation')
-        if type(generation) is not int or generation < 0:
-            raise RuntimeError('官服 PC Frida 缺少事件世代')
-        frame = result.get('native_frame', result.get('frame'))
-        fixed_time = result.get('native_fixed_time')
-        if (not isinstance(fixed_time, str) or not fixed_time.isdecimal()
-                or len(fixed_time) > 20 or int(fixed_time) > 0x7FFFFFFFFFFFFFFF):
-            raise RuntimeError('官服 PC Frida 缺少精确逻辑时钟')
-        game_time = int(fixed_time) / (1 << 32)
-        if operation == 'mark' and (result.get('frame') != frame or result.get('game_time') != game_time):
-            raise RuntimeError('官服 PC Frida 标记与原始逻辑时钟不一致')
-        from collector import ProcessChanged, SampleUnavailable, UnsupportedVersion
-        try:
-            binding = self.collector.observer_binding(
-                frame=frame, game_time=game_time, native_identity=result.get('native_identity'),
-                native_stage_id=result.get('native_stage_id'),
-                native_process_pid=result.get('native_process_pid'), native_fixed_time=fixed_time)
-        except (ProcessChanged, UnsupportedVersion):
-            raise
-        except SampleUnavailable as exc:
-            raise ObserverReadRetry(str(exc)) from exc
-        session = binding['native_session']
-        previous = self._generation_sessions.get(generation)
-        if previous is not None and previous != session:
-            raise RuntimeError('官服 PC Frida 事件世代与已确认战局不一致')
-        previous_generation = self._session_generations.get(session)
-        if previous_generation is not None and previous_generation != generation:
-            raise RuntimeError('官服 PC 原生战局未能区分已观察到的新事件世代，当前事件覆盖已中断')
-        self._generation_sessions[generation] = session
-        self._session_generations[session] = generation
-        return dict(result, **binding)
+        return self.binding.bind(operation, result)

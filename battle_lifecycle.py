@@ -16,8 +16,8 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_stream import (StreamGap, BarrierBusy, baseline_barrier, validate_event_binding,
-                          validate_native_event_batch)
+from event_probe import contract_for
+from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 
 
@@ -135,7 +135,7 @@ class BattleFeed:
             try:
                 # Skip the roster transaction when the guarded counters already
                 # crossed the opening mark. The closing mark is still required.
-                baseline_barrier(mark, sample, mark)
+                baseline_barrier(mark, sample, mark, contract=contract_for(observer, sample))
             except BarrierBusy:
                 raise
             except StreamGap as exc:
@@ -146,7 +146,7 @@ class BattleFeed:
                 end_mark = observer.mark()
                 if end_mark.get('retry'):
                     raise CaptureRetry('observer clock advanced')
-                sequence = baseline_barrier(mark, sample, end_mark)
+                sequence = baseline_barrier(mark, sample, end_mark, contract=contract_for(observer, sample))
                 events = dict(before=mark, after=end_mark, sequence=sequence)
             except BarrierBusy:
                 raise
@@ -165,7 +165,7 @@ class BattleFeed:
             return {'error': str(opening_error)}
         try:
             end_mark = _observer_mark(observer)
-            sequence = baseline_barrier(mark, sample, end_mark)
+            sequence = baseline_barrier(mark, sample, end_mark, contract=contract_for(observer, sample))
             return dict(before=mark, after=end_mark, sequence=sequence)
         except (BarrierBusy, CaptureRetry, ObserverReadRetry) as exc:
             raise CaptureRetry(str(exc)) from exc
@@ -211,12 +211,14 @@ class BattleFeed:
     def _drain(observer, evidence, sample):
         if evidence is not None and 'error' not in evidence:
             try:
-                if ((sample.get('battle_metadata') or {}).get('platform') == 'native_pc'
+                contract = contract_for(observer, sample)
+                evidence['probe_contract'] = contract.describe()
+                if (contract.bounded_reads_required
                         and not (callable(getattr(observer, 'read_through', None))
                                  and callable(getattr(observer, 'commit_events', None)))):
-                    raise StreamGap('native PC observer must support bounded reads and commit acknowledgements')
+                    raise StreamGap('event probe must support bounded reads and commit acknowledgements')
                 evidence['drain'] = read_event_batch(observer, evidence['sequence'])
-                validate_event_binding(sample, evidence['drain'])
+                contract.validate_binding(sample, evidence['drain'])
             except CaptureRetry:
                 raise
             except Exception as exc:
@@ -515,19 +517,11 @@ class BattleSessions:
             return False
         sample = self.latest_sample
         try:
-            if self.metadata.get('platform') != 'native_pc':
-                controller, native = sample['battle_identity']
-                session_controller, stats, level = map(int, sample['native_session'].rsplit(':', 3)[-3:])
-                if session_controller != controller:
-                    return False
-                for key, expected in (('controller', controller), ('native', native),
-                                      ('stats', stats), ('level', level)):
-                    if expected <= 0 or int(boundary[key], 16) != expected:
-                        return False
-                if int(boundary['logger'], 16) <= 0:
-                    return False
             mark = self._last_event_mark
-            if (baseline_barrier(mark, sample, boundary) != stream.sequence or
+            contract = self.capture.contract
+            if not contract.terminal_identity_matches(sample, boundary):
+                return False
+            if (baseline_barrier(mark, sample, boundary, contract=contract) != stream.sequence or
                     stream.frame != boundary['frame'] or stream.game_time != boundary['game_time']):
                 return False
         except (KeyError, ValueError, TypeError):
@@ -618,11 +612,12 @@ class BattleSessions:
         if stream is not None and stream.closed:
             stream = None
         after = stream.sequence if stream is not None else through
-        if (sample.get('battle_metadata') or {}).get('platform') == 'native_pc':
+        contract = contract_for(sample=sample, descriptor=evidence.get('probe_contract') or drained.get('probe_contract'))
+        if contract.bounded_reads_required:
             try:
-                if baseline_barrier(evidence['before'], sample, evidence['after']) != through:
+                if baseline_barrier(evidence['before'], sample, evidence['after'], contract=contract) != through:
                     return {}
-                validate_native_event_batch(sample, through, drained, stream=stream)
+                contract.validate_batch(sample, through, drained, stream=stream)
             except (KeyError, StreamGap):
                 return {}
         return source_attribution_batch(drained, after, through)
@@ -780,10 +775,9 @@ class BattleRuntime:
         """Release accepted data without turning a lost ack response into a gap."""
         pending_ack = self._pending_event_ack
         identity_sample = observation.sample or self.sessions.latest_sample or {}
-        metadata = identity_sample.get('battle_metadata') or {}
-        ack_binding = (observation.generation,
-                       identity_sample.get('native_session', identity_sample.get('session')),
-                       metadata.get('source_build'))
+        evidence = observation.events or {}
+        contract = contract_for(observer, identity_sample, evidence.get('probe_contract'))
+        ack_binding = contract.ack_scope(identity_sample, observation.generation)
         if pending_ack is not None and (pending_ack[0] is not observer
                                         or pending_ack[2] != ack_binding):
             # An integer-only ack must never cross a replacement observer,
@@ -799,13 +793,12 @@ class BattleRuntime:
                 pending_ack = (observer, stream.sequence, ack_binding)
                 current_ack = True
         retry_ack = pending_ack is not None
-        if retry_ack and not current_ack and metadata.get('platform') == 'native_pc':
+        if retry_ack and not current_ack and contract.ack_mark_required:
             try:
                 # Guard a retained terminal ack against an already observed
                 # producer reset; commit itself must still be stream-bound.
                 mark = _observer_mark(observer)
-                validate_event_binding(identity_sample, mark)
-                if type(mark.get('sequence')) is not int or mark['sequence'] < pending_ack[1]:
+                if not contract.validate_ack_mark(identity_sample, mark, pending_ack[1]):
                     pending_ack = None
                     retry_ack = False
             except (CaptureRetry, ObserverReadRetry):

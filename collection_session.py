@@ -8,6 +8,7 @@ from battle_history import BattleRecord, HistoryError
 from collector import Collector, SampleUnavailable, BattleChanged, UnsupportedVersion, collector_process
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
+from event_probe import EventProbe
 from event_stream import StreamGap
 
 
@@ -22,7 +23,7 @@ class CollectionSession:
         self.collector = collector if collector is not None else Collector(adb, serial, log=log)
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
-        self.observer = None
+        self.observer: EventProbe | None = None
         self._pending_observers = []
         self.capture = None
         self.audit = audit or (lambda *_args: None)
@@ -93,7 +94,7 @@ class CollectionSession:
         self.event_status, self.event_error = WAITING_GAME_INIT, None
         self._next_boot_check = float('-inf')
         if not self._finish_when_game_ready():
-            self.audit('observer_waiting_game_init', {'pid': self.collector.core.mc.pid})
+            self.audit('observer_waiting_game_init', {'pid': collector_process(self.collector).pid})
 
     def _finish_when_game_ready(self):
         if self.event_status != WAITING_GAME_INIT:

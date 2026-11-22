@@ -9,76 +9,32 @@ from copy import deepcopy
 from math import isfinite
 
 from stats_core import ENEMY_STATE_KINDS, Statistics
-
-
-class StreamGap(ValueError):
-    """The stream can no longer prove continuous event coverage."""
-
-
-class BarrierBusy(StreamGap):
-    """Valid producer marks surround a changing frame; retry without draining."""
+from event_probe import BarrierBusy, StreamGap, contract_for
 
 
 def validate_event_binding(sample, *payloads):
-    """Bind native marks and batches to the collector's build and battle session."""
-    metadata = sample.get('battle_metadata') if isinstance(sample, dict) else None
-    if not isinstance(metadata, dict) or metadata.get('platform') != 'native_pc':
-        return
-    session = sample.get('native_session', sample.get('session'))
-    build = metadata.get('source_build')
-    if not isinstance(session, str) or not session or not isinstance(build, str) or not build:
-        raise StreamGap('missing native PC battle or build identity')
-    if any(not isinstance(payload, dict) or payload.get('native_session') != session
-           or payload.get('source_build') != build for payload in payloads):
-        raise StreamGap('observer data belongs to a different or unverified native PC battle or build')
+    """Compatibility entry point for recordings without a live probe owner."""
+    descriptor = next((p['probe_contract'] for p in payloads
+                       if isinstance(p, dict) and 'probe_contract' in p), None)
+    contract_for(sample=sample, descriptor=descriptor).validate_binding(sample, *payloads)
 
 
 def validate_native_event_batch(sample, through, batch, *, stream=None):
-    """Verify the native prefix from the last accepted sequence to the barrier."""
-    if (sample.get('battle_metadata') or {}).get('platform') != 'native_pc':
-        return
-    validate_event_binding(sample, batch)
-    if batch.get('error') or batch.get('stopped'):
-        return
-    events = batch.get('events')
-    if not isinstance(events, (list, tuple)):
-        raise StreamGap('invalid native PC event batch')
-    after = stream.sequence if stream is not None else through
-    baseline = stream.baseline_sequence if stream is not None else through
-    verified = after
-    last_record = None
-    for event in events:
-        if not isinstance(event, dict):
-            raise StreamGap('invalid native PC event record')
-        number, frame, time = event.get('sequence'), event.get('frame'), event.get('game_time')
-        if (type(number) is not int or not 0 <= number <= through
-                or type(frame) is not int or not 0 <= frame <= sample['frame']
-                or type(time) not in (int, float) or not 0 <= time <= sample['game_time']
-                or (frame == sample['frame'] and time != sample['game_time'])):
-            raise StreamGap('native PC event record does not match the bounded watermark')
-        if last_record is not None:
-            previous = last_record['sequence']
-            if number < previous or (number == previous and event != last_record):
-                raise StreamGap('native PC event batch is out of order or has a conflicting replay')
-        if baseline < number <= after and event != stream.received.get(number):
-            raise StreamGap('native PC event replay conflicts with the accepted record')
-        if number > verified:
-            if number != verified + 1:
-                raise StreamGap('native PC event sequence gap')
-            verified = number
-        last_record = event
-    if verified != through:
-        raise StreamGap('native PC event sequence does not reach the bounded watermark')
+    """Compatibility name; the selected contract validates a bounded prefix."""
+    contract_for(sample=sample, descriptor=batch.get('probe_contract')).validate_batch(
+        sample, through, batch, stream=stream)
 
 
-def baseline_barrier(before, sample, after):
+def baseline_barrier(before, sample, after, *, contract=None):
     """Validate two producer marks surrounding one frame-guarded baseline.
 
     The producer must increment epoch on *entry* to every relevant callback,
     track callbacks until return, and return marks in the same serialization
     domain as those callbacks. Equal sequence alone does not prove quiescence.
     """
-    validate_event_binding(sample, before, after)
+    if contract is None:
+        contract = contract_for(sample=sample, descriptor=after.get('probe_contract') if isinstance(after, dict) else None)
+    contract.validate_binding(sample, before, after)
 
     def valid_integer(value):
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0

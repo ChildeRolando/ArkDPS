@@ -7,9 +7,9 @@ from collections import deque
 
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
+from event_probe import contract_for
 from roster import RosterUnavailable
-from event_stream import (StreamGap, BarrierBusy, baseline_barrier, validate_event_binding,
-                          validate_native_event_batch)
+from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 
@@ -18,10 +18,17 @@ class CaptureRetry(RuntimeError):
 
 
 def read_event_batch(observer, sequence):
+    contract = contract_for(observer)
+    if (contract.bounded_reads_required
+            and not (callable(getattr(observer, 'read_through', None))
+                     and callable(getattr(observer, 'commit_events', None)))):
+        raise StreamGap('event probe must support bounded reads and commit acknowledgements')
     try:
         if hasattr(observer, 'read_through'):
-            return observer.read_through(sequence)
-        return observer.drain()
+            batch = observer.read_through(sequence)
+        else:
+            batch = observer.drain()
+        return dict(batch, probe_contract=contract.describe())
     except ObserverReadRetry as exc:
         raise CaptureRetry(str(exc)) from exc
 
@@ -33,6 +40,8 @@ def acknowledge_event_batch(observer, sequence):
     numbers within an observer lifetime. A separate mark is not a transaction
     that can bind a later integer-only commit across a producer-side reset.
     """
+    if contract_for(observer).bounded_reads_required and not callable(getattr(observer, 'commit_events', None)):
+        raise StreamGap('event probe must support commit acknowledgements')
     if hasattr(observer, 'commit_events'):
         try:
             observer.commit_events(sequence)
@@ -66,6 +75,7 @@ class LiveEventCapture:
     def __init__(self, collector, observer=None, audit=None):
         self.collector = collector
         self.observer = observer
+        self.contract = contract_for(observer)
         self.audit = audit or (lambda *_args: None)
         self.adapter = BattleStatisticsAdapter()
         self.pending = deque()
@@ -154,7 +164,7 @@ class LiveEventCapture:
         if roster.frame != sample.get('frame'):
             raise CaptureRetry('snapshot and roster are from different frames')
         try:
-            sequence = baseline_barrier(before, sample, after)
+            sequence = baseline_barrier(before, sample, after, contract=contract_for(self.observer, sample))
         except BarrierBusy as exc:
             raise CaptureRetry(str(exc)) from exc
         except StreamGap:
@@ -184,7 +194,7 @@ class LiveEventCapture:
             self.close()
             raise
 
-    def _apply_quality(self, payload, enemy_damage_quality, *, native_pc=False):
+    def _apply_quality(self, payload, enemy_damage_quality):
         """Keep recoverable gaps scoped to their affected event metric."""
         statistics = self.adapter.statistics
         if statistics is None:
@@ -193,24 +203,15 @@ class LiveEventCapture:
             statistics.mark_overkill_unknown(source)
         for source in payload.get('engagement_unknown_sources') or ():
             statistics.mark_engagement_unknown(source)
-        # The existing Android producer certifies these families as part of
-        # its observer contract. Native event inputs must affirm each family
-        # explicitly; missing or non-boolean JSON values cannot certify zero.
-        def unknown(key):
-            return payload.get(key) is not False if native_pc else bool(payload.get(key))
-
-        if unknown('damage_unknown'):
+        if payload['damage_unknown']:
             statistics.mark_all_overkill_unknown()
-        if unknown('engagement_unknown'):
+        if payload['engagement_unknown']:
             statistics.mark_all_engagement_unknown()
-        if unknown('shield_unknown'):
+        if payload['shield_unknown']:
             statistics.mark_shields_unknown()
-        if unknown('skill_unknown'):
+        if payload['skill_unknown']:
             statistics.mark_skill_unknown()
-        if ((native_pc and (payload.get('mitigation_ready') is not True
-                            or unknown('mitigation_unknown')))
-                or (not native_pc and (payload.get('mitigation_ready') is False
-                                       or payload.get('mitigation_unknown')))):
+        if not payload['mitigation_ready'] or payload['mitigation_unknown']:
             statistics.mark_mitigation_unknown()
         if 'boss_damage_ready' in payload or statistics.boss_damage is not None:
             statistics.observe_boss_damage(complete=payload.get('boss_damage_ready') is True
@@ -248,8 +249,10 @@ class LiveEventCapture:
         baseline. The observation generation is checked before reaching here.
         """
         try:
-            validate_event_binding(sample, mark)
-            validate_native_event_batch(sample, sequence, drained, stream=self.adapter.event_stream)
+            contract = contract_for(self.observer, sample, drained.get('probe_contract'))
+            self.contract = contract
+            contract.validate_binding(sample, mark)
+            contract.validate_batch(sample, sequence, drained, stream=self.adapter.event_stream)
             if self.baseline_sequence is None:
                 self.baseline_sequence = sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],
@@ -280,8 +283,7 @@ class LiveEventCapture:
                     unknown = damage_quality.get('damage_settlement_unknown',
                                                  damage_quality.get('enemy_damage_unknown'))
                     self.adapter.statistics.settlement_stream_incomplete |= (ready is not True or bool(unknown))
-            native_pc = (sample.get('battle_metadata') or {}).get('platform') == 'native_pc'
-            self._apply_quality(drained, damage_quality, native_pc=native_pc)
+            self._apply_quality(contract.normalize_quality(drained), damage_quality)
             self.pending.extend(drained['events'])
             while self.pending:
                 event = self.pending[0]
@@ -291,7 +293,7 @@ class LiveEventCapture:
                     break
                 self.pending.popleft()
                 if ((self.initial_drain and event['sequence'] <= self.baseline_sequence)
-                        or (native_pc and event['sequence'] <= stream.sequence)):
+                        or (contract.raw_replay and event['sequence'] <= stream.sequence)):
                     # Native replays were compared against the original record
                     # before this frame's roster could change its attribution.
                     continue
@@ -301,7 +303,7 @@ class LiveEventCapture:
                         and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
                     payload['skill_method'] = proof['method']
                 self.adapter.accept_event(session=sample['session'], refresh_result=False,
-                                          replay_record=event if native_pc else None, **payload)
+                                          replay_record=event if contract.raw_replay else None, **payload)
             self.initial_drain = False
             if any(event.get('sequence', -1) <= sequence for event in self.pending):
                 raise StreamGap('event records were delivered out of order')
