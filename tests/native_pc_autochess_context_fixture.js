@@ -112,8 +112,14 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
   [[5,'<selfPlayerIndex>k__BackingField',0x38,8],[6,'<currentRound>k__BackingField',0x3c,8],
    [28,'battleData',0xe8,18],[30,'playerDataModel',0xf8,18]]));
  f.write(center.add(0x38),4);f.write(center.add(0x3c),1);f.write(center.add(0xe8),battleData);f.write(center.add(0xf8),playerModel);
- const manager=obj(klass('AutoChessGameManager',NS,152,[[12,'gameStatus',0x38,18],[13,'dataCenter',0x40,18]]));
+ const viewMode=platform==='mumu'?fixtureOptions.autoChessViewMode:undefined;
+ const viewFields=[];
+ if(viewMode&&Object.hasOwn(viewMode,'in_step_mode'))viewFields.push([5,'<inStepMode>k__BackingField',0x1c,2]);
+ if(viewMode&&Object.hasOwn(viewMode,'enable_view_multi_battle'))viewFields.push([7,'<enableViewMultiBattle>k__BackingField',0x1e,2]);
+ const manager=obj(klass('AutoChessGameManager',NS,152,[[12,'gameStatus',0x38,18],[13,'dataCenter',0x40,18],...viewFields]));
  f.write(manager.add(0x38),status);f.write(manager.add(0x40),center);
+ if(viewMode&&Object.hasOwn(viewMode,'in_step_mode'))f.write(manager.add(0x1c),Number(viewMode.in_step_mode));
+ if(viewMode&&Object.hasOwn(viewMode,'enable_view_multi_battle'))f.write(manager.add(0x1e),Number(viewMode.enable_view_multi_battle));
  const entry=klass('Entry','',4,[[0,'hashCode',0x10,8],[1,'next',0x14,8],[2,'key',0x18,18],[3,'value',0x20,28]]);
  const generic=f.alloc();f.write(generic.add(24),entry);
  const element=type(21,generic),dict=obj(klass('Dictionary`2','System.Collections.Generic',14,

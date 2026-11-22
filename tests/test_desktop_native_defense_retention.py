@@ -129,10 +129,11 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
                 return result
             elif action == 'next_defense_baseline':
                 battle.advance(0, state=2, phase=4, epoch=5, native_round=5)
-            elif action == 'next_defense_hits':
+            elif action in ('next_defense_hits', 'next_defense_zero_hits'):
                 battle.advance(1)
                 first = len(battle.records) + 1
-                battle.advance(1, [battle.hit(first + i - 1, i, i * 7) for i in range(1, 5)])
+                amount = 0 if action == 'next_defense_zero_hits' else 7
+                battle.advance(1, [battle.hit(first + i - 1, i, i * amount) for i in range(1, 5)])
             elif action == 'absent':
                 battle.active = False
             elif action == 'new_match_prepare':
@@ -295,7 +296,7 @@ def test_same_scope_late_terminal_improves_retained_defense_without_switching_sc
     assert_retained(views['late_terminal'], terminal['multiplayer']['scope'], (110, 210, 310, 410))
 
 
-def test_first_accepted_new_defense_replaces_old_cache_before_any_new_hit(tmp_path, monkeypatch):
+def test_new_defense_keeps_prior_result_until_its_first_settlement(tmp_path, monkeypatch):
     _, _, _, events, views, accepted = run_chain(tmp_path, monkeypatch,
         ['defense_baseline', 'defense_hits', 'assist_busy', 'assist_baseline', 'prepare',
          'next_defense_baseline', 'next_defense_hits'])
@@ -303,17 +304,33 @@ def test_first_accepted_new_defense_replaces_old_cache_before_any_new_hit(tmp_pa
     new = next(raw for action, raw, _ in accepted if action == 'next_defense_baseline')
     assert_retained(views['prepare'], old['multiplayer']['scope'])
     snapshot = views['next_defense_baseline']
-    assert snapshot['multiplayer']['scope'] == new['multiplayer']['scope'] != old['multiplayer']['scope']
-    assert snapshot['multiplayer'].get('previous_defense') is not True
-    assert view_values(snapshot) == []
-    assert four_values(snapshot) == [[], [], [], []]
+    assert new['multiplayer']['scope'] != old['multiplayer']['scope']
+    assert_retained(snapshot, old['multiplayer']['scope'])
+    assert '等待本轮防御数据' in snapshot['status_text']
     assert view_values(views['next_defense_hits']) == [21]
     assert four_values(views['next_defense_hits']) == [[7], [14], [21], [28]]
+    assert views['next_defense_hits']['multiplayer']['scope'] == new['multiplayer']['scope']
+    assert not views['next_defense_hits']['multiplayer'].get('previous_defense')
     # A valid scene marker is sent ahead of the corresponding accepted sample.
     index = next(i for i, (kind, value) in enumerate(events) if kind == 'sample' and value is new)
     last_scene = [value for kind, value in events[:index] if kind == 'autochess_scene'][-1]
     assert last_scene.phase == 4 and last_scene.round == 5
     assert last_scene.scope == new['multiplayer']['scope']
+
+
+def test_real_zero_settlement_is_useful_and_replaces_prior_defense(tmp_path, monkeypatch):
+    _, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'prepare', 'next_defense_baseline',
+         'next_defense_zero_hits'])
+    old = next(raw for action, raw, _ in accepted if action == 'defense_hits')
+    assert_retained(views['next_defense_baseline'], old['multiplayer']['scope'])
+    current = views['next_defense_zero_hits']['multiplayer']
+    assert current['scope'] != old['multiplayer']['scope']
+    assert not current.get('previous_defense')
+    assert [p['observed_damage'] for p in current['players']] == [0, 0, 0, 0]
+    raw = next(raw for action, raw, _ in accepted if action == 'next_defense_zero_hits')
+    assert all(any(a['ledger']['nominal_hits'] > 0 for a in p['actor_ledgers'])
+               for p in raw['multiplayer']['players'])
 
 
 def test_guarded_absence_invalidates_defense_retention_instead_of_resurrecting_it(tmp_path, monkeypatch):

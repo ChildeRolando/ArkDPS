@@ -111,6 +111,26 @@ def _event_only_statistics(statistics):
                 event_only_projection=True, totals_complete=False)
 
 
+def _defense_has_settlement(sample):
+    """A counter baseline is not a replacement for an observed defense result."""
+    payload = sample.get('multiplayer') or {}
+    for player in payload.get('players') or ():
+        uid, statistics = player.get('player_uid'), player.get('statistics') or {}
+        if (not valid_player_uid(uid) or statistics.get('session') != f"{payload.get('scope')}:{uid}"
+                or statistics.get('game_time') != sample.get('game_time')):
+            continue
+        for actor in player.get('actor_ledgers') or ():
+            if actor.get('player_uid') != uid:
+                continue
+            lane = actor.get('ledger') or {}
+            for hits, amount in (('nominal_hits', 'observed_damage'), ('observed_hits', 'effective_damage')):
+                value = lane.get(amount)
+                if (type(lane.get(hits)) is int and lane[hits] > 0
+                        and type(value) in (int, float) and math.isfinite(value) and value >= 0):
+                    return True
+    return False
+
+
 def _native_display_source(sample):
     """Assist shows the evidenced battlefield; other phases still select self."""
     payload = sample.get('multiplayer')
@@ -515,6 +535,10 @@ class DesktopState:
         current = scene == active and scene.phase == 4 and scene.scope == payload['scope']
         if not current and not (same_scope and sample.get('state') == 3):
             return
+        if old is not None and _defense_has_settlement(old) and not _defense_has_settlement(sample):
+            # The next native phase can precede its actual combat. Retain the
+            # useful prior result through empty baselines, including reconnects.
+            return
         # The worker transfers an owned DTO. Retain only the presentation
         # fields, since the shared world statistics can contain a large journal.
         self._defense_sample = {key: sample[key] for key in (
@@ -545,6 +569,7 @@ class DesktopState:
             multiplayer = defense['multiplayer']
             if (scene.phase == 4 and scene.scope == multiplayer['scope']
                     and self._sample_scene == scene and sample.get('frame') == defense.get('frame')
+                    and sample.get('multiplayer') is multiplayer
                     and sample.get('event_status') in ('recording', 'finished')
                     and defense.get('state') != 3 and self.lifecycle not in ('preparing', 'ended', 'finalizing')):
                 return defense, multiplayer, self._defense_analysis, None

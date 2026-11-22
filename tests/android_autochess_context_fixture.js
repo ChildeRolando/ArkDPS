@@ -59,8 +59,8 @@ function assertUnknown(f){
 // effective production layout through --effective-layout instead of this copy.
 const CURRENT_ANDROID_LAYOUT=Object.freeze({native:16,nativeOwner:40,logger:224,loggerOwner:24,
  stats:48,level:352,state:552,levelId:24});
-function configuredWorld(layout,mode='all',sourceLayout=layout){
- const f=owned(mode,{fixtureOptions:{androidBattleLayout:layout,unitManagerOffset:0x2c0,
+function configuredWorld(layout,mode='all',sourceLayout=layout,options={}){
+ const f=owned(mode,{fixtureOptions:{...options,androidBattleLayout:layout,unitManagerOffset:0x2c0,
   globals:{arkdpsAndroidBattleLayout:sourceLayout}}});
  const list=f.alloc();f.write(list,f.klass('ListDict`2','Torappu',0));
  if(layout.logger!==LEGACY_ANDROID_FIXTURE_LAYOUT.logger)f.write(f.controller.add(LEGACY_ANDROID_FIXTURE_LAYOUT.logger),list);
@@ -119,6 +119,47 @@ check('current_effective_android_layout_uses_e0_160_228_and_rejects_legacy_listd
  f.write(logger.add(CURRENT_ANDROID_LAYOUT.loggerOwner),f.ptr(0));const broken=f.mark();
  assert.equal(broken.autochess_binding_diagnostic.guard,'logger_owner_mismatch');assert.equal(broken.native_identity,undefined);
  f.write(logger.add(CURRENT_ANDROID_LAYOUT.loggerOwner),f.controller);assert.equal(packet(f).status,'available');
+});
+
+check('optional_android_view_mode_is_typed_fresh_and_never_identity',()=>{
+ const stepField='<inStepMode>k__BackingField',viewField='<enableViewMultiBattle>k__BackingField';
+ function withViews(view){return configuredWorld(CURRENT_ANDROID_LAYOUT,'all',CURRENT_ANDROID_LAYOUT,{autoChessViewMode:view});}
+ for(const step of [false,true])for(const multi of [false,true]){
+  const expected={in_step_mode:step,enable_view_multi_battle:multi},f=withViews(expected),first=f.mark();
+  assert.equal(first.native_autochess_context.status,'available');assert.deepEqual(plain(first.autochess_view_mode),expected);
+  const scope=first.native_autochess_context.scope_key,changed={in_step_mode:!step,enable_view_multi_battle:!multi};
+  f.write(address(f,f.manager,stepField),Number(changed.in_step_mode));
+  f.write(address(f,f.manager,viewField),Number(changed.enable_view_multi_battle));
+  const read=f.context.rpc.exports.readEvents(0,0);
+  assert.deepEqual(plain(read.autochess_view_mode),changed,'bounded read observes fresh Boolean values');
+  assert.deepEqual(plain(read.events),[]);assert.equal(read.native_autochess_context.status,'available');
+  const mark=f.mark();assert.deepEqual(plain(mark.autochess_view_mode),changed,'mark cannot reuse parsed old Boolean values');
+  assert.equal(mark.native_autochess_context.scope_key,scope,'optional presentation capability is not battle identity');
+  assert.deepEqual(plain(first.autochess_view_mode),expected,'prior DTO remains owned');
+ }
+ for(const view of [undefined,{in_step_mode:false},{enable_view_multi_battle:true}]){
+  const f=withViews(view),mark=f.mark();assert.equal(mark.native_autochess_context.status,'available');
+  assert.equal(mark.autochess_view_mode,undefined);assert.equal(mark.autochess_binding_diagnostic,undefined);
+ }
+ for(const mutate of [
+  f=>f.write(field(f,f.manager,stepField).add(8).readPointer().add(8),8<<16),
+  f=>f.write(field(f,f.manager,viewField).add(8).readPointer().add(8),(2<<16)|16),
+  f=>f.write(field(f,f.manager,stepField).add(16),f.controllerClass),
+  f=>f.write(field(f,f.manager,viewField),f.text('renamed_view_mode')),
+  f=>f.write(address(f,f.manager,stepField),2),
+ ]){
+  const f=withViews({in_step_mode:false,enable_view_multi_battle:true});mutate(f);const mark=f.mark();
+  assert.equal(mark.native_autochess_context.status,'available');assert.equal(mark.autochess_view_mode,undefined);
+  assert.equal(mark.autochess_binding_diagnostic,undefined,'an optional bad field cannot reject valid combat identity');
+ }
+ const changing=withViews({in_step_mode:false,enable_view_multi_battle:true}),target=address(changing,changing.manager,stepField);
+ const proto=changing.ptr(0).constructor.prototype,read=proto.readU8;let reads=0;
+ proto.readU8=function(){if(this.equals(target)&&++reads===2)changing.write(target,1);return read.call(this);};
+ let raced;try{raced=changing.mark();}finally{proto.readU8=read;}
+ assert.equal(reads,2);assert.equal(raced.native_autochess_context.status,'available');
+ assert.equal(raced.autochess_view_mode,undefined,'a changing optional pair never becomes a false/zero capability');
+ assert.deepEqual(plain(changing.mark().autochess_view_mode),{in_step_mode:true,enable_view_multi_battle:true});
+ const pc=world();assert.equal(pc.mark().autochess_view_mode,undefined);
 });
 
 check('historic_compatibility_layout_can_explicitly_differ_from_dump_metadata',()=>{

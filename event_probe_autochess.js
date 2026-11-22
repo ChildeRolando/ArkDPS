@@ -540,6 +540,19 @@ function currentNativeIdentity(reject){
  const controller=statics.readPointer();
  return terminalIdentity(controller,nativeControllerClass,reject);
 }
+function readAutoChessViewMode(manager){
+ // This optional witness describes which battle objects the client can load.
+ // Keep its reads outside the membership and settlement acceptance guards.
+ try{
+  const read=autoRead();
+  const stepField='<inStepMode>k__BackingField',viewField='<enableViewMultiBattle>k__BackingField';
+  read.object(manager,'AutoChessGameManager',AUTO_NS,152,[[5,stepField,0x1c,[2]],[7,viewField,0x1e,[2]]]);
+  const step=read.b(read.at(manager,stepField)),multi=read.b(read.at(manager,viewField));
+  if(step>1||multi>1)return null;
+  read.validate();
+  return {in_step_mode:step===1,enable_view_multi_battle:multi===1};
+ }catch(e){return null;}
+}
 function nativeBinding(){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded
  // Windows sampler. The host binds this evidence to its battle serial.
@@ -582,6 +595,7 @@ function nativeBinding(){
   const bodyKey=stageKey+'#'+nativeAutoStage.stagePointer.toString();
   if(!enabled)nativeAutoBodyCache=null;
   const auto=enabled?readAutoChessBody(before,frame,fixed,bodyKey):null;
+  const viewMode=probeAdapter.autoChessReflected&&auto?.header?.phase===4?readAutoChessViewMode(auto.header.manager):null;
   step='closing_guard';
   if(probeAdapter.autoChessReflected&&(!level.readPointer().equals(levelClass)||
      !stageAddress.readPointer().equals(stagePointer)||str(stagePointer)!==stage||
@@ -623,6 +637,7 @@ function nativeBinding(){
    native_frame:frame,native_fixed_time:fixed,native_stage_id:stage};
   if(enabled){
    result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
+   if(viewMode)result.autochess_view_mode=viewMode;
    nativeAutoBodyCache=!auto.error&&auto.unknown.length===0?
     {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto}:null;
   }
