@@ -375,12 +375,10 @@ def test_actual_prepare_observer_consumes_before_second_acquire_busy_so_no_fast_
             return runtime.poll(collector, observed, prepare_observer=lambda _: (True, observed))
         finally:
             runtime._acquire = original
-            consumed.append(runtime.sessions.sequence)
-            assert runtime.sessions.sequence == observation.sequence > 0
-            assert runtime.sessions.adapter is not None
+            consumed.append((runtime.sessions.sequence, observation.sequence, runtime.sessions.adapter))
 
     _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, [read_recovery], observer_override=observed)
-    assert calls == ['acquire', 'acquire'] and consumed == [1]
+    assert calls == ['acquire', 'acquire'] and consumed == [(1, 1, None)]
     assert waits == [.2, .2] and commits == []
 
 

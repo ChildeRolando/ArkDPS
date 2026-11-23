@@ -11,9 +11,8 @@ import pytest
 
 from autochess_context import native_autochess_scope_id, normalize_native_autochess, valid_player_uid
 from battle_history import BattleHistory, BattleRecord, HistoryError
-from battle_lifecycle import BattleRuntime
+from battle_lifecycle import BattleRuntime, NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
 from desktop_bridge import DesktopState, _native_local_player
-from event_capture import CaptureRetry
 from panel_model import PanelConfig
 from test_multiplayer_native_context import CID, hit, stamp
 from test_native_pc_autochess_collector_gate import ROOTS, ROOT_VALUES, fixture
@@ -191,8 +190,9 @@ def test_leading_zeros_do_not_relax_native_identity_proof_or_ack(tmp_path, inval
         battle.scope = lambda: '0x90000:' + ':'.join(list(ROOTS.values())[1:]) + ':autochess:1'
     else:
         battle.self_index = 9
-    with pytest.raises(CaptureRetry):
-        battle.poll()
+    observation = battle.poll()
+    assert observation.kind == 'scope_unavailable'
+    assert observation.reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
     assert battle.commits == [] and battle.runtime.display_sample() is None
 
 

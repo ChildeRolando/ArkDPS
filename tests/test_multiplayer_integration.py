@@ -348,7 +348,7 @@ def test_declared_source_quality_uses_each_players_uid_owner_without_crossing_na
     assert battle.commits == [0, 4]
 
 
-def test_same_player_snapshot_roundtrips_history_and_uses_shared_desktop_view(tmp_path, monkeypatch):
+def test_legacy_player_snapshot_uses_shared_live_view_and_preserves_raw_history(tmp_path, monkeypatch):
     battle = populated_battle()
     live_sample = battle.runtime.display_sample()
     state = DesktopState(tmp_path)
@@ -386,15 +386,17 @@ def test_same_player_snapshot_roundtrips_history_and_uses_shared_desktop_view(tm
     state.accept('history', None)
     history = state.snapshot()['history_selected']
     assert history['battle_id'] == live_sample['battle_id']
-    assert amounts(history['multiplayer']) == amounts(live)
-    assert history['multiplayer']['round_id'] == live['round_id']
-    assert history['multiplayer']['status'] == 'ended'
-    assert [[(e['owner_id'], e['value']) for e in p['view']['entries']]
-            for p in history['multiplayer']['players']] == [
-                [(e['owner_id'], e['value']) for e in p['view']['entries']] for p in live['players']]
+    assert history['multiplayer'] is None
+    assert history['scope_warning'] == '卫戍快照 · 玩家归属未知'
+    assert [(e['owner_id'], e['value']) for e in history['view']['entries']] == [(CID, 300)]
+    loaded, = state.history.get(record.battle_id).records
+    raw = loaded.last_sample['multiplayer']
+    assert raw['schema_version'] == 1
+    assert amounts(raw) == amounts(live)
+    assert raw['round_id'] == live['round_id'] and raw['status'] == 'ended'
     restarted = DesktopState(tmp_path)
     restarted.layout = replace(restarted.layout, multiplayer_enabled=True)
-    reopened = restarted.snapshot()['history_selected']['multiplayer']
-    assert reopened == history['multiplayer']
+    reopened = restarted.snapshot()['history_selected']
+    assert reopened['multiplayer'] is None and reopened['scope_warning'] == history['scope_warning']
     assert not state.history.list_recent().diagnostics
 

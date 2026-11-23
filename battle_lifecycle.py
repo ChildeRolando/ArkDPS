@@ -34,6 +34,15 @@ def _native_pc_autochess(metadata, stage):
             and 'AUTOCHESS' in stage.upper())
 
 
+def _native_pc_autochess_scope_unavailable(metadata, stage, sample, observer):
+    # Complete paired snapshots with an observer still use the established
+    # event admission rules. Incomplete native pairs need independent scope
+    # evidence before the event path can advance its watermark.
+    return (_native_pc_autochess(metadata, stage)
+            and (observer is None or 'native_snapshot_witnesses' in sample)
+            and not native_autochess_context_bound(sample))
+
+
 def _use_autochess_character_counters(sample, observer, previous_scope):
     witness = (sample.get('native_snapshot_witnesses') or {}).get('actor_rows')
     if (observer is not None or previous_scope is not None
@@ -506,8 +515,7 @@ class BattleFeed:
                     self.current_lifecycle = before
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
-                    if (_native_pc_autochess(metadata, stage or self.stage)
-                            and not native_autochess_context_bound(sample)):
+                    if _native_pc_autochess_scope_unavailable(metadata, stage or self.stage, sample, observer):
                         if self.terminal and self.autochess_identity is not None:
                             return self._emit('waiting', reason='terminal_battle')
                         if (not sample['rows'] or not _use_autochess_character_counters(
@@ -563,8 +571,8 @@ class BattleFeed:
         native_context_known = context.get('status') in ('available', 'partial')
         context_identity = context.get('identity') if native_context_known else None
         scope_changed = context_identity is not None and context_identity != self.autochess_identity
-        scope_unavailable = (_native_pc_autochess(metadata, stage or (self.stage if same_native else None))
-                             and not native_autochess_context_bound(sample))
+        scope_unavailable = _native_pc_autochess_scope_unavailable(
+            metadata, stage or (self.stage if same_native else None), sample, observer)
         prior_scope = self.autochess_identity if same_native and not clock_reset else None
         closed_scope = (prior_scope is not None and capture is not None and capture.closed)
         character_counters = scope_unavailable and _use_autochess_character_counters(
