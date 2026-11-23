@@ -776,8 +776,9 @@ function recordElementalBar(scope,when,amount){
  if(!target)return;
  const evidence={target_instance:target.pointer.toString()};
  if(target.uid&&damageTargetUid(target.pointer)===target.uid)evidence.target_uid=String(target.uid);
- record(scope.source,'elemental_bar',amount,when,{method:scope.name,type:0,target:5},
-  evidence,scope.sourceCharacterUid);
+ const proof={method:scope.name,type:0,target:5},tokenHost=autoTokenHostEvidence(scope,when);
+ if(tokenHost)proof.native_autochess_token_host=tokenHost;
+ record(scope.source,'elemental_bar',amount,when,proof,evidence,scope.sourceCharacterUid);
  scope.elementalBarRecorded=true;
 }
 function recordTriggeringElementalBar(burst,when){
@@ -1240,6 +1241,8 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   if(nested)evidence.settled_after_nested_kill=true;
   if(typeof killed==='boolean')evidence.killed=killed;
   const proof={method:scope.name};if(evidenceMethod)proof.evidence_method=evidenceMethod;
+  const tokenHost=autoTokenHostEvidence(scope,when);
+  if(tokenHost)proof.native_autochess_token_host=tokenHost;
   if(scope.nestedParentSettlementProof)proof.nested_settlement=scope.nestedParentSettlementProof;
   if(!complete&&scope.settlementFailureReason)proof.settlement_unknown_reason=scope.settlementFailureReason;
   const event=record(scope.source,'damage_settlement',real===0?0:-real,when,proof,

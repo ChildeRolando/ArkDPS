@@ -384,3 +384,73 @@ def lookup_native_actor(context, *, cid, data_uid):
     if not valid_player_uid(actor.get('player_uid')) or actor.get('actor_key') != [actor['player_uid'], data_uid]:
         return None
     return _readonly(dict(actor, context_identity=context['identity']))
+
+
+_TOKEN_HOST_FIELDS = ('host_key', 'host_uid', 'player_side')
+_INACTIVE_TOKEN = 'token lifecycle unavailable or inactive'
+
+
+def _token_claim_conflicts(context, cid, data_uid):
+    # An inactive, identified token can disappear from the current roster.
+    # A rejected or contradictory claim is not proof of simple absence.
+    return (any(row['data_uid'] == data_uid for row in context['memberships'])
+            or any(row.get('data_uid') == data_uid and (
+                row.get('cid') != cid or row.get('reasons') != [_INACTIVE_TOKEN])
+                for row in context['unknown_memberships']))
+
+
+def resolve_native_event_member(context, event, previous=None):
+    """Resolve a guarded event against live or event-time token evidence.
+
+    Callers pass only consecutive accepted contexts from the same source.
+    An earlier member can cover the interval immediately following that
+    context. A token absent from both contexts needs its own callback proof.
+    """
+    cid, data_uid = event.get('source'), event.get('source_character_uid')
+    member = lookup_native_actor(context, cid=cid, data_uid=data_uid)
+    if not isinstance(cid, str) or not cid.startswith('token_'):
+        return member
+    if (not isinstance(context, dict) or not isinstance(context.get('identity'), dict)
+            or context.get('verified_same_frame') is not True
+            or not _integer(data_uid, 1, (1 << 32) - 1)):
+        return None
+    identity = context['identity']
+    scope = (identity['scope_key'], identity['phase'], identity['round'])
+    if native_autochess_event_identity(event) != scope:
+        return None
+
+    past = None
+    if (previous is not None and previous['identity'] == identity
+            and previous['frame'] <= event['frame'] and previous['game_time'] <= event['game_time']
+            and previous.get('collection_mode') == context.get('collection_mode')):
+        past = lookup_native_actor(previous, cid=cid, data_uid=data_uid)
+        if past is None and _token_claim_conflicts(previous, cid, data_uid):
+            return None
+    if member is None and _token_claim_conflicts(context, cid, data_uid):
+        return None
+
+    proof = event.get('proof')
+    supplied = isinstance(proof, dict) and 'native_autochess_token_host' in proof
+    witness = proof['native_autochess_token_host'] if supplied else member or past
+    if witness is None:
+        return None
+    if supplied and (event.get('kind') not in ('damage_settlement', 'elemental_bar')
+                     or not isinstance(witness, dict) or set(witness) != set(_TOKEN_HOST_FIELDS)):
+        return None
+    key, uid, side = (witness.get(field) for field in _TOKEN_HOST_FIELDS)
+    if (not _cid(key) or not _integer(uid, 1, (1 << 32) - 1) or uid == data_uid
+            or not _integer(side, 0, (1 << 31) - 1)):
+        return None
+    host = lookup_native_actor(context, cid=key, data_uid=uid)
+    if host is None or host['is_token'] or host['player_side'] != side:
+        return None
+    for bound in (member, past):
+        if bound is not None and (not bound['is_token']
+                or (bound['host_key'], bound['host_uid'], bound['player_side']) != (key, uid, side)
+                or (bound['player_uid'], bound['player_index']) != (host['player_uid'], host['player_index'])):
+            return None
+    if member is not None or past is not None:
+        return member or past
+    return dict(cid=cid, data_uid=data_uid, is_token=True, is_predefined=False,
+                host_key=key, host_uid=uid, player_uid=host['player_uid'],
+                player_index=host['player_index'], player_side=side)

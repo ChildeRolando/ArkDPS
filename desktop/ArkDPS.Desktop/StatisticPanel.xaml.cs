@@ -293,6 +293,20 @@ public partial class StatisticPanel : UserControl
         Rows.ItemContainerStyle = (Style)FindResource("SideRankedRow");
         AutomationProperties.SetAutomationId(Rows, "SideDpsRanking");
         AutomationProperties.SetName(Rows, "干员排行");
+        var footerColumns = ReferenceFooterColumns.ColumnDefinitions;
+        ReferenceFooterColumns.Margin = new Thickness(8,0,2,0);
+        footerColumns[0].Width = new GridLength(30);
+        footerColumns[1].MinWidth = 0;
+        footerColumns[1].Width = new GridLength(1, GridUnitType.Star);
+        footerColumns[2].Width = new GridLength(70);
+        footerColumns[3].Width = new GridLength(65);
+        footerColumns[4].Width = footerColumns[5].Width = new GridLength(0);
+        Grid.SetColumnSpan(ReferenceFooterLabel, 1);
+        Grid.SetColumn(ReferenceFooterTotal, 2);
+        Grid.SetColumn(ReferenceFooterRate, 3);
+        ReferenceFooterLabel.FontSize = 13;
+        ReferenceFooterLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+        ReferenceFooterTotal.Style = ReferenceFooterRate.Style = (Style)FindResource("SideNumberCell");
         PanelFrame.Margin = new Thickness(0);
         PanelFrame.SetResourceReference(Border.BackgroundProperty, "Console");
         PanelFrame.SetResourceReference(Border.BorderBrushProperty, "ConsoleLine");
@@ -617,16 +631,20 @@ public partial class StatisticPanel : UserControl
         ReferenceShareHeading.ToolTip=share.Description;
         var hasFooterTotal=value.Get("footer_total").ValueKind==JsonValueKind.Number;
         var hasFooterRate=value.Get("footer_rate").ValueKind==JsonValueKind.Number;
-        var showFooter=referenceStyle && (incoming.Length>0 || hasFooterTotal || hasFooterRate);
+        var showFooter=(referenceStyle || sideRanking) && (incoming.Length>0 || hasFooterTotal || hasFooterRate);
         ReferenceFooter.Visibility=showFooter ? Visibility.Visible : Visibility.Collapsed;
         if(showFooter)
         {
             var totalComplete=value.Bool("footer_total_complete");
             var rateComplete=value.Bool("footer_rate_complete");
-            ReferenceFooterLabel.Text=totalComplete && (!hasFooterRate || rateComplete) ? "全队合计" : "已知合计";
+            var completeLabel=sideRanking ? "全队汇总" : "全队合计";
+            ReferenceFooterLabel.Text=totalComplete && (!hasFooterRate || rateComplete) ? completeLabel : "已知合计";
+            var recentRanking=config.Text("ranking")=="recent";
+            if(sideRanking && recentRanking) ReferenceFooterLabel.Text+=" · 近期";
+            var footerMetric=sideRanking && !recentRanking ? SideTotalHeading.Text : ReferenceTotalHeading.Text;
             ReferenceFooterTotal.Text=value.Text("footer_total_display");
             ReferenceFooterTotal.ToolTip=hasFooterTotal
-                ? (totalComplete ? "全队" : "已知干员")+ReferenceTotalHeading.Text+" "+value.Ui("footer_total")
+                ? (totalComplete ? "全队" : "已知干员")+footerMetric+" "+value.Ui("footer_total")
                 : null;
             ReferenceFooterRate.Text=value.Text("footer_rate_display");
             ReferenceFooterRate.ToolTip=hasFooterRate

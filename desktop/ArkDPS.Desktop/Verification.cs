@@ -476,9 +476,11 @@ public partial class MainWindow
                 FindVisual<LiveTrendView>(SideFriendly, _ => true) is null,
                 "side details did not use the selected operator's primary data card");
         var container = (ListBoxItem)ranking.ItemContainerGenerator.ContainerFromIndex(0);
-        Require(FindVisual<TextBlock>(container, text => text.IsVisible && (text.Text == name || text.Text == "1")) is null &&
+        var operatorName = FindAutomationElement(container, "SideRankingOperatorName") as TextBlock;
+        Require(operatorName is { IsVisible: true } && operatorName.Text == name &&
+                FindVisual<TextBlock>(container, text => text.IsVisible && text.Text == "1") is null &&
                 System.Windows.Automation.AutomationProperties.GetName(container) == name,
-                "side ranking displays rank or name, or hides name from accessibility");
+                "side ranking did not display the accessible operator name without a rank");
         var total = FindAutomationElement(container, "SideRankingTotal") as TextBlock;
         var rate = FindAutomationElement(container, "SideRankingRate") as TextBlock;
         Require(total is { IsVisible: true } && total.Text == expected.Text("cumulative_display_value") &&
@@ -490,6 +492,13 @@ public partial class MainWindow
                 bar.Data.Get("segments").Items().Count() == expectedSegments &&
                 bar.Data.Number("bar_ratio") == expected.Number("bar_ratio"),
                 "side ranking did not render the first panel's segmented contribution bar");
+        Require(operatorName!.TranslatePoint(new Point(0,operatorName.ActualHeight),container).Y <=
+                bar!.TranslatePoint(new Point(0,0),container).Y,
+                "side ranking did not place the operator name above the contribution bar");
+        Require(sourcePanel!.ReferenceFooter.IsVisible &&
+                sourcePanel.ReferenceFooterTotal.Text == source.Text("footer_total_display") &&
+                sourcePanel.ReferenceFooterRate.Text == source.Text("footer_rate_display"),
+                "side ranking footer did not render the first panel's team totals");
     }
 
     private void VerifySideRankingDuringHover(string panelId)
