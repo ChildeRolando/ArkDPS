@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Media;
 using ArkDPS.Desktop;
 
 internal static class MultiplayerViewTests
@@ -27,6 +29,13 @@ internal static class MultiplayerViewTests
 
     private static string Text(DependencyObject root) =>
         string.Join("|", Children(root).OfType<TextBlock>().Select(item => item.Text));
+
+    private static IEnumerable<DependencyObject> VisualChildren(DependencyObject root)
+    {
+        yield return root;
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            foreach (var child in VisualChildren(VisualTreeHelper.GetChild(root, index))) yield return child;
+    }
 
     private static JsonObject Player(int side, string uid, int amount) => new()
     {
@@ -217,6 +226,103 @@ internal static class MultiplayerViewTests
         }
     }
 
+    private static void SideRankingNameAndSummary()
+    {
+        var selected = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "Fixtures", "native-ce5-healing.selected.json")))!;
+        foreach (string skin in new[] { "lone-trail", "people", "babel" })
+        foreach (double width in new[] { 280d, 320d })
+        {
+            Theme.Apply(skin);
+            var view = selected["view"]!.DeepClone().AsObject();
+            view["config"]!["panel_id"] = "side-name-summary";
+            var entry = view["entries"]![0]!;
+            string name = width == 280 ? "闪灵·侧边长名称布局检查" : entry["name"]!.GetValue<string>();
+            entry["name"] = name;
+            entry["rate"] = 123.4;
+            entry["rate_text"] = "123.4";
+            view["footer_total"] = entry["value"]!.DeepClone();
+            view["footer_total_display"] = entry["display_value"]!.DeepClone();
+            view["footer_rate"] = 123.4;
+            view["footer_rate_display"] = "123.4";
+            view["footer_total_complete"] = true;
+            view["footer_rate_complete"] = true;
+            string totalText = entry["display_value"]!.GetValue<string>();
+            var side = new StatisticPanel();
+            side.ConfigureSideRanking();
+            var main = new StatisticPanel();
+            main.SetReferenceStyle(true);
+            void Update()
+            {
+                var state = JsonSerializer.SerializeToElement(view);
+                side.Update(state);
+                main.Update(state);
+                side.Measure(new Size(width, 460));
+                side.Arrange(new Rect(0, 0, width, 460));
+                side.UpdateLayout();
+            }
+            Update();
+            var container = (ListBoxItem)side.Rows.ItemContainerGenerator.ContainerFromIndex(0)!;
+            var row = VisualChildren(container).OfType<Grid>().Single(item => item.Height == 36);
+            var caption = VisualChildren(container).OfType<TextBlock>().Single(item =>
+                AutomationProperties.GetAutomationId(item) == "SideRankingOperatorName");
+            var bar = VisualChildren(container).OfType<ContributionBar>().Single(item =>
+                AutomationProperties.GetAutomationId(item) == "SideRankingContribution");
+            var rowTotal = VisualChildren(container).OfType<TextBlock>().Single(item =>
+                AutomationProperties.GetAutomationId(item) == "SideRankingTotal");
+            var rowRate = VisualChildren(container).OfType<TextBlock>().Single(item =>
+                AutomationProperties.GetAutomationId(item) == "SideRankingRate");
+            double captionBottom = caption.TransformToAncestor(row).Transform(new Point()).Y + caption.ActualHeight;
+            double barTop = bar.TransformToAncestor(row).Transform(new Point()).Y;
+            Check(skin + width + " side name fits above the bar in the unchanged 36 DIP row",
+                row.ActualHeight == 36 && caption.Text == name && caption.ActualHeight > 0 &&
+                captionBottom <= barTop && caption.TextWrapping == TextWrapping.NoWrap &&
+                caption.TextTrimming == TextTrimming.CharacterEllipsis);
+            Check(skin + width + " side name preserves worker cumulative value and rate beside the original bar",
+                rowTotal.Text == totalText && rowRate.Text == "123.4" && bar.Data.Number("value") == 10919.251953125 &&
+                ((RowItem)side.Rows.Items[0]).Tooltip.Contains(name, StringComparison.Ordinal));
+            double RightEdge(FrameworkElement element) =>
+                element.TranslatePoint(new Point(element.ActualWidth, 0), side).X;
+            Check(skin + width + " side summary aligns with the two numeric columns below the rows",
+                Grid.GetRow(side.ReferenceFooter) > Grid.GetRow(side.Rows) &&
+                Math.Abs(RightEdge(side.ReferenceFooterTotal) - RightEdge(rowTotal)) <= 1 &&
+                Math.Abs(RightEdge(side.ReferenceFooterRate) - RightEdge(rowRate)) <= 1);
+            foreach (string quality in new[] { "complete", "partial_total", "partial_rate", "unknown" })
+            {
+                view["footer_total_complete"] = quality is "complete" or "partial_rate";
+                view["footer_rate_complete"] = quality is "complete" or "partial_total";
+                bool unknown = quality == "unknown";
+                view["footer_total"] = unknown ? null : entry["value"]!.DeepClone();
+                view["footer_total_display"] = unknown ? "—" : totalText;
+                view["footer_rate"] = unknown ? null : JsonValue.Create(123.4);
+                view["footer_rate_display"] = unknown ? "—" : "123.4";
+                Update();
+                Check(skin + width + quality + " side summary shares the main worker figures without inventing unknown zeros",
+                    side.ReferenceFooter.Visibility == Visibility.Visible &&
+                    side.ReferenceFooterLabel.Text == (quality == "complete" ? "全队汇总" : "已知合计") &&
+                    side.ReferenceFooterTotal.Text == main.ReferenceFooterTotal.Text &&
+                    side.ReferenceFooterRate.Text == main.ReferenceFooterRate.Text &&
+                    side.ReferenceFooterTotal.Text == (unknown ? "—" : totalText) &&
+                    side.ReferenceFooterRate.Text == (unknown ? "—" : "123.4"));
+            }
+            view["config"]!["ranking"] = "recent";
+            entry["value"] = 17.25;
+            entry["display_value"] = "17.3";
+            entry["cumulative_display_value"] = totalText;
+            view["footer_total"] = 17.25;
+            view["footer_total_display"] = "17.3";
+            view["footer_total_complete"] = true;
+            Update();
+            Check(skin + width + " recent summary keeps the main recent aggregate while each side row keeps cumulative output",
+                side.ReferenceFooterLabel.Text == "全队汇总 · 近期" &&
+                side.ReferenceFooterTotal.Text == "17.3" && side.ReferenceFooterTotal.Text == main.ReferenceFooterTotal.Text &&
+                rowTotal.Text == totalText);
+            side.Update(default);
+            Check(skin + width + " clearing the side view removes the old rows and summary",
+                side.Rows.Items.Count == 0 && side.ReferenceFooter.Visibility == Visibility.Collapsed);
+        }
+    }
+
     internal static void Run()
     {
         if (Application.Current is null)
@@ -229,6 +335,7 @@ internal static class MultiplayerViewTests
             Portraits.Get("char_618_acrbot", false) is System.Windows.Media.Imaging.CroppedBitmap { PixelWidth: 48, PixelHeight: 48 } &&
             Portraits.Get("char_618_acrbot", true) is System.Windows.Media.Imaging.CroppedBitmap { PixelWidth: 48, PixelHeight: 48 });
         StableActorControls();
+        SideRankingNameAndSummary();
         RetainedDefenseTransitions();
         var surface = new MultiplayerView();
         string empty = Text(surface);
