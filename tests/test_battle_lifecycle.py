@@ -10,6 +10,22 @@ from battle_lifecycle import (BattleFeed, BattleObservation, BattleRuntime,
 from roster import CharacterEntry, RosterSnapshot
 from snapshot_adapter import FrameMismatch, MappingUnavailable
 from event_capture import CaptureRetry
+from event_observer import FridaEventObserver
+
+
+def test_feed_detaches_shared_event_evidence_and_adopts_fresh_frida_records():
+    records = [{'sequence': 1, 'proof': {'method': 'Entity.SetHpInternal'}}]
+    evidence = dict(before={'sequence': 0}, drain=dict(events=records, quality={'ready': True}))
+    feed = BattleFeed()
+
+    external = feed._emit('sample', events=evidence)
+    owned = feed._emit('sample', events=evidence, observer=FridaEventObserver(None, None))
+
+    assert external.events == owned.events == evidence
+    assert external.events['drain']['events'][0]['proof'] is not records[0]['proof']
+    assert owned.events['drain']['events'] is records
+    assert owned.events['before'] is not evidence['before']
+    assert owned.events['drain']['quality'] is not evidence['drain']['quality']
 
 
 class FakeCollector:

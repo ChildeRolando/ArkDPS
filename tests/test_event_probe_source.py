@@ -111,7 +111,7 @@ def test_submitted_source_manifest_survives_ready_or_load_failure(monkeypatch, p
         __version__="17.26.1", get_local_device=lambda: device,
         get_device_manager=lambda: SimpleNamespace(add_remote_device=lambda _: device)))
     monkeypatch.setenv("ARKDPS_TRACE_HP_CONTEXT", "1")
-    monkeypatch.setenv("ARKDPS_COALESCE_ENEMY_HP", "1")
+    monkeypatch.setenv("ARKDPS_COALESCE_ENEMY_HP", "0")
     collector = SimpleNamespace(diagnostics=SimpleNamespace(
         connection_ok=True, version_status=VersionStatus.COMPATIBLE),
         process=SimpleNamespace(pid=123, process_instance=(123, 456), process_alive=lambda: True),
@@ -128,6 +128,7 @@ def test_submitted_source_manifest_survives_ready_or_load_failure(monkeypatch, p
     manifest = observer.probe_modes["probe_source"]
     assembled = assemble_probe_source(platform)
     assert {key: manifest[key] for key in assembled.audit()} == assembled.audit()
+    assert loaded[0].startswith("globalThis.arkdpsCoalesceEnemyHp = false;\n")
     assert manifest["submitted_sha256"] == hashlib.sha256(loaded[0].encode()).hexdigest()
     assert manifest["submitted_sha256"] != manifest["assembled_sha256"]
     # A second producer ready notification cannot erase or replace provenance.

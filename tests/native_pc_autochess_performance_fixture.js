@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const {world}=require('./native_pc_autochess_context_fixture.js');
 const plain=value=>JSON.parse(JSON.stringify(value));
-const checks=[],counts=[];
+const checks=[],counts=[],androidScopeReads=[];
 function check(name,run){run();checks.push(name);}
 function state(f){return vm.runInContext('({body:nativeAutoBodyCache!==null,scope:nativeAutoCache!==null})',f.context);}
 function owned(options={},full=false){
@@ -51,8 +51,8 @@ for(const roles of [32,40]){
   return {first,mark,drain,ack};
  },{rolesPerPlayer:roles/4}));
  check('warm_'+roles+'_read_budgets_and_callback_event_equivalence',()=>{
-  for(const [name,budget,call]of [['scope',83,f=>f.stamp()],['mark',roles===32?1594:1850,f=>f.mark()],
-   ['10_output_pairs',3950,f=>modifierPairs(f,false)],['10_unlogged_pairs',3600,f=>modifierPairs(f,true)]]){
+  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?1584:1840,f=>f.mark()],
+   ['10_output_pairs',3750,f=>modifierPairs(f,false)],['10_unlogged_pairs',3400,f=>modifierPairs(f,true)]]){
    const f=owned({rolesPerPlayer:roles/4}),measured=readCount(f,()=>call(f));
    assert.equal(measured.reads,budget,name+' native-read budget');
    assert.equal(f.fullReads,1,'unchanged warm body must avoid parsing another full roster');
@@ -60,14 +60,23 @@ for(const roles of [32,40]){
    assert.deepEqual(plain(measured.result),plain(call(oracle)));
    counts.push({roles,operation:name,reads:measured.reads});
   }
+  const android=owned({platform:'mumu',rolesPerPlayer:roles/4});
+  const scope=readCount(android,()=>android.stamp());
+  assert.equal(scope.result.native_autochess_scope.status,'available');
+  assert.equal(scope.reads,118,'Android scope native-read budget');
+  androidScopeReads.push({roles,reads:scope.reads});
  });
 }
 check('first_body_guard_mismatch_falls_back_to_full_parse',()=>{
  const f=owned(),previous=vm.runInContext('nativeAutoBodyCache.body',f.context);
+ const plan=vm.runInContext('nativeAutoCache.scopeGuards',f.context);
+ assert.equal(f.mark().native_autochess_context.status,'available');
+ assert.equal(vm.runInContext('nativeAutoCache.scopeGuards',f.context),plan,'same verified body retains its guard plan');
  f.write(f.roleList.add(0x1c),f.roleList.add(0x1c).readS32()+1);
  assert.equal(f.mark().native_autochess_context.status,'available');
  assert.equal(f.fullReads,2);assert(state(f).body);
  assert.notEqual(vm.runInContext('nativeAutoBodyCache.body',f.context),previous);
+ assert.notEqual(vm.runInContext('nativeAutoCache.scopeGuards',f.context),plan);
 });
 check('second_body_guard_failure_clears_both_caches_without_retry',()=>{
  const f=owned(),proto=f.ptr(0).constructor.prototype,read=proto.readU32;let seen=0;
@@ -164,6 +173,36 @@ check('cross_page_block_failure_and_short_reads_are_unknown',()=>{
   assert(triggered);assert.equal(stamp.native_autochess_scope.status,'unknown');
  }
 });
+check('cross_page_player_slots_keep_existing_reads_and_closing_checks',()=>{
+ const f=world(),items=f.playerList.add(0x10).readPointer(),next=f.ptr(0x4000fffc0n);
+ f.write(next,items.readPointer());f.write(next.add(0x18),f.players.length);
+ for(let index=0;index<f.players.length;index++){
+  const slot=next.add(0x20+16*index);
+  f.write(slot,f.players[index][0]);f.write(slot.add(8),f.players[index][1]);
+ }
+ f.write(f.playerList.add(0x10),next);
+ assert.equal(f.mark().native_autochess_context.status,'available');
+ const slot=next.add(0x40),proto=f.ptr(0).constructor.prototype,read=proto.readByteArray;
+ let passes=0;
+ proto.readByteArray=function(size){
+  assert((this.value&4095n)+BigInt(size)<=4096n,'new slot range must not cross the page');
+  if(this.equals(slot)&&++passes===2)f.write(slot.add(8),f.players[0][1]);
+  return read.call(this,size);
+ };
+ let stamp;try{stamp=f.stamp();}finally{proto.readByteArray=read;}
+ assert.equal(passes,2);assert.equal(stamp.native_autochess_scope.status,'unknown');
+});
+check('scope_checks_stage_pointer_after_guard_pass',()=>{
+ for(const platform of ['native_pc','mumu']){
+  const f=owned({platform}),old=f.level.add(0x18).readPointer(),host=f.controller.add(0x2e8);
+  const next=f.text('Activities/ACT3AUTOCHESS/level_act3autochess_m01');
+  assert(!next.equals(old));
+  const proto=f.ptr(0).constructor.prototype,read=proto.readPointer;let passes=0;
+  proto.readPointer=function(){if(this.equals(host)&&++passes===2)f.write(f.level.add(0x18),next);return read.call(this);};
+  let stamp;try{stamp=f.stamp();}finally{proto.readPointer=read;}
+  assert.equal(passes,2);assert.equal(stamp.native_autochess_scope.status,'unknown');
+ }
+});
 check('dictionary_version_is_the_same_guarded_value_not_a_second_read',()=>{
  const f=world(),read=f.context.autoRead(),identity=f.context.currentNativeIdentity();
  const proto=f.ptr(0).constructor.prototype,scalar=proto.readS32;let versionReads=0;
@@ -177,5 +216,5 @@ check('post_closing_stamp_phase_and_round_changes_never_commit_an_older_body',()
  const {verifyPostClosingStampConsistency}=require('./autochess_mark_consistency_fixture.js');
  assert.equal(verifyPostClosingStampConsistency().length,4);
 });
-console.log(JSON.stringify({status:'verified',classification:'owned_memory_not_live',checks,counts,
+console.log(JSON.stringify({status:'verified',classification:'owned_memory_not_live',checks,counts,androidScopeReads,
  note:'Production parser/adapter only. Full-read oracle clears body cache; no copied adapter or ignored prototype dependency. Read counts do not claim game FPS.'}));

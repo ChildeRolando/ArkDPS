@@ -129,34 +129,70 @@ function autoLayout(k,name,namespace,count,specs){
  }
  nativeAutoLayouts.set(cacheKey,out);return out;
 }
-function scopePointerNumber(pointer){
- const value=Number(BigInt(pointer.toString()));
- if(!Number.isSafeInteger(value)||value<0||value>0x7fffffffffff)throw new Error('AutoChess cached pointer range');
- return value;
-}
 function scopeBlock(address,size,fields){
  const bytes=address.readByteArray(size);
  if(bytes===null||bytes.byteLength!==size)throw new Error('AutoChess block read unavailable');
  const view=new DataView(bytes);
- for(const [kind,offset,expected]of fields){
+ for(const [kind,offset,expected,high]of fields){
   if(kind==='p'){
-   if(view.getUint32(offset,true)!==expected%4294967296||
-      view.getUint32(offset+4,true)!==Math.floor(expected/4294967296))
+   if(view.getUint32(offset,true)!==expected||view.getUint32(offset+4,true)!==high)
     throw new Error('AutoChess scope block pointer changed');
   }else if(view.getInt32(offset,true)!==expected)throw new Error('AutoChess scope block integer changed');
  }
 }
-function scopeBlocks(cached){
- if(probeAdapter.autoChessReflected)return null;
- const p=(offset,value)=>['p',offset,scopePointerNumber(value)],i=(offset,value)=>['i',offset,value];
- return {
-  manager:[cached.manager.add(0x38),16,[p(0,cached.status),p(8,cached.center)]],
-  dict:[cached.dict.add(0x18),24,[p(0,cached.dictEntries),i(8,cached.dictCount),i(16,cached.dictFree),i(20,cached.dictVersion)]],
-  list:[cached.playerList.add(0x10),16,[p(0,cached.playerItems),i(8,cached.ownerRefs.length),i(12,cached.playerVersion)]],
-  owners:cached.ownerRefs.map(owner=>[
-   [owner.slot,16,[i(0,owner.index),p(8,owner.value)]],
-   [owner.value.add(0x10),16,[i(0,owner.index),p(8,owner.uidRef)]]])
- };
+function scopeGuardGroup(fields,existingBlock=false){
+ if(fields.length<2)return fields;
+ const addresses=fields.map(([,address])=>BigInt(address.toString()));
+ let first=0,last=addresses[0];
+ for(let index=0;index<fields.length;index++){
+  const address=addresses[index],end=address+(fields[index][0]==='p'?8n:4n);
+  if(address<addresses[first])first=index;
+  if(end>last)last=end;
+ }
+ const start=addresses[first],size=last-start,pageSize=BigInt(Process.pageSize??4096);
+ // New reads stay in one page. Existing PC blocks retain their fault behavior.
+ if(size>128n||!existingBlock&&start/pageSize!==(last-1n)/pageSize)return fields;
+ const words=fields.map(([kind,,expected],index)=>{
+  const offset=Number(addresses[index]-start);
+  if(kind==='i')return [kind,offset,expected];
+  const value=BigInt(expected.toString());
+  return [kind,offset,Number(BigInt.asUintN(32,value)),Number(BigInt.asUintN(32,value>>32n))];
+ });
+ return [['block',fields[first][1],words,Number(size)]];
+}
+function scopeGuardPlan(body){
+ const p=(address,value)=>['p',address,value],i=(address,value)=>['i',address,value];
+ const {header,model,playerList,playerItems,playerVersion,ownerRefs,playerAddresses:list}=body;
+ const a=header.addresses,reflected=probeAdapter.autoChessReflected;
+ const group=fields=>reflected?fields:scopeGuardGroup(fields,true);
+ const plan=[p(a.controllerHost,header.host),p(a.hostDict,header.dict),p(a.statusModel,header.model),
+  p(a.modelMachine,header.machine),p(header.managerSlot,header.manager),p(a.centerPlayers,model),
+  p(list.list,playerList),
+  ...group([p(a.managerStatus,header.status),p(a.managerCenter,header.center)]),
+  ...group([p(a.dictEntries,header.dictEntries),i(a.dictCount,header.dictCount),
+   i(a.dictFree,header.dictFree),i(a.dictVersion,header.dictVersion)]),
+  ...group([p(list.items,playerItems),i(list.count,ownerRefs.length),i(list.version,playerVersion)])];
+ const slots=ownerRefs.map(owner=>[i(owner.slot,owner.index),p(owner.slot.add(8),owner.value)]);
+ if(reflected)plan.push(...slots.flat());
+ else{
+  const slotBlock=scopeGuardGroup(slots.flat());
+  plan.push(...(slotBlock.length===1?slotBlock:slots.flatMap(group)));
+ }
+ for(const owner of ownerRefs)
+  plan.push(...group([i(owner.indexAddress,owner.index),p(owner.uidAddress,owner.uidRef)]));
+ if(reflected)plan.push(i(a.self,header.self));
+ return plan;
+}
+function validateScopeGuards(plan){
+ for(const [kind,address,expected,size]of plan){
+  if(kind==='block'){scopeBlock(address,size,expected);continue;}
+  if(kind==='p'?!address.readPointer().equals(expected):address.readS32()!==expected)
+   throw new Error('AutoChess scope guard changed');
+ }
+}
+function validateScopeStage(stage,level,stagePointer){
+ if(probeAdapter.autoChessReflected&&(!ptr(level).readPointer().equals(stage.levelClass)||
+    !stagePointer.readPointer().equals(stage.stageClass)))throw new Error('AutoChess stage class changed');
 }
 function autoRead(){
  const guards=[],layouts=new Map();
@@ -192,10 +228,8 @@ function autoRead(){
   if(typeof result!=='string'||/[\u0000-\u001f\u007f]/.test(result))throw new Error('AutoChess string value');
   guards.push(['text',address,result]);return result;
  };
- read.block=(address,size,fields)=>{scopeBlock(address,size,fields);guards.push(['block',address,{size,fields}]);};
  read.validate=()=>{
   for(const [kind,address,before] of guards){
-   if(kind==='block'){scopeBlock(address,before.size,before.fields);continue;}
    const after=kind==='p'?address.readPointer():kind==='i'?address.readS32():
     kind==='u'?address.readU32():kind==='b'?address.readU8():kind==='n'?address.readU64().toNumber():
     address.add(0x14).readUtf16String(address.add(0x10).readS32());
@@ -315,11 +349,10 @@ function autoData(address,read){
  return {cid,data_uid,is_token:!!token,is_predefined:!!predefined,
   host_key:token&&!host.isNull()?read.text(host):null,host_uid:token?hostUid:null};
 }
-function autoScope(identity,phase,round,frame,fixed,fingerprint,headerKey){
- const roots=['controller','native','logger','stats','level'].map(k=>ptr(identity[k]).toString()).join(':');
+function autoScope(roots,phase,round,frame,fixed,fingerprint,headerKey){
  const previous=nativeAutoScope;
  if(previous&&(previous.roots!==roots||previous.phase!==phase||previous.round!==round||
-   frame<previous.frame||BigInt(fixed)<BigInt(previous.fixed)||
+   frame<previous.frame||(fixed!==previous.fixed&&BigInt(fixed)<BigInt(previous.fixed))||
    headerKey!==undefined&&previous.headerKey!==undefined&&headerKey!==previous.headerKey||
    fingerprint!==undefined&&previous.fingerprint!==undefined&&fingerprint!==previous.fingerprint))nativeAutoEpoch++;
  nativeAutoScope={roots,phase,round,frame,fixed,fingerprint:fingerprint===undefined?previous?.fingerprint:fingerprint,
@@ -431,13 +464,15 @@ function readAutoChess(identity,frame,fixed){
 function finishAutoChess(result,identity,frame,fixed){
  if(result.error)return {protocol_version:1,status:'unknown',verified_same_frame:false,frame,
   game_time:Number(BigInt(fixed))/4294967296,reason:result.error};
- const {header,model,playerList,playerItems,playerVersion,ownerRefs,players,memberships,unknown,fingerprint,playerAddresses}=result;
+ const {header,players,memberships,unknown,fingerprint}=result;
  const headerKey=[header.manager,header.status,header.model,header.machine,header.center].map(p=>p.toString()).join(':');
- const scope_key=autoScope(identity,header.phase,header.round,frame,fixed,fingerprint,headerKey);
+ const roots=[identity.controller,identity.native,identity.logger,identity.stats,identity.level].join(':');
+ const scope_key=autoScope(roots,header.phase,header.round,frame,fixed,fingerprint,headerKey);
  const collection_mode=autoCollectionMode(scope_key,header.phase);
- nativeAutoCache={...header,playerModel:model,playerList,playerItems,playerVersion,
-  ownerRefs,identity:{...identity},fingerprint,headerKey,playerAddresses};
- nativeAutoCache.blocks=scopeBlocks(nativeAutoCache);
+ // A reused body has passed both live guard passes. Keep the plan of what to
+ // read on it, while each event must still read and compare every guard.
+ result.scopeGuards??=scopeGuardPlan(result);
+ nativeAutoCache={addresses:header.addresses,identity:{...identity},fingerprint,headerKey,roots,scopeGuards:result.scopeGuards};
  autoCollectionOwners(result,scope_key,collection_mode,frame,Number(BigInt(fixed))/4294967296);
  return {protocol_version:1,status:'available',verified_same_frame:true,frame,
   game_time:Number(BigInt(fixed))/4294967296,scope_key,phase:header.phase,round:header.round,
@@ -460,45 +495,19 @@ function stampAutoChessClock(when){
   if(!cached||Object.keys(before).some(k=>before[k]!==cached.identity[k]))throw new Error('AutoChess scope cache unavailable');
   const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
   if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time)throw new Error('AutoChess event clock mismatch');
-  const read=autoRead();
-  let phase,round;
-  if(probeAdapter.autoChessReflected){
-   if(!read.p(ptr(before.level)).equals(nativeAutoStage.levelClass))throw new Error('AutoChess level class changed');
-   if(!read.p(stagePointer).equals(nativeAutoStage.stageClass))throw new Error('AutoChess stage String class changed');
-   const a=cached.addresses,p=cached.playerAddresses;
-   const pointers=[[a.controllerHost,cached.host],[a.hostDict,cached.dict],[a.managerStatus,cached.status],
-    [a.managerCenter,cached.center],[a.statusModel,cached.model],[a.modelMachine,cached.machine],
-    [a.dictEntries,cached.dictEntries],[cached.managerSlot,cached.manager],[a.centerPlayers,cached.playerModel],
-    [p.list,cached.playerList],[p.items,cached.playerItems]];
-   const integers=[[a.dictCount,cached.dictCount],[a.dictFree,cached.dictFree],[a.dictVersion,cached.dictVersion],
-    [p.count,cached.ownerRefs.length],[p.version,cached.playerVersion],[a.self,cached.self]];
-   for(const owner of cached.ownerRefs){
-    pointers.push([owner.slot.add(8),owner.value],[owner.uidAddress,owner.uidRef]);
-    integers.push([owner.slot,owner.index],[owner.indexAddress,owner.index]);
-   }
-   for(const [address,expected]of pointers)if(!read.p(address).equals(expected))throw new Error('AutoChess reflected pointer changed');
-   for(const [address,expected]of integers)if(read.i(address)!==expected)throw new Error('AutoChess reflected scalar changed');
-   phase=read.i(a.phase);round=read.i(a.round);
-  }else{
-  for(const [address,expected]of [[cached.controller.add(0x2e8),cached.host],[cached.host.add(0x10),cached.dict]]){
-   if(!read.p(address).equals(expected))throw new Error('AutoChess header cache changed');
-  }
-  read.block(...cached.blocks.manager);
-  for(const [address,expected]of [[cached.status.add(0x10),cached.model],[cached.model.add(0x18),cached.machine]]){
-   if(!read.p(address).equals(expected))throw new Error('AutoChess header cache changed');
-  }
-  read.block(...cached.blocks.dict);
-  if(!read.p(cached.managerSlot).equals(cached.manager)||!read.p(cached.center.add(0xf8)).equals(cached.playerModel)||
-   !read.p(cached.playerModel.add(0x18)).equals(cached.playerList))throw new Error('AutoChess players cache changed');
-  read.block(...cached.blocks.list);
-  for(const owner of cached.blocks.owners){read.block(...owner[0]);read.block(...owner[1]);}
-   phase=read.i(cached.machine.add(0x5c));round=read.i(cached.center.add(0x3c));
-  }
+  const {phase:phaseAddress,round:roundAddress}=cached.addresses;
+  validateScopeStage(nativeAutoStage,before.level,stagePointer);
+  validateScopeGuards(cached.scopeGuards);
+  const phase=phaseAddress.readS32(),round=roundAddress.readS32();
   if(![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(phase)||round<0)throw new Error('AutoChess event phase/round');
-  read.validate();const after=currentNativeIdentity();
+  validateScopeGuards(cached.scopeGuards);
+  validateScopeStage(nativeAutoStage,before.level,stagePointer);
+  if(phaseAddress.readS32()!==phase||roundAddress.readS32()!==round||
+     !nativeAutoStage.stageAddress.readPointer().equals(stagePointer))throw new Error('AutoChess changed during read');
+  const after=currentNativeIdentity();
   if(!after||Object.keys(before).some(k=>before[k]!==after[k])||clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed)
    throw new Error('AutoChess event scope changed');
-  const scope_key=autoScope(before,phase,round,frame,fixed,cached.fingerprint,cached.headerKey);
+  const scope_key=autoScope(cached.roots,phase,round,frame,fixed,cached.fingerprint,cached.headerKey);
   when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,
    frame,game_time:when.game_time,scope_key,phase,round,collection_mode:autoCollectionMode(scope_key,phase)};
  }catch(e){nativeAutoCache=null;unknown(String(e));}

@@ -91,9 +91,9 @@ def event_processing_payload(record):
     Native AutoChess scope is checked by the acquisition/attribution boundary;
     it is not a Statistics event argument and cannot supply an event amount.
     """
-    payload = {key: value for key, value in record.items()
-               if key not in ('proof', 'native_autochess_scope')}
-    proof = record.get('proof')
+    payload = dict(record)
+    proof = payload.pop('proof', None)
+    payload.pop('native_autochess_scope', None)
     if (payload.get('kind') in ('skill_start', 'skill_end')
             and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
         payload['skill_method'] = proof['method']

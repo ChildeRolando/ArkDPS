@@ -2,7 +2,7 @@
 const il=Process.getModuleByName(probeAdapter.moduleName);
 const traceHpContext=globalThis.arkdpsTraceHpContext===true;
 const traceNestedParent=globalThis.arkdpsTraceNestedParent===true;
-const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp===true;
+const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp!==false;
 const observeSourceCharacterUid=globalThis.arkdpsSourceCharacterUid!==false;
 function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
 function className(k){return k.add(0x10).readPointer().readCString();}
@@ -321,7 +321,7 @@ function resetDamageSettlementScope(){
  damageSettlementIssue=null;
  damageSettlementController=null;
 }
-function damageSettlementStamp(frame,game_time){
+function damageSettlementStamp(frame,game_time,withEventScope=true){
  // A Defense Protocol round can reuse the whole Unity battle object. Check
  // both clock readings before any callback can report uncertainty for it.
  if(damageSettlementClock&&probeAdapter.clockRegressed(damageSettlementClock,frame,game_time)){
@@ -330,6 +330,9 @@ function damageSettlementStamp(frame,game_time){
  }
  const sample={frame,game_time,settlementScope:damageSettlementScope};
  damageSettlementClock=sample;
+ return withEventScope?stampEventScope(sample):sample;
+}
+function stampEventScope(sample){
  if(typeof probeAdapter.stampClock==='function'){
   try{
    probeAdapter.stampClock(sample);
@@ -337,7 +340,7 @@ function damageSettlementStamp(frame,game_time){
     sample.native_autochess_scope={...sample.native_autochess_scope};
   }catch(e){
    sample.native_autochess_scope={protocol_version:1,status:'unknown',verified_same_frame:false,
-    frame,game_time,reason:'native scope observation failed'};
+    frame:sample.frame,game_time:sample.game_time,reason:'native scope observation failed'};
   }
  }
  return sample;
@@ -478,7 +481,7 @@ function damageSettlementQuality(){
   damage_settlement_scope:damageSettlementScope,enemy_damage_unknown:enemyDamageUnknown,
   damage_settlement_first_issue:damageSettlementIssue};
 }
-function time(allowRetry = false) {
+function time(allowRetry = false, withEventScope = true) {
  const frame = clock.readU32();
  const game_time = fp(clock.add(4));
  if (clock.readU32() !== frame) {
@@ -486,7 +489,7 @@ function time(allowRetry = false) {
   throw new Error('unstable callback clock');
  }
  if (!Number.isFinite(game_time) || game_time < 0) throw new Error('invalid clock');
-  return damageSettlementStamp(frame,game_time);
+  return damageSettlementStamp(frame,game_time,withEventScope);
 }
 function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer(),hasShield:p.add(0x27c).readU8()};}
 // Modifier callbacks receive a pointer to m_source; the remaining fields follow
@@ -1081,7 +1084,7 @@ function sameNativeEventScope(left,right){
   &&a.status==='available'&&b.status==='available'
   &&a.verified_same_frame===true&&b.verified_same_frame===true
   &&typeof a.scope_key==='string'&&a.scope_key.length>0&&a.scope_key===b.scope_key
-  &&a.phase===b.phase&&a.round===b.round;
+  &&a.phase===b.phase&&a.round===b.round&&a.collection_mode===b.collection_mode;
 }
 function recordEnemyHp(write,when,method,hp,maxHp){
  const {key,evidence,hpBefore,maxHpBefore}=write;
@@ -1097,6 +1100,7 @@ function recordEnemyHp(write,when,method,hp,maxHp){
    const run=enemyHpRun;
    if(run&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
       &&run.when.frame===when.frame&&run.when.game_time===when.game_time
+      &&run.when.settlementScope===when.settlementScope
       &&sameNativeEventScope(run.when,when)&&run.after===hpBefore){
     if(run.tail)run.tail.evidence.hp_after=hp;
     else run.tail={when,method,evidence};
@@ -1996,14 +2000,17 @@ function installEnemyStateHooks() {
       // Stage traps never create an entry; the host admits them via snapshot.
       if(enemyTarget&&!enemy.add(0x25).readU8())return;
       if(!enemyTarget&&(attributeChange||!stageTrapId(enemy)))return;
-      const when=time(),uid=enemy.add(0x18).readU32();
+      // This setter publishes only the closing scope. The opening clock still
+      // detects a new round and brackets the write with the closing clock.
+      const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
+      const when=time(false,!deferScope),uid=enemy.add(0x18).readU32();
       refreshEnemyEntryFrame(when.frame);
       if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
       if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
       const evidence=enemyIdentity(enemy,uid),hpBefore=targetHp(enemy);
       if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
       const maxHpBefore=attributeChange?fixedArg(args[2]):null;
-      this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,superseded:false};
+      this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,superseded:false};
       enemyHpWrites.set(key,this.write);
       beginEnemyHook(label);
      }catch(e){
@@ -2015,11 +2022,11 @@ function installEnemyStateHooks() {
      const write=this.write;
      if(!write)return;
      try{
-      const {enemy,key,uid,when,evidence,hpBefore,maxHpBefore,superseded}=write;
+      const {enemy,key,uid,when,evidence,hpBefore,maxHpBefore,deferScope,superseded}=write;
       if(enemyHpWrites.get(key)!==write)return;
       enemyHpWrites.delete(key);
       if(stopped||fatal||superseded)return;
-      const end=time();
+      const end=time(false,!deferScope);
       if(end.frame!==when.frame||end.game_time!==when.game_time||enemy.add(0x18).readU32()!==uid)
        throw new Error('enemy HP callback changed identity or crossed a frame');
       const hp=targetHp(enemy);
@@ -2027,6 +2034,7 @@ function installEnemyStateHooks() {
       if(hp===hpBefore&&maxHpBefore===null)return;
       const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
       if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
+      if(deferScope)stampEventScope(end);
       recordEnemyHp(write,end,label,hp,maxHp);
      }catch(e){
       if(coalesceEnemyHp)flushCoalescedEnemyHp();

@@ -35,6 +35,9 @@ def _while_live(operation, released):
 class FridaEventObserver:
     contract = MUMU_CONTRACT
     provides_autochess_context = True
+    # Frida decodes a fresh event list for every reply. The observer retains no
+    # reference to those records after delivering the batch to the collector.
+    transfers_event_records = True
 
     def __init__(self, collector, remote):
         self.collector = collector
@@ -146,8 +149,8 @@ class FridaEventObserver:
             source = self._probe_source()
             if os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1':
                 source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
-            if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '1':
-                source = 'globalThis.arkdpsCoalesceEnemyHp = true;\n' + source
+            if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '0':
+                source = 'globalThis.arkdpsCoalesceEnemyHp = false;\n' + source
             self._probe_source_manifest['submitted_sha256'] = sha256(source.encode('utf-8')).hexdigest()
             self.probe_modes['probe_source'] = dict(self._probe_source_manifest)
             self.script = self.session.create_script(source)

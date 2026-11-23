@@ -19,7 +19,7 @@ function loadProbeSource(sourcePath) {
 }
 
 function fixture({platform = 'native_pc', sourcePath = process.argv[2],
-  settlement = false, traceHpContext = false, traceNestedParent = false, skillCastState = false,
+  settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false,
   loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, nullClassIndex = null,
   unreadableClassIndex = null, extraNullRow = false, lazySkillFields = false,
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
@@ -115,8 +115,10 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     });
     classes.push(k); return k;
   }
-  const entity = klass('Entity', 'Torappu.Battle', {'m_hp': 0x40, '<id>k__BackingField': 0x148},
-    {ApplyModifier: 2, OnAfterOutputDamage: 1});
+  const entity = klass('Entity', 'Torappu.Battle', {'m_hp': 0x40, '<id>k__BackingField': 0x148,
+    ...(enemyHpState ? {'m_attributes': 0xb0, '<finishReason>k__BackingField': 0x158} : {})},
+    {ApplyModifier: 2, OnAfterOutputDamage: 1,
+      ...(enemyHpState ? {SetHpInternal: 4, SetHpInternalDirectly: 1, OnAttributeDirty: 2} : {})});
   const unitClass = klass('Unit', 'Torappu.Battle', {}, {OnTakeDamage: 2});
   const buffClass = klass('Buff', 'Torappu.Battle', {
     m_source: 0x18, m_blackboard: 0xb8, '<key>k__BackingField': 0x208,
@@ -139,12 +141,14 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       ...(skillCastState?{SwitchToSkillState:0,OnSkillCastSucceed:0}:{})});
   const basicSkill = klass('BasicSkill', 'Torappu.Battle', {m_owner: 0xa8, m_data: 0xb0,
     ...(skillCastState?{m_waitForSkillEnd:0x98}:{})}, {Tick:0,...(skillCastState?{OnCastFinish:3}:{})});
-  const bObject = settlement || skillCastState ? klass('BObject', 'Torappu.Battle', {
+  const bObject = settlement || enemyHpState || skillCastState ? klass('BObject', 'Torappu.Battle', {
     '<instanceUid>k__BackingField': 0x18, '<borned>k__BackingField': 0x25,
     '<isDisappeared>k__BackingField': 0x26,
   }, {Born: 0, OnRecycle: 0}) : null;
-  const enemyClass = settlement ? klass('Enemy', 'Torappu.Battle', {m_currentTile: 0x360},
-    {_UpdatePlayerSideAndMapLayer: 0}) : null;
+  const enemyClass = settlement || enemyHpState ? klass('Enemy', 'Torappu.Battle', {m_currentTile: 0x360},
+    {_UpdatePlayerSideAndMapLayer: 0,
+      ...(enemyHpState ? {DoFakeDeath: 1, DoReborn: 1, OnFinish: 1} : {})}) : null;
+  if(enemyHpState)klass('Attributes', 'Torappu.Battle', {m_cachedData: 0x68});
   if(lazySkillFields)write(basicSkill.add(0x80),ptr(0));
   if(lazySkillMethods)write(basicSkill.add(0x98),ptr(0));
   if(fieldOwnerMismatch)write(fieldTables.get(basicSkill.toString()).table.add(16),entity);
@@ -307,7 +311,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     androidBattleLayout:physicalLayout,
     entity, unitClass, character, basicSkill, skillData, buffClass, blockDamage, level, controller, controllerClass,
     apiCalls, fieldTables, methodTables, metadataExports:exports, vm, installSyntheticMitigation, hookTrace, hookAt,
-    abilityClass,castSkillClass,skillCastFieldTypes,skillCastMethodTypes,skillCastTypeInfo,characterData,enemyClass};
+    abilityClass,castSkillClass,skillCastFieldTypes,skillCastMethodTypes,skillCastTypeInfo,characterData,enemyClass,bObject};
 }
 
 module.exports = {fixture, loadProbeSource, LEGACY_ANDROID_FIXTURE_LAYOUT};

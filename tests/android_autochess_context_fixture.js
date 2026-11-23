@@ -350,11 +350,14 @@ check('body_clock_root_and_closing_owner_guards_remain_mandatory',()=>{
  proto.readU32=function(){if(!changed&&this.equals(crossing.roleData[0].add(0x6c))){changed=true;crossing.clock(1,143165576n);}return readU32.call(this);};
  let result;try{result=crossing.mark();}finally{proto.readU32=readU32;}
  assert.equal(result.retry,true);assert.equal(result.native_autochess_context,undefined);
- const f=owned();packet(f);const owner=f.players[0][1],uid=address(f,owner,'uid');
- const p=f.ptr(0).constructor.prototype,read=p.readPointer;let reads=0;
- p.readPointer=function(){if(this.equals(uid)&&++reads===2)f.write(uid,f.text('009999999'));return read.call(this);};
- let stamp;try{stamp=f.stamp();}finally{p.readPointer=read;}
- assert.equal(stamp.native_autochess_scope.status,'unknown');
+ for(const offset of [0x18,0x110]){
+  const f=owned();if(offset!==0x18)move(f,f.players.map(([,value])=>value),'uid',offset);
+  packet(f);const uid=address(f,f.players[0][1],'uid'),p=f.ptr(0).constructor.prototype,read=p.readPointer;
+  let reads=0;
+  p.readPointer=function(){if(this.equals(uid)&&++reads===2)f.write(uid,f.text('009999999'));return read.call(this);};
+  let stamp;try{stamp=f.stamp();}finally{p.readPointer=read;}
+  assert.equal(reads,2);assert.equal(stamp.native_autochess_scope.status,'unknown');
+ }
  const bad=owned();packet(bad);bad.write(bad.controller.add(0x158),bad.ptr(0));
  assert.equal(bad.stamp().native_autochess_scope.status,'unknown');
 });
