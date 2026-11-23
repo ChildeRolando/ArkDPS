@@ -22,6 +22,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from release_identity import candidate_head
+from native_pc.internal_entry import HOST_NAME
 # The vendored upstream also owns a regular package named tools.
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
@@ -93,17 +94,51 @@ def assert_no_tk_files(names):
         raise RuntimeError('Sealed Tk artifacts in package: ' + ', '.join(bad))
 
 
-def archive_name(version, with_events):
-    suffix = '' if with_events else '-snapshot'
+def archive_name(version, with_events, *, internal_backend=False):
+    suffix = '-internal-events' if internal_backend else ('' if with_events else '-snapshot')
     return f'ArkDPS-{version}-win-x64{suffix}.zip'
 
 
+def verify_internal_candidate(bundle, inputs, environment):
+    python = str(bundle / 'python/python.exe')
+    collector = bundle / 'collector'
+    for scenario in ('normal', 'autochess'):
+        cli = subprocess.run([python, '-I', '-B', str(collector / 'app.py'),
+            '--internal-capture', scenario, '--state-dir', str(inputs / f'internal-cli-{scenario}')],
+            cwd=bundle, env=environment, check=True, capture_output=True, encoding='utf-8', timeout=30)
+        report = json.loads(cli.stdout)
+        if report.get('status') != 'ok' or report.get('archives') != 1 or report.get('game_connected') is not False:
+            raise RuntimeError(f'Unexpected controlled CLI result for {scenario}')
+        desktop = inputs / f'internal-desktop-{scenario}'
+        desktop.mkdir()
+        (desktop / 'wpf-startup.log').touch()
+        commands = ('hello', 'snapshot', 'quit')
+        request = ''.join(json.dumps(dict(version=1, id=index, op=op)) + '\n'
+                          for index, op in enumerate(commands, start=1))
+        worker = subprocess.run([python, '-I', '-B', '-X', 'utf8', str(collector / 'desktop_bridge.py'),
+            '--offline', '--internal-capture', scenario, '--state-dir', str(desktop)],
+            cwd=bundle, env=environment, check=True, capture_output=True, encoding='utf-8',
+            input=request, timeout=30)
+        replies = [json.loads(line) for line in worker.stdout.splitlines()]
+        if [(reply.get('kind'), reply.get('ok')) for reply in replies] != [
+                ('hello', True), ('snapshot', True), ('bye', True)]:
+            raise RuntimeError(f'Unexpected controlled desktop bridge replies for {scenario}')
+        state = replies[1]['state']
+        if state.get('error') or len(state.get('history', ())) != 1 or state.get('event_status') != 'finished':
+            raise RuntimeError(f'Unexpected controlled desktop state for {scenario}')
+        if scenario == 'autochess' and len(state.get('multiplayer', {}).get('players', ())) != 4:
+            raise RuntimeError('Controlled desktop state lost its four-player projection')
+
+
 def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
-          frida_gadget_archive=None, frida_server=None, frida_server_license=None, with_events=True):
+          frida_gadget_archive=None, frida_server=None, frida_server_license=None, with_events=True,
+          internal_event_host=None):
     if not RELEASE_VERSION.fullmatch(version) or any(
             int(part) > 2147483647 for part in re.findall(r'[0-9]+', version)):
         raise ValueError('Use a version such as 1.0.0 or 1.0.0-rc.1')
     head = candidate_head(ROOT)
+    if internal_event_host is not None and with_events:
+        raise ValueError('Internal event candidate must be built without Frida components')
     output.mkdir(parents=True, exist_ok=True)
     inputs = Path(tempfile.mkdtemp(prefix='inputs-', dir=output))
     python_zip = pinned_input(python_zip, destination=inputs / 'python.zip',
@@ -144,12 +179,21 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         shutil.copy2(ROOT / name, collector / name)
     for name in ('assets', 'vendor', 'native_pc'):
         # The separately built ArkFramework DLL belongs to its host, outside the Python worker.
-        ignored = ('__pycache__', '*.pyc', 'arkframework') if name == 'native_pc' else ('__pycache__', '*.pyc')
+        ignored = ('__pycache__', '*.pyc')
+        if name == 'native_pc':
+            ignored += ('arkframework', 'internal_event_host')
+            if internal_event_host is None:
+                ignored += ('internal_event_source.py', 'internal_capture.py')
         if name == 'vendor':
             # Only the full variant receives a verified Gadget. A local source
             # cache must never leak it into a snapshot-only archive.
             ignored += ('frida',)
         shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns(*ignored))
+    if internal_event_host is not None:
+        host_dir = collector / 'native_pc' / 'internal_event_host'
+        host_dir.mkdir()
+        shutil.copy2(internal_event_host, host_dir / HOST_NAME)
+        shutil.copy2(ROOT / 'app.py', collector / 'app.py')
     if with_events:
         component_dir = collector / 'vendor' / 'frida'
         stage_gadget(component_dir / FRIDA_VERSION, source_archive=frida_gadget_archive)
@@ -158,6 +202,9 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     notices.mkdir()
     for name in ('LICENSE', 'THIRD_PARTY.md'):
         shutil.copy2(ROOT / name, notices / name)
+    if internal_event_host is not None:
+        license_file = internal_event_host.with_name('nlohmann-json-LICENSE.MIT')
+        shutil.copy2(license_file, notices / license_file.name)
     if with_events:
         server_payload = bundle / FRIDA_SERVER_PATH
         server_payload.parent.mkdir()
@@ -186,7 +233,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         '开启观察者时，ArkDPS 会为选中的受支持 MuMu 实例准备并启动包内 Frida 服务。\n'
         if with_events else '此包仅提供伤害和治疗快照。\n'
     )
-    (bundle / 'README.txt').write_text(
+    readme = (
         f'ArkDPS {version} · Windows x64\n\n'
         '解压到可写目录，双击 ArkDPS.Desktop.exe。无需安装 Python 或 .NET。\n'
         'ArkDPS 始终申请管理员权限，请允许 Windows 提升提示；取消提示不会启动程序。\n'
@@ -199,8 +246,18 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         '从尚未要求管理员权限的旧版首次升级，请退出旧版并手动下载完整 ZIP，按下面步骤迁移一次。\n'
         '首次从旧版迁移或需要手动升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
         '如果旧版有 collector/runtime，将整个 runtime 目录复制到新版的 collector 后再启动。\n'
-        '保留旧目录与备份。需要手动回退时，先退出新版，再启动旧目录中的程序。\n',
-        encoding='utf-8-sig')
+        '保留旧目录与备份。需要手动回退时，先退出新版，再启动旧目录中的程序。\n')
+    if internal_event_host is not None:
+        readme = (
+            f'ArkDPS {version} · 自研事件后端内部候选\n\n'
+            '本包使用自有测试数据验证普通关、卫戍和战绩。\n'
+            '从包根目录运行以下 PowerShell 命令，可将 normal 换成 autochess。\n\n'
+            '桌面\n'
+            '.\\ArkDPS.Desktop.exe --offline --internal-capture normal --state-dir .\\internal-desktop\n\n'
+            '无界面\n'
+            '.\\python\\python.exe -I -B .\\collector\\app.py --internal-capture normal '
+            '--state-dir .\\internal-cli\n')
+    (bundle / 'README.txt').write_text(readme, encoding='utf-8-sig')
     if {entry.name for entry in bundle.iterdir()} != PACKAGE_ROOT:
         raise RuntimeError('Unexpected files in portable package root')
     manifest = dict(format=2, version=version, protocol=1, target_framework='net10.0-windows',
@@ -214,6 +271,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     if with_events:
         manifest['update_protocol'] = UPDATE_PROTOCOL
         manifest['frida_server'] = dict(path=FRIDA_SERVER_PATH, source=FRIDA_SERVER_URL, sha256=FRIDA_SERVER_SHA256)
+    if internal_event_host is not None:
+        manifest['internal_event_backend'] = dict(protocol=1, scope='controlled-replay')
     assert_no_tk_files(manifest['files'])
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
@@ -227,7 +286,9 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         script_args.append(str(server_payload))
     subprocess.run([str(bundle/'python/python.exe'), '-I', '-B', '-c', script, *script_args],
                    cwd=ROOT, env=environment, check=True)
-    archive = output / archive_name(version, with_events)
+    if internal_event_host is not None:
+        verify_internal_candidate(bundle, inputs, environment)
+    archive = output / archive_name(version, with_events, internal_backend=internal_event_host is not None)
     staged_archive = inputs / archive.name
     with zipfile.ZipFile(staged_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
         for path in sorted(bundle.rglob('*')):
@@ -249,12 +310,16 @@ def main():
     parser.add_argument('--frida-gadget-archive',type=Path, help='verified official PC Gadget XZ input')
     parser.add_argument('--frida-server', type=Path, help='reuse the pinned Android server .xz')
     parser.add_argument('--frida-server-license', type=Path, help='reuse the pinned server COPYING text')
-    parser.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
+    variants = parser.add_mutually_exclusive_group()
+    variants.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
+    variants.add_argument('--internal-event-host', type=Path, help='build the separate controlled-data candidate')
     args=parser.parse_args()
     build(args.output.resolve(), version=args.version, python_zip=args.python_zip,
           frida_wheel=args.frida_wheel, frida_gadget_archive=args.frida_gadget_archive,
           frida_server=args.frida_server,
-          frida_server_license=args.frida_server_license, with_events=not args.without_events)
+          frida_server_license=args.frida_server_license,
+          with_events=not args.without_events and args.internal_event_host is None,
+          internal_event_host=args.internal_event_host)
 
 
 if __name__=='__main__':

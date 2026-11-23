@@ -77,6 +77,10 @@ def parser_for():
     parser.add_argument('--arkframework-root', type=Path,
                         help='官服 PC 采集时从此 ArkFramework 目录单独记录 BetterBattle 的逐笔持续回复')
     parser.add_argument('--capture-seconds', type=float, default=0)
+    parser.add_argument('--internal-capture', metavar='SCENARIO',
+                        help='run a controlled PC event capture and print its receipt')
+    parser.add_argument('--state-dir', type=Path,
+                        help='separate state directory for --internal-capture')
     events = parser.add_mutually_exclusive_group()
     events.add_argument('--frida-remote', default=None,
                         help='Frida 17.26.1 endpoint; default comes from the saved '
@@ -111,6 +115,25 @@ def main(*, native_pc_observer_factory=None):
     _utf8_streams()
     parser = parser_for()
     args = parser.parse_args()
+    if args.internal_capture is not None:
+        if (any(value is not None for value in (args.adb, args.serial, args.platform,
+                args.native_game_root, args.arkframework_root, args.frida_remote, args.output_dir,
+                args.stop_file, args.expect_head, args.maa_job, args.maa_log, args.stage))
+                or args.capture_seconds or args.require_progress or args.require_events):
+            parser.error('--internal-capture cannot be combined with live capture options')
+        from native_pc.internal_capture import run_internal_capture
+        from native_pc.internal_entry import internal_host, internal_state_dir
+        try:
+            host = internal_host(ROOT)
+            directory = internal_state_dir(ROOT, args.state_dir)
+            result = run_internal_capture(host, args.internal_capture, directory)
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False, default=str))
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0 if result.get('status') == 'ok' else 2
+    if args.state_dir is not None:
+        parser.error('--state-dir requires --internal-capture')
     if args.arkframework_root is not None:
         if args.platform == 'mumu' or args.frida_remote:
             parser.error('--arkframework-root 仅用于官服 PC')

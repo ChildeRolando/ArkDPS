@@ -1802,7 +1802,7 @@ def _drain_worker_events(worker, state):
         state.accept(*event)
 
 
-def serve(input_stream, output, state, worker=None):
+def serve(input_stream, output, state, worker=None, *, internal_capture=False):
     """Versioned UTF-8 JSON Lines: hello, snapshot/state/error, quit/bye."""
     handshake = False
     forced_trace = os.environ.get('ARKDPS_BRIDGE_TRACE') == '1'
@@ -1917,6 +1917,8 @@ def serve(input_stream, output, state, worker=None):
                     worker.close()
                 result, kind, quit_requested = None, 'bye', True
             elif op == 'detect':
+                if internal_capture:
+                    raise ValueError('内部事件候选不连接游戏或模拟器。')
                 effective = getattr(worker, 'effective', None)
                 config = effective[0] if effective is not None else state.effective_connection
                 platform = cmd.get('platform', config.platform)
@@ -1990,6 +1992,7 @@ def main(*, native_pc_observer_factory=None):
     parser.add_argument('--state-dir', type=Path)
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--fixture', type=Path)
+    parser.add_argument('--internal-capture', metavar='SCENARIO')
     parser.add_argument('--adb')
     parser.add_argument('--serial')
     parser.add_argument('--platform', choices=('mumu', 'native_pc'))
@@ -1999,6 +2002,21 @@ def main(*, native_pc_observer_factory=None):
     parser.add_argument('--debug-mode', action='store_true')
     parser.add_argument('--frida-remote')
     args = parser.parse_args()
+    from native_pc.internal_entry import portable_manifest
+    manifest = portable_manifest(ROOT)
+    if manifest and manifest.get('internal_event_backend') and args.internal_capture is None:
+        parser.error('内部候选需要显式选择 --internal-capture，启动方式见随包说明。')
+    if args.internal_capture is not None:
+        if (not args.offline or args.no_events or any(value is not None for value in
+                (args.fixture, args.adb, args.serial, args.platform, args.native_game_root,
+                 args.arkframework_root, args.frida_remote))):
+            parser.error('--internal-capture requires --offline and excludes live or other fixture options')
+        from native_pc.internal_entry import internal_host, internal_state_dir
+        try:
+            host = internal_host(ROOT)
+            args.state_dir = internal_state_dir(ROOT, args.state_dir, desktop=True)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     if args.offline and args.state_dir is None:
         parser.error('--offline requires an isolated --state-dir')
     if args.fixture and not args.offline:
@@ -2033,6 +2051,27 @@ def main(*, native_pc_observer_factory=None):
     state.effective_connection = effective_config
     if args.fixture:
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))
+    if args.internal_capture is not None:
+        from native_pc.internal_capture import run_internal_capture
+        state.effective_connection = replace(effective_config, platform='native_pc')
+        state.accept('connection', '内部 PC 事件候选 · 自有测试数据')
+
+        def publish_internal_sample(sample):
+            scene = autochess_scene(sample)
+            if scene is not None or state._autochess_scene_announced:
+                state.accept('autochess_scene', scene)
+            state.accept('sample', sample)
+
+        try:
+            result = run_internal_capture(host, args.internal_capture, state.directory,
+                                          publish=publish_internal_sample)
+            if result.get('status') != 'ok':
+                state.accept('error', str(result.get('error') or '内部采集未通过'))
+            elif state.last is not None:
+                state.accept('lifecycle', 'frozen')
+        except (OSError, RuntimeError, ValueError) as exc:
+            state.accept('error', str(exc))
+        state.refresh_history()
     worker = None if args.offline else CollectionWorker(
         state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE,
         arkframework_root=args.arkframework_root,
@@ -2043,7 +2082,10 @@ def main(*, native_pc_observer_factory=None):
         state.expect_connection_request(effective_config, revision)
         worker.thread.start()
     try:
-        serve(sys.stdin, output, state, worker)
+        if args.internal_capture is not None:
+            serve(sys.stdin, output, state, internal_capture=True)
+        else:
+            serve(sys.stdin, output, state, worker)
     finally:
         if worker:
             worker.close()

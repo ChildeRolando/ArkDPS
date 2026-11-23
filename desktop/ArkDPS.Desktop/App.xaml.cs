@@ -71,6 +71,8 @@ public partial class App : System.Windows.Application
                     case "--verify-update": updateFixture = arguments[++i]; break;
                     case "--offline": case "--no-events": case "--debug-mode": BridgeArguments.Add(arg); break;
                     case "--state-dir": stateOverride = arguments[++i]; break;
+                    case "--internal-capture":
+                        BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--fixture": case "--adb": case "--serial": case "--frida-remote":
                     case "--platform": case "--native-game-root":
                         BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
@@ -91,6 +93,9 @@ public partial class App : System.Windows.Application
             }
             Root = Path.GetFullPath(Root);
             bool offline = BridgeArguments.Contains("--offline");
+            bool internalCapture = BridgeArguments.Contains("--internal-capture");
+            if (internalCapture && (!offline || stateOverride == null))
+                throw new ArgumentException("内部事件候选需要 --offline 和独立的 --state-dir。");
             if (offline && stateOverride == null)
                 throw new ArgumentException("离线验收必须指定独立 --state-dir，不能覆盖产品设置。");
             if (Verification != null && !offline)
@@ -101,15 +106,25 @@ public partial class App : System.Windows.Application
                 BridgeArguments.Add("--debug-mode");
             bool packaged = string.Equals(Root, packagedRoot, StringComparison.OrdinalIgnoreCase);
             string launchRoot = packaged && host != null ? Path.Combine(host.Root, "collector") : Root;
-            StateDirectory = stateOverride == null
+            string configuredState = stateOverride == null
                 ? (packaged ? host?.StateDirectory : null) ?? Path.Combine(Root, "runtime")
                 : Path.GetFullPath(stateOverride, launchRoot);
+            if (internalCapture)
+            {
+                string statePath = Path.TrimEndingDirectorySeparator(configuredState) + Path.DirectorySeparatorChar;
+                string productPath = Path.Combine(Root, "runtime") + Path.DirectorySeparatorChar;
+                if (statePath.StartsWith(productPath, StringComparison.OrdinalIgnoreCase) ||
+                    productPath.StartsWith(statePath, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("内部候选的状态目录必须与标准运行目录分开。");
+            }
+            StateDirectory = configuredState;
             WriteStartupEvent("event=configured");
             if (packaged && Python == "python.exe")
                 throw new IOException("便携包缺少自带的 Python 运行时。请重新下载完整发布包。");
             for (int i = 0; i + 1 < BridgeArguments.Count; i++)
             {
                 if (BridgeArguments[i] == "--fixture" ||
+                    (BridgeArguments[i] == "--internal-capture" && BridgeArguments[i + 1] is not ("normal" or "autochess")) ||
                     (BridgeArguments[i] == "--adb" && Path.GetDirectoryName(BridgeArguments[i + 1]) is { Length: > 0 }))
                     BridgeArguments[i + 1] = Path.GetFullPath(BridgeArguments[i + 1], launchRoot);
             }
