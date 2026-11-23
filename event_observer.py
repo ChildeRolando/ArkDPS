@@ -146,8 +146,8 @@ class FridaEventObserver:
             source = self._probe_source()
             if os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1':
                 source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
-            if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '1':
-                source = 'globalThis.arkdpsCoalesceEnemyHp = true;\n' + source
+            if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '0':
+                source = 'globalThis.arkdpsCoalesceEnemyHp = false;\n' + source
             self._probe_source_manifest['submitted_sha256'] = sha256(source.encode('utf-8')).hexdigest()
             self.probe_modes['probe_source'] = dict(self._probe_source_manifest)
             self.script = self.session.create_script(source)
