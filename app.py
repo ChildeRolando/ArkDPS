@@ -115,6 +115,10 @@ def main(*, native_pc_observer_factory=None):
     _utf8_streams()
     parser = parser_for()
     args = parser.parse_args()
+    from native_pc.internal_entry import portable_manifest
+    manifest = portable_manifest(ROOT)
+    if manifest and manifest.get('internal_event_backend') and args.internal_capture is None:
+        parser.error('内部候选需要显式选择 --internal-capture，启动方式见随包说明。')
     if args.internal_capture is not None:
         if (any(value is not None for value in (args.adb, args.serial, args.platform,
                 args.native_game_root, args.arkframework_root, args.frida_remote, args.output_dir,

@@ -6,6 +6,7 @@ import pytest
 
 from battle_history import BattleHistory
 from capture_battles import replay
+from event_capture import CaptureRetry
 from event_probe import NATIVE_PC_CONTRACT
 from native_pc.internal_capture import CID, SOURCE, _builtin_fixture, run_internal_capture
 
@@ -151,6 +152,17 @@ def test_native_host_rejects_gapped_event_batch_without_discarding_counters(nati
     assert record.statistics['rows'][CID]['damage'] == 20
 
 
+def test_native_host_cannot_replace_independent_autochess_scope(native_host, tmp_path):
+    fixture = _builtin_fixture('autochess')
+    fixture['frames'][0]['snapshot']['controlled_autochess_scope']['round'] += 1
+    published = []
+    with pytest.raises(CaptureRetry, match='controlled AutoChess event scope'):
+        run_internal_capture(native_host, _fixture_file(tmp_path / 'foreign-round.json', fixture),
+                             tmp_path, publish=published.append)
+    assert not published
+    assert not BattleHistory(tmp_path / 'history').list_recent().records
+
+
 def test_native_host_keeps_assist_uid_scoped_and_freezes_verified_terminal(native_host, tmp_path):
     fixture = _builtin_fixture('autochess')
     baseline, defense, original_terminal, absent = fixture['frames']
@@ -163,6 +175,9 @@ def test_native_host_keeps_assist_uid_scoped_and_freezes_verified_terminal(nativ
     def step(at, state, sequence, deltas=()):
         frame = at * 30
         snapshot = dict(original_terminal['snapshot'], game_time=at, frame=frame, state=state)
+        snapshot['controlled_autochess_scope'] = {
+            key: help_scope[key] for key in ('scope_key', 'phase', 'round')
+        }
         lifecycle = dict(original_terminal['lifecycle'], state=state, metadata=dict(
             original_terminal['lifecycle']['metadata'], outcome='victory' if state == 3 else None))
         context = dict(help_scope, game_time=at, frame=frame)

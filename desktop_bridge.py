@@ -39,6 +39,7 @@ from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from log_context import LogContext
 from metrics import observation_age
+from native_pc.event_source import PcEventSource, PcEventSourceCleanupError
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
                          settled_boss_damage_rates, team_status, format_compact)
@@ -1159,9 +1160,8 @@ class CollectionWorker:
         self.session = None
         self.cleanup_error = ''
         self.retired_errors = []
-        self.pc_runtime = None
-        self.pc_runtime_key = None
-        self.pc_runtime_dir = state.history.directory.parent
+        self.pc_source = PcEventSource(state.history.directory.parent,
+                                       observer_factory=native_pc_observer_factory)
         self.pc_cleanup_error = ''
         self._last_pc_bootstrap = None
         self._pc_bootstrap_revision = None
@@ -1255,53 +1255,49 @@ class CollectionWorker:
         with self._request_lock:
             if self.stop.is_set():
                 raise InterruptedError('采集器正在关闭')
-        needed = (config.platform == 'native_pc' and enabled and bool(config.native_game_root)
-                  and self.native_pc_observer_factory is None)
-        key = str(Path(config.native_game_root).expanduser().resolve()) if needed and config.native_game_root else None
-        if self.pc_runtime is not None and (not needed or key != self.pc_runtime_key):
-            if not self._close_pc_runtime():
-                raise RuntimeError(self.pc_cleanup_error)
-        if not needed:
-            return self.native_pc_observer_factory if config.platform == 'native_pc' and enabled else None
-        if self.pc_runtime is None:
-            from capture_cli import _native_pc_frida_runtime
-            candidate = _native_pc_frida_runtime(config.native_game_root, self.pc_runtime_dir,
-                                                startup_trace=self._trace_pc_startup)
-            with self._request_lock:
-                if self.stop.is_set():
-                    candidate.close()
-                    raise InterruptedError('采集器在启动运行时创建期间关闭')
-                self.pc_runtime = candidate
-                self.pc_runtime_key = key
-                try:
-                    # Publish the owner before starting it, under the same
-                    # gate used by shutdown, so cancellation cannot miss it.
-                    self.pc_runtime.start()
-                except Exception as exc:
-                    self.events.put(('warning', str(exc)))
-        elif explicit_retry:
-            # A user request reconciles the existing owner. Automatic retries
-            # preserve its loading window, lease and attempted process births.
-            self.pc_runtime.retry()
-        return self.pc_runtime.observer_factory
+            if self.session is not None:
+                raise RuntimeError('旧采集会话尚未释放')
+        previous = self.pc_runtime
+        cleanup_error = None
+        try:
+            return self.pc_source.select(enabled=config.platform == 'native_pc' and enabled,
+                game_root=config.native_game_root, explicit_retry=explicit_retry,
+                startup_trace=self._trace_pc_startup, admission=self._request_lock,
+                cancelled=self.stop.is_set, on_start_error=lambda exc: self.events.put(('warning', str(exc))))
+        except PcEventSourceCleanupError as exc:
+            cleanup_error = exc
+            raise
+        finally:
+            if previous is not None and previous is not self.pc_runtime:
+                self._report_pc_runtime_closed()
+            if cleanup_error is not None:
+                self._report_pc_cleanup_error(cleanup_error)
+
+    @property
+    def pc_runtime(self):
+        return self.pc_source.runtime
 
     def _close_pc_runtime(self):
         if self.pc_runtime is None:
             return True
         try:
-            self.pc_runtime.close()
-        except Exception as exc:
-            self.pc_cleanup_error = f'PC 启动加载器清理失败：{exc}'
-            self.events.put(('error', self.pc_cleanup_error))
+            self.pc_source.close()
+        except PcEventSourceCleanupError as exc:
+            self._report_pc_cleanup_error(exc)
             return False
+        self._report_pc_runtime_closed()
+        return True
+
+    def _report_pc_cleanup_error(self, exc):
+        self.pc_cleanup_error = str(exc)
+        self.events.put(('error', self.pc_cleanup_error))
+
+    def _report_pc_runtime_closed(self):
         if self.pc_cleanup_error:
             self.retired_errors.append('已释放 PC 启动加载器，保留历史清理异常：' + self.pc_cleanup_error)
-        self.pc_runtime = None
-        self.pc_runtime_key = None
         self._pc_bootstrap_revision = None
         self.pc_cleanup_error = ''
         self._emit_pc_bootstrap(None)
-        return True
 
     def _emit_pc_bootstrap(self, value, *, force=False):
         if force or value != self._last_pc_bootstrap:
@@ -1501,10 +1497,9 @@ class CollectionWorker:
                                         session_bootstrap_generation = bootstrap.get('ready_generation')
                                     if config.platform == 'native_pc':
                                         from native_pc_collector import NativePcCollector
-                                        session_kwargs['collector'] = NativePcCollector(
-                                            config.native_game_root, collect_actions=enabled,
-                                            event_identity_only=(enabled and self.arkframework_root is None
-                                                and self.native_pc_observer_factory is None))
+                                        collector = NativePcCollector(config.native_game_root, collect_actions=enabled)
+                                        collector.allow_event_identity_sampling = self.arkframework_root is None
+                                        session_kwargs['collector'] = collector
                                         if pc_provider is not None:
                                             session_kwargs['observer_factory'] = pc_provider
                                         adb, serial = None, None

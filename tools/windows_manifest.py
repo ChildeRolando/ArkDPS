@@ -8,12 +8,13 @@ import sys
 from xml.etree import ElementTree
 
 
-def verify_manifest_xml(data):
+def verify_manifest_xml(data, *, internal_backend=False):
     root = ElementTree.fromstring(data)
     namespace = {'v3': 'urn:schemas-microsoft-com:asm.v3'}
     levels = root.findall('v3:trustInfo/v3:security/v3:requestedPrivileges/v3:requestedExecutionLevel', namespace)
-    if len(levels) != 1 or levels[0].attrib != {'level': 'requireAdministrator', 'uiAccess': 'false'}:
-        raise ValueError('ArkDPS manifest must requireAdministrator with uiAccess=false')
+    level = 'asInvoker' if internal_backend else 'requireAdministrator'
+    if len(levels) != 1 or levels[0].attrib != {'level': level, 'uiAccess': 'false'}:
+        raise ValueError(f'ArkDPS manifest must use {level} with uiAccess=false')
     settings = root.find('v3:application/v3:windowsSettings', namespace)
     if settings is None:
         raise ValueError('ArkDPS manifest is missing Windows settings')
@@ -21,7 +22,7 @@ def verify_manifest_xml(data):
     paths = settings.findall('{http://schemas.microsoft.com/SMI/2016/WindowsSettings}longPathAware')
     if len(dpi) != 1 or dpi[0].text != 'PerMonitorV2' or len(paths) != 1 or paths[0].text != 'true':
         raise ValueError('ArkDPS manifest must preserve PerMonitorV2 and longPathAware')
-    return dict(level='requireAdministrator', ui_access=False, dpi_awareness='PerMonitorV2', long_path_aware=True)
+    return dict(level=level, ui_access=False, dpi_awareness='PerMonitorV2', long_path_aware=True)
 
 
 def read_executable_manifest(path):
@@ -64,8 +65,8 @@ def read_executable_manifest(path):
             raise ctypes.WinError(ctypes.get_last_error())
 
 
-def verify_executable_manifest(path):
-    return verify_manifest_xml(read_executable_manifest(path))
+def verify_executable_manifest(path, *, internal_backend=False):
+    return verify_manifest_xml(read_executable_manifest(path), internal_backend=internal_backend)
 
 
 def require_admin_test_host():

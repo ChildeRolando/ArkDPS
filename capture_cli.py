@@ -14,11 +14,7 @@ from collection_session import CollectionSession
 from battle_history import BattleHistory
 from event_capture import CaptureRetry
 from log_context import LogContext
-
-
-def _native_pc_frida_runtime(game_root, runtime_dir, *, startup_trace=None):
-    from native_pc.frida_runtime import NativePcFridaRuntime
-    return NativePcFridaRuntime(game_root, runtime_dir=runtime_dir, startup_trace=startup_trace)
+from native_pc.event_source import PcEventSource
 
 
 def _connect_pc_after_bootstrap(session, bootstrap, *, timeout, cancelled):
@@ -153,28 +149,18 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
         audit('metadata', metadata)
         session_options = dict(frida_remote=args.frida_remote, audit=audit)
         regeneration = None
-        pc_runtime = None
+        pc_source = PcEventSource(root / 'runtime', observer_factory=native_pc_observer_factory)
         if platform == 'native_pc':
             from native_pc_collector import NativePcCollector
             collector = NativePcCollector(args.native_game_root,
-                                          collect_actions=getattr(args, 'collect_native_actions', True),
-                                          event_identity_only=(args.frida_remote is None
-                                              and getattr(args, 'arkframework_root', None) is None
-                                              and native_pc_observer_factory is None))
+                                          collect_actions=getattr(args, 'collect_native_actions', True))
+            collector.allow_event_identity_sampling = framework_root is None
             session_options.update(collector=collector, frida_remote=args.frida_remote)
             if framework_root is not None:
                 from native_pc.arkframework_replay import RegenerationRecorder
                 regeneration = RegenerationRecorder(Path(framework_root) / 'battle_timeline.json',
                                                      dest / 'arkframework')
-            if native_pc_observer_factory is not None and args.frida_remote is None:
-                session_options['observer_factory'] = native_pc_observer_factory
-            elif args.frida_remote is None:
-                pc_runtime = _native_pc_frida_runtime(args.native_game_root, root / 'runtime')
-                session_options['observer_factory'] = pc_runtime.observer_factory
-        session = session_factory(args.adb, args.serial, **session_options)
-        if isinstance(session, CollectionSession):
-            session.history = BattleHistory(root / 'runtime' / 'history')
-            session.enable_lifecycle()
+        session = None
 
         def poll_replay(*, final=False):
             if regeneration is not None:
@@ -182,16 +168,26 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
 
         try:
             poll_replay()
-            bootstrap_started = False
-            if pc_runtime is not None:
-                try:
-                    pc_runtime.start()
-                    bootstrap_started = True
-                except Exception as exc:
-                    audit('native_pc_bootstrap_error', {'reason': str(exc)})
-                    if args.require_events:
-                        raise
-            if bootstrap_started:
+            bootstrap_error = None
+
+            def startup_failed(exc):
+                nonlocal bootstrap_error
+                bootstrap_error = exc
+                audit('native_pc_bootstrap_error', {'reason': str(exc)})
+                if args.require_events:
+                    raise exc
+
+            if platform == 'native_pc':
+                provider = pc_source.select(enabled=events_enabled, game_root=args.native_game_root,
+                                            on_start_error=startup_failed)
+                if provider is not None:
+                    session_options['observer_factory'] = provider
+            session = session_factory(args.adb, args.serial, **session_options)
+            if isinstance(session, CollectionSession):
+                session.history = BattleHistory(root / 'runtime' / 'history')
+                session.enable_lifecycle()
+            pc_runtime = pc_source.runtime
+            if pc_runtime is not None and bootstrap_error is None:
                 print('WAITING_GAME 已准备 PC 事件采集，请启动游戏；已在运行时请先正常重启游戏。', flush=True)
                 try:
                     _connect_pc_after_bootstrap(session, pc_runtime, timeout=args.wait_battle_seconds,
@@ -248,23 +244,24 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
         except BaseException as exc:
             failure = f'{type(exc).__name__}: {exc}'
             failure_data = {'reason': failure}
-            if platform == 'native_pc':
+            if platform == 'native_pc' and session is not None:
                 failure_data['diagnostics'] = session.collector.diagnostics.as_dict()
             audit('failure', failure_data)
         finally:
-            try:
-                session.close()
-            except Exception as exc:
-                failure = failure or f'cleanup failed: {exc}'
-                audit('cleanup_error', {'reason': str(exc)})
-            if pc_runtime is not None:
-                try:
-                    pc_runtime.close()
-                except Exception as exc:
-                    failure = failure or f'PC bootstrap cleanup failed: {exc}'
-                    audit('cleanup_error', {'reason': str(exc)})
+            resources = [('session', session), ('PC source', pc_source)]
+            for name, resource in resources:
+                if resource is None:
+                    continue
+                for _ in range(2):
+                    try:
+                        resource.close()
+                    except Exception as exc:
+                        failure = failure or f'{name} cleanup failed: {exc}'
+                        audit('cleanup_error', {'resource': name, 'reason': str(exc)})
+                    else:
+                        break
             poll_replay(final=True)
-            final = session.capture.adapter.result() if session.capture is not None else None
+            final = session.capture.adapter.result() if session is not None and session.capture is not None else None
             summary = {**metadata, **counts, 'ended_at': time.time(), 'error': failure,
                        'last_sample': last_sample, 'final_statistics': final}
             if args.maa_log and args.maa_log.exists():

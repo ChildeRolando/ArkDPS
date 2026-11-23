@@ -40,6 +40,19 @@ def dependency(cache, artifact, *, offline):
     return contents
 
 
+def _require_windows_x64(binary):
+    with binary.open('rb') as stream:
+        dos = stream.read(64)
+        if len(dos) == 64 and dos[:2] == b'MZ':
+            stream.seek(int.from_bytes(dos[60:64], 'little'))
+            pe = stream.read(26)
+            # The COFF machine and Optional Header must say AMD64 and PE32+.
+            if (len(pe) == 26 and pe[:4] == b'PE\0\0' and pe[4:6] == b'\x64\x86'
+                    and pe[24:26] == b'\x0b\x02'):
+                return
+    raise ValueError('native event host compiler must produce a Windows x64 executable')
+
+
 def build(output, *, compiler='g++', cache=None, offline=False):
     compiler_path = which(compiler)
     if compiler_path is None:
@@ -56,6 +69,7 @@ def build(output, *, compiler='g++', cache=None, offline=False):
         (stage / 'LICENSE.MIT').write_bytes(license_text)
         run([compiler_path, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Wpedantic', '-Werror',
              '-static', '-I', str(stage), str(SOURCE / 'main.cpp'), '-o', str(binary)], check=True)
+        _require_windows_x64(binary)
         (stage / 'LICENSE.MIT').replace(output.parent / 'nlohmann-json-LICENSE.MIT')
         binary.replace(output)
     return output

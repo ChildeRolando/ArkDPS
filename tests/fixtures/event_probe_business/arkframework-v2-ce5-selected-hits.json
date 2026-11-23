@@ -1,0 +1,89 @@
+{
+  "provenance": {
+    "stage": "CE-5",
+    "recorded_date": "2026-11-21",
+    "source_file": "events-34020-134397442132734207.jsonl",
+    "source_file_sha256": "96fd03497c6614a2aa76f29ab86abf9952f2ce2e1b47acc1ee3496a16734038a",
+    "service": "ark.battle.events.v2",
+    "abi_version": 2,
+    "selection": "Kind 2 records from frames 388 and 1082. No other records are included."
+  },
+  "events": [
+    {
+      "size": 704,
+      "kind": 2,
+      "frame": 388,
+      "frame_event_index": 0,
+      "sequence": 63,
+      "battle": 1,
+      "game_time": 12.933320999145508,
+      "calculated_damage": 30.780000407481566,
+      "actual_damage": 30.780000407481566,
+      "damage_type": 1,
+      "partial": 0,
+      "actor_id": "char_4228_closur",
+      "owner_id": "",
+      "target_id": "enemy_1006_shield_2",
+      "original_source_id": "",
+      "stage_id": ""
+    },
+    {
+      "size": 704,
+      "kind": 2,
+      "frame": 388,
+      "frame_event_index": 1,
+      "sequence": 64,
+      "battle": 1,
+      "game_time": 12.933320999145508,
+      "calculated_damage": 727.9499849081039,
+      "actual_damage": 499.9999888241291,
+      "damage_type": 4,
+      "partial": 0,
+      "actor_id": "char_147_shining",
+      "owner_id": "",
+      "target_id": "char_122_beagle",
+      "original_source_id": "",
+      "stage_id": "",
+      "direct_healing": {
+        "amount": 727.9499849081039,
+        "actual_hp_restored": 499.9999888241291
+      }
+    },
+    {
+      "size": 704,
+      "kind": 2,
+      "frame": 1082,
+      "frame_event_index": 0,
+      "sequence": 262,
+      "battle": 1,
+      "game_time": 36.06663227081299,
+      "calculated_damage": 71.60000577569008,
+      "actual_damage": 71.60000577569008,
+      "damage_type": 1,
+      "partial": 0,
+      "actor_id": "char_4228_closur",
+      "owner_id": "",
+      "target_id": "enemy_1006_shield_2",
+      "original_source_id": "",
+      "stage_id": ""
+    },
+    {
+      "size": 704,
+      "kind": 2,
+      "frame": 1082,
+      "frame_event_index": 1,
+      "sequence": 263,
+      "battle": 1,
+      "game_time": 36.06663227081299,
+      "calculated_damage": 71.60000577569008,
+      "actual_damage": 71.60000577569008,
+      "damage_type": 1,
+      "partial": 0,
+      "actor_id": "char_4228_closur",
+      "owner_id": "",
+      "target_id": "enemy_1006_shield_2",
+      "original_source_id": "",
+      "stage_id": ""
+    }
+  ]
+}

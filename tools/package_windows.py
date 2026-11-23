@@ -22,7 +22,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from release_identity import candidate_head
-from native_pc.internal_entry import HOST_NAME
+from native_pc.internal_entry import HOST_NAME, HOST_PATH
 # The vendored upstream also owns a regular package named tools.
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
@@ -99,50 +99,86 @@ def archive_name(version, with_events, *, internal_backend=False):
     return f'ArkDPS-{version}-win-x64{suffix}.zip'
 
 
-def verify_internal_candidate(bundle, inputs, environment):
+def verify_internal_candidate(bundle, inputs, environment, *, cases=None):
     python = str(bundle / 'python/python.exe')
     collector = bundle / 'collector'
-    for scenario in ('normal', 'autochess'):
+    executable = str(bundle / 'ArkDPS.Desktop.exe')
+    if subprocess.run([executable, '--offline', '--verify-internal'], cwd=bundle, env=environment,
+                      capture_output=True, timeout=10).returncode != 1:
+        raise RuntimeError('Internal desktop startup must require explicit source selection')
+    if subprocess.run([python, '-I', '-B', str(collector / 'app.py'), '--capture-seconds', '1'],
+                      cwd=bundle, env=environment, capture_output=True, timeout=10).returncode != 2:
+        raise RuntimeError('Internal CLI startup must require explicit source selection')
+    if cases is None:
+        cases = {'normal': ('normal', 1, 0), 'autochess': ('autochess', 1, 4)}
+    receipts = {}
+    for name, (selector, expected_archives, expected_players) in cases.items():
+        cli_dir = inputs / f'internal-cli-{name}'
         cli = subprocess.run([python, '-I', '-B', str(collector / 'app.py'),
-            '--internal-capture', scenario, '--state-dir', str(inputs / f'internal-cli-{scenario}')],
+            '--internal-capture', str(selector), '--state-dir', str(cli_dir)],
             cwd=bundle, env=environment, check=True, capture_output=True, encoding='utf-8', timeout=30)
         report = json.loads(cli.stdout)
-        if report.get('status') != 'ok' or report.get('archives') != 1 or report.get('game_connected') is not False:
-            raise RuntimeError(f'Unexpected controlled CLI result for {scenario}')
-        desktop = inputs / f'internal-desktop-{scenario}'
-        desktop.mkdir()
-        (desktop / 'wpf-startup.log').touch()
-        commands = ('hello', 'snapshot', 'quit')
-        request = ''.join(json.dumps(dict(version=1, id=index, op=op)) + '\n'
-                          for index, op in enumerate(commands, start=1))
-        worker = subprocess.run([python, '-I', '-B', '-X', 'utf8', str(collector / 'desktop_bridge.py'),
-            '--offline', '--internal-capture', scenario, '--state-dir', str(desktop)],
-            cwd=bundle, env=environment, check=True, capture_output=True, encoding='utf-8',
-            input=request, timeout=30)
-        replies = [json.loads(line) for line in worker.stdout.splitlines()]
-        if [(reply.get('kind'), reply.get('ok')) for reply in replies] != [
-                ('hello', True), ('snapshot', True), ('bye', True)]:
-            raise RuntimeError(f'Unexpected controlled desktop bridge replies for {scenario}')
-        state = replies[1]['state']
-        if state.get('error') or len(state.get('history', ())) != 1 or state.get('event_status') != 'finished':
-            raise RuntimeError(f'Unexpected controlled desktop state for {scenario}')
-        if scenario == 'autochess' and len(state.get('multiplayer', {}).get('players', ())) != 4:
-            raise RuntimeError('Controlled desktop state lost its four-player projection')
+        if (report.get('status') != 'ok' or report.get('archives') != expected_archives
+                or report.get('game_connected') is not False):
+            raise RuntimeError(f'Unexpected controlled CLI result for {name}')
+        (cli_dir / 'cli-receipt.json').write_text(cli.stdout, encoding='utf-8')
+        desktop_dir = inputs / f'internal-desktop-{name}'
+        subprocess.run([executable, '--offline', '--internal-capture', str(selector),
+                        '--state-dir', str(desktop_dir), '--verify-internal'],
+                       cwd=bundle, env=environment, check=True, capture_output=True, timeout=45)
+        desktop = json.loads((desktop_dir / 'wpf-internal-capture.json').read_text('utf-8'))
+        cli_archive = internal_archives(cli_dir, report['battle_ids'])
+        desktop_archive = internal_archives(desktop_dir, desktop['battle_ids'])
+        if (cli_archive != desktop_archive or desktop.get('scenario') != report.get('scenario')
+                or desktop.get('event_status') != 'finished' or desktop.get('history_count') != expected_archives
+                or desktop.get('players') != expected_players):
+            raise RuntimeError(f'Controlled CLI/WPF archived statistics or projection differ for {name}')
+        screenshots = ('wpf-internal-capture.png', 'wpf-internal-history.png')
+        receipts[name] = dict(
+            fixture_sha256=report['fixture_sha256'],
+            statistics_sha256=hashlib.sha256('\n'.join(cli_archive).encode('utf-8')).hexdigest(),
+            cli=dict(battle_ids=report['battle_ids'], archives=report['archives'], samples=report['samples'],
+                     game_connected=report['game_connected']),
+            wpf=dict(desktop, screenshots={filename: digest(desktop_dir / filename) for filename in screenshots}),
+        )
+    if (collector / 'runtime').exists() or (bundle / '.arkdps-update').exists():
+        raise RuntimeError('Internal capture touched the standard runtime or update directory')
+    return receipts
+
+
+def internal_archives(state_dir, battle_ids):
+    records = [json.loads(path.read_text('utf-8')) for path in (state_dir / 'history').glob('*.json')]
+    if (sorted(record['battle_id'] for record in records) != sorted(battle_ids)
+            or not any(record['event_status'] == 'finished' for record in records)):
+        raise RuntimeError(f'Invalid controlled battle archive in {state_dir}')
+    # Each CLI/WPF run deliberately gets independent session identifiers.
+    return sorted(json.dumps(
+        dict(event_status=record['event_status'], statistics={
+            name: value for name, value in record['statistics'].items() if name not in {'session', 'adapter_session'}
+        }),
+        sort_keys=True, separators=(',', ':'), allow_nan=False,
+    ) for record in records)
 
 
 def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
           frida_gadget_archive=None, frida_server=None, frida_server_license=None, with_events=True,
-          internal_event_host=None):
+          internal_backend=False, internal_event_cache=None):
     if not RELEASE_VERSION.fullmatch(version) or any(
             int(part) > 2147483647 for part in re.findall(r'[0-9]+', version)):
         raise ValueError('Use a version such as 1.0.0 or 1.0.0-rc.1')
     head = candidate_head(ROOT)
-    if internal_event_host is not None and with_events:
+    if internal_backend and with_events:
         raise ValueError('Internal event candidate must be built without Frida components')
     output.mkdir(parents=True, exist_ok=True)
     inputs = Path(tempfile.mkdtemp(prefix='inputs-', dir=output))
     python_zip = pinned_input(python_zip, destination=inputs / 'python.zip',
                               url=PYTHON_URL, sha256=PYTHON_SHA256)
+    if internal_backend:
+        from native_pc.internal_event_host import build as host_build
+        from native_pc.internal_event_source import PROTOCOL_VERSION, SOURCE_PROVIDER, SOURCE_VERSION
+        internal_event_host = host_build.build(
+            inputs / 'host' / HOST_NAME, cache=internal_event_cache,
+        )
     if with_events:
         if frida_wheel is None:
             subprocess.run([sys.executable, '-m', 'pip', 'download', '--only-binary=:all:',
@@ -160,13 +196,14 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     dotnet_executable = os.environ.get('ARKDPS_DOTNET') or shutil.which('dotnet')
     if not dotnet_executable:
         raise RuntimeError('.NET 10 SDK required; set ARKDPS_DOTNET for a task-local SDK')
+    desktop_variant = ['-p:ArkDpsInternalEventCandidate=true'] if internal_backend else []
     subprocess.run([dotnet_executable, 'publish', str(ROOT / 'desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj'),
         '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
         '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=true',
         '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:PublishTrimmed=false',
-        '-p:DebugType=none', '--artifacts-path', str(build_artifacts), '-o', str(bundle)],
+        '-p:DebugType=none', *desktop_variant, '--artifacts-path', str(build_artifacts), '-o', str(bundle)],
         cwd=ROOT, check=True)
-    verify_executable_manifest(bundle / 'ArkDPS.Desktop.exe')
+    verify_executable_manifest(bundle / 'ArkDPS.Desktop.exe', internal_backend=internal_backend)
     runtime_config, = (build_artifacts / 'bin/ArkDPS.Desktop').glob('*/ArkDPS.Desktop.runtimeconfig.json')
     unpack(python_zip, bundle / 'python')
     # Isolated embedded interpreter: no user site, registry Python, PATH or pip.
@@ -182,17 +219,17 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         ignored = ('__pycache__', '*.pyc')
         if name == 'native_pc':
             ignored += ('arkframework', 'internal_event_host')
-            if internal_event_host is None:
+            if not internal_backend:
                 ignored += ('internal_event_source.py', 'internal_capture.py')
         if name == 'vendor':
             # Only the full variant receives a verified Gadget. A local source
             # cache must never leak it into a snapshot-only archive.
             ignored += ('frida',)
         shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns(*ignored))
-    if internal_event_host is not None:
-        host_dir = collector / 'native_pc' / 'internal_event_host'
-        host_dir.mkdir()
-        shutil.copy2(internal_event_host, host_dir / HOST_NAME)
+    if internal_backend:
+        host_path = bundle / HOST_PATH
+        host_path.parent.mkdir()
+        shutil.copy2(internal_event_host, host_path)
         shutil.copy2(ROOT / 'app.py', collector / 'app.py')
     if with_events:
         component_dir = collector / 'vendor' / 'frida'
@@ -202,7 +239,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     notices.mkdir()
     for name in ('LICENSE', 'THIRD_PARTY.md'):
         shutil.copy2(ROOT / name, notices / name)
-    if internal_event_host is not None:
+    if internal_backend:
         license_file = internal_event_host.with_name('nlohmann-json-LICENSE.MIT')
         shutil.copy2(license_file, notices / license_file.name)
     if with_events:
@@ -247,13 +284,13 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         '首次从旧版迁移或需要手动升级时，从托盘菜单选「退出 ArkDPS」，将新版 ZIP 解压到新目录。\n'
         '如果旧版有 collector/runtime，将整个 runtime 目录复制到新版的 collector 后再启动。\n'
         '保留旧目录与备份。需要手动回退时，先退出新版，再启动旧目录中的程序。\n')
-    if internal_event_host is not None:
+    if internal_backend:
         readme = (
             f'ArkDPS {version} · 自研事件后端内部候选\n\n'
             '本包使用自有测试数据验证普通关、卫戍和战绩。\n'
             '从包根目录运行以下 PowerShell 命令，可将 normal 换成 autochess。\n\n'
             '桌面\n'
-            '.\\ArkDPS.Desktop.exe --offline --internal-capture normal --state-dir .\\internal-desktop\n\n'
+            '.\\ArkDPS.Desktop.exe --offline --internal-capture normal --state-dir "$PWD\\internal-desktop"\n\n'
             '无界面\n'
             '.\\python\\python.exe -I -B .\\collector\\app.py --internal-capture normal '
             '--state-dir .\\internal-cli\n')
@@ -271,8 +308,12 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     if with_events:
         manifest['update_protocol'] = UPDATE_PROTOCOL
         manifest['frida_server'] = dict(path=FRIDA_SERVER_PATH, source=FRIDA_SERVER_URL, sha256=FRIDA_SERVER_SHA256)
-    if internal_event_host is not None:
-        manifest['internal_event_backend'] = dict(protocol=1, scope='controlled-replay')
+    if internal_backend:
+        manifest['internal_event_backend'] = dict(
+            protocol=PROTOCOL_VERSION, provider=SOURCE_PROVIDER, source_version=SOURCE_VERSION,
+            scope='controlled-replay', path=HOST_PATH, sha256=manifest['files'][HOST_PATH],
+            cpp_source_sha256=digest(host_build.SOURCE / 'main.cpp'), json_header_sha256=host_build.HEADER[1],
+        )
     assert_no_tk_files(manifest['files'])
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
@@ -286,15 +327,28 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         script_args.append(str(server_payload))
     subprocess.run([str(bundle/'python/python.exe'), '-I', '-B', '-c', script, *script_args],
                    cwd=ROOT, env=environment, check=True)
-    if internal_event_host is not None:
-        verify_internal_candidate(bundle, inputs, environment)
-    archive = output / archive_name(version, with_events, internal_backend=internal_event_host is not None)
+    archive = output / archive_name(version, with_events, internal_backend=internal_backend)
     staged_archive = inputs / archive.name
     with zipfile.ZipFile(staged_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
         for path in sorted(bundle.rglob('*')):
             if path.is_file():
                 stream.write(path,str(Path('ArkDPS')/path.relative_to(bundle)))
     sha256 = digest(staged_archive)
+    if internal_backend:
+        extracted = inputs / 'clean-extract'
+        unpack(staged_archive, extracted)
+        clean_bundle = extracted / 'ArkDPS'
+        clean_manifest = clean_bundle / 'metadata/release.json'
+        files = {path.relative_to(clean_bundle).as_posix(): digest(path)
+                 for path in clean_bundle.rglob('*') if path.is_file() and path != clean_manifest}
+        if json.loads(clean_manifest.read_text('utf-8')) != manifest or files != manifest['files']:
+            raise RuntimeError('Internal candidate ZIP does not match its release manifest')
+        receipts = verify_internal_candidate(clean_bundle, inputs, environment)
+        evidence = dict(head=head, archive=archive.name, sha256=sha256,
+                        backend=manifest['internal_event_backend'], scenarios=receipts,
+                        raw_evidence_directory=inputs.name)
+        (output / (archive.name + '.acceptance.json')).write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     staged_archive.replace(archive)
     (output/(archive.name+'.sha256')).write_text(sha256+'  '+archive.name+'\n',encoding='ascii')
     print(json.dumps(dict(bundle=str(bundle), archive=str(archive), sha256=sha256),ensure_ascii=False))
@@ -312,14 +366,15 @@ def main():
     parser.add_argument('--frida-server-license', type=Path, help='reuse the pinned server COPYING text')
     variants = parser.add_mutually_exclusive_group()
     variants.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
-    variants.add_argument('--internal-event-host', type=Path, help='build the separate controlled-data candidate')
+    variants.add_argument('--internal-events', action='store_true', help='build the separate controlled-data candidate')
+    parser.add_argument('--internal-event-cache', type=Path, help='reuse pinned nlohmann/json build dependencies')
     args=parser.parse_args()
     build(args.output.resolve(), version=args.version, python_zip=args.python_zip,
           frida_wheel=args.frida_wheel, frida_gadget_archive=args.frida_gadget_archive,
           frida_server=args.frida_server,
           frida_server_license=args.frida_server_license,
-          with_events=not args.without_events and args.internal_event_host is None,
-          internal_event_host=args.internal_event_host)
+          with_events=not args.without_events and not args.internal_events,
+          internal_backend=args.internal_events, internal_event_cache=args.internal_event_cache)
 
 
 if __name__=='__main__':

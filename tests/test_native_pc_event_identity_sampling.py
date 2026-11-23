@@ -3,7 +3,7 @@ import pytest
 
 import native_pc_collector as native
 from battle_lifecycle import BattleRuntime, NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
-from test_native_pc_autochess_collector_gate import fixture, SCOPE, CID
+from test_native_pc_autochess_collector_gate import fixture, SCOPE, CID, ROOTS
 from test_multiplayer_native_context import hit
 
 
@@ -64,6 +64,37 @@ def test_event_identity_still_collects_enemy_flow_and_stage_plan(monkeypatch):
     assert calls == ['actor_rows', 'enemy', 'flow']
     collector._capture(None, context)
     assert calls == ['actor_rows', 'enemy', 'flow', 'actor_rows', 'flow', 'plan']
+
+
+@pytest.mark.parametrize('scenario', ['match', 'missing_capability', 'unverified', 'clock_changed',
+                                     'root_changed', 'comparison'])
+def test_guarded_pc_reads_use_authorized_identity_only_for_a_matching_mark(tmp_path, monkeypatch, scenario):
+    calls = readers(monkeypatch)
+    mode = 'unknown' if scenario == 'unverified' else 'valid'
+    collector, probe, observer, _, _ = fixture(tmp_path, mode=mode, stage=AUTO, failed_field=None)
+    collector.allow_event_identity_sampling = scenario != 'comparison'
+    observer.native_autochess_identity_sampling = scenario != 'missing_capability'
+    mark = observer.mark
+    observer.mark = lambda: dict(mark(), native_stage_id=AUTO)
+    original_sample = probe.sample
+
+    def sample(*, extra_reader):
+        report = original_sample(extra_reader=extra_reader)
+        raw = report['sample']
+        context = dict(stage_id=AUTO, stage_status='available', frame=raw['frame'], game_time=raw['game_time'],
+                       battle_controller=int(ROOTS['controller'], 16), battle_logger=int(ROOTS['logger'], 16),
+                       battle_stats=int(ROOTS['stats'], 16), level_data=int(ROOTS['level'], 16))
+        if scenario == 'clock_changed':
+            context['frame'] += 1
+        if scenario == 'root_changed':
+            context['battle_stats'] += 8
+        raw.update(extra_reader(None, context))
+        return report
+
+    probe.sample = sample
+    BattleRuntime().feed.acquire(collector, observer)
+    assert ('roster' not in calls) is (scenario == 'match')
+    assert ('presence' not in calls) is (scenario == 'match')
 
 
 @pytest.mark.parametrize('mode', ['valid', 'unknown', 'foreign', 'no_observer'])

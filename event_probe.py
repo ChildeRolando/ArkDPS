@@ -130,6 +130,25 @@ def _autochess_scope_key(payload):
         return None
 
 
+def native_identity_sampling_mark(observer, mark):
+    """Require a host-admitted capability and a bound opening mark."""
+    if (getattr(observer, 'native_autochess_identity_sampling', False) is not True
+            or not isinstance(mark, dict) or _autochess_scope_key(mark) is None):
+        return None
+    try:
+        if not isinstance(contract_for(observer), NativePcProbeContract):
+            return None
+    except StreamGap:
+        return None
+    context = mark['native_autochess_context']
+    if (type(context.get('protocol_version')) is int and context['protocol_version'] == 1
+            and context.get('status') == 'available' and context.get('verified_same_frame') is True
+            and context.get('phase') in (4, 5, 6)
+            and context.get('frame') == mark.get('frame') and context.get('game_time') == mark.get('game_time')):
+        return mark
+    return None
+
+
 def _android_autochess_scope_key(sample, payload):
     """Bind the producer's Android roots to the collector's guarded snapshot."""
     scope = _autochess_scope_key(payload)
@@ -246,6 +265,11 @@ def bind_native_autochess_pair(sample, before, after):
                 for mark in (before, after)]
     known = [item.get('status') in ('available', 'partial')
              and (platform != 'android' or item.get('match_key') is not None) for item in contexts]
+    controlled_scope = sample.get('controlled_autochess_scope')
+    if controlled_scope is not None and any(
+            not accepted or context.get('identity') != controlled_scope
+            for accepted, context in zip(known, contexts)):
+        raise BarrierBusy('controlled AutoChess event scope differs from the independent snapshot')
     if any(known) and (not all(known) or contexts[0] != contexts[1]):
         raise BarrierBusy('AutoChess identity changed across the snapshot')
     if platform == 'android' and not all(known):

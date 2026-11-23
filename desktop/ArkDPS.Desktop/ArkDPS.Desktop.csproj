@@ -9,6 +9,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>../../assets/arkdps.ico</ApplicationIcon>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(ArkDpsInternalEventCandidate)' == 'true'">
+    <ApplicationManifest>app.internal-events.manifest</ApplicationManifest>
+    <DefineConstants>$(DefineConstants);ARKDPS_INTERNAL_EVENT_CANDIDATE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/LoneTrail/*.png" />
     <Resource Include="Assets/People/**/*.png;Assets/People/**/*.jpg" />

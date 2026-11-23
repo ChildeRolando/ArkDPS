@@ -142,6 +142,12 @@ public partial class MainWindow : Window
             bridge=new BridgeClient(App.Root,App.Python,App.BridgeArguments.ToArray(),App.StateDirectory);
             await bridge.ConnectAsync();
             var reply=await bridge.RequestAsync("snapshot");ApplyState(reply.Get("state"));
+            if (App.VerifyInternalCapture)
+            {
+                await VerifyInternalCaptureAsync();
+                await Quit();
+                return;
+            }
             if (App.UpdateLaunch is { Kind: PortableLaunchKind.Probe } probe)
             {
                 await PortableUpdateHost.ReportReadyAsync(probe);
@@ -168,7 +174,12 @@ public partial class MainWindow : Window
         }
         catch(Exception ex)
         {
-            if(App.Verification!=null)
+            if (App.VerifyInternalCapture)
+            {
+                App.WriteInternalCaptureFailure(ex);
+                await Quit(1);
+            }
+            else if(App.Verification!=null)
             {
                 DesktopLog.Append(App.Verification, "failure.txt", ex.ToString(), App.StateDirectory);
                 await Quit(1);
@@ -177,6 +188,34 @@ public partial class MainWindow : Window
             else if (App.UpdateVerification is { } fixture) { fixture.WriteFailure(ex); await Quit(1); }
             else {MessageBox.Show(this,ex.Message,"ArkDPS 启动失败");await Quit(1);}
         }
+    }
+
+    private async Task VerifyInternalCaptureAsync()
+    {
+        bool autochess = MultiplayerActive;
+        var records = HistoryList.Items.Cast<HistoryItem>().ToArray();
+        int playerCount = State.Get("multiplayer").Get("players").Items().Count();
+        string eventStatus = State.Text("event_status");
+        string workerPath = bridge!.Hello.Text("executable");
+        if (records.Length == 0 || eventStatus != "finished" || State.Text("error").Length > 0 ||
+            EventStatus.Text.Length == 0 || (MultiplayerNav.Visibility == Visibility.Visible) != autochess ||
+            !Path.GetFullPath(App.Python).Equals(workerPath, StringComparison.OrdinalIgnoreCase))
+            throw new IOException($"内部候选的桌面投影未通过：{ErrorText.Text}");
+        if (autochess) await Navigate("multiplayer");
+        Screenshot.Window(this, Path.Combine(App.StateDirectory, "wpf-internal-capture.png"));
+        await Navigate("history");
+        Screenshot.Window(this, Path.Combine(App.StateDirectory, "wpf-internal-history.png"));
+        File.WriteAllText(Path.Combine(App.StateDirectory, "wpf-internal-capture.json"), JsonSerializer.Serialize(new
+        {
+            scenario = autochess ? "autochess" : "normal",
+            event_status = eventStatus,
+            event_text = EventStatus.Text,
+            battle_ids = records.Select(record => record.Id),
+            history_count = records.Length,
+            players = playerCount,
+            python = bridge.Hello.Text("python"),
+            runtime = Environment.Version.ToString(),
+        }));
     }
     private async Task Poll()
     {

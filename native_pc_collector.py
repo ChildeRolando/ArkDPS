@@ -105,6 +105,7 @@ class NativePcCollector:
 
     enemy_frame_bound = True
     autochess_absence_is_exit = True
+    allow_event_identity_sampling = True
 
     def __init__(self, game_root, *, probe_factory=None, collect_actions=True, event_identity_only=False):
         self.game_root = Path(game_root).expanduser() if game_root else None
@@ -221,13 +222,20 @@ class NativePcCollector:
         if self.process is None:
             raise SampleUnavailable('官服 PC 采集器尚未连接')
 
-    def read_lifecycle(self):
+    def read_lifecycle_with_event_identity(self, mark):
+        return self.read_lifecycle(event_identity_mark=mark if self.allow_event_identity_sampling else None)
+
+    def read_lifecycle(self, *, event_identity_mark=None):
         self._rollback_optional()
         self._pending = None
         self._enemy_snapshot_pair = None
         self.locate_lifecycle()
         try:
-            report = self.process.sample(extra_reader=self._capture)
+            extra_reader = self._capture
+            if event_identity_mark is not None:
+                def extra_reader(read, context):
+                    return self._capture(read, context, event_identity_mark=event_identity_mark)
+            report = self.process.sample(extra_reader=extra_reader)
         except BaseException:
             self._rollback_optional()
             raise
@@ -283,8 +291,15 @@ class NativePcCollector:
         self._pending = (lifecycle, report)
         return lifecycle
 
-    def _capture(self, read, context):
-        event_identity = (self.event_identity_only and context.get('stage_status') == 'available'
+    def _capture(self, read, context, *, event_identity_mark=None):
+        bound = (event_identity_mark is not None
+                 and event_identity_mark.get('native_stage_id') == context.get('stage_id')
+                 and event_identity_mark.get('frame') == context.get('frame')
+                 and event_identity_mark.get('game_time') == context.get('game_time')
+                 and all(int(event_identity_mark['native_identity'][root], 16) == context.get(field)
+                         for root, field in (('controller', 'battle_controller'), ('logger', 'battle_logger'),
+                                             ('stats', 'battle_stats'), ('level', 'level_data'))))
+        event_identity = ((self.event_identity_only or bound) and context.get('stage_status') == 'available'
                           and 'AUTOCHESS' in str(context.get('stage_id', '')).upper())
         if event_identity:
             # The independent PC event envelope owns the account/actor table.

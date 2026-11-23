@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+import app
 import desktop_bridge
 from native_pc.internal_entry import HOST_NAME, internal_host, internal_state_dir
 
@@ -37,6 +38,7 @@ def test_desktop_accepts_only_its_own_initial_startup_logs(tmp_path):
 
 def test_bundle_requires_a_verified_internal_host(tmp_path):
     from hashlib import sha256
+    from native_pc.internal_event_source import PROTOCOL_VERSION, SOURCE_PROVIDER, SOURCE_VERSION
 
     collector = tmp_path / 'collector'
     host = collector / 'native_pc' / 'internal_event_host' / HOST_NAME
@@ -48,10 +50,17 @@ def test_bundle_requires_a_verified_internal_host(tmp_path):
     manifest.write_text('{}')
     with pytest.raises(ValueError, match='没有自研'):
         internal_host(collector)
-    manifest.write_text(json.dumps({
-        'internal_event_backend': {'protocol': 1},
-        'files': {host.relative_to(tmp_path).as_posix(): sha256(host.read_bytes()).hexdigest()},
-    }))
+    relative = host.relative_to(tmp_path).as_posix()
+    digest = sha256(host.read_bytes()).hexdigest()
+    component = dict(protocol=PROTOCOL_VERSION, source_version=SOURCE_VERSION, provider=SOURCE_PROVIDER,
+                     scope='controlled-replay', path=relative, sha256=digest)
+    data = {'internal_event_backend': component, 'files': {relative: digest}}
+    for field, incorrect in (('protocol', True), ('source_version', 2), ('provider', 'Frida'),
+                             ('path', 'wrong.exe'), ('sha256', '0' * 64)):
+        manifest.write_text(json.dumps(dict(data, internal_event_backend=dict(component, **{field: incorrect}))))
+        with pytest.raises(ValueError, match='清单不一致'):
+            internal_host(collector)
+    manifest.write_text(json.dumps(data))
     assert internal_host(collector) == host
     host.write_bytes(b'altered')
     with pytest.raises(ValueError, match='清单不一致'):
@@ -80,4 +89,18 @@ def test_internal_bridge_rejects_live_options_before_starting(monkeypatch, tmp_p
     monkeypatch.setattr(desktop_bridge.socket, 'socket', lambda *_: pytest.fail('must not open a socket'))
     with pytest.raises(SystemExit) as failure:
         desktop_bridge.main()
+    assert failure.value.code == 2
+
+
+@pytest.mark.parametrize('entry', [app, desktop_bridge])
+def test_internal_package_requires_explicit_selection(monkeypatch, tmp_path, entry):
+    root = tmp_path / 'collector'
+    metadata = tmp_path / 'metadata'
+    metadata.mkdir()
+    (metadata / 'release.json').write_text('{"internal_event_backend":{"protocol":1}}')
+    monkeypatch.setattr(entry, 'ROOT', root)
+    monkeypatch.setattr(sys, 'argv', [entry.__file__])
+    monkeypatch.setattr(entry.socket, 'socket', lambda *_: pytest.fail('must not open a socket'))
+    with pytest.raises(SystemExit) as failure:
+        entry.main()
     assert failure.value.code == 2

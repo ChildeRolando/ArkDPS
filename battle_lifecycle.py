@@ -20,7 +20,8 @@ from event_observer import ObserverReadRetry
 from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
                          autochess_root_failure, autochess_scope_detail,
-                         bind_native_autochess_pair, contract_for, native_autochess_context_bound)
+                         bind_native_autochess_pair, contract_for, native_autochess_context_bound,
+                         native_identity_sampling_mark)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
@@ -473,8 +474,12 @@ class BattleFeed:
             except Exception as exc:
                 opening = (None, exc)
         from collector import NativeClockBusy
+        read_with_identity = getattr(collector, 'read_lifecycle_with_event_identity', None)
+        identity_mark = (native_identity_sampling_mark(observer, opening[0])
+                         if opening is not None and callable(read_with_identity) else None)
         try:
-            before = collector.read_lifecycle()
+            before = (read_with_identity(identity_mark) if identity_mark is not None
+                      else collector.read_lifecycle())
         except NativeClockBusy as exc:
             # Both boundaries failed before any observation was consumed. Keep
             # the earlier opening failure so a typed native busy cannot hide a

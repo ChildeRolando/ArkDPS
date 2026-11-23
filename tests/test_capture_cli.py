@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import capture_cli
+from native_pc import event_source
 from collection_session import CollectionSession
 from event_capture import CaptureRetry
 from test_collection_session import Collector, LiveObserver
@@ -125,7 +126,7 @@ def test_pc_cli_owns_startup_before_connect_and_releases_it_last(
             calls.append('startup_close')
 
     startup = Startup()
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args: startup)
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', lambda *_args: startup)
 
     class PcSession(Session):
         def __init__(self, adb, serial, *, collector, observer_factory, **kwargs):
@@ -662,7 +663,7 @@ def test_headless_pc_observer_uses_the_event_acceptance_path(tmp_path, monkeypat
         snapshot.frame, snapshot.game_time, snapshot.damage = 2, 1., 20.
         events.queue = [event(1, 2, 1., 20)]
 
-    def create_collector(root, *, collect_actions, event_identity_only):
+    def create_collector(root, *, collect_actions, event_identity_only=False):
         assert root == str(tmp_path / 'game')
         assert collect_actions is (mode != 'disabled')
         assert event_identity_only is False  # An injected provider retains legacy witnesses.

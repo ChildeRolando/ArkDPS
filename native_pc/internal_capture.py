@@ -12,11 +12,13 @@ from battle_history import BattleHistory
 from capture_cli import json_value
 from collection_session import CollectionSession, shutdown_report
 from event_capture import CaptureRetry
+from native_pc.event_source import PcEventSource
 from roster import CharacterEntry, RosterSnapshot
 
 
 SOURCE = 'controlled_internal_event_feed'
 BUILD = 'win-x64:controlled-internal-event-feed'
+PROCESS_INSTANCE = (10, 1234)
 CID = 'char_367_swllow'
 ROOTS = dict(controller='0x10000', native='0x20000', logger='0x30000', stats='0x40000', level='0x50000')
 SCOPE = ':'.join(ROOTS.values()) + ':autochess:1'
@@ -35,7 +37,7 @@ def _event(sequence, kind, amount, **proof):
 def _builtin_fixture(scenario):
     autoc = scenario == 'autochess'
     stage = 'Activities/ACT3AUTOCHESS/level_act3autochess_m11' if autoc else 'Obt/Main/level_main_01-07'
-    session = f'10:1234:controlled-{scenario}'
+    session = ':'.join(map(str, (*PROCESS_INSTANCE, f'controlled-{scenario}')))
     roster = [dict(cid=CID, unique_id=1, player_side=0, is_token=False,
                    is_predefined=False, host_key=None, host_uid=None)] if not autoc else []
     players = [dict(index=i, uid=str(910000000 + i), nick_name=f'演示玩家 {i}', nick_number=f'{i:04d}')
@@ -83,6 +85,9 @@ def _builtin_fixture(scenario):
         mark = dict(QUALITY, native_session=session, source_build=BUILD, sequence=sequence,
                     epoch=sequence, active=0, frame=frame, game_time=when)
         if autoc:
+            snapshot['controlled_autochess_scope'] = {
+                key: scope[key] for key in ('scope_key', 'phase', 'round')
+            }
             mark.update(native_identity=ROOTS, native_autochess_context=dict(
                 scope, frame=frame, game_time=when, self_player_index=3, players=players,
                 memberships=members, collection_mode='all'))
@@ -120,7 +125,7 @@ class _FixtureCollector:
     """Play the independently supplied snapshots without reading an OS process."""
 
     def __init__(self):
-        self.process = SimpleNamespace(pid=10, process_instance=(10, 1234))
+        self.process = SimpleNamespace(pid=PROCESS_INSTANCE[0], process_instance=PROCESS_INSTANCE)
         self.diagnostics = SimpleNamespace(platform='native_pc', connection_ok=True, evidence=SOURCE)
         self.event_capability = {}
         self.frame = None
@@ -154,6 +159,14 @@ class _FixtureCollector:
         sample = dict(deepcopy(self.frame['snapshot']), battle_identity=lifecycle['battle'],
                       battle_metadata=deepcopy(lifecycle['metadata']), observed_at=time.time(),
                       captured_monotonic=time.monotonic(), event_capability=dict(self.event_capability))
+        expected_session = ':'.join(map(str, (*self.process.process_instance, *lifecycle['battle'])))
+        if sample.get('session') != expected_session or not lifecycle['metadata'].get('source_build'):
+            raise ValueError('controlled snapshot does not match its own process, battle or build')
+        if 'AUTOCHESS' in str(lifecycle['metadata'].get('stage_id', '')).upper():
+            scope = sample.get('controlled_autochess_scope')
+            if (not isinstance(scope, dict) or not isinstance(scope.get('scope_key'), str)
+                    or type(scope.get('phase')) is not int or type(scope.get('round')) is not int):
+                raise ValueError('controlled AutoChess snapshot lacks independent scope evidence')
         entries = tuple(CharacterEntry(**entry) for entry in self.frame['roster'])
         roster = RosterSnapshot(sample['frame'], entries=entries, present_known=True,
                                 present_unique_ids=frozenset(entry.unique_id for entry in entries),
@@ -176,6 +189,7 @@ def run_internal_capture(host, fixture, state_dir, *, publish=None):
     history = BattleHistory(state_dir / 'history')
     collector = _FixtureCollector()
     probe = InternalEventProbe(Path(host))
+    source = PcEventSource(state_dir, observer_factory=lambda *_args: probe)
     archives = []
     samples = 0
     last_sample = None
@@ -190,7 +204,7 @@ def run_internal_capture(host, fixture, state_dir, *, publish=None):
         audit('controlled_source', dict(scenario=value['scenario'], fixture_sha256=digest,
                                         evidence=SOURCE, game_connected=False))
         session = CollectionSession(None, None, collector=collector, frida_remote=None,
-                                    observer_factory=lambda *_args: probe, history=history,
+                                    observer_factory=source.select(enabled=True), history=history,
                                     state_dir=state_dir, audit=audit, autochess_enabled=True)
         session.enable_lifecycle()
         try:
@@ -203,11 +217,15 @@ def run_internal_capture(host, fixture, state_dir, *, publish=None):
                     try:
                         if not probe.advance(frame['mark'], frame['events'], terminal_mark=frame.get('terminal_mark')):
                             raise RuntimeError('controlled event host did not accept its next frame')
-                    except (RuntimeError, OSError) as error:
+                    except (RuntimeError, OSError, ValueError) as error:
                         source_failure = dict(reason=str(error), error_type=type(error).__name__,
                                               frame=frame['mark'].get('frame'))
                         audit('observer_advance_failed', source_failure)
-                        probe.stop()
+                        try:
+                            probe.stop()
+                        except (RuntimeError, OSError) as cleanup_error:
+                            session.cleanup_errors.setdefault('observer', []).append(str(cleanup_error))
+                            audit('observer_cleanup_error', {'reason': str(cleanup_error)})
                 try:
                     last_sample = session.read()
                 except CaptureRetry:
@@ -218,7 +236,10 @@ def run_internal_capture(host, fixture, state_dir, *, publish=None):
                 if publish is not None:
                     publish(last_sample)
         finally:
-            session.close()
+            try:
+                session.close()
+            except Exception:
+                session.close()
         cleanup = shutdown_report(session)
         if not cleanup['ok'] or session.history_error:
             raise RuntimeError(session.history_error or f'controlled event host cleanup failed: {cleanup}')

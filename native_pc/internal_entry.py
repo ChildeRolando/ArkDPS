@@ -7,6 +7,7 @@ import re
 
 
 HOST_NAME = 'ArkDPS.NativeEventHost.exe'
+HOST_PATH = f'collector/native_pc/internal_event_host/{HOST_NAME}'
 
 
 def portable_manifest(root):
@@ -20,12 +21,19 @@ def internal_host(root):
         host = root / 'runtime' / 'native-pc' / 'internal-event-host' / HOST_NAME
     else:
         component = manifest.get('internal_event_backend')
-        if not isinstance(component, dict) or component.get('protocol') != 1:
+        if not isinstance(component, dict):
             raise ValueError('此便携包没有自研事件后端。')
-        relative = f'collector/native_pc/internal_event_host/{HOST_NAME}'
-        host = root.parent / relative
-        expected = manifest.get('files', {}).get(relative)
-        if not host.is_file() or not expected or hashlib.sha256(host.read_bytes()).hexdigest() != expected:
+        from native_pc.internal_event_source import PROTOCOL_VERSION, SOURCE_PROVIDER, SOURCE_VERSION
+
+        host = root.parent / HOST_PATH
+        files = manifest.get('files')
+        expected = files.get(HOST_PATH) if isinstance(files, dict) else None
+        if (type(component.get('protocol')) is not int or component['protocol'] != PROTOCOL_VERSION
+                or type(component.get('source_version')) is not int or component['source_version'] != SOURCE_VERSION
+                or component.get('provider') != SOURCE_PROVIDER or component.get('scope') != 'controlled-replay'
+                or component.get('path') != HOST_PATH or component.get('sha256') != expected
+                or not isinstance(expected, str) or not host.is_file()
+                or hashlib.sha256(host.read_bytes()).hexdigest() != expected):
             raise ValueError('自研事件宿主与内部候选清单不一致。')
     if not host.is_file():
         raise ValueError(f'找不到自研事件宿主：{host}')

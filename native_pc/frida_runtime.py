@@ -1231,6 +1231,7 @@ class NativePcFridaRuntime:
 
 class _GadgetObserver(NativePcFridaObserver):
     native_clock_busy_retry = True
+    native_autochess_identity_sampling = True
 
     def __init__(self, collector, remote, *, runtime):
         super().__init__(collector, remote)
