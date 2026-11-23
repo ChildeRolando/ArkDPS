@@ -35,6 +35,9 @@ def _while_live(operation, released):
 class FridaEventObserver:
     contract = MUMU_CONTRACT
     provides_autochess_context = True
+    # Frida decodes a fresh event list for every reply. The observer retains no
+    # reference to those records after delivering the batch to the collector.
+    transfers_event_records = True
 
     def __init__(self, collector, remote):
         self.collector = collector

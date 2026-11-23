@@ -210,10 +210,17 @@ class BattleFeed:
         self.autochess_identity = None
 
     def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None,
-              read_error=None):
+              read_error=None, observer=None):
         self.sequence += 1
+        memo = None
+        if events and getattr(observer, 'transfers_event_records', False):
+            records = (events.get('drain') or {}).get('events')
+            if type(records) is list:
+                # The producer handed off these freshly decoded records. Marks
+                # and the rest of the event envelope still need their own copies.
+                memo = {id(records): records}
         return BattleObservation(self.id, self.sequence, self.generation,
-                                 kind, deepcopy(sample), roster, reason, deepcopy(events),
+                                 kind, deepcopy(sample), roster, reason, deepcopy(events, memo),
                                  deepcopy(self.current_lifecycle), deepcopy(round_reset), deepcopy(read_error))
 
     @property
@@ -487,7 +494,7 @@ class BattleFeed:
                     self.terminal = True
                     self.clock = sample['game_time']
                     self.frame = sample['frame']
-                    return self._emit('terminal', sample, roster, events=events)
+                    return self._emit('terminal', sample, roster, events=events, observer=observer)
             if self.identity == identity and not stage_changed:
                 return self._end('finished', observer=observer)
             return self._end('replaced')
@@ -564,7 +571,7 @@ class BattleFeed:
         sample['session'] = f'{self.id}:{self.generation}'
         if preparing:
             return self._emit('preparing', sample, roster, reason='empty_roster', round_reset=round_reset)
-        return self._emit('sample', sample, roster, events=events, round_reset=round_reset)
+        return self._emit('sample', sample, roster, events=events, round_reset=round_reset, observer=observer)
 
 
 class BattleSessions:
