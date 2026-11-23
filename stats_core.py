@@ -369,6 +369,7 @@ class Statistics:
         self.settlement_unscoped_hits = 0
         self.settlement_unscoped = False
         self.settlement_skill_active = {}
+        self.settlement_skill_initial_pending = set()
         self.settlement_skill_incomplete = set()
         self.settlement_skill_unassigned = set()
         self.partial_damage = {}
@@ -602,10 +603,12 @@ class Statistics:
             self.settlement_bars.pop(target_uid, None)
 
     def _settlement_skill(self, owner, actor):
+        identity = (owner, actor)
         if (actor is None or self.skill_unknown or owner in self.settlement_skill_unassigned
-                or (owner, actor) in self.settlement_skill_incomplete):
+                or identity in self.settlement_skill_initial_pending
+                or identity in self.settlement_skill_incomplete):
             return None
-        window = self.settlement_skill_active.get((owner, actor))
+        window = self.settlement_skill_active.get(identity)
         if window is not None and self._unconfirmed_skill_reason(window, live=True):
             return None
         return window is not None
@@ -974,12 +977,20 @@ class Statistics:
                                 key, skill_id, name, method, reason, wait_for_end=None):
         def close(identity, _time, _reason, *, confirmed):
             window = self.settlement_skill_active.pop(identity)
-            if not confirmed and self._unconfirmed_skill_reason(window):
+            if (not confirmed and identity not in self.settlement_skill_initial_pending
+                    and self._unconfirmed_skill_reason(window)):
                 self.settlement_skill_incomplete.add(identity)
-        self._apply_skill_transition(
-            self.settlement_skill_active, (owner, actor), source, kind, game_time,
+        identity = (owner, actor)
+        effect_started = self._apply_skill_transition(
+            self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
             wait_for_end=wait_for_end, close=close, actor=actor)
+        if effect_started:
+            # Earlier unclassified hits stay in the damage ledger's denominator.
+            self.settlement_skill_initial_pending.discard(identity)
+
+    def mark_settlement_skill_initial_unknown(self, owner, actor):
+        self.settlement_skill_initial_pending.add((owner, actor))
 
     def mark_settlement_skill_unassigned(self, source, method, reason):
         owner = self.owners.get(source)
@@ -1017,9 +1028,11 @@ class Statistics:
                 active[identity_key] = {
                     'start': game_time, 'source': source, 'key': key, 'id': skill_id,
                     'name': name, 'effect_started': effect_started, 'actor': actor}
+                return effect_started
             elif source == window['source'] and same_skill and effect_started:
                 window['effect_started'] = True
-            return
+                return True
+            return False
         if method == 'BasicSkill.OnCastFinish' and not self._native_cast_window_matches(
                 window, source, key, skill_id, actor):
             if wait_for_end is True:
@@ -1113,6 +1126,24 @@ class Statistics:
         """
         if self.end_time is None:
             raise ValueError('only an ended battle can receive settlement revisions')
+        return self._revise_terminal_totals(counters, self.end_time)
+
+    def revise_pending_totals(self, game_time, counters):
+        """Revise an independently read terminal snapshot without closing events.
+
+        The adapter must prove the same ended native battle/frame. This narrow
+        entry never relaxes ordinary same-time snapshot conflicts.
+        """
+        if type(game_time) not in (int, float):
+            raise ValueError('pending terminal time must be a finite number')
+        self._time(game_time)
+        if self.end_time is not None or not self.baseline_ready or game_time != self.now:
+            raise ValueError('pending terminal totals require the current unfrozen endpoint')
+        changed = self._revise_terminal_totals(counters, game_time)
+        self.invalidate_rates()
+        return changed
+
+    def _revise_terminal_totals(self, counters, endpoint):
         for source, values in counters.items():
             if source not in self.owners or set(values) != {'damage', 'healing'}:
                 raise ValueError('unknown source or incomplete settlement counters')
@@ -1129,13 +1160,13 @@ class Statistics:
             prior = self.sources.get(source)
             if prior is None or prior['values'] != values or not prior['continuous']:
                 self.sources[source] = {'values': dict(values),
-                                        'history': deque([(self.end_time, dict(values))]),
-                                        'continuous': True, 'segment_start': self.end_time,
-                                        'totals_valid': True, 'totals_time': self.end_time}
+                                        'history': deque([(endpoint, dict(values))]),
+                                        'continuous': True, 'segment_start': endpoint,
+                                        'totals_valid': True, 'totals_time': endpoint}
                 changed = True
             else:
                 prior['totals_valid'] = True
-                prior['totals_time'] = self.end_time
+                prior['totals_time'] = endpoint
         return changed
 
     def correct_final_totals(self, counters):

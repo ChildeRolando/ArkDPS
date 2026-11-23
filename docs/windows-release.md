@@ -32,7 +32,9 @@ rc.14 起，程序的 Windows manifest 固定为 `requireAdministrator`，取消
 
 ## 构建候选
 
-从 `main` 的干净已提交工作区构建。Windows CI 使用 CPython 3.10.10 与 .NET 10 SDK。
+正式包从 `main` 的干净已提交工作区构建。明确标注的独立实验变体可从隔离候选分支的干净提交构建；
+仍须通过相同的 HEAD 精确及工作区干净校验，不能把开发目录的未提交改动直接拼入分发包。
+Windows CI 使用 CPython 3.10.10 与 .NET 10 SDK。
 
 ```powershell
 python -m pip install -r requirements-windows.txt -r requirements-test.txt
@@ -50,6 +52,38 @@ worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还�
 
 `requirements-test.txt` 单独固定 pytest 与 Pillow（Python 包名 `PIL`）：后者仅用于测试中独立解码 PNG，
 不是产品运行时依赖。`requirements-windows.txt` 只保留事件客户端 pin。
+
+### 官服 PC 自研 Hook 启动测试变体
+
+`--with-native-hooks` 是独立的启动测试候选，不是标准包，也不是原 `--with-native-events` 合作 JSONL 变体。
+文件名后缀固定为 `-native-hooks-startup-test.zip`，不包含 Frida Python、Gadget 或 Android server，
+不接收 MuMu、Frida、合作文件或内部回放作为实时来源，不改变标准发行版的默认后端。
+
+```powershell
+python tools/package_windows.py --with-native-hooks --version <候选版本> `
+  --native-hook-dll <已核验的ArkDPS.NativeEvents.dll> --output runtime/packages
+```
+
+输入 DLL 必须带相邻 `.build.json` 和三份许可，六份原生运行时源码与构建清单必须相符。
+包中固定保存 DLL、构建清单、用于验证的六份源码及 QuickJS/MinHook/nlohmann-json 许可。
+`metadata/release.json` 的 `native_pc_native_hooks` 明确声明 provider、协议、路径、摘要、官服构建及实验范围。
+加载前同时核验发布清单、组件清单及实际字节；标准包或旧合作包不能借放入一个 DLL 自动启用 Hook。
+这些摘要证明载荷一致性，不是数字签名或对本机主动篡改的访问控制。
+
+此候选须解压到**新的独立可写目录**，不要覆盖正式包或复制旧 `collector/runtime`。
+默认有效来源为官服 PC / 自研 / 空事件文件；已有连接配置不被静默改写，设置也不能切到未打包来源。
+先启动 ArkDPS、填写官服游戏目录并应用设置，等实际启动监听就绪后，再正常启动或重启游戏。
+仍使用管理员 manifest；取消 UAC 不会启动，不要求关闭安全保护，未知客户端构建拒绝加载。
+停止观察会撤下 Hook，DLL 按设计保留映射至游戏正常退出；不能将 DLL 仍在模块列表视为采集仍在运行。
+
+候选禁用应用内更新，不写正式 Release，不将内部自测当用户启动兼容性证明。
+包内说明须保留**性能未验、卫戍阶段交接不完整、保护环境兼容性未保证**；
+目前已知的阶段切换原始内容缺口及后续留证修复见[采集候选实机记录](native-pc-native-hooks.md)。
+收到启动失败反馈时区分解压/载荷、UAC、游戏构建、启动时序与真实客户端异常，不无证归因 ACE。
+
+构建门禁包括包内 Python 的无 Frida 导入与离线 worker `hello → snapshot → quit`、载荷摘要及清洁解压复核。
+这些检查不启动游戏、不加载 Hook、不等同于 WPF 界面实机启动或性能测试。
+本机用户正在对局时不运行下面会移动鼠标的交互式验收；该项留待隔离 CI 或用户另行交桌面。
 
 ## 验收
 

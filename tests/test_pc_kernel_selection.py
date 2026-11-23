@@ -51,6 +51,10 @@ def test_pc_source_switch_waits_for_old_runtime_and_native_never_uses_frida(tmp_
 
     frida = FridaRuntime()
     monkeypatch.setattr(event_source, '_native_pc_frida_runtime', lambda *_: frida)
+    native_factory = object()
+    native = SimpleNamespace(observer_factory=native_factory,
+        start=lambda: calls.append('native start'), close=lambda: calls.append('native close'))
+    monkeypatch.setattr(event_source, '_native_pc_hook_runtime', lambda *_, **__: native)
     source = event_source.PcEventSource(tmp_path)
     root = tmp_path / 'game'
     assert source.select(enabled=True, game_root=root) is frida.observer_factory
@@ -59,10 +63,27 @@ def test_pc_source_switch_waits_for_old_runtime_and_native_never_uses_frida(tmp_
     assert source.runtime is frida
     frida.fail_close = False
     observer_factory = source.select(enabled=True, game_root=root, backend='native')
-    assert source.runtime is None and calls == ['Frida start', 'Frida close', 'Frida close']
-    with pytest.raises(RuntimeError, match='JSONL'):
-        observer_factory(object(), None)
+    assert source.runtime is native and calls == ['Frida start', 'Frida close', 'Frida close', 'native start']
+    assert observer_factory is native_factory
     assert source.select(enabled=False, game_root=root, backend='native') is None
+    assert calls[-1] == 'native close'
+
+
+def test_native_runtime_reuses_owner_retries_explicitly_and_never_prepares_frida(tmp_path, monkeypatch):
+    calls = []
+    factory = object()
+    native = SimpleNamespace(observer_factory=factory, start=lambda: calls.append('start'),
+        retry=lambda: calls.append('retry'), close=lambda: calls.append('close'))
+    monkeypatch.setattr(event_source, '_native_pc_hook_runtime', lambda *_, **__: native)
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', lambda *_: pytest.fail('native imported Frida'))
+    source = event_source.PcEventSource(tmp_path, collector_root=tmp_path)
+    assert source.select(enabled=True, game_root=tmp_path / 'game', backend='native') is factory
+    assert source.select(enabled=True, game_root=tmp_path / 'game', backend='native') is factory
+    assert calls == ['start']
+    source.select(enabled=True, game_root=tmp_path / 'game', backend='native', explicit_retry=True)
+    assert calls == ['start', 'retry']
+    source.close()
+    assert source.runtime is None and calls[-1] == 'close'
 
 
 def test_desktop_worker_reports_launch_override_without_saving_it(tmp_path, monkeypatch):
@@ -103,8 +124,10 @@ def test_cli_reads_saved_kernel_but_one_off_override_does_not_persist(tmp_path, 
     assert app.main() is None
     monkeypatch.setattr(sys, 'argv', [*argv, '--native-pc-event-backend', 'frida'])
     assert app.main() is None
+    monkeypatch.setattr(sys, 'argv', [*argv, '--native-pc-event-backend', 'native'])
+    assert app.main() is None
     assert [(x.native_pc_event_backend, x.native_pc_event_feed) for x in args_seen] == [
-        ('native', feed), ('frida', feed)]
+        ('native', feed), ('frida', feed), ('native', None)]
     assert store.load().config == config
 
 
@@ -125,3 +148,13 @@ def test_live_host_manifest_is_separate_from_the_controlled_build(tmp_path):
     assert live_native_host(tmp_path / 'collector') == host
     with pytest.raises(ValueError, match='没有自研'):
         internal_host(tmp_path / 'collector')
+
+
+def test_native_hooks_remain_unreleased_and_fail_before_loading_in_portable(tmp_path):
+    metadata = tmp_path / 'metadata'
+    metadata.mkdir()
+    (metadata / 'release.json').write_text('{}')
+    source = event_source.PcEventSource(tmp_path / 'state', collector_root=tmp_path / 'collector')
+    factory = source.select(enabled=True, backend='native')
+    with pytest.raises(RuntimeError, match='实机验收'):
+        factory(object(), None)

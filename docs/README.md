@@ -43,7 +43,8 @@
 - [累计、生命周期与本地战绩](snapshot-adapter.md#本地战绩ark-8) — 冻结交接、版本化 BattleRecord、最近 100 局读取及故障诊断。
 - [实时事件采集入口与验收](event-capture.md) — 可选观察器、共享采集入口、覆盖语义和宿主机验收命令。
 - [事件探针与共享统计接口](event-probe-interface.md) — MuMu/PC 探针契约、质量声明、共享统计口径和离线一致性回归。
-- [PC 自研事件后端内部候选](internal-event-backend.md) — 受控采集、验证范围和独立打包。
+- [PC 自研事件后端内部候选](internal-event-backend.md) — 合作生产者接入、受控验证及候选包。
+- [官服 PC 非 Frida 实时采集候选](native-pc-native-hooks.md) — 进程内采集组件、官服同局对账、独立实机证据、便携启动测试变体与未覆盖边界。
 - [探针复用审计与修复边界](event-probe-reuse.md) — 实际 MuMu 基线、技能与嵌套结算断点、局部缺口及共同业务回归。
 - [GUI/HUD 共用面板模型](panel-model.md) — 面板配置、排序、柱长与占比口径（Tk 实现已封存）。
 - [设置、托盘与窗口配置恢复](settings-and-layout.md) — 布局版本与迁移、可达位置、托盘生命周期、事件观察开关与退出清理（Tk 历史章节已封存）。

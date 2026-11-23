@@ -1,6 +1,7 @@
 """Publish verified Windows counters through the shared battle lifecycle."""
 
 import hashlib
+from copy import deepcopy
 import json
 import math
 from pathlib import Path
@@ -162,6 +163,7 @@ class NativePcCollector:
             raise SampleUnavailable(diag.error) from exc
         diag = self.diagnostics
         diag.status = DetectionStatus.READY_UNIQUE
+        diag.code, diag.error = None, ''
         diag.connection_ok = True
         diag.version_status = VersionStatus.COMPATIBLE
         diag.version_actual = self.process.build['source_build']
@@ -216,7 +218,10 @@ class NativePcCollector:
     def observer_boot_ready(self):
         if self.process is None:
             raise SampleUnavailable('官服 PC 采集器尚未连接。')
-        return self.process.observer_boot_ready()
+        ready = self.process.observer_boot_ready()
+        self.observer_boot_reason = None if ready else getattr(self.process, 'observer_boot_reason', None)
+        self.diagnostics.details['observer_boot'] = dict(ready=ready, reason=self.observer_boot_reason)
+        return ready
 
     def locate_lifecycle(self):
         if self.process is None:
@@ -264,7 +269,24 @@ class NativePcCollector:
         raw = report['sample']
         # The probe can see a reset while the roster is unavailable. Keep that
         # boundary even if the next publishable frame has caught up to the old one.
-        identity_words = (*self.process.battle_identity, raw['battle_serial'])
+        window_guard = raw.get('native_window_guard')
+        if window_guard is not None:
+            try:
+                roots = window_guard['before']['native_identity']
+                if (window_guard.get('version') != 1 or window_guard.get('source') != 'native_pc_guarded_read'
+                        or window_guard['before'] != window_guard['after']
+                        or window_guard['process_instance_before'] != window_guard['process_instance_after']
+                        or tuple(window_guard['process_instance_before']) != self.process.process_instance
+                        or window_guard['source_build'] != self.diagnostics.version_actual
+                        or window_guard['battle_serial'] != raw['battle_serial']
+                        or set(roots) != {'controller', 'native', 'logger', 'stats', 'level'}):
+                    raise ValueError('guarded native identity changed')
+                identity_words = (*[int(roots[key], 16) for key in ('controller', 'native', 'logger', 'stats', 'level')],
+                                  raw['battle_serial'])
+            except (KeyError, TypeError, ValueError) as error:
+                raise SnapshotGap('官服 PC 原始采样守卫不完整或身份冲突') from error
+        else:
+            identity_words = (*self.process.battle_identity, raw['battle_serial'])
         identity = hashlib.sha256(struct.pack(f'<{len(identity_words)}Q', *identity_words)).hexdigest()
         battle = (identity,)
         stage_id = raw.get('stage_id') if raw.get('stage_status') == 'available' else None
@@ -457,6 +479,8 @@ class NativePcCollector:
                       damage_basis='client character counters; includes overkill; excludes healing',
                       read_ms=report.get('acquisition', {}).get('duration_ms'),
                       observed_at=time.time(), captured_monotonic=time.monotonic())
+        if 'native_window_guard' in raw:
+            sample['native_window_guard'] = deepcopy(raw['native_window_guard'])
         if event_candidate:
             sample['native_counter_scope'] = 'events_only'
             sample['native_snapshot_witnesses'] = {

@@ -147,6 +147,7 @@ class BattleStatisticsAdapter:
     def __init__(self):
         self._events_only = False
         self._character_counters = False
+        self._pending_terminal_clock = None
         self.snapshot_revision = 0
         self.event_stream = None
         self._character_names = load_character_names()
@@ -249,6 +250,7 @@ class BattleStatisticsAdapter:
             self.last_result = self.statistics.result()
 
     def _begin(self, sample: dict, roster: RosterSnapshot) -> None:
+        self._pending_terminal_clock = None
         self.snapshot_revision = 0
         self.event_stream = None
         session = sample['session']
@@ -658,7 +660,17 @@ class BattleStatisticsAdapter:
             self.statistics.settlement_sides_known = len(self.settlement_sides) == 1
         self._bind_event_sources(roster, roster_map, events)
 
-    def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False,
+    def bind_terminal_event_sources(self, sample, roster, *, source_events=(), settlement_version=None):
+        """Use the cached guarded roster for tail identities, never for new counters."""
+        if (self.statistics is None or self.statistics.end_time is not None
+                or self._pending_terminal_clock != (sample.get('session'), sample.get('frame'), sample.get('game_time'))
+                or roster.frame != sample['frame']):
+            raise FrameMismatch('terminal event sources require the pending guarded endpoint')
+        if self.source_attribution:
+            roster_map = _character_counter_map(sample) if self._character_counters else build_owner_map(roster)
+            self._update_event_sources(roster, roster_map, source_events, settlement_version)
+
+    def update(self, sample: dict, roster: RosterSnapshot, *, terminal=False, defer_finish=False,
                source_events=(), source_attribution=False, settlement_version=None) -> AdapterUpdate | None:
         """Apply one cumulative snapshot; returns None for duplicate frames."""
         frame = sample.get('frame')
@@ -677,6 +689,11 @@ class BattleStatisticsAdapter:
                           and metadata.get('outcome') == 'abandoned'
                           and metadata.get('evidence'))
         end_state = sample.get('state') == 3 or native_abandon
+        if defer_finish and not terminal:
+            raise FrameMismatch('deferred finish requires a verified terminal snapshot')
+        if (defer_finish and self._pending_terminal_clock is not None
+                and (sample.get('session'), frame, sample['game_time']) != self._pending_terminal_clock):
+            raise FrameMismatch('pending terminal revision must retain its exact battle and endpoint')
         if terminal and (not end_state or self.statistics is None
                          or sample['session'] != self.session or self.last_game_time is None):
             raise FrameMismatch('结算修订必须属于已有观察战局的原生结束状态')
@@ -719,7 +736,7 @@ class BattleStatisticsAdapter:
             if settling:
                 return None
             self.statistics.snapshot(game_time, {})
-            if terminal and self.statistics.end_time is None:
+            if terminal and not defer_finish and self.statistics.end_time is None:
                 self.statistics.finish(game_time)
             self.last_frame, self.last_game_time = frame, game_time
             self.last_roster, self.last_roster_frame = roster, roster.frame
@@ -727,6 +744,8 @@ class BattleStatisticsAdapter:
             self.missing_fields.add('native_player_counters')
             self.snapshot_revision += 1
             self.last_result = self.statistics.result()
+            if defer_finish:
+                self._pending_terminal_clock = (self.session, frame, game_time)
             return AdapterUpdate(self.session, game_time, self.result(roster),
                                  missing_fields=('native_player_counters',), roster_frame=roster.frame)
         roster_map = _character_counter_map(sample) if self._character_counters else build_owner_map(roster)
@@ -794,7 +813,11 @@ class BattleStatisticsAdapter:
         if not counters and sample.get('rows') and not self.source_attribution:
             raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
         if terminal:
-            if self.statistics.end_time is None:
+            if defer_finish:
+                if game_time > self.last_game_time:
+                    self.statistics.snapshot(game_time, counters)
+                changed = self.statistics.revise_pending_totals(game_time, counters)
+            elif self.statistics.end_time is None:
                 if self.event_stream is not None and self.event_stream.frame != frame:
                     self.statistics.mark_enemy_entry_unknown()
                     self.statistics.mark_enemy_phase_unknown()
@@ -802,7 +825,8 @@ class BattleStatisticsAdapter:
                 if game_time > self.last_game_time:
                     self.statistics.snapshot(game_time, counters)
                 self.finish(game_time)
-            changed = self.statistics.correct_final_totals(counters)
+            if not defer_finish:
+                changed = self.statistics.correct_final_totals(counters)
         elif settling:
             changed = self.statistics.settle_snapshot(counters)
         else:
@@ -835,6 +859,8 @@ class BattleStatisticsAdapter:
         self.last_frame = frame
         self.last_game_time = game_time
         self.last_result = self.statistics.result()
+        if defer_finish:
+            self._pending_terminal_clock = (self.session, frame, game_time)
         return AdapterUpdate(
             session=self.session, game_time=game_time, result=self.last_result,
             unknown_sources=tuple(sorted(self.unknown_sources)),

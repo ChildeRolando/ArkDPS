@@ -8,6 +8,52 @@ import re
 
 HOST_NAME = 'ArkDPS.NativeEventHost.exe'
 HOST_PATH = f'collector/native_pc/internal_event_host/{HOST_NAME}'
+NATIVE_HOOK_CANDIDATE_KEY = 'native_pc_native_hooks'
+
+
+def native_hook_candidate_profile(root):
+    """Package-local launch policy, never a change to saved product defaults."""
+    manifest = portable_manifest(Path(root))
+    if manifest is None or NATIVE_HOOK_CANDIDATE_KEY not in manifest:
+        return None
+    # The owning loader validates the exact profile, DLL, six source inputs,
+    # build manifest and release file hashes. Do not invent a second trust path.
+    from native_pc.native_hook_source import native_hook_binary
+    native_hook_binary(root)
+    profile = manifest[NATIVE_HOOK_CANDIDATE_KEY]
+    if (not isinstance(profile, dict) or profile.get('provider') != 'arkdps-native-hooks'
+            or type(profile.get('protocol')) is not int or profile['protocol'] != 1
+            or profile.get('scope') != 'official-pc-startup-test'
+            or profile.get('default_platform') != 'native_pc' or profile.get('default_backend') != 'native'
+            or profile.get('experimental') is not True or profile.get('performance_verified') is not False
+            or profile.get('autochess_handoff_verified') is not False
+            or manifest.get('internal_event_backend') or manifest.get('native_pc_event_backend')):
+        raise ValueError('自研启动候选配置与便携包清单不一致。')
+    return dict(profile)
+
+
+def validate_native_hook_candidate_connection(profile, config):
+    if profile is not None and (config.platform != 'native_pc'
+            or config.native_pc_event_backend != 'native' or config.native_pc_event_feed):
+        raise ValueError('此启动测试候选仅支持官服 PC 自研实时采集；不支持 MuMu、Frida 或合作事件文件。')
+
+
+def native_hook_candidate_defaults(profile, config):
+    if profile is None:
+        return config
+    from dataclasses import replace
+    return replace(config, platform='native_pc', native_pc_event_backend='native', native_pc_event_feed=None)
+
+
+def native_hook_candidate_arguments(profile, args):
+    if profile is None:
+        return
+    if (args.platform not in (None, 'native_pc') or args.native_pc_event_backend not in (None, 'native')
+            or args.native_pc_event_feed or args.frida_remote not in (None, '')
+            or args.adb is not None or args.serial is not None or args.arkframework_root is not None
+            or args.internal_capture is not None):
+        raise ValueError('此启动测试候选仅支持官服 PC 自研实时采集；不支持 MuMu、Frida、合作文件或内部回放。')
+    args.platform, args.native_pc_event_backend, args.native_pc_event_feed = 'native_pc', 'native', None
 
 
 def portable_manifest(root):

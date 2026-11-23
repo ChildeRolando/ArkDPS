@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from connection import VersionStatus
 from event_probe import (MUMU_CONTRACT, NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry,
-                         ready_probe_modes, assemble_probe_source)
+                         ready_probe_modes, assemble_probe_source, acquire_native_terminal_tail)
 
 
 class ObserverStatus(str, Enum):
@@ -149,6 +149,8 @@ class FridaEventObserver:
             source = self._probe_source()
             if os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1':
                 source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
+                if os.environ.get('ARKDPS_TRACE_NESTED_PARENT') == '1':
+                    source = 'globalThis.arkdpsTraceNestedParent = true;\n' + source
             if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '0':
                 source = 'globalThis.arkdpsCoalesceEnemyHp = false;\n' + source
             self._probe_source_manifest['submitted_sha256'] = sha256(source.encode('utf-8')).hexdigest()
@@ -317,3 +319,21 @@ class NativePcFridaObserver(FridaEventObserver):
     def _request(self, operation, *, timeout=None, **arguments):
         result = super()._request(operation, timeout=timeout, **arguments)
         return self.binding.bind(operation, result)
+
+    def remember_verified_mark(self, sample, mark):
+        return self.binding.remember_verified_mark(sample, mark)
+
+    def read_terminal_mark(self):
+        from copy import deepcopy
+        self.last_terminal_response = None
+        raw = super()._request('mark', timeout=self.terminal_mark_timeout, **self._mark_options())
+        self.last_terminal_response = deepcopy(raw)
+        return self.binding.bind_terminal_mark(raw)
+
+    def read_terminal_tail(self, after, *, deadline=None):
+        return acquire_native_terminal_tail(self, super()._request, after, deadline=deadline)
+
+    def stop(self):
+        self.binding.reset()
+        self.last_terminal_response = None
+        return super().stop()

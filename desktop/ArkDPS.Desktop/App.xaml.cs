@@ -29,6 +29,11 @@ public partial class App : System.Windows.Application
 #else
     internal static readonly bool CooperativeEventPackage = false;
 #endif
+#if ARKDPS_NATIVE_HOOK_CANDIDATE
+    internal static readonly bool NativeHookCandidate = true;
+#else
+    internal static readonly bool NativeHookCandidate = false;
+#endif
     internal static string[] LaunchArguments = [];
     internal static readonly List<string> BridgeArguments = new();
     internal static void ClearConnectionOverrides()
@@ -51,9 +56,12 @@ public partial class App : System.Windows.Application
             VerifyInternalCapture = arguments.Contains("--verify-internal");
             LaunchArguments = arguments;
             bool internalRequested = arguments.Contains("--internal-capture");
+            if (NativeHookCandidate && (arguments.Contains(PortableUpdateHost.ApplyOption)
+                || arguments.Contains(PortableUpdateHost.ChildOption)))
+                throw new ArgumentException("自研启动测试候选不支持自动更新、旧版本激活或状态迁移。");
             if ((InternalEventPackage || VerifyInternalCapture) && !internalRequested)
                 throw new ArgumentException("内部事件候选需要 --offline --internal-capture 和独立的 --state-dir。");
-            var host = InternalEventPackage || internalRequested || CooperativeEventPackage
+            var host = InternalEventPackage || internalRequested || CooperativeEventPackage || NativeHookCandidate
                 ? null : PortableUpdateHost.Find(AppContext.BaseDirectory);
             if (arguments.Length == 2 && arguments[0] == PortableUpdateHost.ApplyOption)
             {
@@ -81,6 +89,13 @@ public partial class App : System.Windows.Application
             for (int i = 0; i < arguments.Length; i++)
             {
                 string arg = arguments[i];
+                if (NativeHookCandidate && arg is "--repo" or "--python" or "--internal-capture"
+                    or "--verify-internal" or "--verify-update" or "--frida-remote" or "--adb" or "--serial" or "--arkframework-root"
+                    or "--native-pc-event-feed")
+                    throw new ArgumentException("自研启动测试候选不支持该启动方式：" + arg);
+                if (NativeHookCandidate && (arg == "--platform" && arguments.ElementAtOrDefault(i + 1) != "native_pc"
+                    || arg == "--native-pc-event-backend" && arguments.ElementAtOrDefault(i + 1) != "native"))
+                    throw new ArgumentException("此候选仅支持官服 PC 自研实时采集。");
                 if (InternalEventPackage && arg is not ("--offline" or "--internal-capture" or "--state-dir" or "--verify-internal"))
                     throw new ArgumentException("内部事件候选不支持参数：" + arg);
                 switch (arg)
@@ -186,12 +201,18 @@ public partial class App : System.Windows.Application
                 if (CooperativeEventPackage != (manifest.RootElement.Get("native_pc_event_backend").ValueKind
                                                 == System.Text.Json.JsonValueKind.Object))
                     throw new IOException("桌面程序与 PC 事件候选清单不匹配。");
+                if (NativeHookCandidate != (manifest.RootElement.Get("native_pc_native_hooks").ValueKind
+                                            == System.Text.Json.JsonValueKind.Object))
+                    throw new IOException("桌面程序与自研启动候选清单不匹配。");
+                if (NativeHookCandidate) VerifyNativeHookPackage(manifest.RootElement);
                 InstalledVersion = version;
-                if (packaged && manifest.RootElement.Number("update_protocol") == 1 &&
+                if (!NativeHookCandidate && packaged && manifest.RootElement.Number("update_protocol") == 1 &&
                     manifest.RootElement.Text("frida").Length > 0 &&
                     !arguments.Contains("--repo") && !arguments.Contains("--python"))
                     UpdateHost = host;
             }
+            else if (NativeHookCandidate)
+                throw new IOException("自研启动测试候选必须从完整且独立的新解压便携目录运行。");
             var window = new MainWindow(); MainWindow = window;
             WriteStartupEvent("event=window_created");
             if (UpdateLaunch?.ReadyPipe != null || UpdateVerification != null || VerifyInternalCapture)
@@ -206,7 +227,7 @@ public partial class App : System.Windows.Application
             }
             window.Show();
             if (InstalledVersion is ReleaseVersion installed)
-                window.InitializeReleaseUpdates(installed, offline || CooperativeEventPackage);
+                window.InitializeReleaseUpdates(installed, offline || CooperativeEventPackage || NativeHookCandidate);
         }
         catch (Exception ex)
         {
@@ -219,6 +240,46 @@ public partial class App : System.Windows.Application
             else MessageBox.Show(ex.Message, "ArkDPS 启动失败");
             Shutdown(1);
         }
+    }
+
+    internal static void VerifyNativeHookPackage(System.Text.Json.JsonElement manifest)
+    {
+        var profile = manifest.Get("native_pc_native_hooks");
+        if (InternalEventPackage || CooperativeEventPackage || profile.Text("provider") != "arkdps-native-hooks"
+            || profile.Get("protocol").ValueKind != System.Text.Json.JsonValueKind.Number
+            || !profile.Get("protocol").TryGetInt32(out int protocol) || protocol != 1
+            || profile.Text("scope") != "official-pc-startup-test" || !profile.Bool("experimental")
+            || profile.Text("default_platform") != "native_pc" || profile.Text("default_backend") != "native"
+            || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.False
+            || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.False
+            || manifest.Get("files").ValueKind != System.Text.Json.JsonValueKind.Object)
+            throw new IOException("自研启动候选的实验范围或默认来源清单不匹配。");
+        string root = Path.GetFullPath(AppContext.BaseDirectory);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in manifest.Get("files").EnumerateObject())
+        {
+            string name = file.Name;
+            string digest = file.Value.ValueKind == System.Text.Json.JsonValueKind.String ? file.Value.GetString()! : "";
+            if (!names.Add(name) || name.Length == 0 || name.Any(char.IsControl)
+                || name.IndexOfAny(['\\', ':', '*', '?', '"', '<', '>', '|']) >= 0
+                || name.StartsWith('/') || name.Split('/').Any(part => part is "" or "." or ".."
+                    || part.EndsWith('.') || part.EndsWith(' '))
+                || digest.Length != 64 || !digest.All(Uri.IsHexDigit))
+                throw new IOException("自研启动候选的文件清单无效。");
+            string path = Path.GetFullPath(Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar)));
+            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+                throw new IOException("自研启动候选缺少清单文件：" + name);
+            for (FileSystemInfo? entry = new FileInfo(path); entry is not null && entry.FullName != root.TrimEnd(Path.DirectorySeparatorChar);
+                 entry = entry is FileInfo info ? info.Directory : ((DirectoryInfo)entry).Parent)
+                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("自研启动候选不接受链接替换的文件：" + name);
+            string actual = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+            if (!string.Equals(actual, digest, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("自研启动候选文件摘要不一致：" + name);
+        }
+        if (!names.Contains("ArkDPS.Desktop.exe") || !names.Contains("collector/desktop_bridge.py")
+            || !names.Contains("python/python.exe"))
+            throw new IOException("自研启动候选缺少必要入口文件。");
     }
 
     private static string ResolveDirectory(string path)

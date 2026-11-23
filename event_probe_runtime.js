@@ -20,6 +20,7 @@ if(domain.isNull())throw new Error('IL2CPP domain is not initialized');
 const thread=api('il2cpp_thread_attach','pointer',['pointer'])(domain);
 if(thread.isNull())throw new Error('IL2CPP thread could not attach');
 const cfg={methods:[]};let clock;let skillF=null;
+let probeHooksReady=false;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;
 let terminalMethods=null;
@@ -279,6 +280,8 @@ let skillUnknown=false;
 let skippedUnattributed=0;
 const EVENT_BUFFER_LIMIT=100000,HP_CONTEXT_BUFFER_LIMIT=10000;
 const queue=[],hpContext=[];
+// Internal provenance only; never a new or rewritten field on the wire event.
+const queueSettlementScopes=new WeakMap();
 let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
 const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
@@ -315,6 +318,7 @@ function sourceCharacterUid(source,sourceId){
  }catch(e){/* Native identity unavailable; keep the original event. */}
 }
 function resetDamageSettlementScope(){
+ if(typeof probeAdapter.discardInitialBoundary==='function')probeAdapter.discardInitialBoundary('settlement_scope_changed');
  damageSettlementClock=null;
  damageSettlementScope++;
  enemyDamageUnknown=false;
@@ -893,11 +897,62 @@ function rememberNestedOrdinarySettlement(child,when,evidence,event){
      hpAfter:evidence.hp_after,real:evidence.real_delta}:null;
  }
 }
+function rememberNestedElementalNonlethalSettlement(child,when,evidence,burstRecord){
+ // A source-null type5 child can leave the target alive. Its own completed
+ // settlement and burst must witness HP; neither nominal damage nor the
+ // parent's final (already combined) HP may supply the child's contribution.
+ const uid=child.elementalTargetUid,settlement=child.settlementRecord;
+ if(!uid||!child.nativeSourceNull||!child.nativeModifierSource?.isNull()||child.sourceReadFailed||
+    child.targetSettlementNested||child.mitigationModifierReused||!sameMitigationTime(child.when,when)||
+    evidence?.killed!==false||evidence.cancel_reason!==0||evidence.shield_absorbed!==0||
+    !(evidence.real_delta<0)||!(evidence.hp_before>evidence.hp_after)||!(evidence.hp_after>0)||
+    evidence.hp_before!==child.hpBefore||targetHp(child.target)!==evidence.hp_after||
+    Math.abs(evidence.hp_before-evidence.hp_after+evidence.real_delta)>Math.max(0.01,Math.abs(evidence.real_delta)*1e-6)||
+    damageTargetUid(child.target)!==uid||!child.target.equals(child.mod.add(0x10).readPointer())||
+    !child.nativeModifierSource.equals(child.mod.readPointer())||child.mod.add(0x60).readS32()!==0||
+    child.mod.add(0x68).readS32()!==5||child.mod.add(0x70).readS32()!==0||
+    fp(child.mod.add(0x48))!==evidence.real_delta||
+    !child.settlementRecordEmitted||!settlement||settlement.kind!=='damage_settlement'||
+    settlement.source!==null||settlement.damage_type!==5||settlement.settlement_complete!==true||
+    settlement.shield_absorbed!==0||settlement.killed!==false||settlement.amount!==-evidence.real_delta||
+    settlement.target_uid!==String(uid)||settlement.target_instance!==child.target.toString()||
+    settlement.frame!==when.frame||settlement.game_time!==when.game_time||
+    !burstRecord||burstRecord.kind!=='elemental_burst'||burstRecord.source!==null||burstRecord.damage_type!==5||
+    burstRecord.target_instance!==settlement.target_instance||burstRecord.target!==settlement.target||
+    burstRecord.hp_before!==evidence.hp_before||burstRecord.hp_after!==evidence.hp_after||
+    burstRecord.real_delta!==evidence.real_delta||burstRecord.killed!==false||
+    burstRecord.frame!==when.frame||burstRecord.game_time!==when.game_time||
+    shieldContextUnknown(when.frame,child.target)||shieldTotal(when.frame,child.target)!==0)return;
+ const scopes=activeModifiers.get(child.tid);
+ if(!scopes||scopes[scopes.length-1]!==child)return;
+ const parents=scopes.slice(0,-1).filter(parent=>{
+  const checkpoint=parent.nestedTargetCheckpoint;
+  return checkpoint?.ordinary===false&&checkpoint.child===child&&checkpoint.uid===uid;
+ });
+ for(const parent of parents){
+  const checkpoint=parent.nestedTargetCheckpoint;
+  parent.nestedElementalNonlethalSettlement=parents.length===1&&parent.nestedElementalNonlethalSettlement===undefined&&
+   checkpoint.hpAfter===evidence.hp_before&&sameMitigationTime(checkpoint.when,when)?
+   {child,when,uid,hpBefore:evidence.hp_before,hpAfter:evidence.hp_after,real:evidence.real_delta,
+    settlementRecord:settlement,burstRecord}:null;
+ }
+}
 function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
  try{
   const checkpoint=scope.nestedTargetCheckpoint,hit=scope.targetHit;
-  const kill=checkpoint?.ordinary?scope.nestedOrdinarySettlement:scope.nestedElementalKill;
-  const childAfter=checkpoint?.ordinary?kill?.hpAfter:0;
+  const elemental=checkpoint?.ordinary===false?scope.nestedElementalNonlethalSettlement:null;
+  const kill=checkpoint?.ordinary?scope.nestedOrdinarySettlement:elemental||scope.nestedElementalKill;
+  const childAfter=checkpoint?.ordinary||elemental?kill?.hpAfter:0;
+  // Retain the exact emitted child pair until the parent closes. Never read
+  // its borrowed Modifier& again after the child's callback has returned.
+  if(elemental){
+   const event=elemental.settlementRecord,burst=elemental.burstRecord;
+   if(!(childAfter>0)||event!==elemental.child.settlementRecord||event?.settlement_complete!==true||
+      event.source!==null||event.damage_type!==5||event.amount!==-elemental.real||event.shield_absorbed!==0||
+      event.target_uid!==String(elemental.uid)||event.target_instance!==target?.toString()||
+      burst?.source!==null||burst.hp_before!==elemental.hpBefore||burst.hp_after!==childAfter||
+      burst.real_delta!==elemental.real||burst.killed!==false)return null;
+  }
   if(!checkpoint||!kill||kill.child!==checkpoint.child||!kill.child.settlementRecordEmitted||
      checkpoint.uid!==kill.uid||kill.hpBefore!==checkpoint.hpAfter||
      !sameMitigationTime(checkpoint.when,when)||!sameMitigationTime(kill.when,when)||
@@ -915,7 +970,7 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
    target_type:0,damage_type:type,cancel_reason:0,shield_absorbed:0};
  }catch(e){return null;}
 }
-function rememberNestedElementalKill(child,when,evidence){
+function rememberNestedElementalKill(child,when,evidence,burstRecord){
  const uid=child.elementalTargetUid;
  if(!uid||child.mitigationModifierReused||!evidence?.killed||evidence.cancel_reason!==0||
     evidence.shield_absorbed!==0||!(evidence.real_delta<0)||evidence.hp_after!==0||
@@ -930,20 +985,35 @@ function rememberNestedElementalKill(child,when,evidence){
  });
  for(const parent of parents){
   parent.nestedElementalKill=parents.length===1&&parent.nestedElementalKill===undefined?
-    {uid,when,child,hpBefore:evidence.hp_before,real:evidence.real_delta}:null;
+    {uid,when,child,hpBefore:evidence.hp_before,hpAfter:evidence.hp_after,real:evidence.real_delta,
+     burstRecord,settlementRecord:child.settlementRecord,observedAfterChild:targetHp(child.target)}:null;
  }
 }
 function damageSettledAfterNestedKill(scope,when,amount){
  const kill=scope.nestedElementalKill,hit=scope.targetHit;
  if(!kill||kill.hpBefore!==hit?.hpBefore||scope.targetHitAmbiguous||scope.outputAmbiguous||scope.mitigationModifierReused||
     !scope.nativeModifierSource||!(amount>0)||!sameMitigationTime(kill.when,when))return null;
- const target=hit.target,mod=scope.mod;
+ const target=hit.target,mod=scope.mod,child=kill.child,settlement=kill.settlementRecord,burst=kill.burstRecord;
+ if(!child?.settlementRecordEmitted||!settlement||settlement!==child.settlementRecord||
+    settlement.kind!=='damage_settlement'||settlement.settlement_complete!==true||settlement.damage_type!==5||
+    settlement.target_uid!==String(kill.uid)||settlement.target_instance!==target.toString()||
+    settlement.shield_absorbed!==0||settlement.amount!==-kill.real||settlement.killed!==true||
+    !burst||burst.kind!=='elemental_burst'||burst.target_instance!==target.toString()||
+    burst.real_delta!==kill.real||burst.hp_before!==kill.hpBefore||burst.hp_after!==kill.hpAfter||
+    !sameMitigationTime(child.when,when)||settlement.frame!==when.frame||settlement.game_time!==when.game_time||
+    burst.frame!==when.frame||burst.game_time!==when.game_time||
+    kill.hpAfter!==0||kill.observedAfterChild!==kill.hpAfter)return null;
+ const parentAfter=targetHp(target),parentReal=fp(mod.add(0x48));
  if(damageTargetUid(target)!==kill.uid||!target.equals(mod.add(0x10).readPointer())||
     !scope.nativeModifierSource.equals(mod.readPointer())||
-    mod.add(0x70).readS32()!==0||fp(mod.add(0x48))!==0||targetHp(target)!==0||
+    mod.add(0x70).readS32()!==0||parentReal!==0||parentAfter!==0||fp(mod.add(0x30))!==amount||
     shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
  // The outer modifier still has a settlement amount, but only the child's
  // HP changed. Do not attach the parent's pre-nesting target HP to this hit.
+ scope.nestedParentSettlementProof={target_uid:String(kill.uid),ordering:'child_before_parent_zero',
+  parent_entry_hp_before:hit.hpBefore,parent_real_delta:parentReal,
+  parent_hp_before:kill.observedAfterChild,parent_hp_after:parentAfter,
+  child_hp_before:kill.hpBefore,child_hp_after:kill.hpAfter,child_real_delta:kill.real};
  return {real_delta:0,hp_before:0,hp_after:0,killed:true,cancel_reason:0,shield_absorbed:0,
          settled_after_nested_kill:true};
 }
@@ -987,6 +1057,7 @@ function enqueueEvent(source,kind,amount,when,proof,evidence){
   return;
  }
  event.sequence=++sequence;
+ queueSettlementScopes.set(event,when.settlementScope);
  queue.push(event);
  return event;
 }
@@ -1132,7 +1203,8 @@ function readEvents(after,through){
  const error=fatal||(valid?null:'event read range is unavailable');
  const envelope=probeAdapter.readEnvelope();
  const result={events:[],hp_context:[],hp_context_dropped:hpContextDropped,error,stopped,
-  ...eventQuality(),...envelope.fields};
+  ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
+  ...eventQuality(),terminal_boundary_diagnostics:{...terminalDiagnostics},...envelope.fields};
  if(traceNestedParent){
   result.nested_parent_trace_count=nestedParentTraceCount;
   result.nested_parent_trace_dropped=nestedParentTraceDropped;
@@ -1165,6 +1237,42 @@ function ackEvents(through){
   hpContext.splice(0,count);
  }
  return {acknowledged:acknowledgedSequence,error:fatal};
+}
+function readTerminalEvents(after,through){
+ // The ordinary read requires a live native binding. Only this explicit API
+ // may drain the retained queue after a real OnDestroy has removed it.
+ const fence={sequence,epoch,active,active_hooks:[...activeHooks.keys()]};
+ const result={events:[],hp_context:[],hp_context_dropped:hpContextDropped,
+  error:fatal,stopped,...eventQuality(),...fence,after,through,terminal_only:true,
+  terminal_read_version:probeAdapter.terminalReadVersion??null,
+  terminal_boundary_diagnostics:{...terminalDiagnostics},retry:true};
+ const reject=reason=>({...result,terminal_read_rejection:reason});
+ if(probeAdapter.terminalReadVersion!==1)return reject('unsupported');
+ const boundary=currentTerminalBoundary();
+ if(!boundary)return reject('terminal_boundary_unavailable');
+ if(!probeHooksReady||fatal||stopped||active||activeHooks.size)return reject('producer_not_quiet');
+ if(!Number.isSafeInteger(after)||!Number.isSafeInteger(through)||acknowledgedSequence>after
+    ||after<0||after>through||through!==boundary.sequence||through!==sequence)
+  return reject('terminal_read_range_unavailable');
+ const invalidate=reason=>{if(terminalBoundary===boundary)terminalBoundary=null;
+  countTerminalDiagnostic('invalidated');terminalDiagnostics.last_rejection=reason;return reject(reason);};
+ try{if(!probeAdapter.validateTerminalBinding(boundary))return invalidate('terminal_binding_changed');}
+ catch(e){return invalidate('terminal_binding_unreadable');}
+ // No synthesized prefix or old acknowledged record can fill a lost tail.
+ const records=queue.slice(after-acknowledgedSequence,through-acknowledgedSequence);
+ if(records.length!==through-after||records.some((record,index)=>record.sequence!==after+index+1
+    ||queueSettlementScopes.get(record)!==boundary.damage_settlement_scope
+    ||!Number.isSafeInteger(record.frame)||record.frame>boundary.frame
+    ||!Number.isFinite(record.game_time)||record.game_time>boundary.game_time))
+  return reject('terminal_queue_incomplete');
+ if(currentTerminalBoundary(boundary)!==boundary||sequence!==fence.sequence||epoch!==fence.epoch
+    ||active||activeHooks.size)return reject('terminal_fence_changed');
+ Object.assign(result,{events:records,hp_context:hpContext.filter(item=>after<item.eventSequence&&item.eventSequence<=through)
+  .map(item=>item.context),retry:false,frame:boundary.frame,game_time:boundary.game_time,
+  terminal_boundary:boundary});
+ for(const key of Object.keys(boundary))if(key.startsWith('native_'))result[key]=boundary[key];
+ readThroughSequence=Math.max(readThroughSequence,through);
+ return result;
 }
 function refreshEnemyEntryFrame(frame) {
  if(enemyEntryFrame!==null&&frame<enemyEntryFrame){
@@ -1244,7 +1352,7 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   if(!complete&&scope.settlementFailureReason)proof.settlement_unknown_reason=scope.settlementFailureReason;
   const event=record(scope.source,'damage_settlement',real===0?0:-real,when,proof,
          {...evidence,...reduction},scope.sourceCharacterUid);
-  if(event)scope.settlementRecordEmitted=true;
+  if(event){scope.settlementRecordEmitted=true;scope.settlementRecord=event;}
   return event;
  }catch(e){
   const owner=scope.tracksModifier?scope:scope.modifierScope;
@@ -1375,12 +1483,13 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  scope.outputSettlement=null;
  if(unverified)noteSettlementProofGap(scope,when,scope.settlementFailureReason||'missing same-hit target or output settlement proof');
  const recipient=targetCommit?scope:output||scope;
+ if(scope.nestedParentSettlementProof)recipient.nestedParentSettlementProof=scope.nestedParentSettlementProof;
  if(scope.settlementFailureReason)recipient.settlementFailureReason=scope.settlementFailureReason;
  const event=damageSettlement(recipient,target,settledReal,when,{nominal,shield:absorbed,type,nested,unverified,killed,
                    identity:output?.settlementIdentity,reduction:pair,
                    evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
- if(event)scope.settlementRecordEmitted=true;
+ if(event){scope.settlementRecordEmitted=true;scope.settlementRecord=event;}
  if(event&&targetCommit&&capturedHp&&[1,2,3].includes(type))
   rememberNestedOrdinarySettlement(scope,when,exactEvidence,event);
  return true;
@@ -2453,7 +2562,10 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
         if(owned)settleDamage(this,this.target,end,amount,type,reduction,evidence);
         else settleSourcelessBurst(this,evidence,end,amount,reduction);
         const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
-        if(event)try{rememberNestedElementalKill(this,end,evidence);}catch(e){/* Independently verified burst remains queued. */}
+        if(event)try{
+         rememberNestedElementalNonlethalSettlement(this,end,evidence,event);
+         rememberNestedElementalKill(this,end,evidence,event);
+        }catch(e){/* Independently verified burst remains queued. */}
         noteUnpairedDamage(this,event,type);
        }catch(e){fatal=String(e);}
       }else{
@@ -2508,8 +2620,8 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       if(targetEvidence){
        evidence={...evidence,...targetEvidence};
        proof.evidence_method='Unit.OnTakeDamage+Entity.ApplyModifier';
-       if(this.nestedParentSettlementProof)proof.nested_settlement=this.nestedParentSettlementProof;
       }
+      if(this.nestedParentSettlementProof)proof.nested_settlement=this.nestedParentSettlementProof;
       settleDamage(this,damageTarget,end,amount,type,reduction,targetEvidence||
                    (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
      }
@@ -2557,6 +2669,9 @@ installEnemyStateHooks();
 installMitigationHooks();
 installSkillCastStateHook();
 let terminalBoundary=null,terminalGeneration=0;
+const terminalDiagnostics={destroy_entered:0,destroy_left:0,candidates:0,captured:0,rejected:0,invalidated:0,last_rejection:null};
+function countTerminalDiagnostic(key){terminalDiagnostics[key]=Math.min(1000000,terminalDiagnostics[key]+1);}
+function rejectTerminal(reason){countTerminalDiagnostic('rejected');terminalDiagnostics.last_rejection=reason;}
 function terminalIdentity(controller,controllerClass,reject){
  if(controller.isNull())return reject?.('singleton_empty')??null;
  const klass=controller.readPointer();
@@ -2587,16 +2702,24 @@ function terminalIdentity(controller,controllerClass,reject){
   stats:stats.toString(),level:level.toString()};
 }
 function currentTerminalBoundary(candidate=terminalBoundary){
- return candidate&&!active&&!fatal&&!stopped&&candidate.sequence===sequence
-   &&candidate.epoch===epoch&&candidate.damage_settlement_scope===damageSettlementScope?candidate:null;
+ if(!candidate)return null;
+ const reason=active?'callbacks_active':fatal?'fatal':stopped?'stopped':candidate.sequence!==sequence?'sequence_changed':
+  candidate.epoch!==epoch?'epoch_changed':candidate.damage_settlement_scope!==damageSettlementScope?'settlement_scope_changed':null;
+ if(reason){
+  countTerminalDiagnostic('invalidated');terminalDiagnostics.last_rejection=reason;
+  if(candidate===terminalBoundary)terminalBoundary=null;
+  return null;
+ }
+ return candidate;
 }
 function installTerminalHooks(){
  if(!terminalMethods)return;
  try{
   hooks.push(Interceptor.attach(terminalMethods.state,{
    onEnter(args){
-    probeAdapter.enterTerminalStateHook(this);
+    probeAdapter.enterTerminalStateHook(this,args);
     const state=args[1].toInt32();
+    this.nativeStateValue=state;this.nativeStateController=args[0];
     if(state===1||state===2){
      resetEnemyHpCoalescing();
      terminalGeneration++;terminalBoundary=null;
@@ -2613,28 +2736,37 @@ function installTerminalHooks(){
   }));
   hooks.push(Interceptor.attach(terminalMethods.destroy,{
    onEnter(args){
+    countTerminalDiagnostic('destroy_entered');
     this.generation=++terminalGeneration;
     terminalBoundary=null;
-    if(active||fatal||stopped)return;
+    if(active||fatal||stopped){rejectTerminal(active?'callbacks_active':fatal?'fatal':'stopped');return;}
     if(coalesceEnemyHp)flushCoalescedEnemyHp();
     try{
      const identity=terminalIdentity(args[0],terminalMethods.controller),stamp=time(true);
      if(identity&&stamp){
       observeDamageSettlementController(identity);
-      this.boundary={...identity,frame:stamp.frame,game_time:stamp.game_time,sequence,epoch,active,
+      let binding=null;
+      try{if(typeof probeAdapter.captureTerminalBinding==='function')binding=probeAdapter.captureTerminalBinding(identity,stamp);}
+      catch(e){/* A missing tail binding must not erase the existing raw fence. */}
+      this.boundary={...identity,...binding,frame:stamp.frame,game_time:stamp.game_time,sequence,epoch,active,
         damage_settlement_scope:stamp.settlementScope};
-     }
-    }catch(e){/* A partially destroyed object cannot certify an endpoint. */}
+      countTerminalDiagnostic('candidates');
+     }else rejectTerminal(!identity?'identity_unavailable':'clock_unstable');
+    }catch(e){rejectTerminal('destroy_entry_unreadable');}
    },
    onLeave(){
-    if(!this.boundary||this.generation!==terminalGeneration)return;
+    countTerminalDiagnostic('destroy_left');
+    if(!this.boundary)return;
+    if(this.generation!==terminalGeneration){rejectTerminal('generation_changed');return;}
     const candidate=currentTerminalBoundary(this.boundary);
     if(!candidate)return;
     try{
      const stamp=time(true);
      if(stamp?.frame===candidate.frame&&stamp.game_time===candidate.game_time&&
-        stamp.settlementScope===candidate.damage_settlement_scope)terminalBoundary=candidate;
-    }catch(e){/* The clock disappeared during teardown. */}
+        stamp.settlementScope===candidate.damage_settlement_scope){
+       terminalBoundary=candidate;countTerminalDiagnostic('captured');terminalDiagnostics.last_rejection=null;
+      }else rejectTerminal('destroy_clock_changed');
+    }catch(e){rejectTerminal('destroy_leave_unreadable');}
    }
   }));
  }catch(e){probeAdapter.terminalInstallFailed(e);}
@@ -2673,11 +2805,13 @@ function markEvents(){
  catch(e){if(!terminal_boundary)throw e;current=null;}
  const envelope=probeAdapter.markEnvelope(current);
  const quality={...eventQuality(current?.frame),terminal_boundary:currentTerminalBoundary(terminal_boundary),
+  terminal_boundary_diagnostics:{...terminalDiagnostics},
+  ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
   ...envelope.fields};
- if(!envelope.ready)return {retry:true,error:fatal,stopped,...quality};
- if(current===null)return {retry:true,error:fatal,stopped,...quality};
- return {frame:current.frame,game_time:current.game_time,sequence,epoch,active,
-  active_hooks:[...activeHooks.keys()],error:fatal,stopped,...quality};
+ const fence={sequence,epoch,active,active_hooks:[...activeHooks.keys()]};
+ if(!envelope.ready)return {...fence,retry:true,error:fatal,stopped,...quality};
+ if(current===null)return {...fence,retry:true,error:fatal,stopped,...quality};
+ return {frame:current.frame,game_time:current.game_time,...fence,error:fatal,stopped,...quality};
 }
 function receiveEventRequest(){
  // Frida recv is one-shot. Rearm before dispatch; a late reply can be safely
@@ -2692,6 +2826,7 @@ function receiveEventRequest(){
       probeAdapter.setAutoChessMode(request.autochess_enabled);
      result=markEvents();break;
     case 'read':result=readEvents(request.after,request.through);break;
+    case 'terminal_read':result=readTerminalEvents(request.after,request.through);break;
     case 'ack':result=ackEvents(request.sequence);break;
     default:result={error:'unknown event transport operation'};
    }
@@ -2702,11 +2837,15 @@ function receiveEventRequest(){
 rpc.exports={
  mark:markEvents,
  readEvents,
+ readTerminalEvents,
  ackEvents,
- stop(){stopped=true;for(const h of hooks)h.detach();return {active,error:fatal};}
+ stop(){stopped=true;if(typeof probeAdapter.discardInitialBoundary==='function')probeAdapter.discardInitialBoundary('stopped');
+  for(const h of hooks)h.detach();return {active,error:fatal};}
 };
+probeHooksReady=true;
 receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
+ ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
  coalesce_enemy_hp:coalesceEnemyHp,trace_hp_context:traceHpContext,
  source_character_uid_ready:sourceCharacterClasses!==null,source_character_uid_error:cfg.sourceCharacterUidError||null,
  skill_finish_error:cfg.skillFinishError||null,

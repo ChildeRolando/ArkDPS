@@ -121,6 +121,12 @@ def main(*, native_pc_observer_factory=None):
     args = parser.parse_args()
     from native_pc.internal_entry import portable_manifest
     manifest = portable_manifest(ROOT)
+    from native_pc.internal_entry import native_hook_candidate_profile, native_hook_candidate_arguments
+    try:
+        hook_profile = native_hook_candidate_profile(ROOT)
+        native_hook_candidate_arguments(hook_profile, args)
+    except (OSError, RuntimeError, ValueError) as exc:
+        parser.error(str(exc))
     if manifest and manifest.get('internal_event_backend') and args.internal_capture is None:
         parser.error('内部候选需要显式选择 --internal-capture，启动方式见随包说明。')
     if args.internal_capture is not None:
@@ -166,8 +172,10 @@ def main(*, native_pc_observer_factory=None):
     args.platform = args.platform or ('native_pc' if args.native_game_root else saved.platform)
     capture_options = {}
     if args.platform == 'native_pc':
+        explicit_native_hooks = args.native_pc_event_backend == 'native' and args.native_pc_event_feed is None
         args.native_pc_event_backend = args.native_pc_event_backend or saved.native_pc_event_backend
-        args.native_pc_event_feed = args.native_pc_event_feed or saved.native_pc_event_feed
+        if not explicit_native_hooks:
+            args.native_pc_event_feed = args.native_pc_event_feed or saved.native_pc_event_feed
         args.native_game_root = args.native_game_root or saved.native_game_root
         if not args.native_game_root:
             parser.error('官服 PC 采集需要 --native-game-root，或已保存的游戏目录')

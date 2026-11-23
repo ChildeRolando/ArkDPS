@@ -313,12 +313,18 @@ class DesktopState:
         self.connection_store = ConnectionConfigStore(directory / 'connection.json')
         config = self.connection_store.load()
         self.connection = config.config
-        self.effective_connection = self.connection
+        from native_pc.internal_entry import native_hook_candidate_profile, native_hook_candidate_defaults
+        self.native_hook_profile = native_hook_candidate_profile(ROOT)
+        self.effective_connection = native_hook_candidate_defaults(self.native_hook_profile, self.connection)
         self._source_request_revision = None
         self._source_request_platform = self.connection.platform
         self._awaiting_source = False
         self.warnings = [x for x in (loaded.warning, config.warning,
                                      stage_names.catalog().warning) if x]
+        if self.native_hook_profile is not None:
+            self.warnings.append('自研 PC 启动测试候选：请使用独立新解压目录；性能和卫戍完整交接尚未验证。')
+            if (directory / 'connection.json').is_file():
+                self.warnings.append('此目录已有连接设置；本候选不支持迁移旧 runtime。有效来源固定为官服 PC 自研、空合作文件，不会自动改写已保存连接。')
         self.history = BattleHistory(directory / 'history')
         self.records = {}
         self.selected = None
@@ -987,6 +993,7 @@ class DesktopState:
                 WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped', 'snapshot_only'):
             event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
+                    native_hook_candidate=self.native_hook_profile,
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     effective_connection_config=self.effective_connection.to_dict(),
                     totals=team_totals({} if character_counters else stats), native_counter_scope=counter_scope,
@@ -1116,6 +1123,8 @@ class DesktopState:
             return '已保存：' + Path(cmd['path']).name
         elif op == 'connection_apply':
             config = ConnectionConfig.from_dict(cmd['config'])
+            from native_pc.internal_entry import validate_native_hook_candidate_connection
+            validate_native_hook_candidate_connection(self.native_hook_profile, config)
             if config.platform == 'mumu' and not config.auto_detect and not config.serial:
                 raise ValueError('自动检测关闭时必须填写端口地址')
             enabled = cmd['events']
@@ -1905,6 +1914,8 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                 result = dict(transport='stdio-jsonl', worker='ArkDPS Python', version=PROTOCOL_VERSION,
                               python=sys.version.split()[0], executable=sys.executable, frida=frida_version,
                               request_replay=True)
+                if state.native_hook_profile is not None:
+                    result['native_hook_candidate'] = state.native_hook_profile
                 kind = 'hello'
             elif not handshake:
                 raise ValueError('必须先完成 hello 握手')
@@ -1923,6 +1934,8 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                 effective = getattr(worker, 'effective', None)
                 config = effective[0] if effective is not None else state.effective_connection
                 platform = cmd.get('platform', config.platform)
+                if state.native_hook_profile is not None and platform != 'native_pc':
+                    raise ValueError('此启动测试候选不支持 MuMu 检测，请选择官服 PC。')
                 if platform == 'native_pc':
                     native_root = cmd.get('native_game_root', config.native_game_root)
                     ConnectionConfig.from_dict({'platform': platform, 'native_game_root': native_root})
@@ -2007,6 +2020,12 @@ def main(*, native_pc_observer_factory=None):
     args = parser.parse_args()
     from native_pc.internal_entry import portable_manifest
     manifest = portable_manifest(ROOT)
+    from native_pc.internal_entry import native_hook_candidate_profile, native_hook_candidate_arguments
+    try:
+        hook_profile = native_hook_candidate_profile(ROOT)
+        native_hook_candidate_arguments(hook_profile, args)
+    except (OSError, RuntimeError, ValueError) as exc:
+        parser.error(str(exc))
     if manifest and manifest.get('internal_event_backend') and args.internal_capture is None:
         parser.error('内部候选需要显式选择 --internal-capture，启动方式见随包说明。')
     if args.internal_capture is not None:
@@ -2057,7 +2076,8 @@ def main(*, native_pc_observer_factory=None):
         native_game_root=(args.native_game_root if args.native_game_root is not None
                           else state.connection.native_game_root),
         native_pc_event_backend=args.native_pc_event_backend or state.connection.native_pc_event_backend,
-        native_pc_event_feed=args.native_pc_event_feed or state.connection.native_pc_event_feed)
+        native_pc_event_feed=(args.native_pc_event_feed if args.native_pc_event_backend == 'native'
+                              else args.native_pc_event_feed or state.connection.native_pc_event_feed))
     state.effective_connection = effective_config
     if args.fixture:
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))

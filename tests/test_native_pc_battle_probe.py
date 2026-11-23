@@ -183,6 +183,62 @@ def test_observer_boot_check_preserves_unsupported_layout_and_process_change(run
             probe.observer_boot_ready()
 
 
+def test_observer_boot_waits_for_lazy_field_table_then_checks_complete_metadata(runtime):
+    root, api, p = runtime
+    table, = struct.unpack('<Q', api.read(None, p['klass'] + battle.CLASS_FIELDS, 8))
+    api.put(p['klass'] + battle.CLASS_FIELDS, '<Q', 0)
+    with battle.NativePcBattleProbe(root, api) as probe:
+        assert probe.observer_boot_ready() is False
+        assert probe.observer_boot_reason == 'field_table_missing'
+        assert probe._battle_class is None and not probe.reader.verified_fields
+        api.put(p['klass'] + battle.CLASS_FIELDS, '<Q', table)
+        assert probe.observer_boot_ready() is True
+        assert probe.observer_boot_reason is None
+
+
+@pytest.mark.parametrize('problem,reason', [
+    ('populated', 'field_layout_mismatch'), ('count', 'field_count_mismatch'),
+    ('identity', 'class_identity_mismatch'),
+])
+def test_observer_lazy_fields_wait_does_not_relax_populated_or_identity_checks(runtime, problem, reason):
+    root, api, p = runtime
+    if problem == 'populated':
+        table, = struct.unpack('<Q', api.read(None, p['klass'] + battle.CLASS_FIELDS, 8))
+        api.put(table + battle.BATTLE_FIELDS[0][0] * 32 + 24, '<i', 0x999)
+    else:
+        api.put(p['klass'] + battle.CLASS_FIELDS, '<Q', 0)
+        if problem == 'count':
+            api.put(p['klass'] + battle.CLASS_FIELD_COUNT, '<H', 514)
+        else:
+            api.put(p['klass'] + 0x10, '<Q', api.text('NotBattleController'))
+    with battle.NativePcBattleProbe(root, api) as probe:
+        with pytest.raises(battle.ResearchFailure, match=reason):
+            probe.observer_boot_ready()
+
+
+def test_lazy_field_wait_still_checks_runtime_and_process_at_closing_guard(runtime):
+    root, api, p = runtime
+    api.put(p['klass'] + battle.CLASS_FIELDS, '<Q', 0)
+
+    def shutdown(address, size):
+        if address == p['klass'] + battle.CLASS_FIELDS:
+            api.put(api.base + battle.RUNTIME_INIT_FLAGS_RVA, '<BB', 1, 1)
+
+    with battle.NativePcBattleProbe(root, api) as probe:
+        api.on_read = shutdown
+        assert probe.observer_boot_ready() is False
+        assert probe.observer_boot_reason == 'runtime_init_changed'
+        api.put(api.base + battle.RUNTIME_INIT_FLAGS_RVA, '<BB', 1, 0)
+
+        def exit_during_read(address, size):
+            if address == p['klass'] + battle.CLASS_FIELDS:
+                api.exited = 1
+
+        api.on_read = exit_during_read
+        with pytest.raises(battle.ResearchFailure, match='owned_process_exited'):
+            probe.observer_boot_ready()
+
+
 @pytest.mark.parametrize('flags,owner,depth,count', [
     ((0, 0), 0, 0, 0), ((0, 0), 123, 1, 1), ((1, 0), 123, 1, 1),
     ((1, 0), 123, 0, 1), ((1, 0), 0, 1, 1), ((1, 0), 0, 0, 0),

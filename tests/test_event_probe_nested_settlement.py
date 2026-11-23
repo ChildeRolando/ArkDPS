@@ -90,3 +90,42 @@ def test_native_parent_real_is_required_and_cannot_be_replaced_by_nominal(produc
     row = result['rows'][report['source']]['settled_damage']
     assert row['complete'] is False and row['unverified_hits'] == 1
     assert row['known_hp_damage'] == report['measured_child_hp']
+
+
+@pytest.fixture(scope='module')
+def after_kill_producer():
+    result = subprocess.run(['node', 'tests/event_probe_nested_after_kill_fixture.js'], cwd=ROOT,
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('platform', ['android', 'native_pc'])
+def test_child_before_parent_zero_has_one_same_scope_raw_certificate(after_kill_producer, platform):
+    records = after_kill_producer[platform]['valid']['batch']['events']
+    parent = next(e for e in records if e['kind'] == 'damage' and e['source'] == 'char_owned_parent')
+    parent_settlement = next(e for e in records if e['kind'] == 'damage_settlement' and e['source'] == parent['source'])
+    child = next(e for e in records if e['kind'] == 'elemental_burst')
+    child_settlement = next(e for e in records if e['kind'] == 'damage_settlement' and e['source'] is None)
+    proof = parent['proof']['nested_settlement']
+    assert parent_settlement['proof']['nested_settlement'] == proof
+    assert parent['settled_after_nested_kill'] is parent_settlement['settled_after_nested_kill'] is True
+    assert parent_settlement['settlement_complete'] is child_settlement['settlement_complete'] is True
+    assert parent['hp_before'] == parent['hp_after'] == parent['real_delta'] == parent_settlement['amount'] == 0
+    assert proof == dict(target_uid='12', ordering='child_before_parent_zero', parent_entry_hp_before=80,
+        parent_real_delta=0, parent_hp_before=0, parent_hp_after=0,
+        child_hp_before=80, child_hp_after=0, child_real_delta=-80)
+    assert proof['child_hp_before'] == child['hp_before'] == child_settlement['amount']
+    assert proof['child_hp_after'] == child['hp_after'] == 0
+    assert proof['child_real_delta'] == child['real_delta'] == -child_settlement['amount']
+    assert proof['target_uid'] == child_settlement['target_uid'] == parent_settlement['target_uid']
+    assert parent['frame'] == parent_settlement['frame'] == child['frame'] == child_settlement['frame']
+    assert parent['target_instance'] == parent_settlement['target_instance'] == child['target_instance'] == child_settlement['target_instance']
+
+
+@pytest.mark.parametrize('platform', ['android', 'native_pc'])
+@pytest.mark.parametrize('fault', ['child_incomplete', 'child_delta_mismatch', 'parent_nonzero_delta', 'target_uid_changed'])
+def test_after_kill_certificate_never_uses_incomplete_or_contradictory_child(after_kill_producer, platform, fault):
+    records = after_kill_producer[platform]['invalid'][fault]['batch']['events']
+    assert not any(event.get('settled_after_nested_kill') for event in records)
+    assert not any((event.get('proof') or {}).get('nested_settlement') for event in records)

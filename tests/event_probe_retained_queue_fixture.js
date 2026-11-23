@@ -8,6 +8,9 @@ function section(start,end){
  return source.slice(from,to);
 }
 const context={};vm.createContext(context);
+const terminalDiagnosticFrom=source.indexOf('const terminalDiagnostics='),
+ terminalDiagnosticTo=source.indexOf('function terminalIdentity(',terminalDiagnosticFrom);
+if(terminalDiagnosticFrom<0||terminalDiagnosticTo<0)throw Error('Production terminal diagnostics missing');
 vm.runInContext(`
  let sequence=2,epoch=2,active=0,fatal=null,stopped=false;
  let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
@@ -22,6 +25,7 @@ vm.runInContext(`
  function eventQuality(){return {quality_contract_version:1,damage_unknown:false,
   engagement_unknown:false,shield_unknown:false,skill_unknown:false,
   mitigation_ready:true,mitigation_unknown:false};}
+ ${source.slice(terminalDiagnosticFrom,terminalDiagnosticTo)}
  ${section('readEvents','ackEvents')}
  ${section('ackEvents','refreshEnemyEntryFrame')}
  ${section('markEvents','receiveEventRequest')}

@@ -98,7 +98,6 @@ class MultiplayerBattleStatistics:
         self._scope_unknown_all_targets = False
         self._scope_verified_targets = set()
         self._terminal_tail = False
-        self._initial_skill_pending = set()
 
     @staticmethod
     def _native_fingerprint(context, sample):
@@ -205,7 +204,6 @@ class MultiplayerBattleStatistics:
         self._scope_unknown_targets = set()
         self._scope_unknown_all_targets = False
         self._scope_verified_targets = set()
-        self._initial_skill_pending = set()
 
     def _bind_native(self, context):
         self._context = self._active_context = deepcopy(context)
@@ -224,7 +222,7 @@ class MultiplayerBattleStatistics:
                 player = self._players[uid]
                 owner = self._source_key(entry, uid)
                 if owner not in player.actors and self._baseline is not None:
-                    self._initial_skill_pending.add(owner)
+                    player.statistics.mark_settlement_skill_initial_unknown(owner, entry.unique_id)
                 player.actors[owner] = entry
                 player.statistics.register_source(owner, owner)
         self._native_entries = entries
@@ -299,8 +297,8 @@ class MultiplayerBattleStatistics:
                     and isinstance(retained, list) and len(retained) <= MAX_BASELINE_SKILL_EVENTS)
         if not self._native_initial_point(sample) or not complete:
             for player in self._players.values():
-                for owner in player.actors:
-                    player.statistics.mark_settlement_skill_unassigned(owner, 'native_baseline', None)
+                for owner, entry in player.actors.items():
+                    player.statistics.mark_settlement_skill_initial_unknown(owner, entry.unique_id)
             if not complete:
                 self._reasons.add('初始技能事件前缀证据不完整')
         # These records are uncertainty witnesses only. They do not open a
@@ -348,14 +346,8 @@ class MultiplayerBattleStatistics:
                 uid, entry = self._native_entries[data_uid]
                 if uid not in self._players:
                     continue
-                self._players[uid].statistics.mark_settlement_skill_unassigned(
-                    self._source_key(entry, uid), 'native_baseline', None)
-
-    def _mark_initial_skill_unknown(self, player_key, owner):
-        if owner in self._initial_skill_pending:
-            self._players[player_key].statistics.mark_settlement_skill_unassigned(
-                owner, 'native_baseline', None)
-            self._initial_skill_pending.discard(owner)
+                self._players[uid].statistics.mark_settlement_skill_initial_unknown(
+                    self._source_key(entry, uid), entry.unique_id)
 
     @staticmethod
     def _scope_target(event):
@@ -804,28 +796,11 @@ class MultiplayerBattleStatistics:
                     self._scope_foreign_events += 1
                 elif state not in ('owned', 'global', 'non_team', 'not_collected', 'elemental'):
                     self._diagnose(event, state)
-                pending_skill_owner = None
-                skill_damage = event['kind'] in ('damage_settlement', 'damage', 'hp_damage', 'elemental_burst')
-                if self._native_mode and state == 'owned':
-                    owner = self._source_key(actor, side)
-                    if owner in self._initial_skill_pending:
-                        if event['kind'] == 'skill_start' and not entry.is_token:
-                            pending_skill_owner = owner
-                        elif skill_damage:
-                            self._mark_initial_skill_unknown(side, owner)
                 elemental_before = None
                 if state == 'elemental' and event['kind'] == 'damage_settlement':
                     elemental_before = {s: (sum(m.hits for m in p.statistics.settled.values()),
                         p.statistics.settlement_unassigned['hits']) for s, p in self._players.items()}
                 for player_side, player in self._players.items():
-                    if self._native_mode and state == 'elemental' and skill_damage:
-                        # Ask the existing local bar witness which owner's
-                        # initial skill state may affect this source-null hit.
-                        # The shared core still decides attribution and amount.
-                        bar = player.statistics.settlement_bars.get(event.get('target_uid'))
-                        if (bar is not None and bar[1] == event.get('target_instance')
-                                and bar[2] == 'local'):
-                            self._mark_initial_skill_unknown(player_side, bar[3])
                     payload = event_processing_payload(event)
                     identity = ('unknown', None, None)
                     unresolved_source_keys = ()
@@ -853,14 +828,6 @@ class MultiplayerBattleStatistics:
                         settlement_identity=identity, replay_record=event, **payload)
                 if self._native_mode and state in ('owned', 'not_collected') and event['kind'] == 'elemental_bar':
                     self._confirm_scope_bar(event, side, actor)
-                if pending_skill_owner is not None:
-                    # The ordinary receiver, including native/ammo rules, owns
-                    # proof of an actual effect. Do not manufacture a start.
-                    window = self._players[side].statistics.settlement_skill_active.get(
-                        (pending_skill_owner, actor.unique_id))
-                    if (window is not None and window.get('effect_started') is True
-                            and window.get('source') == self._source_key(entry, side)):
-                        self._initial_skill_pending.discard(pending_skill_owner)
                 if elemental_before is not None:
                     resolved = any(sum(m.hits for m in p.statistics.settled.values()) > elemental_before[s][0]
                                    for s, p in self._players.items())

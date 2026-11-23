@@ -20,6 +20,13 @@ def options(tmp_path):
                            maa_job=None, maa_log=None, require_progress=False, require_events=True)
 
 
+@pytest.mark.parametrize('value', [0, .001, True, float('nan'), float('inf'), 2])
+def test_capture_rejects_invalid_initial_poll_interval_before_connect(tmp_path, value):
+    with pytest.raises(ValueError, match='baseline poll interval'):
+        capture_cli.run_capture(options(tmp_path), baseline_poll_seconds=value,
+                                session_factory=lambda *_a, **_k: pytest.fail('must not connect'))
+
+
 class Session:
     instances = []
     failed = False
@@ -78,6 +85,14 @@ def test_cli_retries_and_writes_ready_raw_journal_and_summary(tmp_path, monkeypa
     assert header['settings']['platform'] == 'mumu' and header['settings']['event_observation'] is True
     assert header['settings']['manual_target_configured'] is True
     assert 'serial' not in header['settings'] and 'adb_path' not in header['settings']
+
+
+def test_fast_initial_poll_restores_normal_cadence_after_real_baseline(tmp_path, monkeypatch):
+    clock = stub_git_and_clock(monkeypatch)
+    result = capture_cli.run_capture(options(tmp_path), session_factory=Session, baseline_poll_seconds=.01)
+    assert result['samples'] == 1 and result['retries'] == 1
+    assert clock.now == pytest.approx(.11)  # .01 retry, then the original .1 sampling interval.
+    assert result['baseline_poll_seconds'] == .01 and result['steady_poll_seconds'] == .1
 
 
 def test_cli_writes_log_context_before_session_initialization(tmp_path, monkeypatch):
@@ -180,6 +195,98 @@ def test_pc_connect_bounds_initial_access_denial_after_verified_bootstrap(monkey
     else:
         capture_cli._connect_pc_after_bootstrap(current, startup, timeout=30, cancelled=None)
         assert len(calls) == 2 and clock.now == .1
+
+
+@pytest.mark.parametrize('api', ['EnumProcessModulesEx', 'GetModuleFileNameExW', 'GetModuleInformation'])
+@pytest.mark.parametrize('error', [6, 24, 299])
+def test_pc_connect_retries_only_allowlisted_module_api_races_and_audits(monkeypatch, api, error):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    calls, checks, journal = [], [], []
+    lease = dict(pid=42, created=100)
+    collector = SimpleNamespace(process=None, diagnostics=SimpleNamespace(code='native_unavailable',
+        details=dict(reason='windows_api_failed', api=api, win32_error=error)))
+    def connect():
+        calls.append(clock.now)
+        if len(calls) == 1:
+            raise SampleUnavailable('bounded module enumeration race')
+    def alive(record):
+        checks.append(record)
+        return record == lease
+    capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+        SimpleNamespace(wait_ready=lambda *_args, **_kwargs: lease, _alive=alive), timeout=30, cancelled=None,
+        audit=lambda kind, data: journal.append((kind, data)))
+    assert len(calls) == 2 and clock.now == .1
+    assert checks == ([lease] if error == 6 else [])
+    assert journal[0][0] == 'native_pc_connect_retry'
+    assert journal[0][1]['api'] == api and journal[0][1]['win32_error'] == error
+    assert journal[0][1]['process_instance'] == [42, 100]
+    assert journal[0][1]['remaining_seconds'] == 5
+
+
+@pytest.mark.parametrize('api,error', [
+    ('OpenProcess', 6), ('ReadProcessMemory', 299), ('GetModuleFileNameExW', 5),
+    ('GetModuleInformation', 87), ('EnumProcessModulesEx', 123),
+])
+def test_pc_connect_preserves_non_module_or_permanent_api_errors(monkeypatch, api, error):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    failure = SampleUnavailable('permanent API failure')
+    calls = []
+    collector = SimpleNamespace(process=None, diagnostics=SimpleNamespace(code='native_unavailable',
+        details=dict(reason='windows_api_failed', api=api, win32_error=error)))
+    def connect():
+        calls.append(clock.now)
+        raise failure
+    with pytest.raises(SampleUnavailable) as caught:
+        capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+            SimpleNamespace(wait_ready=lambda *_args, **_kwargs: dict(pid=42, created=100),
+                            _alive=lambda *_args: pytest.fail('permanent API must not query liveness')),
+            timeout=30, cancelled=None)
+    assert caught.value is failure and calls == [0] and clock.now == 0
+
+
+@pytest.mark.parametrize('verification', ['false', 'raises', 'missing_checker', 'missing_lease'])
+def test_pc_connect_invalid_handle_requires_verified_same_bootstrap_birth(monkeypatch, verification):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    failure = SampleUnavailable('invalid module handle without confirmed process birth')
+    calls = []
+    collector = SimpleNamespace(process=None, diagnostics=SimpleNamespace(code='native_unavailable',
+        details=dict(reason='windows_api_failed', api='GetModuleFileNameExW', win32_error=6)))
+    def connect():
+        calls.append(clock.now)
+        raise failure
+    def alive(_record):
+        if verification == 'raises':
+            raise OSError('read-only liveness query failed')
+        return False
+    lease = None if verification == 'missing_lease' else dict(pid=42, created=100)
+    startup = SimpleNamespace(wait_ready=lambda *_args, **_kwargs: lease)
+    if verification != 'missing_checker':
+        startup._alive = alive
+    with pytest.raises(SampleUnavailable) as caught:
+        capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+                                               startup, timeout=30, cancelled=None)
+    assert caught.value is failure and calls == [0] and clock.now == 0
+
+
+def test_pc_connect_stable_module_api_error_expires_without_claiming_progress(monkeypatch):
+    from collector import SampleUnavailable
+    clock = stub_git_and_clock(monkeypatch)
+    failure = SampleUnavailable('stable GetModuleFileNameExW error 6')
+    calls = []
+    collector = SimpleNamespace(process=None, diagnostics=SimpleNamespace(code='native_unavailable',
+        details=dict(reason='windows_api_failed', api='GetModuleFileNameExW', win32_error=6)))
+    def connect():
+        calls.append(clock.now)
+        raise failure
+    with pytest.raises(SampleUnavailable) as caught:
+        capture_cli._connect_pc_after_bootstrap(SimpleNamespace(collector=collector, connect=connect),
+            SimpleNamespace(wait_ready=lambda *_args, **_kwargs: dict(pid=42, created=100), _alive=lambda _: True),
+            timeout=30, cancelled=None)
+    assert caught.value is failure
+    assert len(calls) > 1 and max(calls) < 5 and clock.now == 5
 
 
 @pytest.mark.parametrize('phase', ['before_ready', 'after_ready', 'connect_success',

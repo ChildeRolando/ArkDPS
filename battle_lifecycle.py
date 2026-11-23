@@ -19,9 +19,10 @@ from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
 from event_observer import ObserverReadRetry
 from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
+                         autochess_event_mark_context, verified_autochess_event_window,
                          autochess_root_failure, autochess_scope_detail,
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
-                         native_identity_sampling_mark)
+                         native_identity_sampling_mark, TerminalReadRetry)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
@@ -126,17 +127,48 @@ class MappingRetry(CaptureRetry):
         self.observation = observation
 
 
-def _terminal_boundary(observer):
+def _terminal_boundary(observer, capture=None, *, deadline=None):
     if observer is None:
-        return None
+        return {'terminal_diagnostic': {'status': 'missing', 'reason': 'no_observer'}}
     try:
+        if (capture is not None and getattr(capture, 'terminal_pending', False)
+                and not capture.closed and capture.adapter.event_stream is not None):
+            read_tail = getattr(observer, 'read_terminal_tail', None)
+            if not callable(read_tail):
+                raise StreamGap('pending terminal source cannot read its final prefix')
+            result = read_tail(capture.adapter.event_stream.sequence, deadline=deadline)
+            contract = capture.contract
+            result['probe_contract'] = contract.describe()
+            result['drain']['probe_contract'] = contract.describe()
+            return result
         mark = read_terminal_mark(observer)
-    except Exception:
-        return None  # Departure remains certain even if the observer is unavailable.
+    except Exception as error:
+        # Departure remains certain. Record why its optional raw proof failed,
+        # without converting a retry, transport fault, or unknown scope to success.
+        retry = isinstance(error, TerminalReadRetry) if getattr(capture, 'terminal_pending', False) else isinstance(error, ObserverReadRetry)
+        evidence = {'terminal_diagnostic': {'status': 'retry' if retry else 'rejected',
+                                         'error_type': type(error).__name__,
+                                         'reason': str(error).partition('\n')[0][:240]}}
+        raw = getattr(observer, 'last_terminal_response', None)
+        if isinstance(raw, dict):
+            evidence['terminal_raw_mark'] = deepcopy(raw)
+            if isinstance(raw.get('terminal_boundary'), dict):
+                evidence['terminal_raw_candidate'] = deepcopy(raw['terminal_boundary'])
+        batch = getattr(observer, 'last_terminal_batch', None)
+        if isinstance(batch, dict):
+            evidence['terminal_raw_drain'] = deepcopy(batch)
+        return evidence
     if not isinstance(mark, dict) or mark.get('error') or mark.get('stopped'):
-        return None
+        return {'terminal_diagnostic': {'status': 'rejected', 'reason': 'source_unavailable'}}
     boundary = mark.get('terminal_boundary')
-    return {'terminal_boundary': boundary} if isinstance(boundary, dict) else None
+    if not isinstance(boundary, dict):
+        return {'terminal_diagnostic': {'status': 'missing', 'reason': 'no_raw_terminal_boundary'},
+                'terminal_raw_mark': deepcopy(getattr(observer, 'last_terminal_response', None) or mark)}
+    diagnostic = mark.get('terminal_binding')
+    return {'terminal_boundary': boundary,
+            'terminal_raw_mark': deepcopy(getattr(observer, 'last_terminal_response', None) or mark),
+            'terminal_diagnostic': diagnostic if isinstance(diagnostic, dict)
+                                   else {'status': 'candidate', 'reason': 'raw_boundary_received'}}
 
 
 def _observer_mark(observer):
@@ -162,11 +194,12 @@ def _event_barrier(before, sample, after, *, contract=None, capture=None):
     contract = contract or contract_for(sample=sample)
     if 'autochess_snapshot_anchor' in sample:
         anchor = sample['autochess_snapshot_anchor']
-        if not isinstance(contract, MuMuAutoChessProbeContract) or not isinstance(anchor, dict):
-            raise BarrierBusy('invalid Android AutoChess event window evidence')
-        context, sequence = android_autochess_event_window(sample, before, after, anchor=anchor)
+        if (not isinstance(contract, (MuMuAutoChessProbeContract, NativePcProbeContract))
+                or not isinstance(anchor, dict) or sample.get('native_counter_scope') != 'events_only'):
+            raise BarrierBusy('invalid AutoChess event window evidence')
+        context, sequence = verified_autochess_event_window(sample, before, after, anchor=anchor)
         if sample['autochess_context'] != context:
-            raise BarrierBusy('Android AutoChess event window does not match the published scope')
+            raise BarrierBusy('AutoChess event window does not match the published scope')
         return sequence
     try:
         return baseline_barrier(before, sample, after, contract=contract)
@@ -235,6 +268,8 @@ class BattleFeed:
         self.retired_session = None
         self.native_session = None
         self.terminal = False
+        self._terminal_retry_started = None
+        self._terminal_retry_attempts = 0
         self.current_lifecycle = None
         self.autochess_scene = None
         self.autochess_exited = False
@@ -272,18 +307,58 @@ class BattleFeed:
                   if error is not None else None)
         return self._emit('gap', reason=reason, read_error=detail)
 
-    def _end(self, reason, sample=None, roster=None, *, observer=None):
+    def _end(self, reason, sample=None, roster=None, *, observer=None, capture=None):
         if self.identity is None:
             return self._emit('waiting', reason=reason)
-        events = _terminal_boundary(observer) if not self.terminal else None
+        # FINISHED can precede OnDestroy. Even after the final cumulative pair
+        # was consumed, fetch that later raw fence independently for the journal.
+        # A capable PC source may still own an unacknowledged late event tail.
+        # Read it under its real destroy fence, never as a new counter sample.
+        pending = capture is not None and getattr(capture, 'terminal_pending', False)
+        if pending:
+            now = time.monotonic()
+            if self._terminal_retry_started is None:
+                self._terminal_retry_started = now
+            deadline = self._terminal_retry_started + 2.
+            if capture.closed or now >= deadline or self._terminal_retry_attempts >= 20:
+                events = {'terminal_diagnostic': dict(status='rejected', reason=(
+                    'terminal_tail_capture_closed' if capture.closed else 'terminal_tail_retry_budget_expired'),
+                    attempts=self._terminal_retry_attempts)}
+            else:
+                self._terminal_retry_attempts += 1
+                events = _terminal_boundary(observer, capture, deadline=deadline)
+                if (events.get('terminal_diagnostic') or {}).get('status') == 'retry':
+                    events['terminal_diagnostic']['attempts'] = self._terminal_retry_attempts
+                    if time.monotonic() < deadline and self._terminal_retry_attempts < 20:
+                        return self._emit('terminal', reason='terminal_tail_pending', events=events)
+                    events['terminal_retry_diagnostic'] = deepcopy(events['terminal_diagnostic'])
+                    events['terminal_diagnostic'] = dict(status='rejected',
+                        reason='terminal_tail_retry_budget_expired', attempts=self._terminal_retry_attempts)
+        else:
+            events = _terminal_boundary(observer, capture)
         self.retired, self.retired_clock = self.identity, self.clock
         self.retired_session = self.native_session
         self.retired_stage = self.stage
         self.identity = self.clock = self.frame = self.native_session = None
         self.stage = None
         self.terminal = False
+        self._terminal_retry_started = None
+        self._terminal_retry_attempts = 0
         self.autochess_identity = None
         return self._emit('end', sample, roster, reason=reason, events=events)
+
+    @staticmethod
+    def _project_event_window(sample, before, after):
+        context, sequence = verified_autochess_event_window(sample, before, after)
+        anchor = {key: sample[key] for key in ('frame', 'game_time')}
+        # A moved event watermark never re-tags the independently read totals.
+        if (any(before[key] != after[key] for key in ('frame', 'game_time', 'sequence', 'epoch'))
+                or anchor['frame'] != context['frame'] or anchor['game_time'] != context['game_time']):
+            sample.update(rows=[], global_total=None, global_heal=None, sum_damage=None)
+        sample.update(frame=context['frame'], game_time=context['game_time'],
+                      native_counter_scope='events_only', autochess_context=context,
+                      autochess_snapshot_anchor=anchor)
+        return sequence
 
     def _read_marked_snapshot(self, collector, observer, *, metadata=None, capture=None):
         events = None
@@ -307,16 +382,7 @@ class BattleFeed:
                 end_mark = _observer_mark(observer)
             except ObserverReadRetry as exc:
                 raise CaptureRetry(str(exc)) from exc
-            context, sequence = android_autochess_event_window(sample, mark, end_mark)
-            anchor = {key: sample[key] for key in ('frame', 'game_time')}
-            # Exact zero counters can prove an initial point only when the
-            # entire event barrier also covers the counter frame.
-            if (any(mark[key] != end_mark[key] for key in ('frame', 'game_time', 'sequence', 'epoch'))
-                    or anchor['frame'] != context['frame'] or anchor['game_time'] != context['game_time']):
-                sample.update(rows=[], global_total=None, global_heal=None, sum_damage=None)
-            sample.update(frame=context['frame'], game_time=context['game_time'],
-                          native_counter_scope='events_only', autochess_context=context,
-                          autochess_snapshot_anchor=anchor)
+            sequence = self._project_event_window(sample, mark, end_mark)
             return (sample, RosterSnapshot(sample['frame']),
                     dict(before=mark, after=end_mark, sequence=sequence))
         if mark is not None and events is None:
@@ -355,6 +421,11 @@ class BattleFeed:
             if opening_error is not None:
                 return {'error': str(opening_error)}
             end_mark = _observer_mark(observer)
+            metadata = sample.get('battle_metadata') or {}
+            if (sample.get('state') == 2 and metadata.get('platform') == 'native_pc'
+                    and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
+                    and autochess_event_mark_context(sample, mark) is not None):
+                BattleFeed._project_event_window(sample, mark, end_mark)
             if not isinstance(contract_for(observer), NativePcProbeContract):
                 capture = None
             sequence = _event_barrier(mark, sample, end_mark,
@@ -407,6 +478,8 @@ class BattleFeed:
             raise FrameMismatch('游戏时间无效')
         if opening is not None and observer is not None:
             events = self._guarded_events(observer, opening, sample, capture)
+            if 'autochess_snapshot_anchor' in sample:
+                roster = RosterSnapshot(sample['frame'])
         if events and 'before' in events and 'after' in events:
             try:
                 if 'autochess_snapshot_anchor' not in sample:
@@ -504,7 +577,7 @@ class BattleFeed:
         self.autochess_exited = (isinstance(stage, str) and bool(stage) and 'AUTOCHESS' not in stage.upper()
                                  or battle is None and getattr(collector, 'autochess_absence_is_exit', False))
         if battle is None:
-            observation = self._end('battle_absent', observer=observer)
+            observation = self._end('battle_absent', observer=observer, capture=published_capture)
             self.retired = self.retired_clock = None
             self.retired_session = None
             return observation
@@ -550,7 +623,7 @@ class BattleFeed:
                     self.frame = sample['frame']
                     return self._emit('terminal', sample, roster, events=events, observer=observer)
             if self.identity == identity and not stage_changed:
-                return self._end('finished', observer=observer)
+                return self._end('finished', observer=observer, capture=published_capture)
             return self._end('replaced')
         if not before['ready'] or before['transiting']:
             if before.get('state') in (0, 1):
@@ -569,7 +642,7 @@ class BattleFeed:
                     and exit_metadata.get('outcome') == 'abandoned'
                     and exit_metadata.get('evidence')
                     and exit_metadata.get('stage_id', self.stage) == self.stage):
-                return self._end('finished', observer=observer)
+                return self._end('finished', observer=observer, capture=published_capture)
             raise
         now = sample['game_time']
         if (self.terminal and not stage_changed and identity == self.identity and
@@ -624,6 +697,8 @@ class BattleFeed:
         if changed:
             self.generation = generation
             self.terminal = False
+            self._terminal_retry_started = None
+            self._terminal_retry_attempts = 0
             if stage or not same_native:
                 self.stage = stage
         elif stage:
@@ -849,6 +924,8 @@ class BattleSessions:
         if stream is None or stream.closed or self.adapter.statistics.end_time is not None:
             return False
         if observation.kind in ('sample', 'preparing'):
+            if getattr(self.capture, 'terminal_pending', False):
+                return False
             if not self._clock_reset_matches_watermark(observation, stream):
                 return False
         elif not self._terminal_boundary_matches_watermark(observation, stream):
@@ -883,6 +960,13 @@ class BattleSessions:
         if successor is not None:
             self._finish_at_verified_watermark(successor)
         self._close_unverified_event_end()
+        if self.capture is not None and getattr(self.capture, 'terminal_pending', False):
+            self.adapter.statistics.invalidate_snapshots()
+            self.adapter.types_current.clear()
+            self.metadata['final_counter_status'] = 'unknown'
+            self.metadata['terminal_pending'] = False
+            self.metadata['terminal_tail_error'] = self.metadata.get('terminal_tail_error', 'no verified final source fence')
+            self.capture.terminal_pending = False
         self.adapter.finish()
         if self.multiplayer is not None:
             self._multiplayer_call('finish', self.adapter.last_game_time,
@@ -911,6 +995,11 @@ class BattleSessions:
         self.capture = deepcopy(self.capture)
         self.capture.adapter = final_adapter
         final_events = False
+        pending = getattr(self.capture, 'terminal_pending', False)
+        capable = (isinstance(self.capture.contract, NativePcProbeContract)
+                   and (observation.sample.get('battle_metadata') or {}).get('platform') == 'native_pc'
+                   and type(((observation.events or {}).get('after') or {}).get('terminal_read_version')) is int
+                   and observation.events['after']['terminal_read_version'] == 1)
         try:
             # Accept the last verified event watermark before freezing time.
             # Later same-frame revisions change native counters only.
@@ -921,9 +1010,10 @@ class BattleSessions:
                         **self._source_attribution(observation, final_adapter.event_stream))
                     self.adapter = final_adapter
                     final_events = self._events(observation, project=False)
-                if not final_events:
+                if not final_events and not pending:
                     self._close_unverified_event_end()
-            final_adapter.update(observation.sample, observation.roster, terminal=True)
+            defer = pending or (capable and final_events)
+            final_adapter.update(observation.sample, observation.roster, terminal=True, defer_finish=defer)
         except (AdapterError, ValueError) as exc:
             self.adapter, self.capture = previous_adapter, previous_capture
             self.event_status, self.event_error = previous_status, previous_error
@@ -931,11 +1021,19 @@ class BattleSessions:
         else:
             self.adapter = final_adapter
             if final_events:
-                self.event_status = 'finished'
+                self.event_status = 'recording' if defer else 'finished'
                 evidence = observation.events
-                self._consume_multiplayer(observation, evidence['sequence'],
+                self._consume_multiplayer(replace(observation, kind='sample') if defer else observation,
+                                          evidence['sequence'],
                                           evidence['drain'], evidence['after'])
-                self._multiplayer_call('finish', self.adapter.last_game_time, complete=True)
+                if not defer:
+                    self._multiplayer_call('finish', self.adapter.last_game_time, complete=True)
+            if defer:
+                self.capture.terminal_pending = True
+                self.metadata['terminal_pending'] = True
+                self.metadata['terminal_read_version'] = 1
+                self.metadata['final_counter_status'] = 'pending'
+                self.metadata['native_counter_watermark'] = deepcopy(self._last_event_mark)
             if self.capture is not None:
                 self.capture.adapter = self.adapter
             self.latest_sample = deepcopy(observation.sample)
@@ -943,6 +1041,92 @@ class BattleSessions:
             self._snapshot_accepted()
             self.metadata.pop('final_sample_error', None)
             self._merge_metadata(observation.sample)
+
+    def _terminal_tail(self, observation):
+        """Consume a final source prefix without replaying cached cumulative rows."""
+        evidence = observation.events or {}
+        if type(evidence.get('terminal_tail_version')) is not int or evidence['terminal_tail_version'] != 1:
+            return False
+        previous_adapter, previous_capture = self.adapter, self.capture
+        previous_mark = self._last_event_mark
+        try:
+            stream = self.adapter.event_stream
+            sample = self.latest_sample
+            if (not getattr(self.capture, 'terminal_pending', False) or self.capture.closed
+                    or self.event_status != 'recording' or stream is None or stream.closed
+                    or self.adapter.statistics.end_time is not None or sample.get('state') != 3
+                    or type(evidence.get('read_after')) is not int or evidence['read_after'] != stream.sequence):
+                raise StreamGap('terminal tail does not continue an open pending prefix')
+            mark = evidence['after']
+            sequence = evidence['sequence']
+            if (type(sequence) is not int or sequence < stream.sequence
+                    or baseline_barrier(evidence['before'], sample, mark,
+                                        contract=self.capture.contract) != sequence
+                    or evidence['terminal_boundary'] != mark):
+                raise StreamGap('terminal tail final fence changed')
+            anchor = self._last_event_mark
+            if (baseline_barrier(anchor, sample, anchor, contract=self.capture.contract) != stream.sequence
+                    or type(mark.get('epoch')) is not int or mark['epoch'] < anchor['epoch']
+                    or (sequence > stream.sequence and mark['epoch'] <= anchor['epoch'])):
+                raise StreamGap('terminal tail regressed from its accepted anchor')
+            for key in ('native_frame', 'native_fixed_time', 'native_identity', 'native_generation',
+                        'native_process_pid', 'native_stage_id', 'native_session', 'source_build',
+                        'native_autochess_context', 'damage_settlement_scope'):
+                if (key in anchor) != (key in mark) or (key in anchor and anchor[key] != mark[key]):
+                    raise StreamGap('terminal tail changed its independently verified clock or scope')
+            drained = evidence['drain']
+            if (drained.get('terminal_only') is not True or drained.get('retry')
+                    or type(drained.get('active')) is not int or drained['active'] != 0
+                    or drained.get('active_hooks') != []
+                    or drained.get('after') != stream.sequence or drained.get('through') != sequence):
+                raise StreamGap('terminal tail batch has no explicit bounded quiescent proof')
+            self.capture.contract.validate_batch(sample, sequence, drained, stream=stream)
+            final_adapter = deepcopy(self.adapter)
+            final_capture = deepcopy(self.capture)
+            final_capture.adapter = final_adapter
+            attribution = source_attribution_batch(drained, stream.sequence, sequence)
+            final_adapter.bind_terminal_event_sources(sample, final_adapter.last_roster,
+                source_events=attribution.get('source_events', ()),
+                settlement_version=attribution.get('settlement_version'))
+            final_capture.ingest(sample, final_adapter.last_roster, sequence, drained, mark=mark)
+            advanced = sequence != stream.sequence or mark['epoch'] != anchor['epoch']
+            if advanced:
+                # These are genuine later callbacks, not a fresh native total.
+                final_adapter.statistics.invalidate_snapshots()
+                final_adapter.types_current.clear()
+                # The optional player reducer has its own frame-bound counter
+                # admission. Do not silently finish its old prefix without the
+                # newly consumed source records or re-feed cached CID totals.
+                self._multiplayer_call('gap', '终局尾部缺少独立的玩家累计修订')
+            self.adapter, self.capture = final_adapter, final_capture
+            self._last_event_mark = mark
+            if not self._finish_at_verified_watermark(observation):
+                raise StreamGap('terminal tail does not reach the exact final source fence')
+            self.capture.terminal_pending = False
+            self.metadata['terminal_pending'] = False
+            self.metadata['event_source_final_watermark'] = deepcopy(mark)
+            self.metadata['final_counter_status'] = 'unknown' if advanced else 'verified_at_final_watermark'
+            self.metadata['event_source_prefix_complete'] = True
+            self.metadata['terminal_ack_status'] = 'pending'
+            return True
+        except Exception as error:
+            self.adapter, self.capture = previous_adapter, previous_capture
+            self._last_event_mark = previous_mark
+            self._close_event_gap('terminal tail rejected: ' + str(error))
+            self.metadata['terminal_tail_error'] = str(error)
+            return False
+
+    def terminal_acknowledged(self, confirmed):
+        """An accepted final prefix and a confirmed producer ACK are different facts."""
+        if not self.metadata.get('event_source_prefix_complete'):
+            return
+        self.metadata['terminal_ack_status'] = 'confirmed' if confirmed else 'pending'
+        self.event_status = 'finished' if confirmed else 'gap'
+        self.event_error = None if confirmed else '终局事件确认待重试'
+        for archive in self._archives:
+            if archive['battle_id'] == self.battle_id:
+                archive['metadata']['terminal_ack_status'] = self.metadata['terminal_ack_status']
+                archive['event_status'], archive['event_error'] = self.event_status, self.event_error
 
     def _terminal_gap(self, reason):
         # Close unreliable coverage, but leave the endpoint pending until a
@@ -1066,6 +1250,8 @@ class BattleSessions:
             else:
                 if not self._archived and observation.reason == 'finished':
                     self._merge_terminal_metadata(observation)
+                if not self._archived:
+                    self._terminal_tail(observation)
                 if observation.sample is not None and not self._archived:
                     self._terminal_update(observation)
                 if (self.adapter is not None and self.adapter.statistics.end_time is None and
@@ -1165,16 +1351,28 @@ class BattleRuntime:
             stream = self.sessions.adapter.event_stream
             if ('drain' in evidence and stream is not None
                     and stream.sequence == evidence['sequence']
-                    and stream.frame == observation.sample['frame']):
-                pending_ack = (observer, stream.sequence, ack_binding)
+                    and stream.frame == identity_sample['frame']):
+                remember = getattr(observer, 'remember_verified_mark', None)
+                is_terminal_tail = evidence.get('terminal_tail_version') == 1
+                if callable(remember) and not is_terminal_tail:
+                    remember(identity_sample, evidence['after'])
+                pending_ack = (observer, stream.sequence, ack_binding,
+                               deepcopy(evidence['after']) if is_terminal_tail else None)
                 current_ack = True
         retry_ack = pending_ack is not None
         if retry_ack and not current_ack and contract.ack_mark_required:
             try:
                 # Guard a retained terminal ack against an already observed
                 # producer reset; commit itself must still be stream-bound.
-                mark = _observer_mark(observer)
-                if not contract.validate_ack_mark(identity_sample, mark, pending_ack[1]):
+                final = pending_ack[3] if len(pending_ack) > 3 else None
+                if final is not None:
+                    checked = observer.read_terminal_tail(pending_ack[1])
+                    mark = checked['after']
+                    valid = mark == final and checked.get('sequence') == pending_ack[1]
+                else:
+                    mark = _observer_mark(observer)
+                    valid = contract.validate_ack_mark(identity_sample, mark, pending_ack[1])
+                if not valid:
                     pending_ack = None
                     retry_ack = False
             except (CaptureRetry, ObserverReadRetry):
@@ -1182,8 +1380,12 @@ class BattleRuntime:
             except Exception:
                 pending_ack = None
                 retry_ack = False
-        if retry_ack and acknowledge_event_batch(pending_ack[0], pending_ack[1]):
-            pending_ack = None
+        if retry_ack:
+            confirmed = acknowledge_event_batch(pending_ack[0], pending_ack[1])
+            if len(pending_ack) > 3 and pending_ack[3] is not None:
+                self.sessions.terminal_acknowledged(confirmed)
+            if confirmed:
+                pending_ack = None
         self._pending_event_ack = pending_ack
 
     def poll(self, collector, observer=None, *, prepare_observer=None):

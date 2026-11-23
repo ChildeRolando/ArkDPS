@@ -11,6 +11,7 @@ from collection_session import CollectionSession
 from event_capture import CaptureRetry
 from native_pc.event_source import PcEventSource
 from native_pc.internal_capture import ROOTS
+from native_pc.live_event_producer import CooperativeEventWriter
 from native_pc_collector import NativePcCollector
 from test_event_probe_parity import declared_quality
 from test_internal_capture import ROOT, native_host
@@ -57,11 +58,15 @@ def publish_header(feed, process):
                                     source_build=BUILD)) + '\n', encoding='utf-8')
 
 
-def publish_frame(feed, process, frame, sequence, events=(), *, terminal=False, stage=STAGE):
+def frame_mark(process, frame, sequence, *, stage=STAGE):
     when = frame // 30
-    mark = dict(declared_quality(), native_process_pid=process.pid, native_frame=frame,
+    return dict(declared_quality(), native_process_pid=process.pid, native_frame=frame,
                 native_fixed_time=str(when << 32), native_identity=ROOTS, native_stage_id=stage,
                 native_generation=1, frame=frame, game_time=when, sequence=sequence, epoch=sequence, active=0)
+
+
+def publish_frame(feed, process, frame, sequence, events=(), *, terminal=False, stage=STAGE):
+    mark = frame_mark(process, frame, sequence, stage=stage)
     line = dict(mark=mark, events=list(events))
     if terminal:
         line['terminal_mark'] = mark
@@ -104,10 +109,10 @@ def test_cooperative_feed_publishes_only_on_matching_snapshot_and_archives_once(
     history = BattleHistory(tmp_path / 'history')
     process = OwnedSnapshotProcess(123)
     process.advance(0, 0)
-    publish_header(feed, process)
-    publish_frame(feed, process, 0, 0)
-
-    with connected_session(feed, process, history) as (session, observations):
+    with CooperativeEventWriter(feed, producer='owned-combat-test', producer_version=1,
+                                process_instance=process.process_instance, source_build=BUILD) as writer, \
+            connected_session(feed, process, history) as (session, observations):
+        writer.publish(frame_mark(process, 0, 0), [])
         first = session.read()
         assert first['event_status'] == 'recording'
         assert first['event_watermark'] == dict(sequence=0, frame=0, game_time=0)
@@ -117,7 +122,7 @@ def test_cooperative_feed_publishes_only_on_matching_snapshot_and_archives_once(
 
         # The cooperative writer progresses independently. Its newer mark
         # cannot be credited or acknowledged against the earlier snapshot.
-        publish_frame(feed, process, 30, 3, events)
+        writer.publish(frame_mark(process, 30, 3), events)
         with pytest.raises(CaptureRetry):
             session.read()
         assert session.runtime.display_sample()['event_watermark']['sequence'] == 0
@@ -132,9 +137,13 @@ def test_cooperative_feed_publishes_only_on_matching_snapshot_and_archives_once(
         assert row['healing'] == row['observed_healing'] == 6
         assert [event['sequence'] for event in observations[-1].events['drain']['events']] == [1, 2, 3]
         assert session.observer.read_through(3)['events'] == []
+        writer.heartbeat()
+        repeated = session.read()
+        assert repeated['event_watermark'] == observed['event_watermark']
+        assert repeated['statistics']['rows'][OPERATOR]['effective_damage'] == 17.5
 
         process.advance(60, 20, 6, state=3)
-        publish_frame(feed, process, 60, 3, terminal=True)
+        writer.publish(frame_mark(process, 60, 3), [], terminal=True)
         finished = session.read()
         assert finished['event_status'] == 'finished'
         process.report = ABSENT
@@ -144,6 +153,52 @@ def test_cooperative_feed_publishes_only_on_matching_snapshot_and_archives_once(
         archive, = history.list_recent().records
         assert archive.battle_id == first['battle_id'] and archive.event_status == 'finished'
         assert archive.statistics['rows'][OPERATOR]['effective_damage'] == 17.5
+
+
+def test_header_only_does_not_expire_until_independent_sampler_is_in_battle(native_host, tmp_path, monkeypatch):
+    from native_pc import live_event_source
+
+    clock = [0.0]
+    monkeypatch.setattr(live_event_source, 'monotonic', lambda: clock[0])
+    feed = tmp_path / 'producer.jsonl'
+    process = OwnedSnapshotProcess(123)
+    process.report = ABSENT
+    with CooperativeEventWriter(feed, producer='owned-combat-test', producer_version=1,
+                                process_instance=process.process_instance, source_build=BUILD), \
+            connected_session(feed, process, BattleHistory(tmp_path / 'history')) as (session, _):
+        clock[0] = 2 * live_event_source.LiveNativeEventProbe.stale_timeout
+        with pytest.raises(CaptureRetry, match='battle_absent'):
+            session.read()
+        assert session.event_status == 'ready'
+        process.advance(0, 25, 4)
+        with pytest.raises(CaptureRetry):
+            session.read()
+        clock[0] += live_event_source.LiveNativeEventProbe.stale_timeout
+        sample = session.read()
+        assert sample['event_status'] == 'gap' and sample['event_watermark'] is None
+        row = sample['statistics']['rows'][OPERATOR]
+        assert row['damage'] == 25 and row['healing'] == 4
+        assert row['effective_damage'] is None and row['event_coverage_complete'] is False
+
+
+def test_late_writer_without_quality_does_not_prove_missing_history(native_host, tmp_path):
+    feed = tmp_path / 'late-producer.jsonl'
+    process = OwnedSnapshotProcess(123)
+    process.advance(30, 25, 4)
+    mark = frame_mark(process, 30, 7)
+    for key in declared_quality():
+        mark.pop(key)
+    with CooperativeEventWriter(feed, producer='owned-combat-test', producer_version=1,
+                                process_instance=process.process_instance, source_build=BUILD) as writer, \
+            connected_session(feed, process, BattleHistory(tmp_path / 'history')) as (session, _):
+        writer.publish(mark, [])
+        sample = session.read()
+        row = sample['statistics']['rows'][OPERATOR]
+        assert row['damage'] == 25 and row['healing'] == 4
+        assert sample['event_watermark'] == dict(sequence=7, frame=30, game_time=1)
+        assert row['shield_coverage_start'] == 1
+        assert row['shield_absorbed'] is None and row['effective_damage'] is None
+        assert row['overkill_coverage_complete'] is False
 
 
 def test_cooperative_wrong_stage_cannot_create_the_first_baseline(native_host, tmp_path):

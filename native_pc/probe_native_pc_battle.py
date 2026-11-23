@@ -274,6 +274,7 @@ class NativePcBattleProbe:
 
     def _require_process_alive(self):
         _require(self.process_alive(), 'owned_process_exited', 'process_exited')
+        return tuple(self.process_instance)  # process_alive compared this with the actual creation time.
 
     def _module_range(self, rva, size):
         _require(self.base and 0 <= rva and rva + size <= self.module_size,
@@ -320,6 +321,7 @@ class NativePcBattleProbe:
     def observer_boot_ready(self):
         """Wait for completed IL2CPP initialization and checked class/statics."""
         self.reader.reset_budget()
+        self.observer_boot_reason = None
         self._require_process_alive()
         try:
             before = self._observer_runtime_state()
@@ -330,15 +332,35 @@ class NativePcBattleProbe:
                 # runtime state, not a normal initialization wait.
                 if count < 0 and not shutdown and not owner and not depth:
                     _require(self._observer_runtime_state() != before, 'invalid_runtime_init_count')
+                self.observer_boot_reason = 'runtime_init_pending'
                 return False
             binding_ready = True
             try:
                 self._binding()
             except ResearchFailure as exc:
-                if exc.status != 'waiting_game_init':
+                if (exc.status == 'unsupported_layout' and exc.reason == 'field_table_missing'
+                        and self._battle_class is None):
+                    # _binding has checked BattleController identity and its
+                    # exact 515-field count before discovering a null lazy
+                    # fields table. Recheck that narrow condition; never turn
+                    # populated-but-invalid metadata into a readiness wait.
+                    klass = self._resolve_battle_class()
+                    self.reader.require_class(klass, 'BattleController', 'Torappu.Battle')
+                    _require(struct.unpack('<H', self.reader.read(klass + CLASS_FIELD_COUNT, 2))[0] == 515,
+                             'field_count_mismatch')
+                    if self.reader.pointer(klass + CLASS_FIELDS):
+                        self._binding()  # A table published meanwhile must pass every original check.
+                    else:
+                        binding_ready = False
+                        self.observer_boot_reason = 'field_table_missing'
+                elif exc.status == 'waiting_game_init':
+                    binding_ready = False
+                    self.observer_boot_reason = exc.reason
+                else:
                     raise
-                binding_ready = False
             after = self._observer_runtime_state()
+            if after != before:
+                self.observer_boot_reason = 'runtime_init_changed'
             return binding_ready and after == before
         finally:
             self._require_process_alive()
@@ -557,6 +579,17 @@ class NativePcBattleProbe:
         sample = {'battle_serial': self._serial, 'frame': frame, 'game_time': game_time,
                   'battle_state': state, 'total_damage': damage, 'total_heal': heal,
                   'verbose_recorder_present': bool(struct.unpack_from('<Q', logger_raw, LOGGER_VERBOSE)[0])}
+        root_names = ('controller', 'native', 'logger', 'stats', 'level')
+        after_fields = self._battle_fields(after_raw)
+        after_identity = (after_singleton, after_fields[1], after_fields[2],
+                          struct.unpack_from('<Q', after_logger, LOGGER_STATS)[0], after_fields[3])
+        after_frame, after_fixed = struct.unpack('<Iq', clock_after)
+        sample['native_window_guard'] = dict(version=1, source='native_pc_guarded_read',
+            source_build=self.build['source_build'], battle_serial=self._serial,
+            before=dict(native_identity={key: hex(value) for key, value in zip(root_names, identity)},
+                        frame=frame, native_fixed_time=str(fixed_time), stage_id=metadata['stage_id']),
+            after=dict(native_identity={key: hex(value) for key, value in zip(root_names, after_identity)},
+                       frame=after_frame, native_fixed_time=str(after_fixed), stage_id=metadata['stage_id']))
         sample.update(metadata)
         _require(not sample.keys() & extra.keys(), 'reserved_extra_field')
         sample.update(extra)
@@ -569,11 +602,14 @@ class NativePcBattleProbe:
         self.reader.reset_budget()
         started = time.monotonic()
         try:
-            self._require_process_alive()
+            birth_before = self._require_process_alive()
             try:
                 report = self._read_sample(extra_reader, idle_reader)
             finally:
-                self._require_process_alive()
+                birth_after = self._require_process_alive()
+            if report['status'] == 'sample_available':
+                report['sample']['native_window_guard'].update(
+                    process_instance_before=list(birth_before), process_instance_after=list(birth_after))
         except ResearchFailure as error:
             report = {'status': error.status, 'reason': error.reason, 'research_only': True}
         except access.ApiFailure as error:

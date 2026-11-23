@@ -68,6 +68,13 @@ ARK-6 生命周期接入补入同一固定提交 `5734c30bf54780056ff75850538032
 
 `tools/package_windows.py` 从官方 Python.org HTTPS 地址取得 CPython 3.12.10 embeddable x64，并使用固定 SHA-256 核验。原始 `python/LICENSE.txt` 保留在分发目录。自包含 .NET 10 / WPF 产物随包分发，保留 .NET `LICENSE.txt` 与 `ThirdPartyNotices.txt` 于 `licenses/`。标准便携包保留 PyPI `frida==17.26.1` wheel 的 `dist-info/licenses/COPYING` 及元数据，同时带有 [Frida 17.26.1 官方 Android x86_64 服务端](https://github.com/frida/frida/releases/tag/17.26.1)及对应 [frida-core 许可文本](https://github.com/frida/frida-core/blob/17.26.1/COPYING)。上游许可为 wxWindows Library Licence 3.1。`--without-events` 生成无 Frida 的累计快照版。ADB 由模拟器提供。
 
+## 实验 PC 原生事件运行时
+
+`native_pc/native_event_runtime/build.py` 使用 [QuickJS 2025-09-13](https://bellard.org/quickjs/)（MIT）、
+[MinHook 1.3.4](https://github.com/TsudaKageyu/minhook/releases/tag/v1.3.4)（BSD 许可，含 HDE 声明）和
+[nlohmann/json 3.11.3](https://github.com/nlohmann/json/tree/v3.11.3)（MIT）。构建期下载源档，固定 SHA-256 核验；
+原许可文本与来源摘要随实验 DLL 保存。组件未纳入便携包发布，不能据此宣称实机验收完成。
+
 ## 已封存的 ARK-14 旧 Tk 候选运行时
 
 旧 PyInstaller + Tk 候选（CPython 3.10.10、Tcl/Tk 8.6、frida 客户端、typing_extensions、PyInstaller bootloader）

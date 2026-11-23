@@ -51,7 +51,7 @@ function coalesced(useNativeScope) {
  vm.createContext(context);
  vm.runInContext(`
   let sequence=0,stopped=false,fatal=null;
-  const queue=[],EVENT_BUFFER_LIMIT=100,coalesceEnemyHp=true;
+  const queue=[],queueSettlementScopes=new WeakMap(),EVENT_BUFFER_LIMIT=100,coalesceEnemyHp=true;
   let enemyMaxHpReady=true;
   ${runtime.slice(recordFrom, recordTo)}
   const when=phase=>({frame:10,game_time:1,...(${useNativeScope} ? {

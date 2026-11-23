@@ -19,7 +19,7 @@ from native_pc.event_source import PcEventSource
 from native_pc.internal_entry import portable_manifest
 
 
-def _connect_pc_after_bootstrap(session, bootstrap, *, timeout, cancelled):
+def _connect_pc_after_bootstrap(session, bootstrap, *, timeout, cancelled, audit=None):
     """Share one wait budget across readiness and initial module/access retries.
 
     A zero timeout permits one immediate readiness/connection check, without
@@ -36,30 +36,60 @@ def _connect_pc_after_bootstrap(session, bootstrap, *, timeout, cancelled):
 
     check_cancelled()
     deadline = time.monotonic() + timeout
-    bootstrap.wait_ready(max(0, deadline - time.monotonic()), cancelled=cancelled)
+    lease = bootstrap.wait_ready(max(0, deadline - time.monotonic()), cancelled=cancelled)
     check_cancelled()
     if timeout > 0 and time.monotonic() >= deadline:
         raise TimeoutError('PC connection readiness exhausted the initialization wait budget')
     permission_deadline = min(deadline, time.monotonic() + 5)
+    module_api_deadline = None
+    attempts = 0
     while True:
         check_cancelled()
         if timeout > 0 and time.monotonic() >= deadline:
             raise TimeoutError('PC connection initialization wait budget expired')
         try:
+            attempts += 1
             session.connect()
         except UnsupportedVersion:
             raise
         except SampleUnavailable:
             check_cancelled()
             diagnostic = session.collector.diagnostics
+            details = diagnostic.details
             module_initializing = (diagnostic.code == 'native_unavailable'
-                and diagnostic.details.get('reason') in ('module_not_unique', 'process_not_unique'))
+                and details.get('reason') in ('module_not_unique', 'process_not_unique'))
             access_initializing = (diagnostic.code == 'native_permission_denied'
                                    and time.monotonic() < permission_deadline)
-            if (not (module_initializing or access_initializing)
+            module_api_initializing = (diagnostic.code == 'native_unavailable'
+                and details.get('reason') == 'windows_api_failed'
+                and details.get('api') in ('EnumProcessModulesEx', 'GetModuleFileNameExW', 'GetModuleInformation')
+                and type(details.get('win32_error')) is int and details['win32_error'] in (6, 24, 299))
+            if module_api_initializing and details['win32_error'] == 6:
+                # ERROR_INVALID_HANDLE is not generally a module-list race.
+                # The owning bootstrap must independently confirm the exact
+                # lease birth and path is still alive; no guessed PID fallback.
+                alive = getattr(bootstrap, '_alive', None)
+                valid_lease = (isinstance(lease, dict) and type(lease.get('pid')) is int and lease['pid'] > 0
+                    and type(lease.get('created')) is int and lease['created'] > 0)
+                try:
+                    module_api_initializing = valid_lease and callable(alive) and alive(lease) is True
+                except Exception:
+                    module_api_initializing = False
+            if module_api_initializing:
+                if module_api_deadline is None:
+                    module_api_deadline = min(deadline, time.monotonic() + 5)
+                module_api_initializing = time.monotonic() < module_api_deadline
+            if (not (module_initializing or access_initializing or module_api_initializing)
                     or session.collector.process is not None or time.monotonic() >= deadline):
                 raise
-            retry_deadline = min(deadline, permission_deadline) if access_initializing else deadline
+            retry_deadline = (min(deadline, permission_deadline) if access_initializing else
+                              module_api_deadline if module_api_initializing else deadline)
+            if audit is not None:
+                audit('native_pc_connect_retry', dict(attempt=attempts, code=diagnostic.code,
+                    reason=details.get('reason'), api=details.get('api'), win32_error=details.get('win32_error'),
+                    remaining_seconds=max(0, retry_deadline - time.monotonic()),
+                    process_instance=[lease['pid'], lease['created']] if isinstance(lease, dict)
+                        and type(lease.get('pid')) is int and type(lease.get('created')) is int else None))
             time.sleep(min(.1, max(0, retry_deadline - time.monotonic())))
             check_cancelled()
             if time.monotonic() >= retry_deadline:
@@ -88,8 +118,25 @@ def write_json(path, value):
         json.dump(value, out, ensure_ascii=False, indent=2, default=json_value, allow_nan=False)
 
 
-def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_factory=None):
+def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_factory=None, state_dir=None,
+                before_session_close=None, after_session_close=None, native_pc_bootstrap=None,
+                baseline_poll_seconds=.1):
+    """Capture, optionally coordinating native patch ownership with a trusted caller.
+
+    before_session_close(session) may block until another observer is safely
+    detached. False or an exception defers *both* session and startup-owner
+    cleanup; the caller must retain them and keep the process alive as needed.
+    after_session_close(session, succeeded) reports the actual close outcome.
+    These hooks never manufacture a successful cleanup or event boundary.
+    native_pc_bootstrap is a borrowed, already-started PC startup owner. Its
+    readiness gate and bounded cold-start retries are reused, but this capture
+    neither starts nor closes it; its caller retains that responsibility.
+    """
     root = Path(__file__).resolve().parent
+    if (type(baseline_poll_seconds) not in (int, float) or not math.isfinite(baseline_poll_seconds)
+            or not .005 <= baseline_poll_seconds <= 1):
+        raise ValueError('baseline poll interval must be finite and between 0.005 and 1 seconds')
+    state_dir = Path(state_dir) if state_dir is not None else root / 'runtime'
     frozen = getattr(sys, 'frozen', False)
     manifest = portable_manifest(root)
     if manifest is not None:
@@ -120,13 +167,14 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
     framework_root = getattr(args, 'arkframework_root', None)
     pc_backend = getattr(args, 'native_pc_event_backend', None) or 'frida'
     pc_feed = getattr(args, 'native_pc_event_feed', None)
-    log_context = LogContext(root / 'runtime', root=root, build_head=head, connection_override={
+    log_context = LogContext(state_dir, root=root, build_head=head, connection_override={
         'platform': platform, 'adb_path': args.adb, 'serial': args.serial,
         'native_game_root': getattr(args, 'native_game_root', None), 'auto_detect': False,
     }, layout_override={'event_observation': events_enabled})
     metadata = {'head': head, 'stage': args.stage, 'frida_remote': args.frida_remote,
                 'adb': args.adb, 'serial': args.serial, 'started_at': time.time(),
                 'capture_seconds_after_baseline': args.capture_seconds,
+                'baseline_poll_seconds': baseline_poll_seconds, 'steady_poll_seconds': .1,
                 'require_events': args.require_events,
                 'log_header': log_context.header('foreground_capture', debug_mode=True)['data']}
     if platform == 'native_pc':
@@ -158,7 +206,7 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
         audit('metadata', metadata)
         session_options = dict(frida_remote=args.frida_remote, audit=audit)
         regeneration = None
-        pc_source = PcEventSource(root / 'runtime', observer_factory=native_pc_observer_factory, collector_root=root)
+        pc_source = PcEventSource(state_dir, observer_factory=native_pc_observer_factory, collector_root=root)
         if platform == 'native_pc':
             from native_pc_collector import NativePcCollector
             collector = NativePcCollector(args.native_game_root,
@@ -193,14 +241,17 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
                     session_options['observer_factory'] = provider
             session = session_factory(args.adb, args.serial, **session_options)
             if isinstance(session, CollectionSession):
-                session.history = BattleHistory(root / 'runtime' / 'history')
+                session.history = BattleHistory(state_dir / 'history')
                 session.enable_lifecycle()
-            pc_runtime = pc_source.runtime
+            pc_runtime = pc_source.runtime or (native_pc_bootstrap if platform == 'native_pc' else None)
             if pc_runtime is not None and bootstrap_error is None:
-                print('WAITING_GAME 已准备 PC 事件采集，请启动游戏；已在运行时请先正常重启游戏。', flush=True)
+                if pc_source.runtime is None:
+                    print('WAITING_PC_INIT 复用已就绪的 PC 启动组件，正在确认模块和读取权限；无需再次重启游戏。', flush=True)
+                else:
+                    print('WAITING_GAME 已准备 PC 事件采集，请启动游戏；已在运行时请先正常重启游戏。', flush=True)
                 try:
                     _connect_pc_after_bootstrap(session, pc_runtime, timeout=args.wait_battle_seconds,
-                        cancelled=(lambda: args.stop_file.exists()) if args.stop_file else None)
+                        cancelled=(lambda: args.stop_file.exists()) if args.stop_file else None, audit=audit)
                 except Exception as exc:
                     if (args.require_events or isinstance(exc, InterruptedError)
                             or not pc_runtime.is_failed):
@@ -245,7 +296,7 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
                     audit('retry', {'reason': str(exc)})
                     if end is None and time.monotonic() >= baseline_deadline:
                         raise RuntimeError('no reliable baseline before timeout') from exc
-                time.sleep(.1)
+                time.sleep(baseline_poll_seconds if end is None else .1)
             if not counts['samples']:
                 raise RuntimeError('capture stopped without a reliable baseline')
             if args.require_progress and not progressed:
@@ -258,17 +309,38 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
             audit('failure', failure_data)
         finally:
             resources = [('session', session), ('PC source', pc_source)]
-            for name, resource in resources:
-                if resource is None:
-                    continue
-                for _ in range(2):
-                    try:
-                        resource.close()
-                    except Exception as exc:
-                        failure = failure or f'{name} cleanup failed: {exc}'
-                        audit('cleanup_error', {'resource': name, 'reason': str(exc)})
-                    else:
-                        break
+            close_allowed = True
+            session_close_succeeded = session is None
+            if before_session_close is not None:
+                try:
+                    close_allowed = before_session_close(session) is not False
+                except BaseException as exc:
+                    close_allowed = False
+                    failure = failure or f'cleanup gate failed: {exc}'
+                if not close_allowed:
+                    failure = failure or 'cleanup deferred by the observer ownership gate'
+                    audit('cleanup_deferred', {'reason': 'observer ownership gate',
+                                              'resources_retained': True})
+            if close_allowed:
+                for name, resource in resources:
+                    if resource is None:
+                        continue
+                    for _ in range(2):
+                        try:
+                            resource.close()
+                        except Exception as exc:
+                            failure = failure or f'{name} cleanup failed: {exc}'
+                            audit('cleanup_error', {'resource': name, 'reason': str(exc)})
+                        else:
+                            if name == 'session':
+                                session_close_succeeded = True
+                            break
+            if after_session_close is not None:
+                try:
+                    after_session_close(session, close_allowed and session_close_succeeded)
+                except BaseException as exc:
+                    failure = failure or f'cleanup outcome callback failed: {exc}'
+                    audit('cleanup_error', {'resource': 'cleanup outcome callback', 'reason': str(exc)})
             poll_replay(final=True)
             final = session.capture.adapter.result() if session is not None and session.capture is not None else None
             summary = {**metadata, **counts, 'ended_at': time.time(), 'error': failure,

@@ -524,6 +524,13 @@
           <ComboBoxItem Content="Frida" Tag="frida"/>
           <ComboBoxItem Content="自研" Tag="native"/>
          </ComboBox>
+         <StackPanel x:Name="NativeHookCandidateNotes" Visibility="Collapsed">
+          <TextBlock Text="自研 PC 启动测试候选 · 不含 Frida" Foreground="{DynamicResource AccentText}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,6"/>
+          <TextBlock Text="1. 填写官服 PC 游戏目录，保持事件开启并应用设置。&#10;2. 等状态明确显示「自研监听已就绪」后，再正常启动或重启游戏。&#10;3. 进入大厅等待采集就绪，再开始对局。"
+                     Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,8"/>
+          <TextBlock Text="请使用独立的新解压目录；不支持旧状态迁移、MuMu、Frida 或合作文件。性能、稳定性和卫戍完整交接尚未验证；本包禁止自动更新。"
+                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+         </StackPanel>
          <StackPanel x:Name="FridaEventNotes">
           <TextBlock Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,10">
            <Run Text="1. 选择包含 Arknights.exe 的游戏目录。"/><LineBreak/>
@@ -534,13 +541,13 @@
                      Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
          </StackPanel>
          <StackPanel x:Name="NativeEventFeedFields" Visibility="Collapsed" Margin="0,0,0,10">
-          <TextBlock Text="事件数据文件" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+            <TextBlock Text="合作事件文件（可选）" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
           <DockPanel>
            <Button Content="选择文件" DockPanel.Dock="Right" Click="ChooseNativeEventFeed" Margin="8,0,0,0"/>
            <TextBox x:Name="NativeEventFeed" AutomationProperties.Name="事件数据文件"
-                    ToolTip="填写合作来源写入的 JSONL 文件完整路径"/>
+                     ToolTip="留空使用实验原生 Hook；填写完整路径则读取合作来源的 JSONL"/>
           </DockPanel>
-          <TextBlock Text="选择合作来源提供的 JSONL 文件，然后应用设置。没有可用事件来源时继续显示累计快照。"
+           <TextBlock Text="留空使用已构建的实验原生 Hook（尚待官服实机验收）；填写文件则读取合作来源。不可用时保留累计快照。"
                      Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
          </StackPanel>
         </StackPanel>

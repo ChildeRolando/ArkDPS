@@ -94,14 +94,147 @@ def assert_no_tk_files(names):
         raise RuntimeError('Sealed Tk artifacts in package: ' + ', '.join(bad))
 
 
-def archive_name(version, with_events, *, internal_backend=False, with_native_events=False):
-    if internal_backend:
+def archive_name(version, with_events, *, internal_backend=False, with_native_events=False,
+                 with_native_hooks=False):
+    if with_native_hooks:
+        suffix = '-native-hooks-startup-test'
+    elif internal_backend:
         suffix = '-internal-events'
     elif with_native_events:
         suffix = '-native-events'
     else:
         suffix = '' if with_events else '-snapshot'
     return f'ArkDPS-{version}-win-x64{suffix}.zip'
+
+
+def assert_no_frida_payload(names):
+    """Source provisioning helpers are not a client, Gadget or server payload."""
+    forbidden = ('python/lib/site-packages/frida', 'python/lib/site-packages/_frida',
+                 'collector/vendor/frida/', 'collector/frida-server/')
+    bad = sorted(name for name in names if name.lower().startswith(forbidden)
+                 or name.lower() == 'collector/native_pc/frida_runtime.py')
+    if bad:
+        raise RuntimeError('Frida payload in native-hooks startup-test package: ' + ', '.join(bad))
+
+
+def stage_native_hook_payload(binary, collector, notices):
+    """Copy only an already-built, owning-source-validated native payload.
+
+    This never builds or loads a DLL and never looks in ROOT/runtime. Both the
+    supplied bytes and the final copied bytes use the loader's validation gate.
+    """
+    from native_pc.native_hook_source import (RUNTIME_SOURCES, NATIVE_HOOK_LICENSES,
+        NATIVE_HOOK_PACKAGE_PATH, NATIVE_HOOK_BUILD_MANIFEST_PATH, validate_native_hook_payload)
+    binary = Path(binary)
+    source_dir = ROOT / 'native_pc/native_event_runtime'
+    validate_native_hook_payload(binary, source_dir=source_dir, license_dir=binary.parent)
+    destination = collector.parent / NATIVE_HOOK_PACKAGE_PATH
+    build_manifest = collector.parent / NATIVE_HOOK_BUILD_MANIFEST_PATH
+    destination.parent.mkdir(parents=True, exist_ok=False)
+    shutil.copy2(binary, destination)
+    shutil.copy2(binary.with_suffix('.build.json'), build_manifest)
+    for name in RUNTIME_SOURCES:
+        shutil.copy2(source_dir / name, destination.parent / name)
+    for name in NATIVE_HOOK_LICENSES:
+        shutil.copy2(binary.parent / name, notices / name)
+    validate_native_hook_payload(destination, source_dir=destination.parent, license_dir=notices,
+                                 build_manifest_path=build_manifest)
+
+
+def native_hook_component(files):
+    from native_pc.native_hook_source import NATIVE_HOOK_PACKAGE_PATH, NATIVE_HOOK_BUILD_MANIFEST_PATH
+    from native_pc.probe_native_pc import BUILD_ID
+    return dict(provider='arkdps-native-hooks', protocol=1, scope='official-pc-startup-test',
+                path=NATIVE_HOOK_PACKAGE_PATH, build_manifest_path=NATIVE_HOOK_BUILD_MANIFEST_PATH,
+                sha256=files[NATIVE_HOOK_PACKAGE_PATH],
+                build_manifest_sha256=files[NATIVE_HOOK_BUILD_MANIFEST_PATH],
+                default_platform='native_pc', default_backend='native', supported_source_builds=[BUILD_ID],
+                experimental=True, performance_verified=False, autochess_handoff_verified=False)
+
+
+def native_hooks_readme(version):
+    return (
+        f'ArkDPS {version} · 官服 PC 自研事件启动测试包（实验候选）\n\n'
+        '本包仅面向已适配构建的官服 Windows PC，不包含 Frida 客户端、Gadget 或服务端。\n'
+        '无需安装 Python 或 .NET；不支持 MuMu、合作事件文件或自动更新。\n'
+        '单独解压到新的可写目录，不要覆盖标准版；不要复制或继承旧 runtime、配置或战绩。\n'
+        '先启动 ArkDPS.Desktop.exe，允许正常的管理员权限提示，在设置中填写游戏目录。\n'
+        '确认界面显示「自研监听已就绪，请启动游戏」后，再正常启动游戏。\n'
+        '此时仅启动监听已建立，尚未预载 DLL 或连接采集；不要等待 DLL ready 才启动游戏。\n'
+        '若游戏已开，请先正常退出，再按此顺序重开。\n'
+        '退出测试时先正常退出游戏，再退出 ArkDPS；不要强制结束相关进程。\n'
+        '这是未签名的实验包，Windows 可能提示未知发布者；不确定时请停止并反馈。\n'
+        '不要关闭或修改杀毒、防火墙、反作弊等安全防护，不保证其它机器或游戏构建兼容。\n\n'
+        '已知限制：这是启动测试，不是正式上线或完整兼容验收。性能尚未验收；\n'
+        '卫戍多阶段交接仍可能出现事件覆盖 gap / partial，不能把显示数值当完整逐笔账。\n'
+        '不要据此宣称性能、卫戍完整性或所有战斗机制均已通过。性能体感仅作反馈，不是测量结论。\n\n'
+        '手动反馈：Windows 版本、官服游戏版本/文件校验结果、是否先启动 ArkDPS、\n'
+        '监听/初始化状态、是否进入大厅、客户端错误码/崩溃、正常退出结果。\n'
+        '启动失败可保留游戏错误截图及 collector/runtime/wpf-startup.log、\n'
+        'collector/runtime/wpf-collector*.log，并在脱敏后手动反馈；本包不自动上传。\n'
+        '不要发送或打包 native-hook-sessions/*.json 等会含 token 的会话配置，也不要发送认证信息。\n'
+    )
+
+
+def _no_frida_import_guard():
+    return (
+        'import importlib.abc, importlib.util, importlib.metadata, sys\n'
+        'assert importlib.util.find_spec("frida") is None\n'
+        'try:\n'
+        '    importlib.metadata.version("frida")\n'
+        'except importlib.metadata.PackageNotFoundError:\n'
+        '    pass\n'
+        'else:\n'
+        '    raise RuntimeError("Frida distribution found")\n'
+        'class NoFrida(importlib.abc.MetaPathFinder):\n'
+        '    def find_spec(self, fullname, path=None, target=None):\n'
+        '        if fullname.split(".")[0] in ("frida", "_frida") or fullname == "native_pc.frida_runtime":\n'
+        '            raise RuntimeError("Frida import attempted")\n'
+        'sys.meta_path.insert(0, NoFrida())\n'
+    )
+
+
+def verify_native_hooks_candidate(bundle, inputs, environment):
+    """Embedded-Python-only smoke check; no GUI, DLL mapping or game access."""
+    python = str(bundle / 'python/python.exe')
+    collector = bundle / 'collector'
+    guard = _no_frida_import_guard()
+    script = (guard + 'import app, desktop_launcher, desktop_bridge, native_pc_collector\n'
+              'from pathlib import Path\n'
+              'from native_pc.native_hook_source import native_hook_binary\n'
+              'import native_pc.native_hook_runtime\n'
+              'native_hook_binary(Path.cwd() / "collector")\n'
+              'assert "tkinter" not in sys.modules\n')
+    subprocess.run([python, '-I', '-B', '-c', script], cwd=bundle, env=environment,
+                   check=True, capture_output=True, encoding='utf-8', timeout=30)
+    commands = ('hello', 'snapshot', 'quit')
+    request = ''.join(json.dumps(dict(version=1, id=index, op=op)) + '\n'
+                      for index, op in enumerate(commands, start=1))
+    worker_script = (guard + 'import runpy\n'
+                     'sys.argv = sys.argv[1:]\n'
+                     'runpy.run_path(sys.argv[0], run_name="__main__")\n')
+    worker = subprocess.run([
+        python, '-I', '-B', '-X', 'utf8', '-c', worker_script, str(collector / 'desktop_bridge.py'),
+        '--offline', '--state-dir', str(inputs / 'native-hooks-offline-state'),
+    ], cwd=bundle, env=environment, input=request, check=True, capture_output=True, encoding='utf-8', timeout=30)
+    replies = [json.loads(line) for line in worker.stdout.splitlines()]
+    if (len(replies) != len(commands) or any(not isinstance(reply, dict) or reply.get('ok') is not True
+            or reply.get('kind') != kind for reply, kind in zip(replies, ('hello', 'snapshot', 'bye')))):
+        raise RuntimeError('Unexpected native-hooks startup-test worker replies')
+    hello = replies[0]['result']
+    effective = replies[1]['state']['effective_connection_config']
+    if ('frida' not in hello or hello['frida'] is not None
+            or not isinstance(hello.get('native_hook_candidate'), dict)
+            or hello['native_hook_candidate'].get('provider') != 'arkdps-native-hooks'
+            or effective.get('platform') != 'native_pc' or effective.get('native_pc_event_backend') != 'native'
+            or 'native_pc_event_feed' not in effective or effective['native_pc_event_feed'] not in (None, '')):
+        raise RuntimeError('Native-hooks startup-test worker lost its no-Frida package defaults')
+    if (collector / 'runtime').exists() or (bundle / '.arkdps-update').exists():
+        raise RuntimeError('Offline startup check wrote to product state or update storage')
+    return dict(scope='embedded-python-offline-startup-only', imports=True, manifest_validated=True,
+                worker_commands=list(commands), frida=None, frida_import_blocked=True,
+                effective_platform='native_pc', effective_backend='native', game_connected=False,
+                desktop_started=False, performance_verified=False, autochess_handoff_verified=False)
 
 
 def verify_internal_candidate(bundle, inputs, environment, *, cases=None):
@@ -186,7 +319,22 @@ def verify_cooperative_candidate(bundle, inputs, environment):
                           check=True, capture_output=True, encoding='utf-8', timeout=20)
     identity = json.loads(host.stdout)
     feed = inputs / 'cooperative-smoke.jsonl'
-    feed.touch()
+    mark = dict(sequence=0, frame=0, game_time=0, epoch=0, active=0, native_frame=0,
+                native_fixed_time='0', native_generation=1, native_process_pid=42,
+                native_stage_id='owned-smoke-stage',
+                native_identity=dict(controller='0x10000', native='0x20000', logger='0x30000',
+                                     stats='0x40000', level='0x50000'))
+    subprocess.run([
+        python, '-I', '-B', '-m', 'native_pc.live_event_bridge', '--output', str(feed),
+        '--producer', 'owned-packaging-smoke', '--producer-version', '1', '--pid', '42',
+        '--creation-filetime', '132245567890001234', '--source-build', 'owned-smoke-build',
+    ], cwd=bundle, env=environment, input=json.dumps(dict(mark=mark, events=[], terminal=True)) + '\n',
+        check=True, capture_output=True, encoding='utf-8', timeout=10)
+    header, closing = [json.loads(line) for line in feed.read_bytes().splitlines()]
+    if (header != dict(format='arkdps-pc-events', version=1, producer='owned-packaging-smoke',
+                       producer_version=1, process_instance=[42, 132245567890001234], source_build='owned-smoke-build')
+            or closing != dict(mark=mark, events=[], terminal_mark=mark)):
+        raise RuntimeError('Packaged cooperative bridge did not publish the original fenced record')
     state_dir = inputs / 'cooperative-smoke-state'
     commands = ('hello', 'snapshot', 'quit')
     request = ''.join(json.dumps(dict(version=1, id=index, op=op)) + '\n'
@@ -206,16 +354,27 @@ def verify_cooperative_candidate(bundle, inputs, environment):
             or effective['native_pc_event_backend'] != 'native' or Path(effective['native_pc_event_feed']) != feed):
         raise RuntimeError('Cooperative candidate lost backend selection or changed the Frida default')
     return dict(runtime_source=identity, frida=FRIDA_VERSION, saved_backend='frida',
-                effective_backend='native', packaged_cli_options=True, game_connected=False)
+                effective_backend='native', packaged_cli_options=True, packaged_cooperative_producer=True,
+                game_connected=False)
 
 
 def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
           frida_gadget_archive=None, frida_server=None, frida_server_license=None, with_events=True,
-          internal_backend=False, with_native_events=False, internal_event_cache=None):
+          internal_backend=False, with_native_events=False, internal_event_cache=None,
+          with_native_hooks=False, native_hook_dll=None):
     if not RELEASE_VERSION.fullmatch(version) or any(
             int(part) > 2147483647 for part in re.findall(r'[0-9]+', version)):
         raise ValueError('Use a version such as 1.0.0 or 1.0.0-rc.1')
     head = candidate_head(ROOT)
+    if with_native_hooks:
+        if with_events or internal_backend or with_native_events:
+            raise ValueError('Native-hooks startup-test must be isolated without Frida or another event candidate')
+        if native_hook_dll is None:
+            raise ValueError('Native-hooks startup-test requires --native-hook-dll (an existing validated DLL)')
+        if any(value is not None for value in (frida_wheel, frida_gadget_archive, frida_server, frida_server_license)):
+            raise ValueError('Native-hooks startup-test does not accept Frida component inputs')
+    elif native_hook_dll is not None:
+        raise ValueError('--native-hook-dll requires --with-native-hooks')
     if internal_backend and with_events:
         raise ValueError('Internal event candidate must be built without Frida components')
     if with_native_events and not with_events:
@@ -253,6 +412,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         desktop_variant.append('-p:ArkDpsInternalEventCandidate=true')
     elif with_native_events:
         desktop_variant.append('-p:ArkDpsCooperativeEventCandidate=true')
+    elif with_native_hooks:
+        desktop_variant.append('-p:ArkDpsNativeHookCandidate=true')
     subprocess.run([dotnet_executable, 'publish', str(ROOT / 'desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj'),
         '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
         '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=true',
@@ -274,11 +435,17 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         # The separately built ArkFramework DLL belongs to its host, outside the Python worker.
         ignored = ('__pycache__', '*.pyc')
         if name == 'native_pc':
-            ignored += ('arkframework', 'internal_event_host')
+            ignored += ('arkframework', 'internal_event_host', 'native_event_runtime')
+            if not with_native_hooks:
+                ignored += ('native_hook_source.py', 'native_hook_runtime.py')
+            else:
+                ignored += ('frida_runtime.py',)
             if not internal_backend:
                 ignored += ('internal_capture.py',)
-            if not with_host:
+            if not with_host and not with_native_hooks:
                 ignored += ('internal_event_source.py',)
+            if not with_native_events:
+                ignored += ('live_event_bridge.py', 'live_event_producer.py')
         if name == 'vendor':
             # Only the full variant receives a verified Gadget. A local source
             # cache must never leak it into a snapshot-only archive.
@@ -289,8 +456,11 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         host_path.parent.mkdir()
         shutil.copy2(internal_event_host, host_path)
         shutil.copy2(ROOT / 'app.py', collector / 'app.py')
-    if with_native_events:
+    if with_native_events or with_native_hooks:
         shutil.copy2(ROOT / 'desktop_launcher.py', collector / 'desktop_launcher.py')
+    if with_native_hooks:
+        shutil.copy2(ROOT / 'app.py', collector / 'app.py')
+        shutil.copy2(ROOT / 'release_identity.py', collector / 'release_identity.py')
     if with_events:
         component_dir = collector / 'vendor' / 'frida'
         stage_gadget(component_dir / FRIDA_VERSION, source_archive=frida_gadget_archive)
@@ -299,6 +469,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     notices.mkdir()
     for name in ('LICENSE', 'THIRD_PARTY.md'):
         shutil.copy2(ROOT / name, notices / name)
+    if with_native_hooks:
+        stage_native_hook_payload(native_hook_dll, collector, notices)
     if with_host:
         license_file = internal_event_host.with_name('nlohmann-json-LICENSE.MIT')
         shutil.copy2(license_file, notices / license_file.name)
@@ -327,6 +499,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
             '官服 PC 请填写 Arknights.exe 所在目录，然后选择「PC 事件后端」。\n'
             'Frida：先启动 ArkDPS，按连接提示启动或重启游戏。\n'
             '自研：指定合作来源写入的 JSONL 文件。事件不可用时继续显示累计快照。\n'
+            '合作来源写入工具：.\\python\\python.exe -I -B -m native_pc.live_event_bridge --help\n'
             '无界面采集参数：.\\python\\python.exe -I -B .\\collector\\app.py --help\n'
         )
     update_instructions = (
@@ -361,6 +534,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
             '无界面\n'
             '.\\python\\python.exe -I -B .\\collector\\app.py --internal-capture normal '
             '--state-dir .\\internal-cli\n')
+    if with_native_hooks:
+        readme = native_hooks_readme(version)
     (bundle / 'README.txt').write_text(readme, encoding='utf-8-sig')
     if {entry.name for entry in bundle.iterdir()} != PACKAGE_ROOT:
         raise RuntimeError('Unexpected files in portable package root')
@@ -384,12 +559,17 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
             path=HOST_PATH, sha256=manifest['files'][HOST_PATH],
             cpp_source_sha256=digest(host_build.SOURCE / 'main.cpp'), json_header_sha256=host_build.HEADER[1],
         )
+    if with_native_hooks:
+        manifest['native_pc_native_hooks'] = native_hook_component(manifest['files'])
+        assert_no_frida_payload(manifest['files'])
     assert_no_tk_files(manifest['files'])
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
     environment=dict(os.environ, PYTHONHOME='Z:/not-a-python', PYTHONPATH='Z:/not-a-python', DOTNET_MULTILEVEL_LOOKUP='0')
     script=('import desktop_bridge, native_pc_collector, sys; '
             'assert "tkinter" not in sys.modules; print(sys.version); print(sys.executable)')
+    if with_native_hooks:
+        script = _no_frida_import_guard() + script
     script_args = []
     if with_events:
         script += (f'; import frida, lzma; assert frida.__version__ == {FRIDA_VERSION!r}; print(frida.__version__)'
@@ -398,14 +578,14 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     subprocess.run([str(bundle/'python/python.exe'), '-I', '-B', '-c', script, *script_args],
                    cwd=ROOT, env=environment, check=True)
     archive = output / archive_name(version, with_events, internal_backend=internal_backend,
-                                   with_native_events=with_native_events)
+                                   with_native_events=with_native_events, with_native_hooks=with_native_hooks)
     staged_archive = inputs / archive.name
     with zipfile.ZipFile(staged_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
         for path in sorted(bundle.rglob('*')):
             if path.is_file():
                 stream.write(path,str(Path('ArkDPS')/path.relative_to(bundle)))
     sha256 = digest(staged_archive)
-    if with_host:
+    if with_host or with_native_hooks:
         extracted = inputs / 'clean-extract'
         unpack(staged_archive, extracted)
         clean_bundle = extracted / 'ArkDPS'
@@ -414,8 +594,13 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
                  for path in clean_bundle.rglob('*') if path.is_file() and path != clean_manifest}
         if json.loads(clean_manifest.read_text('utf-8')) != manifest or files != manifest['files']:
             raise RuntimeError('PC event candidate ZIP does not match its release manifest')
-        receipts = (verify_internal_candidate(clean_bundle, inputs, environment) if internal_backend else
-                    {'cooperative': verify_cooperative_candidate(clean_bundle, inputs, environment)})
+        if with_native_hooks:
+            backend_key = 'native_pc_native_hooks'
+            assert_no_frida_payload(files)
+            receipts = {'startup': verify_native_hooks_candidate(clean_bundle, inputs, environment)}
+        else:
+            receipts = (verify_internal_candidate(clean_bundle, inputs, environment) if internal_backend else
+                        {'cooperative': verify_cooperative_candidate(clean_bundle, inputs, environment)})
         evidence = dict(head=head, archive=archive.name, sha256=sha256,
                         backend=manifest[backend_key], scenarios=receipts,
                         raw_evidence_directory=inputs.name)
@@ -440,15 +625,18 @@ def main():
     variants.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
     variants.add_argument('--internal-events', action='store_true', help='build the separate controlled-data candidate')
     variants.add_argument('--with-native-events', action='store_true', help='build the candidate with both PC event backends')
+    variants.add_argument('--with-native-hooks', action='store_true', help='build the isolated official-PC no-Frida startup-test candidate')
+    parser.add_argument('--native-hook-dll', type=Path, help='existing native-hooks DLL with its build manifest and redistribution licenses')
     parser.add_argument('--internal-event-cache', type=Path, help='reuse pinned nlohmann/json build dependencies')
     args=parser.parse_args()
     build(args.output.resolve(), version=args.version, python_zip=args.python_zip,
           frida_wheel=args.frida_wheel, frida_gadget_archive=args.frida_gadget_archive,
           frida_server=args.frida_server,
           frida_server_license=args.frida_server_license,
-          with_events=not args.without_events and not args.internal_events,
+          with_events=not args.without_events and not args.internal_events and not args.with_native_hooks,
           internal_backend=args.internal_events, with_native_events=args.with_native_events,
-          internal_event_cache=args.internal_event_cache)
+          internal_event_cache=args.internal_event_cache,
+          with_native_hooks=args.with_native_hooks, native_hook_dll=args.native_hook_dll)
 
 
 if __name__=='__main__':

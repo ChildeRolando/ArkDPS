@@ -16,6 +16,9 @@
   <PropertyGroup Condition="'$(ArkDpsCooperativeEventCandidate)' == 'true'">
     <DefineConstants>$(DefineConstants);ARKDPS_COOPERATIVE_EVENT_CANDIDATE</DefineConstants>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(ArkDpsNativeHookCandidate)' == 'true'">
+    <DefineConstants>$(DefineConstants);ARKDPS_NATIVE_HOOK_CANDIDATE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/LoneTrail/*.png" />
     <Resource Include="Assets/People/**/*.png;Assets/People/**/*.jpg" />

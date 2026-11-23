@@ -75,6 +75,71 @@ def test_available_empty_native_counter_rows_still_certify_fresh_initial_skill_s
     assert lane(result, 3)['observed_non_skill_damage'] == 100
 
 
+@pytest.mark.parametrize('baseline_time,changes,peer_non_skill', [
+    (2, {}, None),
+    (0, {'global_total': 700000, 'global_heal': 20000, 'native_snapshot_witnesses': {
+        'actor_rows': {'status': 'available', 'reason': None}}}, None),
+    (0, {'native_snapshot_witnesses': {
+        'actor_rows': {'status': 'not_requested', 'reason': 'native_event_identity'}}}, None),
+    (0, {'quality': {'baseline_discarded_skill_events': [activation(50)]}}, 100),
+])
+def test_verified_effect_recovers_after_a_cold_baseline_without_reclassifying_old_hits(
+        baseline_time, changes, peer_non_skill):
+    meter = MultiplayerBattleStatistics()
+    consume(meter, baseline_time, sequence=50, **changes)
+    requested = activation(52, 4)
+    requested['proof']['method'] = 'Character.OnSkillStart'
+    result = consume(meter, 6, [
+        hit(51, 3, 3, 20), requested, hit(53, 3, 5, 30),
+        activation(54, 6), hit(55, 3, 6, 50)])
+    during = lane(result, 3)
+    assert during['observed_damage'] == 100
+    assert during['observed_skill_damage'] == 50
+    assert during['observed_non_skill_damage'] == 0
+    assert during['skill_split_complete'] is False
+    assert during['skill_damage_unverified_share'] == pytest.approx(2 / 3)
+    finish = dict(activation(56, 7), kind='skill_end', proof={'method': 'Character.OnSkillFinish'})
+    result = consume(meter, 8, [finish, hit(57, 3, 7, 25), hit(58, 4, 8, 100)])
+    after = lane(result, 3)
+    assert after['observed_skill_damage'] == 50
+    assert after['observed_non_skill_damage'] == 25
+    assert after['observed_skill_damage_effective'] == 50
+    assert after['observed_non_skill_damage_effective'] == 25
+    assert after['skill_split_complete'] is False
+    assert after['skill_damage_unverified_share'] == pytest.approx(0.5)
+    peer = lane(result, 4)
+    assert peer['observed_non_skill_damage'] == peer_non_skill
+    assert peer['skill_damage_unverified_share'] == (1 if peer_non_skill is None else 0)
+
+
+@pytest.mark.parametrize('starts_unknown', [True, False])
+def test_unmatched_cast_return_recovers_only_for_an_unknown_initial_actor(starts_unknown):
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 1 if starts_unknown else 0, sequence=50)
+    cast_return = dict(activation(51, 2), kind='skill_end',
+        skill_wait_for_end=True, skill_reason=1, proof={'method': 'BasicSkill.OnCastFinish'})
+    result = consume(meter, 4, [cast_return, activation(52, 3), hit(53, 3, 4, 100)])
+    observed = lane(result, 3)
+    assert observed['observed_damage'] == 100
+    assert observed['observed_skill_damage'] == (100 if starts_unknown else None)
+    assert observed['skill_split_complete'] is starts_unknown
+
+
+def test_tentative_initial_window_does_not_block_a_later_verified_effect():
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 1, sequence=50)
+    requested = dict(activation(51, 2), proof={'method': 'Character.OnSkillStart'})
+    cast_return = dict(activation(52, 3), kind='skill_end',
+        skill_wait_for_end=True, skill_reason=1, proof={'method': 'BasicSkill.OnCastFinish'})
+    result = consume(meter, 6, [requested, cast_return, hit(53, 3, 4, 20),
+        activation(54, 5), hit(55, 3, 6, 50)])
+    observed = lane(result, 3)
+    assert observed['observed_damage'] == 70
+    assert observed['observed_skill_damage'] == 50
+    assert observed['skill_split_complete'] is False
+    assert observed['skill_damage_unverified_share'] == pytest.approx(0.5)
+
+
 @pytest.mark.parametrize('field,bad', [('baseline_discarded_skill_events_complete', None),
     ('baseline_discarded_skill_events_complete', False),
     ('baseline_discarded_skill_events_complete', 1), ('baseline_discarded_skill_events', None)])

@@ -191,7 +191,7 @@ class EventStream:
                     self.statistics.last_elemental.clear()
             self._record_receipt(sequence, frame, game_time, payload, replay_record)
             return
-        ignore_passive_native_cast = False
+        ignore_unmatched_native_cast = False
         native_cast = (skill_method or target_instance) == 'BasicSkill.OnCastFinish'
         skill_actor = (settlement_identity[2] if settlement_identity and settlement_identity[0] == 'local'
                        else source_character_uid if not self.statistics.settlement_enabled else None)
@@ -208,8 +208,12 @@ class EventStream:
                                    self.statistics.settlement_skill_active.get((owner, actor)),
                                    source, skill_key, skill_id, actor))
                     if not matches:
-                        if skill_wait_for_end is False:
-                            ignore_passive_native_cast = True
+                        identity = (owner, actor)
+                        before_observed_activation = (
+                            state == 'local' and identity in self.statistics.settlement_skill_initial_pending
+                            and identity not in self.statistics.settlement_skill_active)
+                        if skill_wait_for_end is False or before_observed_activation:
+                            ignore_unmatched_native_cast = True
                         else:
                             raise ValueError('native cast state has no matching actor activation')
             if self.statistics.settlement_enabled and kind == 'damage_settlement':
@@ -226,9 +230,9 @@ class EventStream:
             elif settlement_identity == ('summon', None, None):
                 # A proven summon skill never opens a host skill window.
                 pass
-            elif ignore_passive_native_cast:
-                # A false return can follow a real finish inside the native
-                # call. An unmatched passive observation cannot affect a CID peer.
+            elif ignore_unmatched_native_cast:
+                # A passive return or a return from an unobserved initial
+                # activation leaves the current actor's skill state unchanged.
                 pass
             elif unresolved_source:
                 self._observe_unresolved_source(source, unresolved_source_keys,
@@ -266,7 +270,7 @@ class EventStream:
                     verified_skill_end_owner=verified_skill_end_owner,
                     mitigation_before=mitigation_before, mitigation_after=mitigation_after,
                     settled_after_nested_kill=settled_after_nested_kill)
-            if (self.statistics.settlement_enabled and settlement_identity and not ignore_passive_native_cast
+            if (self.statistics.settlement_enabled and settlement_identity and not ignore_unmatched_native_cast
                     and kind in ('skill_start', 'skill_end') and settlement_identity[0] == 'local'
                     and settlement_identity[2] is not None):
                 _state, owner, actor = settlement_identity
@@ -307,7 +311,7 @@ class EventStream:
                 if kind == 'elemental_bar':
                     self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor)
                 elif (kind in ('skill_start', 'skill_end') and state == 'unknown'
-                      and not ignore_passive_native_cast):
+                      and not ignore_unmatched_native_cast):
                     self._mark_settlement_skill_unassigned(source, unresolved_source_keys,
                         skill_method or target_instance, skill_reason)
             if self.statistics.settlement_enabled and kind in ('enemy_enter', 'enemy_fake_death',

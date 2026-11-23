@@ -111,6 +111,15 @@ public partial class MainWindow : Window
     {
         Theme.Apply(Theme.Key);
         InitializeComponent();
+        if (App.NativeHookCandidate)
+        {
+            Title = "ArkDPS · 自研 PC 启动测试候选";
+            ConnectionPlatform.SelectedIndex = NativeEventBackend.SelectedIndex = 1;
+            ConnectionPlatform.IsEnabled = NativeEventBackend.IsEnabled = false;
+            NativeHookCandidateNotes.Visibility = Visibility.Visible;
+            SystemTitle.TextTrimming = ModeLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+            SystemTitle.ToolTip = "自研 PC 启动测试候选；仅供独立新解压目录启动检查，不代表完整发布验收。";
+        }
         CompactTrend.Bind(trendModel);
         OperatorTrend.Bind(trendModel);
         RankingScroll.SizeChanged += (_, _) => FitLivePanels();
@@ -170,7 +179,7 @@ public partial class MainWindow : Window
                 return;
             }
             if (App.InstalledVersion is { } version && !App.BridgeArguments.Contains("--offline")
-                && !App.CooperativeEventPackage)
+                && !App.CooperativeEventPackage && !App.NativeHookCandidate)
                 _ = CheckForUpdates(ReleaseUpdates.Public, version, manual: false);
             if(App.Verification!=null) await Verify(App.Verification);
         }
@@ -644,7 +653,7 @@ public partial class MainWindow : Window
     private void InitializeSettings()
     {
         adbPathDetected=serialDetected=false;
-        var config=State.Get("connection_config");AutoDetect.IsChecked=config.Bool("auto_detect");
+        var config=State.Get(App.NativeHookCandidate ? "effective_connection_config" : "connection_config");AutoDetect.IsChecked=config.Bool("auto_detect");
         AdbPath.Text=config.Text("adb_path");Serial.Text=config.Text("serial");EventsEnabled.IsChecked=State.Get("layout").Bool("event_observation");
         NativeGameRoot.Text=config.Text("native_game_root");
         NativeEventBackend.SelectedIndex=config.Text("native_pc_event_backend")=="native" ? 1 : 0;
@@ -687,7 +696,12 @@ public partial class MainWindow : Window
         MumuEventNotes.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
         NativeEventNotes.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
         FridaEventNotes.Visibility=useFrida ? Visibility.Visible : Visibility.Collapsed;
-        NativeEventFeedFields.Visibility=useFrida ? Visibility.Collapsed : Visibility.Visible;
+        NativeEventFeedFields.Visibility=useFrida || App.NativeHookCandidate ? Visibility.Collapsed : Visibility.Visible;
+        if (App.NativeHookCandidate)
+        {
+            DetectionNote.Text="仅支持官服 PC 自研实时事件；不支持迁移旧 runtime，请使用新的独立解压目录。关闭事件仅使用快照，不切换 Frida。";
+            return;
+        }
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
             or "--frida-remote" or "--platform" or "--native-game-root" or "--native-pc-event-backend" or "--native-pc-event-feed")
             ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。"
@@ -911,9 +925,12 @@ public partial class MainWindow : Window
         BabelTitlebarSurface.Visibility = BabelSidebarMark.Visibility =
             Theme.IsBabel ? Visibility.Visible : Visibility.Collapsed;
         bool offline = App.BridgeArguments.Contains("--offline");
-        SystemTitle.Visibility = loneTrail ? Visibility.Visible : Visibility.Collapsed;
-        ModeLabel.Visibility = offline || loneTrail ? Visibility.Visible : Visibility.Collapsed;
-        ModeLabel.Text = offline ? "离线验收 · 合成数据 · 不访问游戏" : "ARKDPS / ORBITAL CONSOLE";
+        SystemTitle.Visibility = loneTrail || App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
+        SystemTitle.Text = App.NativeHookCandidate ? "自研 PC · 启动测试候选" : "COMBAT DPS ANALYSIS SYSTEM";
+        ModeLabel.Visibility = offline || loneTrail || App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
+        ModeLabel.Text = offline ? "离线验收 · 合成数据 · 不访问游戏"
+            : App.NativeHookCandidate ? "独立新解压 · 性能 / 卫戍交接未验证" : "ARKDPS / ORBITAL CONSOLE";
+        ModeLabel.ToolTip = App.NativeHookCandidate ? "本包不含 Frida，不提供自动更新。请使用独立新解压目录，不迁移旧 runtime。" : null;
         ArrangeThemeArtwork(ContentRoot.ActualWidth is > 0 and < 1100);
     }
 
@@ -951,7 +968,7 @@ public partial class MainWindow : Window
     private void ArrangeThemeArtwork(bool narrow)
     {
         bool loneTrail = Theme.Key == Theme.LoneTrail;
-        ChromeDescription.Visibility = ContentRoot.ActualWidth >= 740 && ModeLabel.Visibility == Visibility.Visible
+        ChromeDescription.Visibility = (App.NativeHookCandidate || ContentRoot.ActualWidth >= 740) && ModeLabel.Visibility == Visibility.Visible
             ? Visibility.Visible : Visibility.Collapsed;
         BrandMark.Visibility = loneTrail && !narrow ? Visibility.Visible : Visibility.Collapsed;
         CompactBrandMark.Visibility = loneTrail && narrow ? Visibility.Visible : Visibility.Collapsed;
