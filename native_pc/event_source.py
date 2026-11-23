@@ -16,18 +16,34 @@ class PcEventSourceCleanupError(RuntimeError):
 class PcEventSource:
     """Own the startup runtime. CollectionSession owns its attached observer."""
 
-    def __init__(self, runtime_dir, *, observer_factory=None):
+    def __init__(self, runtime_dir, *, observer_factory=None, collector_root=None):
         self.runtime_dir = runtime_dir
         self.observer_factory = observer_factory
+        self.collector_root = collector_root if collector_root is not None else Path(__file__).resolve().parents[1]
         self.runtime = None
         self.game_root = None
 
-    def select(self, *, enabled, game_root=None, explicit_retry=False, startup_trace=None,
+    def select(self, *, enabled, game_root=None, backend='frida', feed_path=None, explicit_retry=False, startup_trace=None,
                admission=None, cancelled=lambda: False, on_start_error=None):
-        use_default = enabled and game_root and self.observer_factory is None
+        use_default = enabled and backend == 'frida' and game_root and self.observer_factory is None
         key = Path(game_root).expanduser().resolve() if use_default else None
         if self.runtime is not None and (not use_default or key != self.game_root):
             self.close()
+        if enabled and backend == 'native':
+            opened = False
+
+            def live_observer(collector, _remote):
+                nonlocal opened
+                if not feed_path:
+                    raise RuntimeError('自研内核需要已配置的实时事件 JSONL 文件。')
+                if opened:
+                    raise RuntimeError('自研事件输入按战局独立，请选择新战局的 JSONL 并重连。')
+                from native_pc.internal_entry import live_native_host
+                from native_pc.live_event_source import LiveNativeEventProbe
+                opened = True
+                return LiveNativeEventProbe(collector, Path(feed_path), live_native_host(self.collector_root))
+
+            return live_observer
         if not use_default:
             return self.observer_factory if enabled else None
         if self.runtime is None:

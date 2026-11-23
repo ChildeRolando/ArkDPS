@@ -349,18 +349,26 @@ class BattleFeed:
     @staticmethod
     def _guarded_events(observer, opening, sample, capture=None):
         mark, opening_error = opening
-        if isinstance(opening_error, (CaptureRetry, ObserverReadRetry)):
-            raise CaptureRetry(str(opening_error)) from opening_error
-        if opening_error is not None:
-            return {'error': str(opening_error)}
         try:
+            if isinstance(opening_error, (CaptureRetry, ObserverReadRetry)):
+                raise opening_error
+            if opening_error is not None:
+                return {'error': str(opening_error)}
             end_mark = _observer_mark(observer)
             if not isinstance(contract_for(observer), NativePcProbeContract):
                 capture = None
             sequence = _event_barrier(mark, sample, end_mark,
                                      contract=contract_for(observer, sample), capture=capture)
+            accept = getattr(observer, 'accept_verified_frame', None)
+            if callable(accept):
+                accept()
             return dict(before=mark, after=end_mark, sequence=sequence)
         except (BarrierBusy, CaptureRetry, ObserverReadRetry) as exc:
+            reject = getattr(observer, 'reject_unverified_frame', None)
+            if callable(reject):
+                reason = reject(exc)
+                if reason is not None:
+                    return {'error': reason}
             raise CaptureRetry(str(exc)) from exc
         except Exception as exc:
             return {'error': str(exc)}

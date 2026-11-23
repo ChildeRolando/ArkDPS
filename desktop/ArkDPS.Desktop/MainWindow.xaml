@@ -501,8 +501,6 @@
           <Button Content="选择目录" DockPanel.Dock="Right" Click="ChooseNativeGameRoot" Margin="8,0,0,0"/>
           <TextBox x:Name="NativeGameRoot" AutomationProperties.Name="PC 游戏目录" ToolTip="选择包含 Arknights.exe 的目录"/>
          </DockPanel>
-         <TextBlock Text="选择包含 Arknights.exe 的目录。应用后先看当前状态，等待监听准备完成，再按提示启动或重启游戏。"
-                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
         </StackPanel>
         <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
        </StackPanel>
@@ -520,13 +518,31 @@
                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
         </StackPanel>
         <StackPanel x:Name="NativeEventNotes" Visibility="Collapsed">
-         <TextBlock x:Name="NativeEventNote" Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,10">
-          <Run Text="1. 选择包含 Arknights.exe 的游戏目录。"/><LineBreak/>
-          <Run Text="2. 保持逐次事件开启，点击「应用设置并重连」。"/><LineBreak/>
-          <Run Text="3. 等待状态显示「监听已就绪」，再启动游戏；提示重启时保持 ArkDPS 开启，正常重启游戏。"/>
-         </TextBlock>
-         <TextBlock Text="正在准备监听：先等待当前状态更新。监听已就绪：按提示启动或重启游戏。等待初始化：进入大厅后稍候，无需反复重连。端口被占用：先退出旧版 ArkDPS（含托盘），等待监听准备完成。采集就绪后再进入战斗。"
-                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+         <TextBlock Text="PC 事件后端" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+         <ComboBox x:Name="NativeEventBackend" SelectedIndex="0" AutomationProperties.Name="PC 事件后端"
+                   SelectionChanged="NativeEventBackendChanged" Margin="0,0,0,10">
+          <ComboBoxItem Content="Frida" Tag="frida"/>
+          <ComboBoxItem Content="自研" Tag="native"/>
+         </ComboBox>
+         <StackPanel x:Name="FridaEventNotes">
+          <TextBlock Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,10">
+           <Run Text="1. 选择包含 Arknights.exe 的游戏目录。"/><LineBreak/>
+           <Run Text="2. 保持逐次事件开启，点击「应用设置并重连」。"/><LineBreak/>
+           <Run Text="3. 等待状态显示「监听已就绪」，再启动游戏；提示重启时保持 ArkDPS 开启，正常重启游戏。"/>
+          </TextBlock>
+          <TextBlock Text="正在准备监听：先等待当前状态更新。监听已就绪：按提示启动或重启游戏。等待初始化：进入大厅后稍候，无需反复重连。端口被占用：先退出旧版 ArkDPS（含托盘），等待监听准备完成。采集就绪后再进入战斗。"
+                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+         </StackPanel>
+         <StackPanel x:Name="NativeEventFeedFields" Visibility="Collapsed" Margin="0,0,0,10">
+          <TextBlock Text="事件数据文件" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+          <DockPanel>
+           <Button Content="选择文件" DockPanel.Dock="Right" Click="ChooseNativeEventFeed" Margin="8,0,0,0"/>
+           <TextBox x:Name="NativeEventFeed" AutomationProperties.Name="事件数据文件"
+                    ToolTip="填写合作来源写入的 JSONL 文件完整路径"/>
+          </DockPanel>
+          <TextBlock Text="选择合作来源提供的 JSONL 文件，然后应用设置。没有可用事件来源时继续显示累计快照。"
+                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
+         </StackPanel>
         </StackPanel>
         <TextBlock Text="逐次记录伤害、治疗、实际吸盾与技能起止。关闭后仅使用累计快照；事件未覆盖的指标保留未知。"
                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>

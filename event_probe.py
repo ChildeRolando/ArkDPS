@@ -466,6 +466,16 @@ class NativePcProbeContract(ProbeContract):
         return True
 
 
+@dataclass(frozen=True)
+class NativePcLiveProbeContract(NativePcProbeContract):
+    def validate_binding(self, sample, *payloads):
+        super().validate_binding(sample, *payloads)
+        stage = sample['battle_metadata'].get('stage_id')
+        if not isinstance(stage, str) or not stage or any(
+                payload.get('native_stage_id') != stage for payload in payloads):
+            raise StreamGap('cooperative PC event data belongs to a different or unverified stage')
+
+
 def _validate_autochess_scope(sample, payloads, scope_key):
     context = sample.get('autochess_context') or {}
     identity = context.get('identity') if context.get('status') in ('available', 'partial') else None
@@ -494,9 +504,11 @@ LEGACY_CONTRACT = ProbeContract('legacy-events')
 # probes require explicit quality, independently of those source-proof choices.
 MUMU_CONTRACT = ProbeContract('frida-events-v1', strict_quality=True)
 NATIVE_PC_CONTRACT = NativePcProbeContract('native-pc-frida-v1', True, True, True, True, True)
+NATIVE_PC_LIVE_CONTRACT = NativePcLiveProbeContract('native-pc-live-v1', True, True, True, True, True)
 MUMU_AUTOCHESS_CONTRACT = MuMuAutoChessProbeContract(
     'mumu-autochess-frida-v1', True, True, True, False, True)
-_CONTRACTS = {c.name: c for c in (LEGACY_CONTRACT, MUMU_CONTRACT, NATIVE_PC_CONTRACT, MUMU_AUTOCHESS_CONTRACT)}
+_CONTRACTS = {c.name: c for c in (LEGACY_CONTRACT, MUMU_CONTRACT, NATIVE_PC_CONTRACT,
+                                  NATIVE_PC_LIVE_CONTRACT, MUMU_AUTOCHESS_CONTRACT)}
 
 
 def _validate_contract(contract):
@@ -573,18 +585,18 @@ class NativePcBinding:
         if operation not in ('mark', 'read') or result.get('error') or result.get('stopped'):
             return result
         if result.get('retry'):
-            raise ObserverReadRetry('官服 PC Frida 战局或时钟正在变化，请重试当前采集')
+            raise ObserverReadRetry('官服 PC 事件来源 战局或时钟正在变化，请重试当前采集')
         generation = result.get('native_generation')
         if type(generation) is not int or generation < 0:
-            raise RuntimeError('官服 PC Frida 缺少事件世代')
+            raise RuntimeError('官服 PC 事件来源 缺少事件世代')
         frame = result.get('native_frame', result.get('frame'))
         fixed_time = result.get('native_fixed_time')
         if (not isinstance(fixed_time, str) or not fixed_time.isdecimal()
                 or len(fixed_time) > 20 or int(fixed_time) > 0x7FFFFFFFFFFFFFFF):
-            raise RuntimeError('官服 PC Frida 缺少精确逻辑时钟')
+            raise RuntimeError('官服 PC 事件来源 缺少精确逻辑时钟')
         game_time = int(fixed_time) / (1 << 32)
         if operation == 'mark' and (result.get('frame') != frame or result.get('game_time') != game_time):
-            raise RuntimeError('官服 PC Frida 标记与原始逻辑时钟不一致')
+            raise RuntimeError('官服 PC 事件来源 标记与原始逻辑时钟不一致')
         from collector import ProcessChanged, SampleUnavailable, UnsupportedVersion
         try:
             binding = self.collector.observer_binding(
@@ -598,7 +610,7 @@ class NativePcBinding:
         session = binding['native_session']
         previous = self.generation_sessions.get(generation)
         if previous is not None and previous != session:
-            raise RuntimeError('官服 PC Frida 事件世代与已确认战局不一致')
+            raise RuntimeError('官服 PC 事件来源 事件世代与已确认战局不一致')
         previous_generation = self.session_generations.get(session)
         if previous_generation is not None and previous_generation != generation:
             raise RuntimeError('官服 PC 原生战局未能区分已观察到的新事件世代，当前事件覆盖已中断')

@@ -100,6 +100,7 @@ public partial class MainWindow : Window
     private bool SamplingRejected=>State.Get("sampling_rejection").Text("code")=="mapping_unavailable" &&
         (State.Text("status") is "sampling_rejected" or "stale") && State.Text("error").Length==0 && !PcReadiness.IsError;
     private string SelectedConnectionPlatform=>(ConnectionPlatform.SelectedItem as ComboBoxItem)?.Tag as string ?? "mumu";
+    private string SelectedNativeEventBackend=>(NativeEventBackend.SelectedItem as ComboBoxItem)?.Tag as string ?? "frida";
     private readonly ConnectionDetection connectionDetection = new();
     private string HistorySelectionId=>cachedHistorySelection?.Id ?? State.Get("history_selected").Text("battle_id");
     private JsonElement HistoryRecoveryConfig=>State.Get("history_selected").Get("view").Get("config");
@@ -168,7 +169,8 @@ public partial class MainWindow : Window
                 await VerifyPortableUpdateAsync(fixture);
                 return;
             }
-            if (App.InstalledVersion is { } version && !App.BridgeArguments.Contains("--offline"))
+            if (App.InstalledVersion is { } version && !App.BridgeArguments.Contains("--offline")
+                && !App.CooperativeEventPackage)
                 _ = CheckForUpdates(ReleaseUpdates.Public, version, manual: false);
             if(App.Verification!=null) await Verify(App.Verification);
         }
@@ -205,6 +207,7 @@ public partial class MainWindow : Window
         Screenshot.Window(this, Path.Combine(App.StateDirectory, "wpf-internal-capture.png"));
         await Navigate("history");
         Screenshot.Window(this, Path.Combine(App.StateDirectory, "wpf-internal-history.png"));
+        await VerifyPcBackendSettingsAsync();
         File.WriteAllText(Path.Combine(App.StateDirectory, "wpf-internal-capture.json"), JsonSerializer.Serialize(new
         {
             scenario = autochess ? "autochess" : "normal",
@@ -216,6 +219,27 @@ public partial class MainWindow : Window
             python = bridge.Hello.Text("python"),
             runtime = Environment.Version.ToString(),
         }));
+    }
+
+    private async Task VerifyPcBackendSettingsAsync()
+    {
+        await Navigate("settings");
+        ConnectionPlatform.SelectedIndex = 1;
+        NativeEventBackend.SelectedIndex = 0;
+        if (NativeEventNotes.Visibility != Visibility.Visible || FridaEventNotes.Visibility != Visibility.Visible
+            || NativeEventFeedFields.Visibility != Visibility.Collapsed)
+            throw new IOException("PC 的 Frida 后端设置显示错误。");
+
+        NativeEventBackend.SelectedIndex = 1;
+        if (FridaEventNotes.Visibility != Visibility.Collapsed || NativeEventFeedFields.Visibility != Visibility.Visible)
+            throw new IOException("PC 的自研后端设置显示错误。");
+        if (EffectiveConnectionConfig.Text("native_pc_event_backend") == "native" && PcReadiness.Active)
+            throw new IOException("自研后端显示了 Frida 的启动状态。");
+        Screenshot.Window(this, Path.Combine(App.StateDirectory, "wpf-internal-settings.png"));
+
+        ConnectionPlatform.SelectedIndex = 0;
+        if (NativeEventNotes.Visibility != Visibility.Collapsed)
+            throw new IOException("MuMu 显示了只供 PC 使用的事件选项。");
     }
     private async Task Poll()
     {
@@ -401,6 +425,7 @@ public partial class MainWindow : Window
         UpdateConnectionFromWorker(diag);
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
             SamplingRejected ? state.Text("status_text") : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text"),state.Text("event_text"),
+            UsingNativePc ? "已应用后端 · "+(EffectiveConnectionConfig.Text("native_pc_event_backend")=="native" ? "自研" : "Frida") : "",
             UsingNativePc ? state.Get("native_pc_bootstrap").Text("error") : "",
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected"),
             diag.Text("message"),diag.Text("error"),diag.Text("code")
@@ -622,6 +647,8 @@ public partial class MainWindow : Window
         var config=State.Get("connection_config");AutoDetect.IsChecked=config.Bool("auto_detect");
         AdbPath.Text=config.Text("adb_path");Serial.Text=config.Text("serial");EventsEnabled.IsChecked=State.Get("layout").Bool("event_observation");
         NativeGameRoot.Text=config.Text("native_game_root");
+        NativeEventBackend.SelectedIndex=config.Text("native_pc_event_backend")=="native" ? 1 : 0;
+        NativeEventFeed.Text=config.Text("native_pc_event_feed");
         ConnectionPlatform.SelectedIndex=config.Text("platform")=="native_pc" ? 1 : 0;
         UpdateConnectionForm();
     }
@@ -633,6 +660,11 @@ public partial class MainWindow : Window
     {
         ConnectionFormChanged();
     }
+    private void NativeEventBackendChanged(object sender,SelectionChangedEventArgs e)
+    {
+        if (FridaEventNotes is not null && NativeEventFeedFields is not null)
+            UpdateConnectionForm();
+    }
     private void InvalidateConnectionDetection()
     {
         connectionDetection.Invalidate();
@@ -642,26 +674,37 @@ public partial class MainWindow : Window
     {
         InvalidateConnectionDetection();
         if(MumuConnectionFields is null || NativeConnectionFields is null || EventsEnabled is null
-           || MumuEventNotes is null || NativeEventNotes is null) return;
+           || MumuEventNotes is null || NativeEventNotes is null || FridaEventNotes is null
+           || NativeEventFeedFields is null) return;
         UpdateConnectionForm();
     }
     private void UpdateConnectionForm()
     {
         bool native=SelectedConnectionPlatform=="native_pc";
+        bool useFrida=SelectedNativeEventBackend=="frida";
         MumuConnectionFields.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
         NativeConnectionFields.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
         MumuEventNotes.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
         NativeEventNotes.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
+        FridaEventNotes.Visibility=useFrida ? Visibility.Visible : Visibility.Collapsed;
+        NativeEventFeedFields.Visibility=useFrida ? Visibility.Collapsed : Visibility.Visible;
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
-            or "--frida-remote" or "--platform" or "--native-game-root")
+            or "--frida-remote" or "--platform" or "--native-game-root" or "--native-pc-event-backend" or "--native-pc-event-feed")
             ? "本次启动含命令行覆盖；表单编辑长期设置，应用后以此处为准。"
-            : native ? "应用后请按当前状态操作；等待显示「监听已就绪」后再启动游戏。已连接时无需再次重启。" : "唯一可用实例会自动填入；多实例时请从列表中选择。";
+            : native ? "" : "唯一可用实例会自动填入；多实例时请从列表中选择。";
     }
     private void ChooseNativeGameRoot(object sender,RoutedEventArgs e)
     {
         var dialog=new Microsoft.Win32.OpenFolderDialog {Title="选择明日方舟 PC 游戏目录"};
         if(Directory.Exists(NativeGameRoot.Text)) dialog.InitialDirectory=NativeGameRoot.Text;
         if(dialog.ShowDialog(this)==true) NativeGameRoot.Text=dialog.FolderName;
+    }
+    private void ChooseNativeEventFeed(object sender,RoutedEventArgs e)
+    {
+        var dialog=new Microsoft.Win32.OpenFileDialog {Title="选择事件数据文件", Filter="JSON Lines (*.jsonl)|*.jsonl"};
+        if(File.Exists(NativeEventFeed.Text) && Path.GetDirectoryName(NativeEventFeed.Text) is string directory)
+            dialog.InitialDirectory=directory;
+        if(dialog.ShowDialog(this)==true) NativeEventFeed.Text=dialog.FileName;
     }
     private string ConfiguredAdbPath => adbPathDetected ? "" : AdbPath.Text.Trim();
     private string ConfiguredSerial => serialDetected && AutoDetect.IsChecked==true ? "" : Serial.Text.Trim();
@@ -1502,6 +1545,8 @@ public partial class MainWindow : Window
         }
         var config=new{adb_path=ConfiguredAdbPath,serial=ConfiguredSerial,auto_detect=AutoDetect.IsChecked==true,
             platform=SelectedConnectionPlatform,
+            native_pc_event_backend=SelectedNativeEventBackend,
+            native_pc_event_feed=string.IsNullOrWhiteSpace(NativeEventFeed.Text) ? null : NativeEventFeed.Text.Trim(),
             native_game_root=string.IsNullOrWhiteSpace(NativeGameRoot.Text) ? null : NativeGameRoot.Text.Trim()};
         await Command("connection_apply",new(){["config"]=config,["events"]=EventsEnabled.IsChecked==true});
     }

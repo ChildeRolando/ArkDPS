@@ -13,6 +13,9 @@
     <ApplicationManifest>app.internal-events.manifest</ApplicationManifest>
     <DefineConstants>$(DefineConstants);ARKDPS_INTERNAL_EVENT_CANDIDATE</DefineConstants>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(ArkDpsCooperativeEventCandidate)' == 'true'">
+    <DefineConstants>$(DefineConstants);ARKDPS_COOPERATIVE_EVENT_CANDIDATE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/LoneTrail/*.png" />
     <Resource Include="Assets/People/**/*.png;Assets/People/**/*.jpg" />

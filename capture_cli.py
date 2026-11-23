@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from battle_history import BattleHistory
 from event_capture import CaptureRetry
 from log_context import LogContext
 from native_pc.event_source import PcEventSource
+from native_pc.internal_entry import portable_manifest
 
 
 def _connect_pc_after_bootstrap(session, bootstrap, *, timeout, cancelled):
@@ -89,14 +91,19 @@ def write_json(path, value):
 def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_factory=None):
     root = Path(__file__).resolve().parent
     frozen = getattr(sys, 'frozen', False)
-    if frozen:
+    manifest = portable_manifest(root)
+    if manifest is not None:
+        head = manifest.get('head')
+        if not isinstance(head, str) or not re.fullmatch(r'[a-f0-9]{40}', head):
+            raise RuntimeError('invalid portable candidate source identity')
+    elif frozen:
         from release_identity import load_manifest
         head = load_manifest(root, verify=True)['head']
     else:
         head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     if args.expect_head and head != args.expect_head:
         raise RuntimeError(f'candidate mismatch: expected {args.expect_head}, got {head}')
-    if args.expect_head and not frozen:
+    if args.expect_head and manifest is None and not frozen:
         dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=normal'],
                                         cwd=root, text=True).strip()
         if dirty:
@@ -111,6 +118,8 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
     platform = getattr(args, 'platform', 'mumu')
     events_enabled = args.frida_remote is None if platform == 'native_pc' else bool(args.frida_remote)
     framework_root = getattr(args, 'arkframework_root', None)
+    pc_backend = getattr(args, 'native_pc_event_backend', None) or 'frida'
+    pc_feed = getattr(args, 'native_pc_event_feed', None)
     log_context = LogContext(root / 'runtime', root=root, build_head=head, connection_override={
         'platform': platform, 'adb_path': args.adb, 'serial': args.serial,
         'native_game_root': getattr(args, 'native_game_root', None), 'auto_detect': False,
@@ -122,7 +131,7 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
                 'log_header': log_context.header('foreground_capture', debug_mode=True)['data']}
     if platform == 'native_pc':
         metadata.update(platform=platform, native_game_root=args.native_game_root,
-                        frida_remote=None, event_observation=events_enabled)
+                        frida_remote=None, event_observation=events_enabled, native_pc_event_backend=pc_backend)
         if framework_root is not None:
             metadata['arkframework_root'] = str(framework_root)
     if args.maa_job:
@@ -149,7 +158,7 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
         audit('metadata', metadata)
         session_options = dict(frida_remote=args.frida_remote, audit=audit)
         regeneration = None
-        pc_source = PcEventSource(root / 'runtime', observer_factory=native_pc_observer_factory)
+        pc_source = PcEventSource(root / 'runtime', observer_factory=native_pc_observer_factory, collector_root=root)
         if platform == 'native_pc':
             from native_pc_collector import NativePcCollector
             collector = NativePcCollector(args.native_game_root,
@@ -179,7 +188,7 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
 
             if platform == 'native_pc':
                 provider = pc_source.select(enabled=events_enabled, game_root=args.native_game_root,
-                                            on_start_error=startup_failed)
+                                            backend=pc_backend, feed_path=pc_feed, on_start_error=startup_failed)
                 if provider is not None:
                     session_options['observer_factory'] = provider
             session = session_factory(args.adb, args.serial, **session_options)

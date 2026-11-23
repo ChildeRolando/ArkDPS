@@ -16,7 +16,8 @@ internal readonly record struct NativePcReadiness(string Phase, string Label, bo
     {
         var config = state.Get("effective_connection_config");
         if (config.ValueKind != JsonValueKind.Object) config = state.Get("connection_config");
-        if (config.Text("platform") != "native_pc") return default;
+        if (config.Text("platform") != "native_pc" || config.Text("native_pc_event_backend") == "native")
+            return default;
         string observer = state.Text("observer_status");
         if (observer == "disabled" || state.Get("layout").Get("event_observation").ValueKind == JsonValueKind.False)
             return default;

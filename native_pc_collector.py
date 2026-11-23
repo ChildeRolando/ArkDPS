@@ -187,15 +187,15 @@ class NativePcCollector:
         if (type(native_process_pid) is not int or native_process_pid != process.pid
                 or not isinstance(native_identity, dict)
                 or set(native_identity) != {'controller', 'native', 'logger', 'stats', 'level'}):
-            raise SnapshotGap('官服 PC Frida 的进程或战局根无效。')
+            raise SnapshotGap('官服 PC 事件来源 的进程或战局根无效。')
         roots = []
         for key in ('controller', 'native', 'logger', 'stats', 'level'):
             value = native_identity[key]
             if not isinstance(value, str) or re.fullmatch(r'0x[0-9a-fA-F]{1,16}', value) is None:
-                raise SnapshotGap('官服 PC Frida 的战局根格式无效。')
+                raise SnapshotGap('官服 PC 事件来源 的战局根格式无效。')
             address = int(value, 16)
             if not 0x10000 <= address <= 0x00007FFFFFFFFFFF or address % 8:
-                raise SnapshotGap('官服 PC Frida 的战局根范围无效。')
+                raise SnapshotGap('官服 PC 事件来源 的战局根范围无效。')
             roots.append(address)
         if (type(frame) is not int or not 0 <= frame <= 0xFFFFFFFF
                 or type(game_time) not in (int, float) or not math.isfinite(game_time)
@@ -205,7 +205,7 @@ class NativePcCollector:
                 or int(native_fixed_time) > 0x7FFFFFFFFFFFFFFF
                 or int(native_fixed_time) / (1 << 32) != game_time
                 or not isinstance(native_stage_id, str) or not native_stage_id):
-            raise SnapshotGap('官服 PC Frida 的原始逻辑时钟或关卡无效。')
+            raise SnapshotGap('官服 PC 事件来源 的原始逻辑时钟或关卡无效。')
         identity = tuple(roots)
         serial = process.battle_serial_for(identity, frame, int(native_fixed_time), native_stage_id)
         words = (*identity, serial)

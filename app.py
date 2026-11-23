@@ -16,7 +16,7 @@ from pathlib import Path
 
 from collector import DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from collection_session import DEFAULT_FRIDA_REMOTE
-from connection import ConnectionConfigStore
+from connection import PC_EVENT_BACKENDS, ConnectionConfigStore, native_event_feed_path
 
 WPF_LAUNCH = 'python app.py（或 start.cmd）启动 WPF'
 WPF_ACCEPTANCE = 'python acceptance/verify_wpf.py'
@@ -74,6 +74,10 @@ def parser_for():
                         help='select the game platform for this launch')
     parser.add_argument('--native-game-root',
                         help='set the directory containing the official PC client Arknights.exe')
+    parser.add_argument('--native-pc-event-backend', choices=PC_EVENT_BACKENDS,
+                        help='override the saved PC event kernel for this launch')
+    parser.add_argument('--native-pc-event-feed', type=native_event_feed_path,
+                        help='absolute path to the cooperative live JSONL input for the native PC kernel')
     parser.add_argument('--arkframework-root', type=Path,
                         help='官服 PC 采集时从此 ArkFramework 目录单独记录 BetterBattle 的逐笔持续回复')
     parser.add_argument('--capture-seconds', type=float, default=0)
@@ -122,6 +126,7 @@ def main(*, native_pc_observer_factory=None):
     if args.internal_capture is not None:
         if (any(value is not None for value in (args.adb, args.serial, args.platform,
                 args.native_game_root, args.arkframework_root, args.frida_remote, args.output_dir,
+                args.native_pc_event_backend, args.native_pc_event_feed,
                 args.stop_file, args.expect_head, args.maa_job, args.maa_log, args.stage))
                 or args.capture_seconds or args.require_progress or args.require_events):
             parser.error('--internal-capture cannot be combined with live capture options')
@@ -138,6 +143,10 @@ def main(*, native_pc_observer_factory=None):
         return 0 if result.get('status') == 'ok' else 2
     if args.state_dir is not None:
         parser.error('--state-dir requires --internal-capture')
+    if args.native_pc_event_backend is not None or args.native_pc_event_feed is not None:
+        if args.platform == 'mumu' or args.frida_remote:
+            parser.error('PC 事件内核参数只支持 PC 平台')
+        args.platform = 'native_pc'
     if args.arkframework_root is not None:
         if args.platform == 'mumu' or args.frida_remote:
             parser.error('--arkframework-root 仅用于官服 PC')
@@ -157,6 +166,8 @@ def main(*, native_pc_observer_factory=None):
     args.platform = args.platform or ('native_pc' if args.native_game_root else saved.platform)
     capture_options = {}
     if args.platform == 'native_pc':
+        args.native_pc_event_backend = args.native_pc_event_backend or saved.native_pc_event_backend
+        args.native_pc_event_feed = args.native_pc_event_feed or saved.native_pc_event_feed
         args.native_game_root = args.native_game_root or saved.native_game_root
         if not args.native_game_root:
             parser.error('官服 PC 采集需要 --native-game-root，或已保存的游戏目录')

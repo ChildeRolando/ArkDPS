@@ -80,8 +80,12 @@ def launch(args=None):
     runtime.mkdir(exist_ok=True)
     log = runtime / 'wpf-build.log'
     try:
-        sources = [p for p in PROJECT.parent.iterdir() if p.suffix in ('.cs', '.xaml', '.csproj', '.manifest')]
-        if not EXECUTABLE.exists() or any(p.stat().st_mtime > EXECUTABLE.stat().st_mtime for p in sources):
+        from native_pc.internal_entry import portable_manifest
+        packaged = portable_manifest(ROOT) is not None
+        sources = [] if packaged else [
+            p for p in PROJECT.parent.iterdir() if p.suffix in ('.cs', '.xaml', '.csproj', '.manifest')]
+        if not packaged and (not EXECUTABLE.exists()
+                             or any(p.stat().st_mtime > EXECUTABLE.stat().st_mtime for p in sources)):
             dotnet = os.environ.get('ARKDPS_DOTNET') or shutil.which('dotnet')
             if not dotnet:
                 raise RuntimeError('首次从源码启动需要 .NET 10 SDK；安装后重新运行 start.cmd。')
@@ -104,9 +108,11 @@ def launch(args=None):
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if result.returncode:
                 raise RuntimeError(f'WPF 构建失败（退出码 {result.returncode}）；详情见 runtime/wpf-build.log。')
-        command = [str(EXECUTABLE), '--repo', str(ROOT), '--python', worker_python(sys.executable)]
+        command = ([str(ROOT.parent / 'ArkDPS.Desktop.exe')] if packaged else
+                   [str(EXECUTABLE), '--repo', str(ROOT), '--python', worker_python(sys.executable)])
         if args is not None:
-            for name in ('adb', 'serial', 'platform', 'native_game_root'):
+            for name in ('adb', 'serial', 'platform', 'native_game_root', 'native_pc_event_backend',
+                         'native_pc_event_feed'):
                 value = getattr(args, name, None)
                 if value:
                     command += ['--' + name.replace('_', '-'), value]

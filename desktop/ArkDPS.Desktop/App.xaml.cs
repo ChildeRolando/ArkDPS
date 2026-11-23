@@ -24,6 +24,11 @@ public partial class App : System.Windows.Application
 #else
     private static readonly bool InternalEventPackage = false;
 #endif
+#if ARKDPS_COOPERATIVE_EVENT_CANDIDATE
+    internal static readonly bool CooperativeEventPackage = true;
+#else
+    internal static readonly bool CooperativeEventPackage = false;
+#endif
     internal static string[] LaunchArguments = [];
     internal static readonly List<string> BridgeArguments = new();
     internal static void ClearConnectionOverrides()
@@ -31,7 +36,8 @@ public partial class App : System.Windows.Application
         for (int index = 0; index < BridgeArguments.Count;)
         {
             string argument = BridgeArguments[index];
-            if (argument is "--adb" or "--serial" or "--platform" or "--native-game-root")
+            if (argument is "--adb" or "--serial" or "--platform" or "--native-game-root"
+                or "--native-pc-event-backend" or "--native-pc-event-feed")
                 BridgeArguments.RemoveRange(index, Math.Min(2, BridgeArguments.Count - index));
             else index++;
         }
@@ -47,7 +53,8 @@ public partial class App : System.Windows.Application
             bool internalRequested = arguments.Contains("--internal-capture");
             if ((InternalEventPackage || VerifyInternalCapture) && !internalRequested)
                 throw new ArgumentException("内部事件候选需要 --offline --internal-capture 和独立的 --state-dir。");
-            var host = InternalEventPackage || internalRequested ? null : PortableUpdateHost.Find(AppContext.BaseDirectory);
+            var host = InternalEventPackage || internalRequested || CooperativeEventPackage
+                ? null : PortableUpdateHost.Find(AppContext.BaseDirectory);
             if (arguments.Length == 2 && arguments[0] == PortableUpdateHost.ApplyOption)
             {
                 if (host == null) throw new IOException("找不到 ArkDPS 便携目录。");
@@ -89,6 +96,7 @@ public partial class App : System.Windows.Application
                         BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--fixture": case "--adb": case "--serial": case "--frida-remote":
                     case "--platform": case "--native-game-root":
+                    case "--native-pc-event-backend": case "--native-pc-event-feed":
                         BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--arkframework-root":
                         BridgeArguments.Add(arg); BridgeArguments.Add(Path.GetFullPath(arguments[++i])); break;
@@ -175,6 +183,9 @@ public partial class App : System.Windows.Application
                 if (InternalEventPackage != (manifest.RootElement.Get("internal_event_backend").ValueKind
                                              == System.Text.Json.JsonValueKind.Object))
                     throw new IOException("桌面程序与内部候选清单不匹配。");
+                if (CooperativeEventPackage != (manifest.RootElement.Get("native_pc_event_backend").ValueKind
+                                                == System.Text.Json.JsonValueKind.Object))
+                    throw new IOException("桌面程序与 PC 事件候选清单不匹配。");
                 InstalledVersion = version;
                 if (packaged && manifest.RootElement.Number("update_protocol") == 1 &&
                     manifest.RootElement.Text("frida").Length > 0 &&
@@ -195,7 +206,7 @@ public partial class App : System.Windows.Application
             }
             window.Show();
             if (InstalledVersion is ReleaseVersion installed)
-                window.InitializeReleaseUpdates(installed, offline);
+                window.InitializeReleaseUpdates(installed, offline || CooperativeEventPackage);
         }
         catch (Exception ex)
         {

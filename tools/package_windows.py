@@ -94,8 +94,13 @@ def assert_no_tk_files(names):
         raise RuntimeError('Sealed Tk artifacts in package: ' + ', '.join(bad))
 
 
-def archive_name(version, with_events, *, internal_backend=False):
-    suffix = '-internal-events' if internal_backend else ('' if with_events else '-snapshot')
+def archive_name(version, with_events, *, internal_backend=False, with_native_events=False):
+    if internal_backend:
+        suffix = '-internal-events'
+    elif with_native_events:
+        suffix = '-native-events'
+    else:
+        suffix = '' if with_events else '-snapshot'
     return f'ArkDPS-{version}-win-x64{suffix}.zip'
 
 
@@ -133,7 +138,7 @@ def verify_internal_candidate(bundle, inputs, environment, *, cases=None):
                 or desktop.get('event_status') != 'finished' or desktop.get('history_count') != expected_archives
                 or desktop.get('players') != expected_players):
             raise RuntimeError(f'Controlled CLI/WPF archived statistics or projection differ for {name}')
-        screenshots = ('wpf-internal-capture.png', 'wpf-internal-history.png')
+        screenshots = ('wpf-internal-capture.png', 'wpf-internal-history.png', 'wpf-internal-settings.png')
         receipts[name] = dict(
             fixture_sha256=report['fixture_sha256'],
             statistics_sha256=hashlib.sha256('\n'.join(cli_archive).encode('utf-8')).hexdigest(),
@@ -160,20 +165,67 @@ def internal_archives(state_dir, battle_ids):
     ) for record in records)
 
 
+def verify_cooperative_candidate(bundle, inputs, environment):
+    python = str(bundle / 'python/python.exe')
+    collector = bundle / 'collector'
+    cli = subprocess.run([python, '-I', '-B', str(collector / 'app.py'), '--help'], cwd=bundle,
+                         env=environment, check=True, capture_output=True, encoding='utf-8', timeout=10)
+    if any(flag not in cli.stdout for flag in ('--native-pc-event-backend', '--native-pc-event-feed')):
+        raise RuntimeError('Cooperative candidate CLI is missing its backend options')
+    identity_check = (
+        'from pathlib import Path; from native_pc.internal_entry import live_native_host; '
+        'from native_pc.internal_event_source import InternalEventProbe\n'
+        'probe = InternalEventProbe(live_native_host(Path.cwd() / "collector"))\n'
+        'try:\n'
+        '    probe.start()\n'
+        '    import json; print(json.dumps(probe.probe_modes["probe_source"]))\n'
+        'finally:\n'
+        '    probe.stop()'
+    )
+    host = subprocess.run([python, '-I', '-B', '-c', identity_check], cwd=bundle, env=environment,
+                          check=True, capture_output=True, encoding='utf-8', timeout=20)
+    identity = json.loads(host.stdout)
+    feed = inputs / 'cooperative-smoke.jsonl'
+    feed.touch()
+    state_dir = inputs / 'cooperative-smoke-state'
+    commands = ('hello', 'snapshot', 'quit')
+    request = ''.join(json.dumps(dict(version=1, id=index, op=op)) + '\n'
+                      for index, op in enumerate(commands, start=1))
+    worker = subprocess.run([
+        python, '-I', '-B', '-X', 'utf8', str(collector / 'desktop_bridge.py'),
+        '--offline', '--platform', 'native_pc', '--state-dir', str(state_dir),
+        '--native-pc-event-backend', 'native', '--native-pc-event-feed', str(feed),
+    ], cwd=bundle, env=environment, input=request, check=True, capture_output=True, encoding='utf-8', timeout=30)
+    replies = [json.loads(line) for line in worker.stdout.splitlines()]
+    if [(reply['kind'], reply['ok']) for reply in replies] != [('hello', True), ('snapshot', True), ('bye', True)]:
+        raise RuntimeError('Unexpected cooperative candidate worker replies')
+    state = replies[1]['state']
+    effective = state['effective_connection_config']
+    saved = state['connection_config']
+    if (replies[0]['result']['frida'] != FRIDA_VERSION or saved['native_pc_event_backend'] != 'frida'
+            or effective['native_pc_event_backend'] != 'native' or Path(effective['native_pc_event_feed']) != feed):
+        raise RuntimeError('Cooperative candidate lost backend selection or changed the Frida default')
+    return dict(runtime_source=identity, frida=FRIDA_VERSION, saved_backend='frida',
+                effective_backend='native', packaged_cli_options=True, game_connected=False)
+
+
 def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
           frida_gadget_archive=None, frida_server=None, frida_server_license=None, with_events=True,
-          internal_backend=False, internal_event_cache=None):
+          internal_backend=False, with_native_events=False, internal_event_cache=None):
     if not RELEASE_VERSION.fullmatch(version) or any(
             int(part) > 2147483647 for part in re.findall(r'[0-9]+', version)):
         raise ValueError('Use a version such as 1.0.0 or 1.0.0-rc.1')
     head = candidate_head(ROOT)
     if internal_backend and with_events:
         raise ValueError('Internal event candidate must be built without Frida components')
+    if with_native_events and not with_events:
+        raise ValueError('The PC backend candidate requires both native and Frida components')
+    with_host = internal_backend or with_native_events
     output.mkdir(parents=True, exist_ok=True)
     inputs = Path(tempfile.mkdtemp(prefix='inputs-', dir=output))
     python_zip = pinned_input(python_zip, destination=inputs / 'python.zip',
                               url=PYTHON_URL, sha256=PYTHON_SHA256)
-    if internal_backend:
+    if with_host:
         from native_pc.internal_event_host import build as host_build
         from native_pc.internal_event_source import PROTOCOL_VERSION, SOURCE_PROVIDER, SOURCE_VERSION
         internal_event_host = host_build.build(
@@ -196,7 +248,11 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     dotnet_executable = os.environ.get('ARKDPS_DOTNET') or shutil.which('dotnet')
     if not dotnet_executable:
         raise RuntimeError('.NET 10 SDK required; set ARKDPS_DOTNET for a task-local SDK')
-    desktop_variant = ['-p:ArkDpsInternalEventCandidate=true'] if internal_backend else []
+    desktop_variant = []
+    if internal_backend:
+        desktop_variant.append('-p:ArkDpsInternalEventCandidate=true')
+    elif with_native_events:
+        desktop_variant.append('-p:ArkDpsCooperativeEventCandidate=true')
     subprocess.run([dotnet_executable, 'publish', str(ROOT / 'desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj'),
         '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
         '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=true',
@@ -220,17 +276,21 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         if name == 'native_pc':
             ignored += ('arkframework', 'internal_event_host')
             if not internal_backend:
-                ignored += ('internal_event_source.py', 'internal_capture.py')
+                ignored += ('internal_capture.py',)
+            if not with_host:
+                ignored += ('internal_event_source.py',)
         if name == 'vendor':
             # Only the full variant receives a verified Gadget. A local source
             # cache must never leak it into a snapshot-only archive.
             ignored += ('frida',)
         shutil.copytree(ROOT / name, collector / name, ignore=shutil.ignore_patterns(*ignored))
-    if internal_backend:
+    if with_host:
         host_path = bundle / HOST_PATH
         host_path.parent.mkdir()
         shutil.copy2(internal_event_host, host_path)
         shutil.copy2(ROOT / 'app.py', collector / 'app.py')
+    if with_native_events:
+        shutil.copy2(ROOT / 'desktop_launcher.py', collector / 'desktop_launcher.py')
     if with_events:
         component_dir = collector / 'vendor' / 'frida'
         stage_gadget(component_dir / FRIDA_VERSION, source_archive=frida_gadget_archive)
@@ -239,7 +299,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     notices.mkdir()
     for name in ('LICENSE', 'THIRD_PARTY.md'):
         shutil.copy2(ROOT / name, notices / name)
-    if internal_backend:
+    if with_host:
         license_file = internal_event_host.with_name('nlohmann-json-LICENSE.MIT')
         shutil.copy2(license_file, notices / license_file.name)
     if with_events:
@@ -262,10 +322,17 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         'PC 事件组件随游戏保留到正常退出，仅通过本机认证端点连接。关闭观察者可只采累计。\n'
         if with_events else
         '本包仅包含累计快照。官服 PC 请填写 Arknights.exe 所在目录，并关闭「启用观察者」。\n')
+    if with_native_events:
+        pc_instructions = (
+            '官服 PC 请填写 Arknights.exe 所在目录，然后选择「PC 事件后端」。\n'
+            'Frida：先启动 ArkDPS，按连接提示启动或重启游戏。\n'
+            '自研：指定合作来源写入的 JSONL 文件。事件不可用时继续显示累计快照。\n'
+            '无界面采集参数：.\\python\\python.exe -I -B .\\collector\\app.py --help\n'
+        )
     update_instructions = (
         '程序启动后会在后台检查并下载更新。也可从设置页手动检查。\n'
         '下载完成后，在设置页选择「重启并更新」。软件会保留设置和战绩。\n\n'
-    ) if with_events else ''
+    ) if with_events and not with_native_events else ''
     observer_instructions = (
         '开启观察者时，ArkDPS 会为选中的受支持 MuMu 实例准备并启动包内 Frida 服务。\n'
         if with_events else '此包仅提供伤害和治疗快照。\n'
@@ -306,12 +373,15 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         native_pc_gadget=gadget_metadata() if with_events else None,
         files={str(p.relative_to(bundle)).replace('\\','/'):digest(p) for p in sorted(bundle.rglob('*')) if p.is_file()})
     if with_events:
-        manifest['update_protocol'] = UPDATE_PROTOCOL
+        if not with_native_events:
+            manifest['update_protocol'] = UPDATE_PROTOCOL
         manifest['frida_server'] = dict(path=FRIDA_SERVER_PATH, source=FRIDA_SERVER_URL, sha256=FRIDA_SERVER_SHA256)
-    if internal_backend:
-        manifest['internal_event_backend'] = dict(
+    if with_host:
+        backend_key = 'internal_event_backend' if internal_backend else 'native_pc_event_backend'
+        manifest[backend_key] = dict(
             protocol=PROTOCOL_VERSION, provider=SOURCE_PROVIDER, source_version=SOURCE_VERSION,
-            scope='controlled-replay', path=HOST_PATH, sha256=manifest['files'][HOST_PATH],
+            scope='controlled-replay' if internal_backend else 'cooperative-live',
+            path=HOST_PATH, sha256=manifest['files'][HOST_PATH],
             cpp_source_sha256=digest(host_build.SOURCE / 'main.cpp'), json_header_sha256=host_build.HEADER[1],
         )
     assert_no_tk_files(manifest['files'])
@@ -327,14 +397,15 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         script_args.append(str(server_payload))
     subprocess.run([str(bundle/'python/python.exe'), '-I', '-B', '-c', script, *script_args],
                    cwd=ROOT, env=environment, check=True)
-    archive = output / archive_name(version, with_events, internal_backend=internal_backend)
+    archive = output / archive_name(version, with_events, internal_backend=internal_backend,
+                                   with_native_events=with_native_events)
     staged_archive = inputs / archive.name
     with zipfile.ZipFile(staged_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
         for path in sorted(bundle.rglob('*')):
             if path.is_file():
                 stream.write(path,str(Path('ArkDPS')/path.relative_to(bundle)))
     sha256 = digest(staged_archive)
-    if internal_backend:
+    if with_host:
         extracted = inputs / 'clean-extract'
         unpack(staged_archive, extracted)
         clean_bundle = extracted / 'ArkDPS'
@@ -342,10 +413,11 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         files = {path.relative_to(clean_bundle).as_posix(): digest(path)
                  for path in clean_bundle.rglob('*') if path.is_file() and path != clean_manifest}
         if json.loads(clean_manifest.read_text('utf-8')) != manifest or files != manifest['files']:
-            raise RuntimeError('Internal candidate ZIP does not match its release manifest')
-        receipts = verify_internal_candidate(clean_bundle, inputs, environment)
+            raise RuntimeError('PC event candidate ZIP does not match its release manifest')
+        receipts = (verify_internal_candidate(clean_bundle, inputs, environment) if internal_backend else
+                    {'cooperative': verify_cooperative_candidate(clean_bundle, inputs, environment)})
         evidence = dict(head=head, archive=archive.name, sha256=sha256,
-                        backend=manifest['internal_event_backend'], scenarios=receipts,
+                        backend=manifest[backend_key], scenarios=receipts,
                         raw_evidence_directory=inputs.name)
         (output / (archive.name + '.acceptance.json')).write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
@@ -367,6 +439,7 @@ def main():
     variants = parser.add_mutually_exclusive_group()
     variants.add_argument('--without-events',action='store_true',help='explicit snapshot-only variant, never silent downgrade')
     variants.add_argument('--internal-events', action='store_true', help='build the separate controlled-data candidate')
+    variants.add_argument('--with-native-events', action='store_true', help='build the candidate with both PC event backends')
     parser.add_argument('--internal-event-cache', type=Path, help='reuse pinned nlohmann/json build dependencies')
     args=parser.parse_args()
     build(args.output.resolve(), version=args.version, python_zip=args.python_zip,
@@ -374,7 +447,8 @@ def main():
           frida_server=args.frida_server,
           frida_server_license=args.frida_server_license,
           with_events=not args.without_events and not args.internal_events,
-          internal_backend=args.internal_events, internal_event_cache=args.internal_event_cache)
+          internal_backend=args.internal_events, with_native_events=args.with_native_events,
+          internal_event_cache=args.internal_event_cache)
 
 
 if __name__=='__main__':

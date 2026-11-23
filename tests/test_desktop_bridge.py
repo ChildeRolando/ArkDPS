@@ -1830,8 +1830,8 @@ def test_native_connection_apply_keeps_mumu_preferences_and_replaces_cli_source(
     config = ConnectionConfig.from_dict(native)
     assert worker.requests == [(config, True), (config, True)]
     snapshot = replies[1]['state']
-    assert snapshot['connection_config'] == native
-    assert snapshot['effective_connection_config'] == native
+    assert snapshot['connection_config'] == config.to_dict()
+    assert snapshot['effective_connection_config'] == config.to_dict()
     assert DesktopState(tmp_path).connection == config
     assert DesktopState(tmp_path).layout.event_observation is True
 
