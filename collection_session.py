@@ -45,13 +45,14 @@ class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
                  collector=None, observer_factory=None, prepare_observer=None,
                  history=None, on_history=None, on_history_result=None, state_dir=None,
-                 autochess_enabled=None):
+                 autochess_enabled=None, debug_mode=None):
         self.collector = (collector if collector is not None else
                           Collector(adb, serial, log=log, state_dir=state_dir))
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
         self.prepare_observer = prepare_observer
         self.autochess_enabled = autochess_enabled
+        self.debug_mode = debug_mode
         self.observer: EventProbe | None = None
         self._pending_observers = []
         self.capture = None
@@ -247,7 +248,10 @@ class CollectionSession:
                     configure(self.autochess_enabled)
             timing = getattr(self.observer, 'set_request_timing_audit', None) if self._is_native_pc() else None
             if callable(timing):
-                timing(self.audit)
+                if self.debug_mode is None:
+                    timing(self.audit)
+                else:
+                    timing(self.audit, enabled=self.debug_mode)
             self.observer.start()
             self.event_status = 'ready'
             self.audit('observer_ready', {
@@ -256,7 +260,10 @@ class CollectionSession:
             return True
         except Exception as exc:
             self.event_status, self.event_error = 'failed', str(exc)
-            failure = {'reason': str(exc)}
+            failure = {'reason': str(exc), 'error_type': type(exc).__name__}
+            code = getattr(exc, 'code', None)
+            if type(code) in (str, int):
+                failure['code'] = code
             script_error = getattr(self.observer, 'script_error', None)
             if isinstance(script_error, dict) and script_error:
                 failure['script_error'] = dict(script_error)
@@ -280,7 +287,7 @@ class CollectionSession:
                 pending.stop()
             except BaseException as cleanup:
                 self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
-                self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+                self.audit('observer_cleanup_error', {'reason': str(cleanup), 'error_type': type(cleanup).__name__})
                 if not isinstance(cleanup, Exception):
                     raise
             else:
@@ -346,13 +353,14 @@ class CollectionSession:
                       else self.capture.sample())
         except StreamGap as exc:
             self.event_status, self.event_error = 'gap', str(exc)
-            self.audit('event_gap', {'reason': str(exc), 'statistics': self.capture.adapter.result()})
+            self.audit('event_gap', {'reason': str(exc), 'error_type': type(exc).__name__,
+                                     'statistics': self.capture.adapter.result()})
             if self.observer is not None:
                 try:
                     self.observer.stop()
                 except Exception as cleanup:
                     self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
-                    self.audit('observer_cleanup_error', {'reason': str(cleanup)})
+                    self.audit('observer_cleanup_error', {'reason': str(cleanup), 'error_type': type(cleanup).__name__})
             result = self.capture.snapshot()
         sample = dict(self.capture.last_sample)
         if sample.get('state') == 3 and self.capture.adapter.statistics.end_time is None:

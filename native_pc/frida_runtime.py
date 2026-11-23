@@ -7,11 +7,13 @@ the shared MuMu event protocol and own their scripts and client sessions.
 import ctypes
 from ctypes import wintypes
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -122,6 +124,7 @@ class WindowsGadgetLoader:
         self.cancelled = lambda: False
         self.commit = lambda operation: operation()
         self.before_mutation = lambda: None
+        self.on_submitted = None
         for name, arguments, result in (
             ('IsWow64Process2', [wintypes.HANDLE, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.WORD)], wintypes.BOOL),
             ('GetModuleHandleW', [wintypes.LPCWSTR], wintypes.HMODULE),
@@ -274,6 +277,8 @@ class WindowsGadgetLoader:
             self.submitted = True
             self.stage = 'submitted'
         self.commit(submit)
+        if self.on_submitted is not None:
+            self.on_submitted(self)
         if not self.poll():
             raise TimeoutError('Windows Gadget loader is still completing')
         if self.load_error is not None:
@@ -398,6 +403,8 @@ for _state_name in _TRANSITIONS:
 _KEEP = object()
 _AUTH_RETRY_SECONDS = .1
 _TRANSIENT_ENDPOINT_CODES = frozenset(('endpoint_unavailable', 'endpoint_cleanup_pending'))
+_TRACE_LOADER_PHASES = frozenset(('initializing', 'initialized', 'preparing', 'allocating', 'writing_path',
+                                  'submitted', 'verifying', 'complete'))
 
 
 class NativePcFridaRuntime:
@@ -415,7 +422,7 @@ class NativePcFridaRuntime:
         RuntimeState.FAILED, RuntimeState.PROCESS_FAILED, RuntimeState.CLEANUP_PENDING))
 
     def __init__(self, game_root, *, runtime_dir, gadget_path=None, api=None, loader_factory=None,
-                 build_check=None, admin_check=None):
+                 build_check=None, admin_check=None, startup_trace=None):
         self.game_root = Path(game_root).resolve()
         self.runtime_dir = Path(runtime_dir).resolve() / 'native-pc-frida'
         self.lease_path = self.runtime_dir / 'lease.json'
@@ -427,6 +434,7 @@ class NativePcFridaRuntime:
         self.loader_factory = loader_factory or WindowsGadgetLoader
         self.build_check = build_check or access.verify_build
         self.admin_check = admin_check or (lambda: bool(ctypes.windll.shell32.IsUserAnAdmin()))
+        self._startup_trace = startup_trace
         self.status, self.code, self.error = RuntimeState.STOPPED, None, None
         self._condition = Condition()
         self._cancel = Event()
@@ -489,6 +497,40 @@ class NativePcFridaRuntime:
         if diagnostics is not None:
             self._loader_diagnostic = diagnostics
 
+    def _trace_startup(self, event, *, instance=None, loader=None, win32_error=None):
+        if self._startup_trace is None:
+            return
+        try:
+            if instance is None and self._lease is not None:
+                instance = self._birth(self._lease)
+            code = self.code
+            if type(code) is not int and not (type(code) is str and len(code) <= 64 and
+                                             code.isascii() and code.isidentifier()):
+                code = None
+            record = {'utc': datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+                      'event': event, 'status': self.status.value, 'code': code,
+                      'pid': instance[0] if instance else None,
+                      'created_filetime': instance[1] if instance else None}
+            build = self._lease.get('source_build') if self._lease is not None else None
+            if isinstance(build, str) and re.fullmatch(r'win-x64:[0-9a-f]{64}', build):
+                record['game_client_version'] = build
+            # The diagnostic snapshots contain details that should remain local.
+            # Pick only bounded status fields. A loader thread result can encode an address.
+            diagnostics = (self._loader_snapshot(loader) or {}) if loader is not None else {}
+            phase = diagnostics.get('stage')
+            if phase in _TRACE_LOADER_PHASES:
+                record['loader_phase'] = phase
+            for source, target in (('submitted', 'loader_submitted'), ('verification_complete', 'loader_verified')):
+                value = diagnostics.get(source)
+                if type(value) is bool:
+                    record[target] = value
+            if type(win32_error) is int:
+                record['win32_error'] = win32_error
+            self._startup_trace(record)
+        except Exception:
+            # Diagnostics must not interrupt start, cleanup, or state publication.
+            pass
+
     @staticmethod
     def _birth(record):
         return record['pid'], record['created']
@@ -513,7 +555,7 @@ class NativePcFridaRuntime:
             if self._pending_loader is not None or self._endpoint_owner is not None or self._observers:
                 raise RuntimeError('PC Frida closed while client resources remain owned')
 
-    def _state(self, state, code=None, error=None, *, lease=_KEEP, loaded=_KEEP):
+    def _state(self, state, code=None, error=None, *, lease=_KEEP, loaded=_KEEP, win32_error=None):
         with self._condition:
             state = RuntimeState(state)
             if state not in _TRANSITIONS[self.status]:
@@ -537,6 +579,8 @@ class NativePcFridaRuntime:
                  self._module_loaded, self._authenticated_birth) = previous
                 raise
             self._condition.notify_all()
+            if self._startup_trace is not None and (state, code) != previous[:2]:
+                self._trace_startup('state', win32_error=win32_error)
 
     def _check_cancelled(self):
         if self._cancel.is_set():
@@ -936,6 +980,8 @@ class NativePcFridaRuntime:
             self._state(RuntimeState.WAITING_PROCESS)
 
     def _load_once(self, instance):
+        if self._startup_trace is not None:
+            self._trace_startup('target_selected', instance=instance)
         source_build = self._verify_build_cached()
         self._verify_assets()
         with self._condition:
@@ -975,6 +1021,8 @@ class NativePcFridaRuntime:
             self._verify_assets()
 
         loader.before_mutation = verify_before_mutation
+        if self._startup_trace is not None and hasattr(loader, 'on_submitted'):
+            loader.on_submitted = lambda source: self._trace_startup('loader_submitted', loader=source)
         try:
             self._check_cancelled()
             if loader.created_filetime != instance[1] or not self._alive(record):
@@ -1010,6 +1058,8 @@ class NativePcFridaRuntime:
             raise error
         if not self._alive(self._lease) or not self._module_present(self._lease):
             raise RuntimeFailure('loader_failed', 'Windows PC Frida component was not present after startup')
+        if self._startup_trace is not None:
+            self._trace_startup('loader_completed', loader=loader)
         self._state(RuntimeState.AUTHENTICATING, loaded=True)
         self._next_auth = 0
         return True
@@ -1032,6 +1082,8 @@ class NativePcFridaRuntime:
             if self._armed is None:
                 self._armed = time.time_ns() // 100 + FILETIME_EPOCH
         if not self._alive(record):
+            if self._startup_trace is not None:
+                self._trace_startup('target_unavailable')
             self._release_endpoint()
             self._remove_credentials(record)
             return
@@ -1072,6 +1124,8 @@ class NativePcFridaRuntime:
         if self.status == RuntimeState.FAILED and not self._retry_requested:
             return
         if self._lease is not None and not self._alive(self._lease):
+            if self._startup_trace is not None and self.status != RuntimeState.STARTING:
+                self._trace_startup('target_unavailable')
             self._state(RuntimeState.STARTING, loaded=False)
             if self._observers:
                 return
@@ -1107,17 +1161,19 @@ class NativePcFridaRuntime:
                         break
                     code = getattr(exc, 'code', 'startup_interrupted' if isinstance(exc, InterruptedError)
                                    else 'startup_failed')
+                    win32_error = getattr(exc, 'winerror', None) if self._startup_trace is not None else None
                     if self._pending_loader is not None:
                         self._state(RuntimeState.LOADING, 'loader_pending',
-                                    'Windows PC Frida startup or cleanup is still owned; waiting for completion')
+                                    'Windows PC Frida startup or cleanup is still owned; waiting for completion',
+                                    win32_error=win32_error)
                     elif code in _TRANSIENT_ENDPOINT_CODES and self._module_loaded and self._lease is not None:
                         self._next_auth = time.monotonic() + _AUTH_RETRY_SECONDS
-                        self._state(RuntimeState.AUTHENTICATING, code, str(exc))
+                        self._state(RuntimeState.AUTHENTICATING, code, str(exc), win32_error=win32_error)
                     elif self._lease is not None and (self.status == RuntimeState.LOADING
                             or code in ('loader_failed', 'loader_not_ready', 'process_changed')):
-                        self._state(RuntimeState.PROCESS_FAILED, code, str(exc))
+                        self._state(RuntimeState.PROCESS_FAILED, code, str(exc), win32_error=win32_error)
                     else:
-                        self._state(RuntimeState.FAILED, code, str(exc))
+                        self._state(RuntimeState.FAILED, code, str(exc), win32_error=win32_error)
             self._cancel.wait(POLL_SECONDS)
 
     def report_transport_failure(self, error=None):
@@ -1166,7 +1222,9 @@ class NativePcFridaRuntime:
             if record is not None and not self._alive(record):
                 self._remove_credentials(record)
         except Exception as exc:
-            self._state(RuntimeState.CLEANUP_PENDING, getattr(exc, 'code', 'cleanup_failed'), str(exc))
+            win32_error = getattr(exc, 'winerror', None) if self._startup_trace is not None else None
+            self._state(RuntimeState.CLEANUP_PENDING, getattr(exc, 'code', 'cleanup_failed'), str(exc),
+                        win32_error=win32_error)
             raise
         self._state(RuntimeState.CLOSED)
 
@@ -1181,13 +1239,15 @@ class _GadgetObserver(NativePcFridaObserver):
         self._detach_intent = None
         self.script_error = None
         self._request_timing_audit = None
+        self._request_timing_enabled = None
 
-    def set_request_timing_audit(self, sink=None):
+    def set_request_timing_audit(self, sink=None, *, enabled=None):
         self._request_timing_audit = sink
+        self._request_timing_enabled = enabled
 
     def _request(self, operation, *, timeout=None, **arguments):
         sink = self._request_timing_audit
-        if sink is None:
+        if sink is None or (self._request_timing_enabled is not None and not self._request_timing_enabled()):
             return super()._request(operation, timeout=timeout, **arguments)
         started = time.monotonic()
         started_perf = time.perf_counter()

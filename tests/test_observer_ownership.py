@@ -31,7 +31,7 @@ def test_failed_probe_keeps_structured_script_error_before_cleanup():
     current.connect()
     try:
         failure = next(data for kind, data in audit if kind == 'observer_error')
-        assert failure == {'reason': 'probe layout mismatch', 'script_error': detail}
+        assert failure == {'reason': 'probe layout mismatch', 'error_type': 'RuntimeError', 'script_error': detail}
         assert current.event_status == 'failed' and current.event_error == 'probe layout mismatch'
         assert current.observer is None and current._pending_observers == []
     finally:

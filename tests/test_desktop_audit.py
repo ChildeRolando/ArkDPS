@@ -11,6 +11,37 @@ from desktop_audit import DesktopAuditReader, DesktopAuditWriter, DesktopCapture
 from test_lifecycle_events import connected
 
 
+def _test_header(source, *, debug_mode):
+    return {'kind': 'log_header', 'data': {'debug_mode': debug_mode}}
+
+
+def _records(path):
+    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+
+
+def test_capture_selects_key_events_until_debug_enabled_and_respects_live_toggle(tmp_path):
+    detailed = False
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header, debug_mode=lambda: detailed) as journal:
+        journal.write('published', object())  # Never serialized while debug mode is off.
+        journal.write('capture_error', {'error_type': 'OSError', 'reason': 'C:/private/a'})
+        journal.write('capture_error', {'error_type': 'OSError', 'reason': 'C:/private/b'})
+        detailed = True
+        journal.write('sample', {'frame': 7})
+        detailed = False
+        journal.write('published', object())
+        journal.write('stopped', {'cleanup_errors': {'collector': ['C:/private/c']}})
+    log, = tmp_path.glob('wpf-*.jsonl')
+    header, error, enabled, sample, disabled, stopped = _records(log)
+    assert header == _test_header('desktop_capture', debug_mode=False)
+    assert error['kind'] == 'capture_error' and error['data']['error_type'] == 'OSError'
+    assert 'reason' not in error['data']
+    assert enabled['kind'] == disabled['kind'] == 'debug_mode'
+    assert enabled['data']['enabled'] is True and disabled['data']['enabled'] is False
+    assert sample == {'kind': 'sample', 'data': {'frame': 7}}
+    assert stopped['data']['cleanup_ok'] is False and 'cleanup_errors' not in stopped['data']
+
+
 def test_desktop_enemy_state_delta_restores_prefix_across_records_and_resets():
     records = []
     writer = DesktopAuditWriter(records.append)
@@ -106,21 +137,24 @@ def test_capture_rotation_keeps_newest_and_only_prunes_managed_files(tmp_path):
     recent = tmp_path / f'wpf-20260101-000001-000000-{"0" * 32}.jsonl'
     other = tmp_path / 'capture.jsonl'
     history = tmp_path.parent / 'history.json'
-    for path, size, stamp in ((oldest, 200, 1), (recent, 85, 2), (other, 300, 3), (history, 300, 4)):
+    for path, size, stamp in ((oldest, 270, 1), (recent, 85, 2), (other, 300, 3), (history, 300, 4)):
         path.write_bytes(b'x' * size)
         os.utime(path, (stamp, stamp))
 
     with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
-                               segment_bytes=50, total_bytes=260) as journal:
+                               segment_bytes=50, total_bytes=320,
+                               header=_test_header, debug_mode=True) as journal:
         assert not oldest.exists() and recent.exists()
         for index in range(5):
             journal.write('sample', {'index': index, 'text': '字' * 14})
             managed = sorted(tmp_path.glob('wpf-*.jsonl'))
-            assert sum(path.stat().st_size for path in managed) <= 260
-            assert json.loads(managed[-1].read_bytes())['data']['index'] == index
+            assert sum(path.stat().st_size for path in managed) <= 320
+            header, record = _records(managed[-1])
+            assert header == _test_header('desktop_capture', debug_mode=True)
+            assert record['data']['index'] == index
 
     assert not recent.exists()
-    assert [json.loads(path.read_bytes())['data']['index'] for path in managed] == [3, 4]
+    assert [_records(path)[1]['data']['index'] for path in managed] == [3, 4]
     assert other.stat().st_size == history.stat().st_size == 300
 
 
@@ -143,7 +177,7 @@ def test_capture_rotation_replays_complete_chain_and_inspects_retained_tail(tmp_
         session.close()
 
     with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
-                               segment_bytes=1) as journal:
+                               segment_bytes=1, debug_mode=True) as journal:
         for kind, data in captured:
             journal.write(kind, data)
 
@@ -176,7 +210,8 @@ def test_capture_retention_retries_after_locked_file_is_released(tmp_path, monke
     monkeypatch.setattr(Path, 'unlink', unlink_if_available)
     monkeypatch.setattr('desktop_audit.time.monotonic', lambda: now)
     with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=warnings.append,
-                               segment_bytes=50, total_bytes=100) as journal:
+                               segment_bytes=50, total_bytes=100,
+                               header=_test_header, debug_mode=True) as journal:
         journal.write('sample', {'frame': 1})
         journal.write('sample', {'frame': 2})
         assert old.exists() and len(warnings) == 1
@@ -185,5 +220,5 @@ def test_capture_retention_retries_after_locked_file_is_released(tmp_path, monke
 
     log, = tmp_path.glob('wpf-*.jsonl')
     assert not old.exists()
-    assert json.loads(log.read_bytes())['data'] == {'frame': 3}
+    assert _records(log)[1]['data'] == {'frame': 3}
     assert replay(log)['coverage'] == 'retained_only'

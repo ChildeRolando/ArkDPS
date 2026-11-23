@@ -60,7 +60,8 @@ def run_sequence(tmp_path, monkeypatch, mode):
         def close(self):
             trace.append(('startup_close',))
 
-    def startup(*_args):
+    def startup(*_args, startup_trace):
+        assert callable(startup_trace)
         owner = Startup()
         owners.append(owner)
         return owner
@@ -296,7 +297,8 @@ def test_pending_bootstrap_changes_are_published_before_connection_retry(tmp_pat
         def close(self):
             calls.append('close')
 
-    def factory(*_args):
+    def factory(*_args, startup_trace):
+        assert callable(startup_trace)
         owner = Startup()
         owners.append(owner)
         return owner
@@ -353,7 +355,8 @@ def test_shutdown_winning_during_provider_construction_prevents_start_and_public
         def close(self):
             trace.append('close_unstarted')
 
-    def factory(*_args):
+    def factory(*_args, startup_trace):
+        assert callable(startup_trace)
         entered.set()
         assert finish.wait(2)
         return Startup()
@@ -446,7 +449,7 @@ def test_shutdown_after_ready_before_session_admission_never_constructs_or_conne
         def connect(self):
             errors.append('Connection started after shutdown won admission')
 
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args: Startup())
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args, **_kwargs: Startup())
     monkeypatch.setattr(native_pc_collector, 'NativePcCollector', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
     worker.request(ConnectionConfig(platform='native_pc', native_game_root='test-client'), True)

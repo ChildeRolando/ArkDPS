@@ -380,7 +380,7 @@ def test_observer_start_failure_preserves_native_snapshots(failure, cleanup_fail
         assert row['shield_absorbed'] is None and row['active_damage'] is None
         assert sample['event_watermark'] is None
         assert calls == ['transport', 'attach', 'detach', 'locate']
-        assert ('observer_error', {'reason': str(failure)}) in audit
+        assert ('observer_error', {'reason': str(failure), 'error_type': type(failure).__name__}) in audit
         assert any(kind == 'observer_cleanup_error' for kind, _ in audit) == cleanup_fails
     finally:
         if cleanup_fails:

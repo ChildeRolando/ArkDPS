@@ -133,6 +133,7 @@ internal static class Program
         NativePcReadinessTests.Run();
         SamplingRejectionTests.Run();
         RefreshBudgetTests.Run();
+        DesktopLogTests.Run();
         using var recovery = JsonDocument.Parse("""
             [{"game_time":11,"remaining_hp":900,"remaining_hp_complete":true},
              {"game_time":17,"remaining_hp":500,"remaining_hp_complete":true,"break_before":true},

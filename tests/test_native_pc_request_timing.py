@@ -34,6 +34,30 @@ def test_default_sink_is_none_and_uses_no_clock_or_extra_call(monkeypatch):
     assert inspect.signature(native._GadgetObserver._request) == inspect.signature(request)
 
 
+def test_live_debug_mode_controls_timing_before_clock_reads(monkeypatch):
+    current = observer()
+    records = []
+    clocks = []
+    enabled = False
+
+    def clock():
+        clocks.append(True)
+        return float(len(clocks))
+
+    monkeypatch.setattr(native, 'time', SimpleNamespace(monotonic=clock, perf_counter=clock))
+    monkeypatch.setattr(NativePcFridaObserver, '_request', lambda _self, operation, **_kwargs: operation)
+    current.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: enabled)
+    assert current._request('mark') == 'mark'
+    assert not clocks and not records
+    enabled = True
+    assert current._request('read') == 'read'
+    assert len(clocks) == 3
+    assert records[0][0] == 'native_pc_request_timing'
+    enabled = False
+    assert current._request('ack') == 'ack'
+    assert len(clocks) == 3 and len(records) == 1
+
+
 @pytest.mark.parametrize('operation,timeout', [('mark', None), ('mark', .5), ('read', .125), ('ack', 0), ('private operation', None)])
 def test_timing_preserves_inputs_return_identity_and_records_only_bounded_labels(monkeypatch, operation, timeout):
     current = observer()

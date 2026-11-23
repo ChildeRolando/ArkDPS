@@ -27,6 +27,102 @@ def cmd(state, op, **fields):
     return state.command(dict(version=PROTOCOL_VERSION, op=op, **fields))
 
 
+def test_debug_mode_persists_and_switches_trace_without_reconnecting(tmp_path, capsys):
+    state = DesktopState(tmp_path)
+    worker = CollectionWorker(state)
+    commands = [('hello', {}), ('theme', {'theme': state.layout.theme}),
+                ('debug_mode', {'enabled': True}), ('snapshot', {}),
+                ('debug_mode', {'enabled': False}), ('snapshot', {}),
+                ('debug_mode', {'enabled': 'false'})]
+    input_stream = io.StringIO(''.join(json.dumps(dict(version=PROTOCOL_VERSION, id=index, op=op, **fields)) + '\n'
+        for index, (op, fields) in enumerate(commands, 1)))
+    output = io.StringIO()
+    serve(input_stream, output, state, worker)
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert not replies[0]['state']['layout']['debug_mode'] and not worker.debug_mode
+    assert replies[2]['state']['layout']['debug_mode'] and replies[3]['state']['layout']['debug_mode']
+    assert not replies[4]['state']['layout']['debug_mode'] and not replies[5]['state']['layout']['debug_mode']
+    assert not replies[6]['ok'] and worker.requests.empty()
+    assert LayoutStore(tmp_path / 'layout.json').load().layout.debug_mode is False
+    diagnostics = capsys.readouterr().err
+    assert 'op=snapshot id=4' in diagnostics and 'op=snapshot id=6' not in diagnostics
+    assert 'op=theme id=2' not in diagnostics
+
+
+def test_debug_layout_is_loaded_by_new_worker(tmp_path):
+    state = DesktopState(tmp_path)
+    cmd(state, 'debug_mode', enabled=True)
+    assert CollectionWorker(DesktopState(tmp_path)).debug_mode is True
+
+
+def test_worker_startup_log_retains_original_listener_error(monkeypatch, capsys):
+    import desktop_bridge
+
+    monkeypatch.setattr(sys, 'argv', ['desktop_bridge.py'])
+    with patch('desktop_bridge.socket.socket') as create_socket:
+        listener = create_socket.return_value
+        error = OSError(10048, 'socket busy')
+        listener.bind.side_effect = error
+        with pytest.raises(SystemExit, match='无法启动单实例监听'):
+            desktop_bridge.main()
+        listener.close.assert_called_once()
+    line = capsys.readouterr().err.strip()
+    event = json.loads(line.removeprefix('[listener] '))
+    assert event['operation'] == 'bind' and event['system_error'] == 10048
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_worker_records_verified_environment_and_caches_only_saved_target(tmp_path, monkeypatch, capsys, override):
+    from types import SimpleNamespace
+
+    import desktop_bridge
+    from connection import ConnectionDiagnostics, DetectionStatus, VersionStatus
+
+    state = DesktopState(tmp_path)
+    saved = replace(state.connection, serial='private-saved-target', auto_detect=False)
+    state.connection_store.save(saved)
+    effective = replace(saved, serial='private-override-target') if override else saved
+    worker = CollectionWorker(state)
+    diagnostics = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, version_actual='2.7.91',
+        version_status=VersionStatus.COMPATIBLE, selected_serial=effective.serial, connection_ok=True)
+    target = SimpleNamespace(adb_path='adb', serial=effective.serial, diagnostics=diagnostics)
+    monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda config: target)
+
+    class Session:
+        collector = SimpleNamespace(diagnostics=diagnostics)
+        event_status = 'unavailable'
+        event_error = None
+
+        def __init__(self, *_args, audit, **_kwargs):
+            self.audit = audit
+
+        def enable_lifecycle(self, runtime):
+            self.runtime = runtime
+
+        def connect(self):
+            self.audit('connected', {'diagnostics': diagnostics.as_dict(), 'pid': 42})
+
+        def read(self):
+            worker.stop.set()
+            return None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
+    worker.request(effective, False)
+    worker.run()
+    path, = (tmp_path / 'captures').glob('wpf-*.jsonl')
+    log = path.read_text(encoding='utf-8')
+    entries = [json.loads(line) for line in log.splitlines()]
+    assert entries[0]['data']['settings']['event_observation'] is False
+    environment, = [entry['data'] for entry in entries if entry['kind'] == 'environment']
+    assert environment['platform'] == 'mumu' and environment['game_client_version'] == '2.7.91'
+    assert 'private-' not in log and 'private-' not in capsys.readouterr().err
+    cache = tmp_path / 'log-environment.json'
+    assert cache.exists() is not override
+
+
 def test_worker_import_does_not_import_tk_or_frida():
     result = subprocess.run([sys.executable, '-c',
         "import desktop_bridge, sys; assert 'tkinter' not in sys.modules; assert 'frida' not in sys.modules"],
@@ -1364,6 +1460,7 @@ def test_worker_only_uses_fast_keepalive_for_successfully_bound_selection(tmp_pa
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     state = DesktopState(tmp_path/'state')
     worker = CollectionWorker(state)
+    worker.set_debug_mode(True)
     clock = [0.0]
     checks = []
     monkeypatch.setattr(desktop_bridge, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
@@ -1465,6 +1562,7 @@ def test_worker_retries_final_cleanup_before_closing_audit_stream(tmp_path, monk
 
     state = DesktopState(tmp_path/'state')
     worker = CollectionWorker(state)
+    worker.set_debug_mode(True)
 
     class Session:
         cleanup_errors = {}
@@ -1497,7 +1595,8 @@ def test_worker_retries_final_cleanup_before_closing_audit_stream(tmp_path, monk
     assert worker.session is None and worker.cleanup_error == ''
     audit_path = next((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
     events = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
-    assert events == [
+    assert events[0]['kind'] == 'log_header'
+    assert [entry for entry in events if entry['kind'] == 'cleanup_attempt'] == [
         {'kind': 'cleanup_attempt', 'data': {'attempt': 1}},
         {'kind': 'cleanup_attempt', 'data': {'attempt': 2}},
     ]
@@ -1517,6 +1616,7 @@ def test_worker_retains_and_reports_session_after_final_cleanup_retries_fail(tmp
     monkeypatch.setattr(desktop_bridge, 'resolve_configured', lambda _config: target)
     state = DesktopState(tmp_path/'state')
     worker = CollectionWorker(state)
+    worker.set_debug_mode(True)
     sessions = []
 
     class Session:
@@ -1554,7 +1654,9 @@ def test_worker_retains_and_reports_session_after_final_cleanup_retries_fail(tmp
     with pytest.raises(RuntimeError, match='persistent cleanup failure'):
         worker.close()
     audit_path = next((tmp_path/'state'/'captures').glob('wpf-*.jsonl'))
-    assert len(audit_path.read_text('utf-8').splitlines()) == 2
+    events = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
+    assert [entry['data']['attempt'] for entry in events if entry['kind'] == 'cleanup_attempt'] == [1, 2]
+    assert events[-1]['kind'] == 'worker_stopped' and events[-1]['data']['cleanup_ok'] is False
 
 
 def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatch):
@@ -1603,6 +1705,7 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
     for _ in range(2):
         worker = CollectionWorker(state)
+        worker.set_debug_mode(True)
         workers.append(worker)
         worker.request(state.connection, False)
         worker.run()
@@ -1613,9 +1716,9 @@ def test_worker_releases_session_while_audit_stream_is_open(tmp_path, monkeypatc
     assert len(paths) == 2
     assert len({path.name for path in paths}) == 2
     for audit_path in paths:
-        assert json.loads(audit_path.read_text('utf-8').splitlines()[-1]) == {
-            'kind': 'session_closed', 'data': {},
-        }
+        entries = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
+        assert entries[-2] == {'kind': 'session_closed', 'data': {}}
+        assert entries[-1]['kind'] == 'worker_stopped' and entries[-1]['data']['cleanup_ok'] is True
 
 
 def test_quit_ack_is_after_collector_cleanup(tmp_path):

@@ -14,7 +14,8 @@ from sample_data import sample
 
 def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='native_pc',
                provider_state='recording', publish=True, observer_display_attributes=True,
-               arkframework_root=None, bootstrap_pending=False, bootstrap_pending_state='starting'):
+               arkframework_root=None, bootstrap_pending=False, bootstrap_pending_state='starting',
+               debug_mode=False):
     monkeypatch.setattr(desktop_bridge, 'ROOT', tmp_path)
     state = DesktopState(tmp_path / 'state')
     state.command(dict(version=1, op='panel_update',
@@ -22,6 +23,7 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
     worker = CollectionWorker(state, endpoint='expert-android-endpoint',
                               arkframework_root=arkframework_root,
                               native_pc_observer_factory=factory)
+    worker.set_debug_mode(debug_mode)
     calls = []
 
     class Startup:
@@ -55,7 +57,8 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
             self.phase = 'ready'
             return {'status': 'ready'}
 
-    def startup(game_root, runtime_dir):
+    def startup(game_root, runtime_dir, *, startup_trace):
+        assert callable(startup_trace)
         calls.append(('pc_startup_created', game_root, runtime_dir))
         return Startup()
 
@@ -211,7 +214,7 @@ def test_pc_startup_survives_same_source_retries_and_stops_on_mumu(tmp_path, mon
             pass
 
     startup = Startup()
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args: startup)
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args, **_kwargs: startup)
     worker = CollectionWorker(DesktopState(tmp_path))
     config = ConnectionConfig(platform='native_pc', native_game_root='recorded-game-root')
     first = worker._pc_provider(config, True)
@@ -240,7 +243,7 @@ def test_failed_pc_startup_cleanup_retains_owner_and_historical_failure(tmp_path
                 raise RuntimeError('owned loader call is pending')
 
     startup = Startup()
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args: startup)
+    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args, **_kwargs: startup)
     worker = CollectionWorker(DesktopState(tmp_path))
     worker._pc_provider(ConnectionConfig(platform='native_pc', native_game_root='game'), True)
     with pytest.raises(RuntimeError, match='owned loader call is pending'):
@@ -310,7 +313,7 @@ def test_desktop_worker_reads_optional_timeline_in_lobby_only_when_enabled(
     monkeypatch.setattr(RegenerationRecorder, 'poll', poll)
     directory = tmp_path / 'ArkFramework' if configure_root else None
     state, _, _ = run_worker(tmp_path, monkeypatch, platform=platform, enabled=enabled,
-                             arkframework_root=directory, publish=False)
+                             arkframework_root=directory, publish=False, debug_mode=True)
     assert bool(polls) == should_read
     assert state.last is None
     if should_read:

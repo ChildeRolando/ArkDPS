@@ -69,8 +69,27 @@ def test_cli_retries_and_writes_ready_raw_journal_and_summary(tmp_path, monkeypa
     assert result['error'] is None
     assert Session.instances[-1].closed
     assert json.loads((args.output_dir / 'READY.json').read_text())['head'] == 'candidate'
-    kinds = [json.loads(line)['kind'] for line in (args.output_dir / 'capture.jsonl').read_text().splitlines()]
-    assert kinds == ['metadata', 'observer_ready', 'retry', 'published', 'coverage_closed']
+    records = [json.loads(line) for line in (args.output_dir / 'capture.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert [record['kind'] for record in records] == ['metadata', 'observer_ready', 'retry', 'published', 'coverage_closed']
+    header = records[0]['data']['log_header']
+    assert header['schema'] == 1
+    assert header['source'] == 'foreground_capture' and header['debug_mode'] is True
+    assert header['settings']['platform'] == 'mumu' and header['settings']['event_observation'] is True
+    assert header['settings']['manual_target_configured'] is True
+    assert 'serial' not in header['settings'] and 'adb_path' not in header['settings']
+
+
+def test_cli_writes_log_context_before_session_initialization(tmp_path, monkeypatch):
+    stub_git_and_clock(monkeypatch)
+    args = options(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError('test setup failure')
+
+    with pytest.raises(RuntimeError, match='test setup failure'):
+        capture_cli.run_capture(args, session_factory=fail)
+    first = (args.output_dir / 'capture.jsonl').read_text(encoding='utf-8').splitlines()[0]
+    assert json.loads(first)['data']['log_header']['source'] == 'foreground_capture'
 
 
 @pytest.mark.parametrize('startup_failed,required', [(False, True), (True, True), (True, False)])
@@ -502,6 +521,9 @@ def test_app_capture_entry_uses_shared_event_policy(tmp_path, monkeypatch, flags
             pass
 
         def listen(self, _backlog):
+            pass
+
+        def close(self):
             pass
 
     monkeypatch.setattr(app.socket, 'socket', Lock)

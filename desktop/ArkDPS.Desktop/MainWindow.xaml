@@ -532,6 +532,11 @@
                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
         <TextBlock Text="当前状态" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
         <TextBlock x:Name="ConnectionDiagnostics" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
+        <ToggleButton x:Name="DebugModeSetting" Content="开启调试模式" Click="ChangeDebugMode"
+                      AutomationProperties.Name="调试模式" AutomationProperties.HelpText="开启详细采集日志"
+                      HorizontalAlignment="Left" Margin="0,14,0,5"/>
+        <TextBlock Text="调试模式记录详细采集日志，会增加磁盘写入，排查完可随时关闭。"
+                   Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         <Button Content="应用设置并重连" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,16,0,0"/>
        </StackPanel>
       </Border>

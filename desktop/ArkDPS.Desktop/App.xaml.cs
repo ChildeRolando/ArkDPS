@@ -69,7 +69,7 @@ public partial class App : System.Windows.Application
                     case "--python": Python = arguments[++i]; break;
                     case "--verify": Verification = arguments[++i]; break;
                     case "--verify-update": updateFixture = arguments[++i]; break;
-                    case "--offline": case "--no-events": BridgeArguments.Add(arg); break;
+                    case "--offline": case "--no-events": case "--debug-mode": BridgeArguments.Add(arg); break;
                     case "--state-dir": stateOverride = arguments[++i]; break;
                     case "--fixture": case "--adb": case "--serial": case "--frida-remote":
                     case "--platform": case "--native-game-root":
@@ -97,13 +97,16 @@ public partial class App : System.Windows.Application
                 throw new ArgumentException("--verify 必须使用 --offline");
             if (updateFixture != null && (!offline || host == null || Verification != null))
                 throw new ArgumentException("--verify-update 必须使用便携包及隔离的离线状态目录。");
+            if ((Verification != null || updateFixture != null) && !BridgeArguments.Contains("--debug-mode"))
+                BridgeArguments.Add("--debug-mode");
             bool packaged = string.Equals(Root, packagedRoot, StringComparison.OrdinalIgnoreCase);
-            if (packaged && Python == "python.exe")
-                throw new IOException("便携包缺少自带的 Python 运行时。请重新下载完整发布包。");
             string launchRoot = packaged && host != null ? Path.Combine(host.Root, "collector") : Root;
             StateDirectory = stateOverride == null
                 ? (packaged ? host?.StateDirectory : null) ?? Path.Combine(Root, "runtime")
                 : Path.GetFullPath(stateOverride, launchRoot);
+            WriteStartupEvent("event=configured");
+            if (packaged && Python == "python.exe")
+                throw new IOException("便携包缺少自带的 Python 运行时。请重新下载完整发布包。");
             for (int i = 0; i + 1 < BridgeArguments.Count; i++)
             {
                 if (BridgeArguments[i] == "--fixture" ||
@@ -121,14 +124,13 @@ public partial class App : System.Windows.Application
                 Directory.CreateDirectory(evidence);
                 DispatcherUnhandledException += (sender, failure) =>
                 {
-                    File.AppendAllText(Path.Combine(evidence, "dispatcher-failure.txt"),
-                        failure.Exception + Environment.NewLine);
+                    DesktopLog.Append(evidence, "dispatcher-failure.txt", failure.Exception.ToString(), StateDirectory);
                     failure.Handled = true;
                     if (MainWindow is MainWindow main) _ = main.Quit(1);
                     else Shutdown(1);
                 };
                 AppDomain.CurrentDomain.UnhandledException += (_, failure) =>
-                    File.WriteAllText(Path.Combine(evidence, "runtime-failure.txt"), failure.ExceptionObject.ToString());
+                    DesktopLog.Append(evidence, "runtime-failure.txt", failure.ExceptionObject.ToString() ?? "", StateDirectory);
             }
             string release = Path.Combine(AppContext.BaseDirectory, "metadata", "release.json");
             if (File.Exists(release) || packaged)
@@ -147,6 +149,7 @@ public partial class App : System.Windows.Application
                     UpdateHost = host;
             }
             var window = new MainWindow(); MainWindow = window;
+            WriteStartupEvent("event=window_created");
             if (UpdateLaunch?.ReadyPipe != null || UpdateVerification != null)
             {
                 window.IsEnabled = UpdateLaunch?.ReadyPipe == null;
@@ -163,13 +166,26 @@ public partial class App : System.Windows.Application
         }
         catch (Exception ex)
         {
-            if(Verification!=null){Directory.CreateDirectory(Verification);File.WriteAllText(Path.Combine(Verification,"failure.txt"),ex.ToString());}
+            WriteStartupEvent($"event=failed error={ex.GetType().Name} hresult=0x{ex.HResult:X8}");
+            if (Verification != null) DesktopLog.Append(Verification, "failure.txt", ex.ToString(), StateDirectory);
             else if (UpdateLaunch?.ReadyPipe != null || (e.Args.Length > 0 && e.Args[0] == PortableUpdateHost.ApplyOption))
                 UpdateHost?.Log(ex);
             else if (UpdateVerification != null) UpdateVerification.WriteFailure(ex);
             else MessageBox.Show(ex.Message, "ArkDPS 启动失败");
             Shutdown(1);
         }
+    }
+
+    private static void WriteStartupEvent(string message)
+    {
+        try
+        {
+            string? directory = StateDirectory.Length > 0 ? StateDirectory
+                : PortableUpdateHost.Find(AppContext.BaseDirectory)?.StateDirectory;
+            if (directory != null)
+                DesktopLog.Append(directory, "wpf-startup.log", $"{DateTimeOffset.UtcNow:O} {message}");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 }
 

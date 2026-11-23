@@ -98,6 +98,7 @@ internal sealed class BridgeClient : IAsyncDisposable
     private readonly Stream input;
     private readonly Stream output;
     private volatile bool closing;
+    private volatile bool debugMode;
     private volatile BridgeTransportException? firstFault;
     private int sequence;
     private int replayedId;
@@ -114,6 +115,13 @@ internal sealed class BridgeClient : IAsyncDisposable
         Directory.CreateDirectory(directory);
         LogPath = Path.Combine(directory, "wpf-collector-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + ".log");
         log = new(LogPath, false, new UTF8Encoding(false)) { AutoFlush = true };
+        debugMode = Array.IndexOf(arguments, "--debug-mode") >= 0 || DesktopLog.ReadDebugMode(directory);
+        int platformIndex = Array.IndexOf(arguments, "--platform");
+        string? platform = platformIndex >= 0 && platformIndex + 1 < arguments.Length ? arguments[platformIndex + 1] : null;
+        log.WriteLine(DesktopLog.Header(directory, "wpf-collector", debugMode: debugMode,
+            effectivePlatform: platform, eventsEnabled: Array.IndexOf(arguments, "--no-events") >= 0 ? false : null,
+            connectionOverridden: platform is not null || Array.Exists(arguments, entry =>
+                entry is "--adb" or "--serial" or "--native-game-root" or "--frida-remote")));
         var start = new ProcessStartInfo(python)
         {
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
@@ -125,18 +133,31 @@ internal sealed class BridgeClient : IAsyncDisposable
         start.ArgumentList.Add("-X"); start.ArgumentList.Add("utf8");
         start.ArgumentList.Add(Path.Combine(root, "desktop_bridge.py"));
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
+        start.Environment["ARKDPS_DESKTOP_RUN_ID"] = DesktopLog.RunId;
         process = new() { StartInfo = start, EnableRaisingEvents = true };
-        process.ErrorDataReceived += (_, e) => { if(e.Data!=null){ try{ lock(log) log.WriteLine(e.Data); }catch(ObjectDisposedException){} } };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not { } line || !DesktopLog.KeepWorkerLine(line, debugMode)) return;
+            try { lock (log) log.WriteLine(line); }
+            catch (ObjectDisposedException) { }
+            catch (IOException) { }
+        };
         try
         {
             if (!process.Start()) throw new IOException("无法启动 Python 采集进程");
+            WriteDiagnostic("worker", $"event=started pid={process.Id}");
             process.BeginErrorReadLine();
             input = process.StandardInput.BaseStream;
             output = process.StandardOutput.BaseStream;
             _ = Task.Factory.StartNew(ReadReplies, CancellationToken.None,
                 TaskCreationOptions.LongRunning, TaskScheduler.Default);
         }
-        catch { log.Dispose(); throw; }
+        catch (Exception error)
+        {
+            WriteDiagnostic("worker", $"event=start_failed error={error.GetType().Name} hresult=0x{error.HResult:X8}");
+            log.Dispose();
+            throw;
+        }
     }
     public async Task ConnectAsync(TimeSpan? timeoutOverride = null)
     {
@@ -283,6 +304,11 @@ internal sealed class BridgeClient : IAsyncDisposable
             if (kind != expectedKind) throw new IOException("worker 响应类型不匹配");
             if (op == "hello" && reply.Get("result").Text("transport") != "stdio-jsonl")
                 throw new IOException("Python worker 握手失败；请检查 UI 与采集器版本。");
+            var debugSetting = reply.Get("state").Get("layout").Get("debug_mode");
+            if (debugSetting.ValueKind is JsonValueKind.False or JsonValueKind.True)
+                debugMode = debugSetting.ValueKind == JsonValueKind.True;
+            if (debugMode || DesktopLog.IsKeyBridgeOperation(op))
+                WriteDiagnostic("bridge", $"op={op} id={id} phase=validate event=accepted");
             return reply.Clone();
         }
         catch (BridgeCommandException) { throw; }
@@ -359,6 +385,7 @@ internal sealed class BridgeClient : IAsyncDisposable
                 if(exited)
                 {
                     try{exit=process.ExitCode;}catch(InvalidOperationException){}
+                    WriteDiagnostic("worker", $"event=exited code={exit}");
                     if(exit!=0)error=new IOException("采集进程退出码 "+exit+"；清理日志："+LogPath,error);
                 }
                 else error??=new IOException("采集进程退出未确认；诊断日志："+LogPath,closeError);

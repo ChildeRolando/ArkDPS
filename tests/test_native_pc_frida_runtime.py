@@ -1,4 +1,5 @@
 """PC startup ownership checks use fake processes, loaders and endpoints only."""
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -64,6 +65,13 @@ class Loaders:
                 self.pending_thread = None
                 self.load_error = None
                 self.closed = False
+                self.on_submitted = None
+                self.submitted = False
+
+            def diagnostics(self):
+                return {'stage': 'complete' if process.module else 'submitted', 'submitted': self.submitted,
+                        'verification_complete': process.module, 'thread_exit_code': 0x10000,
+                        'last_error': {'win32_error': 299}}
 
             def find_module(self, path):
                 return {'base': 0x10000} if process.module else None
@@ -72,6 +80,9 @@ class Loaders:
                 owner.loads.append((pid, Path(path)))
                 if owner.failure:
                     raise RuntimeFailure('loader_failed', owner.failure)
+                self.submitted = True
+                if self.on_submitted is not None:
+                    self.on_submitted(self)
                 if owner.pending:
                     self.pending_thread = object()
                     raise TimeoutError('still running')
@@ -175,6 +186,50 @@ def test_new_exact_process_loads_once_and_close_preserves_live_component(environ
     assert environment.api.opened == environment.api.closed
 
 
+def test_startup_trace_times_transitions_and_omits_private_diagnostics(environment):
+    records = []
+    runtime = environment.make(startup_trace=records.append).start()
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
+    pid = add_new(environment, runtime)
+    birth = environment.api.rows[pid].created
+    build = runtime.wait_ready(2)['source_build']
+    token = json.loads(runtime.config_path.read_text())['interaction']['token']
+    environment.api.rows[pid].alive = False
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
+    runtime.close()
+
+    process_records = [record for record in records if record['pid'] == pid]
+    assert [(record['event'], record['status']) for record in process_records] == [
+        ('target_selected', 'waiting_for_process'), ('state', 'loading'), ('loader_submitted', 'loading'),
+        ('loader_completed', 'loading'), ('state', 'authenticating'), ('state', 'ready'),
+        ('target_unavailable', 'ready'), ('state', 'starting'),
+    ]
+    assert all(record['created_filetime'] == birth for record in process_records)
+    assert process_records[2]['loader_submitted'] is True and process_records[2]['loader_verified'] is False
+    assert process_records[3]['loader_phase'] == 'complete' and process_records[3]['loader_verified'] is True
+    assert process_records[5]['game_client_version'] == build
+    assert all(datetime.fromisoformat(record['utc']).tzinfo == timezone.utc for record in records)
+    assert [record['status'] for record in records[:2]] == ['starting', 'waiting_for_process']
+    assert [record['status'] for record in records[-2:]] == ['stopping', 'closed']
+    allowed = {'utc', 'event', 'status', 'code', 'pid', 'created_filetime', 'game_client_version',
+               'loader_phase', 'loader_submitted', 'loader_verified'}
+    assert all(record.keys() <= allowed for record in records)
+    assert all(secret not in str(value) for record in records for value in record.values()
+               for secret in (token, str(environment.root), str(environment.gadget)))
+
+
+def test_startup_trace_callback_failure_does_not_alter_ownership(environment):
+    def fail(_record):
+        raise OSError('trace disk unavailable')
+
+    runtime = environment.make(startup_trace=fail).start()
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
+    pid = add_new(environment, runtime)
+    assert runtime.wait_ready(2)['pid'] == pid
+    runtime.close()
+    assert runtime.describe()['status'] == 'closed'
+
+
 def test_old_equal_and_wrong_path_are_not_loaded_and_ambiguity_is_recoverable(environment):
     runtime = arm(environment)
     armed = runtime.describe()['armed_filetime']
@@ -216,13 +271,18 @@ def test_existing_ready_lease_reconnects_without_a_second_load(environment, sour
 
 def test_failed_loader_is_not_retried_for_the_same_instance(environment):
     environment.loaders.failure = 'controlled load failure'
-    runtime = arm(environment)
+    records = []
+    runtime = environment.make(startup_trace=records.append).start()
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
     pid = add_new(environment, runtime)
     wait_for(runtime, lambda state: state['status'] == 'process_failed')
     with pytest.raises(RuntimeFailure, match='controlled load failure'):
         runtime.wait_ready(1)
     time.sleep(.06)
     assert len(environment.loaders.loads) == 1
+    failures = [record for record in records if record['status'] == 'process_failed']
+    assert len(failures) == 1 and failures[0]['pid'] == pid and failures[0]['code'] == 'loader_failed'
+    assert 'controlled load failure' not in json.dumps(records)
     environment.api.rows[pid].alive = False
     wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
     environment.loaders.failure = None

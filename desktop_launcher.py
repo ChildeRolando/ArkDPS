@@ -2,10 +2,13 @@
 from pathlib import Path
 import ctypes
 from ctypes import wintypes
+import json
 import os
 import shutil
 import subprocess
 import sys
+
+from log_context import LogContext
 
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT / 'desktop' / 'ArkDPS.Desktop' / 'ArkDPS.Desktop.csproj'
@@ -83,6 +86,19 @@ def launch(args=None):
             if not dotnet:
                 raise RuntimeError('首次从源码启动需要 .NET 10 SDK；安装后重新运行 start.cmd。')
             with log.open('w', encoding='utf-8') as output:
+                overrides = {key: value for key, arg in (('platform', 'platform'), ('adb_path', 'adb'),
+                    ('serial', 'serial'), ('native_game_root', 'native_game_root'))
+                    if (value := getattr(args, arg, None)) is not None}
+                if overrides.get('serial'):
+                    overrides['auto_detect'] = False
+                if overrides.get('native_game_root'):
+                    overrides.setdefault('platform', 'native_pc')
+                endpoint = getattr(args, 'frida_remote', None)
+                log_context = LogContext(runtime, root=ROOT, connection_override=overrides or None,
+                    layout_override={'event_observation': bool(endpoint)} if endpoint is not None else None)
+                header = log_context.header('wpf_build')
+                output.write(json.dumps(header, ensure_ascii=False) + '\n')
+                output.flush()
                 result = subprocess.run([dotnet, 'build', str(PROJECT), '-c', 'Release', '--nologo'],
                     cwd=ROOT, stdout=output, stderr=subprocess.STDOUT,
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

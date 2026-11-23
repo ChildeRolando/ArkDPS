@@ -16,6 +16,17 @@ from test_collection_session import Collector, LiveObserver
 from test_event_capture import Collector as SnapshotFixture, event
 
 
+@pytest.mark.parametrize('record', [
+    {'kind': 'log_header', 'data': {'debug_mode': False}},
+    {'kind': 'debug_mode', 'data': {'enabled': False}},
+])
+def test_replay_explains_missing_detailed_coverage(record):
+    from capture_battles import replay_product
+
+    with pytest.raises(ValueError, match='详细采样未覆盖日志全程'):
+        replay_product([json.dumps(record)])
+
+
 def native_connection():
     """Use an atomic collector and a serialized observer with no target access."""
     snapshot = SnapshotFixture()

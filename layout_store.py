@@ -184,6 +184,7 @@ class Layout:
     hud_styles: tuple[tuple[str, HudStyle], ...] = ()
     side_mode: bool = False
     multiplayer_enabled: bool = False
+    debug_mode: bool = False
 
     def __post_init__(self):
         if self.theme not in THEMES:
@@ -194,6 +195,8 @@ class Layout:
             raise ValueError('侧边模式必须是布尔值')
         if not isinstance(self.multiplayer_enabled, bool):
             raise ValueError('卫戍四家开关必须是布尔值')
+        if not isinstance(self.debug_mode, bool):
+            raise ValueError('调试模式开关必须是布尔值')
         if not self.panels:
             raise ValueError('至少需要一个面板')
         ids = [panel.panel_id for panel in self.panels]
@@ -210,6 +213,7 @@ class Layout:
         return {'version': LAYOUT_VERSION, 'theme': self.theme,
                 'event_observation': bool(self.event_observation),
                 'multiplayer_enabled': self.multiplayer_enabled,
+                'debug_mode': self.debug_mode,
                 'number_units': self.number_units,
                 'side_mode': self.side_mode,
                 'gui': self.gui.to_dict() if self.gui else None,
@@ -339,6 +343,10 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     if not isinstance(multiplayer_enabled, bool):
         warnings.append('卫戍四家开关无效，已使用默认关闭')
         multiplayer_enabled = False
+    debug_mode = raw.get('debug_mode', False)
+    if not isinstance(debug_mode, bool):
+        warnings.append('调试模式开关无效，已使用默认关闭')
+        debug_mode = False
     gui = None
     if raw.get('gui') is not None:
         try:
@@ -362,7 +370,8 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     return Layout(panels=panels, huds=huds, gui=gui,
                   event_observation=event, theme=theme,
                   number_units=number_units, hud_styles=hud_styles,
-                  side_mode=side_mode, multiplayer_enabled=multiplayer_enabled), warnings, migrated_from
+                  side_mode=side_mode, multiplayer_enabled=multiplayer_enabled,
+                  debug_mode=debug_mode), warnings, migrated_from
 
 
 class LayoutStore:

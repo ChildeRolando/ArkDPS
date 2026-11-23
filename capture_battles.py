@@ -17,6 +17,7 @@ from collector import Collector, BattleChanged, DEFAULT_ADB, DEFAULT_SERIAL
 from desktop_audit import CAPTURE_NAME, DesktopAuditReader
 from roster import CharacterEntry, RosterSnapshot
 from event_capture import CaptureRetry
+from log_context import LogContext
 from snapshot_adapter import AdapterError, MappingUnavailable
 
 
@@ -35,7 +36,11 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
             stream.write(json.dumps(record, ensure_ascii=False, default=sorted) + '\n')
             stream.flush()
 
-        write({'header': summary.copy()})
+        context = LogContext(Path(__file__).resolve().parent / 'runtime',
+            connection_override=dict(platform='mumu', adb_path=adb, serial=serial, auto_detect=False),
+            layout_override=dict(event_observation=False))
+        header = context.header('lifecycle_capture', debug_mode=True)
+        write({'header': {**summary, 'log_header': header['data']}})
         try:
             while time.monotonic() < deadline:
                 if collector is None:
@@ -48,7 +53,8 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
                         write({'connected': dict(
                             pid=collector.core.mc.pid,
                             process_instance=collector.core.mc.process_instance,
-                            version=collector.diagnostics.version_actual)})
+                            version=collector.diagnostics.version_actual,
+                            environment=context.update_environment(vars(collector.diagnostics)))})
                         print('lifecycle_ready', flush=True)
                     except Exception as exc:
                         gap = runtime.disconnected(str(exc))
@@ -274,6 +280,9 @@ def replay_product(lines):
     for line in lines:
         record = reader.restore(json.loads(line))
         kind, data = record['kind'], record['data']
+        if ((kind == 'log_header' and data.get('debug_mode') is False)
+                or (kind == 'debug_mode' and data.get('enabled') is False)):
+            raise ValueError('详细采样未覆盖日志全程，无法完整回放。请在复现前开启调试模式。')
         if kind == 'lifecycle_header':
             if sessions is not None:
                 raise ValueError('duplicate lifecycle header')

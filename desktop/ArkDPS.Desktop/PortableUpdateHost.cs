@@ -128,6 +128,7 @@ internal sealed class PortableUpdateHost(string root)
 
         string source = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
         var prior = SelectionForSource(ReadSelection(), source);
+        WriteUpdateEvent($"event=applying target={request.Target.Version}");
         bool selectionChanged = false;
         string? scratch = null;
         try
@@ -149,6 +150,7 @@ internal sealed class PortableUpdateHost(string root)
                 WriteSelection(new Selection(request.Target, prior.Current, null));
                 selectionChanged = true;
             }, waitForExit: false);
+            WriteUpdateEvent($"event=activated target={request.Target.Version}");
             PruneVersions(request.Target, prior.Current);
         }
         catch (Exception error) when (IsUpdateError(error))
@@ -166,6 +168,7 @@ internal sealed class PortableUpdateHost(string root)
             }
             using var recovery = Start(source, ChildOption, new PortableLaunch(
                 PortableLaunchKind.Recover, request.Arguments, Message: "更新未完成，已重新打开上一版本。"));
+            WriteUpdateEvent($"event=rolled_back target={request.Target.Version}");
         }
         finally
         {
@@ -329,12 +332,13 @@ internal sealed class PortableUpdateHost(string root)
         catch (Exception error) when (IsUpdateError(error)) { Log(error); }
     }
 
-    internal void Log(Exception error)
+    internal void Log(Exception error) => WriteUpdateEvent(error.ToString());
+
+    private void WriteUpdateEvent(string message)
     {
         try
         {
-            Directory.CreateDirectory(StateDirectory);
-            File.AppendAllText(Path.Combine(StateDirectory, "wpf-update.log"), $"{DateTimeOffset.Now:O} {error}{Environment.NewLine}");
+            DesktopLog.Append(StateDirectory, "wpf-update.log", $"{DateTimeOffset.UtcNow:O} {message}");
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException) { }
     }

@@ -35,6 +35,7 @@ from event_observer import ObserverReadRetry, ObserverStatus
 from event_probe import BarrierBusy, NATIVE_PC_CONTRACT
 from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
+from log_context import LogContext
 from metrics import observation_age
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
@@ -58,8 +59,19 @@ BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
     'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
-    'multiplayer_enabled',
+    'multiplayer_enabled', 'debug_mode',
 ))
+BRIDGE_KEY_COMMANDS = frozenset(('hello', 'connection_apply', 'rescan', 'history_refresh', 'quit', 'debug_mode'))
+PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable'))
+PC_STARTUP_KEY_STATES = frozenset(('waiting_for_process', 'ready', 'failed', 'process_failed', 'cleanup_pending'))
+
+
+def _write_diagnostic_event(category, event):
+    try:
+        sys.stderr.write(f'[{category}] ' + json.dumps(event, ensure_ascii=False, separators=(',', ':')) + '\n')
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def event_label(status, error=None):
@@ -1013,6 +1025,12 @@ class DesktopState:
                 raise ValueError('卫戍队友DPS开关必须是布尔值')
             if enabled != self.layout.multiplayer_enabled:
                 self.persist(replace(self.layout, multiplayer_enabled=enabled))
+        elif op == 'debug_mode':
+            enabled = cmd.get('enabled')
+            if type(enabled) is not bool:
+                raise ValueError('调试模式开关必须是布尔值')
+            if enabled != self.layout.debug_mode:
+                self.persist(replace(self.layout, debug_mode=enabled))
         elif op == 'hud_style':
             panel_id = cmd['panel_id']
             if panel_id not in {p.panel_id for p in self.layout.panels}:
@@ -1099,6 +1117,8 @@ class CollectionWorker:
         self.effective = (state.connection, state.layout.event_observation)
         self._request_lock = threading.Lock()
         self._autochess_enabled = state.layout.multiplayer_enabled
+        self._debug_mode = threading.Event()
+        self.set_debug_mode(state.layout.debug_mode)
         self._request_revision = 0
         self.stop = threading.Event()
         self.session = None
@@ -1123,6 +1143,21 @@ class CollectionWorker:
     def autochess_enabled(self):
         with self._request_lock:
             return self._autochess_enabled
+
+    @property
+    def debug_mode(self):
+        return self._debug_mode.is_set()
+
+    def set_debug_mode(self, enabled):
+        if enabled:
+            self._debug_mode.set()
+        else:
+            self._debug_mode.clear()
+
+    def _trace_pc_startup(self, record):
+        if (self.debug_mode or record.get('event') in PC_STARTUP_KEY_EVENTS
+                or record.get('status') in PC_STARTUP_KEY_STATES):
+            _write_diagnostic_event('pc-startup', record)
 
     def request(self, config, enabled):
         with self._request_lock:
@@ -1195,7 +1230,8 @@ class CollectionWorker:
             return self.native_pc_observer_factory if config.platform == 'native_pc' and enabled else None
         if self.pc_runtime is None:
             from capture_cli import _native_pc_frida_runtime
-            candidate = _native_pc_frida_runtime(config.native_game_root, self.pc_runtime_dir)
+            candidate = _native_pc_frida_runtime(config.native_game_root, self.pc_runtime_dir,
+                                                startup_trace=self._trace_pc_startup)
             with self._request_lock:
                 if self.stop.is_set():
                     candidate.close()
@@ -1259,20 +1295,79 @@ class CollectionWorker:
 
             runtime = BattleRuntime()
             capture_dir = self.directory / 'captures'
+            context = LogContext(self.directory)
+            saved_connection_path = self.directory / 'connection.json'
+            observed_config, observed_signature, observed_environment = None, None, None
+            current_config, current_enabled = None, False
+
+            def header(source, *, debug_mode):
+                latest_config, latest_events = (self.effective if current_config is None
+                                                else (current_config, current_enabled))
+                result = context.header(source, debug_mode=debug_mode)
+                data = result['data']
+                data['settings'].update(platform=latest_config.platform,
+                    auto_detect=latest_config.auto_detect, event_observation=latest_events,
+                    adb_configured=bool(latest_config.adb_path), manual_target_configured=bool(latest_config.serial),
+                    native_game_root_configured=bool(latest_config.native_game_root))
+                if latest_config == observed_config and observed_environment is not None:
+                    data['environment'] = observed_environment
+                elif latest_config != ConnectionConfigStore(saved_connection_path).load().config:
+                    data['environment'] = {'platform': latest_config.platform, 'provenance': 'not_observed'}
+                return result
+
             with DesktopCaptureJournal(capture_dir, encoder=json_value,
-                                       warn=lambda message: self.events.put(('warning', message))) as journal:
-                sampling_observation = None
+                                       warn=lambda message: self.events.put(('warning', message)),
+                                       header=header, debug_mode=lambda: self.debug_mode) as journal:
+                sampling_observation = last_lifecycle = None
+                last_transient_transition = {}
+
+                def observe_environment(data, config):
+                    nonlocal observed_config, observed_signature, observed_environment
+                    if not data.get('version_actual'):
+                        return
+                    data = dict(data, platform=config.platform)
+                    signature = tuple(data.get(key) for key in (
+                        'version_actual', 'version_expected', 'version_status', 'adb_path', 'selected_serial'))
+                    if config == observed_config and signature == observed_signature:
+                        return
+                    connection_bytes = None
+                    try:
+                        with saved_connection_path.open('rb') as stream:
+                            raw = stream.read(262145)
+                        if len(raw) <= 262144 and ConnectionConfig.from_dict(json.loads(raw)) == config:
+                            connection_bytes = raw
+                    except (OSError, ValueError, RecursionError):
+                        pass
+                    environment = context.update_environment(data, cache=connection_bytes is not None,
+                                                             connection_bytes=connection_bytes)
+                    observed_config, observed_signature = config, signature
+                    if environment != observed_environment:
+                        observed_environment = environment
+                        journal.write('environment', environment)
+                        _write_diagnostic_event('environment', environment)
+
                 def audit(kind, value):
-                    nonlocal sampling_observation
+                    nonlocal sampling_observation, last_lifecycle
+                    if kind == 'connected' and current_config is not None:
+                        observe_environment(value.get('diagnostics', {}), current_config)
                     if kind == 'lifecycle_observation':
                         sampling_observation = (value.feed, value.sequence, value.kind)
+                        if value.kind != last_lifecycle:
+                            transition = (last_lifecycle, value.kind)
+                            now = time.monotonic()
+                            if (self.debug_mode or 'gap' not in transition or
+                                    now - last_transient_transition.get(transition, float('-inf')) >= 30):
+                                journal.write('lifecycle_state', {'previous': last_lifecycle, 'state': value.kind})
+                                if 'gap' in transition:
+                                    last_transient_transition[transition] = now
+                            last_lifecycle = value.kind
                     journal.write(kind, value)
                 self._bootstrap_audit = audit
                 regeneration = None
                 try:
                     usable = False
                     retry_allowed = True
-                    current_config, current_enabled, current_target = None, False, None
+                    current_target = None
                     current_revision = None
                     explicit_retry_pending = False
                     session_bootstrap_generation = None
@@ -1286,6 +1381,8 @@ class CollectionWorker:
                     last_autochess_scene = object()
                     clock_burst = None
                     bundled_observer = self.endpoint == DEFAULT_FRIDA_REMOTE and BUNDLED_SERVER_ARCHIVE.is_file()
+                    initial_config, initial_events = self.effective
+                    audit('worker_started', {'platform': initial_config.platform, 'event_observation': initial_events})
 
                     def publish_sampling_rejection(value):
                         nonlocal last_sampling_rejection
@@ -1321,10 +1418,15 @@ class CollectionWorker:
                         except queue.Empty:
                             config = None
                         if config is not None:
-                            if revision != current_revision:
-                                explicit_retry_pending = True
+                            changed = revision != current_revision
                             current_revision = revision
                             current_config, current_enabled = config, enabled
+                            if changed:
+                                explicit_retry_pending = True
+                                last_lifecycle = None
+                                last_transient_transition.clear()
+                                audit('connection_attempt', {'revision': revision, 'platform': config.platform,
+                                                             'event_observation': enabled})
                             current_target = None
                             usable = False
                             retry_allowed = True
@@ -1345,7 +1447,8 @@ class CollectionWorker:
                             self.events.put(('scanning', True))
                             if self.release():
                                 try:
-                                    session_kwargs = {'autochess_enabled': self.autochess_enabled}
+                                    session_kwargs = {'autochess_enabled': self.autochess_enabled,
+                                                      'debug_mode': lambda: self.debug_mode}
                                     pc_provider = self._pc_provider(config, enabled,
                                         explicit_retry=explicit_retry_pending)
                                     explicit_retry_pending = False
@@ -1390,7 +1493,9 @@ class CollectionWorker:
                                     if self.stop.is_set():
                                         continue
                                     diag = self.session.collector.diagnostics
-                                    self.events.put(('diagnostic', diag.as_dict()))
+                                    diag_dict = diag.as_dict()
+                                    observe_environment(diag_dict, config)
+                                    self.events.put(('diagnostic', diag_dict))
                                     text = (diag.message or '已连接官服 PC · 累计快照'
                                             if config.platform == 'native_pc' else
                                             f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}')
@@ -1400,8 +1505,14 @@ class CollectionWorker:
                                     diag = getattr(exc, 'diagnostics', None)
                                     if diag is None and self.session is not None:
                                         diag = getattr(self.session.collector, 'diagnostics', None)
+                                    diag_dict = diag.as_dict() if diag is not None else {}
+                                    audit('connection_failed', {'revision': revision, 'platform': config.platform,
+                                          'code': diag_dict.get('code'), 'error_type': type(exc).__name__,
+                                          'win32_error': (diag_dict.get('details') or {}).get('win32_error',
+                                                                                             getattr(exc, 'winerror', None))})
                                     if diag:
-                                        self.events.put(('diagnostic', diag.as_dict()))
+                                        observe_environment(diag_dict, config)
+                                        self.events.put(('diagnostic', diag_dict))
                                     retry_allowed = not (
                                         config.platform == 'native_pc'
                                         and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
@@ -1524,6 +1635,7 @@ class CollectionWorker:
                                         if reason.startswith('observer ') and ' request failed:' in reason:
                                             reason = reason.partition(':')[0]
                                         audit('capture_retry', {
+                                            'error_type': type(exc).__name__,
                                             'reason': reason[:200], 'count': retries,
                                             'duration_ms': round((now - started) * 1000, 1),
                                             'monotonic': now})
@@ -1606,6 +1718,8 @@ class CollectionWorker:
                     if regeneration is not None and enabled and config.platform == 'native_pc':
                         regeneration.poll_reporting(time.monotonic(), audit, force=True)
                     self.pending_history_count = len(runtime.pending_history)
+                    audit('worker_stopped', {'pending_history_count': self.pending_history_count,
+                        'cleanup_ok': not bool(self.cleanup_error or self.pc_cleanup_error or self.retired_errors)})
         except Exception as exc:
             self.events.put(('worker_error', str(exc)))
             traceback.print_exc(file=sys.stderr)
@@ -1650,9 +1764,10 @@ def _drain_worker_events(worker, state):
 def serve(input_stream, output, state, worker=None):
     """Versioned UTF-8 JSON Lines: hello, snapshot/state/error, quit/bye."""
     handshake = False
-    trace = os.environ.get('ARKDPS_BRIDGE_TRACE') == '1'
+    forced_trace = os.environ.get('ARKDPS_BRIDGE_TRACE') == '1'
     last_reply: tuple[int, str, str, int] | None = None
     while True:
+        trace = forced_trace or state.layout.debug_mode
         line = input_stream.readline(MAX_MESSAGE + 2)
         if not line:
             return
@@ -1692,7 +1807,7 @@ def serve(input_stream, output, state, worker=None):
 
         def send(payload):
             advance('write')
-            if log_op != 'snapshot' and not trace:
+            if log_op in BRIDGE_KEY_COMMANDS and not trace:
                 diagnostic('reply_ready')
             try:
                 output.write(payload + '\n')
@@ -1702,7 +1817,7 @@ def serve(input_stream, output, state, worker=None):
                 diagnostic('failed', error=type(exc).__name__)
                 return False
             advance('complete')
-            if log_op != 'snapshot' or trace or time.perf_counter() - started >= BRIDGE_SLOW_PHASE_SECONDS:
+            if log_op in BRIDGE_KEY_COMMANDS or trace or time.perf_counter() - started >= BRIDGE_SLOW_PHASE_SECONDS:
                 diagnostic('sent')
             return True
 
@@ -1714,7 +1829,7 @@ def serve(input_stream, output, state, worker=None):
                     log_op = request_op
                 if type(raw_id) is int:
                     request_id = raw_id
-            if log_op != 'snapshot' or trace:
+            if log_op in BRIDGE_KEY_COMMANDS or trace:
                 diagnostic('received')
             if not isinstance(cmd, dict) or type(cmd.get('version')) is not int or cmd.get('version') != PROTOCOL_VERSION:
                 raise ValueError('不支持的 worker 协议版本')
@@ -1794,6 +1909,8 @@ def serve(input_stream, output, state, worker=None):
                     state.finish_offline_connection()
                 elif op == 'multiplayer_enabled' and worker:
                     worker.set_multiplayer_enabled(state.layout.multiplayer_enabled)
+                elif op == 'debug_mode' and worker:
+                    worker.set_debug_mode(state.layout.debug_mode)
                 kind = 'snapshot' if op == 'snapshot' else 'state'
             advance('snapshot')
             if getattr(worker, 'effective', None) is not None:
@@ -1838,6 +1955,7 @@ def main(*, native_pc_observer_factory=None):
     parser.add_argument('--native-game-root')
     parser.add_argument('--arkframework-root', type=Path)
     parser.add_argument('--no-events', action='store_true')
+    parser.add_argument('--debug-mode', action='store_true')
     parser.add_argument('--frida-remote')
     args = parser.parse_args()
     if args.offline and args.state_dir is None:
@@ -1847,14 +1965,22 @@ def main(*, native_pc_observer_factory=None):
     instance = None
     if not args.offline:
         instance = socket.socket()
+        operation = 'bind'
         try:
             instance.bind(('127.0.0.1', 27380))
+            operation = 'listen'
             instance.listen(1)
-        except OSError:
-            raise SystemExit('ArkDPS 采集已在运行；请先退出原窗口。')
+        except OSError as error:
+            instance.close()
+            _write_diagnostic_event('listener', {'operation': operation, 'port': 27380,
+                'utc': datetime.now(timezone.utc).isoformat(),
+                'error_type': type(error).__name__, 'system_error': getattr(error, 'winerror', None) or error.errno})
+            raise SystemExit('ArkDPS 无法启动单实例监听；请查看日志。') from error
     output = sys.stdout
     sys.stdout = sys.stderr  # stdout is exclusively the protocol stream
     state = DesktopState(args.state_dir)
+    if args.debug_mode:
+        state.layout = replace(state.layout, debug_mode=True)
     effective_config = replace(
         state.connection, adb_path=args.adb or state.connection.adb_path,
         serial=args.serial or state.connection.serial,

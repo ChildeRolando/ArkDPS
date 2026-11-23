@@ -13,11 +13,12 @@ import time
 from collection_session import CollectionSession
 from battle_history import BattleHistory
 from event_capture import CaptureRetry
+from log_context import LogContext
 
 
-def _native_pc_frida_runtime(game_root, runtime_dir):
+def _native_pc_frida_runtime(game_root, runtime_dir, *, startup_trace=None):
     from native_pc.frida_runtime import NativePcFridaRuntime
-    return NativePcFridaRuntime(game_root, runtime_dir=runtime_dir)
+    return NativePcFridaRuntime(game_root, runtime_dir=runtime_dir, startup_trace=startup_trace)
 
 
 def _connect_pc_after_bootstrap(session, bootstrap, *, timeout, cancelled):
@@ -112,13 +113,22 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
                                              'maa-job.json', 'maa-callbacks.jsonl')):
         raise RuntimeError('capture evidence already exists; choose a fresh output directory')
     platform = getattr(args, 'platform', 'mumu')
+    events_enabled = args.frida_remote is None if platform == 'native_pc' else bool(args.frida_remote)
+    framework_root = getattr(args, 'arkframework_root', None)
+    log_context = LogContext(root / 'runtime', root=root, build_head=head, connection_override={
+        'platform': platform, 'adb_path': args.adb, 'serial': args.serial,
+        'native_game_root': getattr(args, 'native_game_root', None), 'auto_detect': False,
+    }, layout_override={'event_observation': events_enabled})
     metadata = {'head': head, 'stage': args.stage, 'frida_remote': args.frida_remote,
                 'adb': args.adb, 'serial': args.serial, 'started_at': time.time(),
                 'capture_seconds_after_baseline': args.capture_seconds,
-                'require_events': args.require_events}
+                'require_events': args.require_events,
+                'log_header': log_context.header('foreground_capture', debug_mode=True)['data']}
     if platform == 'native_pc':
         metadata.update(platform=platform, native_game_root=args.native_game_root,
-                        frida_remote=None, event_observation=args.frida_remote is None)
+                        frida_remote=None, event_observation=events_enabled)
+        if framework_root is not None:
+            metadata['arkframework_root'] = str(framework_root)
     if args.maa_job:
         job = args.maa_job.read_bytes()
         metadata['maa_job_sha256'] = hashlib.sha256(job).hexdigest()
@@ -131,12 +141,16 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
     with (dest / 'capture.jsonl').open('x', encoding='utf-8') as journal:
         def audit(kind, data):
             if kind == 'connected':
+                environment = log_context.update_environment(data['diagnostics'])
                 metadata.update(pid=data['pid'], process_instance=data.get('process_instance'),
-                                game_version=data['diagnostics'].get('version_actual'))
+                                game_version=data['diagnostics'].get('version_actual'),
+                                log_header={**metadata['log_header'], 'environment': environment})
+                data = {**data, 'environment': environment}
             record = {'kind': kind, 'wall': time.time(), 'data': data}
             journal.write(json.dumps(record, ensure_ascii=False, default=json_value, allow_nan=False) + '\n')
             journal.flush()
 
+        audit('metadata', metadata)
         session_options = dict(frida_remote=args.frida_remote, audit=audit)
         regeneration = None
         pc_runtime = None
@@ -148,12 +162,10 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
                                               and getattr(args, 'arkframework_root', None) is None
                                               and native_pc_observer_factory is None))
             session_options.update(collector=collector, frida_remote=args.frida_remote)
-            framework_root = getattr(args, 'arkframework_root', None)
             if framework_root is not None:
                 from native_pc.arkframework_replay import RegenerationRecorder
                 regeneration = RegenerationRecorder(Path(framework_root) / 'battle_timeline.json',
                                                      dest / 'arkframework')
-                metadata['arkframework_root'] = str(framework_root)
             if native_pc_observer_factory is not None and args.frida_remote is None:
                 session_options['observer_factory'] = native_pc_observer_factory
             elif args.frida_remote is None:
@@ -168,7 +180,6 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
             if regeneration is not None:
                 regeneration.poll_reporting(time.monotonic(), audit, force=final)
 
-        audit('metadata', metadata)
         try:
             poll_replay()
             bootstrap_started = False

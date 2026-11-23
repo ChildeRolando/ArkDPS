@@ -7,6 +7,8 @@ Removed legacy flags fail loudly through argparse instead of silently falling
 back to a different interface.
 """
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
+import json
 import socket
 import sys
 from datetime import datetime, timedelta, timezone
@@ -169,10 +171,20 @@ def main(*, native_pc_observer_factory=None):
         finally:
             instance_lock.close()
     else:
-        log = (ROOT / 'runtime' / f'app-{timestamp():%Y%m%d-%H%M%S}.log').open(
-            'a', encoding='utf-8', buffering=1)
-        sys.stdout = sys.stderr = log
-        run_capture(args)
+        from log_context import LogContext
+
+        state_dir = ROOT / 'runtime'
+        path = state_dir / f'app-{timestamp():%Y%m%d-%H%M%S-%f}.log'
+        try:
+            with path.open('x', encoding='utf-8', buffering=1) as log:
+                context = LogContext(state_dir,
+                    connection_override=dict(platform='mumu', adb_path=args.adb, serial=args.serial, auto_detect=False),
+                    layout_override=dict(event_observation=bool(args.frida_remote)))
+                log.write(json.dumps(context.header('capture_console', debug_mode=True), ensure_ascii=False) + '\n')
+                with redirect_stdout(log), redirect_stderr(log):
+                    run_capture(args)
+        finally:
+            instance_lock.close()
     return None
 
 

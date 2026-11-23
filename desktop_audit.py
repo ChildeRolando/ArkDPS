@@ -1,11 +1,14 @@
 """Bound the desktop capture journal and encode cumulative enemy state as deltas."""
 
 from datetime import datetime, timezone
+from enum import Enum
 import json
 import re
 import stat
 import time
 from uuid import uuid4
+
+from log_context import LogContext
 
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
@@ -16,12 +19,56 @@ CAPTURE_NAME = re.compile(
     r'(?P<run>wpf-\d{8}-\d{6}-\d{6}-[0-9a-f]{32})(?:-part-(?P<part>\d{6,}))?\.jsonl',
     re.ASCII)
 
+KEY_EVENTS = {
+    'worker_started': ('platform', 'event_observation'),
+    'worker_stopped': ('pending_history_count', 'cleanup_ok'),
+    'connection_attempt': ('revision', 'platform', 'event_observation'),
+    'connection_failed': ('revision', 'platform', 'code', 'error_type', 'win32_error'),
+    'connected': ('pid',),
+    'environment': None,  # LogContext owns and allowlists these fields.
+    'native_pc_bootstrap': ('status', 'code', 'ready_generation'),
+    'frida_endpoint': ('ok',),
+    'frida_keepalive': ('ok',),
+    'observer_waiting_game_init': ('pid',),
+    'observer_game_init_ready': ('pid', 'source'),
+    'observer_attach_blocked': ('code', 'pid'),
+    'observer_ready': (),
+    'observer_error': ('error_type', 'code'),
+    'observer_cleanup_error': ('error_type', 'code'),
+    'observer_retry': ('generation', 'previous_status', 'status'),
+    'lifecycle_state': ('previous', 'state'),
+    'event_gap': ('error_type', 'code'),
+    'capture_retry': ('error_type', 'code'),
+    'capture_error': ('error_type', 'code'),
+    'history_error': ('code',),
+    'history_saved': ('written',),
+    'stopped': (),
+}
+REPEATED_KEY_EVENTS = frozenset(('connection_failed', 'frida_keepalive', 'native_pc_bootstrap',
+                                'capture_retry', 'capture_error', 'history_error', 'observer_error'))
+
+
+def _event_fields(data, fields):
+    if not isinstance(data, dict):
+        return {}
+    result = {}
+    for name in fields:
+        if name not in data:
+            continue
+        value = data[name]
+        if isinstance(value, Enum):
+            value = value.value
+        if value is None or type(value) in (bool, int) or (
+                isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,120}', value)):
+            result[name] = value
+    return result
+
 
 class DesktopCaptureJournal:
     """Best-effort disk audit for the single live desktop worker."""
 
     def __init__(self, directory, *, encoder, warn, segment_bytes=CAPTURE_SEGMENT_BYTES,
-                 total_bytes=CAPTURE_TOTAL_BYTES):
+                 total_bytes=CAPTURE_TOTAL_BYTES, header=None, debug_mode=False):
         self.directory, self.encoder, self.warn = directory, encoder, warn
         self.segment_bytes, self.total_bytes = segment_bytes, total_bytes
         self.run = f'wpf-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{uuid4().hex}'
@@ -29,6 +76,10 @@ class DesktopCaptureJournal:
         self.stream = None
         self.size = self.available = 0
         self.retry_at = 0.
+        self.header = header if header is not None else LogContext(directory.parent).header
+        self.debug_enabled = debug_mode if callable(debug_mode) else lambda: debug_mode
+        self._detailed = None
+        self._last_key_events = {}
         self.writer = DesktopAuditWriter(self._emit)
 
     def __enter__(self):
@@ -79,9 +130,14 @@ class DesktopCaptureJournal:
             raise OSError(f'采集日志目录无法腾出 {required} 字节（上限 {self.total_bytes} 字节）')
         self.available = available
 
+    def _encode(self, record):
+        return (json.dumps(record, ensure_ascii=False, default=self.encoder,
+                           separators=(',', ':')) + '\n').encode('utf-8')
+
     def _emit(self, record):
-        payload = (json.dumps(record, ensure_ascii=False, default=self.encoder,
-                              separators=(',', ':')) + '\n').encode('utf-8')
+        payload = self._encode(record)
+        if self.stream is None:
+            payload = self._encode(self.header('desktop_capture', debug_mode=self._detailed)) + payload
         if len(payload) > self.total_bytes:
             raise OSError('单条采集记录超出目录容量上限')
         if self.stream is None or self.available < len(payload):
@@ -116,10 +172,40 @@ class DesktopCaptureJournal:
         if self.retry_at and time.monotonic() < self.retry_at:
             return
         try:
+            detailed = bool(self.debug_enabled())
+            if detailed != self._detailed:
+                previous = self._detailed
+                self._detailed = detailed
+                if previous is not None:
+                    # A resumed recording needs its own delta baseline.
+                    self.writer = DesktopAuditWriter(self._emit)
+                    self._last_key_events.clear()
+                    self.writer.write('debug_mode', {'enabled': detailed,
+                        'utc': datetime.now(timezone.utc).isoformat()})
+            if not detailed:
+                if kind not in KEY_EVENTS:
+                    return
+                if kind == 'frida_keepalive' and data.get('ok') and kind not in self._last_key_events:
+                    return
+                cleanup_ok = kind == 'stopped' and not bool(data.get('cleanup_errors'))
+                fields = KEY_EVENTS[kind]
+                data = dict(data) if fields is None else _event_fields(data, fields)
+                if kind == 'stopped':
+                    data['cleanup_ok'] = cleanup_ok
+                if kind == 'connected':
+                    self._last_key_events.pop('connection_failed', None)
+                if kind == 'history_saved':
+                    self._last_key_events.pop('history_error', None)
+                if kind in REPEATED_KEY_EVENTS and self._last_key_events.get(kind) == data:
+                    return
+                if kind in REPEATED_KEY_EVENTS:
+                    self._last_key_events[kind] = data.copy()
+                data['utc'] = datetime.now(timezone.utc).isoformat()
             if self.size >= self.segment_bytes:
                 self._close_segment()
             self.writer.write(kind, data)
         except (OSError, TypeError, ValueError) as exc:
+            self._last_key_events.pop(kind, None)
             self._on_error(exc)
         else:
             self.retry_at = 0.

@@ -168,8 +168,7 @@ public partial class MainWindow : Window
         {
             if(App.Verification!=null)
             {
-                Directory.CreateDirectory(App.Verification);
-                File.WriteAllText(Path.Combine(App.Verification,"failure.txt"),ex.ToString());
+                DesktopLog.Append(App.Verification, "failure.txt", ex.ToString(), App.StateDirectory);
                 await Quit(1);
             }
             else if (App.UpdateLaunch?.ReadyPipe != null) { RecordUiError(ex); await Quit(1); }
@@ -238,9 +237,8 @@ public partial class MainWindow : Window
         LastUiError=ex.ToString();
         try
         {
-            Directory.CreateDirectory(App.StateDirectory);
-            File.AppendAllText(Path.Combine(App.StateDirectory,"ui-errors.log"),
-                DateTime.Now.ToString("O")+Environment.NewLine+LastUiError+Environment.NewLine);
+            DesktopLog.Append(App.StateDirectory, "ui-errors.log", DateTimeOffset.UtcNow.ToString("O")
+                + Environment.NewLine + LastUiError);
         }
         catch(IOException){}
         catch(UnauthorizedAccessException){}
@@ -308,6 +306,7 @@ public partial class MainWindow : Window
     {
         applying=true;State=state;
         var layout=state.Get("layout");string theme=Theme.Normalize(layout.Text("theme"));
+        UpdateDebugMode(layout.Bool("debug_mode"));
         string units = layout.Text("number_units") == "chinese" ? "chinese" : "western";
         bool unitsChanged = Json.NumberUnits != units;
         Json.NumberUnits = units;
@@ -1428,6 +1427,26 @@ public partial class MainWindow : Window
             AutoDetect.IsChecked=false;
         }
     }
+    private void UpdateDebugMode(bool enabled)
+    {
+        DebugModeSetting.IsChecked = enabled;
+        DebugModeSetting.Content = enabled ? "调试模式已开启 · 点击关闭" : "开启调试模式";
+    }
+    private async void ChangeDebugMode(object sender,RoutedEventArgs e)
+    {
+        bool enabled = DebugModeSetting.IsChecked == true;
+        UpdateDebugMode(State.Get("layout").Bool("debug_mode"));
+        DebugModeSetting.IsEnabled = false;
+        try
+        {
+            await Command("debug_mode", new() { ["enabled"] = enabled });
+        }
+        finally
+        {
+            UpdateDebugMode(State.Get("layout").Bool("debug_mode"));
+            DebugModeSetting.IsEnabled = true;
+        }
+    }
     private async void ApplySettings(object sender,RoutedEventArgs e)
     {
         if(closingRequested || quitting || updateShutdownPreparing) return;
@@ -1496,6 +1515,7 @@ public partial class MainWindow : Window
             else code=await cleanup;
         }
         catch(Exception ex){code=1;WriteQuitLog("退出流程异常："+ex);}
+        WriteQuitLog($"event=desktop_shutdown code={code}");
         System.Windows.Application.Current.Shutdown(code);
     }
     private async Task<int> Release(int code,bool forUpdate)
@@ -1521,7 +1541,8 @@ public partial class MainWindow : Window
         {
             code=1;WriteQuitLog("退出清理未确认："+ex.Message);
             if(App.Verification!=null)
-                try{Directory.CreateDirectory(App.Verification);File.WriteAllText(Path.Combine(App.Verification,"cleanup-error.txt"),ex.ToString());}catch(IOException){}
+                try { DesktopLog.Append(App.Verification, "cleanup-error.txt", ex.ToString(), App.StateDirectory); }
+                catch (IOException) { }
         }
         return code;
     }
@@ -1529,8 +1550,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            string directory=App.StateDirectory;Directory.CreateDirectory(directory);
-            File.AppendAllText(Path.Combine(directory,"wpf-quit.log"),DateTime.Now.ToString("O")+" "+message+Environment.NewLine);
+            DesktopLog.Append(App.StateDirectory, "wpf-quit.log", $"{DateTimeOffset.UtcNow:O} {message}");
         }
         catch(IOException){}
         catch(UnauthorizedAccessException){}
