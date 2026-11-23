@@ -369,6 +369,7 @@ class Statistics:
         self.settlement_unscoped_hits = 0
         self.settlement_unscoped = False
         self.settlement_skill_active = {}
+        self.settlement_skill_initial_pending = set()
         self.settlement_skill_incomplete = set()
         self.settlement_skill_unassigned = set()
         self.partial_damage = {}
@@ -602,10 +603,12 @@ class Statistics:
             self.settlement_bars.pop(target_uid, None)
 
     def _settlement_skill(self, owner, actor):
+        identity = (owner, actor)
         if (actor is None or self.skill_unknown or owner in self.settlement_skill_unassigned
-                or (owner, actor) in self.settlement_skill_incomplete):
+                or identity in self.settlement_skill_initial_pending
+                or identity in self.settlement_skill_incomplete):
             return None
-        window = self.settlement_skill_active.get((owner, actor))
+        window = self.settlement_skill_active.get(identity)
         if window is not None and self._unconfirmed_skill_reason(window, live=True):
             return None
         return window is not None
@@ -974,12 +977,20 @@ class Statistics:
                                 key, skill_id, name, method, reason, wait_for_end=None):
         def close(identity, _time, _reason, *, confirmed):
             window = self.settlement_skill_active.pop(identity)
-            if not confirmed and self._unconfirmed_skill_reason(window):
+            if (not confirmed and identity not in self.settlement_skill_initial_pending
+                    and self._unconfirmed_skill_reason(window)):
                 self.settlement_skill_incomplete.add(identity)
-        self._apply_skill_transition(
-            self.settlement_skill_active, (owner, actor), source, kind, game_time,
+        identity = (owner, actor)
+        effect_started = self._apply_skill_transition(
+            self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
             wait_for_end=wait_for_end, close=close, actor=actor)
+        if effect_started:
+            # Earlier unclassified hits stay in the damage ledger's denominator.
+            self.settlement_skill_initial_pending.discard(identity)
+
+    def mark_settlement_skill_initial_unknown(self, owner, actor):
+        self.settlement_skill_initial_pending.add((owner, actor))
 
     def mark_settlement_skill_unassigned(self, source, method, reason):
         owner = self.owners.get(source)
@@ -1017,9 +1028,11 @@ class Statistics:
                 active[identity_key] = {
                     'start': game_time, 'source': source, 'key': key, 'id': skill_id,
                     'name': name, 'effect_started': effect_started, 'actor': actor}
+                return effect_started
             elif source == window['source'] and same_skill and effect_started:
                 window['effect_started'] = True
-            return
+                return True
+            return False
         if method == 'BasicSkill.OnCastFinish' and not self._native_cast_window_matches(
                 window, source, key, skill_id, actor):
             if wait_for_end is True:

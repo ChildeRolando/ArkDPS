@@ -63,7 +63,7 @@ public partial class MainWindow : Window
     private (string? AdbPath,string? Serial)? workerConnectionTarget;
     private bool syncingHudFooter;
     private bool multiplayerSettingPending;
-    private const string MultiplayerPcOnly="卫戍队友DPS仅支持官服 PC";
+    private const string MultiplayerPcOnly="卫戍队友DPS仅支持 PC";
     private bool MultiplayerEnabled=>State.Get("layout").Bool("multiplayer_enabled");
     private bool MultiplayerSupported=>State.Bool("multiplayer_supported") &&
         State.Get("effective_connection_config").Text("platform")=="native_pc";

@@ -491,3 +491,100 @@ def test_native_history_consumer_does_not_infer_self_from_bad_late_metadata(tmp_
     assert selected['view']['footer_total'] is None
     assert record.to_dict() == original and path.read_bytes() == original_bytes
 
+
+@pytest.mark.parametrize('phase', [4, 5], ids=['defense', 'assist_scene'])
+@pytest.mark.parametrize('effective', [False, True], ids=['nominal', 'effective'])
+def test_cold_native_skill_observations_reach_main_teammate_and_saved_history(tmp_path, phase, effective):
+    """Partial skill components remain usable; the missing prefix stays unknown."""
+    battle = ScopedNativeBattle()
+    battle.native_phase = phase
+    battle.advance(10, damage=90000)
+    assert battle.poll().kind == 'sample'
+    state = four_player_state(tmp_path)
+    state.layout = replace(state.layout, panels=(PanelConfig(effective_only=effective),))
+    state.history_config = PanelConfig(panel_id='history', effective_only=effective)
+    originals = []
+
+    def publish():
+        sample = battle.runtime.display_sample()
+        originals.append((sample, deepcopy(sample)))
+        state.accept('autochess_scene', battle.runtime.feed.autochess_scene)
+        state.accept('sample', sample)
+        return state.snapshot()
+
+    def damage(sequence, index, amount, nominal):
+        return dict(battle.scoped_hit(sequence, index, amount), nominal_amount=nominal)
+
+    def cast(sequence, index, *, end=False):
+        event = battle.scoped_hit(sequence, index, 0)
+        return {**{key: event[key] for key in ('sequence', 'frame', 'game_time', 'source',
+                    'source_character_uid', 'native_autochess_scope')},
+                'kind': 'skill_end' if end else 'skill_start', 'amount': 1,
+                'skill_key': 'skchr_swllow_2',
+                'proof': {'method': 'Character.OnSkillFinish' if end else 'Character.SwitchToSkillState'}}
+
+    def advance(when, events):
+        battle.advance(when, events)
+        assert battle.poll().kind == 'sample'
+        return publish()
+
+    self_owner, teammate_owner = f'910000003:{CID}#301', f'910000001:{CID}#101'
+    battle.advance(11)
+    cold = advance(11, [damage(1, 3, 25, 50), damage(2, 1, 7, 7)])
+    assert cold['panels'][0]['details_by_owner'][self_owner]['observed_skill_damage'] is None
+    battle.advance(12)
+    advance(12, [cast(3, 3), cast(4, 1)])
+    battle.advance(13)
+    active = advance(13, [damage(5, 3, 100, 200), damage(6, 1, 40, 120)])
+    assert active['panels'][0]['details_by_owner'][self_owner]['observed_skill_damage'] == 200
+    assert active['panels'][0]['details_by_owner'][self_owner]['observed_non_skill_damage'] == 0
+    battle.advance(14)
+    advance(14, [cast(7, 3, end=True), cast(8, 1, end=True)])
+    battle.advance(15)
+    live = advance(15, [damage(9, 3, 25, 100), damage(10, 1, 20, 60)])
+
+    def assert_split(view, owner, nominal, settled):
+        detail = view['details_by_owner'][owner]
+        assert detail['damage_scope_reason'] is None
+        assert detail['skill_split_complete'] is detail['skill_split_effective_complete'] is False
+        assert detail['skill_damage'] is detail['non_skill_damage'] is None
+        assert detail['observed_skill_damage'] == nominal[0]
+        assert detail['observed_non_skill_damage'] == nominal[1]
+        assert detail['observed_skill_damage_effective'] == settled[0]
+        assert detail['observed_non_skill_damage_effective'] == settled[1]
+        assert detail['skill_split_reason']
+        assert view['source'][owner]['actor_uid'] == int(owner.rsplit('#', 1)[1])
+        assert view['source'][owner]['player_uid'] == owner.split(':', 1)[0]
+
+    assert_split(live['panels'][0], self_owner, (200, 100), (100, 25))
+    assert_split(live['multiplayer']['players'][0]['view'], teammate_owner, (120, 60), (40, 20))
+    assert live['multiplayer']['scope_kind'] == ('defense' if phase == 4 else 'assist')
+    if phase == 5:
+        assert live['panels'][0]['scope_label'] == '当前协防战场'
+        assert teammate_owner in live['panels'][0]['details_by_owner']
+    else:
+        assert teammate_owner not in live['panels'][0]['details_by_owner']
+
+    battle.native_phase, battle.autochess_epoch = 8, 2
+    battle.advance(16, state=3)
+    assert battle.poll().kind == 'terminal'
+    battle.active = False
+    assert battle.poll().kind == 'end'
+    archive, = battle.runtime.sessions.pop_archives()
+    record = BattleRecord.from_archive(archive)
+    assert state.history.save(record).written
+    original_bytes = state.history.path_for(record.battle_id).read_bytes()
+    state.accept('history', None)
+    state.command(dict(version=1, op='history_select', battle_id=record.battle_id))
+    selected = state.snapshot()['history_selected']
+    assert_split(selected['view'], self_owner, (200, 100), (100, 25))
+    assert_split(selected['multiplayer']['players'][0]['view'], teammate_owner, (120, 60), (40, 20))
+    assert selected['multiplayer']['scope'] == live['multiplayer']['scope']
+    assert state.selected.last_sample['autochess_context']['phase'] == 8
+    assert state.selected.last_sample['multiplayer']['native_phase'] == phase
+    assert state.selected.statistics['rows'] == {}  # No invented native counters.
+    state.accept('lifecycle', 'preparing')
+    assert state.snapshot()['history_selected'] == selected
+    assert state.history.path_for(record.battle_id).read_bytes() == original_bytes
+    assert all(sample == original for sample, original in originals)
+

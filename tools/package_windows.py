@@ -26,7 +26,7 @@ from release_identity import candidate_head
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
 from windows_manifest import verify_executable_manifest
-DEFAULT_VERSION = '1.0.0-rc.35'
+DEFAULT_VERSION = '1.0.0-rc.36'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
@@ -193,7 +193,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         '在设置中选择 MuMu 或官服 PC。MuMu 需要开启 Root，并使用已适配的安卓游戏 2.7.91。\n'
         f'{pc_instructions}'
         f'{observer_instructions}'
-        '「卫戍队友DPS」仅支持具有多战场视野的官服 PC。MuMu 及其它端的防御只统计本家。\n'
+        '「卫戍队友DPS」仅支持具有多战场视野的 PC 客户端，适用于官服和 B 服。MuMu 及其它端的防御只统计本家。\n'
         'ADB 由模拟器提供。\n\n'
         f'{update_instructions}'
         '从尚未要求管理员权限的旧版首次升级，请退出旧版并手动下载完整 ZIP，按下面步骤迁移一次。\n'
