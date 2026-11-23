@@ -28,7 +28,8 @@ internal sealed class HistoryItem
     {
         "native_pc"=>"官服 PC", "android"=>"Android（ADB）", _=>"来源未记录",
     };
-    public string Summary=>string.Join(" · ",SourceLabel,Outcome,Data.Text("duration"));
+    public string Summary=>string.Join(" · ",new[]{Data.Text("scope_warning"),SourceLabel,Outcome,Data.Text("duration")}
+        .Where(value=>value.Length>0));
     public string Date=>Data.Text("date");
 }
 
@@ -94,6 +95,7 @@ public partial class MainWindow : Window
     private JsonElement EffectiveConnectionConfig=>State.Get("effective_connection_config").ValueKind==JsonValueKind.Object
         ? State.Get("effective_connection_config") : State.Get("connection_config");
     private bool UsingNativePc=>EffectiveConnectionConfig.Text("platform")=="native_pc";
+    private bool ShowingCharacterCounters=>State.Text("native_counter_scope")=="autochess_character_counters";
     private NativePcReadiness PcReadiness=>NativePcReadiness.From(State);
     private bool SamplingRejected=>State.Get("sampling_rejection").Text("code")=="mapping_unavailable" &&
         (State.Text("status") is "sampling_rejected" or "stale") && State.Text("error").Length==0 && !PcReadiness.IsError;
@@ -342,6 +344,7 @@ public partial class MainWindow : Window
         EventStatus.Text=state.Text("event_text");
         ErrorText.Text=string.Join(" · ",state.Get("warnings").Items().Select(x=>x.Text()).Append(state.Text("error")).Where(x=>x.Length>0));
         bool previousBattle=ShowingPreviousBattle;
+        if(!previousBattle) SideFriendlyTab.Header=ShowingCharacterCounters ? "角色累计" : "我方";
         bool panelLayoutChanged=ApplyLiveSnapshot(state,previousBattle,changed || unitsChanged);
         Footer.Text=SamplingRejected ? state.Text("status_text") : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text");
         if(!initialized)
@@ -368,7 +371,9 @@ public partial class MainWindow : Window
         LiveReconnectButton.Content=SubpageReconnectButton.Content=reconnectLabel;
         applying=false;
         if (panelLayoutChanged || changed) ArrangePanels();
-        UpdateEnemies(state.Get("enemy"),DisplayedBattleId,previousBattle ? "previous" : state.Text("status"));
+        bool previousEnemy=previousBattle || (SamplingRejected && DisplayedBattleId.Length>0 &&
+            state.Get("sampling_rejection").Text("scope_code")=="native_pc_autochess_scope_unverified");
+        UpdateEnemies(state.Get("enemy"),DisplayedBattleId,previousEnemy ? "previous" : state.Text("status"));
         UpdateEnemySummary();
         if(changed){InvalidateVisualTree(this);foreach(var hud in Huds.Values)InvalidateVisualTree(hud);}
     }
@@ -539,6 +544,7 @@ public partial class MainWindow : Window
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" or "locating" => (workerLabel,StatusAmber),
             "waiting" => ("PC 版 · 等待进入战斗",StatusAmber),
+            "live" when ShowingCharacterCounters => (workerLabel,StatusAmber),
             "live" or "degraded" => ("PC 版 · 累计统计",StatusGreen),
             _ => (workerLabel,StatusGray),
         } : status switch

@@ -13,7 +13,8 @@ import math
 from copy import deepcopy
 from dataclasses import dataclass, field
 
-from autochess_context import lookup_native_actor, native_autochess_event_identity
+from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, lookup_native_actor,
+                               native_autochess_event_identity)
 from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -101,6 +102,12 @@ def build_owner_map(roster: RosterSnapshot) -> OwnerMap:
     return result
 
 
+def _character_counter_map(sample):
+    # This scope groups only by the client's original counter key. It has no
+    # roster ownership and does not attribute a summon to a host.
+    return OwnerMap(owners={row['id']: row['id'] for row in sample['rows']})
+
+
 def _counter(row: dict) -> dict[str, float] | None:
     values = {}
     for kind in ('damage', 'healing'):
@@ -139,6 +146,7 @@ class BattleStatisticsAdapter:
 
     def __init__(self):
         self._events_only = False
+        self._character_counters = False
         self.snapshot_revision = 0
         self.event_stream = None
         self._character_names = load_character_names()
@@ -246,15 +254,20 @@ class BattleStatisticsAdapter:
         session = sample['session']
         start = sample['game_time']
         events_only = native_autochess_event_baseline(sample)
+        character_counters = sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
         if sample.get('native_counter_scope') == 'events_only' and not events_only:
             raise MappingUnavailable(
                 '卫戍身份或阶段尚未取得可靠事件基线；拒绝回退到按角色名累计')
-        mapping = OwnerMap() if events_only else build_owner_map(roster)
+        if character_counters:
+            mapping = _character_counter_map(sample)
+        else:
+            mapping = OwnerMap() if events_only else build_owner_map(roster)
         if not mapping.owners and not events_only:
             raise MappingUnavailable(
                 '未能从战局编队建立可靠的统计键归属；拒绝发布累计数据')
         self.owner_map = mapping
         self._events_only = events_only
+        self._character_counters = character_counters
         context = sample.get('autochess_context') if events_only else None
         self._world_identity = (tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round'))
                                 if context is not None else None)
@@ -652,6 +665,7 @@ class BattleStatisticsAdapter:
         if not isinstance(frame, int) or isinstance(frame, bool) or frame != roster.frame:
             raise FrameMismatch('累计快照与编队快照逻辑帧不一致；请重新读取')
         if ('native_snapshot_witnesses' in sample
+                and sample.get('native_counter_scope') != NATIVE_AUTOCHESS_CHARACTER_COUNTERS
                 and not native_autochess_context_bound(sample)):
             raise MappingUnavailable('原生累计或编队不可用，尚未取得可靠的卫戍事件身份；保留队列重试')
         if (self.statistics is not None and sample.get('session') == self.session
@@ -715,7 +729,7 @@ class BattleStatisticsAdapter:
             self.last_result = self.statistics.result()
             return AdapterUpdate(self.session, game_time, self.result(roster),
                                  missing_fields=('native_player_counters',), roster_frame=roster.frame)
-        roster_map = build_owner_map(roster)
+        roster_map = _character_counter_map(sample) if self._character_counters else build_owner_map(roster)
         if self.source_attribution or source_attribution:
             self._update_event_sources(roster, roster_map, source_events, settlement_version)
         # New roster evidence can map tokens that were not attributable when
@@ -928,6 +942,9 @@ class BattleStatisticsAdapter:
         if self._events_only:
             result['totals_complete'] = False
             result['native_counter_scope'] = 'unavailable'
+        elif self._character_counters:
+            result['totals_complete'] = False
+            result['native_counter_scope'] = NATIVE_AUTOCHESS_CHARACTER_COUNTERS
         result['adapter_session'] = self.session
         result['snapshot_revision'] = self.snapshot_revision
         return result

@@ -3,10 +3,12 @@ import json
 
 import pytest
 
+from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from battle_history import BattleRecord
-from battle_share import json_bytes, record_display
+from battle_share import json_bytes, record_display, record_view
 from connection import ConnectionConfig
-from desktop_bridge import DesktopState
+from desktop_bridge import DesktopState, PROTOCOL_VERSION
+from panel_model import PanelConfig, Ranking, RateBasis
 from test_battle_history import record
 
 
@@ -60,3 +62,58 @@ def test_legacy_android_record_shape_remains_unrecorded_after_source_switch(tmp_
             assert item['labels'][-1] == '来源未记录'
         assert '来源未记录' in snapshot['history'][0]['search']
         assert archive_path.read_bytes() == raw
+
+
+@pytest.mark.parametrize('platform,counter_scope', [('native_pc', None), ('android', None),
+                                                       ('native_pc', NATIVE_AUTOCHESS_CHARACTER_COUNTERS)])
+def test_autochess_history_missing_player_scope_keeps_raw_record(tmp_path, platform, counter_scope):
+    unverified = platform == 'native_pc'
+    archived = record(platform=platform, stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m03',
+                      outcome='victory', practice=True).to_dict()
+    archived['last_sample'].update(native_counter_scope=counter_scope, rows=[
+        dict(id='char_328_cammou', damage=482, healing=0, physical=482),
+        dict(id='duplicate', damage=800, healing=0),
+        dict(id='duplicate', damage=900, healing=0),
+        dict(id='invalid:cid', damage=1000, healing=0),
+        dict(id='invalid_counters', damage=-1000, healing=False),
+    ])
+    original = BattleRecord.from_dict(archived)
+    raw = json.dumps(archived, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    state = DesktopState(tmp_path)
+    archive_path = state.history.path_for(original.battle_id)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(raw)
+    state.refresh_history()
+
+    snapshot = state.snapshot()
+    index, detail = snapshot['history'][0], snapshot['history_selected']
+    standalone = record_view(original, PanelConfig())
+    expected = ('char_328_cammou', 482) if unverified and not counter_scope else ('a', 230)
+    assert [(row['owner_id'], row['value']) for row in detail['view']['entries']] == [expected]
+    assert [(row.owner_id, row.value) for row in standalone.entries] == [expected]
+    assert original.unverified_autochess_scope is unverified
+    if unverified:
+        assert index['scope_warning'] == detail['scope_warning'] == '卫戍快照 · 玩家归属未知'
+        assert '卫戍快照 · 玩家归属未知' in index['search']
+        assert index['duration'] == detail['duration'] == '采样至 12.0 秒'
+        assert detail['outcome'] == '结果未知'
+        assert detail['labels'][1] == '演习状态未知'
+        assert detail['view']['share_known'] is False
+        assert detail['multiplayer'] is None
+        assert standalone.entries[0].name.casefold() in index['search']
+        if not counter_scope:
+            for basis in RateBasis:
+                assert not record_view(original, PanelConfig(ranking=Ranking.DPS, rate_basis=basis)).entries
+    else:
+        assert 'scope_warning' not in index and 'scope_warning' not in detail
+        assert detail['outcome'] == '胜利'
+        assert detail['labels'][1] == '演习'
+
+    export_path = tmp_path / 'export.json'
+    state.command(dict(version=PROTOCOL_VERSION, op='export', battle_id=original.battle_id,
+                       format='json', path=str(export_path)))
+    exported = json.loads(export_path.read_bytes())
+    display = exported.pop('display')
+    assert ('scope_warning' in display) is unverified
+    assert exported == archived
+    assert archive_path.read_bytes() == raw

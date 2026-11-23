@@ -12,7 +12,7 @@ import math
 import time
 import uuid
 
-from autochess_context import native_autochess_scope_id
+from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autochess_scope_id
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
@@ -24,6 +24,24 @@ from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract,
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
+
+
+NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED = 'native_pc_autochess_scope_unverified'
+
+
+def _native_pc_autochess(metadata, stage):
+    return (metadata.get('platform') == 'native_pc' and isinstance(stage, str)
+            and 'AUTOCHESS' in stage.upper())
+
+
+def _use_autochess_character_counters(sample, observer, previous_scope):
+    witness = (sample.get('native_snapshot_witnesses') or {}).get('actor_rows')
+    if (observer is not None or previous_scope is not None
+            or (witness is not None and witness.get('status') != 'available')):
+        return False
+    sample['native_counter_scope'] = NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+    sample['presence_duration_supported'] = False
+    return True
 
 
 @dataclass(frozen=True)
@@ -453,7 +471,8 @@ class BattleFeed:
         self.current_lifecycle = before
         metadata = before.get('metadata') or {}
         stage = metadata.get('stage_id') if metadata.get('evidence') else None
-        stage_changed = bool(stage and self.stage and stage != self.stage)
+        stage_changed = bool(stage and stage != self.stage
+                             and (self.stage or _native_pc_autochess(metadata, stage)))
         battle = before['battle']
         self.autochess_exited = (isinstance(stage, str) and bool(stage) and 'AUTOCHESS' not in stage.upper()
                                  or battle is None and getattr(collector, 'autochess_absence_is_exit', False))
@@ -487,6 +506,15 @@ class BattleFeed:
                     self.current_lifecycle = before
                     return self._emit('terminal', reason='finished_snapshot_unavailable')
                 if sample['session'] == self.native_session and sample['game_time'] >= self.clock:
+                    if (_native_pc_autochess(metadata, stage or self.stage)
+                            and not native_autochess_context_bound(sample)):
+                        if self.terminal and self.autochess_identity is not None:
+                            return self._emit('waiting', reason='terminal_battle')
+                        if (not sample['rows'] or not _use_autochess_character_counters(
+                                sample, observer, self.autochess_identity)):
+                            return self._emit('scope_unavailable', sample, roster,
+                                              reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED, events=events)
+                        roster = RosterSnapshot(sample['frame'])
                     capture = published_capture if self.generation == published_generation else None
                     events = self._drain(observer, events, sample, capture=capture)
                     sample['native_session'] = sample['session']
@@ -535,11 +563,23 @@ class BattleFeed:
         native_context_known = context.get('status') in ('available', 'partial')
         context_identity = context.get('identity') if native_context_known else None
         scope_changed = context_identity is not None and context_identity != self.autochess_identity
-        changed = not same_native or clock_reset or scope_changed
+        scope_unavailable = (_native_pc_autochess(metadata, stage or (self.stage if same_native else None))
+                             and not native_autochess_context_bound(sample))
+        prior_scope = self.autochess_identity if same_native and not clock_reset else None
+        closed_scope = (prior_scope is not None and capture is not None and capture.closed)
+        character_counters = scope_unavailable and _use_autochess_character_counters(
+            sample, observer, None if closed_scope else prior_scope)
+        new_counter_scope = character_counters and closed_scope
+        changed = not same_native or clock_reset or scope_changed or new_counter_scope
         generation = self.generation + int(changed)
+        if character_counters:
+            roster = RosterSnapshot(sample['frame'])
+            scope_unavailable = not sample['rows'] and generation == published_generation
         preparing = (generation > published_generation and roster.present_known
                      and not roster.entries and not sample['rows'])
-        if native_context_known:
+        if character_counters and generation > published_generation:
+            preparing = not any(row['damage'] or row['healing'] for row in sample['rows'])
+        elif native_context_known:
             # A proven native combat phase may have no local BattlePlayerData.
             # Its typed actor/player evidence travels on the event interface.
             preparing = context['phase'] not in (4, 5, 6)
@@ -548,29 +588,34 @@ class BattleFeed:
         # A same-controller round reset can still prove the old stream ended
         # at its last accepted watermark, without draining preparation events.
         capture = published_capture if generation == published_generation else None
-        if not preparing:
+        if not preparing and not scope_unavailable:
             events = self._drain(observer, events, sample, capture=capture)
         round_reset = None
-        if clock_reset and events is not None and 'sequence' in events:
+        if clock_reset and not scope_unavailable and events is not None and 'sequence' in events:
             drained = events.get('drain') or {}
             if not (drained.get('error') or drained.get('stopped')):
                 round_reset = {key: events[key] for key in ('before', 'after', 'sequence')}
         if changed:
             self.generation = generation
             self.terminal = False
-            self.stage = stage
+            if stage or not same_native:
+                self.stage = stage
         elif stage:
             self.stage = stage
         self.identity, self.clock, self.frame = identity, now, sample['frame']
         self.native_session = sample['session']
         if context_identity is not None:
             self.autochess_identity = deepcopy(context_identity)
-        elif not same_native or clock_reset:
+        elif not same_native or clock_reset or new_counter_scope:
             self.autochess_identity = None
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
+        if scope_unavailable:
+            return self._emit('scope_unavailable', sample, roster,
+                              reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED, events=events)
         if preparing:
-            return self._emit('preparing', sample, roster, reason='empty_roster', round_reset=round_reset)
+            reason = 'awaiting_character_output' if character_counters else 'empty_roster'
+            return self._emit('preparing', sample, roster, reason=reason, round_reset=round_reset)
         return self._emit('sample', sample, roster, events=events, round_reset=round_reset, observer=observer)
 
 
@@ -915,9 +960,18 @@ class BattleSessions:
                 observation.sequence <= self.sequence or
                 observation.generation < max(self.generation, self.preparing_generation or 0)):
             return False
-        if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting', 'preparing'):
+        if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting', 'preparing', 'scope_unavailable'):
             raise ValueError('unknown observation kind')
-        if observation.kind == 'preparing':
+        if observation.kind == 'scope_unavailable':
+            if observation.generation > self.generation:
+                self._archive('new_battle')
+                self.preparing_generation = observation.generation
+            # A retry within the same generation can still fill the event
+            # prefix. Keep its acknowledgment and coverage at the last mark.
+            self.state = 'frozen' if self.adapter is not None else 'waiting'
+            self.connection = 'connected'
+            self.reason = observation.reason
+        elif observation.kind == 'preparing':
             if observation.generation <= self.generation:
                 return False
             self._archive('new_battle', successor=observation)
@@ -1113,16 +1167,23 @@ class BattleRuntime:
         from tools.stage_global_state.memory import ReadFailure
         try:
             observation = self._acquire(collector, observer)
-            if (prepare_observer is not None and observation.kind == 'sample'
+            if (prepare_observer is not None and observation.kind in ('sample', 'scope_unavailable')
                     and observation.generation != self.sessions.generation):
                 retry, observer = prepare_observer(observation)
                 if retry:
-                    # Preserve the confirmed native snapshot and archive the
-                    # old battle before a new observer barrier can be busy.
-                    # Its event coverage starts only at the fresh paired mark.
+                    # Preserve independent native counters before a new
+                    # observer barrier can be busy. Player scope must be
+                    # certified by the fresh observer's own marks.
                     native = dict(observation.sample,
                                   event_capability=deepcopy(collector.event_capability))
-                    self._consume(replace(observation, sample=native, events=None))
+                    metadata = native.get('battle_metadata') or {}
+                    if (native.get('native_counter_scope') == 'events_only'
+                            and _native_pc_autochess(metadata, metadata.get('stage_id'))):
+                        self._consume(replace(observation, kind='scope_unavailable', sample=native,
+                                              reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED,
+                                              events=None, round_reset=None))
+                    else:
+                        self._consume(replace(observation, sample=native, events=None))
                     observation = self._acquire(collector, observer)
             consumed = self._consume(observation)
             self._acknowledge_observation(observation, observer, consumed)

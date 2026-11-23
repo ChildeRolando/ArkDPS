@@ -12,7 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from battle_lifecycle import BattleRuntime
+from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+from battle_lifecycle import BattleRuntime, NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
 from event_capture import CaptureRetry, LiveEventCapture
 from event_probe import NATIVE_PC_CONTRACT, bind_native_autochess_pair, native_autochess_context_bound
 from native_pc.probe_native_pc import BILIBILI_BUILD_ID, BUILD_ID
@@ -129,15 +130,79 @@ def test_guarded_native_combat_can_reach_existing_event_pipeline_without_legacy_
     assert commits == [0, 1] and probe.reads == 2
 
 
-@pytest.mark.parametrize('mode', ['unknown', 'foreign', 'no_observer'])
+@pytest.mark.parametrize('mode', ['unknown', 'foreign'])
 def test_incomplete_legacy_tables_cannot_bypass_missing_or_foreign_context_proof(tmp_path, mode):
     collector, _, observer, commits, _ = fixture(tmp_path, mode=mode)
     runtime = BattleRuntime()
-    with pytest.raises(CaptureRetry):
-        runtime.poll(collector, None if mode == 'no_observer' else observer)
+    observation = runtime.poll(collector, observer)
+    assert observation.kind == 'scope_unavailable'
+    assert observation.reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
     assert commits == []
     assert runtime.display_sample() is None
     assert runtime.sessions.multiplayer is None
+
+
+@pytest.mark.parametrize('failed_field', ['roster', None], ids=['missing-roster', 'empty-roster'])
+def test_snapshot_only_autochess_displays_raw_character_counters_and_marks_archive(tmp_path, failed_field):
+    collector, probe, observer, commits, _ = fixture(tmp_path, failed_field=failed_field)
+    runtime = BattleRuntime()
+    first = runtime.poll(collector)
+
+    def assert_counters(value):
+        stats = value['statistics']
+        assert stats['native_counter_scope'] == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+        assert stats['totals_complete'] is False
+        assert stats['present_known'] is False
+        assert stats['rows'][CID]['damage'] == 90000.
+        assert stats['rows'][CID]['sources'] == [CID]
+        assert commits == []
+
+    assert first.kind == 'sample'
+    assert first.sample['native_counter_scope'] == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+    assert_counters(runtime.display_sample())
+    assert runtime.sessions.multiplayer is None
+
+    probe.frame, probe.when, probe.failed_field = 30, 1, 'actor_rows'
+    assert runtime.poll(collector).kind == 'scope_unavailable'
+    assert_counters(runtime.display_sample())
+    assert runtime.sessions.state == 'frozen'
+    assert not runtime.sessions.pop_archives()
+
+    probe.frame, probe.when, probe.failed_field = 60, 2, failed_field
+    verified = runtime.poll(collector, observer)
+    assert verified.kind == 'sample' and verified.generation > first.generation
+    archive, = runtime.sessions.pop_archives()
+    assert archive['last_sample']['native_counter_scope'] == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+    assert archive['statistics']['rows'][CID]['damage'] == 90000.
+    assert runtime.display_sample()['multiplayer']['schema_version'] == 2
+    assert commits == [0]
+
+
+def test_snapshot_only_missing_actor_counters_do_not_create_an_empty_battle(tmp_path):
+    collector, _, _, _, _ = fixture(tmp_path, failed_field='actor_rows')
+    runtime = BattleRuntime()
+    assert runtime.poll(collector).kind == 'scope_unavailable'
+    runtime.process_changed()
+    assert runtime.display_sample() is None
+    assert not runtime.sessions.pop_archives()
+
+
+def test_reconnect_without_observer_starts_a_new_counter_scope_in_the_same_native_round(tmp_path):
+    collector, probe, observer, commits, _ = fixture(tmp_path)
+    runtime = BattleRuntime()
+    verified = runtime.poll(collector, observer)
+    runtime.disconnected('capture_stopped')
+    probe.frame, probe.when = 30, 1
+
+    basic = runtime.poll(collector)
+
+    assert basic.generation == verified.generation + 1
+    assert basic.sample['native_session'] == verified.sample['native_session']
+    assert basic.sample['native_counter_scope'] == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+    assert runtime.display_sample()['statistics']['rows'][CID]['damage'] == 90000.
+    assert runtime.sessions.multiplayer is None and commits == [0]
+    archive, = runtime.sessions.pop_archives()
+    assert archive['last_sample']['native_counter_scope'] == 'events_only'
 
 
 def test_ordinary_stage_still_rejects_missing_legacy_roster_even_with_observer(tmp_path):
@@ -169,8 +234,9 @@ def test_established_event_only_mode_does_not_admit_unbound_fallback_on_later_fr
     runtime.poll(collector, observer)
     assert commits == [0]
     probe.frame, probe.when, probe.failed_field, probe.observer_mode = 30, 1, 'roster', mode
-    with pytest.raises(CaptureRetry):
-        runtime.poll(collector, None if mode == 'no_observer' else observer)
+    observation = runtime.poll(collector, None if mode == 'no_observer' else observer)
+    assert observation.kind == 'scope_unavailable'
+    assert observation.reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
     assert commits == [0]
     assert runtime.sessions.adapter.last_game_time == 0
     view = runtime.display_sample()

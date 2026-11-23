@@ -11,6 +11,7 @@ from collector import (Collector, SampleUnavailable, BattleChanged, ProcessChang
 from enemy_telemetry import defense_enemy_projection
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
+from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from event_probe import EventProbe
 from event_stream import StreamGap
 
@@ -433,9 +434,9 @@ class CollectionSession:
                       if isinstance(value, dict)
                       and isinstance(value.get('damage'), (int, float))]
         effective = [value.get('effective_damage') for value in known_rows]
-        if events_only:
-            # The shared world supplies target-scoped HP facts. Empty native
-            # player counters cannot establish a zero team-damage baseline.
+        if events_only or sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
+            # Neither the event-only baseline nor unscoped character counters
+            # establish a native team-damage amount.
             our_damage = None
         elif not known_rows:
             our_damage = 0.0

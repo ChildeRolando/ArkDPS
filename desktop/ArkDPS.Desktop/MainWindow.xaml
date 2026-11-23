@@ -579,7 +579,7 @@
                         Margin="{TemplateBinding Padding}"/>
      </Grid>
     </ControlTemplate></TabControl.Template>
-    <TabItem Header="我方" Style="{StaticResource SideTab}"><local:SideFriendlyView x:Name="SideFriendly"/></TabItem>
+    <TabItem x:Name="SideFriendlyTab" Header="我方" Style="{StaticResource SideTab}"><local:SideFriendlyView x:Name="SideFriendly"/></TabItem>
     <TabItem Header="敌方" Style="{StaticResource SideTab}"><ContentControl x:Name="SideEnemyHost"
           HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/></TabItem>
    </TabControl>

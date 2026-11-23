@@ -1,18 +1,26 @@
 """Read-only sharing of a validated BattleRecord, never a live sample."""
 from datetime import datetime
+from functools import cache
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
+from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from battle_history import BattleRecord
-from panel_model import (DIAGNOSTIC_LABELS, EventAvailability, panel_statistics, render_panel,
+from character_catalog import load_character_names
+from panel_model import (DAMAGE_ORDER, DIAGNOSTIC_LABELS, EventAvailability, panel_statistics, render_panel,
                          rows_from_statistics, team_status)
 from source_classification import classify_unmapped_source
 import stage_names
 
 
 OUTCOMES = {'victory': '胜利', 'defeat': '失败', 'abandoned': '退出', 'unknown': '结果未知'}
+AUTOCHESS_SNAPSHOT_LABEL = '卫戍快照 · 玩家归属未知'
+AUTOCHESS_SNAPSHOT_NOTE = '按角色键记录客户端累计伤害和治疗。玩家归属、回合及整场结果未知。'
+_CHARACTER_KEY = re.compile(r'[A-Za-z0-9_#.-]{1,110}')
+_history_character_names = cache(load_character_names)
 
 
 def record_labels(record):
@@ -24,9 +32,11 @@ def record_display(record):
     data = record.display_metadata()
     metadata = data['metadata']
     stage = stage_names.resolve(metadata['stage_id'])
-    practice = {True: '演习', False: '正式', None: '演习状态未知'}[metadata['practice']]
-    outcome = OUTCOMES[metadata['outcome']]
+    unverified = record.unverified_autochess_scope
+    practice = {True: '演习', False: '正式', None: '演习状态未知'}[None if unverified else metadata['practice']]
+    outcome = OUTCOMES['unknown' if unverified else metadata['outcome']]
     duration = f'{data["duration"]:.1f} 秒'
+    duration_label = f'采样至 {duration}' if unverified else f'{duration}（最后可靠游戏时刻）'
     date = data['observed_at'] or data['recorded_at']
     date_label = '最后观察' if data['observed_at'] else '记录时间（观察时间未知）'
     observed_date = datetime.fromisoformat(date)
@@ -39,12 +49,15 @@ def record_display(record):
     source_label = ('官服 PC' if platform == 'native_pc' else
                     'Android（ADB）' if platform == 'android' else '来源未记录')
     display = dict(battle_id=record.battle_id, stage=stage.label, stage_description=stage.description,
-                stage_detail=stage.detail, stage_raw=stage.raw, outcome=outcome, duration=duration,
+                stage_detail=stage.detail, stage_raw=stage.raw, outcome=outcome,
+                duration=duration_label if unverified else duration,
                 source_label=source_label,
                 date=f'{observed_date:%Y-%m-%d %H:%M}', labels=(stage.label, practice, outcome,
-                    f'{duration}（最后可靠游戏时刻）', f'{date_label} {date}', source_label))
+                    duration_label, f'{date_label} {date}', source_label))
     if platform in ('native_pc', 'android'):
         display['platform'] = platform
+    if unverified:
+        display.update(scope_warning=AUTOCHESS_SNAPSHOT_LABEL, labels=(*display['labels'], AUTOCHESS_SNAPSHOT_LABEL))
     return display
 
 
@@ -90,6 +103,35 @@ def _native_output(sample):
     return {item.get('id'): item for item in rows if isinstance(item, dict)}
 
 
+def _legacy_autochess_rows(sample):
+    """Project only the last native CID counters from archives predating scoped snapshots."""
+    raw = sample.get('rows')
+    if not isinstance(raw, list) or not raw:
+        return {}
+    names = _history_character_names()
+    rows, seen = {}, set()
+
+    def amount(value):
+        # Native rows are floats with each typed component at most 1e15.
+        return value if type(value) in (int, float) and 0 <= value <= 4e15 else None
+
+    for item in raw:
+        cid = item.get('id') if isinstance(item, dict) else None
+        if not isinstance(cid, str) or not _CHARACTER_KEY.fullmatch(cid):
+            continue
+        if cid in seen:
+            rows.pop(cid, None)
+            continue
+        seen.add(cid)
+        damage, healing = amount(item.get('damage')), amount(item.get('healing'))
+        if damage is None and healing is None:
+            continue
+        by_type = {key: value for key in DAMAGE_ORDER if (value := amount(item.get(key))) is not None}
+        rows[cid] = dict(name=names.get(cid, cid), damage=damage, healing=healing, damage_by_type=by_type,
+                         sources=[cid], counter_snapshot_complete=damage is not None and healing is not None)
+    return rows
+
+
 def _legacy_non_team(stats, native):
     """Move recognised non-team keys out of a pre-ARK-24 unknown list.
 
@@ -130,10 +172,18 @@ def record_statistics(record, *, for_panel=False):
     stay incomplete instead of being zero-filled.
     """
     if for_panel:
+        unverified = record.unverified_autochess_scope
+        if unverified:
+            sample = record.last_sample
+            if sample.get('native_counter_scope') != NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
+                return dict(rows=_legacy_autochess_rows(sample), ended=True, totals_complete=False,
+                            display_scope_label=AUTOCHESS_SNAPSHOT_LABEL)
         fields = ('rows', 'ended', 'totals_complete', 'non_team_sources', 'non_team_output',
                   'boss_damage_available', 'boss_damage_reason', 'settlement_unassigned',
                   *(key for key, _ in DIAGNOSTIC_LABELS))
         stats = record.statistics_fields(fields)
+        if unverified:
+            return dict(stats, totals_complete=False, display_scope_label=AUTOCHESS_SNAPSHOT_LABEL)
     else:
         stats = record.statistics
     if 'non_team_sources' in stats and 'totals_complete' in stats:
@@ -161,6 +211,8 @@ def record_view(record, config):
         reason = stats['boss_damage_reason'] or reason
         complete = complete and stats['boss_damage_available']
         note = ''
+    if record.unverified_autochess_scope:
+        reason = AUTOCHESS_SNAPSHOT_NOTE
     return render_panel(config, rows_from_statistics(stats), team_complete=complete,
                         team_reason=reason, team_note=note,
                         event=EventAvailability(record.event_status, record.event_error, live=False))
@@ -177,8 +229,10 @@ def json_bytes(record):
     # or compatibility rows.
     data = BattleRecord.from_dict(record.to_dict()).to_dict()
     # The raw stage_id stays authoritative; the display block only adds the
-    # resolved name so exported JSON is readable without the catalog.
+    # resolved name and any warning needed to interpret the data.
     data['display'] = {'stage': stage_names.display_fields(data['metadata']['stage_id'])}
+    if record.unverified_autochess_scope:
+        data['display']['scope_warning'] = AUTOCHESS_SNAPSHOT_NOTE
     return (json.dumps(data, ensure_ascii=False, allow_nan=False, indent=2) + '\n').encode('utf-8')
 
 

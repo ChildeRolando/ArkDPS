@@ -630,6 +630,16 @@ class BattleRecord:
     def event_error(self):
         return self._data['event_error']
 
+    @property
+    def unverified_autochess_scope(self):
+        metadata = self._data['metadata']
+        if metadata.get('platform') != 'native_pc' or 'AUTOCHESS' not in (metadata['stage_id'] or '').upper():
+            return False
+        sample = self._data['last_sample']
+        players = sample.get('multiplayer') or {}
+        # The archive loader has already validated schema 2's scope and player identities.
+        return sample.get('native_counter_scope') != 'events_only' or players.get('schema_version') != 2
+
     def display_metadata(self):
         metadata = self.metadata
         evidence = [metadata.get('evidence')]
