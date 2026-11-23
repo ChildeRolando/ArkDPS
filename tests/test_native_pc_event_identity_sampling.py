@@ -2,7 +2,7 @@
 import pytest
 
 import native_pc_collector as native
-from battle_lifecycle import BattleRuntime
+from battle_lifecycle import BattleRuntime, NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
 from test_native_pc_autochess_collector_gate import fixture, SCOPE, CID
 from test_multiplayer_native_context import hit
 
@@ -86,9 +86,9 @@ def test_omitted_witness_candidate_still_needs_independent_event_identity(tmp_pa
     runtime = BattleRuntime()
     collector._next_enemy = collector._next_stage_plan = float('inf')
     if mode != 'valid':
-        from event_capture import CaptureRetry
-        with pytest.raises(CaptureRetry):
-            runtime.poll(collector, None if mode == 'no_observer' else observer)
+        observation = runtime.poll(collector, None if mode == 'no_observer' else observer)
+        assert observation.kind == 'scope_unavailable'
+        assert observation.reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
         assert commits == [] and runtime.display_sample() is None
     else:
         assert runtime.poll(collector, observer).kind == 'sample'

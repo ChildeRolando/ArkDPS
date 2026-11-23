@@ -44,9 +44,14 @@ def _native_pc_autochess_scope_unavailable(metadata, stage, sample, observer):
 
 
 def _use_autochess_character_counters(sample, observer, previous_scope):
-    witness = (sample.get('native_snapshot_witnesses') or {}).get('actor_rows')
+    witnesses = sample.get('native_snapshot_witnesses') or {}
+    actor_rows = witnesses.get('actor_rows')
+    roster = witnesses.get('roster') or {}
+    # The event-only optimization skips the roster by design while the
+    # observer is starting. A missing observer here is not read-only mode.
     if (observer is not None or previous_scope is not None
-            or (witness is not None and witness.get('status') != 'available')):
+            or roster.get('reason') == 'native_event_identity'
+            or (actor_rows is not None and actor_rows.get('status') != 'available')):
         return False
     sample['native_counter_scope'] = NATIVE_AUTOCHESS_CHARACTER_COUNTERS
     sample['presence_duration_supported'] = False
