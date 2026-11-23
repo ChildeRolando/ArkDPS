@@ -61,6 +61,16 @@ class WindowsDllLoader:
     """Keep the path allocation and loader thread until their use has ended."""
 
     def __init__(self, pid, *, access_rights=0x43A, clock=None):
+        self._diagnostic_origin = time.perf_counter()
+        self._timing_seconds = dict.fromkeys(('load_started', 'submitted', 'thread_completed',
+            'verification_started', 'verification_completed', 'closed'))
+        self._last_alive_exit_code = None
+        self.verification_alive = self.process_exit_code = None
+        self.module_query_attempted = False
+        self.module_query_succeeded = self.module_found = None
+        self.module_base = self.module_base_low32 = self.return_matches = None
+        self.path_utf16_units = self.path_utf16_bytes = self.path_buffer_bytes = None
+        self.loader_module_basename = self.loader_export_rva = None
         self.clock = clock or time
         self.api = access.WindowsApi()
         self.kernel = self.api.kernel
@@ -113,16 +123,37 @@ class WindowsDllLoader:
             raise
 
     def alive(self):
-        return (self.handle is not None and self.api.process_times(self.handle)[0] == self.created_filetime
-                and self.api.exit_code(self.handle) == 259)
+        # Same short-circuit API order and liveness policy as before. Retain the
+        # actual code when read; a skipped/failed read is not an invented zero.
+        self._last_alive_exit_code = None
+        if self.handle is None or self.api.process_times(self.handle)[0] != self.created_filetime:
+            return False
+        code = self.api.exit_code(self.handle)
+        if type(code) is int and 0 <= code <= 0xffffffff:
+            self._last_alive_exit_code = code
+        return code == 259
+
+    def _stamp(self, name):
+        # Observation only: never use the policy/mock clock or change deadlines.
+        self._timing_seconds[name] = max(0.0, time.perf_counter() - self._diagnostic_origin)
 
     def diagnostics(self):
         return {'stage': self.stage, 'operation': self.operation, 'check': self.check,
+                'pid': self.pid, 'created_filetime': self.created_filetime,
                 'submitted': self.submitted, 'thread_exit_code': self.thread_exit_code,
                 'verification_complete': self.verification_complete,
                 'preparation_retries': self.preparation_retries,
                 'verification_retries': self.verification_retries,
                 'last_error': dict(self.last_error) if self.last_error is not None else None,
+                'verification_alive': self.verification_alive, 'process_exit_code': self.process_exit_code,
+                'module_query_attempted': self.module_query_attempted,
+                'module_query_succeeded': self.module_query_succeeded, 'module_found': self.module_found,
+                'module_base': self.module_base, 'module_base_low32': self.module_base_low32,
+                'return_matches': self.return_matches,
+                'path_utf16_units': self.path_utf16_units, 'path_utf16_bytes': self.path_utf16_bytes,
+                'path_buffer_bytes': self.path_buffer_bytes,
+                'loader_module_basename': self.loader_module_basename, 'loader_export_rva': self.loader_export_rva,
+                'timing_seconds': dict(self._timing_seconds),
                 'handle_closed': self.handle is None}
 
     def _remember_error(self, error):
@@ -174,6 +205,7 @@ class WindowsDllLoader:
         path = ctypes.create_unicode_buffer(32768)
         if not self.kernel.GetModuleFileNameW(owner, path, len(path)):
             self._win_error('GetModuleFileNameW')
+        self.loader_module_basename = Path(path.value).name
         own = self.api.open_process(os.getpid(), 0x410)
         try:
             info = access.ModuleInfo()
@@ -182,6 +214,7 @@ class WindowsDllLoader:
         finally:
             self.api.close(own)
         offset = int(address) - int(info.base)
+        self.loader_export_rva = offset if 0 <= offset < info.size else None
         remote = self.find_module(path.value)
         if not 0 <= offset < info.size or remote is None or remote['size'] != info.size:
             raise RuntimeFailure('loader_not_ready', 'Matching public Windows loader module is not ready')
@@ -208,12 +241,16 @@ class WindowsDllLoader:
         if self.submitted:
             raise RuntimeFailure('loader_already_submitted', 'This process owner already submitted its Windows load')
         self.path = Path(path)
+        self._stamp('load_started')
+        encoded_path = str(self.path).encode('utf-16-le', errors='surrogatepass')
+        self.path_utf16_bytes, self.path_utf16_units = len(encoded_path), len(encoded_path) // 2
         entry = self._prepare()
         self.before_mutation()
         self._check_cancelled()
         if not self.alive():
             raise RuntimeFailure('process_changed', 'PC process exited before Windows loader mutation')
         text = ctypes.create_unicode_buffer(str(self.path))
+        self.path_buffer_bytes = ctypes.sizeof(text)
         self.stage, self.check, self.operation = 'allocating', None, 'VirtualAllocEx'
         self.path_address = self.kernel.VirtualAllocEx(self.handle, None, ctypes.sizeof(text), 0x3000, 0x04)
         if not self.path_address:
@@ -234,6 +271,7 @@ class WindowsDllLoader:
             self.pending_thread = thread
             self.submitted = True
             self.stage = 'submitted'
+            self._stamp('submitted')
         self.commit(submit)
         if self.on_submitted is not None:
             self.on_submitted(self)
@@ -261,16 +299,43 @@ class WindowsDllLoader:
             if not self.kernel.GetExitCodeThread(self.pending_thread, ctypes.byref(code)):
                 self._win_error('GetExitCodeThread')
             self.thread_exit_code = code.value
+            self._stamp('thread_completed')
             self.api.close(self.pending_thread)
             self.pending_thread = None
             self._verification_deadline = self.clock.monotonic() + LOADER_VERIFICATION_SECONDS
         self.stage, self.check = 'verifying', 'loaded_component'
+        if self._timing_seconds['verification_started'] is None:
+            self._stamp('verification_started')
         # The path is no longer in use once the Windows worker has returned.
         # Query failures after this point retain the result and only reverify.
         self.free_path()
+        # These are the latest verification attempt's facts. Query errors and
+        # an exited process must remain unknown, not become module_found=False.
+        self.verification_alive = self.process_exit_code = None
+        self.module_query_attempted = False
+        self.module_query_succeeded = self.module_found = None
+        self.module_base = self.module_base_low32 = self.return_matches = None
         try:
             self.operation = 'find_module'
-            self.module = self.find_module(self.path) if self.alive() else None
+            try:
+                self.verification_alive = self.alive()
+            finally:
+                self.process_exit_code = self._last_alive_exit_code
+            if self.verification_alive:
+                self.module_query_attempted = True
+                try:
+                    self.module = self.find_module(self.path)
+                except Exception:
+                    self.module_query_succeeded = False
+                    raise
+                self.module_query_succeeded = True
+                self.module_found = self.module is not None
+                if self.module is not None:
+                    self.module_base = hex(self.module['base'])
+                    self.module_base_low32 = self.module['base'] & 0xffffffff
+                    self.return_matches = self.module_base_low32 == self.thread_exit_code
+            else:
+                self.module = None
         except (OSError, RuntimeFailure) as error:
             self._remember_error(error)
             if self._read_not_ready(error) and self.alive():
@@ -285,11 +350,21 @@ class WindowsDllLoader:
                     f'PC native observer post-load verification failed ({self.operation}, '
                     f'WinError {getattr(error, "winerror", None)}, Windows result {self.thread_exit_code:#x})')
         else:
-            if self.module is None or (self.module['base'] & 0xFFFFFFFF) != self.thread_exit_code:
+            if not self.verification_alive:
+                exited = self.process_exit_code is not None and self.process_exit_code != 259
+                self.load_error = RuntimeFailure('loader_process_exited' if exited else 'process_changed',
+                    f'PC process was not alive at DLL verification (process status {self.process_exit_code}, '
+                    f'thread status {self.thread_exit_code:#x}; not a Win32 error)')
+            elif self.module is None:
                 self.load_error = RuntimeFailure('loader_failed',
-                    f'Windows did not load observer DLL (thread result {self.thread_exit_code:#x})')
+                    f'Observer DLL mapping was not confirmed (thread status {self.thread_exit_code:#x}; not a Win32 error)')
+            elif not self.return_matches:
+                self.load_error = RuntimeFailure('loader_result_mismatch',
+                    f'Observer DLL was found but its module result did not match '
+                    f'(thread status {self.thread_exit_code:#x}; not a Win32 error)')
         self.verification_complete = True
         self.stage = 'complete'
+        self._stamp('verification_completed')
         return True
 
     def free_path(self):
@@ -315,3 +390,4 @@ class WindowsDllLoader:
         self.free_path()
         self.api.close(self.handle)
         self.handle = None
+        self._stamp('closed')

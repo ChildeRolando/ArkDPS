@@ -31,7 +31,8 @@ from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_
 from collector import BattleChanged, NativeClockBusy, ProcessChanged, SnapshotGap, ROOT
 from connection import (PC_EVENT_BACKENDS, ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
                         DetectionStatus, detect_instances, native_event_feed_path, resolve_configured)
-from desktop_audit import DesktopCaptureJournal
+from desktop_audit import (DesktopCaptureJournal, NATIVE_HOOK_STARTUP_EVENTS,
+                            NATIVE_HOOK_STARTUP_OVERFLOW, sanitize_native_hook_startup)
 from event_capture import CaptureRetry
 from event_observer import ObserverReadRetry, ObserverStatus
 from event_probe import BarrierBusy, NATIVE_PC_CONTRACT
@@ -65,7 +66,7 @@ BRIDGE_COMMANDS = frozenset((
     'multiplayer_enabled', 'debug_mode',
 ))
 BRIDGE_KEY_COMMANDS = frozenset(('hello', 'connection_apply', 'rescan', 'history_refresh', 'quit', 'debug_mode'))
-PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable'))
+PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable')) | NATIVE_HOOK_STARTUP_EVENTS
 PC_STARTUP_KEY_STATES = frozenset(('waiting_for_process', 'ready', 'failed', 'process_failed', 'cleanup_pending'))
 
 
@@ -1177,6 +1178,9 @@ class CollectionWorker:
         self._last_pc_bootstrap = None
         self._pc_bootstrap_revision = None
         self._bootstrap_audit = None
+        self._pc_startup_audit_queue = queue.Queue(maxsize=64)
+        self._pc_startup_audit_dropped = 0
+        self._pc_startup_audit_reported_drops = 0
         self.pending_history_count = 0
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
@@ -1201,9 +1205,55 @@ class CollectionWorker:
             self._debug_mode.clear()
 
     def _trace_pc_startup(self, record):
+        if type(record) is not dict or type(record.get('event')) is not str:
+            return
+        if (record.get('event') in NATIVE_HOOK_STARTUP_EVENTS or record['event'].startswith('native_prepare_')
+                or record.get('provider') == 'arkdps-native-hooks'):
+            data = sanitize_native_hook_startup(record)
+            if data is None:
+                return
+            # The startup owner calls from its own thread. Keep file rotation
+            # AND stderr I/O off this early-loading thread. A source owner
+            # serializes its callbacks; only it advances the dropped counter.
+            try:
+                self._pc_startup_audit_queue.put_nowait(data)
+            except queue.Full:
+                self._pc_startup_audit_dropped += 1
+            return
         if (self.debug_mode or record.get('event') in PC_STARTUP_KEY_EVENTS
                 or record.get('status') in PC_STARTUP_KEY_STATES):
             _write_diagnostic_event('pc-startup', record)
+
+    def _flush_pc_startup_audit(self):
+        def emit(record):
+            try:
+                _write_diagnostic_event('pc-startup', record)
+            except Exception:
+                pass
+            if self._bootstrap_audit is not None:
+                try:
+                    self._bootstrap_audit(record['event'], record)
+                except Exception:
+                    # Each diagnostic sink is independent of the other and
+                    # can never change source selection or cleanup.
+                    pass
+
+        for _ in range(64):
+            try:
+                record = self._pc_startup_audit_queue.get_nowait()
+            except queue.Empty:
+                break
+            emit(record)
+        # Never reset the producer's monotonic counter from this thread. A
+        # concurrent overflow will be included in this or the next flush.
+        dropped = self._pc_startup_audit_dropped
+        previous = self._pc_startup_audit_reported_drops
+        if dropped > previous:
+            self._pc_startup_audit_reported_drops = dropped
+            emit(dict(event=NATIVE_HOOK_STARTUP_OVERFLOW, provider='arkdps-native-hooks',
+                utc=datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+                dropped_records=dropped - previous, total_dropped_records=dropped,
+                diagnostic_records_complete=False))
 
     def request(self, config, enabled):
         with self._request_lock:
@@ -1312,6 +1362,7 @@ class CollectionWorker:
         self._emit_pc_bootstrap(None)
 
     def _emit_pc_bootstrap(self, value, *, force=False):
+        self._flush_pc_startup_audit()
         if force or value != self._last_pc_bootstrap:
             self._last_pc_bootstrap = value
             self.events.put(('native_pc_bootstrap', value))
@@ -1765,6 +1816,7 @@ class CollectionWorker:
                         self.release()
                     if not self._close_pc_runtime():
                         self._close_pc_runtime()
+                    self._flush_pc_startup_audit()
                     config, enabled = self.effective
                     if regeneration is not None and enabled and config.platform == 'native_pc':
                         regeneration.poll_reporting(time.monotonic(), audit, force=True)

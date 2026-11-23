@@ -345,3 +345,198 @@ def test_import_does_not_load_frida_or_its_runtime():
     code = "import native_pc.native_hook_runtime,sys; assert 'frida' not in sys.modules; assert 'native_pc.frida_runtime' not in sys.modules"
     result = subprocess.run([sys.executable, '-c', code], cwd=root, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
+
+
+def test_startup_trace_runs_outside_condition_and_preserves_single_load(env):
+    records = []
+    runtime = env.make()
+    def trace(record):
+        assert not runtime._condition._is_owned()
+        records.append(record)
+    runtime.startup_trace = trace
+    runtime.start()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    lease = ready(env, runtime)
+    runtime.close()
+    assert [r['event'] for r in records] == ['native_prepare_started', 'native_prepare_completed', 'native_prepare_closed']
+    assert all(r['pid'] == lease['pid'] and r['created_filetime'] == lease['created'] for r in records)
+    assert all(r['source_build'] == module.access.BUILD_ID for r in records)
+    assert records[-1]['cleanup_ok'] is True
+    assert len(env.factory.instances) == len(env.factory.loads) == 1
+
+
+@pytest.mark.parametrize('callback_failure', [RuntimeError, KeyboardInterrupt])
+def test_trace_callback_failure_does_not_drop_owner_or_retry_load(env, callback_failure):
+    def broken(_record):
+        raise callback_failure('do-not-echo-auth-or-source')
+    runtime = env.make(startup_trace=broken).start()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    lease = ready(env, runtime)
+    prepared = runtime._prepared
+    assert prepared is env.factory.instances[0] and not prepared._closed
+    assert runtime.wait_ready(0) == lease
+    runtime.retry()
+    time.sleep(.05)
+    assert len(env.factory.instances) == len(env.factory.loads) == 1
+    runtime.close()
+    assert prepared._closed and runtime._prepared is None
+
+
+def test_failure_trace_keeps_safe_loader_facts_before_cleanup_not_arbitrary_text(env):
+    records = []
+    def diagnostic(prepared):
+        original = prepared.diagnostics
+        def facts():
+            raw = original()
+            raw.update(source_sha256='a' * 64, dll_sha256='b' * 64, token='secret-token',
+                       source='private-js', config='private-config', fullpath='private-path')
+            raw['loader'].update(stage='verifying', operation='find_module', check='loaded_component',
+                thread_exit_code=0xffffffff, module_found=False, module_query_succeeded=True,
+                verification_alive=True, process_exit_code=259, path_utf16_units=220,
+                path_utf16_bytes=440, path_buffer_bytes=442, return_matches=None,
+                module_base='0x123456789', module_base_low32=None, fullpath='private-path',
+                token='secret-token', timing_seconds=dict(submitted=.01, thread_completed=.02, auth='private'))
+            return raw
+        prepared.diagnostics = facts
+    def trace(record):
+        if record['event'] == 'native_prepare_failed':
+            assert env.factory.instances[0].close_calls == 0
+        records.append(record)
+    env.factory.before_commit = diagnostic
+    env.factory.failure = 'private-token/source/path exception text'
+    runtime = env.make(startup_trace=trace).start()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 1)
+    wait_for(runtime, lambda r: r['status'] == 'process_failed')
+    failed = next(r for r in records if r['event'] == 'native_prepare_failed')
+    assert failed['source_sha256'] == 'a' * 64 and failed['dll_sha256'] == 'b' * 64
+    assert failed['loader']['thread_exit_code'] == 0xffffffff
+    assert failed['loader']['module_found'] is False and failed['loader']['return_matches'] is None
+    assert failed['loader']['path_utf16_units'] == 220
+    assert 'private' not in repr(records) and 'secret-token' not in repr(records)
+    assert 'module_base' not in failed['loader']
+    assert env.factory.instances[0]._closed and runtime._prepared is None
+    runtime.retry()
+    time.sleep(.05)
+    assert len(env.factory.instances) == 1
+
+
+def test_diagnostic_read_failure_is_unknown_and_never_causes_cleanup_of_success(env):
+    records = []
+    def break_diagnostic(prepared):
+        def fail():
+            raise RuntimeError('private diagnostic read failure')
+        prepared.diagnostics = fail
+    env.factory.before_commit = break_diagnostic
+    runtime = env.make(startup_trace=records.append).start()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    ready(env, runtime)
+    assert runtime._prepared is env.factory.instances[0] and not runtime._prepared._closed
+    completed = next(r for r in records if r['event'] == 'native_prepare_completed')
+    assert completed['preparation'] is None and completed['loader'] is None
+    assert runtime.describe()['preparation'] is None
+    runtime.close()
+
+
+def test_close_failure_trace_does_not_drop_pending_owner(env):
+    records = []
+    runtime = env.make(startup_trace=records.append).start()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    ready(env, runtime)
+    prepared = runtime._prepared
+    env.factory.fail_cleanup = True
+    with pytest.raises(RuntimeFailure):
+        runtime.close()
+    assert runtime._prepared is prepared and not prepared._closed
+    assert records[-1]['event'] == 'native_prepare_closed' and records[-1]['cleanup_ok'] is False
+    env.factory.fail_cleanup = False
+    runtime.close()
+    assert records[-1]['cleanup_ok'] is True
+
+
+def test_missing_diagnostic_clock_is_none_not_a_reason_to_drop_a_trace(env):
+    records = []
+    clock = SimpleNamespace(time_ns=time.time_ns, monotonic=time.monotonic)
+    runtime = env.make(startup_trace=records.append, clock=clock).start()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    def unavailable():
+        raise RuntimeError('clock unavailable')
+    clock.time_ns = unavailable
+    ready(env, runtime)
+    assert records and all(record['process_age_seconds'] is None for record in records)
+    runtime.close()
+
+
+def test_trace_and_loading_describe_never_acquire_a_live_preparation_lock(env):
+    entered, release = Event(), Event()
+    in_prepare = [False]
+    diagnostic_checks = []
+    def hold(prepared):
+        original = prepared.diagnostics
+        def facts():
+            diagnostic_checks.append(in_prepare[0])
+            assert not in_prepare[0]
+            return original()
+        prepared.diagnostics = facts
+        in_prepare[0] = True
+        entered.set()
+        release.wait(3)
+        in_prepare[0] = False
+    env.factory.before_commit = hold
+    records = []
+    runtime = env.make(startup_trace=records.append).start()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 1)
+    assert entered.wait(3)
+    try:
+        assert runtime.describe()['status'] == 'loading'
+        assert runtime.describe()['preparation'] is None
+        assert diagnostic_checks == []
+        assert records[0]['event'] == 'native_prepare_started'
+    finally:
+        release.set()
+    runtime.wait_ready(3)
+    runtime.close()
+    assert not any(diagnostic_checks)
+
+
+def test_trace_fields_reject_boolean_integer_aliases_invalid_hashes_and_free_text():
+    raw = dict(prepared=1, closed=False, source_sha256='private-token', dll_sha256='a' * 64,
+               process_instance=[True, 123], valid_seconds=float('nan'), source_build='private-source')
+    safe = module._trace_preparation(raw)
+    assert safe['prepared'] is None and safe['closed'] is False
+    assert safe['source_sha256'] is None and safe['dll_sha256'] == 'a' * 64
+    assert safe['process_instance'] is safe['valid_seconds'] is safe['source_build'] is None
+    loader = module._trace_loader(dict(stage='private-token', operation='private-path', check='private-js',
+        thread_exit_code=True, process_exit_code=-1, module_base_low32=0x100000000,
+        module_found=0, return_matches=None, path_utf16_units=False,
+        timing_seconds={'submitted': True, 'closed': float('inf'), 'auth': 'private-token'}))
+    assert all(loader[key] is None for key in ('stage', 'operation', 'check', 'thread_exit_code',
+        'process_exit_code', 'module_base_low32', 'module_found', 'return_matches', 'path_utf16_units'))
+    assert loader['timing_seconds']['submitted'] is loader['timing_seconds']['closed'] is None
+    assert 'private' not in repr(safe) + repr(loader)
+
+
+@pytest.mark.parametrize('operation', ['GetProcAddress/GetModuleHandleExW', 'GetModuleInformation(local)'])
+def test_trace_preserves_existing_combined_loader_api_literals(env, operation):
+    records = []
+    runtime = env.make(startup_trace=records.append)
+    runtime._trace_startup('native_prepare_failed', preparation=dict(loader=dict(
+        operation=operation, last_error=dict(operation=operation, win32_error=5))))
+    assert records[0]['loader']['operation'] == operation
+    assert records[0]['loader']['last_error']['operation'] == operation
+    assert records[0]['loader']['last_error']['win32_error'] == 5
+    assert not env.factory.instances and not env.api.opened
+
+
+@pytest.mark.parametrize('operation', ['GetProcAddress/GetModuleHandleExW/PRIVATE_TOKEN',
+    'GetModuleInformation(C:/PRIVATE_PATH)', 'GetModuleInformation(local) PRIVATE_SOURCE'])
+def test_trace_does_not_treat_combined_api_literal_as_a_free_text_prefix(env, operation):
+    records = []
+    runtime = env.make(startup_trace=records.append)
+    runtime._trace_startup('native_prepare_failed', preparation=dict(loader=dict(
+        operation=operation, last_error=dict(operation=operation))))
+    assert records[0]['loader']['operation'] is None
+    assert records[0]['loader']['last_error']['operation'] is None
+    assert 'PRIVATE_' not in repr(records)
+    assert not env.factory.instances and not env.api.opened

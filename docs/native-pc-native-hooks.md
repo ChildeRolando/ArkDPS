@@ -2,6 +2,10 @@
 
 ## 当前结论
 
+**便携启动测试候选 rc.2026112401 已暂停分发。** 同机实际启动在观察者 READY 前发生加载确认失败，
+截图报告线程终止值 `0xffffffff`；现有默认日志不足以区分进程退出、未找到映射及模块返回值不匹配。
+此前离线检查及包摘要仍有效，但不能当作实机启动成功。原 ZIP 保留作证据，不反复加载或无证归因安全保护。
+
 本候选新增真正的进程内采集组件，不再要求外部程序先提供事件 JSONL。
 它不是纯 C++ 重写：现有三段探针的元数据核验、结算、归属、技能和敌情逻辑原样运行在 QuickJS，
 自研 C++ 适配层用 MinHook 观察原生调用，并提供有界内存读取、调用上下文与命名管道。
@@ -409,7 +413,7 @@ DLL 与共同源码仍为上一轮候选。实际关卡已变为 `Obt/Hard/level
 | 冻结候选后实机复验 | 普通关三路径完成指定范围。卫戍局部跨帧及技能恢复已有新证据，但 8 次 scope rebase 跳过了 370 条原始留证，16 个旧 scope 均保留 `new_battle/gap`。先补每次 rebase 的真实队列审计再定向实测，不用新基线冒充旧终点。MuMu 观察窗/原始能力差异保持不变。 |
 | 运行稳定性与性能 | 旧局启用高密度诊断且关闭 HP 合并，不是默认配置性能结果。还需默认配置长局/多局、暂停与倍速、重连与切源、退出清理；故障注入与实机证据分别登记。 |
 | 发布集成 | 新增独立 `--with-native-hooks` 启动测试变体，包级默认官服 PC / 自研 / 空 feed，不带 Frida，并核 DLL、六源、构建清单及许可。标准包及旧 `--with-native-events` 合作文件候选不变；实际包内检查、用户启动、性能及完整发布仍须分开登记。 |
-| 正式交付 | 尚未形成干净已提交发布候选、候选包、包内实机回执、WPF/升级回退验收与发布。现有已提交 HEAD 不代表全部工作树改动已发布；交互验收仅在隔离 CI 或用户另行交桌面时进行。 |
+| 正式交付 | 已从隔离干净提交生成独立启动测试 ZIP，但未取得用户启动、包内实机性能、完整卫戍交接及正式发布验收。开发工作树与候选快照分开，不把本地 ZIP 当公开 Release；交互验收仅在隔离 CI 或用户另行交桌面时进行。 |
 
 首版可支持的机制及仍未知项目需明确列出：本轮未触发的 after-kill 新顺序、特殊技能终点、破盾/全吸收、召唤与卫戍新路径不能由其它正例自动认证。
 共同业务已复用不代表原始能力已相同：MuMu 尚未实现 PC 新增的 `terminal_read` 协议；首帧证书、时钟回退与代次策略还需能力审计及对应实机证据。
@@ -628,3 +632,94 @@ DLL 六份嵌入源及 124 份采集文件已核验，准备了新输出目录�
 
 分发说明及构建命令见[Windows 启动测试变体](windows-release.md#官服-pc-自研-hook-启动测试变体)。
 实际 ZIP、源提交、摘要和构建回执以构建输出为准；尚未完成的用户启动反馈、包内实机采集、性能与阶段交接继续保留。
+
+### 本地实际构建与静态复核
+
+隔离分支 `codex/native-hooks-startup-test-20261124` 的干净提交为
+`7c1a4656b2bdf0cc45c87a537462bd787ad2130b`，包含此前采集候选及本轮打包接线的明确源码快照。
+原开发分支 HEAD 和 index 保持不变，没有提交、清理或推送原工作树。
+使用本地已核验的 Python 3.12.10 嵌入 ZIP 和已实测 DLL，不重新下载或重编译 DLL。
+
+实际产物位于 `runtime/packages/native-hooks-startup-test-20261124/`：
+
+- `ArkDPS-1.0.0-rc.2026112401-win-x64-native-hooks-startup-test.zip`，111,697,211 字节。
+- SHA-256：`af32a75314ad701004c7f954a6aa763194b702e383dc9c1c43cb5fe79d84fc11`。
+- 随附 `.zip.sha256` 和 `.zip.acceptance.json`；后者明确 `desktop_started=false`、`game_connected=false`，
+  只认证实际包内 Python 导入、manifest 校验及离线 `hello/snapshot/quit`。
+
+隔离提交的相关 19 文件实际 **764 passed / 7 skipped in 45.72s**，检查中无源码漂移、工作树仍干净。
+跳过项为本账户无创建符号链接权限 1 项，及本变体不使用、隔离树未构建的旧合作受控 C++ 宿主 6 项；没有将跳过项计为通过。
+最终 C# headless 检查 14 组全部通过，包含自研监听状态 52 断言；未显示窗口或发送输入，不替代完整 WPF 启动验收。
+
+独立 ZIP 纯字节审计核对 167 个文件及嵌入标准库 ZIP，97 份代码与干净候选完全相同；
+逐文件摘要、DLL/build/六源/三许可及 AMD64 DLL 头均一致。
+危险路径、链接、大小写重复、未入清单文件、Frida 载荷、runtime/会话认证配置及用户数据均未发现。
+回执目录为 `runtime/packages/native-hooks-startup-test-20261124-inputs/`，包括
+`isolated-source-snapshot.json`、`root-isolated-focused-tests.json`、`root-csharp-headless-final.json`、`independent-zip-audit.json`。
+
+构建工具已完成产包及内部检查；外层记录器随后按 UTF-8 读取混合编码日志时失败。
+原始日志、实际产物和工具回执均保留，另以 `actual-package-build-recovered.json` 区分记录器失败和真实构建结果，
+没有把未保留的子进程退出码补成 0，也没有为此盲目重建包。
+这些均不撤销前述性能、实机用户启动、WPF 交互及卫戍交接的未验状态。
+
+### 实际包内解释器独立复核
+
+从真实 ZIP 再次安全解压，使用包内 Python 在无效系统 Python 环境及 Frida 导入阻断下实际运行：
+导入、组件清单校验和离线 `hello → snapshot → quit` 全部通过。
+MuMu、Frida 后端、绝对 JSONL 路径、Frida 端点及内部回放五类不支持参数均以 code2 明确拒绝，且未创建状态目录。
+对三个独立副本分别修改 PC adapter、共同 runtime、AutoChess JS 一个字节，加载门禁均拒绝；原 ZIP 和原解压载荷没有改动。
+进程中额外禁止 DLL 加载、线程启动及 socket 创建，检查均未触发这些入口，也没有运行 EXE 或界面。
+
+回执 `actual-embedded-recheck-revised.json` 的 `accepted=true`，SHA-256 为
+`cd96d00b42558274c99742d2d26482599e3a825262a9a9d33dd36ac0ee624857`。
+首版回执保留：相对文件参数先被 argparse 正确拒绝，但不满足该负测要求的 profile 文案；
+修订检查另用合法绝对路径验证 profile 拒绝，未改产品代码或重写首版结果。
+当时产物仅可作为**用户启动测试候选**，未取得包内 WPF 实际启动、游戏采集或性能认证。
+后续首次同机启动已出现加载确认失败，当前暂停分发，见本文顶部状态；不升级为正式上线通过。
+
+## 启动候选实际失败与有限排查（2026-11-24）
+
+用户启动实际生成的 WPF 包并提供截图。第二次 WPF 运行在 07:34:45 建立启动所有者，
+07:35:01.674 进入 loading，07:35:02.879 进入 `process_failed / loader_failed`，`ready_generation=0`。
+随后同一运行取得官服指纹并完成 VM 初始化，但观察者只报 `native_not_ready`，没有 `observer_ready` 或 JS 认证成功。
+UI 窗口能够启动与实时采集能够启动必须分开；本候选不能分发为已通过采集启动的版本。
+
+### 实际已知与仍未知
+
+- 包内 97 份源码、包 DLL/build 及唯一 staged DLL 均未变化；DLL 仍为 `38e706b3…`，2,176,089 字节。
+- 实际 staged DLL 路径为 220 个 UTF-16 单元，同 stem 配置为 221；不能归因于超过传统 260 字符限制。
+  DLL 仅依赖 Windows/UCRT，静态导入复核及本机导出检查未发现外置运行库缺件；没有 Zone.Identifier。
+- 用户管理员 CMD 执行一次只读模块查询，核实当前 `[31672, 134399505015732153]` 出生实例前后相同、
+  process status259、零等待返回258，完整 222 模块里无 exact staged DLL。
+  这证明当前组件确未映射，不证明加载瞬间的进程/模块状态；原默认日志没有保存该次 lease/birth 与模块验证分支。
+- 用户另执行一次只读公共系统入口对照：同出生、`KERNEL32.DLL` 的 `LoadLibraryW` RVA260032，
+  前32字节与本地对照相同。仅限这处当前字节，不能推广为没有任何保护、系统调用或进程策略干预。
+- `GetExitCodeThread` 报线程终止状态，不是远端 `GetLastError`；
+  原报错合并了未找到模块、返回值不符及进程退出等条件。不能将 `0xffffffff` 解释成“缺 CRT”或已证 ACE 拦截。
+  API 语义见 [GetExitCodeThread](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodethread)
+  与 [LoadLibraryW](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryw)。
+
+### 自有子进程对照，不替代官服验收
+
+未再加载当前游戏。另分别由 Python3.10.10、包内 Python3.12.10 使用**原包 loader**，
+对新建且以随机回执核实所有权的包内 Python 子进程加载同一 DLL，路径同为220 UTF-16单元。
+明确不创建配置文件：DLL 的前认证 worker 因缺配置返回，既不初始化 JS 也不安装 Hook；本对照只核模块映射。
+两组都实际找到模块、完整基址低32位与线程返回一致，子进程正常退出0。
+新增安全诊断后的 loader 又在独立自有子进程通过同样检查，并取得真实的阶段计时和模块诊断。
+这些受控正例排除部分基础包/路径/解释器映射问题，不等于官服兼容、战斗或性能通过。
+
+回执均位于 `runtime/packages/native-hooks-startup-test-20261124-inputs/`：
+`actual-startup-failure-host-audit.json`、`actual-startup-failure-knowns-unknowns.json`、
+`current-startup-readonly.json`、`current-loader-entry-readonly.json`、
+`owned-loader-parity-f310.json`、`owned-loader-parity-embedded312.json`、`owned-loader-parity-f310-current.json`。
+只读脚本只接受已报告 PID/出生，不自动寻找新实例；没有读取会话认证 JSON、修改或执行被比较的系统入口。
+
+### 本轮修改只补诊断，尚未修复实际加载失败
+
+拆分未确认映射、已找到模块但返回不符、验证时进程已退等失败；保留真实线程值、process exit/alive、
+模块查询三态、基址/低32位、公共 loader 模块/RVA及独立时钟，不把未知补零，也不放宽成功条件。
+运行时补齐准备开始、完成、失败和关闭四类安全 trace，失败事实在清理前保存，回调不持有所有者锁。
+桌面主日志与默认采集 journal 共用深层白名单；不记录 token、源正文、配置或完整路径。
+关键加载线程只入有界队列，不做同步日志 I/O；溢出明确保留诊断不完整计数，不影响加载或清理策略。
+原 DLL、共同 JS、加载方法、权限、每出生一次及清理所有权均未改变。
+后续只有在检查通过并与用户协调后，才安排一次带这些事实的新启动；不循环重试，不把加日志说成已修好。
