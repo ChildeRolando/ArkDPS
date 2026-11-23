@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from battle_lifecycle import (BattleFeed, BattleObservation, BattleRuntime,
                               BattleSessions, BattleView, MappingRetry)
 from roster import CharacterEntry, RosterSnapshot
@@ -91,6 +92,18 @@ def test_pause_and_retreat_redeployment_never_clear_or_archive():
     r.poll(c)
     assert total(r) == 150.
     assert r.sessions.generation == first.generation
+
+
+def test_late_pc_autochess_stage_starts_a_separate_character_counter_scope():
+    collector, runtime, first = begin()
+    collector.advance()
+    collector.lifecycle['metadata'] = dict(platform='native_pc', stage_id='level_act3autochess_m03',
+                                           evidence='native_pc_guarded_memory')
+    scoped = runtime.poll(collector)
+    assert scoped.generation == first.generation + 1
+    assert scoped.sample['native_counter_scope'] == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+    assert runtime.display_sample()['statistics']['native_counter_scope'] == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+    assert total(runtime) == 150.
 
 
 def test_torn_lifecycle_binding_retries_without_losing_battle(monkeypatch):

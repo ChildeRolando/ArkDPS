@@ -14,6 +14,8 @@ from types import MappingProxyType
 
 
 PROTOCOL_VERSION = 1
+NATIVE_AUTOCHESS_CHARACTER_COUNTERS = 'autochess_character_counters'
+NATIVE_AUTOCHESS_CHARACTER_LABEL = '原生角色累计 · 玩家归属未知'
 MAX_MEMBERSHIPS = 256
 PHASE_NAMES = {0: 'NONE', 1: 'LOADING', 2: 'SP_PREPARE', 3: 'PREPARE',
                4: 'BATTLE', 5: 'HELP_BATTLE', 6: 'BOSS_BATTLE', 7: 'SETTLE',

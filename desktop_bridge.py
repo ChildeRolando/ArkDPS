@@ -20,10 +20,12 @@ import time
 import traceback
 from uuid import uuid4
 
-from autochess_context import native_local_player as _native_local_player, valid_player_uid
+from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, NATIVE_AUTOCHESS_CHARACTER_LABEL,
+                               native_local_player as _native_local_player, valid_player_uid)
 from battle_history import BattleHistory, HistoryResult
-from battle_lifecycle import BattleRuntime, MappingRetry, autochess_scene
-from battle_share import (json_bytes, record_display, record_statistics,
+from battle_lifecycle import (BattleRuntime, MappingRetry, NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED,
+                              autochess_scene)
+from battle_share import (AUTOCHESS_SNAPSHOT_NOTE, json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
 from collector import BattleChanged, NativeClockBusy, ProcessChanged, SnapshotGap, ROOT
@@ -204,6 +206,8 @@ def _native_display_source(sample):
 
 def _display_statistics(sample, *, source=None):
     statistics = sample.get('statistics') or {}
+    if sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
+        return dict(statistics, totals_complete=False, display_scope_label=NATIVE_AUTOCHESS_CHARACTER_LABEL)
     if sample.get('native_counter_scope') != 'events_only':
         return statistics
     player = source if source is not None else _native_display_source(sample)
@@ -346,7 +350,12 @@ class DesktopState:
         for record in records:
             item = record_display(record)
             # Readable labels and the native id both match, so old records stay searchable.
-            item['search'] = ' '.join((*item['labels'], item['date'], ' '.join(record.operator_names),
+            if record.unverified_autochess_scope:
+                rows = record_statistics(record, for_panel=True)['rows']
+                names = (row.get('name') or cid for cid, row in rows.items())
+            else:
+                names = record.operator_names
+            item['search'] = ' '.join((*item['labels'], item['date'], ' '.join(names),
                                       item['stage_raw'] or '')).casefold()
             history.append(item)
         self._history_index = history
@@ -398,7 +407,7 @@ class DesktopState:
             self._set_autochess_scene(value)
         elif kind == 'sample':
             scene = autochess_scene(value) if self._autochess_scene_announced else None
-            if scene != self._autochess_scene:
+            if scene != self._autochess_scene and value.get('native_counter_scope') != NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
                 # A late terminal DTO may finish the cached defense. It cannot
                 # take over the live assist or reset the current presentation.
                 self._remember_defense(value, scene, late=True)
@@ -437,6 +446,10 @@ class DesktopState:
             self.sampling_rejection = (dict(code='mapping_unavailable', reason=value['reason'][:200])
                 if isinstance(value, dict) and value.get('code') == 'mapping_unavailable'
                 and isinstance(value.get('reason'), str) and value['reason'].strip() else None)
+            if (self.sampling_rejection and self.effective_connection.platform == 'native_pc'
+                    and value.get('scope_code') == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED):
+                self.sampling_rejection['scope_code'] = NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
+                self.analysis_interrupted = True
         elif kind == 'lifecycle':
             self.lifecycle = value
         elif kind == 'battle_waiting':
@@ -553,6 +566,8 @@ class DesktopState:
     def _presented_battle(self):
         sample = self.last or {}
         analysis = (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis)
+        if sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
+            return sample, None, analysis, None
         scene, defense = self._autochess_scene, self._defense_sample
         if scene is None:
             multiplayer = _preparing_multiplayer() if self.lifecycle == 'preparing' else sample.get('multiplayer')
@@ -602,7 +617,8 @@ class DesktopState:
         terminal = statistics.get('ended') is True or self.lifecycle in ('ended', 'frozen', 'finalizing')
         team_recent, operators = live_damage_rates(statistics, game_time)
         scope_label = statistics.get('display_scope_label')
-        if scope_label:
+        character_counters = sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+        if scope_label and not character_counters:
             for operator in operators:
                 row = statistics['rows'][operator['owner_id']]
                 operator.update(player_uid=row['player_uid'], actor_uid=row['unique_id'])
@@ -636,7 +652,7 @@ class DesktopState:
         if scope_label:
             self.live_analysis['scope_label'] = scope_label
         rows = statistics.get('rows') or {}
-        if any('partial_damage' in row for row in rows.values()):
+        if not character_counters and any('partial_damage' in row for row in rows.values()):
             known_damage = [row['damage'] for row in rows.values()
                             if row.get('counter_snapshot_complete') and type(row.get('damage')) in (int, float)
                             and math.isfinite(row['damage']) and row['damage'] >= 0]
@@ -695,13 +711,24 @@ class DesktopState:
         return dict(battle_id=battle_id, game_time=game_time, segment=segment,
                     team_recent_dps=team_recent, operators=operators)
 
+    def _sampling_rejection_label(self):
+        rejection = self.sampling_rejection
+        if rejection.get('scope_code') != NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED:
+            return '当前样本未通过归属校验：' + rejection['reason']
+        if self.observer_status == 'snapshot_only':
+            return '卫戍小局 · 暂无可靠的原生角色累计'
+        if self.observer_status in ('failed', 'incompatible', 'stopped'):
+            detail = (self.observer_error or '').partition('\n')[0][:120]
+            return '卫戍小局 · 事件观察不可用' + (f'（{detail}）' if detail else '')
+        return '卫戍小局 · 等待确认阶段和玩家的逐次事件归属'
+
     def status(self):
         if self.scanning:
             return 'locating', '正在定位 · 保留最后有效记录'
         if self.error:
             return 'disconnected', '连接断开 / 读取中断 · 显示最后有效记录'
         if self.sampling_rejection:
-            label = '当前样本未通过归属校验：' + self.sampling_rejection['reason']
+            label = self._sampling_rejection_label()
             if self.last:
                 label += ' · 保留最后有效记录'
                 if observation_age(self.last) > 2:
@@ -811,7 +838,8 @@ class DesktopState:
                 event_status = 'snapshot_only'
             event = EventAvailability(event_status, self.selected.event_error, live=False)
             sample = self.selected.last_sample
-            multiplayer = sample.get('multiplayer')
+            unverified = self.selected.unverified_autochess_scope
+            multiplayer = None if unverified else sample.get('multiplayer')
             if (sample.get('native_counter_scope') == 'events_only'
                     and isinstance(multiplayer, dict) and multiplayer.get('schema_version') == 2):
                 player = _native_display_source(sample)
@@ -821,6 +849,8 @@ class DesktopState:
                         if player else self.view(self.history_config, statistics, event=event))
             else:
                 view = self.view(self.history_config, record_statistics(self.selected, for_panel=True), event=event)
+            if unverified and not view['source']:
+                view['empty_text'] = '这条卫戍快照没有可核实的角色累计记录。' + AUTOCHESS_SNAPSHOT_NOTE
             self._history_view = dict(
                 record_display(self.selected),
                 view=view, multiplayer=(self.multiplayer_view(multiplayer, event=event)
@@ -903,18 +933,22 @@ class DesktopState:
         sample, multiplayer, analysis, presentation_note = self._presented_battle()
         desired = self.layout.multiplayer_enabled
         supported = self.effective_connection.platform == 'native_pc'
-        scene = self._autochess_scene
+        counter_scope = sample.get('native_counter_scope')
+        character_counters = counter_scope == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+        scene = None if character_counters else self._autochess_scene
         active = desired
         if scene is not None and scene.phase in (4, 5, 6, 7, 8) and scene.collection_mode in ('all', 'local'):
             active = scene.collection_mode == 'all'
         active = supported and active
-        scope_unverified = (supported and scene is None and sample.get('native_counter_scope') != 'events_only'
+        scope_unverified = (supported and scene is None and counter_scope != 'events_only'
                             and 'AUTOCHESS' in str((sample.get('battle_metadata') or {}).get('stage_id', '')).upper())
         local_player = _native_display_source(sample)
         stats = _display_statistics(sample, source=local_player)
         if multiplayer and multiplayer.get('previous_defense') is True:
             stats = dict(stats, display_scope_label=multiplayer['note'])
         status, label = self.status()
+        if character_counters and status == 'live':
+            label = NATIVE_AUTOCHESS_CHARACTER_LABEL
         if presentation_note is not None:
             if self.scanning or self.error or self._waiting_for_connection_sample or self.sampling_rejection:
                 label += ' · ' + presentation_note
@@ -940,7 +974,7 @@ class DesktopState:
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     effective_connection_config=self.effective_connection.to_dict(),
-                    totals=team_totals(stats),
+                    totals=team_totals({} if character_counters else stats), native_counter_scope=counter_scope,
                     status=status, status_text=label, error=self.error,
                     battle_waiting=self.battle_waiting,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
@@ -961,7 +995,8 @@ class DesktopState:
                     multiplayer_supported=supported, multiplayer_active=active,
                     multiplayer_mode_pending=supported and active != desired,
                     multiplayer_scope_unverified=scope_unverified,
-                    multiplayer_scope_detail=sample.get('autochess_scope_detail') if scope_unverified else None,
+                    multiplayer_scope_detail=('仅显示按角色汇总的原生累计' if character_counters else
+                                              sample.get('autochess_scope_detail') if scope_unverified else None),
                     multiplayer=(self.multiplayer_view(multiplayer, event=live_event)
                                  if active and (multiplayer or {}).get('collection_mode') != 'local' else None),
                     live_analysis=analysis[0],
@@ -1265,7 +1300,7 @@ class CollectionWorker:
                 def audit(kind, value):
                     nonlocal sampling_observation
                     if kind == 'lifecycle_observation':
-                        sampling_observation = (value.feed, value.sequence, value.kind)
+                        sampling_observation = (value.feed, value.sequence, value.kind, value.reason)
                     journal.write(kind, value)
                 self._bootstrap_audit = audit
                 regeneration = None
@@ -1505,14 +1540,20 @@ class CollectionWorker:
                                         and clock_burst[2] < NATIVE_BUSY_ATTEMPTS
                                         and time.perf_counter() + NATIVE_BUSY_REST < clock_burst[1] + NATIVE_BUSY_BUDGET):
                                     clock_retry_delay = NATIVE_BUSY_REST
+                                observed_feed, observed_sequence, observed_kind, observed_reason = (
+                                    sampling_observation or (None, None, None, None))
+                                current_observation = observed_feed == feed.id and observed_sequence == sessions.sequence
                                 if isinstance(exc, MappingRetry):
                                     reason = str(exc).partition('\n')[0].strip()[:200]
                                     publish_sampling_rejection(dict(code='mapping_unavailable',
                                                                     reason=reason or '归属证据尚未确认'))
-                                elif (sampling_observation is not None
-                                        and sampling_observation[0] == runtime.feed.id
-                                        and sampling_observation[1] == runtime.sessions.sequence
-                                        and sampling_observation[2] in ('preparing', 'waiting', 'end', 'terminal')):
+                                elif (current_config.platform == 'native_pc' and current_observation
+                                        and observed_kind == 'scope_unavailable'
+                                        and observed_reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED):
+                                    publish_sampling_rejection(dict(code='mapping_unavailable',
+                                        reason='卫戍小局的阶段和玩家身份尚未确认',
+                                        scope_code=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED))
+                                elif current_observation and observed_kind in ('preparing', 'waiting', 'end', 'terminal'):
                                     # _read_lifecycle reports successfully consumed non-sample
                                     # observations as retries. A gap or an old state is not proof.
                                     publish_sampling_rejection(None)

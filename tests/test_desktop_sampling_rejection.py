@@ -1,18 +1,22 @@
 """Nonfatal display diagnostics; no target, process, ACK or reconnect work."""
 from copy import deepcopy
 from dataclasses import replace
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 import desktop_bridge as bridge
-from battle_lifecycle import MappingRetry
+from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS, NATIVE_AUTOCHESS_CHARACTER_LABEL
+from battle_lifecycle import MappingRetry, NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED, NativeAutoChessScene
 from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
 from event_capture import CaptureRetry
 from sample_data import sample
 
 
 REJECTION = dict(code='mapping_unavailable', reason='玩家归属证据尚未确认')
+NATIVE_SCOPE_REJECTION = dict(code='mapping_unavailable', reason='卫戍小局的阶段和玩家身份尚未确认',
+                              scope_code=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED)
 
 
 def test_rejection_is_nonfatal_and_retains_raw_values_and_expiry(tmp_path, monkeypatch):
@@ -63,12 +67,67 @@ def test_latest_source_marker_blocks_old_queued_rejections_and_clears_only_displ
     assert state.sampling_rejection is None
 
 
-def run_worker(tmp_path, monkeypatch, actions):
+@pytest.mark.parametrize('observer,expected', [
+    (('snapshot_only', None), '暂无可靠的原生角色累计'),
+    (('ready', None), '等待确认阶段和玩家的逐次事件归属'),
+    (('failed', '观察者连接失败'), '事件观察不可用（观察者连接失败）'),
+])
+def test_native_scope_notice_reports_current_observer_and_marks_retained_stats(tmp_path, monkeypatch, observer, expected):
+    state = bridge.DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
+    state.accept('observer', observer)
+    state.accept('sampling_rejection', NATIVE_SCOPE_REJECTION)
+    current = state.snapshot()
+    assert current['status'] == 'sampling_rejected' and expected in current['status_text']
+    assert current['battle_id'] is None and '保留' not in current['status_text']
+
+    raw = sample()
+    state.accept('sample', raw)
+    assert state.sampling_rejection is None
+    state.accept('sampling_rejection', NATIVE_SCOPE_REJECTION)
+    monkeypatch.setattr(bridge, 'observation_age', lambda _: 3)
+    current = state.snapshot()
+    assert current['status'] == 'stale' and expected in current['status_text']
+    assert '保留最后有效记录' in current['status_text']
+    assert state.last is raw and current['panels'][0]['footer_total'] == 1730
+    assert state.analysis_interrupted and not current['error']
+
+    state.expect_connection_request(state.effective_connection, 3)
+    state.accept('connection_source', {'revision': 2, 'platform': 'native_pc'})
+    state.accept('sampling_rejection', NATIVE_SCOPE_REJECTION)
+    assert state.sampling_rejection is None
+
+
+def test_native_character_counter_rows_keep_their_scope_without_player_or_team_totals(tmp_path):
+    state = bridge.DesktopState(tmp_path)
+    state.effective_connection = ConnectionConfig(platform='native_pc')
+    state.layout = replace(state.layout, multiplayer_enabled=True)
+    state.accept('observer', ('snapshot_only', None))
+    state.accept('autochess_scene', NativeAutoChessScene(('prior-match',), 'prior', 4, 1, 'all'))
+    state.accept('sampling_rejection', NATIVE_SCOPE_REJECTION)
+    raw = dict(sample(), battle_id='current-character-counters', event_status='unavailable',
+               native_counter_scope=NATIVE_AUTOCHESS_CHARACTER_COUNTERS,
+               battle_metadata=dict(stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m03'))
+    state.accept('sample', raw)
+    current = state.snapshot()
+    assert current['status'] == 'live' and current['status_text'] == NATIVE_AUTOCHESS_CHARACTER_LABEL
+    assert current['battle_id'] == raw['battle_id'] and current['sampling_rejection'] is None
+    assert current['native_counter_scope'] == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+    assert current['panels'][0]['scope_label'] == NATIVE_AUTOCHESS_CHARACTER_LABEL
+    assert current['panels'][0]['footer_total'] == 1730 and not current['panels'][0]['footer_total_complete']
+    assert current['totals'] == dict(damage=None, healing=None, shield_absorbed=None)
+    assert current['live_analysis']['scope_label'] == NATIVE_AUTOCHESS_CHARACTER_LABEL
+    assert current['live_analysis']['team_total_damage'] is None
+    assert current['live_analysis']['team_recent_dps'] is None
+    assert current['multiplayer_scope_unverified'] and current['multiplayer'] is None
+
+
+def run_worker(tmp_path, monkeypatch, actions, *, platform='mumu'):
     state = bridge.DesktopState(tmp_path / 'state')
     worker = bridge.CollectionWorker(state)
     worker.stop.wait = lambda *_: False
-    config = ConnectionConfig(auto_detect=False, serial='owned-fixture')
-    diagnostic = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform='mumu',
+    config = ConnectionConfig(auto_detect=False, serial='owned-fixture', platform=platform)
+    diagnostic = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform=platform,
                                       selected_serial='owned-fixture', version_actual='fixture')
     calls = []
     remaining = iter(actions)
@@ -115,6 +174,13 @@ def run_worker(tmp_path, monkeypatch, actions):
                 raise MappingRetry(REJECTION['reason'] if action == 'map' else '新的归属拒收原因', observation)
             if action == 'ordinary':
                 raise CaptureRetry('baseline crossed an event or game frame')
+            if action in ('scope', 'unconsumed_scope'):
+                observation = self.runtime.feed._emit('scope_unavailable', reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED)
+                if action == 'scope':
+                    self.runtime._consume(observation)
+                else:
+                    self.runtime.record(observation)
+                raise CaptureRetry('native scope unavailable')
             if action in ('preparing', 'waiting', 'end', 'gap'):
                 if action == 'preparing':
                     self.runtime.feed.generation += 1
@@ -132,6 +198,7 @@ def run_worker(tmp_path, monkeypatch, actions):
 
     monkeypatch.setattr(bridge, 'ROOT', tmp_path)
     monkeypatch.setattr(bridge, 'CollectionSession', Session)
+    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=lambda *a, **kw: None))
     monkeypatch.setattr(bridge, 'resolve_configured', lambda _: SimpleNamespace(
         adb_path='owned-fixture', serial='owned-fixture', diagnostics=diagnostic))
     worker.request(config, False)
@@ -178,3 +245,21 @@ def test_plain_cross_frame_retry_never_becomes_a_connection_or_mapping_error(tmp
         state.accept(kind, value)
     assert state.sampling_rejection is None and state.error == '' and state.status()[0] == 'waiting'
     assert calls == ['session', 'connect', 'close']
+
+
+def test_unconsumed_native_scope_observation_does_not_replace_status(tmp_path, monkeypatch):
+    _, _, events, _ = run_worker(tmp_path, monkeypatch, ['unconsumed_scope'], platform='native_pc')
+    assert [value for kind, value in events if kind == 'sampling_rejection'] == [None]
+
+
+@pytest.mark.parametrize('clear', ['preparing', 'waiting', 'sample'])
+def test_native_scope_notice_survives_transient_gaps_and_clears_on_fresh_observation(tmp_path, monkeypatch, clear):
+    state, worker, events, calls = run_worker(tmp_path, monkeypatch,
+        ['scope', 'scope', 'ordinary', 'gap', clear], platform='native_pc')
+    assert [value for kind, value in events if kind == 'sampling_rejection'] == [None, NATIVE_SCOPE_REJECTION, None]
+    state.effective_connection = worker.effective[0]
+    for kind, value in events:
+        state.accept(kind, value)
+        if kind == 'sampling_rejection' and value == NATIVE_SCOPE_REJECTION:
+            assert '暂无可靠的原生角色累计' in state.snapshot()['status_text']
+    assert state.sampling_rejection is None and calls == ['session', 'connect', 'close']
