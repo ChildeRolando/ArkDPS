@@ -22,11 +22,13 @@ def test_capture_leaves_bad_layout_for_next_gui_diagnostic(tmp_path, monkeypatch
     monkeypatch.setattr(app, 'LayoutStore',
                         lambda: pytest.fail('capture loaded GUI layout'), raising=False)
     monkeypatch.setattr(app.sys, 'argv', ['app.py', '--capture-seconds', '1', *event_args])
+    closed = []
     monkeypatch.setattr(app.socket, 'socket', lambda: SimpleNamespace(
-        bind=lambda address: None, listen=lambda count: None))
+        bind=lambda address: None, listen=lambda count: None, close=lambda: closed.append(True)))
     captured = []
     monkeypatch.setattr(capture_cli, 'run_capture', captured.append)
     app.main()
+    assert closed == [True]
     assert len(captured) == 1
     assert captured[0].frida_remote == (None if event_args == ['--no-events'] else
                                          'host:1234' if event_args else
