@@ -572,3 +572,60 @@ def test_changed_birth_is_not_a_fabricated_process_exit_code(api):
         assert diagnostic['module_query_attempted'] is False and diagnostic['module_found'] is None
     finally:
         loader.close()
+
+
+@pytest.mark.parametrize('exit_code', [0, 1, 0xffffffff])
+def test_confirmed_exit_requires_owned_birth_and_real_typed_exit_code_without_new_handles(api, exit_code):
+    loader = module.WindowsGadgetLoader(42)
+    reads = []
+    original_times = api.process_times
+    api.process_times = lambda handle: reads.append(('times', handle)) or original_times(handle)
+    api.exit_code = lambda handle: reads.append(('exit', handle)) or exit_code
+    opened = list(api.opened)
+    try:
+        assert loader.confirmed_process_exit((42, 100)) is True
+        assert [op for op, _ in reads] == ['times', 'exit', 'times']
+        assert all(handle == loader.handle for _, handle in reads) and api.opened == opened
+        assert not loader.submitted and not api.count('submit')
+    finally:
+        loader.close()
+
+
+@pytest.mark.parametrize('problem', ['active', 'unknown_exit', 'boolean_exit', 'negative_exit', 'large_exit',
+    'first_read_error', 'second_read_error', 'before_birth', 'after_birth', 'wrong_pid', 'wrong_birth',
+    'missing_handle', 'invalid_expected', 'boolean_expected', 'swapped_handle'])
+def test_unconfirmed_exit_is_never_inferred_from_missing_identity_or_failed_queries(api, problem):
+    loader = module.WindowsGadgetLoader(42)
+    handle, expected = loader.handle, (42, 100)
+    calls = [0]
+    original_times = api.process_times
+    def times(owned):
+        calls[0] += 1
+        if problem == 'first_read_error' and calls[0] == 1 or problem == 'second_read_error' and calls[0] == 2:
+            raise WinError(5)
+        if problem == 'before_birth' and calls[0] == 1 or problem == 'after_birth' and calls[0] == 2:
+            return 101, 0
+        return original_times(owned)
+    api.process_times = times
+    def exit_code(owned):
+        if problem == 'swapped_handle':
+            loader.handle = (43, 99, 100)
+        return dict(active=259, unknown_exit=None, boolean_exit=False, negative_exit=-1,
+                    large_exit=0x100000000).get(problem, 0)
+    api.exit_code = exit_code
+    if problem == 'wrong_pid':
+        expected = (43, 100)
+    elif problem == 'wrong_birth':
+        expected = (42, 101)
+    elif problem == 'missing_handle':
+        loader.handle = None
+    elif problem == 'invalid_expected':
+        expected = None
+    elif problem == 'boolean_expected':
+        expected = (42, True)
+    try:
+        assert loader.confirmed_process_exit(expected) is False
+        assert not loader.submitted and not api.count('submit')
+    finally:
+        loader.handle = handle
+        loader.close()

@@ -204,7 +204,11 @@ def test_prepare_failure_is_not_reloaded_by_retry_same_birth(env):
     runtime.retry()
     time.sleep(.08)
     assert len(env.factory.instances) == 1
-    env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 2)  # PID reuse, new birth.
+    previous_fence = runtime.describe()['armed_filetime']
+    env.api.rows[1] = env.row(previous_fence + 2)  # PID reuse while old owner retires is not yet admissible.
+    wait_for(runtime, lambda r: r['lease'] is None and r['armed_filetime'] > previous_fence)
+    assert len(env.factory.instances) == 1
+    env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 2)  # A genuinely newer birth.
     wait_for(runtime, lambda r: r['status'] == 'ready')
     assert runtime.wait_ready(3)['created'] == runtime.describe()['armed_filetime'] + 2
     assert len(env.factory.instances) == 2
@@ -368,6 +372,10 @@ def test_startup_trace_runs_outside_condition_and_preserves_single_load(env):
     assert [r['event'] for r in records] == ['native_prepare_started', 'native_prepare_completed', 'native_prepare_closed']
     assert all(r['pid'] == lease['pid'] and r['created_filetime'] == lease['created'] for r in records)
     assert all(r['source_build'] == module.access.BUILD_ID for r in records)
+    assert all(r['armed_filetime'] == runtime.describe()['armed_filetime'] for r in records)
+    assert all(type(r['armed_filetime']) is int and r['armed_filetime'] > 0 for r in records)
+    assert all(type(r['watch_generation']) is int and r['watch_generation'] == 1 for r in records)
+    assert [r['material_ready'] for r in records] == [True, True, False]
     assert records[-1]['cleanup_ok'] is True
     assert len(env.factory.instances) == len(env.factory.loads) == 1
 
@@ -710,6 +718,230 @@ def test_process_query_pending_does_not_repeat_full_material_preflight(env):
     wait_for(runtime, lambda r: r['code'] == 'process_query_pending')
     time.sleep(.06)
     assert len(env.material_calls) == 1 and not env.factory.instances
+
+
+def manual_ready(env):
+    """Drive the owning watcher explicitly; no timing window or real process."""
+    clock = SimpleNamespace(filetime=module.FILETIME_EPOCH + 10000000,
+                            monotonic=time.monotonic)
+    clock.time_ns = lambda: (clock.filetime - module.FILETIME_EPOCH) * 100
+    runtime = env.make(clock=clock)
+    runtime._step()
+    env.api.rows[100] = env.row(clock.filetime + 1)
+    runtime._step()
+    assert runtime.status == module.RuntimeState.READY
+    return runtime, clock, dict(runtime._lease)
+
+
+def test_dead_lease_rearms_once_after_cleanup_and_rejects_already_born_candidate(env):
+    runtime, clock, lease = manual_ready(env)
+    old_fence = runtime.describe()['armed_filetime']
+    old_generation = runtime.describe()['watch_generation']
+    env.api.rows[100].alive = False
+    env.api.rows[200] = env.row(clock.filetime + 5)
+    clock.filetime += 10
+    runtime._step()
+    report = runtime.describe()
+    assert report['armed_filetime'] == clock.filetime > old_fence
+    assert report['watch_generation'] == old_generation + 1
+    assert report['code'] == 'restart_required' and runtime._lease is None
+    assert env.factory.instances[0]._closed and len(env.factory.instances) == 1
+    assert env.factory.loads == [(lease['pid'], lease['created'])]
+    assert (lease['pid'], lease['created']) in runtime._attempted
+    assert (200, env.api.rows[200].created) not in runtime._attempted
+    assert len(env.material_calls) == 1
+    clock.filetime += 10
+    runtime._step()
+    assert runtime.describe()['armed_filetime'] == report['armed_filetime']
+    assert runtime.describe()['watch_generation'] == report['watch_generation']
+    del env.api.rows[200]
+    env.api.rows[201] = env.row(clock.filetime + 1)
+    runtime._step()
+    assert runtime._lease['pid'] == 201 and len(env.factory.loads) == 2
+    assert len(env.material_calls) == 1
+
+
+def test_dead_lease_equal_new_fence_is_not_new_enough(env):
+    runtime, clock, _lease = manual_ready(env)
+    env.api.rows[100].alive = False
+    clock.filetime += 10
+    env.api.rows[200] = env.row(clock.filetime)
+    runtime._step()
+    assert runtime.describe()['code'] == 'restart_required'
+    assert len(env.factory.instances) == len(env.factory.loads) == 1
+
+
+def test_dead_lease_pending_observer_does_not_rearm_until_observer_released(env):
+    runtime, clock, lease = manual_ready(env)
+    observer = runtime.observer_factory(SimpleNamespace(process=SimpleNamespace(
+        pid=lease['pid'], process_instance=(lease['pid'], lease['created']))))
+    old_fence = runtime.describe()['armed_filetime']
+    env.api.rows[100].alive = False
+    env.api.rows[200] = env.row(clock.filetime + 5)
+    clock.filetime += 10
+    runtime._step()
+    assert runtime.describe()['code'] == 'observer_cleanup_pending'
+    assert runtime.describe()['armed_filetime'] == old_fence
+    assert runtime._lease == lease and runtime._prepared is env.factory.instances[0]
+    assert len(env.factory.loads) == 1 and len(env.material_calls) == 1
+    observer.stop()
+    runtime._step()
+    assert runtime.describe()['armed_filetime'] == clock.filetime
+    assert runtime.describe()['code'] == 'restart_required'
+    assert runtime._lease is None and len(env.factory.loads) == 1
+
+
+def test_dead_lease_cleanup_failure_preserves_owner_and_fence(env):
+    runtime, clock, lease = manual_ready(env)
+    prepared, old_fence = runtime._prepared, runtime.describe()['armed_filetime']
+    env.api.rows[100].alive = False
+    env.api.rows[200] = env.row(clock.filetime + 5)
+    clock.filetime += 10
+    env.factory.fail_cleanup = True
+    with pytest.raises(RuntimeFailure, match='pending'):
+        runtime._step()
+    assert runtime._lease == lease and runtime._prepared is prepared and not prepared._closed
+    assert runtime.describe()['armed_filetime'] == old_fence and len(env.factory.loads) == 1
+    with pytest.raises(RuntimeFailure, match='尚未就绪'):
+        runtime.observer_factory(SimpleNamespace())
+    env.factory.fail_cleanup = False
+    runtime._step()
+    assert runtime._lease is None and runtime.describe()['armed_filetime'] == clock.filetime
+    assert runtime.describe()['code'] == 'restart_required' and len(env.factory.loads) == 1
+
+
+def test_cancel_during_dead_lease_cleanup_does_not_publish_new_fence(env):
+    runtime, clock, lease = manual_ready(env)
+    old_fence = runtime.describe()['armed_filetime']
+    prepared = runtime._prepared
+    original = prepared.close
+    def close():
+        original()
+        runtime.cancel()
+    prepared.close = close
+    env.api.rows[100].alive = False
+    clock.filetime += 10
+    with pytest.raises(InterruptedError):
+        runtime._step()
+    assert runtime._lease == lease and runtime.describe()['armed_filetime'] == old_fence
+    assert len(env.factory.loads) == len(env.material_calls) == 1
+
+
+def test_retry_during_dead_lease_cleanup_does_not_arm_stale_admission(env):
+    runtime, clock, lease = manual_ready(env)
+    old_fence = runtime.describe()['armed_filetime']
+    prepared, original = runtime._prepared, runtime._prepared.close
+    def close():
+        original()
+        runtime.retry()
+    prepared.close = close
+    env.api.rows[100].alive = False
+    env.api.rows[200] = env.row(clock.filetime + 5)
+    clock.filetime += 10
+    runtime._step()
+    assert runtime._lease == lease and runtime.describe()['armed_filetime'] == old_fence
+    assert runtime.describe()['material_ready'] is False
+    assert len(env.factory.loads) == len(env.material_calls) == 1
+    runtime._step()
+    assert runtime._lease is None and runtime.describe()['armed_filetime'] == clock.filetime
+    assert runtime.describe()['code'] == 'restart_required'
+    assert len(env.factory.loads) == 1 and len(env.material_calls) == 2
+
+
+def test_unknown_old_lease_liveness_never_closes_or_rearms(env):
+    runtime, clock, lease = manual_ready(env)
+    prepared, old_fence = runtime._prepared, runtime.describe()['armed_filetime']
+    env.api.denied.add(100)
+    env.api.rows[200] = env.row(clock.filetime + 5)
+    clock.filetime += 10
+    try:
+        with pytest.raises(module.access.ApiFailure):
+            runtime._step()
+        assert runtime._lease == lease and runtime._prepared is prepared and not prepared._closed
+        assert runtime.describe()['armed_filetime'] == old_fence
+        assert len(env.factory.loads) == len(env.material_calls) == 1
+    finally:
+        env.api.denied.clear()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('birth', None), ('birth', True), ('birth', -1),
+    ('exit', None), ('exit', True), ('exit', -1), ('exit', 0x100000000), ('exit', '0')])
+def test_untyped_old_lease_liveness_is_unknown_not_dead(env, monkeypatch, field, value):
+    runtime, clock, lease = manual_ready(env)
+    prepared, old_fence = runtime._prepared, runtime.describe()['armed_filetime']
+    method = 'process_times' if field == 'birth' else 'exit_code'
+    with monkeypatch.context() as patch:
+        patch.setattr(env.api, method, lambda handle: (value, 0) if field == 'birth' else value)
+        clock.filetime += 10
+        with pytest.raises(RuntimeFailure) as error:
+            runtime._step()
+        assert error.value.code == 'process_query_pending'
+        assert runtime._lease == lease and runtime._prepared is prepared and not prepared._closed
+        assert runtime.describe()['armed_filetime'] == old_fence
+        assert len(env.factory.loads) == len(env.material_calls) == 1
+
+
+def test_birth_read_failure_preserves_old_owner_and_fence(env, monkeypatch):
+    runtime, clock, lease = manual_ready(env)
+    prepared, old_fence = runtime._prepared, runtime.describe()['armed_filetime']
+    def unavailable(_handle):
+        raise module.access.ApiFailure('GetProcessTimes', 299)
+    with monkeypatch.context() as patch:
+        patch.setattr(env.api, 'process_times', unavailable)
+        clock.filetime += 10
+        with pytest.raises(module.access.ApiFailure):
+            runtime._step()
+        assert runtime._lease == lease and runtime._prepared is prepared and not prepared._closed
+        assert runtime.describe()['armed_filetime'] == old_fence and len(env.factory.loads) == 1
+
+
+def test_alive_observer_does_not_retire_lease_or_advance_fence(env):
+    runtime, clock, lease = manual_ready(env)
+    observer = runtime.observer_factory(SimpleNamespace(process=SimpleNamespace(
+        pid=lease['pid'], process_instance=(lease['pid'], lease['created']))))
+    old_fence = runtime.describe()['armed_filetime']
+    runtime.retry()
+    clock.filetime += 10
+    runtime._step()
+    assert runtime._lease == lease and observer in runtime._observers
+    assert runtime.describe()['armed_filetime'] == old_fence
+    assert runtime.describe()['material_ready'] is True
+    assert len(env.factory.loads) == len(env.material_calls) == 1
+
+
+def test_old_enumeration_ticket_cannot_prepare_after_retirement_fence(env):
+    runtime, clock, _lease = manual_ready(env)
+    old_ticket = (runtime.describe()['armed_filetime'], runtime.describe()['watch_generation'])
+    env.api.rows[100].alive = False
+    clock.filetime += 10
+    runtime._step()
+    env.api.rows[200] = env.row(clock.filetime + 1)
+    runtime._prepare((200, env.api.rows[200].created), fence=old_ticket)
+    assert runtime._lease is None and len(env.factory.instances) == len(env.factory.loads) == 1
+    runtime._step()
+    assert runtime._lease['pid'] == 200 and len(env.factory.loads) == 2
+
+
+@pytest.mark.parametrize('interruption', ['cancel', 'retry'])
+def test_retirement_enumeration_cannot_admit_after_cancel_or_retry(env, interruption):
+    runtime, clock, _lease = manual_ready(env)
+    env.api.rows[100].alive = False
+    clock.filetime += 10
+    runtime._step()
+    env.api.rows[200] = env.row(clock.filetime + 1)
+    original = runtime._instances
+    def instances():
+        rows = original()
+        getattr(runtime, interruption)()
+        return rows
+    runtime._instances = instances
+    if interruption == 'cancel':
+        with pytest.raises(InterruptedError):
+            runtime._step()
+    else:
+        runtime._step()
+    assert runtime._lease is None and len(env.factory.instances) == len(env.factory.loads) == 1
 
 
 def test_game_build_change_during_material_validation_does_not_arm(env, monkeypatch):

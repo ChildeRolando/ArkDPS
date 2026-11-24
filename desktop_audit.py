@@ -27,11 +27,12 @@ NATIVE_HOOK_STARTUP_FIELDS = (
     'utc', 'event', 'provider', 'frida_required', 'status', 'code', 'pid', 'created_filetime',
     'game_client_version', 'source_build', 'ready_generation', 'process_age_seconds',
     'preparation_age_seconds', 'source_sha256', 'dll_sha256', 'error_type', 'cleanup_ok',
-    'preparation_snapshot_phase', 'preparation', 'loader')
+    'preparation_snapshot_phase', 'preparation', 'loader',
+    'armed_filetime', 'watch_generation', 'material_ready')
 _NATIVE_STATUSES = frozenset(('stopped', 'starting', 'waiting_for_process', 'loading', 'ready',
                              'process_failed', 'failed', 'stopping', 'cleanup_pending', 'closed'))
 _NATIVE_CODES = frozenset((
-    'native_permission_denied', 'native_unsupported_build', 'native_build_changed', 'process_identity_invalid',
+    'native_permission_denied', 'native_unsupported_build', 'native_build_changed', 'native_material_not_ready', 'process_identity_invalid',
     'process_query_pending', 'process_changed', 'native_not_ready', 'cleanup_pending', 'restart_required',
     'ambiguous_process', 'preparation_expired', 'observer_cleanup_pending', 'startup_failed',
     'unsupported_environment', 'module_query_failed', 'loader_not_ready', 'existing_component',
@@ -119,6 +120,7 @@ def sanitize_native_hook_startup(record, *, event=None):
     top = dict(utc=utc, event=member(NATIVE_HOOK_STARTUP_EVENTS), provider=member(('arkdps-native-hooks',)),
         frida_required=lambda v: v is False, status=member(_NATIVE_STATUSES), code=member(_NATIVE_CODES),
         **identity, game_client_version=build, source_build=build, ready_generation=integer,
+        armed_filetime=lambda v: integer(v, minimum=1), watch_generation=integer, material_ready=boolean,
         process_age_seconds=seconds, preparation_age_seconds=seconds, source_sha256=digest, dll_sha256=digest,
         error_type=member(_NATIVE_ERROR_TYPES), cleanup_ok=boolean,
         preparation_snapshot_phase=member(('before_prepare', 'after_prepare', 'last_safe_read')))

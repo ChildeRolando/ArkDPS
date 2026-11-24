@@ -133,6 +133,36 @@ class WindowsDllLoader:
             self._last_alive_exit_code = code
         return code == 259
 
+    def confirmed_process_exit(self, expected_instance):
+        """Prove this owned birth ended, without opening or waiting on a PID.
+
+        A missing handle, changed identity, STILL_ACTIVE (including an actual
+        exit with that reserved code), or any unreadable fact is not death.
+        This deliberately does not reuse the negative of alive().
+        """
+        if (type(expected_instance) not in (tuple, list) or len(expected_instance) != 2
+                or any(type(value) is not int or value <= 0 for value in expected_instance)):
+            return False
+        pid, created = expected_instance
+        if pid > 0xffffffff or created > 0xffffffffffffffff:
+            return False
+        handle = self.handle
+        if (handle is None or type(self.pid) is not int or self.pid != pid
+                or type(self.created_filetime) is not int or self.created_filetime != created):
+            return False
+        try:
+            before = self.api.process_times(handle)[0]
+            if type(before) is not int or before != created:
+                return False
+            code = self.api.exit_code(handle)
+            after = self.api.process_times(handle)[0]
+            return (self.handle == handle and type(self.pid) is int and self.pid == pid
+                    and type(self.created_filetime) is int and self.created_filetime == created
+                    and type(after) is int and after == created
+                    and type(code) is int and 0 <= code <= 0xffffffff and code != 259)
+        except Exception:
+            return False
+
     def _stamp(self, name):
         # Observation only: never use the policy/mock clock or change deadlines.
         self._timing_seconds[name] = max(0.0, time.perf_counter() - self._diagnostic_origin)

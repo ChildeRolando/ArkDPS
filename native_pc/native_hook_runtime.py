@@ -146,6 +146,7 @@ class NativeHookRuntime:
         self._material_ready = False
         self._material_generation = 0
         self._material_preflight_seconds = None
+        self._watch_generation = 0
 
     @property
     def is_pending(self):
@@ -179,6 +180,8 @@ class NativeHookRuntime:
             with self._condition:
                 lease = dict(self._lease) if self._lease else {}
                 status, code, generation = self.status.value, self.code, self._ready_generation
+                armed, watch_generation = self._armed, self._watch_generation
+                material_ready = self._material_ready
             failure_code = getattr(error, 'code', code) if error is not None else code
             safe = _trace_preparation(preparation)
             created = lease.get('created')
@@ -200,6 +203,7 @@ class NativeHookRuntime:
                 code=failure_code if type(failure_code) is str and failure_code in _TRACE_CODES else None,
                 pid=lease.get('pid'), created_filetime=created, source_build=lease.get('source_build'),
                 game_client_version=lease.get('source_build'), ready_generation=generation,
+                armed_filetime=armed, watch_generation=watch_generation, material_ready=material_ready,
                 process_age_seconds=process_age, preparation_age_seconds=preparation_age,
                 preparation=safe, preparation_snapshot_phase=snapshot_phase,
                 loader=_trace_loader(preparation.get('loader')) if isinstance(preparation, dict) else None,
@@ -220,6 +224,7 @@ class NativeHookRuntime:
             prepared = self._prepared
             result = dict(status=self.status.value, code=self.code, error=self.error,
                 lease=dict(self._lease) if self._lease else None, armed_filetime=self._armed,
+                watch_generation=self._watch_generation,
                 ready_generation=self._ready_generation, active_observers=len(self._observers),
                 expected_resident=self.status == RuntimeState.READY, cancelled=self._cancel.is_set(),
                 thread_alive=self._thread is not None and self._thread.is_alive(),
@@ -295,6 +300,7 @@ class NativeHookRuntime:
             # No process born during the potentially slow file validation is
             # new enough. Publish this fence only after the frozen bytes exist.
             self._armed = armed
+            self._watch_generation += 1
             self._condition.notify_all()
         return True
 
@@ -329,8 +335,15 @@ class NativeHookRuntime:
         handle = None
         try:
             handle = self.api.open_process(record['pid'], access.PROCESS_QUERY_LIMITED_INFORMATION)
-            return (self.api.process_times(handle)[0] == record['created']
-                    and self.api.exit_code(handle) == access.STILL_ACTIVE
+            created = self.api.process_times(handle)[0]
+            if type(created) is not int or not 0 < created < (1 << 64):
+                raise RuntimeFailure('process_query_pending', '尚不能核验旧 PC 进程出生身份，保留所有权')
+            if created != record['created']:
+                return False
+            exit_code = self.api.exit_code(handle)
+            if type(exit_code) is not int or not 0 <= exit_code <= 0xffffffff:
+                raise RuntimeFailure('process_query_pending', '尚不能核验旧 PC 进程退出状态，保留所有权')
+            return (exit_code == access.STILL_ACTIVE
                     and access.same_path(self.api.image_path(handle), self.game_root / 'Arknights.exe'))
         except access.ApiFailure as error:
             if error.code == 87:
@@ -421,11 +434,15 @@ class NativeHookRuntime:
                 if self._prepared is prepared:
                     self._prepared = None
 
-    def _prepare(self, birth):
+    def _prepare(self, birth, *, fence):
         with self._condition:
             self._check_cancelled()
             if self._retry_requested:
                 return  # A new validation request won admission before this birth.
+            if (fence != (self._armed, self._watch_generation) or self._lease is not None
+                    or self._prepared is not None or self._observers
+                    or self._armed is None or birth[1] <= self._armed or birth in self._attempted):
+                return  # Enumeration belongs to one released-owner watch generation.
             if not self._material_ready or self._material is None:
                 raise RuntimeFailure('native_material_not_ready', '自研组件完整预校验尚未就绪')
             self._attempted.add(birth)
@@ -489,16 +506,39 @@ class NativeHookRuntime:
                     self._discard_unclaimed()
                     self._state(RuntimeState.PROCESS_FAILED, 'preparation_expired', '原生准备已过期，请正常重启游戏')
                 return
-            if self._observers:
-                self._state(RuntimeState.PROCESS_FAILED, 'observer_cleanup_pending', '旧 PC 观察者尚待采集会话释放')
-                return
+            with self._condition:
+                self._check_cancelled()
+                if self._observers:
+                    self._state(RuntimeState.PROCESS_FAILED, 'observer_cleanup_pending', '旧 PC 观察者尚待采集会话释放')
+                    return
+                # Close adoption before releasing a dead lease's remaining
+                # resources. A failed close must not leave READY observable.
+                self._state(RuntimeState.PROCESS_FAILED, 'restart_required', '旧 PC 实例正在释放，请等待重新监听')
             self._discard_unclaimed()
             with self._condition:
+                self._check_cancelled()
+                if (self._lease is not record or self._observers or self._prepared is not None
+                        or self._retry_requested or not self._material_ready):
+                    return
+                # A process born while the old observer/loader blocked cleanup
+                # is not an early-load candidate. Rearm once, only after actual
+                # owner release, without rehashing the frozen payload material.
+                armed = self.clock.time_ns() // 100 + FILETIME_EPOCH
                 self._lease = None
+                self._armed = armed
+                self._watch_generation += 1
+                self._state(RuntimeState.WAITING_PROCESS)
+        with self._condition:
+            self._check_cancelled()
+            if self._retry_requested or not self._material_ready:
+                return
+            fence = self._armed, self._watch_generation
         matches = self._instances()
         selected = None
         with self._condition:
-            if self._retry_requested or not self._material_ready:
+            self._check_cancelled()
+            if (self._retry_requested or not self._material_ready
+                    or fence != (self._armed, self._watch_generation)):
                 return
             if len(matches) > 1:
                 self._state(RuntimeState.WAITING_PROCESS, 'ambiguous_process', '请保留一个相同路径的官服 PC 实例')
@@ -508,7 +548,7 @@ class NativeHookRuntime:
                 self._state(RuntimeState.WAITING_PROCESS, 'restart_required' if matches else None,
                             '请保持 ArkDPS 开启，再正常重启官服 PC 游戏' if matches else None)
         if selected is not None:
-            self._prepare(selected)
+            self._prepare(selected, fence=fence)
 
     def _run(self):
         while not self._cancel.is_set():

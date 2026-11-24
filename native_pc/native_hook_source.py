@@ -674,6 +674,7 @@ class NativeHookEventProbe:
         self.cleanup_errors = {}
         self._loader = self._pipe = self._config = None
         self._started = self._attempted = False
+        self._owned_process_instance = None
         # A chained outer observer may only detach after this native layer
         # has explicitly disabled and drained its hooks (or never submitted).
         self.hook_disable_confirmed = True
@@ -693,6 +694,11 @@ class NativeHookEventProbe:
                 or diagnostics.version_actual != BUILD_ID):
             self.status = ObserverStatus.INCOMPATIBLE
             raise RuntimeError('自研实时采集需要指纹匹配的官服 Windows x64 构建')
+        instance = getattr(process, 'process_instance', None)
+        if (type(instance) in (tuple, list) and len(instance) == 2
+                and all(type(value) is int and value > 0 for value in instance)
+                and instance[0] == process.pid):
+            self._owned_process_instance = tuple(instance)
         self.status = ObserverStatus.ATTACHING
         try:
             if not process.process_alive() or not process.observer_boot_ready():
@@ -866,11 +872,25 @@ class NativeHookEventProbe:
         if errors:
             raise RuntimeError('; '.join(f'{key}: {value}' for key, value in errors.items()))
 
+    def _confirmed_owned_process_exit(self):
+        if self._loader is None or self._owned_process_instance is None:
+            return False
+        try:
+            confirm = getattr(self._loader, 'confirmed_process_exit', None)
+            return callable(confirm) and confirm(self._owned_process_instance) is True
+        except Exception:
+            return False
+
     def stop(self):
         self.binding.reset()
         self.last_terminal_response = None
         stop_error = None
-        if self._started and self._pipe is not None and self.status == ObserverStatus.READY:
+        terminated = self._confirmed_owned_process_exit()
+        if terminated:
+            # This is process-lifetime proof, not a fabricated native active=0
+            # reply. No resident callbacks remain in this verified old birth.
+            self.hook_disable_confirmed = True
+        elif self._started and self._pipe is not None and self.status == ObserverStatus.READY:
             try:
                 reply = self._pipe.request('stop', timeout=2)
                 if (reply.get('error') or type(reply.get('active')) is not int or reply['active'] != 0
@@ -879,6 +899,11 @@ class NativeHookEventProbe:
                 self.hook_disable_confirmed = True
             except Exception as exc:
                 stop_error = exc
+                # Exit can race the normal stop protocol. Prove it while the
+                # original handle is still held; never suppress local cleanup.
+                if self._confirmed_owned_process_exit():
+                    self.hook_disable_confirmed = True
+                    stop_error = None
         self.status = ObserverStatus.STOPPED
         self._release()
         if stop_error:

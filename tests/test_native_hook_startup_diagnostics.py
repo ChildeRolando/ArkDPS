@@ -38,6 +38,16 @@ def test_shared_filter_keeps_actual_safe_native_diagnostics():
     assert result['loader']['thread_exit_code'] == 0xffffffff
 
 
+def test_watch_fence_facts_are_preserved_without_inventing_missing_values():
+    value = facts()
+    value.update(armed_filetime=134399539400000000, watch_generation=2, material_ready=True)
+    assert desktop_audit.sanitize_native_hook_startup(value) == value
+    value.update(armed_filetime=None, watch_generation=0, material_ready=False)
+    assert desktop_audit.sanitize_native_hook_startup(value) == value
+    missing = desktop_audit.sanitize_native_hook_startup(facts())
+    assert not {'armed_filetime', 'watch_generation', 'material_ready'} & missing.keys()
+
+
 @pytest.mark.parametrize('debug', [False, True])
 def test_journal_cannot_bypass_deep_filter_even_with_debug(tmp_path, debug):
     value = facts()
@@ -61,6 +71,9 @@ def test_journal_cannot_bypass_deep_filter_even_with_debug(tmp_path, debug):
     ('top', 'pid', True), ('top', 'created_filetime', '134399400000000001'),
     ('top', 'source_sha256', 'C:/PRIVATE_PATH'), ('top', 'code', 'PRIVATE_TOKEN'),
     ('top', 'preparation_age_seconds', float('nan')), ('top', 'utc', 'PRIVATE_TOKEN'),
+    ('top', 'armed_filetime', True), ('top', 'armed_filetime', 0),
+    ('top', 'armed_filetime', 'PRIVATE_FENCE'), ('top', 'watch_generation', -1),
+    ('top', 'watch_generation', True), ('top', 'material_ready', 1),
     ('loader', 'submitted', 1), ('loader', 'thread_exit_code', -1),
     ('loader', 'process_exit_code', 2 ** 32), ('loader', 'module_base', 'C:/PRIVATE_PATH'),
     ('loader', 'operation', 'PRIVATE_TOKEN'), ('loader', 'loader_module_basename', 'C:/PRIVATE_PATH'),

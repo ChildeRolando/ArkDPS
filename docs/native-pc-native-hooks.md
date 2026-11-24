@@ -5,6 +5,7 @@
 **便携启动测试候选 rc.2026112401 已暂停分发。** 同机实际启动在观察者 READY 前发生加载确认失败，
 截图报告线程终止值 `0xffffffff`；rc.2026112401 当时的默认日志不足以区分进程退出、未找到映射及模块返回值不匹配。
 后续 rc.2026112402 的一次真实诊断启动已确认：验证时进程仍活、模块查询成功，但没有找到组件映射；仍未定位其原因。
+rc.2026112403 校验前置后首次启动成功，但同一运行内第二次重启再次失败；当前仍不具备稳定启动或分发资格。
 此前离线检查及包摘要仍有效，但不能当作实机启动成功。原 ZIP 保留作证据，不反复加载或无证归因安全保护。
 
 本候选新增真正的进程内采集组件，不再要求外部程序先提供事件 JSONL。
@@ -778,3 +779,33 @@ UI 窗口能够启动与实时采集能够启动必须分开；本候选不能�
 另外确认核心初始化，而不是把“模块映射”当作采集就绪。
 这些是实际实现差异，不证明它们导致本次失败或构成保护兼容保证；没有直接替换本项目加载方法、套用规避逻辑或同时更改 DLL 入口。
 参考源码与 HTTPS raw/git 字节对照留在 `arkframework-startup-reference-audit.json`。
+
+### rc.2026112403：一次成功、随后重启复现失败
+
+用户自行启动并重启游戏，第一次真实 `[66564,134399536195624916]` 在出生后26.6ms开始准备、361.8ms完成。
+模块查询成功且找到组件，完整低32返回核对成功；随后真实 `observer_ready`。运行包166个不可变文件摘要全符，DLL/JS仍为38e706/d47。
+本局有事件派生统计，但用户明确为**主动退出**，不是正常通关；归档保留 `event_status=gap`、最后state2及尾部拒绝，累计完整性未知。
+默认日志没有全量raw/read/ACK，不能据汇总证明完整逐笔或正常终局。
+
+同一 WPF 运行中，用户再次正常重启游戏。旧观察者清理未完成期间，新 `[52688,134399539391473853]` 已于08:32:19.147出生。
+旧清理两次 `stopped` 间隔5.215s；08:32:23.150才开始第二次准备，已是出生后4.003s。
+这次没有重复完整物料校验，loader本身约196ms，但再次出现 `0xffffffff / module_found=false`，验证时仍存活259，模块查询成功。
+首次成功不是稳定修复。先后不是匹配因果实验，不能把4秒当作已证保护窗口或错误值的生成原因。
+
+已确认独立的准入缺口：旧owner清理结束后仍沿用最初 `_armed` fence，把清理盲区内早已启动的新实例补选加载。
+ArkFramework [每轮重新建立baseline/fence](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/src/loader/process_watch.cpp#L154-L184)
+可作为这个所有权不变量的对照，但不据此替换我们的加载方式或删掉旧Hook排空。
+用户随后正常退出 ArkDPS；真实 native owner `cleanup_ok=true`，但worker保留旧观察者管道232错误，聚合cleanup为false、实际worker退出码1。
+这两个结果均保留，不把清理前缓存 `handle_closed=false` 当作新泄漏证据，也不把聚合失败改写为干净退出。
+
+本地窄修保持原生DLL/共同JS/加载方式和权限不变：
+- 已持有的旧进程handle、准确PID/FILETIME、前后两次出生查询一致、严格DWORD退出码非259，才可确认该旧进程已结束并免无效远端stop RPC。
+  异常、缺handle、身份变化、bool/None/越界值或259都不能冒充死亡；活进程仍必须原active0/native_quiet证明。
+  本地pipe的OVERLAPPED取消完成和loader.close不能省略或吞错。依据 [GetExitCodeProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess)。
+- 旧lease确已结束且全部旧资源释放后，才一次性提交fresh fence；清理期间已经出生的实例只报需要重启，不再迟到补加载。
+  不设置猜测的毫秒窗口、不清attempted集合、不重复物料校验；未知存活状态继续保留owner。
+- 四类既有安全trace增留真实armed FILETIME、watch代次和material就绪布尔；缺失不补零，不增加同步加载线程日志I/O。
+
+回执为原inputs下 `prearmed-live-startup-audit.json`、`prearmed-live-artifact-audit.json`、
+`prearmed-live-battle-prefix-audit.json`、`prearmed-second-startup-audit.json`、`prearmed-restart-admission-review.json`。
+这些真实结果和新离线修复分开登记；修后仍需新的受协调实机启动/退出/再启动证据，性能、正常终局和分发继续暂停。

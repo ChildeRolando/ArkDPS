@@ -198,6 +198,114 @@ def test_material_keeps_claim_time_source_and_environment_change_gate(prepared_s
     assert loaders[0].closed
 
 
+def test_confirmed_old_process_exit_skips_remote_stop_but_still_releases_local_owners(setup_probe):
+    make, loaders, pipes = setup_probe
+    probe = make()
+    probe.start()
+    checked = []
+    loaders[0].confirmed_process_exit = lambda expected: checked.append(expected) or True
+    pipes[0].failure = OSError(232, 'native observer pipe I/O failed')
+    # The collector may already describe another birth. Only the saved owner
+    # birth, not this mutable process property, is admissible to the proof.
+    probe.collector.process.process_instance = (42, 200)
+    probe.stop()
+    assert checked == [(42, 100)]
+    assert not any(op == 'stop' for op, _ in pipes[0].calls)
+    assert probe.hook_disable_confirmed and loaders[0].closed and pipes[0].closed
+
+
+def test_death_confirmed_after_stop_error_clears_only_that_protocol_error(setup_probe):
+    make, loaders, pipes = setup_probe
+    probe = make(); probe.start()
+    answers = iter((False, True))
+    loaders[0].confirmed_process_exit = lambda expected: next(answers)
+    pipes[0].failure = OSError(232, 'native observer pipe I/O failed')
+    probe.stop()
+    assert probe.hook_disable_confirmed and not probe.cleanup_errors
+    assert [op for op, _ in pipes[0].calls].count('stop') == 1
+    assert loaders[0].closed and pipes[0].closed
+
+
+@pytest.mark.parametrize('confirmation', [False, None, 1, 'true'])
+def test_alive_or_unknown_exit_cannot_replace_native_quiet_stop_proof(setup_probe, confirmation):
+    make, loaders, pipes = setup_probe
+    probe = make(); probe.start()
+    loaders[0].confirmed_process_exit = lambda expected: confirmation
+    failure = pipes[0].failure = OSError(232, 'native observer pipe I/O failed')
+    with pytest.raises(OSError, match='native observer pipe I/O failed') as error:
+        probe.stop()
+    assert error.value is failure and error.value.errno == 232
+    assert not probe.hook_disable_confirmed
+    assert [op for op, _ in pipes[0].calls].count('stop') == 1
+    assert probe.cleanup_errors['hooks'] == str(failure)
+
+
+@pytest.mark.parametrize('confirmation', [False, None])
+def test_pipe_232_with_unproved_exit_retains_real_pending_local_owners(setup_probe, confirmation):
+    make, loaders, pipes = setup_probe
+    probe = make(); probe.start()
+    loaders[0].confirmed_process_exit = lambda expected: confirmation
+    pipes[0].failure = OSError(232, 'native observer pipe I/O failed')
+    loaders[0].fail_close = pipes[0].fail_close = True
+    with pytest.raises(RuntimeError, match='pending'):
+        probe.stop()
+    assert not probe.hook_disable_confirmed
+    assert probe._loader is loaders[0] and probe._pipe is pipes[0]
+    assert set(probe.cleanup_errors) == {'pipe', 'loader'}
+
+
+def test_exit_proof_after_pipe_232_does_not_hide_real_local_cleanup_error(setup_probe):
+    make, loaders, pipes = setup_probe
+    probe = make(); probe.start()
+    answers = iter((False, True))
+    loaders[0].confirmed_process_exit = lambda expected: next(answers)
+    pipes[0].failure = OSError(232, 'native observer pipe I/O failed')
+    loaders[0].fail_close = pipes[0].fail_close = True
+    with pytest.raises(RuntimeError, match='pending'):
+        probe.stop()
+    assert probe.hook_disable_confirmed
+    assert probe._loader is loaders[0] and probe._pipe is pipes[0]
+    assert set(probe.cleanup_errors) == {'pipe', 'loader'}
+    assert [op for op, _ in pipes[0].calls].count('stop') == 1
+    loaders[0].confirmed_process_exit = lambda expected: True
+    loaders[0].fail_close = pipes[0].fail_close = False
+    probe.stop()
+    assert not probe.cleanup_errors and probe._loader is probe._pipe is None
+    assert [op for op, _ in pipes[0].calls].count('stop') == 1
+
+
+def test_confirmed_exit_does_not_swallow_pending_local_pipe_or_loader_cleanup(setup_probe):
+    make, loaders, pipes = setup_probe
+    probe = make(); probe.start()
+    loaders[0].confirmed_process_exit = lambda expected: True
+    loaders[0].fail_close = pipes[0].fail_close = True
+    with pytest.raises(RuntimeError, match='pending'):
+        probe.stop()
+    assert probe.hook_disable_confirmed
+    assert probe._loader is loaders[0] and probe._pipe is pipes[0]
+    assert set(probe.cleanup_errors) == {'pipe', 'loader'}
+    loaders[0].fail_close = pipes[0].fail_close = False
+    probe.stop()
+    assert not probe.cleanup_errors and probe._loader is probe._pipe is None
+    assert not any(op == 'stop' for op, _ in pipes[0].calls)
+
+
+@pytest.mark.parametrize('reply', [dict(active=1, native_quiet=True), dict(active=True, native_quiet=True),
+    dict(active=0, native_quiet=False), dict(active=0), dict(active=0, native_quiet=True, error='stop failed')])
+def test_unproved_death_still_requires_the_original_active_zero_and_native_quiet_reply(setup_probe, reply):
+    make, loaders, pipes = setup_probe
+    probe = make(); probe.start()
+    loaders[0].confirmed_process_exit = lambda expected: None
+    original_request = pipes[0].request
+    def request(operation, **arguments):
+        result = original_request(operation, **arguments)
+        return reply if operation == 'stop' else result
+    pipes[0].request = request
+    with pytest.raises(RuntimeError, match='in-flight callbacks'):
+        probe.stop()
+    assert not probe.hook_disable_confirmed and [op for op, _ in pipes[0].calls].count('stop') == 1
+
+
 @pytest.mark.parametrize('options', [dict(build='unknown'), dict(initialized=False)])
 def test_unknown_build_and_uninitialized_vm_never_mutate(setup_probe, options):
     make, loaders, pipes = setup_probe
