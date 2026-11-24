@@ -445,7 +445,8 @@
      <Grid MaxWidth="1080">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="SettingsRightColumn" Width="*"/></Grid.ColumnDefinitions>
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-      <StackPanel x:Name="SettingsConnectionColumn" Grid.Row="0" Margin="0,0,12,0">
+      <Grid x:Name="SettingsConnectionColumn" Grid.Row="0" Margin="0,0,12,0">
+       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <Border x:Name="ReleaseSettingsCard" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12" Visibility="{Binding Visibility, ElementName=ReleaseSettings}">
        <StackPanel x:Name="ReleaseSettings" Visibility="Collapsed">
         <TextBlock Text="版本与更新" Style="{StaticResource CardTitle}" FontSize="20" Margin="0,0,0,14"/>
@@ -459,7 +460,7 @@
         <ProgressBar x:Name="UpdateProgressBar" Height="4" Margin="0,6,0,0" Visibility="Collapsed" AutomationProperties.Name="更新下载进度"/>
        </StackPanel>
       </Border>
-      <Border x:Name="ConnectionForm" Style="{StaticResource SurfaceCard}" Padding="20" VerticalAlignment="Top" Margin="0,0,0,12">
+      <Border x:Name="ConnectionForm" Grid.Row="1" Style="{StaticResource SurfaceCard}" Padding="20" VerticalAlignment="Stretch" Margin="0,0,0,12">
        <StackPanel>
         <TextBlock Text="连接设置" Style="{StaticResource CardTitle}" FontSize="20"/>
         <TextBlock Text="采集来源" Style="{StaticResource FieldLabel}" Margin="0,12,0,4"/>
@@ -488,8 +489,8 @@
         <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
        </StackPanel>
       </Border>
-      </StackPanel>
-      <Border x:Name="ConnectionEventForm" Grid.Row="0" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" VerticalAlignment="Top" Margin="0,0,0,12">
+      </Grid>
+      <Border x:Name="ConnectionEventForm" Grid.Row="0" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" VerticalAlignment="Stretch" Margin="0,0,0,12">
        <StackPanel>
         <TextBlock Text="事件观察者与连接诊断" Style="{StaticResource CardTitle}" FontSize="20" TextWrapping="Wrap"/>
         <CheckBox x:Name="EventsEnabled" Content="启用战斗事件观察者" AutomationProperties.Name="启用战斗事件观察者" Margin="0,14,0,7"/>

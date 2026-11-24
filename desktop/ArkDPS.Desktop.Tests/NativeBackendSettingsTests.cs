@@ -65,7 +65,13 @@ internal static class NativeBackendSettingsTests
                 arrange.Invoke(window, null);
                 window.ContentRoot.UpdateLayout();
             }
-            bool HiddenUpdatesCollapse(double width, double visibleConnectionTop)
+            bool BottomsAlign(double width) => width < 1000
+                || Math.Abs(Bounds(window.ConnectionForm).Bottom - Bounds(window.ConnectionEventForm).Bottom) <= 1;
+            bool NaturalObserverHeight(double width) => width >= 1000
+                || Math.Abs(window.ConnectionEventForm.ActualHeight
+                    - (window.ConnectionEventForm.DesiredSize.Height - window.ConnectionEventForm.Margin.Top
+                        - window.ConnectionEventForm.Margin.Bottom)) <= 1;
+            bool HiddenUpdatesCollapse(double width, double visibleConnectionTop, string context)
             {
                 window.ReleaseSettings.Visibility = Visibility.Collapsed;
                 Measure(width);
@@ -73,6 +79,8 @@ internal static class NativeBackendSettingsTests
                 var leftColumn = Bounds(window.SettingsConnectionColumn);
                 bool collapsed = hiddenConnection.Top < visibleConnectionTop - 1
                     && Math.Abs(hiddenConnection.Top - leftColumn.Top) <= 1;
+                Check(context + " hidden updates retain wide card bottom alignment", BottomsAlign(width));
+                Check(context + " narrow observer uses natural height when updates hide", NaturalObserverHeight(width));
                 window.ReleaseSettings.Visibility = Visibility.Visible;
                 Measure(width);
                 return collapsed;
@@ -102,7 +110,7 @@ internal static class NativeBackendSettingsTests
                             Check(context + " both left-column cards stay clear of the observer",
                                 connectionColumn.Bottom <= observer.Top + 1 || connectionColumn.Right <= observer.Left + 1);
                             Check(context + " hiding updates removes their occupied space",
-                                HiddenUpdatesCollapse(width, connection.Top));
+                                HiddenUpdatesCollapse(width, connection.Top, context));
                             connection = Bounds(window.ConnectionForm);
                             observer = Bounds(window.ConnectionEventForm);
                             apply = Bounds(applyBar);
@@ -116,6 +124,8 @@ internal static class NativeBackendSettingsTests
                                 width >= 1000 || observer.Top >= connection.Bottom);
                             Check(context + " desktop layouts align connection groups side by side",
                                 width < 1000 || observer.Left >= connection.Right);
+                            Check(context + " wide connection and observer card bottoms align", BottomsAlign(width));
+                            Check(context + " narrow observer uses natural height", NaturalObserverHeight(width));
                             Check(context + " settings stays within its scroll viewport",
                                 settingsGrid.ActualWidth <= window.SettingsPage.ViewportWidth + 1 && window.SettingsPage.ScrollableWidth <= 1);
                             if (platform == 0) continue;
@@ -130,6 +140,9 @@ internal static class NativeBackendSettingsTests
                                 titles.Length == 7 && descriptions.Length == 7 && titles.Select(Grid.GetRow).Distinct().Count() == 7);
                             Check(context + " expanded state legend remains before the shared action",
                                 Bounds(applyBar).Top >= Bounds(window.ConnectionEventForm).Bottom);
+                            Check(context + " expanded legend retains wide card bottom alignment", BottomsAlign(width));
+                            Check(context + " expanded legend still collapses hidden update space",
+                                HiddenUpdatesCollapse(width, Bounds(window.ConnectionForm).Top, context + " expanded"));
                             legend.IsExpanded = false;
                         }
                     }
