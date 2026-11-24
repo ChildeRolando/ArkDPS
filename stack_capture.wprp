@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0">
+  <Profiles>
+    <SystemCollector Id="Kernel" Name="ArkDPS CPU">
+      <BufferSize Value="256"/><Buffers Value="512"/>
+    </SystemCollector>
+    <EventCollector Id="Frames" Name="ArkDPS Frames">
+      <BufferSize Value="64"/><Buffers Value="64"/>
+    </EventCollector>
+    <SystemProvider Id="Threads">
+      <Keywords>
+        <Keyword Value="ProcessThread"/><Keyword Value="Loader"/>
+        <Keyword Value="SampledProfile"/><Keyword Value="CSwitch"/><Keyword Value="ReadyThread"/>
+      </Keywords>
+      <Stacks><Stack Value="SampledProfile"/><Stack Value="CSwitch"/></Stacks>
+    </SystemProvider>
+    <EventProvider Id="DXGI" Name="CA11C036-0102-4A2D-A6AD-F03CFED5D3C9" Level="5">
+      <Keywords><Keyword Value="0x2"/></Keywords>
+    </EventProvider>
+    <Profile Id="ArkDPS.Verbose.Memory" Name="ArkDPS" Description="Game frame submissions and thread stacks" LoggingMode="Memory" DetailLevel="Verbose">
+      <Collectors>
+        <SystemCollectorId Value="Kernel"><SystemProviderId Value="Threads"/></SystemCollectorId>
+        <EventCollectorId Value="Frames"><EventProviders><EventProviderId Value="DXGI"/></EventProviders></EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

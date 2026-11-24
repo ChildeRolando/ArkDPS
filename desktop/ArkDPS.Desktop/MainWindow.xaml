@@ -561,6 +561,15 @@
         <TextBlock Text="调试模式记录详细采集日志，会增加磁盘写入，排查完可随时关闭。"
                    Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         <Button Content="应用设置并重连" Click="ApplySettings" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,16,0,0"/>
+        <TextBlock Text="卡顿诊断" Style="{StaticResource FieldLabel}" Margin="0,18,0,4"/>
+        <TextBlock Text="预计掉帧时开始采样。Windows 将记录系统线程调用栈与游戏帧时间，45 秒后自动保存到本机。"
+                   Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
+        <WrapPanel Margin="0,8,0,0">
+         <Button x:Name="StackCaptureButton" Content="开始线程调用栈采样" Click="ToggleStackCapture" Margin="0,0,8,4"/>
+         <Button Content="打开采样目录" Click="OpenStackCaptureDirectory" Margin="0,0,0,4"/>
+        </WrapPanel>
+        <TextBlock x:Name="StackCaptureStatus" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"
+                   AutomationProperties.LiveSetting="Polite"/>
        </StackPanel>
       </Border>
      </Grid>

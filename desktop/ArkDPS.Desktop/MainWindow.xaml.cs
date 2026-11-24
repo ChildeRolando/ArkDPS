@@ -1609,6 +1609,7 @@ public partial class MainWindow : Window
     internal async Task Quit(int code=0,bool forUpdate=false)
     {
         if(quitting || closingRequested || (updateShutdownPreparing && !forUpdate))return;closingRequested=true;
+        RequestStackCaptureStop();
         recoveryCancellation.Cancel();
         updateDownloadCancellation?.Cancel();
         poll.Stop();save.Stop();SideAttachmentTimer.Stop();
