@@ -1185,10 +1185,18 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
     for suffix in ('', '_effective'):
         skill = lane.get('observed_skill_damage' + suffix)
         non_skill = lane.get('observed_non_skill_damage' + suffix)
+        key = 'skill_effective_damage' if suffix else 'skill_damage'
+        missed = lane.get('skill_effective_unclassified_hits' if suffix else 'skill_unclassified_hits')
+        counted = type(missed) is int and type(hits) is int and 0 <= missed <= hits and hits > 0
         if (lane.get('skill_split' + suffix + '_complete') is not True
-                and _finite(skill) and _finite(non_skill) and skill + non_skill > 0):
-            key = 'skill_effective_damage' if suffix else 'skill_damage'
-            mark(key, key + '_unverified_share', basis='可对账的伤害命中数')
+                and (counted and missed > 0 or _finite(skill) and _finite(non_skill) and skill + non_skill > 0)):
+            mark(key, key + '_unverified_share', basis='可对账的伤害命中数',
+                 reason=lane.get('skill_split_reason') or reason)
+            if counted:
+                coverage[key].update(unverified_hits=missed, observed_hits=hits)
+                initial = lane.get('skill_initial_unknown_hits')
+                if type(initial) is int and 0 <= initial <= missed:
+                    coverage[key]['skill_initial_unknown_hits'] = initial
     if lane.get('mitigation_complete') is not True and _finite(lane.get('observed_mitigation_rate')):
         mark('mitigation', 'mitigation_unverified_share', basis='可对账的伤害命中数',
              reason=lane.get('mitigation_reason') or reason)

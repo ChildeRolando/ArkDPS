@@ -75,6 +75,10 @@ class ObserverReadRetry(RuntimeError):
     """An available probe needs another guarded read without advancing a cursor."""
 
 
+class CallbackBusyMark(ObserverReadRetry):
+    """A decoded live mark found an in-flight callback before it could commit."""
+
+
 class TerminalReadRetry(ObserverReadRetry):
     """A decoded, available final source needs quiet/OnDestroy completion.
 
@@ -934,6 +938,8 @@ class NativePcBinding:
             if not detail and type(result.get('active')) is int and result['active'] > 0:
                 detail = ('采样开始时有未完成的战斗回调' if result.get('mark_retry_reason') == 'callback_pending_at_start'
                           else '采样结束时仍有未完成的战斗回调')
+                if operation == 'mark':
+                    raise CallbackBusyMark(f'官服 PC 事件来源 {operation} · {detail}')
             if not detail and operation == 'mark' and type(result.get('native_frame')) is int:
                 detail = '独立战局时钟与采样标记未能对齐'
             raise ObserverReadRetry(f'官服 PC 事件来源 {operation} · {detail}' if detail else

@@ -371,6 +371,7 @@ class Statistics:
         self.settlement_skill_active = {}
         self.settlement_skill_initial_pending = set()
         self.settlement_skill_incomplete = set()
+        self.settlement_skill_past_incomplete = set()
         self.settlement_skill_unassigned = set()
         self.partial_damage = {}
         self.partial_watermark = None
@@ -586,17 +587,18 @@ class Statistics:
                 self.settlement_overkill[owner] = (
                     self.settlement_overkill.get(owner, 0.0) + max(0.0, nominal - hp - shield))
         skill = self._settlement_skill(owner, actor)
+        initial_unknown = skill is None and (owner, actor) in self.settlement_skill_initial_pending
         args = (when, hp, shield, kind_name, complete, skill, nominal, before, after)
         meter = self.settled.get(owner)
         if meter is None:
             meter = self.settled[owner] = DamageSettlement()
-        meter.hit(*args, overkill=overkill)
+        meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown)
         boss = classify_boss(target)
         if boss is True:
             meter = self.settled_boss.get(owner)
             if meter is None:
                 meter = self.settled_boss[owner] = DamageSettlement()
-            meter.hit(*args, overkill=overkill)
+            meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown)
         elif boss is None:
             self.settlement_boss_missing[owner] = self.settlement_boss_missing.get(owner, 0) + 1
         if source is not None and element:
@@ -630,7 +632,8 @@ class Statistics:
         # Classification accepted while an effect was live remains an observed
         # component. A later missing endpoint cannot certify the whole window.
         skill_reason = self.skill_incomplete.get(owner)
-        if skill_reason is None and (self.skill_unknown or owner in self.settlement_skill_unassigned
+        if skill_reason is None and (self.skill_unknown or owner in self.settlement_skill_past_incomplete
+                                     or owner in self.settlement_skill_unassigned
                                      or any(identity[0] == owner for identity in self.settlement_skill_incomplete)):
             skill_reason = '技能事件覆盖不完整'
         if skill_reason is None:
@@ -990,6 +993,8 @@ class Statistics:
                     and self._unconfirmed_skill_reason(window)):
                 self.settlement_skill_incomplete.add(identity)
         identity = (owner, actor)
+        previous = self.settlement_skill_active.get(identity)
+        was_active = previous is not None and previous['effect_started']
         effect_started = self._apply_skill_transition(
             self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
@@ -997,6 +1002,12 @@ class Statistics:
         if effect_started:
             # Earlier unclassified hits stay in the damage ledger's denominator.
             self.settlement_skill_initial_pending.discard(identity)
+            if (identity in self.settlement_skill_incomplete
+                    and (not was_active or self.settlement_skill_active[identity] is not previous)):
+                # A proved new effect timestamps subsequent hits. Its start cannot
+                # repair the missing endpoint or reclassify hits in an older window.
+                self.settlement_skill_incomplete.remove(identity)
+                self.settlement_skill_past_incomplete.add(owner)
 
     def mark_settlement_skill_initial_unknown(self, owner, actor):
         self.settlement_skill_initial_pending.add((owner, actor))

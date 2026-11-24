@@ -291,3 +291,30 @@ def test_collector_session_and_guard_use_same_read_roots_not_later_process_cache
         assert report['sample']['native_window_guard']['before']['frame'] == 30
     finally:
         current.close()
+
+@pytest.mark.parametrize('fail_twice', [False, True])
+def test_busy_closing_mark_retries_same_guarded_snapshot_once(fail_twice, monkeypatch):
+    from event_probe import CallbackBusyMark
+    from event_capture import CaptureRetry
+    battle = established()
+    battle.advance(1)
+    battle.cross(amount=20)
+    attempts = 0
+    def busy_closing():
+        nonlocal attempts
+        if battle.reads[-1:] == ['pair']:
+            attempts += 1
+            if attempts == 1 or fail_twice:
+                raise CallbackBusyMark('pending callback')
+        return battle.window_mark()
+    battle.reads.clear()
+    battle.observer.mark = busy_closing
+    monkeypatch.setattr('battle_lifecycle.time.sleep', lambda delay: None)
+    if fail_twice:
+        with pytest.raises(CaptureRetry):
+            battle.poll()
+        assert own_amount(battle) == 30 and battle.commits == [0, 1]
+    else:
+        assert battle.poll().kind == 'sample'
+        assert own_amount(battle) == 50 and battle.commits == [0, 1, 2]
+    assert attempts == 2 and battle.reads.count('pair') == 1

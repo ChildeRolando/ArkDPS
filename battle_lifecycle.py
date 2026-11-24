@@ -17,7 +17,7 @@ from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterErro
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
 from event_observer import ObserverReadRetry
-from event_probe import (MuMuAutoChessProbeContract, NativePcProbeContract,
+from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
                          autochess_event_mark_context, verified_autochess_event_window,
                          autochess_root_failure, autochess_scope_detail,
@@ -171,8 +171,16 @@ def _terminal_boundary(observer, capture=None, *, deadline=None):
                                    else {'status': 'candidate', 'reason': 'raw_boundary_received'}}
 
 
-def _observer_mark(observer):
-    mark = observer.mark()
+def _observer_mark(observer, *, retry_busy=False):
+    try:
+        mark = observer.mark()
+    except CallbackBusyMark:
+        if not retry_busy:
+            raise
+        # Yield the host thread before retrying this same mark. A second busy
+        # result leaves the cursor untouched and returns to normal polling.
+        time.sleep(.008)
+        mark = observer.mark()
     if not isinstance(mark, dict):
         raise StreamGap('invalid observer mark')
     if mark.get('error'):
@@ -420,11 +428,12 @@ class BattleFeed:
                 raise opening_error
             if opening_error is not None:
                 return {'error': str(opening_error)}
-            end_mark = _observer_mark(observer)
             metadata = sample.get('battle_metadata') or {}
-            if (sample.get('state') == 2 and metadata.get('platform') == 'native_pc'
-                    and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
-                    and autochess_event_mark_context(sample, mark) is not None):
+            scoped_pc = (sample.get('state') == 2 and metadata.get('platform') == 'native_pc'
+                         and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
+                         and autochess_event_mark_context(sample, mark) is not None)
+            end_mark = _observer_mark(observer, retry_busy=scoped_pc)
+            if scoped_pc:
                 BattleFeed._project_event_window(sample, mark, end_mark)
             if not isinstance(contract_for(observer), NativePcProbeContract):
                 capture = None
@@ -551,7 +560,7 @@ class BattleFeed:
             # The native backend captures the pair in read_lifecycle(). A mark
             # taken while retrieving its cached result would be too late.
             try:
-                opening = (_observer_mark(observer), None)
+                opening = (_observer_mark(observer, retry_busy=self.autochess_identity is not None), None)
             except Exception as exc:
                 opening = (None, exc)
         from collector import NativeClockBusy
