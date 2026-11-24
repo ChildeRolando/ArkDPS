@@ -1447,7 +1447,7 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
             observer_states.append((snapshot['status'], snapshot['observer_status'], snapshot['event_text']))
     assert observer_states == [
         ('waiting', 'waiting_game_init', '等待游戏初始化'),
-        ('waiting', 'ready', '事件已就绪 · 等待同帧基线'),
+        ('waiting', 'ready', '观察者已就绪 · 等待战斗样本'),
     ]
 
 

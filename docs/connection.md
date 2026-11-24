@@ -28,12 +28,12 @@
 ## PC 事件后端
 
 在连接设置选择 PC 平台和包含 `Arknights.exe` 的游戏目录，启用逐次事件。
-「PC 事件后端」可选 Frida 或自研；若遇“检测到环境存在异常”报错，选择「自研」。
+「PC 事件后端」可选 Frida 或 ArkPie；若遇“检测到环境存在异常”报错，选择「ArkPie」。
 点击「应用设置并重连」，等待监听已就绪后正常启动或重启游戏，进入大厅等待事件就绪。
 
 配置中的 `platform: "native_pc"`、`native_game_root` 和 `native_pc_event_backend` 分别保存平台、游戏目录与后端选择，
 `native_pc_event_backend` 为 `frida` 或 `native`。标准便携包内置两种后端，应用内更新沿用连接设置。
-自研逐次事件与 Frida 共用统计接口，具体实机记录见[PC 自研事件后端](native-pc-native-hooks.md)。
+ArkPie 逐次事件与 Frida 共用统计接口，具体实机记录见[PC ArkPie 事件后端](native-pc-native-hooks.md)。
 
 ## 自动检测
 

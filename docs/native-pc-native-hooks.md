@@ -1,4 +1,4 @@
-# PC 自研事件后端
+# PC ArkPie 事件后端
 
 ## 2026-11-24 卫戍实机流畅度验收
 
@@ -6,11 +6,11 @@
 
 ## 设置与启动
 
-标准便携包包含「Frida」与「自研」两种 PC 事件后端。在设置页选择「自研」即可启用本页组件；
-若遇“检测到环境存在异常”报错，选择此选项。应用设置后，等待「自研监听已就绪，请启动游戏」，
+标准便携包包含「Frida」与「ArkPie」两种 PC 事件后端。在设置页选择「ArkPie」即可启用本页组件；
+若遇“检测到环境存在异常”报错，选择此选项。应用设置后，等待「ArkPie 监听已就绪，请启动游戏」，
 再正常启动或重启客户端，进入大厅等待观察者就绪。
 
-自研后端通过与 MuMu、PC Frida 共用的探针与统计接口提供逐次伤害、治疗、实际吸盾、技能起止和敌情。
+ArkPie 后端通过与 MuMu、PC Frida 共用的探针与统计接口提供逐次伤害、治疗、实际吸盾、技能起止和敌情。
 元数据核验、结算与归属逻辑运行于 QuickJS，C++ 适配层使用 MinHook 观察原生调用，提供内存读取、调用上下文及命名管道。
 后端选择、普通更新和历史战绩沿用标准桌面入口。
 
@@ -29,7 +29,7 @@ python native_pc/native_event_runtime/build.py
 python app.py --platform native_pc --native-game-root 'D:\Games\Arknights' --native-pc-event-backend native --capture-seconds 300 --output-dir 'D:\Captures\native-new' --require-events --require-progress
 ```
 
-自研模式不填写合作文件时使用新组件；显式填写 `--native-pc-event-feed` 时仍走原合作 JSONL 路径。
+ArkPie 模式不填写合作文件时使用新组件；显式填写 `--native-pc-event-feed` 时仍走原合作 JSONL 路径。
 CLI 显式传入 `--native-pc-event-backend native` 且不传文件时选择原生 Hook，不沿用旧合作文件；
 未显式切换内核时仍使用已保存的文件配置。桌面设置中需清空合作文件来选择 Hook。
 先启动采集入口，再正常重启客户端；独立 `NativeHookRuntime` 等待同安装路径的新进程出生，
@@ -49,8 +49,8 @@ python -m acceptance.capture_pc_native_only --game-root 'D:\Games\Arknights' --o
 `runtime/native-pc/native-event-runtime/ArkDPS.NativeEvents.dll`，旁边的 `.build.json` 记录 DLL、六个源码输入、依赖与许可摘要。
 启动时拒绝源码已变但未重建的 DLL。
 
-标准便携包内置经清单核验的自研 DLL。组件来源、构建摘要和依赖许可按[便携包构建规则](windows-release.md#pc-自研事件后端)核对。
-早期独立启动测试变体及 `--with-native-events` 合作来源的记录见后文；标准包的自研选项直接使用此 DLL。
+标准便携包内置经清单核验的 ArkPie DLL。组件来源、构建摘要和依赖许可按[便携包构建规则](windows-release.md#pc-ArkPie 事件后端)核对。
+早期独立启动测试变体及 `--with-native-events` 合作来源的记录见后文；标准包的 ArkPie 选项直接使用此 DLL。
 
 ## 同一对局对账
 
@@ -63,12 +63,12 @@ python -m acceptance.capture_pc_probe_pair --game-root 'D:\Games\Arknights' --ou
 ```
 
 1. 看到 `WAITING_GAME` 后正常重启官服 PC，等待大厅初始化。
-2. 官服已验证的启动方式增加 `--preload-native`：先普通加载自研 DLL，再准备 Frida；VM 就绪后串行安装 Frida 和自研 Hook，避免同时改写目标入口。
+2. 官服已验证的启动方式增加 `--preload-native`：先普通加载 ArkPie DLL，再准备 Frida；VM 就绪后串行安装 Frida 和 ArkPie Hook，避免同时改写目标入口。
 3. 看到 **`BOTH_READY`** 后再进入用户选定的测试关卡与模式，开局前不能已有未采到的交战。关卡名称含“演习”不能证明它是免理智的练习模式。
 4. 手动完成对局并等待结算。采集到时间后自动关闭各自会话；也可创建输出目录内的 `STOP` 请求结束。
 5. 检查 `pair-receipt.json`、两侧 `summary.json` 与 `capture.jsonl`，然后执行：
 
-双探针必须按安装相反顺序拆除：先禁用自研 Hook 并等待在途调用结束，再卸载 Frida。
+双探针必须按安装相反顺序拆除：先禁用 ArkPie Hook 并等待在途调用结束，再卸载 Frida。
 如果看到 `FATAL_KEEPALIVE`，脚本会保持 Frida 存活，请先从游戏界面正常退出官服 PC，**不要先结束采集器进程**。
 这是异常清理保护，不是已经证明两套 Hook 在实机中安全共存。
 
@@ -94,9 +94,9 @@ python -m acceptance.verify_live_events 'D:\Captures\native-frida-new\frida'
 - **边界**：新增实现位于 `native_pc/native_event_runtime/`、`native_hook_source.py`；仍实现已有 `EventProbe`，不修改统计口径。
 - **权威数据**：原生累计快照仍是累计权威。事件须经 `NativePcBinding` 和同帧前后水位核验，不按事件重复累加累计。
 - **来源**：直接复用 `assemble_probe_source('native_pc')`，记录三段源码及实际提交字节摘要；不是把历史日志转成实时输入。
-- **唯一业务逻辑**：平台与采集后端是独立维度。PC/MuMu 适配仅提供经过验证的原生布局、ABI、身份、时钟和能力；Frida/自研提供钩子、字段读取与调用上下文。
+- **唯一业务逻辑**：平台与采集后端是独立维度。PC/MuMu 适配仅提供经过验证的原生布局、ABI、身份、时钟和能力；Frida/ArkPie 提供钩子、字段读取与调用上下文。
   父子结算、HP/护盾、元素、技能判断继续执行同一份共同 JS，不新增平台专属结算算法或第二统计核心。回调内事实必须同步保存，不能事后由 Python 推算。
-- **隔离**：配置绑定 PID/出生时间；管道限本机同用户，随机令牌认证，客户端另核对 server PID；同进程命名互斥体拒绝第二自研 Hook 所有者。
+- **隔离**：配置绑定 PID/出生时间；管道限本机同用户，随机令牌认证，客户端另核对 server PID；同进程命名互斥体拒绝第二 ArkPie Hook 所有者。
 - **资源**：I/O 有界，超时通道不重用；Windows 未完成的 I/O/加载仍保留资源所有权。停止禁用 Hook，但 DLL 保持映射至游戏退出，防止回调返回到已释放代码。
 - **兼容边界**：通用 Win64 包装器最多转发 16 个参数（现有业务最高访问下标为 8）；保留浮点与大结构返回。单原生地址多个监听器及异常跨 Hook 跳出尚不支持，前者拒绝安装，后者保留活跃缺口；不能据自有 ABI 检查推断这些场景通过。
 - **共享加载器**：普通 Windows DLL 加载逻辑从 Frida 启动器提取至 `windows_dll_loader.py`，旧公开类名继续兼容，不让新来源导入 Frida 运行时。
@@ -620,7 +620,7 @@ DLL 六份嵌入源及 124 份采集文件已核验，准备了新输出目录�
 - 仅执行不显示窗口、不发输入的 C# 控件/状态测试，以及包内 Python 无 Frida 导入、离线 worker 握手、清洁解压和摘要检查。
   不在用户正在对局时启动 WPF 交互验收或真实 Hook；这些检查不是用户机器上的实际启动、兼容性或性能结论。
 
-该历史启动变体已由标准包内的自研后端取代。当前构建命令见[Windows 自研事件后端](windows-release.md#pc-自研事件后端)。
+该历史启动变体已由标准包内的自研后端取代。当前构建命令见[Windows 自研事件后端](windows-release.md#pc-arkpie-事件后端)。
 实际 ZIP、源提交、摘要和构建回执以构建输出为准；尚未完成的用户启动反馈、包内实机采集、性能与阶段交接继续保留。
 
 ### 本地实际构建与静态复核

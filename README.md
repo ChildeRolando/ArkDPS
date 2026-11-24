@@ -7,7 +7,7 @@ ArkDPS 是《明日方舟》的 Windows 战斗统计工具。作战时可以查�
 1. 前往 [GitHub Releases](https://github.com/ChildeRolando/ArkDPS/releases)，下载 Windows x64 便携包 `ArkDPS-<版本>-win-x64.zip`。
 2. 将 ZIP 解压到可写目录，启动 `ArkDPS.Desktop.exe`。程序始终要求管理员权限，Windows 提示时确认即可，无需每次右键启动。便携包自带运行环境，无需另外安装 Python 或 .NET。
 3. 在「连接设置」选择平台。**MuMu 12** 需要启用 Root，并运行适配的安卓客户端 **2.7.91**。ArkDPS 会通过模拟器自带的 ADB 检测实例。如果检测到多个实例，手动选择运行游戏的那一个。**官服 PC** 选择包含 `Arknights.exe` 的游戏目录，使用已通过构建校验的 Windows x64 客户端。
-4. PC 的「事件后端」可选择 **Frida** 或 **自研**。若遇“检测到环境存在异常”报错，选择「自研」。先启动 ArkDPS，**等提示「监听已就绪，请启动游戏」后再启动游戏**；切换后端后点击「应用设置并重连」，按提示正常重启游戏。观察者就绪后进入战斗。关闭观察者可只采累计。
+4. PC 的「事件后端」可选择 **Frida** 或 **ArkPie**。若遇“检测到环境存在异常”报错，选择「ArkPie」。先启动 ArkDPS，**等提示「监听已就绪，请启动游戏」后再启动游戏**；切换后端后点击「应用设置并重连」，按提示正常重启游戏。观察者就绪后进入战斗。关闭观察者可只采累计。
 
 ## 便携版使用指南
 
@@ -22,7 +22,7 @@ MuMu 的事件观察者可以补充有效伤害、被减伤率、技能期伤害
 
 官服 PC 的累计采样支持分类伤害、治疗、召唤物归属、独立 HUD 与战绩。在开局和编队成员采样完整时，可查看全周期 DPS/HPS。敌情显示当前在场敌人的 HP 和当前名单 HP 合计，实例详情保留已观测最高 HP。关卡配置通过核对后也会显示固定波次计数。逐次结算由事件观察者提供。[官服 PC 实机证据与覆盖范围](docs/native-pc-feasibility.md)
 
-PC 的 Frida 和自研后端共用事件探查接口与统计逻辑，逐次采集伤害、治疗、实际吸盾和技能起止。自研后端已于 2026-11-24 通过实机验收；用户在 `aed70d7` 的卫戍对局中确认战斗数据正常、几乎没有卡顿。[自研后端实机记录](docs/native-pc-native-hooks.md)
+PC 的 Frida 和 ArkPie 后端共用事件探查接口与统计逻辑，逐次采集伤害、治疗、实际吸盾和技能起止。ArkPie 后端已于 2026-11-24 通过实机验收；用户在 `aed70d7` 的卫戍对局中确认战斗数据正常、几乎没有卡顿。[ArkPie 后端实机记录](docs/native-pc-native-hooks.md)
 
 2026-11-22 的 CE-5 实机对账中，42 个敌人的实际扣血合计 221000，与入场总血量一致。104 笔治疗均记录了结算量与实际回血。闪灵的护盾实际吸收了 316.5 点伤害。该局记录了 25 次干员技能效果结束，新约能天使的「使命必达！」在终局前未观察到实际结束，相关技能期统计保留为不完整。其他护盾机制的覆盖需各自的实测记录。[官服 PC 实机覆盖](docs/event-capture.md#arkdps-本机-frida-探针)
 
@@ -42,7 +42,7 @@ PC 的 Frida 和自研后端共用事件探查接口与统计逻辑，逐次采�
 
 安装 Python 和 .NET 10 SDK 后，双击仓库根目录的 [start.cmd](start.cmd)。`main` 与预发布包可能对应不同提交，实际版本所用的源码见 [GitHub Releases](https://github.com/ChildeRolando/ArkDPS/releases) 中的构建提交。
 
-源码运行 PC 事件采集前，在项目 Python 环境安装 `requirements-windows.txt`。Frida 后端执行 `python tools/frida_gadget_asset.py` 准备官方 Gadget；自研后端执行 `python native_pc/native_event_runtime/build.py` 构建采集组件。标准便携包已包含两个后端所需组件。采集组件随游戏正常退出结束。
+源码运行 PC 事件采集前，在项目 Python 环境安装 `requirements-windows.txt`。Frida 后端执行 `python tools/frida_gadget_asset.py` 准备官方 Gadget；ArkPie 后端执行 `python native_pc/native_event_runtime/build.py` 构建采集组件。标准便携包已包含两个后端所需组件。采集组件随游戏正常退出结束。
 
 ## 了解更多
 

@@ -58,7 +58,7 @@ public partial class App : System.Windows.Application
             bool internalRequested = arguments.Contains("--internal-capture");
             if (NativeHookCandidate && (arguments.Contains(PortableUpdateHost.ApplyOption)
                 || arguments.Contains(PortableUpdateHost.ChildOption)))
-                throw new ArgumentException("自研启动测试候选不支持自动更新、旧版本激活或状态迁移。");
+                throw new ArgumentException("ArkPie 启动测试候选不支持自动更新、旧版本激活或状态迁移。");
             if ((InternalEventPackage || VerifyInternalCapture) && !internalRequested)
                 throw new ArgumentException("内部事件候选需要 --offline --internal-capture 和独立的 --state-dir。");
             var host = InternalEventPackage || internalRequested || CooperativeEventPackage || NativeHookCandidate
@@ -92,10 +92,10 @@ public partial class App : System.Windows.Application
                 if (NativeHookCandidate && arg is "--repo" or "--python" or "--internal-capture"
                     or "--verify-internal" or "--verify-update" or "--frida-remote" or "--adb" or "--serial" or "--arkframework-root"
                     or "--native-pc-event-feed")
-                    throw new ArgumentException("自研启动测试候选不支持该启动方式：" + arg);
+                    throw new ArgumentException("ArkPie 启动测试候选不支持该启动方式：" + arg);
                 if (NativeHookCandidate && (arg == "--platform" && arguments.ElementAtOrDefault(i + 1) != "native_pc"
                     || arg == "--native-pc-event-backend" && arguments.ElementAtOrDefault(i + 1) != "native"))
-                    throw new ArgumentException("此候选仅支持官服 PC 自研实时采集。");
+                    throw new ArgumentException("此候选仅支持官服 PC ArkPie 实时采集。");
                 if (InternalEventPackage && arg is not ("--offline" or "--internal-capture" or "--state-dir" or "--verify-internal"))
                     throw new ArgumentException("内部事件候选不支持参数：" + arg);
                 switch (arg)
@@ -204,7 +204,7 @@ public partial class App : System.Windows.Application
                 bool nativeHooks = manifest.RootElement.Get("native_pc_native_hooks").ValueKind
                     == System.Text.Json.JsonValueKind.Object;
                 if (NativeHookCandidate && !nativeHooks)
-                    throw new IOException("桌面程序与自研事件组件清单不匹配。");
+                    throw new IOException("桌面程序与 ArkPie 事件组件清单不匹配。");
                 if (nativeHooks) VerifyNativeHookPackage(manifest.RootElement);
                 InstalledVersion = version;
                 if (!NativeHookCandidate && packaged && manifest.RootElement.Number("update_protocol") == 1 &&
@@ -213,7 +213,7 @@ public partial class App : System.Windows.Application
                     UpdateHost = host;
             }
             else if (NativeHookCandidate)
-                throw new IOException("自研事件组件需要完整便携包。");
+                throw new IOException("ArkPie 事件组件需要完整便携包。");
             var window = new MainWindow(); MainWindow = window;
             WriteStartupEvent("event=window_created");
             if (UpdateLaunch?.ReadyPipe != null || UpdateVerification != null || VerifyInternalCapture)
@@ -260,7 +260,7 @@ public partial class App : System.Windows.Application
                     || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.True)
             || profile.Text("default_platform") != "native_pc" || profile.Text("default_backend") != "native"
             || manifest.Get("files").ValueKind != System.Text.Json.JsonValueKind.Object)
-            throw new IOException("自研事件组件的适用范围或默认来源清单不匹配。");
+            throw new IOException("ArkPie 事件组件的适用范围或默认来源清单不匹配。");
         string root = Path.GetFullPath(AppContext.BaseDirectory);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in manifest.Get("files").EnumerateObject())
@@ -272,21 +272,21 @@ public partial class App : System.Windows.Application
                 || name.StartsWith('/') || name.Split('/').Any(part => part is "" or "." or ".."
                     || part.EndsWith('.') || part.EndsWith(' '))
                 || digest.Length != 64 || !digest.All(Uri.IsHexDigit))
-                throw new IOException("自研事件组件的文件清单无效。");
+                throw new IOException("ArkPie 事件组件的文件清单无效。");
             string path = Path.GetFullPath(Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar)));
             if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
-                throw new IOException("自研事件组件缺少清单文件：" + name);
+                throw new IOException("ArkPie 事件组件缺少清单文件：" + name);
             for (FileSystemInfo? entry = new FileInfo(path); entry is not null && entry.FullName != root.TrimEnd(Path.DirectorySeparatorChar);
                  entry = entry is FileInfo info ? info.Directory : ((DirectoryInfo)entry).Parent)
                 if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException("自研事件组件不接受链接替换的文件：" + name);
+                    throw new IOException("ArkPie 事件组件不接受链接替换的文件：" + name);
             string actual = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
             if (!string.Equals(actual, digest, StringComparison.OrdinalIgnoreCase))
-                throw new IOException("自研事件组件文件摘要不一致：" + name);
+                throw new IOException("ArkPie 事件组件文件摘要不一致：" + name);
         }
         if (!names.Contains("ArkDPS.Desktop.exe") || !names.Contains("collector/desktop_bridge.py")
             || !names.Contains("python/python.exe"))
-            throw new IOException("自研事件组件缺少必要入口文件。");
+            throw new IOException("ArkPie 事件组件缺少必要入口文件。");
     }
 
     private static string ResolveDirectory(string path)

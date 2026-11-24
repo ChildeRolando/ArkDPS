@@ -48,7 +48,7 @@ def test_bundle_requires_a_verified_internal_host(tmp_path):
     metadata.mkdir()
     manifest = metadata / 'release.json'
     manifest.write_text('{}')
-    with pytest.raises(ValueError, match='没有自研'):
+    with pytest.raises(ValueError, match='没有 ArkPie'):
         internal_host(collector)
     relative = host.relative_to(tmp_path).as_posix()
     digest = sha256(host.read_bytes()).hexdigest()

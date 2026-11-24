@@ -146,7 +146,7 @@ def test_live_host_manifest_is_separate_from_the_controlled_build(tmp_path):
         'files': {HOST_PATH: digest},
     }))
     assert live_native_host(tmp_path / 'collector') == host
-    with pytest.raises(ValueError, match='没有自研'):
+    with pytest.raises(ValueError, match='没有 ArkPie'):
         internal_host(tmp_path / 'collector')
 
 
@@ -156,5 +156,5 @@ def test_native_hooks_missing_from_portable_fail_before_loading(tmp_path):
     (metadata / 'release.json').write_text('{}')
     source = event_source.PcEventSource(tmp_path / 'state', collector_root=tmp_path / 'collector')
     factory = source.select(enabled=True, backend='native')
-    with pytest.raises(RuntimeError, match='缺少自研 PC 采集组件'):
+    with pytest.raises(RuntimeError, match='缺少 ArkPie PC 采集组件'):
         factory(object(), None)
