@@ -587,4 +587,3 @@ def test_cold_native_skill_observations_reach_main_teammate_and_saved_history(tm
     assert state.snapshot()['history_selected'] == selected
     assert state.history.path_for(record.battle_id).read_bytes() == original_bytes
     assert all(sample == original for sample, original in originals)
-

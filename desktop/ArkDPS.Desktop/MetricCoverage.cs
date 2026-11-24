@@ -49,6 +49,14 @@ internal static class MetricCoverage
     {
         string percent=Percentage(item);
         if(item.Text("basis_kind")!="hits") return "统计失败占比 "+percent;
+        var prefixCount=item.Get("skill_initial_unknown_hits");
+        if(prefixCount.ValueKind==JsonValueKind.Number && prefixCount.TryGetInt32(out var initial))
+        {
+            string prefix=percent=="未知" ? "已记录命中 " : "未核实命中 ";
+            string counts=$"{item.Get("unverified_hits").GetRawText()}/{item.Get("observed_hits").GetRawText()}";
+            string share=percent=="未知" ? " 未核实，整局占比未知" : $"（{percent}）";
+            return prefix+counts+share+(initial>0 ? $"，其中 {initial} 次开局技能状态未知" : "");
+        }
         if(percent=="未知") return "未核实命中占比未知";
         var missed=item.Get("unverified_hits");
         var hits=item.Get("observed_hits");

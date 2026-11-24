@@ -64,6 +64,26 @@ def test_missing_or_wrong_source_format_cannot_fall_back_to_a_different_probe(tm
         assemble_probe_source("native_pc", directory=tmp_path)
 
 
+def test_source_reader_assembles_exact_verified_snapshot_without_disk_rereads(tmp_path):
+    expected = assemble_probe_source('native_pc')
+    names = (expected.adapter_file, expected.runtime_file, expected.context_file)
+    snapshot = {tmp_path / name: (ROOT / name).read_bytes() for name in names}
+    calls = []
+
+    def read(path):
+        calls.append(path)
+        return snapshot[path]
+
+    # The directory is deliberately empty: a path cache followed by another
+    # disk read would fail instead of composing the admitted bytes.
+    actual = assemble_probe_source('native_pc', directory=tmp_path, read_file=read)
+    assert actual == expected
+    assert calls == [tmp_path / name for name in names]
+    with pytest.raises(TypeError, match='immutable bytes'):
+        assemble_probe_source('native_pc', directory=tmp_path,
+                              read_file=lambda path: bytearray(snapshot[path]))
+
+
 def test_amount_skill_and_settlement_logic_has_one_shared_owner():
     common = (ROOT / "event_probe_runtime.js").read_text(encoding="utf-8")
     for name in ("record", "settleDamage", "skillIdentity", "recordHpContext",
@@ -145,7 +165,9 @@ def test_submitted_source_manifest_survives_ready_or_load_failure(monkeypatch, p
 # declarations were then deliberately corrected; their business truth is tested
 # by test_event_probe_source_settlement/local_settlement, rather than freezing
 # the old global failures. Every normal scenario still compares its whole JSON
-# object, including all events, numeric fields and quality declarations.
+# object, including all events, numeric fields and quality declarations. The
+# additive producer-boundary contract has a second full-object hash below;
+# the original pre-boundary projection must still match these frozen hashes.
 @pytest.mark.parametrize("args,expected", [
     (["tests/native_pc_frida_probe_fixture.js", "event_probe_native_pc.js"],
      "342a5a5367e9c1de59e7387cc5db456cd699a75d24020ee04cbe92d4ab32e6c7"),
@@ -172,5 +194,75 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
                   'late_attenuation_after_unit', 'late_amplification_before_unit',
                   'late_amplification_during_unit', 'late_amplification_old_output')
         payload = {backend: {name: cases[name] for name in normal} for backend, cases in payload.items()}
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    assert hashlib.sha256(canonical).hexdigest() == expected
+    extended_hashes = {
+        'tests/event_probe_quality_fixture.js': '5042a3c89ee5e2dd709f186c351463e355880461ca463f8bb3f7d6c825685987',
+        'tests/native_pc_settlement_order_fixture.js': 'bc3792874c309d3aa292ae2b4d66cc6e17faf3348308424dcce31eabb7f7c6e2',
+        'tests/event_probe_pipeline_fixture.js': '84776a0810f29b1dc79b2713f4a11cb84c045d316bf62f2eb6fbf9cb782d0592',
+        'tests/event_probe_retained_queue_fixture.js': '3abb08e9fa139e8b24f2b3e5a71665d6075bfc066dbc6dcc8126f2b5727e5bed',
+    }
+    def digest(value):
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        return hashlib.sha256(canonical).hexdigest()
+
+    terminal_read_hashes = {
+        'tests/event_probe_quality_fixture.js': 'aa6e7945b7173194caf0ee09dce54d082eab9c502f40d152c6816f9a27db0b4b',
+        'tests/native_pc_settlement_order_fixture.js': '411c11b96b97f139b147d01058f37fda7b78d3d794532e0f2e0fcdaec4febb83',
+        'tests/event_probe_pipeline_fixture.js': '5d5a88a72f80795992fac843be86506ab1bacfc3a3d7379e2e4b190633d65a12',
+    }
+
+    def before_terminal_read(value):
+        if isinstance(value, dict):
+            if 'terminal_read_version' in value:
+                assert type(value['terminal_read_version']) is int and value['terminal_read_version'] == 1
+            return {key: before_terminal_read(item) for key, item in value.items()
+                    if key != 'terminal_read_version'}
+        if isinstance(value, list):
+            return [before_terminal_read(item) for item in value]
+        return value
+
+    assert digest(payload) == terminal_read_hashes.get(args[0], extended_hashes.get(args[0], expected))
+    assert digest(before_terminal_read(payload)) == extended_hashes.get(args[0], expected)
+    additions = {'initial_boundary', 'initial_boundary_diagnostics', 'terminal_boundary_diagnostics'}
+    observed_additions = set()
+
+    def assert_boundary_contract(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in additions:
+                    observed_additions.add(key)
+                if key == 'initial_boundary' and item is not None:
+                    assert set(item) == {'version', 'source', 'method', 'phase', 'state', 'hooks_ready',
+                        'native_identity', 'native_stage_id', 'native_generation', 'native_process_pid',
+                        'native_frame', 'native_fixed_time', 'frame', 'game_time', 'sequence', 'epoch',
+                        'active', 'damage_settlement_scope'}
+                    assert item['version'] == 1 and item['source'] == 'native-pc-producer'
+                    assert item['method'] == 'BattleController.set_state' and item['phase'] == 'leave'
+                    assert item['state'] == 2 and item['hooks_ready'] is True
+                    assert item['frame'] == item['native_frame'] == item['sequence'] == item['active'] == 0
+                    assert item['game_time'] == 0 and item['native_fixed_time'] == '0'
+                    assert set(item['native_identity']) == {'controller', 'native', 'logger', 'stats', 'level'}
+                if key in ('initial_boundary_diagnostics', 'terminal_boundary_diagnostics'):
+                    counters = ({'attempts', 'captured', 'rejected', 'invalidated'} if key.startswith('initial_')
+                        else {'destroy_entered', 'destroy_left', 'candidates', 'captured', 'rejected', 'invalidated'})
+                    assert set(item) == counters | {'last_rejection'}
+                    assert all(type(item[name]) is int and 0 <= item[name] <= 1000000 for name in counters)
+                    assert item['last_rejection'] is None or (
+                        isinstance(item['last_rejection'], str) and 0 < len(item['last_rejection']) <= 64
+                        and all(character in 'abcdefghijklmnopqrstuvwxyz_' for character in item['last_rejection']))
+                assert_boundary_contract(item)
+        elif isinstance(value, list):
+            for item in value:
+                assert_boundary_contract(item)
+
+    assert_boundary_contract(payload)
+    if args[0] in extended_hashes:
+        assert 'terminal_boundary_diagnostics' in observed_additions
+
+    def original_contract(value):
+        if isinstance(value, dict):
+            return {key: original_contract(item) for key, item in value.items() if key not in additions}
+        if isinstance(value, list):
+            return [original_contract(item) for item in value]
+        return value
+
+    assert digest(original_contract(before_terminal_read(payload))) == expected

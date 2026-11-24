@@ -1,7 +1,11 @@
 """Real Session/PC readiness composition with controlled process memory only."""
 from types import SimpleNamespace
 
+import pytest
+
 from collection_session import CollectionSession, WAITING_GAME_INIT
+from collector import SampleUnavailable
+from native_pc_collector import NativePcCollector
 from test_native_pc_battle_probe import battle, runtime
 
 
@@ -45,5 +49,37 @@ def test_valid_battle_class_cannot_attach_before_completed_vm_init(runtime, monk
         assert current._finish_when_game_ready()
         assert current.event_status == 'ready' and calls == ['construct', 'start']
         assert current._finish_when_game_ready() and calls == ['construct', 'start']
+    finally:
+        current.close()
+
+
+def test_stable_lazy_field_table_times_out_without_observer_or_ready_receipt(runtime, monkeypatch):
+    root, api, p = runtime
+    api.put(p['klass'] + battle.CLASS_FIELDS, '<Q', 0)
+    probe = battle.NativePcBattleProbe(root, api)
+    collector = NativePcCollector(root)
+    collector.process = probe
+    collector.connect = lambda **_: None
+    collector.locate_lifecycle = lambda: None
+    clock, constructed, audit = [0.0], [], []
+    monkeypatch.setattr('collection_session.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('collection_session.time.sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def forbidden_observer(*args):
+        constructed.append(True)
+        raise AssertionError('empty metadata must never construct an observer')
+
+    current = CollectionSession(None, None, collector=collector, frida_remote=None,
+        observer_factory=forbidden_observer, audit=lambda kind, data: audit.append((kind, data)))
+    current.enable_lifecycle()
+    try:
+        current.connect()
+        assert current.event_status == WAITING_GAME_INIT
+        with pytest.raises(SampleUnavailable, match='初始化超时'):
+            current.wait_for_game_init(wait_seconds=.6)
+        assert current.event_status == WAITING_GAME_INIT and not constructed
+        assert collector.observer_boot_reason == 'field_table_missing'
+        assert collector.diagnostics.details['observer_boot'] == dict(ready=False, reason='field_table_missing')
+        assert not any(kind in ('observer_game_init_ready', 'observer_ready') for kind, _ in audit)
     finally:
         current.close()

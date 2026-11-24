@@ -6,6 +6,8 @@ path ownership, thread submission, result capture and post-load verification.
 """
 import ctypes
 import hashlib
+import json
+import math
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -413,3 +415,217 @@ def test_runtime_presence_read_revalidates_birth_and_cancels_without_replay(api,
         assert api.count('allocate') == api.count('write') == api.count('submit') == 0
     finally:
         runtime.close()
+
+
+def test_loader_diagnostics_preserve_real_success_facts_without_paths_or_mock_budget_changes(api, tmp_path):
+    api.gadget = tmp_path / '\u6587\u6863-\U0001f680' / module.GADGET_NAME
+    loader = module.WindowsGadgetLoader(42)
+    loader.load(api.gadget)
+    try:
+        before = loader.diagnostics()
+        assert before['pid'] == 42 and before['created_filetime'] == api.birth
+        assert before['verification_alive'] is True and before['process_exit_code'] == 259
+        assert before['module_query_attempted'] is before['module_query_succeeded'] is before['module_found'] is True
+        assert before['module_base'] == hex(api.gadget_base)
+        assert before['module_base_low32'] == api.gadget_base and before['return_matches'] is True
+        encoded = str(api.gadget).encode('utf-16-le')
+        assert before['path_utf16_units'] == len(encoded) // 2
+        assert before['path_utf16_bytes'] == len(encoded)
+        assert before['path_buffer_bytes'] == len(encoded) + 2
+        assert before['loader_module_basename'] == 'KernelBase.dll' and before['loader_export_rva'] == 0x1234
+        assert api.clock == 0.0  # Observation timing is not the loader's policy clock.
+        assert str(api.gadget) not in json.dumps(before) and str(tmp_path) not in json.dumps(before)
+        assert all(type(value) is float and math.isfinite(value) and value >= 0
+                   for key, value in before['timing_seconds'].items() if key != 'closed')
+    finally:
+        loader.close()
+    after = loader.diagnostics()
+    assert after['handle_closed'] and after['timing_seconds']['closed'] is not None
+    assert {key: value for key, value in after.items() if key not in ('handle_closed', 'timing_seconds')} == {
+        key: value for key, value in before.items() if key not in ('handle_closed', 'timing_seconds')}
+    assert before['timing_seconds']['closed'] is None  # A detached diagnostic snapshot.
+
+
+@pytest.mark.parametrize('found', [False, True])
+def test_all_ones_thread_status_never_becomes_win32_error_or_false_success(api, found):
+    api.result = 0xffffffff
+    if not found:
+        submit = api.kernel.CreateRemoteThread.call
+        def missing_module(*arguments):
+            result = submit(*arguments)
+            api.loaded = False
+            return result
+        api.kernel.CreateRemoteThread.call = missing_module
+    loader = module.WindowsGadgetLoader(42)
+    try:
+        with pytest.raises(module.RuntimeFailure) as error:
+            loader.load(api.gadget)
+        assert error.value.code == ('loader_result_mismatch' if found else 'loader_failed')
+        diagnostic = loader.diagnostics()
+        assert diagnostic['thread_exit_code'] == 0xffffffff
+        assert diagnostic['verification_alive'] is True and diagnostic['process_exit_code'] == 259
+        assert diagnostic['module_query_attempted'] is diagnostic['module_query_succeeded'] is True
+        assert diagnostic['module_found'] is found
+        assert diagnostic['return_matches'] is (False if found else None)
+        assert diagnostic['module_base'] == (hex(api.gadget_base) if found else None)
+        assert 'not a Win32 error' in str(error.value)
+        assert api.count('submit') == 1
+    finally:
+        loader.close()
+    closed = loader.diagnostics()
+    assert closed['handle_closed'] and closed['thread_exit_code'] == 0xffffffff
+    for key in ('verification_alive', 'process_exit_code', 'module_query_attempted',
+                'module_query_succeeded', 'module_found', 'module_base', 'module_base_low32', 'return_matches'):
+        assert closed[key] == diagnostic[key]
+
+
+def test_process_exited_before_verification_is_not_reported_as_missing_module(api):
+    submit = api.kernel.CreateRemoteThread.call
+    def exited(*arguments):
+        result = submit(*arguments)
+        api.alive, api.result, api.memory = False, 0xffffffff, None
+        return result
+    api.kernel.CreateRemoteThread.call = exited
+    loader = module.WindowsGadgetLoader(42)
+    try:
+        with pytest.raises(module.RuntimeFailure) as error:
+            loader.load(api.gadget)
+        assert error.value.code == 'loader_process_exited'
+        diagnostic = loader.diagnostics()
+        assert diagnostic['verification_alive'] is False and diagnostic['process_exit_code'] == 0
+        assert diagnostic['module_query_attempted'] is False
+        assert diagnostic['module_query_succeeded'] is diagnostic['module_found'] is diagnostic['return_matches'] is None
+        assert diagnostic['thread_exit_code'] == 0xffffffff
+    finally:
+        loader.close()
+
+
+@pytest.mark.parametrize('transient', [False, True])
+def test_module_query_error_stays_unknown_not_false_even_if_retried(api, transient):
+    api.fail_enum_after, api.enum_error = 1, 299 if transient else 5
+    loader = module.WindowsGadgetLoader(42)
+    try:
+        with pytest.raises(TimeoutError if transient else module.RuntimeFailure):
+            loader.load(api.gadget)
+        diagnostic = loader.diagnostics()
+        assert diagnostic['module_query_attempted'] is True and diagnostic['module_query_succeeded'] is False
+        assert diagnostic['module_found'] is diagnostic['module_base'] is diagnostic['return_matches'] is None
+        if transient:
+            assert loader.poll() and loader.load_error is None
+            assert loader.diagnostics()['module_found'] is loader.diagnostics()['return_matches'] is True
+        else:
+            assert loader.load_error.code == 'loader_verification_failed'
+        assert api.count('submit') == 1
+    finally:
+        loader.close()
+
+
+def test_failed_process_exit_read_remains_none_without_fabricating_a_process_result(api):
+    exit_code = api.exit_code
+    def unreadable(handle):
+        if api.loaded and api.memory is None:
+            raise WinError(5)
+        return exit_code(handle)
+    api.exit_code = unreadable
+    loader = module.WindowsGadgetLoader(42)
+    try:
+        with pytest.raises(module.RuntimeFailure) as error:
+            loader.load(api.gadget)
+        assert error.value.code == 'loader_verification_failed'
+        diagnostic = loader.diagnostics()
+        assert diagnostic['verification_alive'] is diagnostic['process_exit_code'] is None
+        assert diagnostic['module_query_attempted'] is False
+        assert diagnostic['module_query_succeeded'] is diagnostic['module_found'] is None
+    finally:
+        loader.close()
+
+
+def test_full_x64_module_base_and_thread_low32_are_separate_facts(api):
+    api.gadget_base = 0x00007ffa87650000
+    api.result = api.gadget_base & 0xffffffff
+    loader = module.WindowsGadgetLoader(42)
+    try:
+        loader.load(api.gadget)
+        diagnostic = loader.diagnostics()
+        assert diagnostic['module_base'] == '0x7ffa87650000'
+        assert diagnostic['module_base_low32'] == diagnostic['thread_exit_code'] == 0x87650000
+        assert diagnostic['return_matches'] is True and loader.load_error is None
+    finally:
+        loader.close()
+
+
+def test_changed_birth_is_not_a_fabricated_process_exit_code(api):
+    submit = api.kernel.CreateRemoteThread.call
+    def replaced(*arguments):
+        result = submit(*arguments)
+        api.process_times = lambda handle: (api.birth + 1, 0)
+        api.memory = None
+        return result
+    api.kernel.CreateRemoteThread.call = replaced
+    loader = module.WindowsGadgetLoader(42)
+    try:
+        with pytest.raises(module.RuntimeFailure) as error:
+            loader.load(api.gadget)
+        assert error.value.code == 'process_changed'
+        diagnostic = loader.diagnostics()
+        assert diagnostic['verification_alive'] is False and diagnostic['process_exit_code'] is None
+        assert diagnostic['module_query_attempted'] is False and diagnostic['module_found'] is None
+    finally:
+        loader.close()
+
+
+@pytest.mark.parametrize('exit_code', [0, 1, 0xffffffff])
+def test_confirmed_exit_requires_owned_birth_and_real_typed_exit_code_without_new_handles(api, exit_code):
+    loader = module.WindowsGadgetLoader(42)
+    reads = []
+    original_times = api.process_times
+    api.process_times = lambda handle: reads.append(('times', handle)) or original_times(handle)
+    api.exit_code = lambda handle: reads.append(('exit', handle)) or exit_code
+    opened = list(api.opened)
+    try:
+        assert loader.confirmed_process_exit((42, 100)) is True
+        assert [op for op, _ in reads] == ['times', 'exit', 'times']
+        assert all(handle == loader.handle for _, handle in reads) and api.opened == opened
+        assert not loader.submitted and not api.count('submit')
+    finally:
+        loader.close()
+
+
+@pytest.mark.parametrize('problem', ['active', 'unknown_exit', 'boolean_exit', 'negative_exit', 'large_exit',
+    'first_read_error', 'second_read_error', 'before_birth', 'after_birth', 'wrong_pid', 'wrong_birth',
+    'missing_handle', 'invalid_expected', 'boolean_expected', 'swapped_handle'])
+def test_unconfirmed_exit_is_never_inferred_from_missing_identity_or_failed_queries(api, problem):
+    loader = module.WindowsGadgetLoader(42)
+    handle, expected = loader.handle, (42, 100)
+    calls = [0]
+    original_times = api.process_times
+    def times(owned):
+        calls[0] += 1
+        if problem == 'first_read_error' and calls[0] == 1 or problem == 'second_read_error' and calls[0] == 2:
+            raise WinError(5)
+        if problem == 'before_birth' and calls[0] == 1 or problem == 'after_birth' and calls[0] == 2:
+            return 101, 0
+        return original_times(owned)
+    api.process_times = times
+    def exit_code(owned):
+        if problem == 'swapped_handle':
+            loader.handle = (43, 99, 100)
+        return dict(active=259, unknown_exit=None, boolean_exit=False, negative_exit=-1,
+                    large_exit=0x100000000).get(problem, 0)
+    api.exit_code = exit_code
+    if problem == 'wrong_pid':
+        expected = (43, 100)
+    elif problem == 'wrong_birth':
+        expected = (42, 101)
+    elif problem == 'missing_handle':
+        loader.handle = None
+    elif problem == 'invalid_expected':
+        expected = None
+    elif problem == 'boolean_expected':
+        expected = (42, True)
+    try:
+        assert loader.confirmed_process_exit(expected) is False
+        assert not loader.submitted and not api.count('submit')
+    finally:
+        loader.handle = handle
+        loader.close()

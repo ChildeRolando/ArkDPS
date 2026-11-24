@@ -98,6 +98,20 @@ class Probe:
         self.closed = True
 
 
+def test_successful_connect_clears_previous_initialization_error():
+    current = NativePcCollector('game', probe_factory=lambda _: Probe([]))
+    current.diagnostics.code = 'native_unavailable'
+    current.diagnostics.error = 'previous module_not_unique'
+    current.diagnostics.details = {'reason': 'module_not_unique'}
+    try:
+        current.connect()
+        assert current.diagnostics.connection_ok
+        assert current.diagnostics.code is None and current.diagnostics.error == ''
+        assert current.diagnostics.details.get('fixed_module_bytes_match') is True
+    finally:
+        current.close()
+
+
 def sample(frame, damage, *, state=2, presence=True):
     operator = dict(id=OPERATOR, unique_id=10, is_token=False, is_predefined=False,
                     host_key=None, host_uid=None, side=0)

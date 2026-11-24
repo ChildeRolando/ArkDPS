@@ -18,6 +18,22 @@ public partial class App : System.Windows.Application
     internal static PortableUpdateHost? UpdateHost;
     internal static PortableLaunch? UpdateLaunch;
     internal static UpdateFixture? UpdateVerification;
+    internal static bool VerifyInternalCapture;
+#if ARKDPS_INTERNAL_EVENT_CANDIDATE
+    private static readonly bool InternalEventPackage = true;
+#else
+    private static readonly bool InternalEventPackage = false;
+#endif
+#if ARKDPS_COOPERATIVE_EVENT_CANDIDATE
+    internal static readonly bool CooperativeEventPackage = true;
+#else
+    internal static readonly bool CooperativeEventPackage = false;
+#endif
+#if ARKDPS_NATIVE_HOOK_CANDIDATE
+    internal static readonly bool NativeHookCandidate = true;
+#else
+    internal static readonly bool NativeHookCandidate = false;
+#endif
     internal static string[] LaunchArguments = [];
     internal static readonly List<string> BridgeArguments = new();
     internal static void ClearConnectionOverrides()
@@ -25,7 +41,8 @@ public partial class App : System.Windows.Application
         for (int index = 0; index < BridgeArguments.Count;)
         {
             string argument = BridgeArguments[index];
-            if (argument is "--adb" or "--serial" or "--platform" or "--native-game-root")
+            if (argument is "--adb" or "--serial" or "--platform" or "--native-game-root"
+                or "--native-pc-event-backend" or "--native-pc-event-feed")
                 BridgeArguments.RemoveRange(index, Math.Min(2, BridgeArguments.Count - index));
             else index++;
         }
@@ -36,7 +53,16 @@ public partial class App : System.Windows.Application
         try
         {
             var arguments = e.Args;
-            var host = PortableUpdateHost.Find(AppContext.BaseDirectory);
+            VerifyInternalCapture = arguments.Contains("--verify-internal");
+            LaunchArguments = arguments;
+            bool internalRequested = arguments.Contains("--internal-capture");
+            if (NativeHookCandidate && (arguments.Contains(PortableUpdateHost.ApplyOption)
+                || arguments.Contains(PortableUpdateHost.ChildOption)))
+                throw new ArgumentException("自研启动测试候选不支持自动更新、旧版本激活或状态迁移。");
+            if ((InternalEventPackage || VerifyInternalCapture) && !internalRequested)
+                throw new ArgumentException("内部事件候选需要 --offline --internal-capture 和独立的 --state-dir。");
+            var host = InternalEventPackage || internalRequested || CooperativeEventPackage || NativeHookCandidate
+                ? null : PortableUpdateHost.Find(AppContext.BaseDirectory);
             if (arguments.Length == 2 && arguments[0] == PortableUpdateHost.ApplyOption)
             {
                 if (host == null) throw new IOException("找不到 ArkDPS 便携目录。");
@@ -63,16 +89,29 @@ public partial class App : System.Windows.Application
             for (int i = 0; i < arguments.Length; i++)
             {
                 string arg = arguments[i];
+                if (NativeHookCandidate && arg is "--repo" or "--python" or "--internal-capture"
+                    or "--verify-internal" or "--verify-update" or "--frida-remote" or "--adb" or "--serial" or "--arkframework-root"
+                    or "--native-pc-event-feed")
+                    throw new ArgumentException("自研启动测试候选不支持该启动方式：" + arg);
+                if (NativeHookCandidate && (arg == "--platform" && arguments.ElementAtOrDefault(i + 1) != "native_pc"
+                    || arg == "--native-pc-event-backend" && arguments.ElementAtOrDefault(i + 1) != "native"))
+                    throw new ArgumentException("此候选仅支持官服 PC 自研实时采集。");
+                if (InternalEventPackage && arg is not ("--offline" or "--internal-capture" or "--state-dir" or "--verify-internal"))
+                    throw new ArgumentException("内部事件候选不支持参数：" + arg);
                 switch (arg)
                 {
                     case "--repo": Root = arguments[++i]; break;
                     case "--python": Python = arguments[++i]; break;
                     case "--verify": Verification = arguments[++i]; break;
                     case "--verify-update": updateFixture = arguments[++i]; break;
+                    case "--verify-internal": break;
                     case "--offline": case "--no-events": case "--debug-mode": BridgeArguments.Add(arg); break;
                     case "--state-dir": stateOverride = arguments[++i]; break;
+                    case "--internal-capture":
+                        BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--fixture": case "--adb": case "--serial": case "--frida-remote":
                     case "--platform": case "--native-game-root":
+                    case "--native-pc-event-backend": case "--native-pc-event-feed":
                         BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--arkframework-root":
                         BridgeArguments.Add(arg); BridgeArguments.Add(Path.GetFullPath(arguments[++i])); break;
@@ -91,6 +130,9 @@ public partial class App : System.Windows.Application
             }
             Root = Path.GetFullPath(Root);
             bool offline = BridgeArguments.Contains("--offline");
+            bool internalCapture = BridgeArguments.Contains("--internal-capture");
+            if (internalCapture && (!offline || stateOverride == null))
+                throw new ArgumentException("内部事件候选需要 --offline 和独立的 --state-dir。");
             if (offline && stateOverride == null)
                 throw new ArgumentException("离线验收必须指定独立 --state-dir，不能覆盖产品设置。");
             if (Verification != null && !offline)
@@ -101,15 +143,26 @@ public partial class App : System.Windows.Application
                 BridgeArguments.Add("--debug-mode");
             bool packaged = string.Equals(Root, packagedRoot, StringComparison.OrdinalIgnoreCase);
             string launchRoot = packaged && host != null ? Path.Combine(host.Root, "collector") : Root;
-            StateDirectory = stateOverride == null
+            string configuredState = stateOverride == null
                 ? (packaged ? host?.StateDirectory : null) ?? Path.Combine(Root, "runtime")
                 : Path.GetFullPath(stateOverride, launchRoot);
+            if (internalCapture)
+            {
+                configuredState = ResolveDirectory(configuredState);
+                string statePath = Path.TrimEndingDirectorySeparator(configuredState) + Path.DirectorySeparatorChar;
+                string productPath = ResolveDirectory(Path.Combine(Root, "runtime")) + Path.DirectorySeparatorChar;
+                if (statePath.StartsWith(productPath, StringComparison.OrdinalIgnoreCase) ||
+                    productPath.StartsWith(statePath, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("内部候选的状态目录必须与标准运行目录分开。");
+            }
+            StateDirectory = configuredState;
             WriteStartupEvent("event=configured");
             if (packaged && Python == "python.exe")
                 throw new IOException("便携包缺少自带的 Python 运行时。请重新下载完整发布包。");
             for (int i = 0; i + 1 < BridgeArguments.Count; i++)
             {
                 if (BridgeArguments[i] == "--fixture" ||
+                    (BridgeArguments[i] == "--internal-capture" && BridgeArguments[i + 1] is not ("normal" or "autochess")) ||
                     (BridgeArguments[i] == "--adb" && Path.GetDirectoryName(BridgeArguments[i + 1]) is { Length: > 0 }))
                     BridgeArguments[i + 1] = Path.GetFullPath(BridgeArguments[i + 1], launchRoot);
             }
@@ -142,19 +195,32 @@ public partial class App : System.Windows.Application
                     manifest.RootElement.Text("collector_sha256") != worker ||
                     !ReleaseVersion.TryParse(manifest.RootElement.Text("version"), out var version))
                     throw new IOException("安装包两端不匹配；请完整替换同一发布包，不混用旧采集器。");
+                if (InternalEventPackage != (manifest.RootElement.Get("internal_event_backend").ValueKind
+                                             == System.Text.Json.JsonValueKind.Object))
+                    throw new IOException("桌面程序与内部候选清单不匹配。");
+                if (CooperativeEventPackage != (manifest.RootElement.Get("native_pc_event_backend").ValueKind
+                                                == System.Text.Json.JsonValueKind.Object))
+                    throw new IOException("桌面程序与 PC 事件候选清单不匹配。");
+                bool nativeHooks = manifest.RootElement.Get("native_pc_native_hooks").ValueKind
+                    == System.Text.Json.JsonValueKind.Object;
+                if (NativeHookCandidate && !nativeHooks)
+                    throw new IOException("桌面程序与自研事件组件清单不匹配。");
+                if (nativeHooks) VerifyNativeHookPackage(manifest.RootElement);
                 InstalledVersion = version;
-                if (packaged && manifest.RootElement.Number("update_protocol") == 1 &&
+                if (!NativeHookCandidate && packaged && manifest.RootElement.Number("update_protocol") == 1 &&
                     manifest.RootElement.Text("frida").Length > 0 &&
                     !arguments.Contains("--repo") && !arguments.Contains("--python"))
                     UpdateHost = host;
             }
+            else if (NativeHookCandidate)
+                throw new IOException("自研事件组件需要完整便携包。");
             var window = new MainWindow(); MainWindow = window;
             WriteStartupEvent("event=window_created");
-            if (UpdateLaunch?.ReadyPipe != null || UpdateVerification != null)
+            if (UpdateLaunch?.ReadyPipe != null || UpdateVerification != null || VerifyInternalCapture)
             {
                 window.IsEnabled = UpdateLaunch?.ReadyPipe == null;
                 window.ShowActivated = false;
-                if (UpdateLaunch?.Kind == PortableLaunchKind.Probe || UpdateVerification != null)
+                if (UpdateLaunch?.Kind == PortableLaunchKind.Probe || UpdateVerification != null || VerifyInternalCapture)
                 {
                     window.Opacity = 0;
                     window.ShowInTaskbar = false;
@@ -162,12 +228,13 @@ public partial class App : System.Windows.Application
             }
             window.Show();
             if (InstalledVersion is ReleaseVersion installed)
-                window.InitializeReleaseUpdates(installed, offline);
+                window.InitializeReleaseUpdates(installed, offline || CooperativeEventPackage || NativeHookCandidate);
         }
         catch (Exception ex)
         {
             WriteStartupEvent($"event=failed error={ex.GetType().Name} hresult=0x{ex.HResult:X8}");
-            if (Verification != null) DesktopLog.Append(Verification, "failure.txt", ex.ToString(), StateDirectory);
+            if (VerifyInternalCapture) WriteInternalCaptureFailure(ex);
+            else if (Verification != null) DesktopLog.Append(Verification, "failure.txt", ex.ToString(), StateDirectory);
             else if (UpdateLaunch?.ReadyPipe != null || (e.Args.Length > 0 && e.Args[0] == PortableUpdateHost.ApplyOption))
                 UpdateHost?.Log(ex);
             else if (UpdateVerification != null) UpdateVerification.WriteFailure(ex);
@@ -176,11 +243,77 @@ public partial class App : System.Windows.Application
         }
     }
 
+    internal static void VerifyNativeHookPackage(System.Text.Json.JsonElement manifest)
+    {
+        var profile = manifest.Get("native_pc_native_hooks");
+        if (InternalEventPackage || CooperativeEventPackage || profile.Text("provider") != "arkdps-native-hooks"
+            || profile.Get("protocol").ValueKind != System.Text.Json.JsonValueKind.Number
+            || !profile.Get("protocol").TryGetInt32(out int protocol) || protocol != 1
+            || (NativeHookCandidate
+                ? profile.Text("scope") != "official-pc-startup-test"
+                    || profile.Get("experimental").ValueKind != System.Text.Json.JsonValueKind.True
+                    || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.False
+                    || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.False
+                : profile.Text("scope") != "official-pc"
+                    || profile.Get("experimental").ValueKind != System.Text.Json.JsonValueKind.False
+                    || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.True
+                    || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.True)
+            || profile.Text("default_platform") != "native_pc" || profile.Text("default_backend") != "native"
+            || manifest.Get("files").ValueKind != System.Text.Json.JsonValueKind.Object)
+            throw new IOException("自研事件组件的适用范围或默认来源清单不匹配。");
+        string root = Path.GetFullPath(AppContext.BaseDirectory);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in manifest.Get("files").EnumerateObject())
+        {
+            string name = file.Name;
+            string digest = file.Value.ValueKind == System.Text.Json.JsonValueKind.String ? file.Value.GetString()! : "";
+            if (!names.Add(name) || name.Length == 0 || name.Any(char.IsControl)
+                || name.IndexOfAny(['\\', ':', '*', '?', '"', '<', '>', '|']) >= 0
+                || name.StartsWith('/') || name.Split('/').Any(part => part is "" or "." or ".."
+                    || part.EndsWith('.') || part.EndsWith(' '))
+                || digest.Length != 64 || !digest.All(Uri.IsHexDigit))
+                throw new IOException("自研事件组件的文件清单无效。");
+            string path = Path.GetFullPath(Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar)));
+            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+                throw new IOException("自研事件组件缺少清单文件：" + name);
+            for (FileSystemInfo? entry = new FileInfo(path); entry is not null && entry.FullName != root.TrimEnd(Path.DirectorySeparatorChar);
+                 entry = entry is FileInfo info ? info.Directory : ((DirectoryInfo)entry).Parent)
+                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("自研事件组件不接受链接替换的文件：" + name);
+            string actual = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+            if (!string.Equals(actual, digest, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("自研事件组件文件摘要不一致：" + name);
+        }
+        if (!names.Contains("ArkDPS.Desktop.exe") || !names.Contains("collector/desktop_bridge.py")
+            || !names.Contains("python/python.exe"))
+            throw new IOException("自研事件组件缺少必要入口文件。");
+    }
+
+    private static string ResolveDirectory(string path)
+    {
+        var directory = new DirectoryInfo(path);
+        if (directory.Parent is not { } parent) return directory.FullName;
+        DirectoryInfo candidate = new(Path.Combine(ResolveDirectory(parent.FullName), directory.Name));
+        return candidate.Exists ? candidate.ResolveLinkTarget(true)?.FullName ?? candidate.FullName : candidate.FullName;
+    }
+
+    internal static void WriteInternalCaptureFailure(Exception error)
+    {
+        Console.Error.WriteLine(error);
+        try
+        {
+            if (StateDirectory.Length > 0)
+                DesktopLog.Append(StateDirectory, "wpf-internal-failure.txt", error.ToString());
+        }
+        catch (Exception writeError) when (writeError is IOException or UnauthorizedAccessException) { }
+    }
+
     private static void WriteStartupEvent(string message)
     {
         try
         {
             string? directory = StateDirectory.Length > 0 ? StateDirectory
+                : InternalEventPackage || LaunchArguments.Contains("--internal-capture") ? null
                 : PortableUpdateHost.Find(AppContext.BaseDirectory)?.StateDirectory;
             if (directory != null)
                 DesktopLog.Append(directory, "wpf-startup.log", $"{DateTimeOffset.UtcNow:O} {message}");

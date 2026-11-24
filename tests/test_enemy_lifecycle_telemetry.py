@@ -495,3 +495,19 @@ def test_departed_hp_counts_only_positive_hp_confirmed_by_finish_events():
     assert reborn['totals']['departed_hp_count'] == 2
     assert reborn['totals']['entered_total_hp'] == 700
     assert reborn['totals']['remaining_hp'] == 100
+
+
+@pytest.mark.parametrize('starting_hp,starting_max,expected', [(20, 100, 7), (18, 100, 6), (20, 99, 6)])
+def test_shieldguard_tick_run_matches_individual_ticks_and_replay(starting_hp, starting_max, expected):
+    eid = 'enemy_1061_zomshd'
+    def replay(changes):
+        battle = Battle((10, [enemy('10', eid=eid, hp=starting_hp, max_hp=starting_max)]))
+        battle.sample(10)
+        events = [event(i, 12, 'enemy_hp', eid=eid, enemy_max_hp=100, **change)
+                  for i, change in enumerate(changes, 1)]
+        result = battle.sample(12, *events, damage=11)
+        assert result['totals']['recovered_hp'] == expected
+        assert battle.sample(12, damage=11)['totals'] == result['totals']
+        return result['rows'], result['totals'], result['last_point']
+    raw = [dict(hp_before=hp, hp_after=hp + 1) for hp in range(20, 27)]
+    assert replay(raw) == replay([dict(hp_before=20, hp_after=27, enemy_regen_ticks=7)])

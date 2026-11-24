@@ -74,6 +74,55 @@ internal static class NativePcReadinessTests
         Check("disabled events retain snapshot status semantics", !Read(State(events: false)).Active && !Read(State(observer: "disabled")).Active);
         Check("worker error takes precedence over previously ready observer", Read(State(observer: "ready", error: "采集进程读取失败")) is { IsError: true, Label: "采集进程读取失败" });
 
+        JsonObject NativeState(string phase = "starting", bool watch = false)
+        {
+            var native = State(phase, armed: watch ? 134398900000000000 : null);
+            native["effective_connection_config"]!["native_pc_event_backend"] = "native";
+            native["native_pc_bootstrap"]!["provider"] = "arkdps-native-hooks";
+            native["native_pc_bootstrap"]!["frida_required"] = false;
+            native["native_pc_bootstrap"]!["cancelled"] = false;
+            return native;
+        }
+        Check("native startup is not Frida readiness", Read(NativeState()).Label == NativePcReadiness.NativePreparing);
+        var nativeArmed = NativeState("waiting_for_process", true);
+        Check("native watch has its own explicit launch prompt", Read(nativeArmed).Label == NativePcReadiness.NativeArmed);
+        var nativeLoading = NativeState("loading", true);
+        Check("native early load has no Frida authentication claim", Read(nativeLoading) is { Phase: "loading", Label: "正在预载自研 PC 组件，请稍候" });
+        var nativeRestart = NativeState("waiting_for_process", true);
+        nativeRestart["native_pc_bootstrap"]!["code"] = "restart_required";
+        Check("native restart instruction retains its real watch", Read(nativeRestart).Phase == "restart_required");
+        foreach (var field in new[] { "armed_filetime", "thread_alive", "cancelled" })
+        {
+            var missing = (JsonObject)nativeArmed.DeepClone();
+            ((JsonObject)missing["native_pc_bootstrap"]!).Remove(field);
+            Check("native watch missing proof cannot invite launch: " + field, Read(missing).Label == NativePcReadiness.NativePreparing);
+        }
+        var nativeReady = NativeState("ready", true);
+        nativeReady["native_pc_bootstrap"]!["expected_resident"] = true;
+        nativeReady["native_pc_bootstrap"]!["ready_generation"] = 1;
+        nativeReady["native_pc_bootstrap"]!["lease"] = new JsonObject { ["pid"] = 42, ["created"] = 134398900000000001, ["source_build"] = "verified-build" };
+        Check("native prepared does not claim JS observer ready", Read(nativeReady) is { Phase: "connected", Label: "自研 PC 组件已预载，正在准备采集" });
+        foreach (var coverage in new[] { "recording", "gap", "finished" })
+        {
+            nativeReady["observer_status"] = coverage;
+            nativeReady["event_status"] = coverage;
+            Check("battle coverage supersedes completed preload: " + coverage, !Read(nativeReady).Active);
+        }
+        nativeReady["observer_status"] = "waiting_game_init";
+        Check("native VM wait is explicit", Read(nativeReady).Label == "自研 PC 组件已预载，等待游戏初始化");
+        nativeReady["native_pc_bootstrap"]!["ready_generation"] = 0;
+        Check("native ready phase without a real generation is not prepared", Read(nativeReady).Label == NativePcReadiness.NativePreparing);
+        nativeReady["native_pc_bootstrap"]!["ready_generation"] = true;
+        Check("Boolean cannot impersonate native ready generation", Read(nativeReady).Label == NativePcReadiness.NativePreparing);
+        nativeReady["observer_status"] = "ready";
+        Check("native observer READY is an independent proof", !Read(nativeReady).Active);
+        var nativeFailed = NativeState("cleanup_pending", true);
+        nativeFailed["native_pc_bootstrap"]!["error"] = "自研资源待清理";
+        Check("native ownership failure is not hidden", Read(nativeFailed) is { IsError: true, Label: "自研资源待清理" });
+        var cooperative = NativeState();
+        ((JsonObject)cooperative["native_pc_bootstrap"]!).Remove("provider");
+        Check("cooperative native backend never inherits Frida bootstrap labels", !Read(cooperative).Active);
+
         if (Application.Current is null)
         {
             var app = new App();
@@ -104,6 +153,18 @@ internal static class NativePcReadinessTests
             }
             Render(authenticated);
             Check("fully ready observer still waits for battle normally", window.Status.Text == "PC 版 · 等待进入战斗");
+            nativeReady["native_pc_bootstrap"]!["ready_generation"] = 1;
+            nativeReady["observer_status"] = "recording";
+            nativeReady["event_status"] = "recording";
+            nativeReady["native_counter_scope"] = "events_only";
+            foreach (string status in new[] { "live", "stale", "live" })
+            {
+                nativeReady["status"] = status;
+                nativeReady["status_text"] = status == "stale" ? "数据已过期" : "正在统计";
+                Render(nativeReady);
+                Check("recording follows real sample freshness: " + status,
+                    window.Status.Text == (status == "stale" ? "数据已过期" : "PC 版 · 逐次统计"));
+            }
             Render(State(platform: "mumu", observer: "ready"));
             Check("MuMu main status is unchanged", window.Status.Text.Contains("观察中") && window.Status.Text.Contains("等待进入战斗"));
             Render(State(events: false));

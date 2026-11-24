@@ -1,6 +1,7 @@
 """Publish verified Windows counters through the shared battle lifecycle."""
 
 import hashlib
+from copy import deepcopy
 import json
 import math
 from pathlib import Path
@@ -37,10 +38,14 @@ def _flow(report):
     return report.get('game_flow') if report.get('game_flow_status') == 'available' else None
 
 
-def _capture_fields(read, context, *, event_identity_only=False):
+def _capture_fields(read, context, *, event_identity_only=False, counters_outside_event_frame=False):
     fields = {}
     for key, capture in (('actor_rows', capture_character_rows), ('roster', capture_roster),
                          ('presence', capture_presence)):
+        if key == 'actor_rows' and counters_outside_event_frame:
+            fields.update(actor_rows=None, actor_rows_status='not_requested',
+                          actor_rows_reason='outside_opening_event_frame')
+            continue
         if event_identity_only and key in ('roster', 'presence'):
             fields.update({key: None, f'{key}_status': 'not_requested',
                            f'{key}_reason': 'native_event_identity'})
@@ -105,9 +110,11 @@ class NativePcCollector:
 
     enemy_frame_bound = True
     autochess_absence_is_exit = True
+    allow_event_identity_sampling = True
 
     def __init__(self, game_root, *, probe_factory=None, collect_actions=True, event_identity_only=False):
         self.game_root = Path(game_root).expanduser() if game_root else None
+        self._next_scoped_presence = float('-inf')
         self.probe_factory = probe_factory or NativePcBattleProbe
         self.collect_actions = collect_actions
         self.event_identity_only = event_identity_only
@@ -161,6 +168,7 @@ class NativePcCollector:
             raise SampleUnavailable(diag.error) from exc
         diag = self.diagnostics
         diag.status = DetectionStatus.READY_UNIQUE
+        diag.code, diag.error = None, ''
         diag.connection_ok = True
         diag.version_status = VersionStatus.COMPATIBLE
         diag.version_actual = self.process.build['source_build']
@@ -186,15 +194,15 @@ class NativePcCollector:
         if (type(native_process_pid) is not int or native_process_pid != process.pid
                 or not isinstance(native_identity, dict)
                 or set(native_identity) != {'controller', 'native', 'logger', 'stats', 'level'}):
-            raise SnapshotGap('官服 PC Frida 的进程或战局根无效。')
+            raise SnapshotGap('官服 PC 事件来源 的进程或战局根无效。')
         roots = []
         for key in ('controller', 'native', 'logger', 'stats', 'level'):
             value = native_identity[key]
             if not isinstance(value, str) or re.fullmatch(r'0x[0-9a-fA-F]{1,16}', value) is None:
-                raise SnapshotGap('官服 PC Frida 的战局根格式无效。')
+                raise SnapshotGap('官服 PC 事件来源 的战局根格式无效。')
             address = int(value, 16)
             if not 0x10000 <= address <= 0x00007FFFFFFFFFFF or address % 8:
-                raise SnapshotGap('官服 PC Frida 的战局根范围无效。')
+                raise SnapshotGap('官服 PC 事件来源 的战局根范围无效。')
             roots.append(address)
         if (type(frame) is not int or not 0 <= frame <= 0xFFFFFFFF
                 or type(game_time) not in (int, float) or not math.isfinite(game_time)
@@ -204,7 +212,7 @@ class NativePcCollector:
                 or int(native_fixed_time) > 0x7FFFFFFFFFFFFFFF
                 or int(native_fixed_time) / (1 << 32) != game_time
                 or not isinstance(native_stage_id, str) or not native_stage_id):
-            raise SnapshotGap('官服 PC Frida 的原始逻辑时钟或关卡无效。')
+            raise SnapshotGap('官服 PC 事件来源 的原始逻辑时钟或关卡无效。')
         identity = tuple(roots)
         serial = process.battle_serial_for(identity, frame, int(native_fixed_time), native_stage_id)
         words = (*identity, serial)
@@ -215,19 +223,29 @@ class NativePcCollector:
     def observer_boot_ready(self):
         if self.process is None:
             raise SampleUnavailable('官服 PC 采集器尚未连接。')
-        return self.process.observer_boot_ready()
+        ready = self.process.observer_boot_ready()
+        self.observer_boot_reason = None if ready else getattr(self.process, 'observer_boot_reason', None)
+        self.diagnostics.details['observer_boot'] = dict(ready=ready, reason=self.observer_boot_reason)
+        return ready
 
     def locate_lifecycle(self):
         if self.process is None:
             raise SampleUnavailable('官服 PC 采集器尚未连接')
 
-    def read_lifecycle(self):
+    def read_lifecycle_with_event_identity(self, mark):
+        return self.read_lifecycle(event_identity_mark=mark if self.allow_event_identity_sampling else None)
+
+    def read_lifecycle(self, *, event_identity_mark=None):
         self._rollback_optional()
         self._pending = None
         self._enemy_snapshot_pair = None
         self.locate_lifecycle()
         try:
-            report = self.process.sample(extra_reader=self._capture)
+            extra_reader = self._capture
+            if event_identity_mark is not None:
+                def extra_reader(read, context):
+                    return self._capture(read, context, event_identity_mark=event_identity_mark)
+            report = self.process.sample(extra_reader=extra_reader)
         except BaseException:
             self._rollback_optional()
             raise
@@ -256,7 +274,24 @@ class NativePcCollector:
         raw = report['sample']
         # The probe can see a reset while the roster is unavailable. Keep that
         # boundary even if the next publishable frame has caught up to the old one.
-        identity_words = (*self.process.battle_identity, raw['battle_serial'])
+        window_guard = raw.get('native_window_guard')
+        if window_guard is not None:
+            try:
+                roots = window_guard['before']['native_identity']
+                if (window_guard.get('version') != 1 or window_guard.get('source') != 'native_pc_guarded_read'
+                        or window_guard['before'] != window_guard['after']
+                        or window_guard['process_instance_before'] != window_guard['process_instance_after']
+                        or tuple(window_guard['process_instance_before']) != self.process.process_instance
+                        or window_guard['source_build'] != self.diagnostics.version_actual
+                        or window_guard['battle_serial'] != raw['battle_serial']
+                        or set(roots) != {'controller', 'native', 'logger', 'stats', 'level'}):
+                    raise ValueError('guarded native identity changed')
+                identity_words = (*[int(roots[key], 16) for key in ('controller', 'native', 'logger', 'stats', 'level')],
+                                  raw['battle_serial'])
+            except (KeyError, TypeError, ValueError) as error:
+                raise SnapshotGap('官服 PC 原始采样守卫不完整或身份冲突') from error
+        else:
+            identity_words = (*self.process.battle_identity, raw['battle_serial'])
         identity = hashlib.sha256(struct.pack(f'<{len(identity_words)}Q', *identity_words)).hexdigest()
         battle = (identity,)
         stage_id = raw.get('stage_id') if raw.get('stage_status') == 'available' else None
@@ -283,15 +318,38 @@ class NativePcCollector:
         self._pending = (lifecycle, report)
         return lifecycle
 
-    def _capture(self, read, context):
-        event_identity = (self.event_identity_only and context.get('stage_status') == 'available'
+    def _capture(self, read, context, *, event_identity_mark=None):
+        advanced = False
+        bound = (event_identity_mark is not None
+                 and event_identity_mark.get('native_stage_id') == context.get('stage_id')
+                 and all(int(event_identity_mark['native_identity'][root], 16) == context.get(field)
+                         for root, field in (('controller', 'battle_controller'), ('logger', 'battle_logger'),
+                                             ('stats', 'battle_stats'), ('level', 'level_data'))))
+        if bound:
+            frame, when = event_identity_mark.get('frame'), event_identity_mark.get('game_time')
+            current_frame, current_time = context.get('frame'), context.get('game_time')
+            same_tick = (current_frame, current_time) == (frame, when)
+            # The opening mark belongs to this call. At higher game speeds
+            # several ticks can pass before the independent snapshot starts.
+            # This selects its read plan only; the closing proof owns admission.
+            advanced = (type(frame) is int and type(current_frame) is int
+                         and type(when) in (int, float) and type(current_time) in (int, float)
+                         and current_frame > frame and current_time > when
+                         and context.get('battle_state') == 2
+                         and context.get('battle_native') == int(event_identity_mark['native_identity']['native'], 16))
+            bound = same_tick or advanced
+        event_identity = ((self.event_identity_only or bound) and context.get('stage_status') == 'available'
                           and 'AUTOCHESS' in str(context.get('stage_id', '')).upper())
         if event_identity:
             # The independent PC event envelope owns the account/actor table.
             # Skip the redundant legacy identity walks. Retain actor counters
             # for the existing initial-skill baseline check and diagnostics;
             # the event-only adapter never splits them into player amounts.
-            fields = _capture_fields(read, context, event_identity_only=True)
+            # The shared event window discards counters if its opening mark
+            # already precedes this frame. A full character walk here only
+            # extends the independent clock bracket and can starve that window.
+            fields = _capture_fields(read, context, event_identity_only=True,
+                                     counters_outside_event_frame=advanced)
         else:
             fields = _capture_fields(read, context)
         scope = (tuple(context.get(key) for key in (
@@ -306,6 +364,31 @@ class NativePcCollector:
             fields.update(capture_game_flow(read, context))
             return fields
         now = time.monotonic()
+        opening = (event_identity_mark or {}).get('native_autochess_context') or {}
+        if (event_identity and bound and context.get('battle_state') == 2
+                and opening.get('phase') in (4, 5) and opening.get('status') == 'available'
+                and isinstance(opening.get('players'), list) and len(opening['players']) > 1
+                and now >= self._next_scoped_presence
+                and self._next_scoped_presence < self._next_enemy):
+            # One optional read per second. A rejected tick must get a cheap
+            # retry, and a presence sample never delays the next enemy deadline.
+            try:
+                fields.update(capture_presence(read, context))
+            finally:
+                self._next_scoped_presence = time.monotonic() + 1.0
+            presence = fields.get('presence')
+            if opening.get('collection_mode') == 'local' and presence:
+                self_index = opening.get('self_player_index')
+                members = opening.get('memberships') or ()
+                local = {(m['data_uid'], m['cid'], m['player_side']) for m in members
+                         if isinstance(m, dict) and type(self_index) is int
+                         and type(m.get('player_index')) is int and m['player_index'] == self_index
+                         and type(m.get('data_uid')) is int and isinstance(m.get('cid'), str)
+                         and type(m.get('player_side')) is int}
+                presence['entities'] = [u for u in presence['entities']
+                                        if (u['data_uid'], u['id'], u['player_side']) in local]
+            fields.update(capture_game_flow(read, context))
+            return fields
         enemy_due = now >= self._next_enemy
         if enemy_due:
             self._stage_optional(scope)
@@ -442,8 +525,21 @@ class NativePcCollector:
                       damage_basis='client character counters; includes overkill; excludes healing',
                       read_ms=report.get('acquisition', {}).get('duration_ms'),
                       observed_at=time.time(), captured_monotonic=time.monotonic())
+        if 'native_window_guard' in raw:
+            sample['native_window_guard'] = deepcopy(raw['native_window_guard'])
         if event_candidate:
             sample['native_counter_scope'] = 'events_only'
+            if raw.get('presence_status') in ('available', 'unavailable'):
+                presence = raw.get('presence') or {}
+                units = presence.get('entities')
+                point = None
+                if (raw.get('presence_status') == 'available'
+                        and presence.get('scope') == 'unit_manager_characters_membership'
+                        and isinstance(units, list)):
+                    point = [dict(cid=u['id'], data_uid=u['data_uid'], instance_uid=u['instance_uid'],
+                                  player_side=u['player_side']) for u in units if u['inited'] and u['borned']
+                             and not u['is_disappeared'] and not u['is_token']]
+                sample['scoped_presence'] = dict(frame=raw['frame'], game_time=raw['game_time'], units=point)
             sample['native_snapshot_witnesses'] = {
                 key: dict(status=raw.get(f'{key}_status'), reason=raw.get(f'{key}_reason'))
                 for key in ('actor_rows', 'roster')}

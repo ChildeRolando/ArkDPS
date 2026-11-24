@@ -994,3 +994,19 @@ def test_skill_window_longer_than_observed_presence_has_unknown_coverage():
                          skill_active_seconds=260.2, presence_seconds=16.97,
                          presence_complete=True, skill_coverage_complete=True)
     assert row.skill_coverage() is None
+
+def test_skill_coverage_reports_observed_opening_hits_even_after_archive_gap():
+    from damage_settlement import DamageSettlement
+    meter = DamageSettlement()
+    for when, skill in enumerate((None, True, True, False), 1):
+        meter.hit(when, 100, 0, 'physical', True, skill, 100, None, None,
+                  initial_skill_unknown=skill is None)
+    for live in (True, False):
+        lane = meter.result(0, 5, 5, stream_complete=live, live=live)
+        detail = render_panel(PanelConfig(), rows_from_statistics({
+            'rows': {'leto': {'settled_damage': lane}}})).details_by_owner['leto']
+        for metric in ('skill_damage', 'skill_effective_damage'):
+            item = detail['coverage'][metric]
+            assert (item['unverified_hits'], item['observed_hits'], item['skill_initial_unknown_hits']) == (1, 4, 1)
+            assert item['failed_share'] == (.25 if live else None)
+        assert lane['unverified_hits'] == 0 and lane['observed_skill_damage'] == 200

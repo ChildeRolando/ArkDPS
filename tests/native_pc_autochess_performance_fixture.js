@@ -40,6 +40,17 @@ function modifierPairs(f,hostile){
  }
  const events=vm.runInContext('queue',f.context);assert.equal(events.length,hostile?0:20);return events;
 }
+check('late_event_does_not_blind_following_defense_or_assist_events',()=>{
+ for(const phase of [4,5]){
+  const f=world();f.write(f.machine.add(0x5c),phase);f.mark();
+  f.clock(30,4294967296n);
+  assert.equal(f.stamp({frame:0,game_time:0}).native_autochess_scope.status,'unknown');
+  const next=f.stamp({frame:30,game_time:1}).native_autochess_scope;
+  assert.equal(next.status,'available');assert.equal(next.phase,phase);
+  f.write(f.players[2][1].add(0x18),f.text('changed-account'));
+  assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
+ }
+});
 for(const roles of [32,40]){
  check('warm_'+roles+'_role_full_packet_record_and_ack_equivalence',()=>equivalent(f=>{
   const first=f.mark();assert.equal(first.native_autochess_context.memberships.length,roles);
@@ -51,8 +62,8 @@ for(const roles of [32,40]){
   return {first,mark,drain,ack};
  },{rolesPerPlayer:roles/4}));
  check('warm_'+roles+'_read_budgets_and_callback_event_equivalence',()=>{
-  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?1584:1840,f=>f.mark()],
-   ['10_output_pairs',3750,f=>modifierPairs(f,false)],['10_unlogged_pairs',3400,f=>modifierPairs(f,true)]]){
+  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?974:1134,f=>f.mark()],
+   ['10_output_pairs',2190,f=>modifierPairs(f,false)],['10_unlogged_pairs',1840,f=>modifierPairs(f,true)]]){
    const f=owned({rolesPerPlayer:roles/4}),measured=readCount(f,()=>call(f));
    assert.equal(measured.reads,budget,name+' native-read budget');
    assert.equal(f.fullReads,1,'unchanged warm body must avoid parsing another full roster');
@@ -67,6 +78,158 @@ for(const roles of [32,40]){
   androidScopeReads.push({roles,reads:scope.reads});
  });
 }
+check('native_busy_marks_leave_the_game_thread_and_accept_the_next_quiet_window',()=>{
+ let pending=0,tick=0;
+ const f=owned({rolesPerPlayer:8,fixtureOptions:{globals:{__nativeActive:()=>pending}}});
+ modifierPairs(f,false);
+ pending=1;
+ const busy=readCount(f,()=>f.mark());
+ assert.equal(busy.result.retry,true);
+ assert.equal(busy.result.active,1);
+ assert.equal(busy.result.mark_retry_reason,'callback_pending_at_start');
+ assert.equal(busy.reads,0);
+ const body=vm.runInContext('nativeAutoBodyCache.body',f.context);
+ const validate=body.read.validate;
+ let passes=0;
+ body.read.validate=()=>{
+  validate();
+  if(++passes%2===1){tick++;f.clock(30*tick,4294967296n*BigInt(tick));}
+ };
+ pending=0;
+ const mark=f.mark();
+ assert.equal(mark.retry,undefined);
+ assert.equal(mark.native_autochess_context.memberships.length,32);
+ const batch=f.context.rpc.exports.readEvents(0,mark.sequence);
+ assert.equal(batch.retry,false);
+ assert.equal(batch.events.length,20);
+ assert(batch.events.every(e=>e.native_autochess_scope?.verified_same_frame===true));
+ assert.equal(f.context.rpc.exports.ackEvents(mark.sequence).acknowledged,20);
+});
+check('cold_roster_crossing_a_frame_can_progress_without_accepting_the_crossed_read',()=>{
+ for(const transition of ['unchanged','owner','round']){
+  const f=world({rolesPerPlayer:8,fixtureOptions:{globals:{arkdpsAutoChessMode:'local'}}});
+  const parse=f.context.readAutoChess;
+  let parses=0;
+  // The expensive full roster always spans a game tick. Revalidating the
+  // recorded fields fits within a tick. Waiting longer between calls cannot
+  // make an implementation which always restarts the full read progress.
+  f.context.readAutoChess=function(...args){
+   const body=parse.apply(this,args);
+   f.clock(++parses*30,BigInt(parses)*4294967296n);
+   return body;
+  };
+  f.clock(0,0n);
+  const rejected=f.mark();
+  assert.equal(rejected.retry,true);
+  assert.equal(rejected.autochess_binding_diagnostic.guard,'clock_changed');
+  assert.equal(rejected.native_autochess_context,undefined);
+  assert.equal(vm.runInContext('acknowledgedSequence',f.context),0);
+  assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
+  if(transition==='owner')f.write(f.players[2][1].add(0x18),f.text('replacement-owner'));
+  if(transition==='round')f.write(f.center.add(0x3c),2);
+  if(transition!=='unchanged')assert.equal(f.mark().retry,true,'changed scope requires a fresh roster');
+  const next=f.mark();
+  assert.equal(next.native_autochess_context?.status,'available','next guarded sample must progress');
+  assert.equal(next.frame,parses*30);
+  assert.equal(parses,transition==='unchanged'?1:2);
+  assert.equal(next.native_autochess_context.round,transition==='round'?2:1);
+  if(transition==='owner')assert.equal(next.native_autochess_context.players.find(p=>p.index===3).uid,'replacement-owner');
+  modifierPairs(f,false);
+  const closing=f.mark(),batch=f.context.rpc.exports.readEvents(0,closing.sequence);
+  assert.equal(batch.events.length,20);
+  assert.equal(f.context.rpc.exports.ackEvents(closing.sequence).acknowledged,closing.sequence);
+ }
+});
+check('sustained_defense_marks_and_reads_progress_with_unresolved_token_hosts',()=>{
+ for(const unknownToken of [false,true]){
+  const f=world({rolesPerPlayer:4,unknownToken,tokenCount:16,fixtureOptions:{globals:{arkdpsAutoChessMode:'local'}}});
+  const parse=f.context.readAutoChess;
+  let tick=0,parses=0;
+  const advance=()=>{tick++;f.clock(tick*30,BigInt(tick)*4294967296n);};
+  f.clock(0,0n);
+  f.context.readAutoChess=function(...args){
+   const body=parse.apply(this,args);
+   parses++;
+   const validate=body.read.validate;
+   let passes=0;
+   body.read.validate=()=>{validate();if(++passes%2===1)advance();};
+   advance();return body;
+  };
+  assert.equal(f.mark().retry,true);
+  for(let i=0;i<4;i++){
+   const mark=f.mark();
+   assert.equal(mark.native_autochess_context?.status,'available','revalidation must finish at a proved clock');
+   assert.equal(mark.frame,tick*30);
+   assert.equal(mark.native_autochess_context.memberships.length,16);
+   assert.equal(mark.native_autochess_context.unknown_memberships.length,unknownToken?16:0);
+   const drain=f.context.rpc.exports.readEvents(0,mark.sequence);
+   assert.equal(drain.retry,false,'reading the bounded prefix must progress as well');
+   assert.equal(drain.native_frame,tick*30);
+   assert.deepEqual(plain(drain.native_autochess_context.memberships),plain(mark.native_autochess_context.memberships));
+   if(i===0)modifierPairs(f,false);
+   else assert.equal(drain.events.length,20);
+  }
+  assert.equal(parses,1);
+  assert.equal(f.context.rpc.exports.ackEvents(20).acknowledged,20);
+  if(unknownToken){
+   const prepare=f.adapter.prepareEventEnvelope;
+   f.adapter.prepareEventEnvelope=()=>{
+    const proof=prepare();
+    f.write(f.tokenData[0].add(0xa0),101);
+    return proof;
+   };
+   let changed;
+   try{changed=f.mark();}finally{f.adapter.prepareEventEnvelope=prepare;}
+   assert.equal(changed.native_autochess_context.status,'unknown','a changed input cannot authorize the prepared body');
+   assert.equal(f.mark().retry,true,'rediscovery still crosses a tick');
+   const recovered=f.mark().native_autochess_context;
+   assert.equal(recovered.unknown_memberships.length,15);
+   assert.equal(recovered.memberships.find(row=>row.data_uid===999)?.host_uid,101);
+  }
+ }
+});
+check('busy_defense_and_assist_can_mark_and_drain_when_one_scalar_sweep_outlasts_a_tick',()=>{
+ for(const phase of [4,5]){
+  const f=world({rolesPerPlayer:8});
+  f.write(f.machine.add(0x5c),phase);
+  f.mark();
+  const body=vm.runInContext('nativeAutoBodyCache.body',f.context);
+  const validate=body.read.validate;
+  let tick=0;
+  body.read.validate=()=>{
+   if(readCount(f,validate).reads>550){
+    tick++;
+    f.clock(tick*30,BigInt(tick)*4294967296n);
+   }
+  };
+  for(let i=0;i<3;i++){
+   modifierPairs(f,false);
+   const mark=f.mark();
+   assert.equal(mark.native_autochess_context?.phase,phase);
+   const batch=f.context.rpc.exports.readEvents(i*20,mark.sequence);
+   assert.equal(batch.retry,false);
+   assert.equal(batch.events.length,20);
+   assert.equal(f.context.rpc.exports.ackEvents(mark.sequence).acknowledged,(i+1)*20);
+  }
+ }
+});
+check('warm_crossed_mark_keeps_independently_verified_event_scope',()=>{
+ for(const phase of [4,5]){
+  const f=world();f.write(f.machine.add(0x5c),phase);f.mark();
+  const body=vm.runInContext('nativeAutoBodyCache.body',f.context);
+  const validate=body.read.validate;
+  let moved=false;
+  body.read.validate=()=>{
+   validate();
+   if(!moved){moved=true;f.clock(30,4294967296n);}
+  };
+  assert.equal(f.mark().retry,true);
+  const scope=f.stamp({frame:30,game_time:1}).native_autochess_scope;
+  assert.equal(scope.status,'available');assert.equal(scope.phase,phase);
+  f.write(f.players[2][1].add(0x18),f.text('changed-account'));
+  assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
+ }
+});
 check('first_body_guard_mismatch_falls_back_to_full_parse',()=>{
  const f=owned(),previous=vm.runInContext('nativeAutoBodyCache.body',f.context);
  const plan=vm.runInContext('nativeAutoCache.scopeGuards',f.context);

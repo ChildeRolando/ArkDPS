@@ -46,6 +46,14 @@ class _Player:
     slot: int | None = None
     player_uid: str | None = None
     player_name: str | None = None
+    observed_presence: dict = field(default_factory=dict)
+    observed_skill_time: dict = field(default_factory=dict)
+    skill_timed_presence: dict = field(default_factory=dict)
+    unknown_skill_prefix: set = field(default_factory=set)
+
+    def mark_unknown_skill_prefix(self, owner, actor):
+        self.unknown_skill_prefix.add(owner)
+        self.statistics.mark_settlement_skill_initial_unknown(owner, actor)
 
 
 class MultiplayerBattleStatistics:
@@ -91,6 +99,7 @@ class MultiplayerBattleStatistics:
         self._context_fingerprint = None
         self._retired_contexts = set()
         self._retired_event_scopes = set()
+        self._presence_point = None
         self._native_entries = {}
         self._native_aliases = {}
         self._player_reasons = {}
@@ -199,6 +208,7 @@ class MultiplayerBattleStatistics:
         self._reasons = set()
         self._unknown = {}
         self._settlement_version = None
+        self._presence_point = None
         self._native_entries = {}
         self._native_aliases = {key: {} for key in self._players}
         self._player_reasons = {key: set() for key in (self._native_accounts if self._native_mode else self._players)}
@@ -206,6 +216,55 @@ class MultiplayerBattleStatistics:
         self._scope_unknown_targets = set()
         self._scope_unknown_all_targets = False
         self._scope_verified_targets = set()
+
+    def _observe_presence(self, sample):
+        if 'scoped_presence' not in sample:
+            return
+        previous, self._presence_point = self._presence_point, None
+        point = sample['scoped_presence']
+        anchor = sample.get('autochess_snapshot_anchor', sample)
+        if (not self._native_mode or not self._active_context or self._terminal_tail
+                or not isinstance(point, dict) or not isinstance(point.get('units'), list)
+                or not _integer(point.get('frame')) or not _number(point.get('game_time'))
+                or point['frame'] != anchor.get('frame') or point['game_time'] != anchor.get('game_time')
+                or point['game_time'] > sample['game_time']):
+            return
+        when = point['game_time']
+        actors = {}
+        for unit in point['units']:
+            if not isinstance(unit, dict) or not _integer(unit.get('data_uid')):
+                continue
+            match = self._native_entries.get(unit['data_uid'])
+            if not match:
+                continue
+            uid, entry = match
+            if (uid not in self._players or entry.is_token or unit.get('cid') != entry.cid
+                    or type(unit.get('player_side')) is not int or unit['player_side'] != entry.player_side
+                    or not _integer(unit.get('instance_uid')) or not unit['instance_uid']):
+                continue
+            key = (uid, self._source_key(entry, uid), entry.unique_id)
+            actors[key] = unit['instance_uid'] if key not in actors else None
+        # Only matching deployments on adjacent observed endpoints earn time.
+        # A roster member, missing unit or replaced instance earns no interval.
+        known = set()
+        for key, instance in actors.items():
+            uid, owner, actor = key
+            player = self._players[uid]
+            skill = player.statistics.observed_skill_interval(owner, actor, when, when)
+            if skill is not None:
+                known.add(key)
+            if previous is None or not instance or previous[1].get(key) != instance:
+                continue
+            start, _, prior_known, watermark = previous
+            delta = when - start
+            if not 0 < delta <= 5:
+                continue
+            player.observed_presence[owner] = player.observed_presence.get(owner, 0.0) + delta
+            if key in prior_known and skill is not None and watermark < when:
+                overlap = player.statistics.observed_skill_interval(owner, actor, watermark, when)
+                player.observed_skill_time[owner] = player.observed_skill_time.get(owner, 0.0) + overlap
+                player.skill_timed_presence[owner] = player.skill_timed_presence.get(owner, 0.0) + (when - watermark)
+        self._presence_point = when, actors, known, sample['game_time']
 
     def _bind_native(self, context):
         self._previous_context = self._active_context
@@ -225,7 +284,7 @@ class MultiplayerBattleStatistics:
                 player = self._players[uid]
                 owner = self._source_key(entry, uid)
                 if owner not in player.actors and self._baseline is not None:
-                    player.statistics.mark_settlement_skill_initial_unknown(owner, entry.unique_id)
+                    player.mark_unknown_skill_prefix(owner, entry.unique_id)
                 player.actors[owner] = entry
                 player.statistics.register_source(owner, owner)
         self._native_entries = entries
@@ -301,7 +360,7 @@ class MultiplayerBattleStatistics:
         if not self._native_initial_point(sample) or not complete:
             for player in self._players.values():
                 for owner, entry in player.actors.items():
-                    player.statistics.mark_settlement_skill_initial_unknown(owner, entry.unique_id)
+                    player.mark_unknown_skill_prefix(owner, entry.unique_id)
             if not complete:
                 self._reasons.add('初始技能事件前缀证据不完整')
         # These records are uncertainty witnesses only. They do not open a
@@ -349,7 +408,7 @@ class MultiplayerBattleStatistics:
                 uid, entry = self._native_entries[data_uid]
                 if uid not in self._players:
                     continue
-                self._players[uid].statistics.mark_settlement_skill_initial_unknown(
+                self._players[uid].mark_unknown_skill_prefix(
                     self._source_key(entry, uid), entry.unique_id)
 
     @staticmethod
@@ -537,6 +596,11 @@ class MultiplayerBattleStatistics:
             events=0, first_sequence=event['sequence'], last_sequence=event['sequence']))
         item['events'] += 1
         item['last_sequence'] = event['sequence']
+        if reason == 'event_scope_unverified':
+            stamp = event.get('native_autochess_scope')
+            detail = stamp.get('reason') if isinstance(stamp, dict) else None
+            if isinstance(detail, str) and detail:
+                item['last_scope_reason'] = detail[:160]
         if self._native_mode:
             affected = set()
             if reason.startswith('event_scope_') or reason == 'elemental_scope_unverified':
@@ -789,6 +853,7 @@ class MultiplayerBattleStatistics:
                 player.statistics.advance(self._now)
             self._start_events(sequence, version, sample=sample, drained=drained)
             self._quality(sample, drained, quality, initial=True)
+            self._observe_presence(sample)
             return
         try:
             events, pending = self._batch(sample, sequence, drained)
@@ -853,6 +918,7 @@ class MultiplayerBattleStatistics:
             for player in self._players.values():
                 player.stream.watermark(session=player.statistics.session, sequence=sequence,
                     frame=sample['frame'], game_time=sample['game_time'])
+            self._observe_presence(sample)
             self._pending = pending
             self._sequence = sequence
             self._now, self._frame = sample['game_time'], sample['frame']
@@ -907,6 +973,16 @@ class MultiplayerBattleStatistics:
                        name=f'{name} · {entry.unique_id}')
             lane = row.get('settled_damage', {})
             row['observed_damage'] = lane.get('observed_damage')
+            if self._native_mode and (owner in player.unknown_skill_prefix
+                    or owner in player.statistics.settlement_skill_unassigned):
+                row.update(skill_coverage_complete=False, skill_active_seconds=None)
+            if owner in player.observed_presence:
+                row['observed_presence_seconds'] = player.observed_presence[owner]
+                covered = player.skill_timed_presence.get(owner)
+                if covered:
+                    row['observed_skill_active_seconds'] = player.observed_skill_time[owner]
+                    row['skill_timed_presence_seconds'] = covered
+                    row['observed_skill_coverage'] = player.observed_skill_time[owner] / covered
             ledgers.append(dict(cid=entry.cid, source_character_uid=entry.unique_id,
                                 unique_id=entry.unique_id, uid=entry.unique_id, actor_uid=entry.unique_id,
                                 name=name, owner_id=owner, ledger=deepcopy(lane)))

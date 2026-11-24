@@ -12,6 +12,9 @@ namespace ArkDPS.Desktop;
 
 public sealed class Inspector : Border
 {
+    private static string ObservedCoverageNote(JsonElement row) =>
+        $"仅含站场与技能状态均已确认的区间，共 {row.UiInt("skill_timed_presence_seconds")} 游戏秒。";
+
     private static readonly (string Key,string Label,string Token)[] DamageTypes=
     {
         ("physical","物理","Physical"), ("arts","法术","Arts"),
@@ -180,17 +183,19 @@ public sealed class Inspector : Border
         string observedPrefix=split.Observed ? "已观察" : "";
         double coverageValue=detail.Number("skill_coverage",double.NaN);
         bool coverageKnown=detail.Bool("skill_coverage_complete") && coverageValue is >= 0 and <= 1;
+        double sampledCoverage=row.Number("observed_skill_coverage",double.NaN);
+        bool hasSampledCoverage=sampledCoverage is >= 0 and <= 1;
         var splitStats = new WrapPanel();
         AddStat(splitStats, observedPrefix+(effective ? "技能有效伤害" : "技能伤害"),
             Number(split.Skill),showZero:true);
         AddStat(splitStats, observedPrefix+(effective ? "非技能有效伤害" : "非技能伤害"),
             Number(split.NonSkill),showZero:true);
         AddStat(splitStats, "技能覆盖率", coverageKnown
-            ? SkillCoverageText(coverageValue) : "—");
+            ? SkillCoverageText(coverageValue) : hasSampledCoverage ? "已观察 "+SkillCoverageText(sampledCoverage) : "—");
         AddStat(splitStats, "技能开启秒", detail.Bool("skill_coverage_complete")
-            ? detail.UiInt("skill_active_seconds") : "—",showZero:true);
+            ? detail.UiInt("skill_active_seconds") : hasSampledCoverage ? "已观察 "+row.UiInt("observed_skill_active_seconds") : "—",showZero:true);
         AddStat(splitStats, "在场秒", row.Bool("presence_complete")
-            ? row.UiInt("presence_seconds") : "—",showZero:true);
+            ? row.UiInt("presence_seconds") : row.Number("observed_presence_seconds",0)>0 ? "已观察 "+row.UiInt("observed_presence_seconds") : "—",showZero:true);
         body.Children.Add(splitStats);
         if (double.IsFinite(split.Fraction))
         {
@@ -218,7 +223,7 @@ public sealed class Inspector : Border
                 : "技能拆分未知：")+split.Reason,11,false,"Muted",new Thickness(0,1,0,2)));
         var coverageNote=coverageKnown
             ? "覆盖率按技能开启时间占在场时间计算；被动技能计入非技能。"
-            : splitReason.Length>0 ? "技能覆盖率未知："+splitReason
+            : hasSampledCoverage ? ObservedCoverageNote(row) : splitReason.Length>0 ? "技能覆盖率未知："+splitReason
                 : "技能覆盖率未知：在场时间或技能窗口证据不足。";
         body.Children.Add(Text(coverageNote,11,false,"Muted"));
 
@@ -626,9 +631,13 @@ public sealed class Inspector : Border
             string share=Percentage(entry.Number("share",double.NaN));
             string rate=EntryRate(entry);
             string rateLabel=view.Text("rate_label");
+            double sampledCoverage=row.Number("observed_skill_coverage",double.NaN);
+            bool hasSampledCoverage=sampledCoverage is >= 0 and <= 1;
+            double observedSeconds=row.Number("observed_presence_seconds",double.NaN);
             double seconds=row.Number("presence_seconds",double.NaN);
             string presence=row.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
-                ? FormatTime(seconds) : "—";
+                ? FormatTime(seconds) : observedSeconds>0 && observedSeconds<TimeSpan.MaxValue.TotalSeconds
+                    ? "已观察 "+FormatTime(observedSeconds) : "—";
             bool side=sideHeading!=null;
             metricLabels[0].Text=side && category=="healing" ? "总治疗"
                 : (partialEffective || partialBoss ? "已观察" : "")+(bossScope ? "首领" : "")+(effective ? "有效伤害" : "总伤");
@@ -684,9 +693,9 @@ public sealed class Inspector : Border
             SetMetric(1,category=="shield" ? Number(detail.Get("shield_absorbed")) : rate,
                 WithNote(rateHint,entry.Text("rate_note")));
             SetMetric(2,share,WithNote("该干员当前排行指标 ÷ 同口径指标合计。",shareInfo.Description));
-            SetMetric(3,coverageKnown ? SkillCoverageText(skillCoverage) : "—",
+            SetMetric(3,coverageKnown ? SkillCoverageText(skillCoverage) : hasSampledCoverage ? "已观察 "+SkillCoverageText(sampledCoverage) : "—",
                 WithNote("技能开启时间 ÷ 干员在场时间。被动技能不计入开启时间。",
-                    coverageKnown ? "" : (reason.Length>0 ? reason : "在场时间或技能窗口证据不足。")));
+                    coverageKnown ? "" : hasSampledCoverage ? ObservedCoverageNote(row) : (reason.Length>0 ? reason : "在场时间或技能窗口证据不足。")));
             SetMetric(4,presence,WithNote("累加干员确认在场的战斗时长。",
                 presence=="—" ? "在场时间覆盖不足。" : ""));
 

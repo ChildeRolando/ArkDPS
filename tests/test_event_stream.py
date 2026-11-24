@@ -254,3 +254,21 @@ def test_rebirth_coverage_reports_a_shared_gap_without_discarding_accepted_phase
     assert not phases['instances']['7']['phase_from_birth']
     assert phases['instances']['7']['phase_total_hp'] == 60_000
     assert receiver.sequence == 11
+
+
+@pytest.mark.parametrize('target,ticks,valid', [
+    ('enemy_1061_zomshd', 7, True), ('enemy_1061_zomshd_2', 7, True),
+    ('enemy_a', 7, False), ('enemy_1061_zomshd', 6, False), ('enemy_1061_zomshd', True, False),
+])
+def test_compact_shieldguard_hp_is_validated_before_telemetry(target, ticks, valid):
+    stats, receiver = stream()
+    stats.observe_enemy_state(900, complete=True)
+    record = dict(session='battle', sequence=11, frame=900, game_time=30, source=None,
+                  kind='enemy_hp', amount=0, target=target, target_instance='10',
+                  hp_before=20, hp_after=27, enemy_max_hp=100, enemy_regen_ticks=ticks)
+    receiver.accept(**record)
+    receiver.accept(**record)
+    if valid:
+        assert [e['enemy_regen_ticks'] for e in stats.enemy_state_events] == [7]
+    else:
+        assert stats.enemy_state_incomplete and not stats.enemy_state_events

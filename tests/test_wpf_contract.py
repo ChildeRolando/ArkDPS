@@ -124,6 +124,33 @@ def test_wpf_picker_and_worker_offer_lone_trail_people_and_babel():
     assert THEMES == ('lone-trail', 'people', 'babel')
 
 
+def test_pc_event_settings_use_the_existing_connection_contract():
+    root = ROOT / 'desktop/ArkDPS.Desktop'
+    xaml = ElementTree.parse(root / 'MainWindow.xaml')
+    wpf = '{http://schemas.microsoft.com/winfx/2006/xaml/presentation}'
+    name = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
+    pc_fields = next(panel for panel in xaml.iter(wpf + 'StackPanel') if panel.get(name) == 'NativeEventNotes')
+    picker = next(combo for combo in pc_fields.iter(wpf + 'ComboBox') if combo.get(name) == 'NativeEventBackend')
+    assert [(item.get('Tag'), item.get('Content')) for item in picker.findall(wpf + 'ComboBoxItem')] == [
+        ('frida', 'Frida'), ('native', '自研（若遇“检测到环境存在异常”报错选择此选项）'),
+    ]
+    assert any(field.get(name) == 'NativeEventFeed' for field in pc_fields.iter(wpf + 'TextBox'))
+    source = (root / 'MainWindow.xaml.cs').read_text('utf-8')
+    assert 'native_pc_event_backend=SelectedNativeEventBackend' in source
+    assert 'native_pc_event_feed=string.IsNullOrWhiteSpace(NativeEventFeed.Text)' in source
+    assert 'EffectiveConnectionConfig.Text("native_pc_event_backend")' in source
+    launcher = (root / 'App.xaml.cs').read_text('utf-8')
+    for flag in ('--native-pc-event-backend', '--native-pc-event-feed'):
+        assert f'case "{flag}":' in launcher
+
+
+def test_cooperative_candidate_archive_is_distinct_from_all_existing_variants():
+    assert package.archive_name('1.2.3', True) == 'ArkDPS-1.2.3-win-x64.zip'
+    assert package.archive_name('1.2.3', False) == 'ArkDPS-1.2.3-win-x64-snapshot.zip'
+    assert package.archive_name('1.2.3', False, internal_backend=True) == 'ArkDPS-1.2.3-win-x64-internal-events.zip'
+    assert package.archive_name('1.2.3', True, with_native_events=True) == 'ArkDPS-1.2.3-win-x64-native-events.zip'
+
+
 def test_inspector_uses_mitigation_rate_not_penetration_efficiency():
     inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
     assert '"被减伤率"' in inspector and 'mitigation_rate' in inspector

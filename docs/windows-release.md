@@ -18,7 +18,7 @@ Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](http
 
 ### 观察者
 
-标准便携包内置 [Frida 17.26.1](https://github.com/frida/frida/releases/tag/17.26.1) 的 Windows 客户端、PC Gadget 与供 MuMu 12 x86_64 Android 使用的设备端服务。观察者默认开启。MuMu 在选定实例、游戏版本通过校验且游戏完成初始化后，自动准备并启动包内服务；已有可用服务时复用。官服 PC 需要先启动 ArkDPS，再正常启动游戏，在设置页确认自动就绪。首次准备使用本地包内文件，无需联网或手动下载。
+标准便携包内置 PC 自研组件，以及 [Frida 17.26.1](https://github.com/frida/frida/releases/tag/17.26.1) 的 Windows 客户端、PC Gadget 与供 MuMu 12 x86_64 Android 使用的设备端服务。观察者默认开启。MuMu 在选定实例、游戏版本通过校验且游戏完成初始化后，自动准备并启动包内服务；已有可用服务时复用。官服 PC 需要先启动 ArkDPS，再正常启动游戏，在设置页确认自动就绪。首次准备使用本地包内文件，无需联网或手动下载。
 
 如果服务准备失败，设置页的连接诊断会显示原因。实时页仍可显示伤害与治疗累计，缺少事件证据的指标显示为未知。修改连接设置后可点击「应用设置并重连」。[事件采集与验收](event-capture.md)
 
@@ -32,7 +32,9 @@ rc.14 起，程序的 Windows manifest 固定为 `requireAdministrator`，取消
 
 ## 构建候选
 
-从 `main` 的干净已提交工作区构建。Windows CI 使用 CPython 3.10.10 与 .NET 10 SDK。
+正式包从 `main` 的干净已提交工作区构建。明确标注的独立实验变体可从隔离候选分支的干净提交构建；
+仍须通过相同的 HEAD 精确及工作区干净校验，不能把开发目录的未提交改动直接拼入分发包。
+Windows CI 使用 CPython 3.10.10 与 .NET 10 SDK。
 
 ```powershell
 python -m pip install -r requirements-windows.txt -r requirements-test.txt
@@ -41,7 +43,7 @@ python -m pytest tests -q --assert=plain
 python tools/package_windows.py --output runtime/packages
 ```
 
-构建器先验证「HEAD 精确 + 工作区干净」，再 `dotnet publish` 自包含 WPF 单文件、解包固定 SHA-256 的
+构建器先验证「HEAD 精确 + 工作区干净」，构建并核验自研 DLL，再 `dotnet publish` 自包含 WPF 单文件、解包固定 SHA-256 的
 CPython 3.12.10 embeddable 运行时、下载并核验固定的 Frida 17.26.1 wheel、PC Gadget 与 Android x86_64 服务端，核验生成 EXE 的管理员 manifest，然后按 `BACKEND` 白名单复制
 worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还会断言包内 manifest 不存在
 `tkinter` / Tcl / Tk 文件，并用包内 Python 执行 `import desktop_bridge` 且断言 `"tkinter" not in sys.modules`。
@@ -50,6 +52,28 @@ worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还�
 
 `requirements-test.txt` 单独固定 pytest 与 Pillow（Python 包名 `PIL`）：后者仅用于测试中独立解码 PNG，
 不是产品运行时依赖。`requirements-windows.txt` 只保留事件客户端 pin。
+
+### PC 自研事件后端
+
+标准 Windows x64 包同时包含 Frida 与自研事件后端。自研后端使用 `ArkDPS.NativeEvents.dll` 执行共用探针，
+设置页可直接选择「自研」。若遇“检测到环境存在异常”报错，选择此选项，应用设置后按提示重启游戏。
+后端选择与游戏目录保存在既有连接配置中，更新继续沿用设置和战绩。
+
+构建标准包时会自动构建自研 DLL。也可显式提供已构建的组件：
+
+```powershell
+python native_pc/native_event_runtime/build.py
+python tools/package_windows.py --native-hook-dll runtime/native-pc/native-event-runtime/ArkDPS.NativeEvents.dll --output runtime/packages
+```
+
+DLL 的相邻 `.build.json`、六份运行时源码及 QuickJS、MinHook、nlohmann-json 三份许可均随包分发。
+`metadata/release.json` 的 `native_pc_native_hooks` 记录 provider、协议、路径、摘要及受支持的客户端构建。
+组件在加载前核对发布清单、构建清单和实际文件；客户端构建匹配后才启用观察。
+停止观察会撤下 Hook，DLL 保留映射至游戏正常退出。
+
+自研后端于 2026-11-24 获得用户实机验收通过，包含卫戍实际输出和流畅度反馈。
+具体构建、历史对账与实测范围见[PC 自研事件后端](native-pc-native-hooks.md)。
+构建检查继续核对载荷摘要、包内 Python 和 worker 握手；交互式 WPF 检查由隔离 CI 执行。
 
 ## 验收
 
@@ -81,5 +105,5 @@ WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 
 完整本地许可和上游来源见 `LICENSE` / `THIRD_PARTY.md`，非 MIT，包含非商业限制。
 头像仍属鹰角；不能将其学术/交流来源说明解释为任意商业分发授权。候选随包保留 .NET、Python、Frida 与
-typing_extensions 的许可文本到 `licenses/`。Tcl/Tk 与 PyInstaller 文本随封存归档保留，不再进入分发。
+typing_extensions、QuickJS、MinHook 和 nlohmann-json 的许可文本到 `licenses/`。Tcl/Tk 与 PyInstaller 文本随封存归档保留，不再进入分发。
 ADB、MuMu、游戏客户端和 MAA 由各自的渠道提供。未签名程序可能被 SmartScreen 提示。不要指导用户关闭安全防护。

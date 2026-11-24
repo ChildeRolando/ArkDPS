@@ -371,6 +371,7 @@ class Statistics:
         self.settlement_skill_active = {}
         self.settlement_skill_initial_pending = set()
         self.settlement_skill_incomplete = set()
+        self.settlement_skill_past_incomplete = set()
         self.settlement_skill_unassigned = set()
         self.partial_damage = {}
         self.partial_watermark = None
@@ -586,17 +587,18 @@ class Statistics:
                 self.settlement_overkill[owner] = (
                     self.settlement_overkill.get(owner, 0.0) + max(0.0, nominal - hp - shield))
         skill = self._settlement_skill(owner, actor)
+        initial_unknown = skill is None and (owner, actor) in self.settlement_skill_initial_pending
         args = (when, hp, shield, kind_name, complete, skill, nominal, before, after)
         meter = self.settled.get(owner)
         if meter is None:
             meter = self.settled[owner] = DamageSettlement()
-        meter.hit(*args, overkill=overkill)
+        meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown)
         boss = classify_boss(target)
         if boss is True:
             meter = self.settled_boss.get(owner)
             if meter is None:
                 meter = self.settled_boss[owner] = DamageSettlement()
-            meter.hit(*args, overkill=overkill)
+            meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown)
         elif boss is None:
             self.settlement_boss_missing[owner] = self.settlement_boss_missing.get(owner, 0) + 1
         if source is not None and element:
@@ -630,7 +632,8 @@ class Statistics:
         # Classification accepted while an effect was live remains an observed
         # component. A later missing endpoint cannot certify the whole window.
         skill_reason = self.skill_incomplete.get(owner)
-        if skill_reason is None and (self.skill_unknown or owner in self.settlement_skill_unassigned
+        if skill_reason is None and (self.skill_unknown or owner in self.settlement_skill_past_incomplete
+                                     or owner in self.settlement_skill_unassigned
                                      or any(identity[0] == owner for identity in self.settlement_skill_incomplete)):
             skill_reason = '技能事件覆盖不完整'
         if skill_reason is None:
@@ -717,7 +720,7 @@ class Statistics:
     def record_enemy_state(self, sequence, kind, frame, game_time, source, amount,
                            eid, instance_uid, *, hp_before=None, hp_after=None,
                            phase_total_hp=None, phase_count=None, phase_from_birth=None,
-                           finish_reason=None, enemy_max_hp=None):
+                           finish_reason=None, enemy_max_hp=None, enemy_regen_ticks=None):
         if self.enemy_state_start_frame is None:
             return
         if (kind not in ENEMY_STATE_KINDS
@@ -748,6 +751,13 @@ class Statistics:
             event['hp_before'] = hp_before
         if hp_after is not None:
             event['hp_after'] = hp_after
+        if enemy_regen_ticks is not None:
+            if (kind != 'enemy_hp' or eid not in ('enemy_1061_zomshd', 'enemy_1061_zomshd_2')
+                    or type(enemy_regen_ticks) is not int or enemy_regen_ticks < 2
+                    or hp_before is None or hp_before <= 0 or enemy_max_hp is None
+                    or hp_after > enemy_max_hp or hp_after - hp_before != enemy_regen_ticks):
+                raise ValueError('invalid shieldguard recovery ticks')
+            event['enemy_regen_ticks'] = enemy_regen_ticks
         if enemy_max_hp is not None:
             event['enemy_max_hp'] = enemy_max_hp
         if kind == 'enemy_enter':
@@ -896,18 +906,27 @@ class Statistics:
                 self.boss_observed_from = game_time
             self.boss_event_end = game_time
 
-    def _skill_active_seconds(self, owner):
+    def observed_skill_interval(self, owner, actor, start, end):
+        if (not self.event_coverage or self.event_coverage_broken or owner in self.skill_incomplete
+                or self._settlement_skill(owner, actor) is None):
+            return None
+        return self._skill_active_seconds(owner, start=start, stop=end)
+
+    def _skill_active_seconds(self, owner, *, start=0.0, stop=None):
         end = (self.event_coverage_end if self.event_coverage_end is not None
                else self.now)
+        if stop is not None:
+            end = min(end, stop)
         total = 0.0
-        for window in self.skill_windows.get(owner, ()):
-            start = window.get('start')
-            stop = window.get('end')
-            if self._optional_number(start) and self._optional_number(stop):
-                total += max(0.0, min(stop, end) - start)
+        for window in reversed(self.skill_windows.get(owner, ())):
+            left, right = window.get('start'), window.get('end')
+            if self._optional_number(left) and self._optional_number(right):
+                if right <= start:
+                    break
+                total += max(0.0, min(right, end) - max(start, left))
         active = self.skill_active.get(owner)
         if active is not None and self._optional_number(active.get('start')):
-            total += max(0.0, end - active['start'])
+            total += max(0.0, end - max(start, active['start']))
         return total
 
     @staticmethod
@@ -981,6 +1000,8 @@ class Statistics:
                     and self._unconfirmed_skill_reason(window)):
                 self.settlement_skill_incomplete.add(identity)
         identity = (owner, actor)
+        previous = self.settlement_skill_active.get(identity)
+        was_active = previous is not None and previous['effect_started']
         effect_started = self._apply_skill_transition(
             self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
@@ -988,6 +1009,12 @@ class Statistics:
         if effect_started:
             # Earlier unclassified hits stay in the damage ledger's denominator.
             self.settlement_skill_initial_pending.discard(identity)
+            if (identity in self.settlement_skill_incomplete
+                    and (not was_active or self.settlement_skill_active[identity] is not previous)):
+                # A proved new effect timestamps subsequent hits. Its start cannot
+                # repair the missing endpoint or reclassify hits in an older window.
+                self.settlement_skill_incomplete.remove(identity)
+                self.settlement_skill_past_incomplete.add(owner)
 
     def mark_settlement_skill_initial_unknown(self, owner, actor):
         self.settlement_skill_initial_pending.add((owner, actor))
@@ -1126,6 +1153,24 @@ class Statistics:
         """
         if self.end_time is None:
             raise ValueError('only an ended battle can receive settlement revisions')
+        return self._revise_terminal_totals(counters, self.end_time)
+
+    def revise_pending_totals(self, game_time, counters):
+        """Revise an independently read terminal snapshot without closing events.
+
+        The adapter must prove the same ended native battle/frame. This narrow
+        entry never relaxes ordinary same-time snapshot conflicts.
+        """
+        if type(game_time) not in (int, float):
+            raise ValueError('pending terminal time must be a finite number')
+        self._time(game_time)
+        if self.end_time is not None or not self.baseline_ready or game_time != self.now:
+            raise ValueError('pending terminal totals require the current unfrozen endpoint')
+        changed = self._revise_terminal_totals(counters, game_time)
+        self.invalidate_rates()
+        return changed
+
+    def _revise_terminal_totals(self, counters, endpoint):
         for source, values in counters.items():
             if source not in self.owners or set(values) != {'damage', 'healing'}:
                 raise ValueError('unknown source or incomplete settlement counters')
@@ -1142,13 +1187,13 @@ class Statistics:
             prior = self.sources.get(source)
             if prior is None or prior['values'] != values or not prior['continuous']:
                 self.sources[source] = {'values': dict(values),
-                                        'history': deque([(self.end_time, dict(values))]),
-                                        'continuous': True, 'segment_start': self.end_time,
-                                        'totals_valid': True, 'totals_time': self.end_time}
+                                        'history': deque([(endpoint, dict(values))]),
+                                        'continuous': True, 'segment_start': endpoint,
+                                        'totals_valid': True, 'totals_time': endpoint}
                 changed = True
             else:
                 prior['totals_valid'] = True
-                prior['totals_time'] = self.end_time
+                prior['totals_time'] = endpoint
         return changed
 
     def correct_final_totals(self, counters):

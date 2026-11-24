@@ -35,17 +35,33 @@ def test_busy_wrapper_cannot_hide_an_unclassified_underlying_failure(failure):
 
 
 def owned_observer(**changes):
-    return SimpleNamespace(native_clock_busy_retry=True, contract=NATIVE_PC_CONTRACT,
-                           status='ready', error=None, **changes)
+    return SimpleNamespace(**dict(dict(native_clock_busy_retry=True, contract=NATIVE_PC_CONTRACT,
+                                      status='ready', error=None), **changes))
 
 
 def run_worker(tmp_path, monkeypatch, actions=(), *, platform='native_pc', enabled=True,
                custom=False, opt_in=True, read_cost=.001, on_wait=None, session_factory=None,
-               observer_override=None):
+               observer_override=None, backend='frida', feed_path=None, native_owner='same',
+               arkframework=False):
     state = bridge.DesktopState(tmp_path / 'state')
-    worker = bridge.CollectionWorker(state, native_pc_observer_factory=(lambda *_: None) if custom else None)
+    worker = bridge.CollectionWorker(state, native_pc_observer_factory=(lambda *_: None) if custom else None,
+        arkframework_root=tmp_path / 'owned-framework' if arkframework else None)
     worker._pc_provider = lambda *_args, **_kwargs: None
-    config = ConnectionConfig(platform=platform, native_game_root='owned-game', auto_detect=False)
+    config = ConnectionConfig(platform=platform, native_game_root='owned-game', auto_detect=False,
+                              native_pc_event_backend=backend, native_pc_event_feed=feed_path)
+    if backend == 'native' and native_owner != 'absent':
+        # Startup is already owned; never construct a real Runtime or loader.
+        worker.pc_source.runtime = SimpleNamespace(is_pending=False, is_failed=False,
+            describe=lambda: dict(status='ready', ready_generation=1), close=lambda: None,
+            cancel=lambda: None)
+        worker.pc_source.backend = 'frida' if native_owner == 'wrong_backend' else 'native'
+    if arkframework:
+        class Recorder:
+            def __init__(self, *_args):
+                pass
+            def poll_reporting(self, *_args, **_kwargs):
+                pass
+        monkeypatch.setattr('native_pc.arkframework_replay.RegenerationRecorder', Recorder)
     diagnostic = ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform=platform,
         selected_serial='owned-fixture', version_actual='fixture')
     clock = SimpleNamespace(perf=0.)
@@ -78,6 +94,8 @@ def run_worker(tmp_path, monkeypatch, actions=(), *, platform='native_pc', enabl
             self.collector = collector or SimpleNamespace(diagnostics=diagnostic)
             self.observer = observer_override or owned_observer()
             self.observer.native_clock_busy_retry = opt_in
+            if backend == 'native' and native_owner != 'unbound':
+                self.observer.runtime = object() if native_owner == 'foreign' else worker.pc_runtime
             sessions.append(self)
 
         def enable_lifecycle(self, runtime):
@@ -222,6 +240,113 @@ def test_three_attempts_then_original_wait_bounds_sustained_busy(tmp_path, monke
     assert starts[3:6] == pytest.approx([.213, .219, .225])
 
 
+def test_default_native_owner_uses_the_same_three_attempt_and_perf_budget(tmp_path, monkeypatch):
+    _, starts, waits, _, _ = run_worker(tmp_path, monkeypatch, ['barrier'] * 7, backend='native')
+    assert waits == pytest.approx([.005, .005, .2, .005, .005, .2, .005, .2])
+    assert starts[:3] == pytest.approx([0., .006, .012])
+    assert starts[3:6] == pytest.approx([.213, .219, .225])
+
+
+@pytest.mark.parametrize('owner', ['absent', 'unbound', 'foreign', 'wrong_backend'])
+def test_native_fast_retry_requires_the_current_default_runtime_owner(tmp_path, monkeypatch, owner):
+    _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, ['native', 'native'],
+                                  backend='native', native_owner=owner)
+    assert waits == [.2, .2, .2]
+
+
+@pytest.mark.parametrize('status', ['attaching', 'failed', 'incompatible', 'stopped', None, True])
+def test_native_fast_retry_requires_ready_observer(tmp_path, monkeypatch, status):
+    _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, ['native'], backend='native',
+                                  observer_override=owned_observer(status=status))
+    assert waits == [.2, .2]
+
+
+@pytest.mark.parametrize('gate', ['feed', 'custom', 'arkframework', 'no_events', 'no_cap',
+                                 'truthy_cap', 'wrong_contract', 'missing_contract'])
+def test_native_nondefault_and_unverified_sources_keep_original_cadence(tmp_path, monkeypatch, gate):
+    options = dict(backend='native')
+    if gate == 'feed':
+        options['feed_path'] = str(tmp_path / 'owned-feed.jsonl')
+    elif gate == 'custom':
+        options['custom'] = True
+    elif gate == 'arkframework':
+        options['arkframework'] = True
+    elif gate == 'no_events':
+        options['enabled'] = False
+    elif gate in ('no_cap', 'truthy_cap'):
+        options['opt_in'] = False if gate == 'no_cap' else 1
+    else:
+        options['observer_override'] = owned_observer(contract=None if gate == 'missing_contract' else object())
+    _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, ['native'], **options)
+    assert waits == [.2, .2]
+
+
+@pytest.mark.parametrize('action', ['ordinary', 'rpc', 'mapping', 'gap', 'process', 'consumed',
+                                   'consume_started', 'runtime', 'feed', 'sessions'])
+def test_native_owner_does_not_accelerate_unclassified_or_consumed_retry(tmp_path, monkeypatch, action):
+    _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, [action], backend='native')
+    assert all(delay == .2 for delay in waits)
+
+
+@pytest.mark.parametrize('read_cost,expected', [(.02, [.005, .2, .005, .2]), (.05, [.2, .2, .2, .2])])
+def test_native_owner_keeps_the_existing_total_perf_budget(tmp_path, monkeypatch, read_cost, expected):
+    _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, ['native'] * 3,
+                                  backend='native', read_cost=read_cost)
+    assert waits == expected
+
+
+@pytest.mark.parametrize('change', ['stop', 'source', 'observer', 'startup_owner'])
+def test_native_short_wait_rechecks_owner_source_and_cancellation(tmp_path, monkeypatch, change):
+    changed = []
+    def update(worker, sessions, _clock, delay):
+        if delay != .005 or changed:
+            return
+        changed.append(True)
+        if change == 'stop':
+            worker.stop.set()
+        elif change == 'source':
+            worker.request(worker.effective[0], True)
+        elif change == 'observer':
+            sessions[-1].observer = owned_observer(runtime=worker.pc_runtime)
+        else:
+            worker.pc_source.runtime = SimpleNamespace(is_pending=False,
+                describe=lambda: dict(status='ready', ready_generation=1), close=lambda: None,
+                cancel=lambda: None)
+    _, starts, waits, sessions, _ = run_worker(tmp_path, monkeypatch, ['native'] * 4,
+        backend='native', on_wait=update)
+    assert changed
+    if change == 'stop':
+        assert len(starts) == 1 and waits == [.005]
+    elif change == 'startup_owner':
+        assert waits == [.005, .2, .2, .2, .2]
+    else:
+        assert waits[:4] == [.005, .005, .005, .2]
+        assert len(sessions) == (2 if change == 'source' else 1)
+
+
+@pytest.mark.parametrize('change', ['startup_owner', 'observer_not_ready'])
+def test_native_inflight_failure_cannot_schedule_retry_after_owner_or_readiness_change(
+        tmp_path, monkeypatch, change):
+    def changed_during_read(session, worker):
+        if change == 'startup_owner':
+            worker.pc_source.runtime = SimpleNamespace(is_pending=False,
+                describe=lambda: dict(status='ready', ready_generation=1), close=lambda: None,
+                cancel=lambda: None)
+        else:
+            session.observer.status = 'failed'
+        retry(NativeClockBusy('old native owner read failed'))
+    _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, [changed_during_read], backend='native')
+    assert waits == [.2, .2]
+
+
+def test_native_recording_session_with_ready_observer_keeps_bounded_retry(tmp_path, monkeypatch):
+    def recording(session, _worker):
+        session.event_status = 'recording'
+        retry(NativeClockBusy('recording native clock changed'))
+    _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, [recording, 'native'], backend='native')
+    assert waits == [.005, .005, .2]
+
+
 @pytest.mark.parametrize('action', ['ordinary', 'rpc', 'mapping', 'gap', 'process', 'consumed', 'consume_started', 'runtime', 'feed', 'sessions'])
 def test_only_unconsumed_typed_busy_has_a_short_wait(tmp_path, monkeypatch, action):
     _, _, waits, _, _ = run_worker(tmp_path, monkeypatch, [action])
@@ -288,7 +413,8 @@ def test_short_wait_rechecks_stop_and_latest_source_or_observer(tmp_path, monkey
         assert len(sessions) == (2 if change == 'source' else 1)
 
 
-def test_real_native_collector_runtime_queued_hits_retry_twice_then_credit_and_ack_once(tmp_path, monkeypatch):
+@pytest.mark.parametrize('backend', ['frida', 'native'])
+def test_real_native_collector_runtime_queued_hits_retry_twice_then_credit_and_ack_once(tmp_path, monkeypatch, backend):
     collector, probe, observed, commits, records = fixture(tmp_path / 'real')
     observed.native_clock_busy_retry = True
     observed.status, observed.error, observed.probe_modes = 'ready', None, {}
@@ -312,6 +438,7 @@ def test_real_native_collector_runtime_queued_hits_retry_twice_then_credit_and_a
             session = CollectionSession(None, None, collector=collector, audit=audit)
             sessions.append(session)
             session.observer = observed
+            observed.runtime = worker.pc_runtime
             session.event_status, session.event_error = 'ready', None
             def connect():
                 session.capture = LiveEventCapture(collector, observed, audit=audit)
@@ -334,7 +461,7 @@ def test_real_native_collector_runtime_queued_hits_retry_twice_then_credit_and_a
             return session
         return create
 
-    _, starts, waits, _, events = run_worker(tmp_path, monkeypatch, session_factory=factory)
+    _, starts, waits, _, events = run_worker(tmp_path, monkeypatch, session_factory=factory, backend=backend)
     assert probe_attempts == [0, 30, 30, 30] and waits == [.2, .005, .005, .2]
     assert len(starts) == 4 and commits == [0, 4]
     published = [value for kind, value in events if kind == 'sample']

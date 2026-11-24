@@ -5,7 +5,7 @@ from queue import Queue
 
 import pytest
 
-import capture_cli
+from native_pc import event_source
 import desktop_bridge
 import native_pc_collector
 from collector import SampleUnavailable
@@ -66,7 +66,7 @@ def run_sequence(tmp_path, monkeypatch, mode):
         owners.append(owner)
         return owner
 
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', startup)
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', startup)
 
     class Stop:
         stopped = False
@@ -195,7 +195,7 @@ def test_failed_old_session_release_cannot_publish_retired_owner_as_new_source(t
     owner = SimpleNamespace(
         describe=lambda: dict(status='waiting_for_process', armed_filetime=123, thread_alive=True),
         close=lambda: None)
-    worker.pc_runtime, worker._pc_bootstrap_revision = owner, 1
+    worker.pc_source.runtime, worker._pc_bootstrap_revision = owner, 1
     worker._last_pc_bootstrap = dict(status='starting', armed_filetime=None)
 
     class Session:
@@ -253,7 +253,7 @@ def test_usable_pc_session_keeps_existing_bootstrap_poll_cost(tmp_path, monkeypa
 
 def test_unchanged_ready_bootstrap_does_not_spin_on_incompatible_probe(tmp_path):
     worker = CollectionWorker(DesktopState(tmp_path))
-    worker.pc_runtime = SimpleNamespace(is_pending=False,
+    worker.pc_source.runtime = SimpleNamespace(is_pending=False,
         describe=lambda: {'status': 'ready', 'ready_generation': 7})
     session = SimpleNamespace(event_status='failed', observer=None)
     assert not worker._pc_observer_recovery_needed(session, 7)
@@ -329,7 +329,7 @@ def test_pending_bootstrap_changes_are_published_before_connection_retry(tmp_pat
         pytest.fail('Bootstrap telemetry must not construct a snapshot collector')
 
     worker.events, worker.stop = Events(), Stop()
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', factory)
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', factory)
     monkeypatch.setattr(native_pc_collector, 'NativePcCollector', no_collector)
     worker.request(ConnectionConfig(platform='native_pc', native_game_root='test-client'), True)
     worker.run()
@@ -369,7 +369,7 @@ def test_shutdown_winning_during_provider_construction_prevents_start_and_public
         except Exception as exc:
             errors.append(exc)
 
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', factory)
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', factory)
     worker.thread = Thread(target=provide)
     worker.thread.start()
     assert entered.wait(2)
@@ -397,7 +397,7 @@ def test_shutdown_cancels_inflight_startup_before_joining_collection_thread(tmp_
         def close(self):
             trace.append('close')
 
-    worker.pc_runtime = Startup()
+    worker.pc_source.runtime = Startup()
 
     def collection():
         assert cancelled.wait(2)
@@ -449,8 +449,8 @@ def test_shutdown_after_ready_before_session_admission_never_constructs_or_conne
         def connect(self):
             errors.append('Connection started after shutdown won admission')
 
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args, **_kwargs: Startup())
-    monkeypatch.setattr(native_pc_collector, 'NativePcCollector', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', lambda *_args, **_kwargs: Startup())
+    monkeypatch.setattr(native_pc_collector, 'NativePcCollector', lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
     worker.request(ConnectionConfig(platform='native_pc', native_game_root='test-client'), True)
     worker.thread.start()
@@ -507,7 +507,7 @@ def test_admitted_connection_does_not_hold_shutdown_gate_and_remains_owned_until
             worker._close_pc_runtime()
 
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
-    worker.pc_runtime = Startup()
+    worker.pc_source.runtime = Startup()
     worker.thread = Thread(target=collect)
     worker.thread.start()
     assert connecting.wait(2)

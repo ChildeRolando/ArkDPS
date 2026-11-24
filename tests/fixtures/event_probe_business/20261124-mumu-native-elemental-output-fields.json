@@ -1,0 +1,1510 @@
+{
+  "schema": 1,
+  "evidence_class": "frozen_actual_live_fields_not_a_new_live_receipt",
+  "provenance": {
+    "source_capture": "runtime/native-pc/mumu-shared-live-20261124-061004/capture.jsonl",
+    "source_capture_sha256": "e01644d1c8c6fc4b5006e1389f0800d1f745d146f5d4ebc52c406c0666603b31",
+    "source_capture_bytes": 73513430,
+    "accepted_window": {
+      "after_sequence": 3,
+      "through_sequence": 2511
+    },
+    "game_version": "2.7.91",
+    "platform": "android",
+    "target_realm": "emulated",
+    "target_arch": "arm64",
+    "stage_id": "Obt/Hard/level_hard_07-04",
+    "carrier_hash_includes_original_line_ending": true,
+    "source_values_modified": false
+  },
+  "explicit_native_elemental_output_pairs": [
+    {
+      "settlement": {
+        "line": 1652,
+        "event_index": 61,
+        "carrier_line_sha256": "48f851d1c269a69813c4642f368de69b4d435e54052590ade1bbd7192c2bee46",
+        "carrier_line_bytes": 127567,
+        "event": {
+          "sequence": 340,
+          "frame": 924,
+          "game_time": 30.799970626831055,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 998.7749796167482,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "43",
+          "target_instance": "0x7124bd8b5000",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 998.7749796167482,
+          "killed": false,
+          "mitigation_before": 868.5,
+          "mitigation_after": 998.7749796167482,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1652,
+        "event_index": 62,
+        "carrier_line_sha256": "48f851d1c269a69813c4642f368de69b4d435e54052590ade1bbd7192c2bee46",
+        "carrier_line_bytes": 127567,
+        "event": {
+          "sequence": 341,
+          "frame": 924,
+          "game_time": 30.799970626831055,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 998.7749796167482,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -998.7749796167482,
+          "hp_before": 8811.270343987271,
+          "hp_after": 7812.495364370523,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bd8b5000",
+          "mitigation_before": 868.5,
+          "mitigation_after": 998.7749796167482,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1652,
+        "event_index": 70,
+        "carrier_line_sha256": "48f851d1c269a69813c4642f368de69b4d435e54052590ade1bbd7192c2bee46",
+        "carrier_line_bytes": 127567,
+        "event": {
+          "sequence": 349,
+          "frame": 924,
+          "game_time": 30.799970626831055,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 998.7749796167482,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "61",
+          "target_instance": "0x7124bdc69000",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 998.7749796167482,
+          "killed": false,
+          "mitigation_before": 868.5,
+          "mitigation_after": 998.7749796167482,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1652,
+        "event_index": 71,
+        "carrier_line_sha256": "48f851d1c269a69813c4642f368de69b4d435e54052590ade1bbd7192c2bee46",
+        "carrier_line_bytes": 127567,
+        "event": {
+          "sequence": 350,
+          "frame": 924,
+          "game_time": 30.799970626831055,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 998.7749796167482,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -998.7749796167482,
+          "hp_before": 8811.270343987271,
+          "hp_after": 7812.495364370523,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bdc69000",
+          "mitigation_before": 868.5,
+          "mitigation_after": 998.7749796167482,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1652,
+        "event_index": 74,
+        "carrier_line_sha256": "48f851d1c269a69813c4642f368de69b4d435e54052590ade1bbd7192c2bee46",
+        "carrier_line_bytes": 127567,
+        "event": {
+          "sequence": 353,
+          "frame": 924,
+          "game_time": 30.799970626831055,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 998.7749796167482,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "62",
+          "target_instance": "0x7124bdc69800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 998.7749796167482,
+          "killed": false,
+          "mitigation_before": 868.5,
+          "mitigation_after": 998.7749796167482,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1652,
+        "event_index": 75,
+        "carrier_line_sha256": "48f851d1c269a69813c4642f368de69b4d435e54052590ade1bbd7192c2bee46",
+        "carrier_line_bytes": 127567,
+        "event": {
+          "sequence": 354,
+          "frame": 924,
+          "game_time": 30.799970626831055,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 998.7749796167482,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -998.7749796167482,
+          "hp_before": 8811.270343987271,
+          "hp_after": 7812.495364370523,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bdc69800",
+          "mitigation_before": 868.5,
+          "mitigation_after": 998.7749796167482,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1666,
+        "event_index": 23,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 528,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 6188.886808658717,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "62",
+          "target_instance": "0x7124bdc69800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1666,
+        "event_index": 24,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 529,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -6188.886808658717,
+          "hp_before": 6188.886808658717,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bdc69800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1666,
+        "event_index": 27,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 532,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "42",
+          "target_instance": "0x7124baec8800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 1057.0368955419399,
+          "killed": false,
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1666,
+        "event_index": 28,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 533,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -1057.0368955419399,
+          "hp_before": 6392.015281055123,
+          "hp_after": 5334.978385513183,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124baec8800",
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1666,
+        "event_index": 31,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 536,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 6188.886808658717,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "43",
+          "target_instance": "0x7124bd8b5000",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1666,
+        "event_index": 32,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 537,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -6188.886808658717,
+          "hp_before": 6188.886808658717,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bd8b5000",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1666,
+        "event_index": 40,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 545,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "60",
+          "target_instance": "0x7124bd8b5800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 1057.0368955419399,
+          "killed": false,
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1666,
+        "event_index": 41,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 546,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -1057.0368955419399,
+          "hp_before": 6392.015281055123,
+          "hp_after": 5334.978385513183,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bd8b5800",
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1666,
+        "event_index": 44,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 549,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 6188.886808658717,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "61",
+          "target_instance": "0x7124bdc69000",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1666,
+        "event_index": 45,
+        "carrier_line_sha256": "fa924c977d046dfc7e8584725318554eeb92291111138248f41981e9d555df2d",
+        "carrier_line_bytes": 66250,
+        "event": {
+          "sequence": 550,
+          "frame": 1004,
+          "game_time": 33.46663475036621,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -6188.886808658717,
+          "hp_before": 6188.886808658717,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bdc69000",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1683,
+        "event_index": 33,
+        "carrier_line_sha256": "795693644cfd58516ef136e074829ec9d6e84dba21b555dff273cb0c65a97be3",
+        "carrier_line_bytes": 63784,
+        "event": {
+          "sequence": 652,
+          "frame": 1084,
+          "game_time": 36.13329887390137,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 3711.369829801377,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "42",
+          "target_instance": "0x7124baec8800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1683,
+        "event_index": 34,
+        "carrier_line_sha256": "795693644cfd58516ef136e074829ec9d6e84dba21b555dff273cb0c65a97be3",
+        "carrier_line_bytes": 63784,
+        "event": {
+          "sequence": 653,
+          "frame": 1084,
+          "game_time": 36.13329887390137,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -3711.369829801377,
+          "hp_before": 3711.369829801377,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124baec8800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1683,
+        "event_index": 42,
+        "carrier_line_sha256": "795693644cfd58516ef136e074829ec9d6e84dba21b555dff273cb0c65a97be3",
+        "carrier_line_bytes": 63784,
+        "event": {
+          "sequence": 661,
+          "frame": 1084,
+          "game_time": 36.13329887390137,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 3711.369829801377,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "60",
+          "target_instance": "0x7124bd8b5800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1683,
+        "event_index": 43,
+        "carrier_line_sha256": "795693644cfd58516ef136e074829ec9d6e84dba21b555dff273cb0c65a97be3",
+        "carrier_line_bytes": 63784,
+        "event": {
+          "sequence": 662,
+          "frame": 1084,
+          "game_time": 36.13329887390137,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -3711.369829801377,
+          "hp_before": 3711.369829801377,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bd8b5800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1696,
+        "event_index": 17,
+        "carrier_line_sha256": "429ebb2177cf07ef609b59c9a0b4768179489a75f30d2e68079d168cd861b8b8",
+        "carrier_line_bytes": 35206,
+        "event": {
+          "sequence": 751,
+          "frame": 1191,
+          "game_time": 39.69996213912964,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 5412.061599902809,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "70",
+          "target_instance": "0x7124bf2d8800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1696,
+        "event_index": 18,
+        "carrier_line_sha256": "429ebb2177cf07ef609b59c9a0b4768179489a75f30d2e68079d168cd861b8b8",
+        "carrier_line_bytes": 35206,
+        "event": {
+          "sequence": 752,
+          "frame": 1191,
+          "game_time": 39.69996213912964,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -5412.061599902809,
+          "hp_before": 5412.061599902809,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bf2d8800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1706,
+        "event_index": 21,
+        "carrier_line_sha256": "0f95ce43d86ae13e8f6b16d342b34531ccb31ab3ee6f69c35993d0f7f2815a5b",
+        "carrier_line_bytes": 143044,
+        "event": {
+          "sequence": 790,
+          "frame": 1271,
+          "game_time": 42.366626262664795,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "69",
+          "target_instance": "0x7124bf2d8000",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 1057.0368955419399,
+          "killed": false,
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1706,
+        "event_index": 22,
+        "carrier_line_sha256": "0f95ce43d86ae13e8f6b16d342b34531ccb31ab3ee6f69c35993d0f7f2815a5b",
+        "carrier_line_bytes": 143044,
+        "event": {
+          "sequence": 791,
+          "frame": 1271,
+          "game_time": 42.366626262664795,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -1057.0368955419399,
+          "hp_before": 6302.125179130118,
+          "hp_after": 5245.0882835881785,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bf2d8000",
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1706,
+        "event_index": 106,
+        "carrier_line_sha256": "0f95ce43d86ae13e8f6b16d342b34531ccb31ab3ee6f69c35993d0f7f2815a5b",
+        "carrier_line_bytes": 143044,
+        "event": {
+          "sequence": 875,
+          "frame": 1332,
+          "game_time": 44.39995765686035,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 4027.381866804324,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "69",
+          "target_instance": "0x7124bf2d8000",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1706,
+        "event_index": 107,
+        "carrier_line_sha256": "0f95ce43d86ae13e8f6b16d342b34531ccb31ab3ee6f69c35993d0f7f2815a5b",
+        "carrier_line_bytes": 143044,
+        "event": {
+          "sequence": 876,
+          "frame": 1332,
+          "game_time": 44.39995765686035,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -4027.381866804324,
+          "hp_before": 4027.381866804324,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bf2d8000",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1706,
+        "event_index": 110,
+        "carrier_line_sha256": "0f95ce43d86ae13e8f6b16d342b34531ccb31ab3ee6f69c35993d0f7f2815a5b",
+        "carrier_line_bytes": 143044,
+        "event": {
+          "sequence": 879,
+          "frame": 1332,
+          "game_time": 44.39995765686035,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 5817.96373883076,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1081_sotisd_2",
+          "target_uid": "71",
+          "target_instance": "0x7124bfea7000",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1706,
+        "event_index": 111,
+        "carrier_line_sha256": "0f95ce43d86ae13e8f6b16d342b34531ccb31ab3ee6f69c35993d0f7f2815a5b",
+        "carrier_line_bytes": 143044,
+        "event": {
+          "sequence": 880,
+          "frame": 1332,
+          "game_time": 44.39995765686035,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1081_sotisd_2",
+          "real_delta": -5817.96373883076,
+          "hp_before": 5817.96373883076,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124bfea7000",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1884,
+        "event_index": 39,
+        "carrier_line_sha256": "a17188376081ba2218825fdd56418fbad48d5250f7149f1a0351b36dca8a4f51",
+        "carrier_line_bytes": 65290,
+        "event": {
+          "sequence": 1328,
+          "frame": 2874,
+          "game_time": 95.79990863800049,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 6658.499864112353,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 6658.499864112353,
+          "killed": false,
+          "mitigation_before": 5790,
+          "mitigation_after": 6658.499864112353,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1884,
+        "event_index": 40,
+        "carrier_line_sha256": "a17188376081ba2218825fdd56418fbad48d5250f7149f1a0351b36dca8a4f51",
+        "carrier_line_bytes": 65290,
+        "event": {
+          "sequence": 1329,
+          "frame": 2874,
+          "game_time": 95.79990863800049,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 6658.499864112353,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -6658.499864112353,
+          "hp_before": 33637.19335279614,
+          "hp_after": 26978.693488683784,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 5790,
+          "mitigation_after": 6658.499864112353,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1890,
+        "event_index": 19,
+        "carrier_line_sha256": "040c5aa63fd2e89992f23f6d090ab0a1aef40c79988c323d6a84043bc07a9ce5",
+        "carrier_line_bytes": 46356,
+        "event": {
+          "sequence": 1376,
+          "frame": 2930,
+          "game_time": 97.6665735244751,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 6658.499864112353,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 6658.499864112353,
+          "killed": false,
+          "mitigation_before": 5790,
+          "mitigation_after": 6658.499864112353,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1890,
+        "event_index": 20,
+        "carrier_line_sha256": "040c5aa63fd2e89992f23f6d090ab0a1aef40c79988c323d6a84043bc07a9ce5",
+        "carrier_line_bytes": 46356,
+        "event": {
+          "sequence": 1377,
+          "frame": 2930,
+          "game_time": 97.6665735244751,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 6658.499864112353,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -6658.499864112353,
+          "hp_before": 25963.93814136344,
+          "hp_after": 19305.438277251087,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 5790,
+          "mitigation_after": 6658.499864112353,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1895,
+        "event_index": 31,
+        "carrier_line_sha256": "c843d1a2527cec1bc788385e85dfc7bdea0a05b05459cc4a413b0510b9ca0e79",
+        "carrier_line_bytes": 68733,
+        "event": {
+          "sequence": 1424,
+          "frame": 2990,
+          "game_time": 99.66657161712646,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": false,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1895,
+        "event_index": 32,
+        "carrier_line_sha256": "c843d1a2527cec1bc788385e85dfc7bdea0a05b05459cc4a413b0510b9ca0e79",
+        "carrier_line_bytes": 68733,
+        "event": {
+          "sequence": 1425,
+          "frame": 2990,
+          "game_time": 99.66657161712646,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -7046.91263694712,
+          "hp_before": 18121.557038710685,
+          "hp_after": 11074.644401763566,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1899,
+        "event_index": 24,
+        "carrier_line_sha256": "1534ec5aea6bc6dc916c312a83729e6670f5698e46af6518d11b3e3081adc635",
+        "carrier_line_bytes": 45392,
+        "event": {
+          "sequence": 1479,
+          "frame": 3051,
+          "game_time": 101.69990301132202,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": false,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1899,
+        "event_index": 25,
+        "carrier_line_sha256": "1534ec5aea6bc6dc916c312a83729e6670f5698e46af6518d11b3e3081adc635",
+        "carrier_line_bytes": 45392,
+        "event": {
+          "sequence": 1480,
+          "frame": 3051,
+          "game_time": 101.69990301132202,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -7046.91263694712,
+          "hp_before": 10059.889054443222,
+          "hp_after": 3012.976417496102,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 1907,
+        "event_index": 3,
+        "carrier_line_sha256": "3528dd8cedefa557557a11decb5d44b99f56d24301c1a0059f5b9bb7f2a4e081",
+        "carrier_line_bytes": 20623,
+        "event": {
+          "sequence": 1503,
+          "frame": 3111,
+          "game_time": 103.69990110397339,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 2843.8505262760445,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 1907,
+        "event_index": 4,
+        "carrier_line_sha256": "3528dd8cedefa557557a11decb5d44b99f56d24301c1a0059f5b9bb7f2a4e081",
+        "carrier_line_bytes": 20623,
+        "event": {
+          "sequence": 1504,
+          "frame": 3111,
+          "game_time": 103.69990110397339,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -2843.8505262760445,
+          "hp_before": 2843.8505262760445,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 2071,
+        "event_index": 20,
+        "carrier_line_sha256": "aceb61f5a532f296eb37aae882bbaaf2a1d5a86de4302fe9fafda6d631e0c43e",
+        "carrier_line_bytes": 74012,
+        "event": {
+          "sequence": 1881,
+          "frame": 4847,
+          "game_time": 161.56651258468628,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": false,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 2071,
+        "event_index": 21,
+        "carrier_line_sha256": "aceb61f5a532f296eb37aae882bbaaf2a1d5a86de4302fe9fafda6d631e0c43e",
+        "carrier_line_bytes": 74012,
+        "event": {
+          "sequence": 1882,
+          "frame": 4847,
+          "game_time": 161.56651258468628,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -7046.91263694712,
+          "hp_before": 31591.4797102164,
+          "hp_after": 24544.56707326928,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 2081,
+        "event_index": 6,
+        "carrier_line_sha256": "476a7f6d217c97aead9c3116206db260a0fa2a53f016171d9659e53c5fd0249f",
+        "carrier_line_bytes": 85522,
+        "event": {
+          "sequence": 1945,
+          "frame": 4927,
+          "game_time": 164.23317670822144,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": false,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 2081,
+        "event_index": 7,
+        "carrier_line_sha256": "476a7f6d217c97aead9c3116206db260a0fa2a53f016171d9659e53c5fd0249f",
+        "carrier_line_bytes": 85522,
+        "event": {
+          "sequence": 1946,
+          "frame": 4927,
+          "game_time": 164.23317670822144,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -7046.91263694712,
+          "hp_before": 22261.36754179746,
+          "hp_after": 15214.45490485034,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 2081,
+        "event_index": 25,
+        "carrier_line_sha256": "476a7f6d217c97aead9c3116206db260a0fa2a53f016171d9659e53c5fd0249f",
+        "carrier_line_bytes": 85522,
+        "event": {
+          "sequence": 1964,
+          "frame": 4948,
+          "game_time": 164.9331760406494,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 1057.0368955419399,
+          "killed": false,
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 2081,
+        "event_index": 26,
+        "carrier_line_sha256": "476a7f6d217c97aead9c3116206db260a0fa2a53f016171d9659e53c5fd0249f",
+        "carrier_line_bytes": 85522,
+        "event": {
+          "sequence": 1965,
+          "frame": 4948,
+          "game_time": 164.9331760406494,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 1057.0368955419399,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -1057.0368955419399,
+          "hp_before": 14453.388394359732,
+          "hp_after": 13396.351498817792,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 919.1625366210938,
+          "mitigation_after": 1057.0368955419399,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 2081,
+        "event_index": 62,
+        "carrier_line_sha256": "476a7f6d217c97aead9c3116206db260a0fa2a53f016171d9659e53c5fd0249f",
+        "carrier_line_bytes": 85522,
+        "event": {
+          "sequence": 2001,
+          "frame": 4988,
+          "game_time": 166.266508102417,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": false,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 2081,
+        "event_index": 63,
+        "carrier_line_sha256": "476a7f6d217c97aead9c3116206db260a0fa2a53f016171d9659e53c5fd0249f",
+        "carrier_line_bytes": 85522,
+        "event": {
+          "sequence": 2002,
+          "frame": 4988,
+          "game_time": 166.266508102417,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -7046.91263694712,
+          "hp_before": 12381.596151496982,
+          "hp_after": 5334.683514549863,
+          "killed": false,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    },
+    {
+      "settlement": {
+        "line": 2084,
+        "event_index": 9,
+        "carrier_line_sha256": "88ced5ff4753290f76e868f5f93482d21e2647699d98df07ffe391dc9782753b",
+        "carrier_line_bytes": 18895,
+        "event": {
+          "sequence": 2024,
+          "frame": 5046,
+          "game_time": 168.19983959197998,
+          "source": "char_4247_oxi",
+          "kind": "damage_settlement",
+          "amount": 4827.305840889458,
+          "proof": {
+            "method": "Entity.OnAfterOutputDamage"
+          },
+          "target": "enemy_1506_patrt",
+          "target_uid": "44",
+          "target_instance": "0x7124c6ba4800",
+          "damage_type": 5,
+          "shield_absorbed": 0,
+          "settlement_complete": true,
+          "nominal_amount": 7046.91263694712,
+          "killed": true,
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      },
+      "burst": {
+        "line": 2084,
+        "event_index": 10,
+        "carrier_line_sha256": "88ced5ff4753290f76e868f5f93482d21e2647699d98df07ffe391dc9782753b",
+        "carrier_line_bytes": 18895,
+        "event": {
+          "sequence": 2025,
+          "frame": 5046,
+          "game_time": 168.19983959197998,
+          "source": "char_4247_oxi",
+          "kind": "elemental_burst",
+          "amount": 7046.91263694712,
+          "proof": {
+            "method": "Entity.ApplyModifier",
+            "type": 5,
+            "target": 0
+          },
+          "target": "enemy_1506_patrt",
+          "real_delta": -4827.305840889458,
+          "hp_before": 4827.305840889458,
+          "hp_after": 0,
+          "killed": true,
+          "target_type": 0,
+          "damage_type": 5,
+          "cancel_reason": 0,
+          "shield_absorbed": 0,
+          "target_instance": "0x7124c6ba4800",
+          "mitigation_before": 6127.750244140625,
+          "mitigation_after": 7046.91263694712,
+          "source_character_uid": 2147484057
+        }
+      }
+    }
+  ]
+}

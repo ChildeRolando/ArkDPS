@@ -17,17 +17,19 @@ class DamageSettlement:
         self.overkill_hits = 0
         self.overkill_by_type = {}
         self.skill = self.non_skill = self.raw_skill = self.raw_non_skill = 0.0
+        self.initial_skill_unknown_hits = 0
         self.skill_hits = self.raw_skill_hits = self.complete_skill_hits = 0
         self.before = self.after = 0.0
         self.formula_hits = 0
         self.active = self.active_end = self.raw_active = self.raw_active_end = 0.0
         self.recent = deque()
 
-    def hit(self, when, hp, shield, kind, complete, skill, nominal, before, after, *, overkill=None):
+    def hit(self, when, hp, shield, kind, complete, skill, nominal, before, after, *, overkill=None, initial_skill_unknown=False):
         effective = hp + (shield or 0.0)
         if complete and effective == 0 and nominal is None:
             return
         self.hits += 1
+        self.initial_skill_unknown_hits += initial_skill_unknown
         self.unverified += not complete
         self.hp += hp
         self.shield += shield or 0.0
@@ -139,6 +141,9 @@ class DamageSettlement:
             'observed_boss_recent_damage_complete': boss and raw_recent_complete and has_window,
             'observed_boss_recent_window': (begin, end) if boss and has_raw_window else None,
             'damage_by_type': dict(self.raw_by_type) if boss else {},
+            'skill_initial_unknown_hits': self.initial_skill_unknown_hits,
+            'skill_unclassified_hits': hits - self.raw_skill_hits,
+            'skill_effective_unclassified_hits': hits - self.complete_skill_hits,
             'observed_skill_damage_effective': self.skill if self.skill_hits else None,
             'observed_non_skill_damage_effective': self.non_skill if self.skill_hits else None,
             'skill_split_effective_complete': complete and self.skill_hits == self.hits and self.hits > 0,

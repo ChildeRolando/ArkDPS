@@ -88,3 +88,46 @@ python acceptance/probe_arkhelper_feed.py
 同一提交下公开的 SK-5 数据含 11 份快照，来自时间轴标注的一次 PC 录像回放，覆盖逻辑帧 42 至 6,927。相邻快照相隔 88 至 1,216 帧，每秒 30 帧。11 份均提供技能状态，逐次事件和当前实现新增的 `damage` 汇总块均未随该批文件公开。最后一份已结束，记录了 50 次操作的回放完成。样本可供核对回放状态字段，无法定位技能生效或终止的精确逻辑帧。[SK-5 时间轴](https://github.com/Mon4terTeam/ArkFramework/blob/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/webview/ui/fixtures/sk5-9op-live-20261103/timeline.json) · [SK-5 快照](https://github.com/Mon4terTeam/ArkFramework/tree/a2ae65f37282c9ba2d64b759ce918ecaa82be87d/webview/ui/fixtures/sk5-9op-live-20261103/snapshots)
 
 要让 ArkDPS 发布连续观察者统计，仍需有序的外部记录、同局同帧绑定，以及对每类事件覆盖的明确证据。受控自定义关卡的记录只验证其实际覆盖的机制。
+
+## 2026-11-24 · 非 Frida 逐笔来源筛查
+
+目标是让采集器自己取得逐笔事件，现有 Frida/第三方录制仅用于离线对账。不把操作指令、快照差值或按帧累计曲线当作真实结算事件。
+
+北京时间 01:33，基于工作树基线 `012acf4`，读取本机已经生成的 Unity 普通日志；未启动或附加游戏，未核验这些文件对应的客户端构建，也没有人为划定从开局到终局的样本窗口。脚本只读 `Player.log` 和 `Player-prev.log`，不复制原文；在游戏数据目录顶层也只检查几个已知普通战斗日志名称是否存在，不读取其内容。
+
+| 日志 | 已读字节 | 非空完整行 | 战斗相关词命中 | 结算事件词与带标签数值同现 | 单行 JSON 对象 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `Player.log` | 58,203 | 712 | 109 | 0 | 0 |
+| `Player-prev.log` | 23,037 | 449 | 0 | 0 | 0 |
+
+数据目录顶层未见 `BattleLog`、`BattleLog.log` 或 `MultiBattleLog`。对 `Player.log` 的战斗命中做抽查，可见游戏报错调用栈；其中技能词命中 1 行，没有结算量。表中计数用于筛查，不覆盖任意编码、命名与日志格式；结果仅说明这两份样本未找到可直接消费的逐笔记录。随后使用前一份回执核验文件标识及内容前缀，两份日志均无新增完整行；该对照不是新的战斗样本。回执在 `runtime/no-frida-source-audit-20261124-eqrkius6/full-player-logs-v1.json` 和 `append-player-logs-v1.json`。
+
+[鹰角启动器数据面板说明](https://customer-service.hypergryph.com/app/arknights/question/ART178365239398256169747501)公开的是理智、任务进度等部分数据，未说明逐笔战斗接口。[MAA 的关卡结算回调](https://docs.maa.plus/zh-cn/protocol/callback-schema.html)提供关卡、星级和掉落，不提供伤害或治疗事件。两者均未取得可验证的逐笔源样本。
+
+### LS-5 追加窗口
+
+用户报告完成了一场 LS-5。2026-11-24 北京时间 01:33:33 的基线与收到报告后 01:39:50 的回执匹配同一文件标识，原有内容摘要一致。`Player.log` 新增 16,489 字节、241 个非空完整行；战斗相关词命中 80 行，其中 70 行符合 C#/Unity 调用栈形态。未发现带结算量的逐笔候选或单行 JSON 对象，`Player-prev.log` 没有变化。检查时常见战斗日志名称仍未出现。
+
+窗口覆盖用户报告的战斗，但未找到独立的 LS-5 编号或明确的开局、终局标记，客户端构建和治疗覆盖未核验；不能将所有新增内容都归于这局。结论仅为这次普通日志增量不能作为逐笔来源。脱敏回执位于 `runtime/no-frida-source-audit-20261124-eqrkius6/ls5-log-delta-n5xbmraw/`。
+
+### 对一场普通关做增量检查
+
+打开官服客户端、进入关卡前保存基线。保持同一客户端会话，手动完成一场包含伤害和直接治疗的普通关或演习，再保存增量。记录客户端构建、关卡和是否正常结算。不需要启动 ArkDPS 或 Frida。
+
+```powershell
+New-Item -ItemType Directory -Path runtime\non-frida-log-check
+python acceptance/audit_pc_player_log.py | Out-File -Encoding utf8 runtime\non-frida-log-check\before.json
+# 手动完成一场战斗后运行：
+python acceptance/audit_pc_player_log.py --baseline runtime\non-frida-log-check\before.json |
+    Out-File -Encoding utf8 runtime\non-frida-log-check\after.json
+```
+
+只有 `scanned` 才有扫描计数。文件缺失、不稳定、超大小上限或不满足追加条件，都不能记作零条事件。若找到疑似逐笔输出，先对照关卡、帧/序号、来源目标、实际量和终局，再扩展吸盾与技能起止；字段或覆盖不到的机制继续标未知。
+
+### 后续进程内实时来源实机
+
+本节普通日志筛查并非最终数据源。随后在同日新增独立 QuickJS/MinHook 组件，由用户操作官服 PC：
+在最初 476 条共同窗口对账、无 Frida 独立 513 条之后，又完成 1480 条完整源前缀同局逐笔对账及盾/元素/嵌套正例，
+独立运行补取了真实 3 条销毁尾笔。最后针对性独立局收齐 2406 条源事件并验证 6 组嵌套击杀，仍留下 10 笔非致死元素父证明缺口。
+各轮完整原日志、失败回执和来源摘要保留；源事件首尾、独立累计、语义完整性分别登记，没有发布便携包。
+设置、启动失败对照和正式回执见[非 Frida 实时采集候选的实机记录](native-pc-native-hooks.md#2026-11-24-官服实机结果)。

@@ -186,6 +186,80 @@ def test_new_exact_process_loads_once_and_close_preserves_live_component(environ
     assert environment.api.opened == environment.api.closed
 
 
+def test_optional_process_preparation_runs_after_checks_before_any_gadget_load(environment):
+    calls = []
+    runtime = None
+    def prepare(instance):
+        assert instance == (100, environment.api.rows[100].created)
+        assert runtime._verified_build[1] == module.access.BUILD_ID
+        assert runtime._asset_signature is not None
+        assert not runtime.config_path.exists() and not runtime.lease_path.exists()
+        assert not environment.loaders.instances and not environment.loaders.loads
+        calls.append(instance)
+    runtime = environment.make(prepare_process=prepare).start()
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
+    pid = add_new(environment, runtime)
+    lease = runtime.wait_ready(2)
+    assert calls == [(pid, lease['created'])]
+    assert environment.loaders.loads == [(pid, environment.gadget)]
+    state = runtime.describe()
+    assert state['process_preparation_requested'] is True
+    assert state['prepared_process_instance'] == [pid, lease['created']]
+
+
+@pytest.mark.parametrize('value', [False, 42, 'not a callable'])
+def test_process_preparation_argument_must_be_callable_before_runtime_start(environment, value):
+    with pytest.raises(ValueError, match='callable'):
+        environment.make(prepare_process=value)
+    assert not environment.loaders.loads
+
+
+def test_preparation_failure_preserves_its_owner_and_never_mutates_gadget(environment):
+    class Preparation:
+        def __init__(self):
+            self.calls = []
+            self.closed = False
+        def prepare(self, instance):
+            self.calls.append(instance)
+            raise RuntimeFailure('ordinary_loader_failed', 'controlled ordinary native loader failure')
+        def close(self):
+            self.closed = True
+    preparation = Preparation()
+    runtime = environment.make(prepare_process=preparation.prepare).start()
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
+    add_new(environment, runtime)
+    state = wait_for(runtime, lambda state: state['status'] == 'failed')
+    assert state['code'] == 'ordinary_loader_failed'
+    assert state['prepared_process_instance'] is None
+    assert not runtime.config_path.exists() and not runtime.lease_path.exists() and not environment.loaders.loads
+    runtime.close()
+    assert not preparation.closed  # Frida borrows the callback, never owns its resources.
+
+
+def test_preparation_rechecks_same_process_birth_before_gadget_mutation(environment):
+    runtime = None
+    def prepare(instance):
+        environment.api.rows[instance[0]].created += 1
+    runtime = environment.make(prepare_process=prepare).start()
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
+    add_new(environment, runtime)
+    state = wait_for(runtime, lambda state: state['status'] in ('failed', 'process_failed'))
+    assert state['code'] == 'process_changed'
+    assert state['prepared_process_instance'] is None
+    assert not runtime.config_path.exists() and not runtime.lease_path.exists() and not environment.loaders.loads
+
+
+def test_preparation_rejects_non_official_build_without_calling_external_loader(environment):
+    calls = []
+    runtime = environment.make(source_build=module.access.BILIBILI_BUILD_ID,
+                               prepare_process=calls.append).start()
+    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
+    add_new(environment, runtime)
+    state = wait_for(runtime, lambda state: state['status'] == 'failed')
+    assert state['code'] == 'process_prepare_unsupported_build'
+    assert not calls and not environment.loaders.loads and not runtime.config_path.exists()
+
+
 def test_startup_trace_times_transitions_and_omits_private_diagnostics(environment):
     records = []
     runtime = environment.make(startup_trace=records.append).start()

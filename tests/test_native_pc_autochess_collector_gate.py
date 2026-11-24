@@ -322,3 +322,33 @@ def test_same_session_legacy_core_rejects_even_bound_event_only_candidate_until_
         adapter.update(candidate, candidate_roster)
     assert adapter.result() == retained
     assert adapter.last_frame == 0 and adapter.last_game_time == 0
+
+@pytest.mark.parametrize('phase', [4, 5])
+def test_verified_deployment_survives_event_only_collection_and_desktop_projection(tmp_path, phase):
+    from desktop_bridge import _native_display_source
+
+    collector, probe, observer, commits, records = fixture(tmp_path, failed_field='roster')
+    probe.phase = phase
+    original = probe.sample
+
+    def guarded_units(**kwargs):
+        report = original(**kwargs)
+        report['sample'].update(presence_status='available', presence=dict(
+            scope='unit_manager_characters_membership', local_side=3, entities=[dict(id=CID,
+                data_uid=301, instance_uid=701, player_side=3, inited=True, borned=True,
+                is_disappeared=False, is_token=False)]))
+        return report
+
+    probe.sample = guarded_units
+    runtime = BattleRuntime()
+    assert runtime.poll(collector, observer).kind == 'sample'
+    probe.frame, probe.when = 30, 1
+    records.append(hit(1, 3, 1, event_scope=dict(protocol_version=1, status='available',
+        verified_same_frame=True, phase=phase, round=4, scope_key=SCOPE)))
+    assert runtime.poll(collector, observer).kind == 'sample'
+    scene = _native_display_source(runtime.display_sample())
+    rows = scene['statistics']['rows']
+    (local,) = [row for row in rows.values() if row['unique_id'] == 301]
+    assert local['observed_presence_seconds'] == 1
+    assert local['observed_damage'] == 100
+    assert all('observed_presence_seconds' not in row for row in rows.values() if row is not local)

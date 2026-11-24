@@ -121,7 +121,8 @@ internal sealed class BridgeClient : IAsyncDisposable
         log.WriteLine(DesktopLog.Header(directory, "wpf-collector", debugMode: debugMode,
             effectivePlatform: platform, eventsEnabled: Array.IndexOf(arguments, "--no-events") >= 0 ? false : null,
             connectionOverridden: platform is not null || Array.Exists(arguments, entry =>
-                entry is "--adb" or "--serial" or "--native-game-root" or "--frida-remote")));
+                entry is "--adb" or "--serial" or "--native-game-root" or "--frida-remote"
+                    or "--native-pc-event-backend" or "--native-pc-event-feed")));
         var start = new ProcessStartInfo(python)
         {
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,

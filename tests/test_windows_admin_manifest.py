@@ -24,6 +24,16 @@ def test_source_manifest_requires_admin_and_preserves_dpi_and_long_paths():
     assert project.findtext('./PropertyGroup/ApplicationManifest') == 'app.manifest'
 
 
+def test_only_the_compiled_internal_candidate_runs_without_elevation():
+    path = ROOT / 'desktop/ArkDPS.Desktop/app.internal-events.manifest'
+    assert manifest.verify_manifest_xml(path.read_bytes(), internal_backend=True) == dict(
+        level='asInvoker', ui_access=False, dpi_awareness='PerMonitorV2', long_path_aware=True)
+    with pytest.raises(ValueError, match='requireAdministrator'):
+        manifest.verify_manifest_xml(path.read_bytes())
+    with pytest.raises(ValueError, match='asInvoker'):
+        manifest.verify_manifest_xml(SOURCE, internal_backend=True)
+
+
 @pytest.mark.parametrize('before,after', [
     (b'requireAdministrator', b'asInvoker'), (b'uiAccess="false"', b'uiAccess="true"'),
     (b'PerMonitorV2', b'System'), (b'>true</longPathAware>', b'>false</longPathAware>'),

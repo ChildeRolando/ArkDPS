@@ -356,3 +356,112 @@ def test_actual_source_baseline_summary_flows_through_binding_and_uid_local_skil
         current = packet['mark']['native_autochess_context']
         assert old['scope_key'] != current['scope_key']
         assert (old['phase'], old['round']) == (current['phase'], current['round'])
+
+def test_multiplayer_presence_counts_only_matching_deployments_and_timed_skill_windows():
+    meter = MultiplayerBattleStatistics()
+
+    def point(t, *, instance=71, side=3, unit=True, **kwargs):
+        units = [dict(cid=CID, data_uid=301, instance_uid=instance, player_side=side)] if unit else []
+        return consume(meter, t, scoped_presence=dict(frame=t*30, game_time=t, units=units), **kwargs)
+
+    def row(result):
+        return next(iter(player(result, 3)['statistics']['rows'].values()))
+
+    point(0)
+    result = point(2, events=[activation(1, 1), hit(2, 3, 2, 100)])
+    local = row(result)
+    assert local['observed_presence_seconds'] == 2
+    assert local['observed_skill_active_seconds'] == 1
+    assert local['observed_skill_coverage'] == .5
+    assert 'observed_presence_seconds' not in next(iter(player(result, 2)['statistics']['rows'].values()))
+    assert row(point(3, instance=72))['observed_presence_seconds'] == 2
+    assert row(point(4, side=4))['observed_presence_seconds'] == 2
+    point(5)
+    assert row(point(11))['observed_presence_seconds'] == 2
+    point(12, unit=False)
+    assert row(point(13))['observed_presence_seconds'] == 2
+    assert 'observed_presence_seconds' not in row(point(14, native=context(14, phase=5)))
+    assert row(point(15, native=context(15, phase=5)))['observed_presence_seconds'] == 1
+
+def test_cold_presence_has_duration_without_certifying_an_unknown_skill_window():
+    meter = MultiplayerBattleStatistics()
+    for t in (10, 11):
+        result = consume(meter, t, scoped_presence=dict(frame=t*30, game_time=t,
+            units=[dict(cid=CID, data_uid=301, instance_uid=99, player_side=3)]))
+    row = next(iter(player(result, 3)['statistics']['rows'].values()))
+    assert row['observed_presence_seconds'] == 1
+    assert 'observed_skill_coverage' not in row
+    assert not row['skill_coverage_complete'] and row['skill_active_seconds'] is None
+
+def test_leto_verified_activation_recovers_only_the_current_player_and_actor():
+    cid = 'char_194_leto'
+    members = [member(2, cid=cid), member(3, cid=cid), member(3, uid=302, cid=cid)]
+    meter = MultiplayerBattleStatistics()
+
+    def sample(t, events=(), phase=4):
+        return consume(meter, t, events, native=context(t, members=members, phase=phase))
+
+    def marker(seq, when, method, *, uid=301, kind='skill_start', **changes):
+        return dict(activation(seq, when, uid=uid, cid=cid), kind=kind,
+                    skill_key='fixture_leto_skill', proof={'method': method}, **changes)
+
+    def damage(seq, when, uid=301):
+        return hit(seq, uid // 100, when, 100, uid=uid, cid=cid)
+
+    def ledger(result, uid):
+        return next(a['ledger'] for a in player(result, uid // 100)['actor_ledgers'] if a['actor_uid'] == uid)
+
+    sample(0)
+    sample(1, [marker(1, 1, 'Character.OnSkillStart'),
+               marker(2, 1, 'BasicSkill.OnCastFinish', kind='skill_end',
+                      skill_wait_for_end=True, skill_reason=1)])
+    first = ledger(sample(2, [damage(3, 2)]), 301)
+    assert first['skill_damage_unverified_share'] == 1
+    result = sample(3, [marker(4, 3, 'Character.SwitchToSkillState'),
+                        damage(5, 3), damage(6, 3, 201), damage(7, 3, 302)])
+    for t, seq in ((4, 8), (5, 9)):
+        result = sample(t, [damage(seq, t)])
+    current = ledger(result, 301)
+    assert current['unverified_hits'] == 0 and current['observed_hits'] == 4
+    assert current['observed_skill_damage'] == current['observed_skill_damage_effective'] == 300
+    assert current['skill_damage_unverified_share'] == current['skill_effective_damage_unverified_share'] == .25
+    for uid in (201, 302):
+        assert ledger(result, uid)['observed_non_skill_damage'] == 100
+    result = sample(6, [marker(10, 6, 'Character.OnSkillFinish', kind='skill_end'), damage(11, 6)])
+    assert ledger(result, 301)['observed_non_skill_damage'] == 100
+    assert ledger(result, 301)['skill_damage_unverified_share'] == .2
+    assert not ledger(result, 301)['skill_split_complete']
+    assert ledger(sample(7, phase=5), 301)['observed_damage'] is None
+
+def test_round_seven_late_publication_preserves_skill_classification_at_each_event():
+    # Round 7 published its first large batch after the observed effect ended.
+    # Keep the observed transition order and two representative pre-effect hits.
+    meter = MultiplayerBattleStatistics()
+    cid = 'char_194_leto'
+    scope = dict(phase=4, native_round=7)
+    def consume_round(t, events=()):
+        return consume(meter, t, events, native=context(t, **scope, members=[member(3,cid=cid)]))
+    def activation_at(seq, t, method, kind='skill_start', **changes):
+        return dict(activation(seq, t, cid=cid, event_scope=stamp(when=t, **scope)),
+                    skill_key='skchr_leto_2', kind=kind, proof={'method': method}, **changes)
+    def damage(seq, t):
+        return hit(seq, 3, t, cid=cid, event_scope=stamp(**scope))
+
+    consume_round(4.43)
+    batch = [damage(1, 7.33), damage(2, 34.77),
+             activation_at(3, 35.1, 'Character.OnSkillStart'),
+             activation_at(4, 35.1, 'Character.OnSkillCastSucceed'),
+             activation_at(5, 35.1, 'Character.SwitchToSkillState'),
+             activation_at(6, 35.13, 'BasicSkill.OnCastFinish', 'skill_end', skill_wait_for_end=True, skill_reason=1),
+             activation_at(7, 35.13, 'Character.OnAfterSkill', 'skill_end', skill_reason=1),
+             damage(8, 36), damage(9, 56),
+             activation_at(10, 60.17, 'Character.OnSkillFinish', 'skill_end'), damage(11, 61)]
+    value = lane(consume_round(72.1, batch), 3)
+    assert value['skill_initial_unknown_hits'] == value['skill_unclassified_hits'] == 2
+    assert value['skill_effective_unclassified_hits'] == 2 and value['unverified_hits'] == 0
+    assert value['observed_damage'] == 500 and value['observed_skill_damage'] == 200
+    assert value['observed_non_skill_damage'] == 100
+    meter.gap('test terminal gap')
+    archived = lane(meter.result(), 3)
+    assert archived['skill_damage_unverified_share'] is None
+    assert archived['skill_initial_unknown_hits'] == archived['skill_unclassified_hits'] == 2

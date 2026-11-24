@@ -29,9 +29,10 @@ from battle_share import (AUTOCHESS_SNAPSHOT_NOTE, json_bytes, record_display, r
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
 from collector import BattleChanged, NativeClockBusy, ProcessChanged, SnapshotGap, ROOT
-from connection import (ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
-                        DetectionStatus, detect_instances, resolve_configured)
-from desktop_audit import DesktopCaptureJournal
+from connection import (PC_EVENT_BACKENDS, ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
+                        DetectionStatus, detect_instances, native_event_feed_path, resolve_configured)
+from desktop_audit import (DesktopCaptureJournal, NATIVE_HOOK_STARTUP_EVENTS,
+                            NATIVE_HOOK_STARTUP_OVERFLOW, sanitize_native_hook_startup)
 from event_capture import CaptureRetry
 from event_observer import ObserverReadRetry, ObserverStatus
 from event_probe import BarrierBusy, NATIVE_PC_CONTRACT
@@ -39,6 +40,7 @@ from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from log_context import LogContext
 from metrics import observation_age
+from native_pc.event_source import PcEventSource, PcEventSourceCleanupError
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
                          settled_boss_damage_rates, team_status, format_compact)
@@ -64,7 +66,7 @@ BRIDGE_COMMANDS = frozenset((
     'multiplayer_enabled', 'debug_mode',
 ))
 BRIDGE_KEY_COMMANDS = frozenset(('hello', 'connection_apply', 'rescan', 'history_refresh', 'quit', 'debug_mode'))
-PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable'))
+PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable')) | NATIVE_HOOK_STARTUP_EVENTS
 PC_STARTUP_KEY_STATES = frozenset(('waiting_for_process', 'ready', 'failed', 'process_failed', 'cleanup_pending'))
 
 
@@ -312,12 +314,18 @@ class DesktopState:
         self.connection_store = ConnectionConfigStore(directory / 'connection.json')
         config = self.connection_store.load()
         self.connection = config.config
-        self.effective_connection = self.connection
+        from native_pc.internal_entry import native_hook_candidate_profile, native_hook_candidate_defaults
+        self.native_hook_profile = native_hook_candidate_profile(ROOT)
+        self.effective_connection = native_hook_candidate_defaults(self.native_hook_profile, self.connection)
         self._source_request_revision = None
         self._source_request_platform = self.connection.platform
         self._awaiting_source = False
         self.warnings = [x for x in (loaded.warning, config.warning,
                                      stage_names.catalog().warning) if x]
+        if self.native_hook_profile is not None:
+            self.warnings.append('此独立便携包固定使用自研 PC 事件后端。')
+            if (directory / 'connection.json').is_file():
+                self.warnings.append('此目录已有连接设置；本候选不支持迁移旧 runtime。有效来源固定为官服 PC 自研、空合作文件，不会自动改写已保存连接。')
         self.history = BattleHistory(directory / 'history')
         self.records = {}
         self.selected = None
@@ -484,7 +492,9 @@ class DesktopState:
     def expect_connection_request(self, config, revision):
         prior = self._requested_connection
         changed = (config.platform != prior.platform or
-                   (config.native_game_root != prior.native_game_root if config.platform == 'native_pc' else
+                   ((config.native_game_root, config.native_pc_event_backend, config.native_pc_event_feed) !=
+                    (prior.native_game_root, prior.native_pc_event_backend, prior.native_pc_event_feed)
+                    if config.platform == 'native_pc' else
                     (config.adb_path, config.serial) != (prior.adb_path, prior.serial)))
         if changed:
             self._set_autochess_scene(None)
@@ -984,6 +994,7 @@ class DesktopState:
                 WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped', 'snapshot_only'):
             event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
+                    native_hook_candidate=self.native_hook_profile,
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     effective_connection_config=self.effective_connection.to_dict(),
                     totals=team_totals({} if character_counters else stats), native_counter_scope=counter_scope,
@@ -1113,6 +1124,8 @@ class DesktopState:
             return '已保存：' + Path(cmd['path']).name
         elif op == 'connection_apply':
             config = ConnectionConfig.from_dict(cmd['config'])
+            from native_pc.internal_entry import validate_native_hook_candidate_connection
+            validate_native_hook_candidate_connection(self.native_hook_profile, config)
             if config.platform == 'mumu' and not config.auto_detect and not config.serial:
                 raise ValueError('自动检测关闭时必须填写端口地址')
             enabled = cmd['events']
@@ -1159,13 +1172,15 @@ class CollectionWorker:
         self.session = None
         self.cleanup_error = ''
         self.retired_errors = []
-        self.pc_runtime = None
-        self.pc_runtime_key = None
-        self.pc_runtime_dir = state.history.directory.parent
+        self.pc_source = PcEventSource(state.history.directory.parent,
+                                       observer_factory=native_pc_observer_factory, collector_root=ROOT)
         self.pc_cleanup_error = ''
         self._last_pc_bootstrap = None
         self._pc_bootstrap_revision = None
         self._bootstrap_audit = None
+        self._pc_startup_audit_queue = queue.Queue(maxsize=64)
+        self._pc_startup_audit_dropped = 0
+        self._pc_startup_audit_reported_drops = 0
         self.pending_history_count = 0
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
@@ -1190,9 +1205,55 @@ class CollectionWorker:
             self._debug_mode.clear()
 
     def _trace_pc_startup(self, record):
+        if type(record) is not dict or type(record.get('event')) is not str:
+            return
+        if (record.get('event') in NATIVE_HOOK_STARTUP_EVENTS or record['event'].startswith('native_prepare_')
+                or record.get('provider') == 'arkdps-native-hooks'):
+            data = sanitize_native_hook_startup(record)
+            if data is None:
+                return
+            # The startup owner calls from its own thread. Keep file rotation
+            # AND stderr I/O off this early-loading thread. A source owner
+            # serializes its callbacks; only it advances the dropped counter.
+            try:
+                self._pc_startup_audit_queue.put_nowait(data)
+            except queue.Full:
+                self._pc_startup_audit_dropped += 1
+            return
         if (self.debug_mode or record.get('event') in PC_STARTUP_KEY_EVENTS
                 or record.get('status') in PC_STARTUP_KEY_STATES):
             _write_diagnostic_event('pc-startup', record)
+
+    def _flush_pc_startup_audit(self):
+        def emit(record):
+            try:
+                _write_diagnostic_event('pc-startup', record)
+            except Exception:
+                pass
+            if self._bootstrap_audit is not None:
+                try:
+                    self._bootstrap_audit(record['event'], record)
+                except Exception:
+                    # Each diagnostic sink is independent of the other and
+                    # can never change source selection or cleanup.
+                    pass
+
+        for _ in range(64):
+            try:
+                record = self._pc_startup_audit_queue.get_nowait()
+            except queue.Empty:
+                break
+            emit(record)
+        # Never reset the producer's monotonic counter from this thread. A
+        # concurrent overflow will be included in this or the next flush.
+        dropped = self._pc_startup_audit_dropped
+        previous = self._pc_startup_audit_reported_drops
+        if dropped > previous:
+            self._pc_startup_audit_reported_drops = dropped
+            emit(dict(event=NATIVE_HOOK_STARTUP_OVERFLOW, provider='arkdps-native-hooks',
+                utc=datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+                dropped_records=dropped - previous, total_dropped_records=dropped,
+                diagnostic_records_complete=False))
 
     def request(self, config, enabled):
         with self._request_lock:
@@ -1255,55 +1316,53 @@ class CollectionWorker:
         with self._request_lock:
             if self.stop.is_set():
                 raise InterruptedError('采集器正在关闭')
-        needed = (config.platform == 'native_pc' and enabled and bool(config.native_game_root)
-                  and self.native_pc_observer_factory is None)
-        key = str(Path(config.native_game_root).expanduser().resolve()) if needed and config.native_game_root else None
-        if self.pc_runtime is not None and (not needed or key != self.pc_runtime_key):
-            if not self._close_pc_runtime():
-                raise RuntimeError(self.pc_cleanup_error)
-        if not needed:
-            return self.native_pc_observer_factory if config.platform == 'native_pc' and enabled else None
-        if self.pc_runtime is None:
-            from capture_cli import _native_pc_frida_runtime
-            candidate = _native_pc_frida_runtime(config.native_game_root, self.pc_runtime_dir,
-                                                startup_trace=self._trace_pc_startup)
-            with self._request_lock:
-                if self.stop.is_set():
-                    candidate.close()
-                    raise InterruptedError('采集器在启动运行时创建期间关闭')
-                self.pc_runtime = candidate
-                self.pc_runtime_key = key
-                try:
-                    # Publish the owner before starting it, under the same
-                    # gate used by shutdown, so cancellation cannot miss it.
-                    self.pc_runtime.start()
-                except Exception as exc:
-                    self.events.put(('warning', str(exc)))
-        elif explicit_retry:
-            # A user request reconciles the existing owner. Automatic retries
-            # preserve its loading window, lease and attempted process births.
-            self.pc_runtime.retry()
-        return self.pc_runtime.observer_factory
+            if self.session is not None:
+                raise RuntimeError('旧采集会话尚未释放')
+        previous = self.pc_runtime
+        cleanup_error = None
+        try:
+            return self.pc_source.select(enabled=config.platform == 'native_pc' and enabled,
+                game_root=config.native_game_root, backend=config.native_pc_event_backend,
+                feed_path=config.native_pc_event_feed, explicit_retry=explicit_retry,
+                startup_trace=self._trace_pc_startup, admission=self._request_lock,
+                cancelled=self.stop.is_set, on_start_error=lambda exc: self.events.put(('warning', str(exc))))
+        except PcEventSourceCleanupError as exc:
+            cleanup_error = exc
+            raise
+        finally:
+            if previous is not None and previous is not self.pc_runtime:
+                self._report_pc_runtime_closed()
+            if cleanup_error is not None:
+                self._report_pc_cleanup_error(cleanup_error)
+
+    @property
+    def pc_runtime(self):
+        return self.pc_source.runtime
 
     def _close_pc_runtime(self):
         if self.pc_runtime is None:
             return True
         try:
-            self.pc_runtime.close()
-        except Exception as exc:
-            self.pc_cleanup_error = f'PC 启动加载器清理失败：{exc}'
-            self.events.put(('error', self.pc_cleanup_error))
+            self.pc_source.close()
+        except PcEventSourceCleanupError as exc:
+            self._report_pc_cleanup_error(exc)
             return False
+        self._report_pc_runtime_closed()
+        return True
+
+    def _report_pc_cleanup_error(self, exc):
+        self.pc_cleanup_error = str(exc)
+        self.events.put(('error', self.pc_cleanup_error))
+
+    def _report_pc_runtime_closed(self):
         if self.pc_cleanup_error:
             self.retired_errors.append('已释放 PC 启动加载器，保留历史清理异常：' + self.pc_cleanup_error)
-        self.pc_runtime = None
-        self.pc_runtime_key = None
         self._pc_bootstrap_revision = None
         self.pc_cleanup_error = ''
         self._emit_pc_bootstrap(None)
-        return True
 
     def _emit_pc_bootstrap(self, value, *, force=False):
+        self._flush_pc_startup_audit()
         if force or value != self._last_pc_bootstrap:
             self._last_pc_bootstrap = value
             self.events.put(('native_pc_bootstrap', value))
@@ -1344,6 +1403,8 @@ class CollectionWorker:
                     auto_detect=latest_config.auto_detect, event_observation=latest_events,
                     adb_configured=bool(latest_config.adb_path), manual_target_configured=bool(latest_config.serial),
                     native_game_root_configured=bool(latest_config.native_game_root))
+                if latest_config.platform == 'native_pc':
+                    data['settings']['native_pc_event_backend'] = latest_config.native_pc_event_backend
                 if latest_config == observed_config and observed_environment is not None:
                     data['environment'] = observed_environment
                 elif latest_config != ConnectionConfigStore(saved_connection_path).load().config:
@@ -1501,10 +1562,9 @@ class CollectionWorker:
                                         session_bootstrap_generation = bootstrap.get('ready_generation')
                                     if config.platform == 'native_pc':
                                         from native_pc_collector import NativePcCollector
-                                        session_kwargs['collector'] = NativePcCollector(
-                                            config.native_game_root, collect_actions=enabled,
-                                            event_identity_only=(enabled and self.arkframework_root is None
-                                                and self.native_pc_observer_factory is None))
+                                        collector = NativePcCollector(config.native_game_root, collect_actions=enabled)
+                                        collector.allow_event_identity_sampling = self.arkframework_root is None
+                                        session_kwargs['collector'] = collector
                                         if pc_provider is not None:
                                             session_kwargs['observer_factory'] = pc_provider
                                         adb, serial = None, None
@@ -1599,12 +1659,22 @@ class CollectionWorker:
                             runtime = self.session.runtime
                             feed, sessions = runtime.feed, runtime.sessions
                             consume_sequence = sessions.sequence
+                            native_clock_owner = (self.pc_runtime
+                                if current_config.native_pc_event_backend == 'native' else None)
                             clock_retry = (current_config.platform == 'native_pc' and current_enabled
+                                and (current_config.native_pc_event_backend == 'frida'
+                                     or (current_config.native_pc_event_backend == 'native'
+                                         and not current_config.native_pc_event_feed
+                                         and self.pc_source.backend == 'native'
+                                         and native_clock_owner is not None
+                                         and getattr(self.session.observer, 'runtime', None) is native_clock_owner
+                                         and getattr(self.session.observer, 'status', None) == ObserverStatus.READY))
                                 and self.native_pc_observer_factory is None and self.arkframework_root is None
                                 and getattr(self.session.observer, 'native_clock_busy_retry', False) is True
                                 and getattr(self.session.observer, 'contract', None) is NATIVE_PC_CONTRACT)
                             if clock_retry:
-                                owner = (current_revision, self.session, self.session.observer, runtime, feed, sessions)
+                                owner = (current_revision, self.session, self.session.observer, runtime, feed, sessions,
+                                         native_clock_owner)
                                 if clock_burst is not None and (self.stop.is_set() or current_revision != self._request_revision):
                                     clock_burst = None
                                     continue
@@ -1645,6 +1715,10 @@ class CollectionWorker:
                                         and self.session.observer is owner[2]
                                         and self.session.runtime is runtime and runtime.feed is feed
                                         and runtime.sessions is sessions and sessions.sequence == consume_sequence
+                                        and (owner[6] is None or (self.pc_runtime is owner[6]
+                                            and self.pc_source.backend == 'native'
+                                            and getattr(self.session.observer, 'runtime', None) is owner[6]
+                                            and getattr(self.session.observer, 'status', None) == ObserverStatus.READY))
                                         and sampling_observation is None
                                         and not self.stop.is_set() and current_revision == self._request_revision
                                         and _native_clock_busy(exc)
@@ -1755,6 +1829,7 @@ class CollectionWorker:
                         self.release()
                     if not self._close_pc_runtime():
                         self._close_pc_runtime()
+                    self._flush_pc_startup_audit()
                     config, enabled = self.effective
                     if regeneration is not None and enabled and config.platform == 'native_pc':
                         regeneration.poll_reporting(time.monotonic(), audit, force=True)
@@ -1802,7 +1877,7 @@ def _drain_worker_events(worker, state):
         state.accept(*event)
 
 
-def serve(input_stream, output, state, worker=None):
+def serve(input_stream, output, state, worker=None, *, internal_capture=False):
     """Versioned UTF-8 JSON Lines: hello, snapshot/state/error, quit/bye."""
     handshake = False
     forced_trace = os.environ.get('ARKDPS_BRIDGE_TRACE') == '1'
@@ -1904,6 +1979,8 @@ def serve(input_stream, output, state, worker=None):
                 result = dict(transport='stdio-jsonl', worker='ArkDPS Python', version=PROTOCOL_VERSION,
                               python=sys.version.split()[0], executable=sys.executable, frida=frida_version,
                               request_replay=True)
+                if state.native_hook_profile is not None:
+                    result['native_hook_candidate'] = state.native_hook_profile
                 kind = 'hello'
             elif not handshake:
                 raise ValueError('必须先完成 hello 握手')
@@ -1917,9 +1994,13 @@ def serve(input_stream, output, state, worker=None):
                     worker.close()
                 result, kind, quit_requested = None, 'bye', True
             elif op == 'detect':
+                if internal_capture:
+                    raise ValueError('内部事件候选不连接游戏或模拟器。')
                 effective = getattr(worker, 'effective', None)
                 config = effective[0] if effective is not None else state.effective_connection
                 platform = cmd.get('platform', config.platform)
+                if state.native_hook_profile is not None and platform != 'native_pc':
+                    raise ValueError('此启动测试候选不支持 MuMu 检测，请选择官服 PC。')
                 if platform == 'native_pc':
                     native_root = cmd.get('native_game_root', config.native_game_root)
                     ConnectionConfig.from_dict({'platform': platform, 'native_game_root': native_root})
@@ -1990,19 +2071,47 @@ def main(*, native_pc_observer_factory=None):
     parser.add_argument('--state-dir', type=Path)
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--fixture', type=Path)
+    parser.add_argument('--internal-capture', metavar='SCENARIO')
     parser.add_argument('--adb')
     parser.add_argument('--serial')
     parser.add_argument('--platform', choices=('mumu', 'native_pc'))
     parser.add_argument('--native-game-root')
+    parser.add_argument('--native-pc-event-backend', choices=PC_EVENT_BACKENDS)
+    parser.add_argument('--native-pc-event-feed', type=native_event_feed_path)
     parser.add_argument('--arkframework-root', type=Path)
     parser.add_argument('--no-events', action='store_true')
     parser.add_argument('--debug-mode', action='store_true')
     parser.add_argument('--frida-remote')
     args = parser.parse_args()
+    from native_pc.internal_entry import portable_manifest
+    manifest = portable_manifest(ROOT)
+    from native_pc.internal_entry import native_hook_candidate_profile, native_hook_candidate_arguments
+    try:
+        hook_profile = native_hook_candidate_profile(ROOT)
+        native_hook_candidate_arguments(hook_profile, args)
+    except (OSError, RuntimeError, ValueError) as exc:
+        parser.error(str(exc))
+    if manifest and manifest.get('internal_event_backend') and args.internal_capture is None:
+        parser.error('内部候选需要显式选择 --internal-capture，启动方式见随包说明。')
+    if args.internal_capture is not None:
+        if (not args.offline or args.no_events or any(value is not None for value in
+                (args.fixture, args.adb, args.serial, args.platform, args.native_game_root,
+                 args.native_pc_event_backend, args.native_pc_event_feed,
+                 args.arkframework_root, args.frida_remote))):
+            parser.error('--internal-capture requires --offline and excludes live or other fixture options')
+        from native_pc.internal_entry import internal_host, internal_state_dir
+        try:
+            host = internal_host(ROOT)
+            args.state_dir = internal_state_dir(ROOT, args.state_dir, desktop=True)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     if args.offline and args.state_dir is None:
         parser.error('--offline requires an isolated --state-dir')
     if args.fixture and not args.offline:
         parser.error('--fixture requires --offline')
+    pc_event_override = args.native_pc_event_backend is not None or args.native_pc_event_feed is not None
+    if pc_event_override and (args.platform == 'mumu' or args.frida_remote):
+        parser.error('PC 事件内核参数只支持 PC 平台')
     instance = None
     if not args.offline:
         instance = socket.socket()
@@ -2027,12 +2136,37 @@ def main(*, native_pc_observer_factory=None):
         serial=args.serial or state.connection.serial,
         auto_detect=False if args.serial else state.connection.auto_detect,
         platform=args.platform or ('native_pc' if args.native_game_root is not None or args.arkframework_root is not None
+                                   or pc_event_override
                                    else state.connection.platform),
         native_game_root=(args.native_game_root if args.native_game_root is not None
-                          else state.connection.native_game_root))
+                          else state.connection.native_game_root),
+        native_pc_event_backend=args.native_pc_event_backend or state.connection.native_pc_event_backend,
+        native_pc_event_feed=(args.native_pc_event_feed if args.native_pc_event_backend == 'native'
+                              else args.native_pc_event_feed or state.connection.native_pc_event_feed))
     state.effective_connection = effective_config
     if args.fixture:
         state.accept('sample', json.loads(args.fixture.read_text('utf-8')))
+    if args.internal_capture is not None:
+        from native_pc.internal_capture import run_internal_capture
+        state.effective_connection = replace(effective_config, platform='native_pc', native_pc_event_backend='native')
+        state.accept('connection', '内部 PC 事件候选 · 自有测试数据')
+
+        def publish_internal_sample(sample):
+            scene = autochess_scene(sample)
+            if scene is not None or state._autochess_scene_announced:
+                state.accept('autochess_scene', scene)
+            state.accept('sample', sample)
+
+        try:
+            result = run_internal_capture(host, args.internal_capture, state.directory,
+                                          publish=publish_internal_sample)
+            if result.get('status') != 'ok':
+                state.accept('error', str(result.get('error') or '内部采集未通过'))
+            elif state.last is not None:
+                state.accept('lifecycle', 'frozen')
+        except (OSError, RuntimeError, ValueError) as exc:
+            state.accept('error', str(exc))
+        state.refresh_history()
     worker = None if args.offline else CollectionWorker(
         state, endpoint=args.frida_remote or DEFAULT_FRIDA_REMOTE,
         arkframework_root=args.arkframework_root,
@@ -2043,7 +2177,10 @@ def main(*, native_pc_observer_factory=None):
         state.expect_connection_request(effective_config, revision)
         worker.thread.start()
     try:
-        serve(sys.stdin, output, state, worker)
+        if args.internal_capture is not None:
+            serve(sys.stdin, output, state, internal_capture=True)
+        else:
+            serve(sys.stdin, output, state, worker)
     finally:
         if worker:
             worker.close()

@@ -62,8 +62,8 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
         calls.append(('pc_startup_created', game_root, runtime_dir))
         return Startup()
 
-    import capture_cli
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', startup)
+    from native_pc import event_source
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', startup)
 
     def diagnostic(source):
         return ConnectionDiagnostics(status=DetectionStatus.READY_UNIQUE, platform=source,
@@ -74,7 +74,7 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
         diagnostics = diagnostic('native_pc')
 
         def __init__(self, root, *, collect_actions, event_identity_only=False):
-            assert event_identity_only is (enabled and arkframework_root is None and factory is None)
+            assert event_identity_only is False  # Only a verified opening mark can opt in.
             calls.append(('native_collector', root, collect_actions))
 
     class Session:
@@ -200,7 +200,7 @@ def test_pending_pc_startup_defers_snapshot_access_without_recreating_watcher(tm
 
 
 def test_pc_startup_survives_same_source_retries_and_stops_on_mumu(tmp_path, monkeypatch):
-    import capture_cli
+    from native_pc import event_source
     calls = []
 
     class Startup:
@@ -214,7 +214,7 @@ def test_pc_startup_survives_same_source_retries_and_stops_on_mumu(tmp_path, mon
             pass
 
     startup = Startup()
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args, **_kwargs: startup)
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', lambda *_args, **_kwargs: startup)
     worker = CollectionWorker(DesktopState(tmp_path))
     config = ConnectionConfig(platform='native_pc', native_game_root='recorded-game-root')
     first = worker._pc_provider(config, True)
@@ -226,7 +226,7 @@ def test_pc_startup_survives_same_source_retries_and_stops_on_mumu(tmp_path, mon
 
 
 def test_failed_pc_startup_cleanup_retains_owner_and_historical_failure(tmp_path, monkeypatch):
-    import capture_cli
+    from native_pc import event_source
 
     class Startup:
         calls = 0
@@ -243,7 +243,7 @@ def test_failed_pc_startup_cleanup_retains_owner_and_historical_failure(tmp_path
                 raise RuntimeError('owned loader call is pending')
 
     startup = Startup()
-    monkeypatch.setattr(capture_cli, '_native_pc_frida_runtime', lambda *_args, **_kwargs: startup)
+    monkeypatch.setattr(event_source, '_native_pc_frida_runtime', lambda *_args, **_kwargs: startup)
     worker = CollectionWorker(DesktopState(tmp_path))
     worker._pc_provider(ConnectionConfig(platform='native_pc', native_game_root='game'), True)
     with pytest.raises(RuntimeError, match='owned loader call is pending'):

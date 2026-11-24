@@ -274,6 +274,21 @@ class VersionReport:
         )
 
 
+PC_EVENT_BACKENDS = ('frida', 'native')
+
+
+def native_event_feed_path(value):
+    if value is None or value == '':
+        return None
+    if not isinstance(value, str) or '\x00' in value:
+        raise ValueError('自研事件输入必须是本地 JSONL 文件的绝对路径')
+    path = Path(value)
+    if (not path.is_absolute() or path.drive.startswith('\\') or path.suffix.lower() != '.jsonl'
+            or ':' in value[len(path.drive):]):
+        raise ValueError('自研事件输入必须是本地 JSONL 文件的绝对路径')
+    return str(path)
+
+
 @dataclass
 class ConnectionConfig:
     adb_path: str | None = None
@@ -281,11 +296,15 @@ class ConnectionConfig:
     auto_detect: bool = True
     platform: str = 'mumu'
     native_game_root: str | None = None
+    native_pc_event_backend: str = 'frida'
+    native_pc_event_feed: str | None = None
 
     def to_dict(self) -> dict:
         return {'version': CONFIG_VERSION, 'adb_path': self.adb_path,
                 'serial': self.serial, 'auto_detect': bool(self.auto_detect),
-                'platform': self.platform, 'native_game_root': self.native_game_root}
+                'platform': self.platform, 'native_game_root': self.native_game_root,
+                'native_pc_event_backend': self.native_pc_event_backend,
+                'native_pc_event_feed': self.native_pc_event_feed}
 
     @classmethod
     def from_dict(cls, raw: object) -> 'ConnectionConfig':
@@ -296,6 +315,7 @@ class ConnectionConfig:
         auto = raw.get('auto_detect', True)
         platform = raw.get('platform', 'mumu')
         native_root = raw.get('native_game_root')
+        backend = raw.get('native_pc_event_backend', 'frida')
         if adb is not None and not isinstance(adb, str):
             raise ValueError('adb_path 必须是字符串或 null')
         if serial is not None and not isinstance(serial, str):
@@ -306,8 +326,11 @@ class ConnectionConfig:
             raise ValueError('platform 必须是 mumu 或 native_pc')
         if native_root is not None and not isinstance(native_root, str):
             raise ValueError('native_game_root 必须是字符串或 null')
+        if backend not in PC_EVENT_BACKENDS:
+            raise ValueError('PC 事件内核必须是 frida 或 native')
         return cls(adb_path=adb or None, serial=serial or None, auto_detect=auto,
-                   platform=platform, native_game_root=native_root or None)
+                   platform=platform, native_game_root=native_root or None, native_pc_event_backend=backend,
+                   native_pc_event_feed=native_event_feed_path(raw.get('native_pc_event_feed')))
 
 
 @dataclass

@@ -202,6 +202,8 @@ def test_observer_reads_scope_preference_at_start_and_existing_marks(monkeypatch
     monkeypatch.setattr(observer, 'start', lambda: sources.append(observer._probe_source()))
     if platform == 'native_pc':
         monkeypatch.setattr(observer.binding, 'bind', lambda _op, result: result)
+        # This case checks preference transport, not terminal proof admission.
+        monkeypatch.setattr(observer.binding, 'bind_terminal_mark', lambda result: result)
 
     def request(self, operation, *, timeout=None, **arguments):
         calls.append((operation, timeout, arguments))
@@ -283,6 +285,33 @@ def test_native_pc_start_loads_pc_probe_and_reuses_full_cleanup(monkeypatch):
     observer.stop()
     assert calls == ['stop', 'unload', 'detach']
     assert observer.script is observer.session is None
+
+
+@pytest.mark.parametrize('hp,nested,enabled', [('1', '1', True), ('1', '0', False), ('0', '1', False)])
+def test_native_provider_diagnostic_prefixes_are_symmetric_and_nested_requires_hp(monkeypatch, hp, nested, enabled):
+    from native_pc.native_hook_source import _native_source
+    from pathlib import Path
+    monkeypatch.setenv('ARKDPS_TRACE_HP_CONTEXT', hp)
+    monkeypatch.setenv('ARKDPS_TRACE_NESTED_PARENT', nested)
+    monkeypatch.setenv('ARKDPS_COALESCE_ENEMY_HP', '0')
+    sources = []
+    observer = NativePcFridaObserver(native_collector())
+
+    class Script:
+        def on(self, _event, notify):
+            self.notify = notify
+
+        def load(self):
+            self.notify({'type': 'send', 'payload': {'ready': True, 'arch': 'x64'}}, None)
+
+    script = Script()
+    session = SimpleNamespace(on=lambda *_: None,
+        create_script=lambda source: (sources.append(source) or script))
+    monkeypatch.setitem(sys.modules, 'frida', SimpleNamespace(__version__='17.26.1'))
+    monkeypatch.setattr(observer, '_attach_session', lambda _: session)
+    observer.start()
+    assert sources == [_native_source(Path(__file__).resolve().parents[1])[1]]
+    assert ('globalThis.arkdpsTraceNestedParent = true;\n' in sources[0]) is enabled
 
 
 def test_native_pc_permission_failure_names_admin_requirement():
