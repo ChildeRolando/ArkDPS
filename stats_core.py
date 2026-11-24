@@ -896,18 +896,27 @@ class Statistics:
                 self.boss_observed_from = game_time
             self.boss_event_end = game_time
 
-    def _skill_active_seconds(self, owner):
+    def observed_skill_interval(self, owner, actor, start, end):
+        if (not self.event_coverage or self.event_coverage_broken or owner in self.skill_incomplete
+                or self._settlement_skill(owner, actor) is None):
+            return None
+        return self._skill_active_seconds(owner, start=start, stop=end)
+
+    def _skill_active_seconds(self, owner, *, start=0.0, stop=None):
         end = (self.event_coverage_end if self.event_coverage_end is not None
                else self.now)
+        if stop is not None:
+            end = min(end, stop)
         total = 0.0
-        for window in self.skill_windows.get(owner, ()):
-            start = window.get('start')
-            stop = window.get('end')
-            if self._optional_number(start) and self._optional_number(stop):
-                total += max(0.0, min(stop, end) - start)
+        for window in reversed(self.skill_windows.get(owner, ())):
+            left, right = window.get('start'), window.get('end')
+            if self._optional_number(left) and self._optional_number(right):
+                if right <= start:
+                    break
+                total += max(0.0, min(right, end) - max(start, left))
         active = self.skill_active.get(owner)
         if active is not None and self._optional_number(active.get('start')):
-            total += max(0.0, end - active['start'])
+            total += max(0.0, end - max(start, active['start']))
         return total
 
     @staticmethod

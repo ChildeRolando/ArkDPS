@@ -356,3 +356,39 @@ def test_actual_source_baseline_summary_flows_through_binding_and_uid_local_skil
         current = packet['mark']['native_autochess_context']
         assert old['scope_key'] != current['scope_key']
         assert (old['phase'], old['round']) == (current['phase'], current['round'])
+
+def test_multiplayer_presence_counts_only_matching_deployments_and_timed_skill_windows():
+    meter = MultiplayerBattleStatistics()
+
+    def point(t, *, instance=71, side=3, unit=True, **kwargs):
+        units = [dict(cid=CID, data_uid=301, instance_uid=instance, player_side=side)] if unit else []
+        return consume(meter, t, scoped_presence=dict(frame=t*30, game_time=t, units=units), **kwargs)
+
+    def row(result):
+        return next(iter(player(result, 3)['statistics']['rows'].values()))
+
+    point(0)
+    result = point(2, events=[activation(1, 1), hit(2, 3, 2, 100)])
+    local = row(result)
+    assert local['observed_presence_seconds'] == 2
+    assert local['observed_skill_active_seconds'] == 1
+    assert local['observed_skill_coverage'] == .5
+    assert 'observed_presence_seconds' not in next(iter(player(result, 2)['statistics']['rows'].values()))
+    assert row(point(3, instance=72))['observed_presence_seconds'] == 2
+    assert row(point(4, side=4))['observed_presence_seconds'] == 2
+    point(5)
+    assert row(point(11))['observed_presence_seconds'] == 2
+    point(12, unit=False)
+    assert row(point(13))['observed_presence_seconds'] == 2
+    assert 'observed_presence_seconds' not in row(point(14, native=context(14, phase=5)))
+    assert row(point(15, native=context(15, phase=5)))['observed_presence_seconds'] == 1
+
+def test_cold_presence_has_duration_without_certifying_an_unknown_skill_window():
+    meter = MultiplayerBattleStatistics()
+    for t in (10, 11):
+        result = consume(meter, t, scoped_presence=dict(frame=t*30, game_time=t,
+            units=[dict(cid=CID, data_uid=301, instance_uid=99, player_side=3)]))
+    row = next(iter(player(result, 3)['statistics']['rows'].values()))
+    assert row['observed_presence_seconds'] == 1
+    assert 'observed_skill_coverage' not in row
+    assert not row['skill_coverage_complete'] and row['skill_active_seconds'] is None

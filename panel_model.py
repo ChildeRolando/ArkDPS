@@ -571,7 +571,8 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
         identity = {key: row[key] for key in (
             'name', 'present', 'sources', 'presence_seconds', 'presence_complete',
             'skill_active_seconds', 'skill_coverage_complete', 'skill_window_count',
-            'skill_seen') if key in row}
+            'observed_presence_seconds', 'observed_skill_active_seconds',
+            'observed_skill_coverage', 'skill_timed_presence_seconds', 'skill_seen') if key in row}
         rows[owner] = {
             **scoped, **identity,
             'counter_snapshot_complete': scoped.get('counter_snapshot_complete') is True,

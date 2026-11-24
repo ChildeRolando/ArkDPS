@@ -40,6 +40,17 @@ function modifierPairs(f,hostile){
  }
  const events=vm.runInContext('queue',f.context);assert.equal(events.length,hostile?0:20);return events;
 }
+check('late_event_does_not_blind_following_defense_or_assist_events',()=>{
+ for(const phase of [4,5]){
+  const f=world();f.write(f.machine.add(0x5c),phase);f.mark();
+  f.clock(30,4294967296n);
+  assert.equal(f.stamp({frame:0,game_time:0}).native_autochess_scope.status,'unknown');
+  const next=f.stamp({frame:30,game_time:1}).native_autochess_scope;
+  assert.equal(next.status,'available');assert.equal(next.phase,phase);
+  f.write(f.players[2][1].add(0x18),f.text('changed-account'));
+  assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
+ }
+});
 for(const roles of [32,40]){
  check('warm_'+roles+'_role_full_packet_record_and_ack_equivalence',()=>equivalent(f=>{
   const first=f.mark();assert.equal(first.native_autochess_context.memberships.length,roles);
@@ -200,6 +211,23 @@ check('busy_defense_and_assist_can_mark_and_drain_when_one_scalar_sweep_outlasts
    assert.equal(batch.events.length,20);
    assert.equal(f.context.rpc.exports.ackEvents(mark.sequence).acknowledged,(i+1)*20);
   }
+ }
+});
+check('warm_crossed_mark_keeps_independently_verified_event_scope',()=>{
+ for(const phase of [4,5]){
+  const f=world();f.write(f.machine.add(0x5c),phase);f.mark();
+  const body=vm.runInContext('nativeAutoBodyCache.body',f.context);
+  const validate=body.read.validate;
+  let moved=false;
+  body.read.validate=()=>{
+   validate();
+   if(!moved){moved=true;f.clock(30,4294967296n);}
+  };
+  assert.equal(f.mark().retry,true);
+  const scope=f.stamp({frame:30,game_time:1}).native_autochess_scope;
+  assert.equal(scope.status,'available');assert.equal(scope.phase,phase);
+  f.write(f.players[2][1].add(0x18),f.text('changed-account'));
+  assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
  }
 });
 check('first_body_guard_mismatch_falls_back_to_full_parse',()=>{

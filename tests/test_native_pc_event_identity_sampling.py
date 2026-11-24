@@ -145,3 +145,34 @@ def test_omitted_witness_candidate_still_needs_independent_event_identity(tmp_pa
         assert value['native_snapshot_witnesses']['roster']['status'] == 'not_requested'
         assert commits == [0, 4]
     assert 'roster' not in calls and 'presence' not in calls and 'actions' not in calls
+
+@pytest.mark.parametrize('phase,players,expected', [(4, 4, True), (5, 2, True), (4, 1, False), (3, 4, False)])
+def test_scoped_presence_has_its_own_budget_and_never_starves_enemy(monkeypatch, phase, players, expected):
+    calls = readers(monkeypatch)
+    collector = native.NativePcCollector(None)
+    mark = dict(frame=30, game_time=1., native_stage_id=AUTO, native_identity=ROOTS,
+                native_autochess_context=dict(phase=phase, status='available', players=[{}]*players))
+    scene = dict(frame=30, game_time=1., battle_state=2, stage_id=AUTO, stage_status='available',
+                 battle_controller=int(ROOTS['controller'],16), battle_logger=int(ROOTS['logger'],16),
+                 battle_stats=int(ROOTS['stats'],16), level_data=int(ROOTS['level'],16))
+    for _ in range(3):
+        collector._capture(None, scene, event_identity_mark=mark)
+    assert calls.count('presence') == int(expected)
+    assert calls.count('enemy') == 1
+    assert 'roster' not in calls
+
+def test_local_mode_scoped_presence_excludes_other_players_before_publication(monkeypatch):
+    readers(monkeypatch)
+    units = [dict(data_uid=i, id=CID, player_side=i) for i in (2, 3)]
+    monkeypatch.setattr(native, 'capture_presence', lambda *_: dict(presence_status='available',
+        presence=dict(entities=units)))
+    collector = native.NativePcCollector(None)
+    collector._next_enemy = float('inf')
+    mark = dict(frame=30, game_time=1., native_stage_id=AUTO, native_identity=ROOTS,
+        native_autochess_context=dict(phase=5, status='available', players=[{}, {}],
+            collection_mode='local', self_player_index=3,
+            memberships=[dict(data_uid=i, cid=CID, player_side=i, player_index=i) for i in (2, 3)]))
+    scene = dict(frame=30, game_time=1., battle_state=2, stage_id=AUTO, stage_status='available',
+        battle_controller=int(ROOTS['controller'],16), battle_logger=int(ROOTS['logger'],16),
+        battle_stats=int(ROOTS['stats'],16), level_data=int(ROOTS['level'],16))
+    assert collector._capture(None, scene, event_identity_mark=mark)['presence']['entities'] == [units[1]]

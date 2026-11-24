@@ -524,7 +524,9 @@ function stampAutoChessClock(when){
   }
   if(!cached||Object.keys(before).some(k=>before[k]!==cached.identity[k]))throw new Error('AutoChess scope cache unavailable');
   const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
-  if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time)throw new Error('AutoChess event clock mismatch');
+  if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time){
+   unknown('AutoChess event clock mismatch');return;
+  }
   const {phase:phaseAddress,round:roundAddress}=cached.addresses;
   validateScopeStage(nativeAutoStage,before.level,stagePointer);
   validateScopeGuards(cached.scopeGuards);
@@ -535,8 +537,10 @@ function stampAutoChessClock(when){
   if(phaseAddress.readS32()!==phase||roundAddress.readS32()!==round||
      !nativeAutoStage.stageAddress.readPointer().equals(stagePointer))throw new Error('AutoChess changed during read');
   const after=currentNativeIdentity();
-  if(!after||Object.keys(before).some(k=>before[k]!==after[k])||clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed)
-   throw new Error('AutoChess event scope changed');
+  if(!after||Object.keys(before).some(k=>before[k]!==after[k]))throw new Error('AutoChess event scope changed');
+  if(clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed){
+   unknown('AutoChess event scope changed');return;
+  }
   const scope_key=autoScope(cached.roots,phase,round,frame,fixed,cached.fingerprint,cached.headerKey);
   when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,
    frame,game_time:when.game_time,scope_key,phase,round,collection_mode:autoCollectionMode(scope_key,phase)};
@@ -675,7 +679,9 @@ function nativeBinding(prepared=null){
     // Save only a candidate for readAutoChessBody's TWO fresh validation
     // passes. A slow discovery spanning a tick cannot publish members or
     // filter events. Repeating the full discovery would starve every retry.
-    nativeAutoCache=null;
+    // A crossed tick rejects this sample. If this is the same previously
+    // committed guard plan, later events still perform both live validations.
+    if(!auto.scopeGuards||nativeAutoCache?.scopeGuards!==auto.scopeGuards)nativeAutoCache=null;
     nativeAutoOwners=null;
     nativeAutoBodyCache={key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,
      frame:endFrame,fixed:endFixed,body:auto,prepareBeforeClock:true};

@@ -114,6 +114,7 @@ class NativePcCollector:
 
     def __init__(self, game_root, *, probe_factory=None, collect_actions=True, event_identity_only=False):
         self.game_root = Path(game_root).expanduser() if game_root else None
+        self._next_scoped_presence = float('-inf')
         self.probe_factory = probe_factory or NativePcBattleProbe
         self.collect_actions = collect_actions
         self.event_identity_only = event_identity_only
@@ -363,6 +364,31 @@ class NativePcCollector:
             fields.update(capture_game_flow(read, context))
             return fields
         now = time.monotonic()
+        opening = (event_identity_mark or {}).get('native_autochess_context') or {}
+        if (event_identity and bound and context.get('battle_state') == 2
+                and opening.get('phase') in (4, 5) and opening.get('status') == 'available'
+                and isinstance(opening.get('players'), list) and len(opening['players']) > 1
+                and now >= self._next_scoped_presence
+                and self._next_scoped_presence < self._next_enemy):
+            # One optional read per second. A rejected tick must get a cheap
+            # retry, and a presence sample never delays the next enemy deadline.
+            try:
+                fields.update(capture_presence(read, context))
+            finally:
+                self._next_scoped_presence = time.monotonic() + 1.0
+            presence = fields.get('presence')
+            if opening.get('collection_mode') == 'local' and presence:
+                self_index = opening.get('self_player_index')
+                members = opening.get('memberships') or ()
+                local = {(m['data_uid'], m['cid'], m['player_side']) for m in members
+                         if isinstance(m, dict) and type(self_index) is int
+                         and type(m.get('player_index')) is int and m['player_index'] == self_index
+                         and type(m.get('data_uid')) is int and isinstance(m.get('cid'), str)
+                         and type(m.get('player_side')) is int}
+                presence['entities'] = [u for u in presence['entities']
+                                        if (u['data_uid'], u['id'], u['player_side']) in local]
+            fields.update(capture_game_flow(read, context))
+            return fields
         enemy_due = now >= self._next_enemy
         if enemy_due:
             self._stage_optional(scope)
@@ -503,6 +529,17 @@ class NativePcCollector:
             sample['native_window_guard'] = deepcopy(raw['native_window_guard'])
         if event_candidate:
             sample['native_counter_scope'] = 'events_only'
+            if raw.get('presence_status') in ('available', 'unavailable'):
+                presence = raw.get('presence') or {}
+                units = presence.get('entities')
+                point = None
+                if (raw.get('presence_status') == 'available'
+                        and presence.get('scope') == 'unit_manager_characters_membership'
+                        and isinstance(units, list)):
+                    point = [dict(cid=u['id'], data_uid=u['data_uid'], instance_uid=u['instance_uid'],
+                                  player_side=u['player_side']) for u in units if u['inited'] and u['borned']
+                             and not u['is_disappeared'] and not u['is_token']]
+                sample['scoped_presence'] = dict(frame=raw['frame'], game_time=raw['game_time'], units=point)
             sample['native_snapshot_witnesses'] = {
                 key: dict(status=raw.get(f'{key}_status'), reason=raw.get(f'{key}_reason'))
                 for key in ('actor_rows', 'roster')}
