@@ -52,6 +52,9 @@ internal static class NativeBackendSettingsTests
             window.NativeEventFeed.Text = "";
             window.Navigate("settings").GetAwaiter().GetResult();
             var settingsGrid = (Grid)window.SettingsPage.Content;
+            Check("settings exposes vertical scrolling while keeping horizontal layout within the viewport",
+                window.SettingsPage.VerticalScrollBarVisibility == ScrollBarVisibility.Auto &&
+                window.SettingsPage.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled);
             var applyBar = settingsGrid.Children.OfType<Border>().Single(card => Grid.GetRow(card) == 2);
             var displayCard = settingsGrid.Children.OfType<Border>().Single(card => Grid.GetRow(card) == 3);
             var diagnosticsCard = settingsGrid.Children.OfType<Border>().Single(card => Grid.GetRow(card) == 4);

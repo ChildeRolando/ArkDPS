@@ -2774,7 +2774,16 @@ public partial class MainWindow
                 checks.Add(theme+" frozen selected history survives search and refresh");
             }
             await Navigate("settings");await Settle();
-            Require(!HasVisibleScrollbar(this), "settings displayed a scrollbar");
+            Require(SettingsPage.VerticalScrollBarVisibility == ScrollBarVisibility.Auto &&
+                SettingsPage.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled &&
+                SettingsPage.ScrollableWidth <= 1, "settings scrolling policy or horizontal layout is invalid");
+            Require(SettingsPage.ComputedVerticalScrollBarVisibility ==
+                (SettingsPage.ScrollableHeight > 0 ? Visibility.Visible : Visibility.Collapsed),
+                "settings vertical scrollbar does not reflect content overflow");
+            SettingsPage.ScrollToEnd();await Settle();
+            Require(SettingsPage.VerticalOffset >= SettingsPage.ScrollableHeight - 1,
+                "settings lower sections cannot be reached");
+            SettingsPage.ScrollToTop();await Settle();
             Screenshot.Window(this,Path.Combine(output,theme+"-settings.png"));await Navigate("live");
             checks.Add(theme+" theme switch keeps HUD HWND, values and source");
         }
