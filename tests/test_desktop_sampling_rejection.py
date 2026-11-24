@@ -198,7 +198,8 @@ def run_worker(tmp_path, monkeypatch, actions, *, platform='mumu'):
 
     monkeypatch.setattr(bridge, 'ROOT', tmp_path)
     monkeypatch.setattr(bridge, 'CollectionSession', Session)
-    monkeypatch.setitem(sys.modules, 'native_pc_collector', SimpleNamespace(NativePcCollector=lambda *a, **kw: None))
+    monkeypatch.setitem(sys.modules, 'native_pc_collector',
+                        SimpleNamespace(NativePcCollector=lambda *a, **kw: SimpleNamespace(diagnostics=diagnostic)))
     monkeypatch.setattr(bridge, 'resolve_configured', lambda _: SimpleNamespace(
         adb_path='owned-fixture', serial='owned-fixture', diagnostics=diagnostic))
     worker.request(config, False)
