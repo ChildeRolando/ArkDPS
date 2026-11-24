@@ -118,7 +118,7 @@ public partial class MainWindow : Window
             ConnectionPlatform.IsEnabled = NativeEventBackend.IsEnabled = false;
             NativeHookNotes.Visibility = Visibility.Visible;
             SystemTitle.TextTrimming = ModeLabel.TextTrimming = TextTrimming.CharacterEllipsis;
-            SystemTitle.ToolTip = "PC 自研事件采集";
+            SystemTitle.ToolTip = "PC ArkPie 事件采集";
         }
         CompactTrend.Bind(trendModel);
         OperatorTrend.Bind(trendModel);
@@ -241,9 +241,9 @@ public partial class MainWindow : Window
 
         NativeEventBackend.SelectedIndex = 1;
         if (FridaEventNotes.Visibility != Visibility.Collapsed || NativeEventFeedFields.Visibility != Visibility.Visible)
-            throw new IOException("PC 的自研后端设置显示错误。");
+            throw new IOException("PC 的 ArkPie 后端设置显示错误。");
         if (EffectiveConnectionConfig.Text("native_pc_event_backend") == "native" && PcReadiness.Active)
-            throw new IOException("自研后端显示了 Frida 的启动状态。");
+            throw new IOException("ArkPie 后端显示了 Frida 的启动状态。");
         Screenshot.Window(this, Path.Combine(App.StateDirectory, "wpf-internal-settings.png"));
 
         ConnectionPlatform.SelectedIndex = 0;
@@ -359,6 +359,8 @@ public partial class MainWindow : Window
         string reconnect=UsingNativePc ? "重新连接" : "重连观察者";
         MarkDataStale("disconnected",label+" · 点击"+reconnect);
         HistoryNotice.Text="显示已载入的战绩 · 点击"+reconnect+"恢复更新";
+        ConnectionStatusSummary.Text=Status.Text;
+        ConnectionObserverStatus.Text=message;
         ConnectionDiagnostics.Text=Status.Text+"\n"+message;
     }
     internal void ApplyState(JsonElement state)
@@ -432,9 +434,14 @@ public partial class MainWindow : Window
         MultiplayerPage.Update(MultiplayerActive ? state.Get("multiplayer") : default, scopeUnverified ? scopeNotice : "");
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
+        ConnectionStatusSummary.Text=SamplingRejected ? state.Text("status_text")
+            : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text");
+        ConnectionObserverStatus.Text=state.Text("event_text");
+        ConnectionAppliedBackend.Text=UsingNativePc
+            ? "已应用后端 · "+(EffectiveConnectionConfig.Text("native_pc_event_backend")=="native" ? "ArkPie" : "Frida") : "";
         ConnectionDiagnostics.Text=string.Join("\n",new[] {
             SamplingRejected ? state.Text("status_text") : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text"),state.Text("event_text"),
-            UsingNativePc ? "已应用后端 · "+(EffectiveConnectionConfig.Text("native_pc_event_backend")=="native" ? "自研" : "Frida") : "",
+            UsingNativePc ? "已应用后端 · "+(EffectiveConnectionConfig.Text("native_pc_event_backend")=="native" ? "ArkPie" : "Frida") : "",
             UsingNativePc ? state.Get("native_pc_bootstrap").Text("error") : "",
             "版本 "+diag.Text("version_actual")+" / 认证 "+diag.Text("version_expected"),
             diag.Text("message"),diag.Text("error"),diag.Text("code")
@@ -703,7 +710,7 @@ public partial class MainWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         if (App.NativeHookCandidate)
         {
-            DetectionNote.Text="PC 自研实时事件采集。应用设置后等待监听就绪，再启动游戏。";
+            DetectionNote.Text="PC ArkPie 实时事件采集。应用设置后等待监听就绪，再启动游戏。";
             return;
         }
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
@@ -840,8 +847,12 @@ public partial class MainWindow : Window
         bool stackedSettings = width < 1000;
         SettingsRightColumn.Width = stackedSettings ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
         Grid.SetColumn(ConnectionEventForm, stackedSettings ? 0 : 1);
-        Grid.SetRow(ConnectionEventForm, stackedSettings ? 2 : 1);
-        ConnectionForm.Margin = new Thickness(0, 0, stackedSettings ? 0 : 12, 12);
+        Grid.SetRow(ConnectionEventForm, stackedSettings ? 1 : 0);
+        SettingsConnectionColumn.Margin = new Thickness(0, 0, stackedSettings ? 0 : 12, 0);
+        SettingsActionColumn.Width = stackedSettings ? new GridLength(0) : GridLength.Auto;
+        Grid.SetColumn(SettingsApplyActions, stackedSettings ? 0 : 1);
+        Grid.SetRow(SettingsApplyActions, stackedSettings ? 1 : 0);
+        SettingsApplyActions.Margin = new Thickness(stackedSettings ? 0 : 24, stackedSettings ? 12 : 0, 0, 0);
     }
     private void ArrangeOverview(bool narrowOverview, bool twoMetricColumns)
     {
@@ -1253,6 +1264,8 @@ public partial class MainWindow : Window
                 string progress=automatic ? $"正在自动重{reconnect} · {attempt}/{MaxAutomaticRecoveryAttempts}" : "正在重"+reconnect;
                 MarkDataStale("reconnecting",progress+" · 保留最后有效记录");
                 HistoryNotice.Text=Status.Text;
+                ConnectionStatusSummary.Text=Status.Text;
+                ConnectionObserverStatus.Text=ErrorText.Text;
                 ConnectionDiagnostics.Text=Status.Text+"\n"+ErrorText.Text;
                 if(attempt>1) await Task.Delay(TimeSpan.FromSeconds(attempt-1),stop);
                 try

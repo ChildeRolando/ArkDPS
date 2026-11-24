@@ -27,7 +27,7 @@ from native_pc.internal_entry import HOST_NAME, HOST_PATH
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
 from windows_manifest import verify_executable_manifest
-DEFAULT_VERSION = '1.0.0-rc.38'
+DEFAULT_VERSION = '1.0.0-rc.39'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
@@ -154,12 +154,12 @@ def native_hook_component(files, *, released=False):
 
 def native_hooks_readme(version):
     return (
-        f'ArkDPS {version} · 官服 PC 自研事件启动测试包（实验候选）\n\n'
+        f'ArkDPS {version} · 官服 PC ArkPie 事件启动测试包（实验候选）\n\n'
         '本包仅面向已适配构建的官服 Windows PC，不包含 Frida 客户端、Gadget 或服务端。\n'
         '无需安装 Python 或 .NET；不支持 MuMu、合作事件文件或自动更新。\n'
         '单独解压到新的可写目录，不要覆盖标准版；不要复制或继承旧 runtime、配置或战绩。\n'
         '先启动 ArkDPS.Desktop.exe，允许正常的管理员权限提示，在设置中填写游戏目录。\n'
-        '确认界面显示「自研监听已就绪，请启动游戏」后，再正常启动游戏。\n'
+        '确认界面显示「ArkPie 监听已就绪，请启动游戏」后，再正常启动游戏。\n'
         '此时仅启动监听已建立，尚未预载 DLL 或连接采集；不要等待 DLL ready 才启动游戏。\n'
         '若游戏已开，请先正常退出，再按此顺序重开。\n'
         '退出测试时先正常退出游戏，再退出 ArkDPS；不要强制结束相关进程。\n'
@@ -537,13 +537,13 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         if with_events else
         '本包仅包含累计快照。官服 PC 请填写 Arknights.exe 所在目录，并关闭「启用观察者」。\n')
     if released_hooks:
-        pc_instructions += ('PC 事件后端可选择 Frida 或自研；若遇“检测到环境存在异常”报错，选择自研。\n'
+        pc_instructions += ('PC 事件后端可选择 Frida 或 ArkPie；若遇“检测到环境存在异常”报错，选择 ArkPie。\n'
                             '切换后端后应用设置，等监听就绪，再正常重启游戏。\n')
     if with_native_events:
         pc_instructions = (
             '官服 PC 请填写 Arknights.exe 所在目录，然后选择「PC 事件后端」。\n'
             'Frida：先启动 ArkDPS，按连接提示启动或重启游戏。\n'
-            '自研：指定合作来源写入的 JSONL 文件。事件不可用时继续显示累计快照。\n'
+            'ArkPie：指定合作来源写入的 JSONL 文件。事件不可用时继续显示累计快照。\n'
             '合作来源写入工具：.\\python\\python.exe -I -B -m native_pc.live_event_bridge --help\n'
             '无界面采集参数：.\\python\\python.exe -I -B .\\collector\\app.py --help\n'
         )
@@ -571,7 +571,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         '保留旧目录与备份。需要手动回退时，先退出新版，再启动旧目录中的程序。\n')
     if internal_backend:
         readme = (
-            f'ArkDPS {version} · 自研事件后端内部候选\n\n'
+            f'ArkDPS {version} · ArkPie 事件后端内部候选\n\n'
             '本包使用自有测试数据验证普通关、卫戍和战绩。\n'
             '从包根目录运行以下 PowerShell 命令，可将 normal 换成 autochess。\n\n'
             '桌面\n'

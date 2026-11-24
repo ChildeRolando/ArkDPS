@@ -161,7 +161,7 @@ class NativeHookRuntime:
     def _state(self, status, code=None, error=None):
         with self._condition:
             if self._cancel.is_set() and status not in (RuntimeState.STOPPING, RuntimeState.CLEANUP_PENDING, RuntimeState.CLOSED):
-                raise InterruptedError('自研 PC 启动已取消')
+                raise InterruptedError('ArkPie PC 启动已取消')
             self.status, self.code, self.error = status, code, error
             self._condition.notify_all()
 
@@ -245,7 +245,7 @@ class NativeHookRuntime:
 
     def _check_cancelled(self):
         if self._cancel.is_set():
-            raise InterruptedError('自研 PC 启动已取消')
+            raise InterruptedError('ArkPie PC 启动已取消')
 
     def _files(self):
         result = []
@@ -272,7 +272,7 @@ class NativeHookRuntime:
         build, _ = self.build_check(self.game_root)
         if (build.get('known_build') is not True or build.get('amd64') is not True
                 or build.get('source_build') != access.BUILD_ID):
-            raise RuntimeFailure('native_unsupported_build', '自研实时采集只接受指纹匹配的官服 Windows x64 构建')
+            raise RuntimeFailure('native_unsupported_build', 'ArkPie 实时采集只接受指纹匹配的官服 Windows x64 构建')
         if self._files() != before:
             raise RuntimeFailure('native_build_changed', 'PC 客户端文件正在变化，请完成更新后重试')
         material_started = time.perf_counter()
@@ -283,7 +283,7 @@ class NativeHookRuntime:
             with self._condition:
                 self._material_preflight_seconds = duration if math.isfinite(duration) else None
         if material is None:
-            raise RuntimeFailure('native_material_not_ready', '自研组件完整预校验未返回有效物料')
+            raise RuntimeFailure('native_material_not_ready', 'ArkPie 组件完整预校验未返回有效物料')
         if self._files() != before:
             raise RuntimeFailure('native_build_changed', 'PC 客户端文件在组件预校验期间变化')
         api = self.api or access.WindowsApi()
@@ -367,7 +367,7 @@ class NativeHookRuntime:
         with self._condition:
             self._check_cancelled()
             if self.status == RuntimeState.CLOSED:
-                raise RuntimeError('自研 PC 启动所有者已关闭')
+                raise RuntimeError('ArkPie PC 启动所有者已关闭')
             if self._thread is not None:
                 if self._thread.is_alive():
                     return self
@@ -379,7 +379,7 @@ class NativeHookRuntime:
                 self._thread.start()
             except Exception:
                 self._thread = None
-                self._state(RuntimeState.FAILED, 'watcher_start_failed', '自研 PC 监视器未能启动')
+                self._state(RuntimeState.FAILED, 'watcher_start_failed', 'ArkPie PC 监视器未能启动')
                 raise
         return self
 
@@ -387,7 +387,7 @@ class NativeHookRuntime:
         with self._condition:
             self._check_cancelled()
             if self.status in (RuntimeState.STOPPING, RuntimeState.CLOSED):
-                raise RuntimeError('自研 PC 启动正在关闭')
+                raise RuntimeError('ArkPie PC 启动正在关闭')
             self._retry_requested = True
             if not self._observers:
                 self._material_ready = False
@@ -411,13 +411,13 @@ class NativeHookRuntime:
             while True:
                 self._check_cancelled()
                 if cancelled is not None and cancelled():
-                    raise InterruptedError('自研 PC 启动等待已取消')
+                    raise InterruptedError('ArkPie PC 启动等待已取消')
                 if self.status == RuntimeState.READY and self._lease is not None and self._material_ready:
                     if not self._alive(self._lease):
                         raise RuntimeFailure('process_changed', '已准备的 PC 进程实例已退出或变化')
                     return dict(self._lease)
                 if self.is_failed:
-                    raise RuntimeFailure(self.code or 'startup_failed', self.error or '自研 PC 启动失败')
+                    raise RuntimeFailure(self.code or 'startup_failed', self.error or 'ArkPie PC 启动失败')
                 remaining = deadline - self.clock.monotonic()
                 if remaining <= 0:
                     raise TimeoutError('请保持 ArkDPS 开启，再正常启动新的官服 PC 游戏实例')
@@ -444,7 +444,7 @@ class NativeHookRuntime:
                     or self._armed is None or birth[1] <= self._armed or birth in self._attempted):
                 return  # Enumeration belongs to one released-owner watch generation.
             if not self._material_ready or self._material is None:
-                raise RuntimeFailure('native_material_not_ready', '自研组件完整预校验尚未就绪')
+                raise RuntimeFailure('native_material_not_ready', 'ArkPie 组件完整预校验尚未就绪')
             self._attempted.add(birth)
             self._lease = dict(pid=birth[0], created=birth[1], source_build=access.BUILD_ID)
             candidate = self.prepared_factory(self.game_root, root=self.collector_root, runtime_dir=self.runtime_dir,

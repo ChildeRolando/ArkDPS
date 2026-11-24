@@ -174,8 +174,8 @@ def test_configured_pc_provider_ready_before_baseline_is_not_snapshot_only(tmp_p
     state, _, _ = run_worker(tmp_path, monkeypatch, factory=trusted_factory, publish=False)
     snapshot = state.snapshot()
     assert snapshot['observer_status'] == 'ready'
-    assert snapshot['event_text'] == '事件已就绪 · 等待同帧基线'
-    assert '正在建立' in snapshot['panels'][0]['rate_reason']
+    assert snapshot['event_text'] == '观察者已就绪 · 等待战斗样本'
+    assert '观察者已就绪，等待战斗事件' in snapshot['panels'][0]['rate_reason']
     assert '缺少接敌速率' not in snapshot['panels'][0]['rate_reason']
 
 

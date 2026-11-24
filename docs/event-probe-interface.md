@@ -21,7 +21,7 @@ MuMu 与官服 PC 的探针负责采集和证明事件；它们将相同口径�
 
 卫戍 playing 状态的事件专用采样共用 `verified_autochess_event_window`，平台只解析独立快照及观察者原始身份、时钟证据。
 PC 的当次 `native_window_guard` 与 MuMu 原 `guard` 不互相冒充；验证窗口后仅投影 `events_only` 样本，独立快照锚点保留且累计 rows/global 清空。
-普通关卡和终局仍走原屏障。采集后端选择不进入伤害、父子结算或技能公式；Frida 与自研继续运行同一份共同 JS。
+普通关卡和终局仍走原屏障。采集后端选择不进入伤害、父子结算或技能公式；Frida 与 ArkPie 继续运行同一份共同 JS。
 
 公开 profile 的能力字段必须为布尔值；`raw_replay` 与 `strict_batches` 必须同时启用或同时关闭，以保持原始记录存储与重放比较一致。注册和解析都拒绝不一致组合，避免静默跳过冲突重放，或把同一重放的不同存储格式误判为冲突。
 

@@ -215,7 +215,7 @@ def test_cli_selects_native_hooks_without_frida(tmp_path, monkeypatch):
 
 def test_native_hooks_readme_does_not_migrate_old_state():
     text = package.native_hooks_readme('1.2.3')
-    for phrase in ('启动测试', '先启动 ArkDPS', '自研监听已就绪，请启动游戏', '尚未预载 DLL',
+    for phrase in ('启动测试', '先启动 ArkDPS', 'ArkPie 监听已就绪，请启动游戏', '尚未预载 DLL',
                    '再正常启动游戏', '不包含 Frida', '单独', '不要复制',
                    '性能尚未验收', '卫戍', 'partial', '不保证', '未签名', '不要关闭', '不自动上传'):
         assert phrase in text

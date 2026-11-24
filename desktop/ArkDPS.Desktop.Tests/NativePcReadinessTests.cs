@@ -65,7 +65,7 @@ internal static class NativePcReadinessTests
         authenticated["native_pc_bootstrap"]!["endpoint_owned"] = true;
         authenticated["native_pc_bootstrap"]!["expected_resident"] = true;
         authenticated["native_pc_bootstrap"]!["lease"] = new JsonObject { ["status"] = "ready" };
-        Check("authenticated endpoint still explains observer preparation", Read(authenticated) is { Phase: "connected", Label: "PC 事件组件已连接，正在准备采集" });
+        Check("authenticated endpoint still explains observer preparation", Read(authenticated) is { Phase: "connected", Label: "Frida · 正在准备采集" });
         authenticated["observer_status"] = "waiting_game_init";
         Check("authenticated initialization remains distinct from battle wait", Read(authenticated).Label.Contains("等待游戏初始化"));
         authenticated["observer_status"] = "ready";
@@ -87,10 +87,10 @@ internal static class NativePcReadinessTests
         var nativeArmed = NativeState("waiting_for_process", true);
         Check("native watch has its own explicit launch prompt", Read(nativeArmed).Label == NativePcReadiness.NativeArmed);
         var nativeLoading = NativeState("loading", true);
-        Check("native early load has no Frida authentication claim", Read(nativeLoading) is { Phase: "loading", Label: "正在预载自研 PC 组件，请稍候" });
+        Check("native early load has no Frida authentication claim", Read(nativeLoading) is { Phase: "loading", Label: "ArkPie · 正在连接游戏，请稍候" });
         var nativeRestart = NativeState("waiting_for_process", true);
         nativeRestart["native_pc_bootstrap"]!["code"] = "restart_required";
-        Check("native restart instruction retains its real watch", Read(nativeRestart).Phase == "restart_required");
+        Check("native restart instruction retains its real watch", Read(nativeRestart) is { Phase: "restart_required", Label: NativePcReadiness.Restart });
         foreach (var field in new[] { "armed_filetime", "thread_alive", "cancelled" })
         {
             var missing = (JsonObject)nativeArmed.DeepClone();
@@ -101,7 +101,7 @@ internal static class NativePcReadinessTests
         nativeReady["native_pc_bootstrap"]!["expected_resident"] = true;
         nativeReady["native_pc_bootstrap"]!["ready_generation"] = 1;
         nativeReady["native_pc_bootstrap"]!["lease"] = new JsonObject { ["pid"] = 42, ["created"] = 134398900000000001, ["source_build"] = "verified-build" };
-        Check("native prepared does not claim JS observer ready", Read(nativeReady) is { Phase: "connected", Label: "自研 PC 组件已预载，正在准备采集" });
+        Check("native prepared does not claim JS observer ready", Read(nativeReady) is { Phase: "connected", Label: "ArkPie · 正在准备采集" });
         foreach (var coverage in new[] { "recording", "gap", "finished" })
         {
             nativeReady["observer_status"] = coverage;
@@ -109,7 +109,7 @@ internal static class NativePcReadinessTests
             Check("battle coverage supersedes completed preload: " + coverage, !Read(nativeReady).Active);
         }
         nativeReady["observer_status"] = "waiting_game_init";
-        Check("native VM wait is explicit", Read(nativeReady).Label == "自研 PC 组件已预载，等待游戏初始化");
+        Check("native VM wait is explicit", Read(nativeReady).Label == "ArkPie · 等待游戏初始化");
         nativeReady["native_pc_bootstrap"]!["ready_generation"] = 0;
         Check("native ready phase without a real generation is not prepared", Read(nativeReady).Label == NativePcReadiness.NativePreparing);
         nativeReady["native_pc_bootstrap"]!["ready_generation"] = true;
@@ -117,8 +117,8 @@ internal static class NativePcReadinessTests
         nativeReady["observer_status"] = "ready";
         Check("native observer READY is an independent proof", !Read(nativeReady).Active);
         var nativeFailed = NativeState("cleanup_pending", true);
-        nativeFailed["native_pc_bootstrap"]!["error"] = "自研资源待清理";
-        Check("native ownership failure is not hidden", Read(nativeFailed) is { IsError: true, Label: "自研资源待清理" });
+        nativeFailed["native_pc_bootstrap"]!["error"] = "ArkPie 资源待清理";
+        Check("native ownership failure is not hidden", Read(nativeFailed) is { IsError: true, Label: "ArkPie 资源待清理" });
         var cooperative = NativeState();
         ((JsonObject)cooperative["native_pc_bootstrap"]!).Remove("provider");
         Check("cooperative native backend never inherits Frida bootstrap labels", !Read(cooperative).Active);

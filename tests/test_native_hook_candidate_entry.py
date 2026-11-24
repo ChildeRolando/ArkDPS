@@ -89,7 +89,7 @@ def test_desktop_effective_defaults_leave_saved_config_bytes_unchanged(candidate
     assert path.read_bytes() == original
     view = state.snapshot()
     assert view['native_hook_candidate'] == PROFILE
-    assert any('固定使用自研 PC' in warning for warning in view['warnings'])
+    assert any('固定使用 ArkPie PC' in warning for warning in view['warnings'])
     assert any('此目录已有连接设置' in warning for warning in view['warnings'])
 
 
@@ -179,7 +179,8 @@ def test_candidate_ui_is_compile_gated_and_never_enables_updates_or_frida():
     assert '!App.CooperativeEventPackage && !App.NativeHookCandidate' in window
     assert 'App.NativeHookCandidate ? "effective_connection_config"' in window
     assert 'ConnectionPlatform.IsEnabled = NativeEventBackend.IsEnabled = false' in window
-    assert '自研（若遇“检测到环境存在异常”报错选择此选项）' in xaml
+    assert 'Content="ArkPie" Tag="native"' in xaml
+    assert '遇到“检测到环境存在异常”报错时，选择 ArkPie。' in xaml
     assert '自研 PC 启动测试候选' not in xaml and '性能、稳定性和卫戍完整交接尚未验证' not in xaml
     assert 'bool nativeHooks =' in app_source and 'if (nativeHooks) VerifyNativeHookPackage' in app_source
     assert 'official-pc' in app_source

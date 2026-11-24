@@ -67,11 +67,11 @@ _SHA256 = re.compile(r'[0-9a-f]{64}')
 def _portable_bytes(package, name, *, limit=64 * 1024 * 1024):
     path = package.joinpath(*PurePosixPath(name).parts)
     if not path.resolve().is_relative_to(package) or not path.is_file():
-        raise RuntimeError('自研 PC 组件缺件或路径越界。')
+        raise RuntimeError('ArkPie PC 组件缺件或路径越界。')
     with path.open('rb') as stream:
         data = stream.read(limit + 1)
     if len(data) > limit:
-        raise RuntimeError('自研 PC 组件文件超出大小限制。')
+        raise RuntimeError('ArkPie PC 组件文件超出大小限制。')
     return data
 
 
@@ -110,7 +110,7 @@ def validate_native_hook_payload(binary, *, source_dir, license_dir=None, build_
         manifest = _portable_json(manifest_bytes)
         if (not isinstance(manifest.get('sha256'), str) or _SHA256.fullmatch(manifest['sha256']) is None
                 or manifest['sha256'] != sha256(read(binary)).hexdigest()):
-            raise RuntimeError('自研实时 DLL 与构建清单摘要不一致，请重新构建。')
+            raise RuntimeError('ArkPie 实时 DLL 与构建清单摘要不一致，请重新构建。')
         sources = manifest.get('sources')
         if (manifest.get('provider') != PROVIDER or type(manifest.get('protocol')) is not int
                 or manifest['protocol'] != PROTOCOL or not isinstance(sources, dict)
@@ -118,7 +118,7 @@ def validate_native_hook_payload(binary, *, source_dir, license_dir=None, build_
                 or any(not isinstance(sources[name], str) or _SHA256.fullmatch(sources[name]) is None
                        or sha256(read(source_dir / name)).hexdigest() != sources[name]
                        for name in RUNTIME_SOURCES)):
-            raise RuntimeError('自研实时组件源码与构建清单不一致，请重新构建。')
+            raise RuntimeError('ArkPie 实时组件源码与构建清单不一致，请重新构建。')
         if require_distribution_pins:
             if (manifest.get('dependencies') != list(NATIVE_HOOK_DEPENDENCIES)
                     or manifest.get('licenses') != NATIVE_HOOK_LICENSES or license_dir is None):
@@ -130,7 +130,7 @@ def validate_native_hook_payload(binary, *, source_dir, license_dir=None, build_
     except RuntimeError:
         raise
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
-        raise RuntimeError('自研实时组件载荷、构建清单或许可不一致，拒绝加载。') from None
+        raise RuntimeError('ArkPie 实时组件载荷、构建清单或许可不一致，拒绝加载。') from None
 
 
 def _portable_native_hook_binary(root, *, _read_capture=None):
@@ -155,7 +155,7 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
             raise ValueError('invalid release identity')
         component = release.get('native_pc_native_hooks')
         if not isinstance(component, dict):
-            raise RuntimeError('此便携包未包含自研 PC 事件组件。')
+            raise RuntimeError('此便携包未包含 ArkPie PC 事件组件。')
         released = component.get('scope') == 'official-pc'
         if (type(component.get('protocol')) is not int or component['protocol'] != PROTOCOL
                 or component.get('provider') != PROVIDER
@@ -230,7 +230,7 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
     except RuntimeError:
         raise
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
-        raise RuntimeError('自研 PC 组件与便携包清单不一致，拒绝加载。') from None
+        raise RuntimeError('ArkPie PC 组件与便携包清单不一致，拒绝加载。') from None
 
 
 class _Overlapped(ctypes.Structure):
@@ -384,7 +384,7 @@ def native_hook_binary(root, *, _read_capture=None):
     binary = root / 'runtime/native-pc/native-event-runtime' / DLL_NAME
     manifest_path = binary.with_suffix('.build.json')
     if not binary.is_file() or not manifest_path.is_file():
-        raise RuntimeError('请先构建自研实时组件：python native_pc/native_event_runtime/build.py')
+        raise RuntimeError('请先构建 ArkPie 实时组件：python native_pc/native_event_runtime/build.py')
     def read(path):
         with Path(path).open('rb') as stream:
             data = stream.read(64 * 1024 * 1024 + 1)
@@ -667,7 +667,7 @@ class NativeHookEventProbe:
     def __init__(self, collector, remote=None, *, root=None, runtime_dir=None,
                  loader_factory=WindowsDllLoader, pipe_factory=NativePipe, prepared=None):
         if remote is not None:
-            raise ValueError('自研 PC 实时组件只支持本机进程')
+            raise ValueError('ArkPie PC 实时组件只支持本机进程')
         self.collector = collector
         self.root = Path(root) if root else Path(__file__).resolve().parents[1]
         self.runtime_dir = Path(runtime_dir) if runtime_dir else self.root / 'runtime/native-pc/native-hook-sessions'
@@ -703,7 +703,7 @@ class NativeHookEventProbe:
         if (not diagnostics.connection_ok or diagnostics.version_status != VersionStatus.COMPATIBLE
                 or diagnostics.version_actual != BUILD_ID):
             self.status = ObserverStatus.INCOMPATIBLE
-            raise RuntimeError('自研实时采集需要指纹匹配的官服 Windows x64 构建')
+            raise RuntimeError('ArkPie 实时采集需要指纹匹配的官服 Windows x64 构建')
         instance = getattr(process, 'process_instance', None)
         if (type(instance) in (tuple, list) and len(instance) == 2
                 and all(type(value) is int and value > 0 for value in instance)
@@ -722,7 +722,7 @@ class NativeHookEventProbe:
                                             object_pairs_hook=_unique_fields)
                 image_sha256 = sha256(image).hexdigest()
                 if not isinstance(build_manifest, dict) or build_manifest.get('sha256') != image_sha256:
-                    raise RuntimeError('自研实时 DLL 在准备期间改变，请重新构建后重试。')
+                    raise RuntimeError('ArkPie 实时 DLL 在准备期间改变，请重新构建后重试。')
                 assembled, source = _native_source(self.root, self._autochess_enabled)
                 nonce, token = secrets.token_hex(16), secrets.token_hex(32)
                 folder = self.runtime_dir / nonce
@@ -758,7 +758,7 @@ class NativeHookEventProbe:
             if (hello.get('provider') != PROVIDER or type(hello.get('protocol')) is not int
                     or hello['protocol'] != PROTOCOL or not isinstance(hello.get('ready'), dict)
                     or hello['ready'].get('ready') is not True or hello['ready'].get('arch') != 'x64'):
-                raise RuntimeError('自研实时组件握手或架构不匹配')
+                raise RuntimeError('ArkPie 实时组件握手或架构不匹配')
             if not process.process_alive():
                 raise RuntimeError('游戏进程在原生组件初始化期间退出')
             if self._autochess_enabled is not None:

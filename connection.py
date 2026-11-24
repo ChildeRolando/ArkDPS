@@ -281,11 +281,11 @@ def native_event_feed_path(value):
     if value is None or value == '':
         return None
     if not isinstance(value, str) or '\x00' in value:
-        raise ValueError('自研事件输入必须是本地 JSONL 文件的绝对路径')
+        raise ValueError('ArkPie 事件输入必须是本地 JSONL 文件的绝对路径')
     path = Path(value)
     if (not path.is_absolute() or path.drive.startswith('\\') or path.suffix.lower() != '.jsonl'
             or ':' in value[len(path.drive):]):
-        raise ValueError('自研事件输入必须是本地 JSONL 文件的绝对路径')
+        raise ValueError('ArkPie 事件输入必须是本地 JSONL 文件的绝对路径')
     return str(path)
 
 

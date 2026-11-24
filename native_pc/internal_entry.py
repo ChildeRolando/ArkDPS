@@ -32,7 +32,7 @@ def native_hook_package_profile(root):
             or profile.get('experimental') is not True or profile.get('performance_verified') is not False
             or profile.get('autochess_handoff_verified') is not False
             or manifest.get('internal_event_backend') or manifest.get('native_pc_event_backend')):
-        raise ValueError('自研启动候选配置与便携包清单不一致。')
+        raise ValueError('ArkPie 启动候选配置与便携包清单不一致。')
     return dict(profile)
 
 
@@ -44,7 +44,7 @@ def native_hook_candidate_profile(root):
 def validate_native_hook_candidate_connection(profile, config):
     if profile is not None and (config.platform != 'native_pc'
             or config.native_pc_event_backend != 'native' or config.native_pc_event_feed):
-        raise ValueError('此启动测试候选仅支持官服 PC 自研实时采集；不支持 MuMu、Frida 或合作事件文件。')
+        raise ValueError('此启动测试候选仅支持官服 PC ArkPie 实时采集；不支持 MuMu、Frida 或合作事件文件。')
 
 
 def native_hook_candidate_defaults(profile, config):
@@ -61,7 +61,7 @@ def native_hook_candidate_arguments(profile, args):
             or args.native_pc_event_feed or args.frida_remote not in (None, '')
             or args.adb is not None or args.serial is not None or args.arkframework_root is not None
             or args.internal_capture is not None):
-        raise ValueError('此启动测试候选仅支持官服 PC 自研实时采集；不支持 MuMu、Frida、合作文件或内部回放。')
+        raise ValueError('此启动测试候选仅支持官服 PC ArkPie 实时采集；不支持 MuMu、Frida、合作文件或内部回放。')
     args.platform, args.native_pc_event_backend, args.native_pc_event_feed = 'native_pc', 'native', None
 
 
@@ -85,7 +85,7 @@ def _event_host(root, manifest_key, scope):
     else:
         component = manifest.get(manifest_key)
         if not isinstance(component, dict):
-            raise ValueError('此便携包没有自研事件后端。')
+            raise ValueError('此便携包没有 ArkPie 事件后端。')
         from native_pc.internal_event_source import PROTOCOL_VERSION, SOURCE_PROVIDER, SOURCE_VERSION
 
         host = root.parent / HOST_PATH
@@ -97,9 +97,9 @@ def _event_host(root, manifest_key, scope):
                 or component.get('path') != HOST_PATH or component.get('sha256') != expected
                 or not isinstance(expected, str) or not host.is_file()
                 or hashlib.sha256(host.read_bytes()).hexdigest() != expected):
-            raise ValueError('自研事件宿主与便携包清单不一致。')
+            raise ValueError('ArkPie 事件宿主与便携包清单不一致。')
     if not host.is_file():
-        raise ValueError(f'找不到自研事件宿主：{host}')
+        raise ValueError(f'找不到 ArkPie 事件宿主：{host}')
     return host
 
 

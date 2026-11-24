@@ -98,7 +98,11 @@ def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, s
     error = _error_summary(event.error)
     detail = f'（{error}）' if error else ''
     if event.live:
-        if event.status == 'failed':
+        if event.status == 'ready':
+            reason = '接敌数据尚未可用：观察者已就绪，等待战斗事件'
+            hint = '进入战斗并取得有效事件样本后显示接敌数据。'
+            action, label = '', ''
+        elif event.status == 'failed':
             reason = f'接敌数据不可用：事件观察未连接{detail}'
             hint = ('接敌 DPS/HPS 与活跃时间需要事件观察。可以重连观察者，'
                     '或打开连接设置检查 Frida 端点。')

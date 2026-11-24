@@ -46,8 +46,8 @@ class PcEventSource:
                     if (Path(self.collector_root).parent / 'metadata' / 'release.json').is_file():
                         from native_pc.internal_entry import native_hook_package_profile
                         if native_hook_package_profile(self.collector_root) is None:
-                            raise RuntimeError('此便携包缺少自研 PC 采集组件，不从便携包加载。')
-                    raise RuntimeError('自研实时采集需要游戏目录，并须在客户端启动前准备独立原生运行时。')
+                            raise RuntimeError('此便携包缺少 ArkPie PC 采集组件，不从便携包加载。')
+                    raise RuntimeError('ArkPie 实时采集需要游戏目录，并须在客户端启动前准备独立原生运行时。')
 
                 return native_hooks
             opened = False
@@ -55,7 +55,7 @@ class PcEventSource:
             def live_observer(collector, _remote):
                 nonlocal opened
                 if opened:
-                    raise RuntimeError('自研事件输入按战局独立，请选择新战局的 JSONL 并重连。')
+                    raise RuntimeError('ArkPie 事件输入按战局独立，请选择新战局的 JSONL 并重连。')
                 from native_pc.internal_entry import live_native_host
                 from native_pc.live_event_source import LiveNativeEventProbe
                 opened = True

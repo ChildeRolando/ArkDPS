@@ -771,6 +771,16 @@ def test_event_unavailable_explains_engagement_and_never_zero_fills():
     assert '0' not in entry.rate_text
 
 
+def test_ready_observer_waits_for_battle_events_without_a_connection_recovery_action():
+    rows = [src('A', damage=1000, engagement_damage=None)]
+    view = render_panel(engagement_config(), rows, event=EventAvailability('ready'))
+    assert view.rate_available is False
+    assert view.rate_reason == '接敌数据尚未可用：观察者已就绪，等待战斗事件'
+    assert (view.rate_action, view.rate_action_label) == ('', '')
+    assert view.entries[0].rate is None
+    assert view.entries[0].rate_text == '—'
+
+
 def test_event_recovered_engagement_uses_tail_window_and_active_time():
     stats = Statistics('battle', 0, event_coverage=True)
     stats.register_source('a', 'A')

@@ -1,7 +1,7 @@
 # ArkDPS 官服 PC 只读适配可行性报告
 
-当前标准版本已接入 PC Frida 与自研事件后端，自研已于 2026-11-24 实机验收通过。
-当前设置和使用方式见[连接配置](connection.md#pc-事件后端)，逐次事件与验收记录见[自研事件后端](native-pc-native-hooks.md)。
+当前标准版本已接入 PC Frida 与 ArkPie 事件后端，ArkPie 已于 2026-11-24 实机验收通过。
+当前设置和使用方式见[连接配置](connection.md#pc-事件后端)，逐次事件与验收记录见[ArkPie 事件后端](native-pc-native-hooks.md)。
 以下内容保留 2026-11-21 的原生累计适配评估及当时构建结果。
 
 2026-11-22 已在普通官服 PC 中跑通 ArkDPS 独立的 Frida Gadget 启动加载，不依赖 ArkFramework。一局 CE-5 记录了 1477 条有序事件，逐干员伤害、74 笔直接治疗、5 笔实际吸盾及 41 个技能窗口完成对账。正常 CLI 和桌面 worker 已接入启动管理，普通 worker 已验证组件加载、完整探针重连和清理。晚接入的普通 attach 在 17.24.3、17.26.1 与 17.27.4 中仍失败。普通实际 HP 结算、过量及其他盾类型保留各自覆盖限制。[实机与启动加载证据](event-capture.md#arkdps-本机-frida-探针)
