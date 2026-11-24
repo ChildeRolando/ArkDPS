@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from math import isfinite
 
 from autochess_context import (lookup_native_actor, native_autochess_event_identity,
-                              native_autochess_scope_id)
+                              native_autochess_scope_id, resolve_native_event_member)
 from character_catalog import load_character_names
 from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
@@ -95,6 +95,7 @@ class MultiplayerBattleStatistics:
         self._native_accounts = {}
         self._local_account_uid = None
         self._context = self._active_context = None
+        self._previous_context = None
         self._context_fingerprint = None
         self._retired_contexts = set()
         self._retired_event_scopes = set()
@@ -174,6 +175,7 @@ class MultiplayerBattleStatistics:
         self._native_accounts = {row['uid']: dict(row) for row in context['players']} if context is not None else {}
         self._local_account_uid = context.get('self_player_uid') if context is not None else None
         self._context = self._active_context = deepcopy(context)
+        self._previous_context = None
         self._context_fingerprint = new_context
         self._scope = (native_autochess_scope_id(context['identity'], self._context_fingerprint[3]) if self._native_mode
             else f'{round_id}:players:{self._epoch}')
@@ -265,6 +267,7 @@ class MultiplayerBattleStatistics:
         self._presence_point = when, actors, known, sample['game_time']
 
     def _bind_native(self, context):
+        self._previous_context = self._active_context
         self._context = self._active_context = deepcopy(context)
         self._mode_declared = self._mode_declared or 'collection_mode' in context
         for row in context['players']:
@@ -467,7 +470,11 @@ class MultiplayerBattleStatistics:
         if scope is not None:
             return scope, None, None, None
         source = event.get('source')
-        if source is None and event.get('damage_type') == 5 and event.get('kind') in ('damage_settlement', 'elemental_burst'):
+        if source is None and event.get('kind') == 'elemental_burst':
+            # The native settled event owns the amount. Its legacy callback
+            # can lack target_uid and must not invalidate other target bars.
+            return 'global', None, None, None
+        if source is None and event.get('damage_type') == 5 and event.get('kind') == 'damage_settlement':
             target = self._scope_target(event)
             if (target is None or target in self._scope_unknown_targets
                     or self._scope_unknown_all_targets and target not in self._scope_verified_targets):
@@ -480,10 +487,14 @@ class MultiplayerBattleStatistics:
         data_uid = event.get('source_character_uid')
         if type(data_uid) is not int or data_uid <= 0:
             return 'source_uid_missing', None, None, None
-        evidence = lookup_native_actor(self._active_context, cid=source, data_uid=data_uid)
+        evidence = resolve_native_event_member(self._active_context, event, self._previous_context)
         if evidence is None:
             return 'source_uid_unmapped', None, None, None
-        player_uid, entry = self._native_entries[data_uid]
+        player_uid = evidence['player_uid']
+        bound = self._native_entries.get(data_uid)
+        entry = (bound[1] if bound is not None else CharacterEntry(source, data_uid,
+                 evidence['is_token'], evidence['is_predefined'], evidence['host_key'],
+                 evidence['host_uid'], evidence['player_side']))
         actor = entry
         if entry.is_token:
             host = self._native_entries.get(entry.host_uid)
@@ -888,7 +899,8 @@ class MultiplayerBattleStatistics:
                         # an ignorable passive observation before marking them.
                         unresolved_source_keys = tuple(owner for owner, candidate in player.actors.items()
                             if candidate.cid == event.get('source'))
-                    world_receipt = (self._native_mode and event['kind'] in ENEMY_STATE_KINDS)
+                    world_receipt = (self._native_mode and (event['kind'] in ENEMY_STATE_KINDS
+                        or event['kind'] == 'elemental_burst' and event.get('source') is None))
                     player.stream.accept(None, unresolved_source_keys, skip_scope or world_receipt, session=player.statistics.session,
                         settlement_identity=identity, replay_record=event, **payload)
                 if self._native_mode and state in ('owned', 'not_collected') and event['kind'] == 'elemental_bar':

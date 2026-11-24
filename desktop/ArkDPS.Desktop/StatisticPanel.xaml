@@ -74,13 +74,19 @@
       <Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/>
      </Grid>
     </Border>
-    <Border Grid.Column="1" Background="Transparent" ToolTip="{Binding RankedBarTooltip}" Margin="4,0,7,0">
-     <DockPanel>
-      <TextBlock DockPanel.Dock="Right" Text="{Binding CoverageMarker}" Visibility="{Binding CoverageMarkerVisibility}" Foreground="{DynamicResource ConsoleMuted}" VerticalAlignment="Center" Margin="3,0,0,0"/>
-      <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}"
-                             AutomationProperties.AutomationId="SideRankingContribution" Height="8" VerticalAlignment="Center"/>
-     </DockPanel>
-    </Border>
+    <Grid Grid.Column="1" Margin="4,0,7,0">
+     <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ConsoleInk}" FontSize="12"
+                FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="NoWrap"
+                TextTrimming="CharacterEllipsis" AutomationProperties.AutomationId="SideRankingOperatorName"/>
+     <Border Grid.Row="1" Background="Transparent" ToolTip="{Binding RankedBarTooltip}">
+      <DockPanel>
+       <TextBlock DockPanel.Dock="Right" Text="{Binding CoverageMarker}" Visibility="{Binding CoverageMarkerVisibility}" Foreground="{DynamicResource ConsoleMuted}" VerticalAlignment="Center" Margin="3,0,0,0"/>
+       <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}"
+                              AutomationProperties.AutomationId="SideRankingContribution" Height="8" VerticalAlignment="Center"/>
+      </DockPanel>
+     </Border>
+    </Grid>
     <TextBlock Grid.Column="2" Text="{Binding CumulativeTotal}" Style="{StaticResource SideNumberCell}"
                AutomationProperties.AutomationId="SideRankingTotal"/>
     <TextBlock Grid.Column="3" Text="{Binding CompactRate}" Style="{StaticResource SideNumberCell}"
@@ -345,7 +351,7 @@
             BorderThickness="0,0,0,1" Visibility="Collapsed">
      <Grid MinHeight="26" Margin="8,0,2,0">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="70"/><ColumnDefinition Width="65"/></Grid.ColumnDefinitions>
-      <TextBlock Text="贡献" Style="{StaticResource SideNumberCell}" TextAlignment="Left" FontWeight="SemiBold" Margin="34,0,0,0"/>
+      <TextBlock Text="干员 / 贡献" Style="{StaticResource SideNumberCell}" TextAlignment="Left" FontWeight="SemiBold" Margin="34,0,0,0"/>
       <TextBlock x:Name="SideTotalHeading" Grid.Column="1" Style="{StaticResource SideNumberCell}" FontWeight="SemiBold"/>
       <TextBlock x:Name="SideRateHeading" Grid.Column="2" Style="{StaticResource SideNumberCell}" FontWeight="SemiBold"/>
      </Grid>
@@ -353,15 +359,17 @@
     <ListBox x:Name="Rows" Grid.Row="1" ItemContainerStyle="{StaticResource RankedRow}" ScrollViewer.ScrollChanged="ReferenceScrollChanged" SelectionChanged="RowSelected" MouseEnter="HoldOrder" MouseLeave="ReleaseOrder" MaxHeight="520" MinHeight="80" KeyboardNavigation.DirectionalNavigation="Contained"/>
     <TextBlock x:Name="Empty" Grid.Row="1" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="280" TextAlignment="Center" TextWrapping="Wrap" FontSize="13" Margin="14"/>
     <Grid x:Name="ReferenceFooter" Grid.Row="2" Background="{DynamicResource ConsoleCard}" MinHeight="31" Visibility="Collapsed">
-    <Grid.ColumnDefinitions>
-     <ColumnDefinition Width="28"/><ColumnDefinition Width="1.55*" MinWidth="134"/><ColumnDefinition Width="*" MinWidth="30"/>
-     <ColumnDefinition Width="74"/><ColumnDefinition Width="66"/><ColumnDefinition Width="56"/>
-    </Grid.ColumnDefinitions>
-     <Border Grid.ColumnSpan="6" BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="0,1,0,0" IsHitTestVisible="False"/>
-     <TextBlock Text="∑" Foreground="{DynamicResource ConsoleMuted}" FontSize="14" VerticalAlignment="Center" TextAlignment="Center"/>
-     <TextBlock x:Name="ReferenceFooterLabel" Grid.Column="1" Grid.ColumnSpan="2" Foreground="{DynamicResource ConsoleInk}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="3,0,0,0"/>
-     <TextBlock x:Name="ReferenceFooterTotal" Grid.Column="3" Style="{StaticResource ReferenceNumberCell}" FontWeight="SemiBold"/>
-     <TextBlock x:Name="ReferenceFooterRate" Grid.Column="4" Style="{StaticResource ReferenceNumberCell}" FontWeight="SemiBold"/>
+     <Border BorderBrush="{DynamicResource ConsoleLine}" BorderThickness="0,1,0,0" IsHitTestVisible="False"/>
+     <Grid x:Name="ReferenceFooterColumns">
+      <Grid.ColumnDefinitions>
+       <ColumnDefinition Width="28"/><ColumnDefinition Width="1.55*" MinWidth="134"/><ColumnDefinition Width="*" MinWidth="30"/>
+       <ColumnDefinition Width="74"/><ColumnDefinition Width="66"/><ColumnDefinition Width="56"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="∑" Foreground="{DynamicResource ConsoleMuted}" FontSize="14" VerticalAlignment="Center" TextAlignment="Center"/>
+      <TextBlock x:Name="ReferenceFooterLabel" Grid.Column="1" Grid.ColumnSpan="2" Foreground="{DynamicResource ConsoleInk}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="3,0,0,0"/>
+      <TextBlock x:Name="ReferenceFooterTotal" Grid.Column="3" Style="{StaticResource ReferenceNumberCell}" FontWeight="SemiBold"/>
+      <TextBlock x:Name="ReferenceFooterRate" Grid.Column="4" Style="{StaticResource ReferenceNumberCell}" FontWeight="SemiBold"/>
+     </Grid>
     </Grid>
    </Grid>
 

@@ -456,7 +456,7 @@
         </StackPanel>
         <CheckBox x:Name="MultiplayerEnabledSetting" Content="统计卫戍队友DPS" IsChecked="False" IsEnabled="False"
                   Click="MultiplayerEnabledChanged" Margin="0,10,0,0" AutomationProperties.Name="统计卫戍队友DPS"
-                  ToolTipService.ShowOnDisabled="True" ToolTip="卫戍队友DPS仅支持官服 PC"/>
+                  ToolTipService.ShowOnDisabled="True" ToolTip="卫戍队友DPS仅支持 PC"/>
         <TextBlock x:Name="MultiplayerSettingStatus" Style="{StaticResource FieldLabel}" Margin="0,4,0,0"
                    Visibility="Collapsed" TextWrapping="Wrap"/>
         <WrapPanel Margin="0,8,0,0">

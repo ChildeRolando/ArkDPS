@@ -119,6 +119,52 @@ function negatives(platform){
  }
  return output;
 }
-const platforms={},rejected={};
-for(const platform of ['native_pc','mumu']){platforms[platform]=positive(platform);rejected[platform]=negatives(platform);}
-process.stdout.write(JSON.stringify({status:'verified',classification:'owned_callback_not_live',platforms,rejected}));
+function ephemeral(platform){
+ const f=world({platform,fixtureOptions:{settlement:true,...(platform==='mumu'?{
+  androidBattleLayout:androidLayout,unitManagerOffset:0x2c0,globals:{arkdpsAndroidBattleLayout:androidLayout}}:{})}});
+ for(const [index, player] of f.players)f.write(player.add(0x18),f.text(String(910000000+index)));
+ f.klass('BObject','Torappu.Battle',9,[[2,'<instanceUid>k__BackingField',0x18,9],
+  [3,'<playerSide>k__BackingField',0x20,17],[4,'<inited>k__BackingField',0x24,2],
+  [5,'<borned>k__BackingField',0x25,2],[6,'<isDisappeared>k__BackingField',0x26,2]],f.ptr(0),f.bObject);
+ f.klass('BattleCharacterData','Torappu.Battle',36,
+  [[4,'prefabKey',0x50,14],[8,'uniqueId',0x6c,9],[14,'isToken',0x90,2],
+   [15,'isPredefined',0x91,2],[18,'tokenOrHostKey',0x98,14],[19,'tokenOrHostUniqueId',0xa0,9]],f.ptr(0),f.characterData);
+ const tokenClass=derivedFactory(f)('Token',f.character),uid=4194478,hostUid=4194477;
+ const cid='token_10024_ebnhlz_rcube',host='char_4046_ebnhlz';
+ f.write(f.center.add(0x38),1);
+ f.write(f.roleData[0].add(0x50),f.text(host));f.write(f.roleData[0].add(0x6c),hostUid);
+ const source=f.unit(cid,28),enemy=f.unit('enemy_owned_target',77);
+ f.write(source,tokenClass);f.write(source.add(0x20),1);f.write(enemy,f.enemyClass);f.write(enemy.add(0x40),50n*FP);
+ const data=f.data(cid,uid,{isToken:true,hostKey:host,hostUid});
+ f.write(data,f.characterData);f.write(source.add(0x538),data);
+ const before=f.mark(),baseline=f.context.rpc.exports.readEvents(0,0);
+ assert.equal(before.native_autochess_context.status,'available');
+ assert(!before.native_autochess_context.memberships.some(row=>row.data_uid===uid));
+ f.clock(30,FP);f.mark();
+ const modifier=f.modifier(source,enemy,17,0,0),apply=f.callback('ApplyModifier',f.entity),call={threadId:1};
+ f.write(modifier.add(0x60),5);
+ apply.onEnter.call(call,[enemy,modifier,f.ptr(0)]);apply.onLeave.call(call);
+ damage(f,source,enemy,40,50);
+ const mark=f.mark(),batch=plain(f.context.rpc.exports.readEvents(0,mark.sequence));
+ assert(!mark.native_autochess_context.memberships.some(row=>row.data_uid===uid));
+ const hits=batch.events.filter(event=>event.kind==='damage_settlement'||event.kind==='elemental_bar');
+ assert.deepEqual(hits.map(event=>[event.kind,event.amount,event.source_character_uid]),
+  [['elemental_bar',17,uid],['damage_settlement',40,uid]]);
+ for(const event of hits)assert.deepEqual(event.proof.native_autochess_token_host,
+  {host_key:host,host_uid:hostUid,player_side:1});
+ assert(batch.events.filter(event=>!hits.includes(event)).every(event=>!event.proof.native_autochess_token_host));
+ const first=mark.sequence;
+ f.clock(60,2n*FP);f.mark();f.write(source.add(0x20),7);
+ damage(f,source,enemy,40,50);
+ const after=f.mark(),rejected=plain(f.context.rpc.exports.readEvents(first,after.sequence));
+ const hit=rejected.events.find(event=>event.kind==='damage_settlement');
+ assert.equal(hit.amount,40);assert.equal(hit.source_character_uid,uid);
+ assert(!hit.proof.native_autochess_token_host,'invalid side cannot attach a host witness');
+ assert.equal(rejected.enemy_damage_unknown,false);
+ return {before:plain(before),baseline:plain(baseline),mark:plain(mark),batch};
+}
+const platforms={},rejected={},ephemeral_tokens={};
+for(const platform of ['native_pc','mumu']){
+ platforms[platform]=positive(platform);rejected[platform]=negatives(platform);ephemeral_tokens[platform]=ephemeral(platform);
+}
+process.stdout.write(JSON.stringify({status:'verified',classification:'owned_callback_not_live',platforms,rejected,ephemeral_tokens}));

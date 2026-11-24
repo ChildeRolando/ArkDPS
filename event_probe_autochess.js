@@ -376,6 +376,38 @@ function autoData(address,read){
  return {cid,data_uid,is_token:!!token,is_predefined:!!predefined,
   host_key:token&&!host.isNull()?read.text(host):null,host_uid:token?hostUid:null};
 }
+function autoTokenHostEvidence(scope,when){
+ // A short-lived token can disappear before the next membership sample.
+ const stamp=when.native_autochess_scope,entry=scope.when,cache=nativeAutoCache;
+ if(stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!entry||
+    !scope.source?.startsWith('token_')||!scope.sourceCharacterUid||
+    !sourceCharacterClasses||!enemyEntryConfig||!cache||
+    !sameMitigationTime(entry,when)||!sameNativeEventScope(entry,when))return;
+ try{
+  const fixed=clock.add(4).readS64().toString(),{phase,round}=cache.addresses;
+  const samePoint=()=>clock.readU32()===when.frame&&clock.add(4).readS64().toString()===fixed&&
+                      phase.readS32()===stamp.phase&&round.readS32()===stamp.round;
+  if(Number(BigInt(fixed))/4294967296!==when.game_time||!samePoint())return;
+  const read=autoRead(),source=read.p(scope.mod);
+  if(source.isNull()||!scope.nativeModifierSource?.equals(source))return;
+  const klass=read.p(source);
+  if(!isCharacterSourceClass(klass)||!enemyEntryConfig.assignable(enemyEntryConfig.bObject,klass))return;
+  const data=read.p(source.add(0x538));
+  if(data.isNull()||!read.p(data).equals(sourceCharacterClasses.data))return;
+  const {cid,data_uid,is_token,host_key,host_uid}=autoData(data,read);
+  if(!is_token||cid!==scope.source||data_uid!==scope.sourceCharacterUid||
+     !host_key||!/^[A-Za-z0-9_#.-]{1,128}$/.test(host_key)||!host_uid||
+     host_uid===data_uid)return;
+  const layout=autoLayout(enemyEntryConfig.bObject,'BObject','Torappu.Battle',9,
+   [[3,'<playerSide>k__BackingField',0x20,[17]]]);
+  const player_side=read.i(source.add(layout['<playerSide>k__BackingField'].offset));
+  if(player_side<0||player_side>4)return;
+  read.validate();
+  const current=currentNativeIdentity();
+  if(current&&Object.keys(current).every(key=>current[key]===cache.identity[key])&&samePoint())
+   return {host_key,host_uid,player_side};
+ }catch(e){/* The event retains its original source and amount without this witness. */}
+}
 function autoScope(roots,phase,round,frame,fixed,fingerprint,headerKey){
  const previous=nativeAutoScope;
  if(previous&&(previous.roots!==roots||previous.phase!==phase||previous.round!==round||

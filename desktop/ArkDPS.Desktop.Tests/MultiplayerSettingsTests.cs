@@ -157,8 +157,8 @@ internal static class MultiplayerSettingsTests
                         window.MultiplayerPage.DetailInspector.Owner is null && window.MultiplayerPage.Ranking.Rows.Items.Count == 0);
                     Check(skin + " unsupported setting has visible and accessible platform feedback instead of pending mode text",
                         window.MultiplayerSettingStatus.Visibility == Visibility.Visible &&
-                        window.MultiplayerSettingStatus.Text == "卫戍队友DPS仅支持官服 PC" &&
-                        window.MultiplayerEnabledSetting.ToolTip?.ToString() == "卫戍队友DPS仅支持官服 PC" &&
+                        window.MultiplayerSettingStatus.Text == "卫戍队友DPS仅支持 PC" &&
+                        window.MultiplayerEnabledSetting.ToolTip?.ToString() == "卫戍队友DPS仅支持 PC" &&
                         System.Windows.Controls.ToolTipService.GetShowOnDisabled(window.MultiplayerEnabledSetting));
                     window.Navigate("multiplayer").GetAwaiter().GetResult();
                     window.MultiplayerEnabledSetting.IsChecked = false;
