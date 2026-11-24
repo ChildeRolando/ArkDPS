@@ -361,6 +361,7 @@ function autoScope(roots,phase,round,frame,fixed,fingerprint,headerKey){
 }
 function readAutoChess(identity,frame,fixed){
  const read=autoRead(),unknown=[];
+ let unboundHosts=0;
  try{
   const header=autoHeader(identity,read),model=read.p(read.at(header.center,'playerDataModel'));
   read.object(model,'AutoChessPlayerDataModel',AUTO_NS,17,[[0,'m_allPlayerDatas',0x18,[21]]]);
@@ -447,6 +448,7 @@ function readAutoChess(identity,frame,fixed){
      if(inited!==1||borned!==1||disappeared!==0){unknown.push({cid:row.cid,data_uid:row.data_uid,reason:'token lifecycle unavailable or inactive'});continue;}
      const side=read.i(read.at(unit,'<playerSide>k__BackingField')),host=byUid.get(row.host_uid);
      if(!host||conflicts.has(row.host_uid)||host.is_token||host.cid!==row.host_key||side!==host.player_side){
+      unboundHosts++;
       unknown.push({cid:row.cid,data_uid:row.data_uid,host_uid:row.host_uid,reason:'token host unavailable or conflicting'});continue;
      }
      add({...row,player_index:host.player_index,player_side:side});
@@ -458,7 +460,8 @@ function readAutoChess(identity,frame,fixed){
   return {read,header,model,playerList,playerItems,playerVersion,ownerRefs,fingerprint,players,
    playerAddresses:{list:read.at(model,'m_allPlayerDatas'),items:read.at(playerList,'_items'),
     count:read.at(playerList,'_size'),version:read.at(playerList,'_version')},
-   memberships:[...byUid.values()].filter(row=>!conflicts.has(row.data_uid)),unknown};
+   memberships:[...byUid.values()].filter(row=>!conflicts.has(row.data_uid)),unknown,
+   allInputsGuarded:unknown.length===unboundHosts};
  }catch(e){nativeAutoCache=null;return {error:String(e)};}
 }
 function finishAutoChess(result,identity,frame,fixed){
@@ -513,12 +516,32 @@ function stampAutoChessClock(when){
  }catch(e){nativeAutoCache=null;unknown(String(e));}
 }
 let nativeAutoBodyCache=null;
-function readAutoChessBody(identity,frame,fixed,key){
+function prepareAutoChessRetryBody(){
+ const cached=nativeAutoBodyCache;
+ if(!cached?.prepareBeforeClock||!nativeAutoStage?.enabled)return null;
+ try{
+  const roots=currentNativeIdentity(),stage=nativeAutoStage;
+  if(!roots||cached.generation!==nativeGeneration||cached.epoch!==nativeAutoEpoch)return null;
+  const prefix=[roots.controller,roots.native,roots.logger,roots.stats,roots.level].join(':')+':';
+  if(!stage.key.startsWith(prefix)||!stage.stageAddress.readPointer().equals(stage.stagePointer)
+     ||cached.key!==stage.key+'#'+stage.stagePointer.toString())return null;
+  // This pass just selects a candidate. The next pass reads every witness
+  // again inside its OWN original clock and root bracket, including every
+  // input to a failed token-host lookup. No amount or owner is published here.
+  cached.body.read.validate();
+  return cached;
+ }catch(e){
+  nativeAutoBodyCache=null;nativeAutoCache=null;nativeAutoOwners=null;return null;
+ }
+}
+function readAutoChessBody(identity,frame,fixed,key,prepared){
  const cached=nativeAutoBodyCache;
  if(cached&&cached.key===key&&cached.generation===nativeGeneration&&cached.epoch===nativeAutoEpoch
     &&frame>=cached.frame&&BigInt(fixed)>=BigInt(cached.fixed)){
-  try{cached.body.read.validate();}
-  catch(e){nativeAutoBodyCache=null;return readAutoChess(identity,frame,fixed);}
+  if(prepared!==cached){
+   try{cached.body.read.validate();}
+   catch(e){nativeAutoBodyCache=null;return readAutoChess(identity,frame,fixed);}
+  }
   try{cached.body.read.validate();}
   catch(e){nativeAutoCache=null;nativeAutoBodyCache=null;return {error:String(e)};}
   return cached.body;
@@ -563,7 +586,7 @@ function readAutoChessViewMode(manager){
   return {in_step_mode:step===1,enable_view_multi_battle:multi===1};
  }catch(e){return null;}
 }
-function nativeBinding(){
+function nativeBinding(prepared=null){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded
  // Windows sampler. The host binds this evidence to its battle serial.
  let step='root_identity';nativeAutoBindingDiagnostic=null;
@@ -587,6 +610,7 @@ function nativeBinding(){
   const stateOffset=probeAdapter.autoChessStateOffset??0x228;
   const stateAddress=ptr(before.controller).add(stateOffset),state=stateAddress.readS32();
   if(state!==2&&state!==3)return unavailable('BattleController is not PLAYING or FINISHED');
+  if(state!==2)prepared=null;
   step='stage_metadata';
   const level=ptr(before.level),levelClass=probeAdapter.autoChessReflected?level.readPointer():null;
   const stageAddress=level.add(probeAdapter.autoChessStageOffset??0x18),stagePointer=stageAddress.readPointer(),stage=str(stagePointer);
@@ -604,7 +628,7 @@ function nativeBinding(){
    stagePointer:probeAdapter.autoChessReflected?stagePointer:stageAddress.readPointer()};
   const bodyKey=stageKey+'#'+nativeAutoStage.stagePointer.toString();
   if(!enabled)nativeAutoBodyCache=null;
-  const auto=enabled?readAutoChessBody(before,frame,fixed,bodyKey):null;
+  const auto=enabled?readAutoChessBody(before,frame,fixed,bodyKey,prepared):null;
   const viewMode=probeAdapter.autoChessReflected&&auto?.header?.phase===4?readAutoChessViewMode(auto.header.manager):null;
   step='closing_guard';
   if(probeAdapter.autoChessReflected&&(!level.readPointer().equals(levelClass)||
@@ -619,7 +643,7 @@ function nativeBinding(){
    return unavailable('battle roots, clock, state or stage changed during binding');
   if(endFrame!==frame||endFixed!==fixed){
    const rejected=unavailable('battle clock changed during binding','clock_changed');
-   if(!probeAdapter.autoChessReflected&&auto&&!auto.error&&auto.unknown.length===0
+   if(state===2&&!probeAdapter.autoChessReflected&&auto?.allInputsGuarded
       &&endFrame>frame&&BigInt(fixed)>=0n&&BigInt(endFixed)>BigInt(fixed)){
     // Save only a candidate for readAutoChessBody's TWO fresh validation
     // passes. A slow discovery spanning a tick cannot publish members or
@@ -627,7 +651,7 @@ function nativeBinding(){
     nativeAutoCache=null;
     nativeAutoOwners=null;
     nativeAutoBodyCache={key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,
-     frame:endFrame,fixed:endFixed,body:auto};
+     frame:endFrame,fixed:endFixed,body:auto,prepareBeforeClock:true};
    }
    return rejected;
   }
@@ -662,8 +686,10 @@ function nativeBinding(){
   if(enabled){
    result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
    if(viewMode)result.autochess_view_mode=viewMode;
-   nativeAutoBodyCache=!auto.error&&auto.unknown.length===0?
-    {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto}:null;
+   const preparedHere=prepared!==null&&prepared===nativeAutoBodyCache&&prepared.body===auto;
+   nativeAutoBodyCache=auto.allInputsGuarded&&(auto.unknown.length===0||preparedHere)?
+    {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto,
+     prepareBeforeClock:preparedHere}:null;
   }
   return result;
  }catch(e){return unavailable(e);}

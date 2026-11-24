@@ -102,6 +102,54 @@ check('cold_roster_crossing_a_frame_can_progress_without_accepting_the_crossed_r
   assert.equal(f.context.rpc.exports.ackEvents(closing.sequence).acknowledged,closing.sequence);
  }
 });
+check('sustained_defense_marks_and_reads_progress_with_unresolved_token_hosts',()=>{
+ for(const unknownToken of [false,true]){
+  const f=world({rolesPerPlayer:4,unknownToken,tokenCount:16,fixtureOptions:{globals:{arkdpsAutoChessMode:'local'}}});
+  const parse=f.context.readAutoChess;
+  let tick=0,parses=0;
+  const advance=()=>{tick++;f.clock(tick*30,BigInt(tick)*4294967296n);};
+  f.clock(0,0n);
+  f.context.readAutoChess=function(...args){
+   const body=parse.apply(this,args);
+   parses++;
+   const validate=body.read.validate;
+   let passes=0;
+   body.read.validate=()=>{validate();if(++passes%2===1)advance();};
+   advance();return body;
+  };
+  assert.equal(f.mark().retry,true);
+  for(let i=0;i<4;i++){
+   const mark=f.mark();
+   assert.equal(mark.native_autochess_context?.status,'available','revalidation must finish at a proved clock');
+   assert.equal(mark.frame,tick*30);
+   assert.equal(mark.native_autochess_context.memberships.length,16);
+   assert.equal(mark.native_autochess_context.unknown_memberships.length,unknownToken?16:0);
+   const drain=f.context.rpc.exports.readEvents(0,mark.sequence);
+   assert.equal(drain.retry,false,'reading the bounded prefix must progress as well');
+   assert.equal(drain.native_frame,tick*30);
+   assert.deepEqual(plain(drain.native_autochess_context.memberships),plain(mark.native_autochess_context.memberships));
+   if(i===0)modifierPairs(f,false);
+   else assert.equal(drain.events.length,20);
+  }
+  assert.equal(parses,1);
+  assert.equal(f.context.rpc.exports.ackEvents(20).acknowledged,20);
+  if(unknownToken){
+   const prepare=f.adapter.prepareEventEnvelope;
+   f.adapter.prepareEventEnvelope=()=>{
+    const proof=prepare();
+    f.write(f.tokenData[0].add(0xa0),101);
+    return proof;
+   };
+   let changed;
+   try{changed=f.mark();}finally{f.adapter.prepareEventEnvelope=prepare;}
+   assert.equal(changed.native_autochess_context.status,'unknown','a changed input cannot authorize the prepared body');
+   assert.equal(f.mark().retry,true,'rediscovery still crosses a tick');
+   const recovered=f.mark().native_autochess_context;
+   assert.equal(recovered.unknown_memberships.length,15);
+   assert.equal(recovered.memberships.find(row=>row.data_uid===999)?.host_uid,101);
+  }
+ }
+});
 check('first_body_guard_mismatch_falls_back_to_full_parse',()=>{
  const f=owned(),previous=vm.runInContext('nativeAutoBodyCache.body',f.context);
  const plan=vm.runInContext('nativeAutoCache.scopeGuards',f.context);

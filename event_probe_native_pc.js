@@ -157,14 +157,15 @@ const probeAdapter={
  eventCollectionOwner:autoEventOwner,
  stampClock(when){stampAutoChessClock(when);},
  baselineEnvelope(fields,records,acknowledged,through){return discardedAutoChessSkills(fields,records,acknowledged,through);},
- readEnvelope(){
-  const binding=nativeBinding();
+ prepareEventEnvelope:prepareAutoChessRetryBody,
+ readEnvelope(prepared){
+  const binding=nativeBinding(prepared);
   return {fields:{scoped_trace_count:scopedTraceCount,scoped_trace_dropped:scopedTraceDropped,
    ...binding,...nativeInitialEnvelope(binding),retry:binding===null,
    ...(!binding&&nativeAutoBindingDiagnostic?{autochess_binding_diagnostic:nativeAutoBindingDiagnostic}:{})},ready:binding!==null};
  },
- markEnvelope(current){
-  const binding=nativeBinding();
+ markEnvelope(current,prepared){
+  const binding=nativeBinding(prepared);
   return {fields:{...binding,...nativeInitialEnvelope(binding),
    ...(!binding&&nativeAutoBindingDiagnostic?{autochess_binding_diagnostic:nativeAutoBindingDiagnostic}:{})},ready:!(binding===null||current&&binding.native_frame!==current.frame
    ||current&&Number(BigInt(binding.native_fixed_time))/4294967296!==current.game_time)};

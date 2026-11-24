@@ -323,15 +323,15 @@ class NativePcCollector:
             frame, when = event_identity_mark.get('frame'), event_identity_mark.get('game_time')
             current_frame, current_time = context.get('frame'), context.get('game_time')
             same_tick = (current_frame, current_time) == (frame, when)
-            # A tick can elapse between the opening mark and the independent
-            # snapshot. Only select the cheaper read here. Publication still
-            # requires both marks, the independent bracket and the same scope.
-            next_tick = (type(frame) is int and type(current_frame) is int
+            # The opening mark belongs to this call. At higher game speeds
+            # several ticks can pass before the independent snapshot starts.
+            # This selects its read plan only; the closing proof owns admission.
+            advanced = (type(frame) is int and type(current_frame) is int
                          and type(when) in (int, float) and type(current_time) in (int, float)
-                         and current_frame == frame + 1 and current_time > when
+                         and current_frame > frame and current_time > when
                          and context.get('battle_state') == 2
                          and context.get('battle_native') == int(event_identity_mark['native_identity']['native'], 16))
-            bound = same_tick or next_tick
+            bound = same_tick or advanced
         event_identity = ((self.event_identity_only or bound) and context.get('stage_status') == 'available'
                           and 'AUTOCHESS' in str(context.get('stage_id', '')).upper())
         if event_identity:

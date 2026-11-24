@@ -1201,7 +1201,8 @@ function readEvents(after,through){
  const valid=Number.isSafeInteger(after)&&Number.isSafeInteger(through)&&
   acknowledgedSequence<=after&&after<=through&&through<=sequence;
  const error=fatal||(valid?null:'event read range is unavailable');
- const envelope=probeAdapter.readEnvelope();
+ const prepared=error||stopped?null:probeAdapter.prepareEventEnvelope?.();
+ const envelope=probeAdapter.readEnvelope(prepared);
  const result={events:[],hp_context:[],hp_context_dropped:hpContextDropped,error,stopped,
   ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
   ...eventQuality(),terminal_boundary_diagnostics:{...terminalDiagnostics},...envelope.fields};
@@ -2800,10 +2801,11 @@ function eventQuality(frame){
 function markEvents(){
  if(coalesceEnemyHp&&!active)flushCoalescedEnemyHp();
  const terminal_boundary=currentTerminalBoundary();
+ const prepared=probeAdapter.prepareEventEnvelope?.();
  let current;
  try{current=time(true);}
  catch(e){if(!terminal_boundary)throw e;current=null;}
- const envelope=probeAdapter.markEnvelope(current);
+ const envelope=probeAdapter.markEnvelope(current,prepared);
  const quality={...eventQuality(current?.frame),terminal_boundary:currentTerminalBoundary(terminal_boundary),
   terminal_boundary_diagnostics:{...terminalDiagnostics},
   ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),

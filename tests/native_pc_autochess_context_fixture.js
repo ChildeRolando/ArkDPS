@@ -5,7 +5,7 @@ const vm=require('node:vm');
 const {fixture}=require('./native_pc_frida_probe_fixture.js');
 const sourcePath=path.join(__dirname,'..','event_probe_native_pc.js');
 
-function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=false,unknownToken=false,rolesPerPlayer=1,fixtureOptions={},platform='native_pc'}={}){
+function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=false,unknownToken=false,tokenCount=1,rolesPerPlayer=1,fixtureOptions={},platform='native_pc'}={}){
  const actualSource=platform==='mumu'?path.join(__dirname,'..','event_probe_android2791.js'):sourcePath;
  const f=fixture({platform,sourcePath:actualSource,...fixtureOptions}),zero=f.ptr(0),NS='Torappu.Battle.AutoChess';
  const adapter=vm.runInContext('probeAdapter',f.context);
@@ -144,20 +144,24 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
  f.write(f.controllerClass.add(0x58),runtimeParent);
  f.write(f.controller.add(0x2e8),host);f.write(f.controller.add(fixtureOptions.unitManagerOffset??(platform==='mumu'?0x2b8:0x2c0)),unitManager);
  f.write(f.level.add(f.androidBattleLayout?.levelId??0x18),text('Activities/ACT3AUTOCHESS/level_act3autochess_m01'));
+ const tokenData=[];
  if(token||unknownToken){
   const bObject=klass('BObject','Torappu.Battle',9,[[3,'<playerSide>k__BackingField',0x20,17],
    [4,'<inited>k__BackingField',0x24,2],[5,'<borned>k__BackingField',0x25,2],
    [6,'<isDisappeared>k__BackingField',0x26,2]]);
   const entity=klass('Entity','Torappu.Battle',410,[],bObject),unit=klass('Unit','Torappu.Battle',10,[],entity);
   const character=klass('Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,18]],unit);
-  const t=obj(character),d=data('token_shared',999,{isToken:true,hostKey:'char_shared',hostUid:unknownToken?0:101});
-  f.write(t.add(0x538),d);f.write(t.add(0x20),1);f.write(t.add(0x24),1);f.write(t.add(0x25),1);f.write(t.add(0x26),0);
-  const array=obj(klass('Unit[]','Torappu.Battle',0));f.write(array.add(0x18),1);f.write(array.add(0x20),t);
-  f.write(container.add(0x10),array);f.write(container.add(0x20),1);
+  const array=obj(klass('Unit[]','Torappu.Battle',0));f.write(array.add(0x18),tokenCount);
+  for(let i=0;i<tokenCount;i++){
+   const t=obj(character),d=data('token_shared',999+i,{isToken:true,hostKey:'char_shared',hostUid:unknownToken?0:101});
+   f.write(t.add(0x538),d);f.write(t.add(0x20),1);f.write(t.add(0x24),1);f.write(t.add(0x25),1);f.write(t.add(0x26),0);
+   f.write(array.add(0x20+8*i),t);tokenData.push(d);
+  }
+  f.write(container.add(0x10),array);f.write(container.add(0x20),tokenCount);
  }
  const apiCount=f.apiCalls.length;
  return {...f,adapter,machine,center,manager,dict,playerList,players,roles,roleData,roleList,apiCount,phaseEnum,enumValues,
-  text,klass,data,list,pairs,mark:()=>f.context.rpc.exports.mark(),
+  tokenData,text,klass,data,list,pairs,mark:()=>f.context.rpc.exports.mark(),
   stamp(when={frame:0,game_time:0}){adapter.stampClock(when);return when;}};
 }
 
