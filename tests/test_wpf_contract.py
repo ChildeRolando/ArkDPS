@@ -132,7 +132,7 @@ def test_pc_event_settings_use_the_existing_connection_contract():
     pc_fields = next(panel for panel in xaml.iter(wpf + 'StackPanel') if panel.get(name) == 'NativeEventNotes')
     picker = next(combo for combo in pc_fields.iter(wpf + 'ComboBox') if combo.get(name) == 'NativeEventBackend')
     assert [(item.get('Tag'), item.get('Content')) for item in picker.findall(wpf + 'ComboBoxItem')] == [
-        ('frida', 'Frida'), ('native', '自研'),
+        ('frida', 'Frida'), ('native', '自研（若遇“检测到环境存在异常”报错选择此选项）'),
     ]
     assert any(field.get(name) == 'NativeEventFeed' for field in pc_fields.iter(wpf + 'TextBox'))
     source = (root / 'MainWindow.xaml.cs').read_text('utf-8')

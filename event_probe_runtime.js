@@ -2370,6 +2370,8 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       this.source=source.isNull()?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
      }catch(e){this.source=null;this.sourceReadFailed=true;}
+     // Token ownership needs matching scopes before and after settlement.
+     if(this.source?.startsWith('token_')&&this.sourceCharacterUid)stampEventScope(this.when);
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      this.modifierScope=damageModifier(this.tid,this.mod);
@@ -2429,6 +2431,8 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       this.source=this.nativeSourceNull?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
     }catch(e){this.source=null;this.sourceReadFailed=true;}
+     // Token ownership needs matching scopes before and after settlement.
+     if(this.source?.startsWith('token_')&&this.sourceCharacterUid)stampEventScope(this.when);
     if(enemyDamageReady&&this.sourceReadFailed)
      noteSettlementProofGap(this,this.when,'missing modifier source identity');
     if(enemyDamageReady&&this.nativeSourceNull){

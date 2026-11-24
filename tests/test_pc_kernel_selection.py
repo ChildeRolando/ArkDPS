@@ -150,11 +150,11 @@ def test_live_host_manifest_is_separate_from_the_controlled_build(tmp_path):
         internal_host(tmp_path / 'collector')
 
 
-def test_native_hooks_remain_unreleased_and_fail_before_loading_in_portable(tmp_path):
+def test_native_hooks_missing_from_portable_fail_before_loading(tmp_path):
     metadata = tmp_path / 'metadata'
     metadata.mkdir()
     (metadata / 'release.json').write_text('{}')
     source = event_source.PcEventSource(tmp_path / 'state', collector_root=tmp_path / 'collector')
     factory = source.select(enabled=True, backend='native')
-    with pytest.raises(RuntimeError, match='实机验收'):
+    with pytest.raises(RuntimeError, match='缺少自研 PC 采集组件'):
         factory(object(), None)
