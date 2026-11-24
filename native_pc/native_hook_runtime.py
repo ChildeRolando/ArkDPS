@@ -28,11 +28,17 @@ _TRACE_OPERATIONS = {'EnumProcessModulesEx', 'GetModuleFileNameExW', 'GetModuleI
                      'GetModuleFileNameW', 'VirtualFreeEx', 'CloseHandle', 'IsWow64Process2'}
 _TRACE_CHECKS = {'existing_component', 'loader_export', 'loaded_component'}
 _TRACE_CODES = {'cleanup_pending', 'native_build_changed', 'native_not_ready', 'native_permission_denied',
+                'native_material_not_ready',
                 'native_unsupported_build', 'process_changed', 'process_identity_invalid', 'process_query_pending',
                 'existing_component', 'loader_already_submitted', 'loader_failed', 'loader_not_ready',
                 'loader_verification_failed', 'loader_verification_timeout', 'module_query_failed',
                 'unsupported_environment', 'loader_result_mismatch', 'loader_process_exited',
                 'startup_failed', 'restart_required', 'preparation_expired', 'watcher_start_failed'}
+
+
+def _prepare_native_hook_material(root):
+    from native_pc.native_hook_source import prepare_native_hook_material
+    return prepare_native_hook_material(root)
 
 
 def _trace_number(value, *, maximum=None):
@@ -117,7 +123,7 @@ class NativeHookRuntime:
     failure_states = frozenset(('failed', 'process_failed', 'cleanup_pending'))
 
     def __init__(self, game_root, *, runtime_dir, collector_root=None, api=None, admin_check=None,
-                 clock=None, prepared_factory=None, build_check=None, startup_trace=None):
+                 clock=None, prepared_factory=None, material_factory=None, build_check=None, startup_trace=None):
         self.game_root = Path(game_root).expanduser().resolve()
         self.runtime_dir = Path(runtime_dir).resolve() / 'native-hook-sessions'
         self.collector_root = Path(collector_root).resolve() if collector_root else Path(__file__).resolve().parents[1]
@@ -125,6 +131,7 @@ class NativeHookRuntime:
         self.admin_check = admin_check or (lambda: bool(ctypes.windll.shell32.IsUserAnAdmin()))
         self.clock = clock or time
         self.prepared_factory = prepared_factory or PreparedNativeHooks
+        self.material_factory = material_factory or _prepare_native_hook_material
         self.build_check = build_check or access.verify_build
         self.startup_trace = startup_trace
         self.status, self.code, self.error = RuntimeState.STOPPED, None, None
@@ -135,6 +142,10 @@ class NativeHookRuntime:
         self._build_signature = None
         self._ready_generation = 0
         self._last_preparation = None
+        self._material = None
+        self._material_ready = False
+        self._material_generation = 0
+        self._material_preflight_seconds = None
 
     @property
     def is_pending(self):
@@ -213,6 +224,8 @@ class NativeHookRuntime:
                 expected_resident=self.status == RuntimeState.READY, cancelled=self._cancel.is_set(),
                 thread_alive=self._thread is not None and self._thread.is_alive(),
                 provider='arkdps-native-hooks', frida_required=False,
+                material_ready=self._material_ready, material_generation=self._material_generation,
+                material_preflight_seconds=self._material_preflight_seconds,
                 recovery='cleanup' if self.status == RuntimeState.CLEANUP_PENDING else
                          'next_process' if self.status == RuntimeState.PROCESS_FAILED else
                          'explicit_retry' if self.status == RuntimeState.FAILED else 'automatic')
@@ -241,6 +254,13 @@ class NativeHookRuntime:
 
     def _preflight(self):
         self._check_cancelled()
+        with self._condition:
+            # Keep old owned preparations and their material alive. Only new
+            # adoption is paused while an explicit preflight is outstanding.
+            self._material_ready = False
+            self._material_preflight_seconds = None
+            if self._lease is None:
+                self._state(RuntimeState.STARTING)
         if not self.admin_check():
             raise RuntimeFailure('native_permission_denied', '请以管理员权限启动 ArkDPS；不会自动提权')
         before = self._files()
@@ -250,9 +270,33 @@ class NativeHookRuntime:
             raise RuntimeFailure('native_unsupported_build', '自研实时采集只接受指纹匹配的官服 Windows x64 构建')
         if self._files() != before:
             raise RuntimeFailure('native_build_changed', 'PC 客户端文件正在变化，请完成更新后重试')
-        self._build_signature = before
-        self.api = self.api or access.WindowsApi()
+        material_started = time.perf_counter()
+        try:
+            material = self.material_factory(self.collector_root)
+        finally:
+            duration = max(0.0, time.perf_counter() - material_started)
+            with self._condition:
+                self._material_preflight_seconds = duration if math.isfinite(duration) else None
+        if material is None:
+            raise RuntimeFailure('native_material_not_ready', '自研组件完整预校验未返回有效物料')
+        if self._files() != before:
+            raise RuntimeFailure('native_build_changed', 'PC 客户端文件在组件预校验期间变化')
+        api = self.api or access.WindowsApi()
         self._check_cancelled()
+        with self._condition:
+            self._check_cancelled()
+            if self._retry_requested:
+                return False  # A newer explicit request superseded this result.
+            armed = self.clock.time_ns() // 100 + FILETIME_EPOCH
+            self._build_signature, self.api = before, api
+            self._material = material
+            self._material_ready = True
+            self._material_generation += 1
+            # No process born during the potentially slow file validation is
+            # new enough. Publish this fence only after the frozen bytes exist.
+            self._armed = armed
+            self._condition.notify_all()
+        return True
 
     def _instances(self):
         matches = []
@@ -315,7 +359,7 @@ class NativeHookRuntime:
                 if self._thread.is_alive():
                     return self
                 raise RuntimeError('启动监视器已结束，请显式重试')
-            self._armed = self.clock.time_ns() // 100 + FILETIME_EPOCH
+            self._armed = None
             self._state(RuntimeState.STARTING)
             self._thread = Thread(target=self._run, name='ArkDPS native PC startup', daemon=False)
             try:
@@ -332,6 +376,10 @@ class NativeHookRuntime:
             if self.status in (RuntimeState.STOPPING, RuntimeState.CLOSED):
                 raise RuntimeError('自研 PC 启动正在关闭')
             self._retry_requested = True
+            if not self._observers:
+                self._material_ready = False
+                if self._lease is None:
+                    self._state(RuntimeState.STARTING)
             self._condition.notify_all()
             return not self._observers
 
@@ -351,7 +399,7 @@ class NativeHookRuntime:
                 self._check_cancelled()
                 if cancelled is not None and cancelled():
                     raise InterruptedError('自研 PC 启动等待已取消')
-                if self.status == RuntimeState.READY and self._lease is not None:
+                if self.status == RuntimeState.READY and self._lease is not None and self._material_ready:
                     if not self._alive(self._lease):
                         raise RuntimeFailure('process_changed', '已准备的 PC 进程实例已退出或变化')
                     return dict(self._lease)
@@ -376,9 +424,14 @@ class NativeHookRuntime:
     def _prepare(self, birth):
         with self._condition:
             self._check_cancelled()
+            if self._retry_requested:
+                return  # A new validation request won admission before this birth.
+            if not self._material_ready or self._material is None:
+                raise RuntimeFailure('native_material_not_ready', '自研组件完整预校验尚未就绪')
             self._attempted.add(birth)
             self._lease = dict(pid=birth[0], created=birth[1], source_build=access.BUILD_ID)
-            candidate = self.prepared_factory(self.game_root, root=self.collector_root, runtime_dir=self.runtime_dir)
+            candidate = self.prepared_factory(self.game_root, root=self.collector_root, runtime_dir=self.runtime_dir,
+                                              material=self._material)
             self._prepared = candidate  # Publish ownership before any mutation-capable call.
             candidate.cancelled, candidate.commit = self._cancel.is_set, self._commit
             self._state(RuntimeState.LOADING)
@@ -415,11 +468,15 @@ class NativeHookRuntime:
             self._state(RuntimeState.PROCESS_FAILED if self._lease else RuntimeState.WAITING_PROCESS,
                         'restart_required' if self._lease else None)
         if retry and not observed:
-            self._preflight()
             with self._condition:
                 self._retry_requested = False
-            if self._lease is None:
-                self._state(RuntimeState.WAITING_PROCESS)
+            if not self._preflight():
+                return
+            with self._condition:
+                if self._retry_requested or not self._material_ready:
+                    return
+                if self._lease is None:
+                    self._state(RuntimeState.WAITING_PROCESS)
         elif state == RuntimeState.FAILED:
             return
         record = self._lease
@@ -439,13 +496,19 @@ class NativeHookRuntime:
             with self._condition:
                 self._lease = None
         matches = self._instances()
-        if len(matches) > 1:
-            self._state(RuntimeState.WAITING_PROCESS, 'ambiguous_process', '请保留一个相同路径的官服 PC 实例')
-        elif matches and matches[0][1] > self._armed and matches[0] not in self._attempted:
-            self._prepare(matches[0])
-        else:
-            self._state(RuntimeState.WAITING_PROCESS, 'restart_required' if matches else None,
-                        '请保持 ArkDPS 开启，再正常重启官服 PC 游戏' if matches else None)
+        selected = None
+        with self._condition:
+            if self._retry_requested or not self._material_ready:
+                return
+            if len(matches) > 1:
+                self._state(RuntimeState.WAITING_PROCESS, 'ambiguous_process', '请保留一个相同路径的官服 PC 实例')
+            elif matches and matches[0][1] > self._armed and matches[0] not in self._attempted:
+                selected = matches[0]
+            else:
+                self._state(RuntimeState.WAITING_PROCESS, 'restart_required' if matches else None,
+                            '请保持 ArkDPS 开启，再正常重启官服 PC 游戏' if matches else None)
+        if selected is not None:
+            self._prepare(selected)
 
     def _run(self):
         while not self._cancel.is_set():
@@ -466,7 +529,8 @@ class NativeHookRuntime:
     def observer_factory(self, collector, remote=None):
         with self._condition:
             self._check_cancelled()
-            if self.status != RuntimeState.READY or self._prepared is None or self._observers:
+            if (self.status != RuntimeState.READY or not self._material_ready
+                    or self._prepared is None or self._observers):
                 raise RuntimeFailure('native_not_ready', '原生准备尚未就绪或观察者仍拥有该输入')
             observer = _RuntimeNativeHookProbe(collector, remote, runtime=self, prepared=self._prepared,
                                               root=self.collector_root, runtime_dir=self.runtime_dir)
@@ -488,6 +552,8 @@ class NativeHookRuntime:
             self._trace_startup('native_prepare_closed', preparation=self._last_preparation, error=error, cleanup_ok=False)
             raise
         self._state(RuntimeState.CLOSED)
+        with self._condition:
+            self._material, self._material_ready = None, False
         self._trace_startup('native_prepare_closed', preparation=self._last_preparation, cleanup_ok=True)
 
 

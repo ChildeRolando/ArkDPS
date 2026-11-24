@@ -80,10 +80,20 @@ class Pipe:
 
 @pytest.fixture
 def setup_probe(tmp_path, monkeypatch):
-    binary = tmp_path / 'source.dll'
+    source_root = tmp_path / 'source-root'
+    source_root.mkdir()
+    for name in ('event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js'):
+        (source_root / name).write_bytes((ROOT / name).read_bytes())
+    binary = source_root / 'source.dll'
     binary.write_bytes(b'controlled-not-an-executable')
     binary.with_suffix('.build.json').write_text(json.dumps(dict(sha256=sha256(binary.read_bytes()).hexdigest())))
-    monkeypatch.setattr(module, 'native_hook_binary', lambda root: binary)
+    def owned_binary(root, *, _read_capture=None):
+        # This transport fixture substitutes an owned validator, not a real DLL.
+        if _read_capture is not None:
+            for path in (binary, binary.with_suffix('.build.json')):
+                _read_capture[path.resolve()] = path.read_bytes()
+        return binary
+    monkeypatch.setattr(module, 'native_hook_binary', owned_binary)
     loaders, pipes = [], []
     def make_loader(pid):
         value = Loader(pid)
@@ -94,8 +104,9 @@ def setup_probe(tmp_path, monkeypatch):
         pipes.append(value)
         return value
     def make(**options):
-        return module.NativeHookEventProbe(collector(**options), root=ROOT, runtime_dir=tmp_path / 'sessions',
+        return module.NativeHookEventProbe(collector(**options), root=source_root, runtime_dir=tmp_path / 'sessions',
             loader_factory=make_loader, pipe_factory=make_pipe)
+    make.source_root = source_root
     return make, loaders, pipes
 
 
@@ -127,6 +138,64 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     probe.stop()
     assert loaders[0].closed and pipes[0].closed
     assert probe.hook_disable_confirmed
+
+
+def test_prevalidated_material_consumes_pinned_bytes_without_revalidating_or_reassembling_at_birth(
+        prepared_setup, setup_probe, monkeypatch):
+    prepare, _, _, loaders, pipes = prepared_setup
+    root = setup_probe[0].source_root
+    material = module.prepare_native_hook_material(root)
+    # Disk can change after preflight. This attempt uses the immutable bytes;
+    # a later fresh factory must validate the disk again, and claim still checks JS.
+    (root / 'source.dll').write_bytes(b'replaced disk image must not be loaded')
+    monkeypatch.setattr(module, 'native_hook_binary', lambda *_a, **_k: pytest.fail('birth revalidated payload'))
+    monkeypatch.setattr(module, '_native_source', lambda *_a, **_k: pytest.fail('birth reassembled source'))
+    prepared = prepare(material=material)
+    try:
+        prepared.prepare((42, 100))
+        assert len(loaders) == 1 and not pipes and prepared.hook_disable_confirmed
+        assert loaders[0].path.read_bytes() == material.image
+        assert loaders[0].config['source'] == material.source
+    finally:
+        prepared.close()
+
+
+@pytest.mark.parametrize('fault', ['type', 'root', 'environment', 'untyped_environment', 'mutable_bytes', 'image_digest'])
+def test_prevalidated_material_binding_errors_never_create_or_load_a_process_owner(
+        prepared_setup, setup_probe, monkeypatch, tmp_path, fault):
+    from dataclasses import replace
+    prepare, _, _, loaders, pipes = prepared_setup
+    material = module.prepare_native_hook_material(setup_probe[0].source_root)
+    if fault == 'type':
+        material = object()
+    elif fault == 'root':
+        material = replace(material, root=tmp_path / 'different-owner')
+    elif fault == 'environment':
+        material = replace(material, effective_env=(material.effective_env[0], material.effective_env[1], not material.effective_env[2]))
+    elif fault == 'untyped_environment':
+        material = replace(material, effective_env=tuple(int(value) for value in material.effective_env))
+    elif fault == 'mutable_bytes':
+        material = replace(material, image=bytearray(material.image))
+    else:
+        material = replace(material, image_sha256='0' * 64)
+    prepared = prepare(material=material)
+    with pytest.raises(RuntimeError, match='已校验载荷'):
+        prepared.prepare((42, 100))
+    assert not loaders and not pipes and prepared.hook_disable_confirmed
+    prepared.close()
+
+
+def test_material_keeps_claim_time_source_and_environment_change_gate(prepared_setup, setup_probe, monkeypatch):
+    prepare, make_probe, _, loaders, _ = prepared_setup
+    material = module.prepare_native_hook_material(setup_probe[0].source_root)
+    prepared = prepare(material=material)
+    prepared.prepare((42, 100))
+    monkeypatch.setenv('ARKDPS_COALESCE_ENEMY_HP', '0' if material.effective_env[2] else '1')
+    with pytest.raises(RuntimeError, match='源码或采集参数已变化'):
+        make_probe(prepared).start()
+    assert not prepared.claimed
+    prepared.close()
+    assert loaders[0].closed
 
 
 @pytest.mark.parametrize('options', [dict(build='unknown'), dict(initialized=False)])
@@ -231,7 +300,8 @@ def test_explicit_observer_factory_is_preserved_for_native_capture(tmp_path):
 
 @pytest.fixture
 def prepared_setup(tmp_path, monkeypatch, setup_probe):
-    _, loaders, pipes = setup_probe
+    make, loaders, pipes = setup_probe
+    source_root = make.source_root
     game_root = tmp_path / 'official-game'
     state = SimpleNamespace(birth=100, path=game_root / 'Arknights.exe', alive=True,
                             build=module.BUILD_ID, fail_close=False, fail_load=False)
@@ -253,9 +323,9 @@ def prepared_setup(tmp_path, monkeypatch, setup_probe):
                 raise RuntimeError('controlled pending loader')
             super().load(path)
 
-    def prepare():
-        return module.PreparedNativeHooks(game_root, root=ROOT, runtime_dir=tmp_path / 'early',
-                                          loader_factory=EarlyLoader)
+    def prepare(**options):
+        return module.PreparedNativeHooks(game_root, root=source_root, runtime_dir=tmp_path / 'early',
+                                          loader_factory=EarlyLoader, **options)
 
     def probe(prepared, **options):
         selected = collector(**options)
@@ -269,7 +339,7 @@ def prepared_setup(tmp_path, monkeypatch, setup_probe):
             pipes.append(value)
             return value
 
-        return module.NativeHookEventProbe(selected, root=ROOT, prepared=prepared,
+        return module.NativeHookEventProbe(selected, root=source_root, prepared=prepared,
             loader_factory=reject_second_load, pipe_factory=make_pipe)
 
     return prepare, probe, state, loaders, pipes

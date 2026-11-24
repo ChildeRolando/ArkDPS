@@ -7,6 +7,7 @@ totals. This module never elevates privileges or changes a protection service.
 import ctypes
 from copy import deepcopy
 from ctypes import wintypes
+from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 import os
@@ -18,7 +19,7 @@ import time
 
 from connection import VersionStatus
 from event_observer import ObserverStatus
-from event_probe import (NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry,
+from event_probe import (NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry, AssembledProbeSource,
                          assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail)
 from native_pc.internal_event_source import _finite_number, _reject_constant, _unique_fields
 from native_pc.probe_native_pc import BUILD_ID
@@ -132,7 +133,7 @@ def validate_native_hook_payload(binary, *, source_dir, license_dir=None, build_
         raise RuntimeError('自研实时组件载荷、构建清单或许可不一致，拒绝加载。') from None
 
 
-def _portable_native_hook_binary(root):
+def _portable_native_hook_binary(root, *, _read_capture=None):
     """Admit only an explicit startup-test payload, not a release certificate.
 
     Hashes bind this bundle's files to its manifest, not to a digital signature
@@ -144,7 +145,10 @@ def _portable_native_hook_binary(root):
     try:
         if root.resolve() != package / 'collector':
             raise ValueError('fixed collector directory required')
-        release = _portable_json(_portable_bytes(package, 'metadata/release.json', limit=16 * 1024 * 1024))
+        release_bytes = _portable_bytes(package, 'metadata/release.json', limit=16 * 1024 * 1024)
+        release = _portable_json(release_bytes)
+        if _read_capture is not None:
+            _capture_material_bytes(_read_capture, package / 'metadata/release.json', release_bytes)
         if (type(release.get('format')) is not int or release['format'] != 2
                 or type(release.get('protocol')) is not int or release['protocol'] != PROTOCOL
                 or not isinstance(release.get('head'), str) or re.fullmatch(r'[0-9a-f]{40}', release['head']) is None):
@@ -193,6 +197,8 @@ def _portable_native_hook_binary(root):
             data = _portable_bytes(package, name)
             if sha256(data).hexdigest() != expected:
                 raise ValueError('packaged file hash mismatch')
+            if _read_capture is not None:
+                _capture_material_bytes(_read_capture, package / name, data)
             return data
 
         for field, name in (('sha256', NATIVE_HOOK_PACKAGE_PATH),
@@ -368,33 +374,116 @@ class NativePipe:
         self.handle = None
 
 
-def native_hook_binary(root):
+def native_hook_binary(root, *, _read_capture=None):
     """Resolve development bytes or the explicitly scoped portable candidate."""
     root = Path(root)
     if root.name.casefold() == 'collector' or (root.parent / 'metadata').exists():
-        return _portable_native_hook_binary(root)
+        return _portable_native_hook_binary(root, _read_capture=_read_capture)
     binary = root / 'runtime/native-pc/native-event-runtime' / DLL_NAME
     manifest_path = binary.with_suffix('.build.json')
     if not binary.is_file() or not manifest_path.is_file():
         raise RuntimeError('请先构建自研实时组件：python native_pc/native_event_runtime/build.py')
+    def read(path):
+        with Path(path).open('rb') as stream:
+            data = stream.read(64 * 1024 * 1024 + 1)
+        if len(data) > 64 * 1024 * 1024:
+            raise ValueError('native hook payload exceeds limit')
+        _capture_material_bytes(_read_capture, path, data)
+        return data
     validate_native_hook_payload(binary, source_dir=root / 'native_pc/native_event_runtime',
-                                 require_distribution_pins=False)
+                                 require_distribution_pins=False, read_file=read if _read_capture is not None else None)
     return binary
 
 
-def _native_source(root, autochess_enabled=None):
-    assembled = assemble_probe_source('native_pc', directory=root)
+def _effective_native_environment():
+    hp = os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1'
+    return hp, hp and os.environ.get('ARKDPS_TRACE_NESTED_PARENT') == '1', os.environ.get('ARKDPS_COALESCE_ENEMY_HP') != '0'
+
+
+def _native_source(root, autochess_enabled=None, *, read_file=None, effective_env=None):
+    assembled = assemble_probe_source('native_pc', directory=root, read_file=read_file)
     source = assembled.source
     if autochess_enabled is not None:
         source = 'globalThis.arkdpsAutoChessMode = ' + json.dumps(
             'all' if autochess_enabled() else 'local') + ';\n' + source
-    if os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1':
+    hp, nested, coalesce = _effective_native_environment() if effective_env is None else effective_env
+    if hp:
         source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
-        if os.environ.get('ARKDPS_TRACE_NESTED_PARENT') == '1':
+        if nested:
             source = 'globalThis.arkdpsTraceNestedParent = true;\n' + source
-    if os.environ.get('ARKDPS_COALESCE_ENEMY_HP') == '0':
+    if not coalesce:
         source = 'globalThis.arkdpsCoalesceEnemyHp = false;\n' + source
     return assembled, source
+
+
+def _capture_material_bytes(capture, path, data):
+    if capture is None:
+        return
+    if type(data) is not bytes:
+        raise TypeError('native material requires immutable file bytes')
+    path = Path(path).resolve()
+    if path in capture and capture[path] != data:
+        raise RuntimeError('原生载荷在同次完整校验期间改变')
+    capture[path] = data
+
+
+@dataclass(frozen=True)
+class NativeHookMaterial:
+    """Private per-owner validated bytes, not a path/Boolean cache or credential.
+
+    Critical prepare code is already imported at this module's top level. No
+    supplied Python/build source is imported or executed by material creation.
+    Hashes prove byte consistency, not an adversary-proof package signature.
+    """
+    root: Path
+    image: bytes = field(repr=False)
+    assembled: AssembledProbeSource = field(repr=False)
+    source: str = field(repr=False)
+    effective_env: tuple
+    image_sha256: str
+    build_manifest_sha256: str
+    release_sha256: str | None
+    provenance: tuple = field(repr=False)
+
+
+def prepare_native_hook_material(root):
+    """Run every existing hash gate once, assemble from those exact JS reads.
+
+    A new call always revalidates. Callers may keep this immutable result only
+    for their current root/environment lifecycle, before arming their watch.
+    """
+    root = Path(root).resolve()
+    environment = _effective_native_environment()
+    captured = {}
+    binary = native_hook_binary(root, _read_capture=captured)
+    binary_key, manifest_key = binary.resolve(), binary.with_suffix('.build.json').resolve()
+    image, manifest_bytes = captured[binary_key], captured[manifest_key]
+    portable = root.name.casefold() == 'collector' or (root.parent / 'metadata').exists()
+    def source_read(path):
+        key = Path(path).resolve()
+        if key not in captured:
+            if portable:
+                raise RuntimeError('原生便携包缺少同次已校验的业务源码')
+            _capture_material_bytes(captured, path, Path(path).read_bytes())
+        return captured[key]
+    assembled, source = _native_source(root, None, read_file=source_read, effective_env=environment)
+    if _effective_native_environment() != environment:
+        raise RuntimeError('原生探针环境参数在完整校验期间改变')
+    image_hash = sha256(image).hexdigest()
+    if _portable_json(manifest_bytes).get('sha256') != image_hash:
+        raise RuntimeError('原生已验证字节与构建摘要不一致')
+    base = root.parent if portable else root
+    provenance = []
+    for path, data in captured.items():
+        try:
+            name = path.relative_to(base).as_posix()
+        except ValueError:
+            raise RuntimeError('原生已验证载荷路径越界') from None
+        provenance.append((name, sha256(data).hexdigest()))
+    release = captured.get((root.parent / 'metadata/release.json').resolve()) if portable else None
+    return NativeHookMaterial(root, image, assembled, source, environment, image_hash,
+        sha256(manifest_bytes).hexdigest(), sha256(release).hexdigest() if release is not None else None,
+        tuple(sorted(provenance)))
 
 
 class PreparedNativeHooks:
@@ -406,11 +495,12 @@ class PreparedNativeHooks:
 
     valid_seconds = 120.0
 
-    def __init__(self, game_root, *, root=None, runtime_dir=None, loader_factory=WindowsDllLoader):
+    def __init__(self, game_root, *, root=None, runtime_dir=None, loader_factory=WindowsDllLoader, material=None):
         self.game_root = Path(game_root).expanduser().resolve()
         self.root = Path(root).resolve() if root else Path(__file__).resolve().parents[1]
         self.runtime_dir = Path(runtime_dir) if runtime_dir else self.root / 'runtime/native-pc/native-hook-sessions'
         self.loader_factory = loader_factory
+        self.material = material
         self.process_instance = None
         self.prepared_at = self.expires_at = self.prepared_wall_time = None
         self.claimed = False
@@ -446,14 +536,20 @@ class PreparedNativeHooks:
             build, _ = access.verify_build(self.game_root)
             if (not build.get('known_build') or not build.get('amd64') or build.get('source_build') != BUILD_ID):
                 raise RuntimeError('预加载需要指纹匹配的官服 Windows x64 构建')
-            binary = native_hook_binary(self.root)
-            image = binary.read_bytes()
-            manifest = json.loads(binary.with_suffix('.build.json').read_text(encoding='utf-8'),
-                                  object_pairs_hook=_unique_fields)
-            self._image_sha256 = sha256(image).hexdigest()
-            if manifest.get('sha256') != self._image_sha256:
-                raise RuntimeError('自研实时 DLL 在准备期间改变，请重新构建后重试。')
-            self._assembled, self._source = _native_source(self.root)
+            material = self.material
+            if material is None:
+                material = prepare_native_hook_material(self.root)
+            if (type(material) is not NativeHookMaterial or material.root != self.root
+                    or type(material.effective_env) is not tuple or len(material.effective_env) != 3
+                    or any(type(value) is not bool for value in material.effective_env)
+                    or material.effective_env != _effective_native_environment()
+                    or type(material.image) is not bytes or type(material.source) is not str
+                    or type(material.assembled) is not AssembledProbeSource
+                    or sha256(material.image).hexdigest() != material.image_sha256):
+                raise RuntimeError('原生已校验载荷类型、源码目录、环境或字节摘要不匹配')
+            self.material = material
+            image, self._image_sha256 = material.image, material.image_sha256
+            self._assembled, self._source = material.assembled, material.source
             self._loader = self.loader_factory(self.process_instance[0])
             self._identity()
             self._loader.cancelled = lambda: self.cancelled()

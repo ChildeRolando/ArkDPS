@@ -52,7 +52,7 @@ class Preparations:
         self.failure = self.before_commit = None
         self.fail_cleanup = False
 
-    def __call__(self, game_root, *, root, runtime_dir):
+    def __call__(self, game_root, *, root, runtime_dir, material):
         owner = self
 
         class Prepared:
@@ -63,6 +63,7 @@ class Preparations:
                 self.process_instance = None
                 self.close_calls = 0
                 self.root, self.runtime_dir = root, runtime_dir
+                self.material = material
 
             def prepare(self, birth):
                 self.process_instance = birth
@@ -107,11 +108,16 @@ def env(tmp_path, monkeypatch):
     root = tmp_path / 'owned-game-path'
     root.mkdir()
     api, factory, runtimes = Api(root), Preparations(), []
+    material, material_calls = object(), []
+    def make_material(source):
+        material_calls.append(source)
+        return material
     build = {'known_build': True, 'amd64': True, 'source_build': module.access.BUILD_ID}
 
     def make(**options):
         runtime = NativeHookRuntime(root, runtime_dir=tmp_path / 'state', collector_root=tmp_path / 'source',
             api=api, admin_check=options.pop('admin_check', lambda: True), prepared_factory=factory,
+            material_factory=options.pop('material_factory', make_material),
             build_check=lambda _: (dict(build), []), **options)
         runtimes.append(runtime)
         return runtime
@@ -120,7 +126,8 @@ def env(tmp_path, monkeypatch):
         return SimpleNamespace(created=created, alive=True,
                                path=root / ('Arknights.exe' if correct else 'Other.exe'))
 
-    yield SimpleNamespace(root=root, api=api, factory=factory, runtimes=runtimes, build=build, make=make, row=row)
+    yield SimpleNamespace(root=root, api=api, factory=factory, runtimes=runtimes, build=build, make=make, row=row,
+                          material=material, material_calls=material_calls)
     factory.fail_cleanup = False
     for runtime in runtimes:
         for observer in tuple(runtime._observers):
@@ -540,3 +547,225 @@ def test_trace_does_not_treat_combined_api_literal_as_a_free_text_prefix(env, op
     assert records[0]['loader']['last_error']['operation'] is None
     assert 'PRIVATE_' not in repr(records)
     assert not env.factory.instances and not env.api.opened
+
+
+def test_full_material_validation_precedes_arm_and_is_not_repeated_after_birth(env):
+    entered, release = Event(), Event()
+    calls = []
+    runtime = None
+    def material(source):
+        assert not runtime._condition._is_owned()
+        calls.append(source)
+        entered.set()
+        release.wait(3)
+        return env.material
+    runtime = env.make(material_factory=material)
+    runtime.start()
+    assert entered.wait(3)
+    try:
+        assert runtime.describe()['status'] == 'starting'
+        assert runtime.describe()['armed_filetime'] is None
+        assert runtime.describe()['material_ready'] is False
+        env.api.rows[1] = env.row(time.time_ns() // 100 + module.FILETIME_EPOCH)
+        assert not env.api.opened and not env.factory.instances
+    finally:
+        release.set()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process' and r['code'] == 'restart_required')
+    assert calls == [runtime.collector_root] and not env.factory.instances
+    env.api.rows.clear()
+    lease = ready(env, runtime)
+    assert calls == [runtime.collector_root]
+    assert env.factory.instances[0].material is env.material
+    report = runtime.describe()
+    assert report['material_ready'] is True and report['material_generation'] == 1
+    assert type(report['material_preflight_seconds']) is float and report['material_preflight_seconds'] >= 0
+    assert env.factory.loads == [(lease['pid'], lease['created'])]
+
+
+def test_material_failure_does_not_hot_loop_and_needs_explicit_retry(env):
+    calls = []
+    def material(source):
+        calls.append(source)
+        if len(calls) == 1:
+            raise RuntimeError('owned invalid material')
+        return env.material
+    runtime = env.make(material_factory=material).start()
+    wait_for(runtime, lambda r: r['status'] == 'failed')
+    time.sleep(.08)
+    assert len(calls) == 1 and runtime.describe()['armed_filetime'] is None
+    assert not env.api.opened and not env.factory.instances
+    runtime.retry()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    assert len(calls) == 2 and runtime.describe()['material_generation'] == 1
+
+
+def test_none_material_is_never_armed_or_given_to_a_loader(env):
+    runtime = env.make(material_factory=lambda _: None).start()
+    wait_for(runtime, lambda r: r['status'] == 'failed')
+    assert runtime.code == 'native_material_not_ready'
+    assert runtime.describe()['material_ready'] is False and runtime.describe()['armed_filetime'] is None
+    assert not env.factory.instances and not env.api.opened
+
+
+def test_cancellation_discards_late_material_without_arming(env):
+    entered, release = Event(), Event()
+    def material(_):
+        entered.set()
+        release.wait(3)
+        return env.material
+    runtime = env.make(material_factory=material).start()
+    assert entered.wait(3)
+    runtime.cancel()
+    release.set()
+    runtime.close()
+    report = runtime.describe()
+    assert report['status'] == 'closed' and report['material_ready'] is False
+    assert report['armed_filetime'] is None and report['material_generation'] == 0
+    assert runtime._material is None and not env.factory.instances
+
+
+def test_retry_during_validation_cannot_publish_or_load_superseded_material(env):
+    entered, release = [Event(), Event()], [Event(), Event()]
+    values, calls = [object(), object()], []
+    def material(_):
+        index = len(calls)
+        calls.append(index)
+        entered[index].set()
+        release[index].wait(3)
+        return values[index]
+    runtime = env.make(material_factory=material).start()
+    assert entered[0].wait(3)
+    runtime.retry()
+    release[0].set()
+    assert entered[1].wait(3)
+    try:
+        report = runtime.describe()
+        assert report['armed_filetime'] is None and report['material_generation'] == 0
+        assert runtime._material is None and report['material_ready'] is False
+        assert not env.factory.instances and not env.api.opened
+    finally:
+        release[1].set()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    ready(env, runtime)
+    assert calls == [0, 1] and env.factory.instances[0].material is values[1]
+
+
+def test_slow_idle_retry_is_starting_not_an_old_armed_prompt(env):
+    runtime = arm(env)
+    old_material, old_fence = runtime._material, runtime.describe()['armed_filetime']
+    entered, release = Event(), Event()
+    def material(_):
+        entered.set()
+        release.wait(3)
+        return object()
+    runtime.material_factory = material
+    runtime.retry()
+    assert entered.wait(3)
+    try:
+        report = runtime.describe()
+        assert report['status'] == 'starting' and report['material_ready'] is False
+        assert runtime._material is old_material and report['armed_filetime'] == old_fence
+    finally:
+        release.set()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process')
+    assert runtime.describe()['material_generation'] == 2
+
+
+def test_failed_retry_preserves_existing_preparation_material_and_attempted_birth(env):
+    runtime = arm(env)
+    lease = ready(env, runtime)
+    prepared, material, fence = runtime._prepared, runtime._material, runtime.describe()['armed_filetime']
+    def invalid(_):
+        raise RuntimeError('owned changed package')
+    runtime.material_factory = invalid
+    runtime.retry()
+    wait_for(runtime, lambda r: r['status'] == 'process_failed')
+    assert runtime._prepared is prepared and not prepared._closed and runtime._material is material
+    assert runtime.describe()['armed_filetime'] == fence and runtime.describe()['material_ready'] is False
+    assert (lease['pid'], lease['created']) in runtime._attempted
+    with pytest.raises(RuntimeFailure):
+        runtime.observer_factory(SimpleNamespace())
+    time.sleep(.05)
+    assert len(env.factory.instances) == len(env.factory.loads) == 1
+
+
+def test_retry_does_not_invalidate_an_active_observer_or_revalidate_material(env):
+    runtime = arm(env)
+    lease = ready(env, runtime)
+    observer = runtime.observer_factory(SimpleNamespace(process=SimpleNamespace(
+        pid=lease['pid'], process_instance=(lease['pid'], lease['created']))))
+    material, generation = runtime._material, runtime.describe()['material_generation']
+    assert runtime.retry() is False
+    time.sleep(.06)
+    assert runtime.describe()['material_ready'] is True and runtime._material is material
+    assert runtime.describe()['material_generation'] == generation and len(env.material_calls) == 1
+    assert runtime.wait_ready(0) == lease and observer in runtime._observers
+    assert len(env.factory.loads) == 1
+
+
+def test_process_query_pending_does_not_repeat_full_material_preflight(env):
+    runtime = arm(env)
+    env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 1)
+    env.api.denied.add(1)
+    wait_for(runtime, lambda r: r['code'] == 'process_query_pending')
+    time.sleep(.06)
+    assert len(env.material_calls) == 1 and not env.factory.instances
+
+
+def test_game_build_change_during_material_validation_does_not_arm(env, monkeypatch):
+    current = [0]
+    def material(_):
+        current[0] = 1
+        return env.material
+    runtime = env.make(material_factory=material)
+    monkeypatch.setattr(runtime, '_files', lambda: (current[0],))
+    runtime.start()
+    wait_for(runtime, lambda r: r['status'] == 'failed')
+    assert runtime.code == 'native_build_changed' and runtime.describe()['armed_filetime'] is None
+    assert runtime._material is None and not env.factory.instances
+
+
+def test_retry_arriving_during_target_query_blocks_old_material_admission(env, monkeypatch):
+    entered, release = Event(), Event()
+    values, calls = [object(), object()], []
+    def material(_):
+        index = len(calls)
+        calls.append(index)
+        if index == 1:
+            entered.set()
+            release.wait(3)
+        return values[index]
+    runtime = env.make(material_factory=material)
+    original = runtime._instances
+    triggered = [False]
+    def instances():
+        if not triggered[0]:
+            triggered[0] = True
+            env.api.rows[1] = env.row(time.time_ns() // 100 + module.FILETIME_EPOCH)
+            runtime.retry()
+        return original()
+    monkeypatch.setattr(runtime, '_instances', instances)
+    runtime.start()
+    assert entered.wait(3)
+    try:
+        assert runtime.describe()['material_ready'] is False
+        assert runtime.describe()['status'] == 'starting'
+        assert not env.factory.instances and not runtime._attempted
+    finally:
+        release.set()
+    wait_for(runtime, lambda r: r['status'] == 'waiting_for_process' and r['code'] == 'restart_required')
+    assert not env.factory.instances
+    env.api.rows.clear()
+    ready(env, runtime)
+    assert env.factory.instances[0].material is values[1] and calls == [0, 1]
+
+
+def test_failed_arming_clock_does_not_partially_publish_material(env):
+    def bad_clock():
+        raise RuntimeError('owned unavailable arming clock')
+    clock = SimpleNamespace(time_ns=bad_clock, monotonic=time.monotonic)
+    runtime = env.make(clock=clock).start()
+    wait_for(runtime, lambda r: r['status'] == 'failed')
+    assert runtime.describe()['material_ready'] is False
+    assert runtime.describe()['material_generation'] == 0 and runtime.describe()['armed_filetime'] is None
+    assert runtime._material is None and not env.factory.instances

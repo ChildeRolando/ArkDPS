@@ -36,22 +36,32 @@ class AssembledProbeSource:
                     context_source_sha256=self.context_source_sha256)
 
 
-def assemble_probe_source(platform, *, directory=None):
-    """Compose the fixed adapter/runtime boundary; never rewrite source tokens."""
+def assemble_probe_source(platform, *, directory=None, read_file=None):
+    """Compose the fixed adapter/runtime boundary; never rewrite source tokens.
+
+    A caller may supply its already-verified immutable file snapshot. Both
+    compilation and provenance then use that snapshot, not a second disk read.
+    """
     names = {'mumu': 'event_probe_android2791.js', 'native_pc': 'event_probe_native_pc.js'}
     if platform not in names:
         raise ValueError('unsupported event probe source platform')
     directory = Path(__file__).resolve().parent if directory is None else Path(directory)
     adapter_name, runtime_name = names[platform], 'event_probe_runtime.js'
     adapter_path, runtime_path = directory / adapter_name, directory / runtime_name
-    adapter_bytes, runtime_bytes = adapter_path.read_bytes(), runtime_path.read_bytes()
+    def read(path):
+        raw = path.read_bytes() if read_file is None else read_file(path)
+        if type(raw) is not bytes:
+            raise TypeError('event probe source reader must return immutable bytes')
+        return raw
+
+    adapter_bytes, runtime_bytes = read(adapter_path), read(runtime_path)
     # Hash and compile the same single read, even if files change concurrently.
     normalize = lambda raw: raw.decode('utf-8').replace('\r\n', '\n').replace('\r', '\n')
     adapter, runtime = normalize(adapter_bytes), normalize(runtime_bytes)
     if not adapter.startswith('// ArkDPS event probe adapter v1; loaded with event_probe_runtime.js.\n'):
         raise ValueError('unsupported event probe adapter source format')
     context_name = 'event_probe_autochess.js'
-    context_bytes = (directory / context_name).read_bytes()
+    context_bytes = read(directory / context_name)
     context = normalize(context_bytes)
     source = '\n'.join((context, adapter, runtime))
     digest = lambda text: sha256(text.encode('utf-8')).hexdigest()

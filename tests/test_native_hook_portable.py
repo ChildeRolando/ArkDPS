@@ -40,6 +40,9 @@ def portable(tmp_path, monkeypatch):
         path.write_bytes(('owned file fixture: ' + name).encode())
     for name in module.RUNTIME_SOURCES:
         (source_dir / name).write_bytes(('owned native source fixture: ' + name).encode())
+    (root / 'event_probe_native_pc.js').write_bytes(b'// ArkDPS event probe adapter v1; loaded with event_probe_runtime.js.\n// owned adapter\n')
+    (root / 'event_probe_runtime.js').write_bytes(b'// owned runtime\n')
+    (root / 'event_probe_autochess.js').write_bytes(b'// owned AutoChess\n')
     binary = source_dir / module.DLL_NAME
     binary.write_bytes(b'controlled-not-a-DLL-never-executed')
     licenses = {}
@@ -87,6 +90,69 @@ def test_explicit_native_hooks_startup_variant_resolves_only_its_packaged_dll(po
     assert module.native_hook_binary(portable['root']) == portable['binary']
     # The package does not contain a development runtime fallback.
     assert not (portable['root'] / 'runtime').exists()
+
+
+def test_material_uses_exact_validated_payload_and_js_not_post_validation_disk_reads(portable, monkeypatch):
+    image = portable['binary'].read_bytes()
+    source = module._native_source(portable['root'])[1]
+    build_hash = hashed(portable['build_path'])
+    release_hash = hashed(portable['release_path'])
+    original = module.native_hook_binary
+    def changed_after_validation(root, **kwargs):
+        result = original(root, **kwargs)
+        portable['binary'].write_bytes(b'changed after validation')
+        (root / 'event_probe_runtime.js').write_bytes(b'// changed after validation\n')
+        return result
+    monkeypatch.setattr(module, 'native_hook_binary', changed_after_validation)
+    material = module.prepare_native_hook_material(portable['root'])
+    assert material.image == image and material.source == source
+    assert material.image_sha256 == sha256(image).hexdigest()
+    assert material.build_manifest_sha256 == build_hash and material.release_sha256 == release_hash
+    assert material.root == portable['root'].resolve()
+    # A fresh preflight must validate again, not trust a cached path/Boolean.
+    with pytest.raises(RuntimeError):
+        module.prepare_native_hook_material(portable['root'])
+
+
+def test_material_is_frozen_and_assembly_provenance_comes_from_the_verified_js(portable):
+    from dataclasses import FrozenInstanceError
+    material = module.prepare_native_hook_material(portable['root'])
+    assert material.assembled.runtime_sha256 == hashed(portable['root'] / 'event_probe_runtime.js')
+    assert material.assembled.adapter_sha256 == hashed(portable['root'] / 'event_probe_native_pc.js')
+    assert material.assembled.context_sha256 == hashed(portable['root'] / 'event_probe_autochess.js')
+    with pytest.raises(FrozenInstanceError):
+        material.image = b'forbidden mutation'
+    assert 'controlled-not-a-DLL' not in repr(material) and '// owned runtime' not in repr(material)
+
+
+@pytest.mark.parametrize('file', ['event_probe_runtime.js', 'native_pc/native_event_runtime/engine.cpp'])
+def test_material_does_not_skip_existing_portable_full_inventory_hashes(portable, file):
+    (portable['root'] / file).write_bytes(b'changed before preflight')
+    with pytest.raises(RuntimeError):
+        module.prepare_native_hook_material(portable['root'])
+
+
+def test_material_rejects_captured_paths_outside_its_real_owner_root(portable, monkeypatch, tmp_path):
+    original = module.native_hook_binary
+    def outside(root, **kwargs):
+        result = original(root, **kwargs)
+        kwargs['_read_capture'][(tmp_path / 'outside.py').resolve()] = b'not an owner input'
+        return result
+    monkeypatch.setattr(module, 'native_hook_binary', outside)
+    with pytest.raises(RuntimeError, match='路径越界'):
+        module.prepare_native_hook_material(portable['root'])
+
+
+def test_material_rejects_effective_environment_change_during_validation(portable, monkeypatch):
+    original = module.native_hook_binary
+    before = module._effective_native_environment()
+    def changed(root, **kwargs):
+        result = original(root, **kwargs)
+        monkeypatch.setenv('ARKDPS_COALESCE_ENEMY_HP', '0' if before[2] else '1')
+        return result
+    monkeypatch.setattr(module, 'native_hook_binary', changed)
+    with pytest.raises(RuntimeError, match='环境参数在完整校验期间改变'):
+        module.prepare_native_hook_material(portable['root'])
 
 
 def test_relative_collector_root_uses_the_same_fixed_portable_layout(portable, monkeypatch):

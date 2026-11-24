@@ -64,6 +64,26 @@ def test_missing_or_wrong_source_format_cannot_fall_back_to_a_different_probe(tm
         assemble_probe_source("native_pc", directory=tmp_path)
 
 
+def test_source_reader_assembles_exact_verified_snapshot_without_disk_rereads(tmp_path):
+    expected = assemble_probe_source('native_pc')
+    names = (expected.adapter_file, expected.runtime_file, expected.context_file)
+    snapshot = {tmp_path / name: (ROOT / name).read_bytes() for name in names}
+    calls = []
+
+    def read(path):
+        calls.append(path)
+        return snapshot[path]
+
+    # The directory is deliberately empty: a path cache followed by another
+    # disk read would fail instead of composing the admitted bytes.
+    actual = assemble_probe_source('native_pc', directory=tmp_path, read_file=read)
+    assert actual == expected
+    assert calls == [tmp_path / name for name in names]
+    with pytest.raises(TypeError, match='immutable bytes'):
+        assemble_probe_source('native_pc', directory=tmp_path,
+                              read_file=lambda path: bytearray(snapshot[path]))
+
+
 def test_amount_skill_and_settlement_logic_has_one_shared_owner():
     common = (ROOT / "event_probe_runtime.js").read_text(encoding="utf-8")
     for name in ("record", "settleDamage", "skillIdentity", "recordHpContext",
