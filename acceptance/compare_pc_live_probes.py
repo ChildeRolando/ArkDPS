@@ -41,7 +41,7 @@ SEMANTIC_FIELDS = (
     'enemy_damage_owner', 'mitigation_before', 'mitigation_after',
     'skill_key', 'skill_id', 'skill_name', 'skill_reason', 'skill_method',
     'skill_wait_for_end', 'phase_total_hp', 'phase_count', 'phase_from_birth',
-    'enemy_entry_attributes', 'finish_reason', 'enemy_max_hp',
+    'enemy_entry_attributes', 'finish_reason', 'enemy_max_hp', 'enemy_regen_ticks',
 )
 PROOF_FIELDS = ('method', 'evidence_method', 'type', 'target', 'buff',
                 'before', 'after', 'incoming', 'direct_healing',

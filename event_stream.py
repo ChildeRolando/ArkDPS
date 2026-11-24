@@ -126,7 +126,7 @@ class EventStream:
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
                skill_method=None, skill_wait_for_end=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
-               enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None,
+               enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None, enemy_regen_ticks=None,
                mitigation_before=None, mitigation_after=None,
                source_character_uid=None, unresolved_source=False, settled_after_nested_kill=False,
                settlement_complete=None, nominal_amount=None, settlement_identity=None,
@@ -141,7 +141,7 @@ class EventStream:
                        target_instance, target_uid, enemy_damage_owner,
                        skill_key, skill_id, skill_name, skill_reason, skill_method, skill_wait_for_end,
                        phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
-                       finish_reason, enemy_max_hp, mitigation_before, mitigation_after,
+                       finish_reason, enemy_max_hp, enemy_regen_ticks, mitigation_before, mitigation_after,
                        source_character_uid, unresolved_source, settled_after_nested_kill,
                        settlement_complete, nominal_amount, settlement_identity)
         if session != self.session or not self._nonnegative_int(sequence):
@@ -323,7 +323,8 @@ class EventStream:
                         sequence, kind, frame, game_time, source, amount, target, target_instance,
                         hp_before=hp_before, hp_after=hp_after, phase_total_hp=phase_total_hp,
                         phase_count=phase_count, phase_from_birth=phase_from_birth,
-                        finish_reason=finish_reason, enemy_max_hp=enemy_max_hp)
+                        finish_reason=finish_reason, enemy_max_hp=enemy_max_hp,
+                        enemy_regen_ticks=enemy_regen_ticks)
                 except (ValueError, TypeError, OverflowError):
                     self.statistics.mark_enemy_state_unknown()
         self._record_receipt(sequence, frame, game_time, payload, replay_record)

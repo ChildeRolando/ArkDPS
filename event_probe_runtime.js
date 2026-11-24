@@ -1168,19 +1168,28 @@ function recordEnemyHp(write,when,method,hp,maxHp){
   if(write.enemyTarget&&enemyMaxHpReady&&method==='Entity.SetHpInternal'&&maxHpBefore===null
      &&birth?.eid===eid&&when.frame>birth.frame+1&&Number.isFinite(maxHp)
      &&0<hpBefore&&hpBefore<hp&&hp<=maxHp){
+   // Preserve the first +1 as an explicit continuity witness in the compact record.
+   const unitTick=(eid==='enemy_1061_zomshd'||eid==='enemy_1061_zomshd_2')&&hp-hpBefore===1;
    const run=enemyHpRun;
-   if(run&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
+   if(run&&run.unitTick===unitTick&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
       &&run.when.frame===when.frame&&run.when.game_time===when.game_time
       &&run.when.settlementScope===when.settlementScope
       &&sameNativeEventScope(run.when,when)&&run.after===hpBefore){
+    if(unitTick){
+     run.tail.evidence.enemy_regen_ticks=(run.tail.evidence.enemy_regen_ticks??1)+1;
+    }
     if(run.tail)run.tail.evidence.hp_after=hp;
     else run.tail={when,method,evidence};
     run.after=hp;
     return;
    }
    flushCoalescedEnemyHp();
-   if(enqueueEvent(null,'enemy_hp',0,when,{method},evidence))
-    enemyHpRun={key,uid,eid,when,maxHp,after:hp,tail:null};
+   if(unitTick){
+    // Stage even the first tick so an already published sequence is immutable.
+    enemyHpRun={key,uid,eid,when,maxHp,after:hp,unitTick,tail:{when,method,evidence}};
+   }else if(enqueueEvent(null,'enemy_hp',0,when,{method},evidence)){
+    enemyHpRun={key,uid,eid,when,maxHp,after:hp,unitTick,tail:null};
+   }
    return;
   }
  }

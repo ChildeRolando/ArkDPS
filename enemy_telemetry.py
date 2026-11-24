@@ -1003,9 +1003,15 @@ class EnemyTelemetry:
         before = _finite(event.get('hp_before'), None)
         spawn_frame = row.get('spawn_frame')
         event_key = (event['frame'], event['sequence'])
+        continuous = _same_hp(row['hp'], before) and _same_hp(_max_hp(row), max_hp)
+        if not continuous and event.get('enemy_regen_ticks') is not None:
+            # The validated run observed the first +1 and MaxHP in this frame.
+            # Its remaining ticks are continuous even if the earlier row was stale.
+            before += 1
+            continuous = True
         if (row['lifecycle'] != 'active' or row['alive'] is not True or row.get('entry_inferred')
                 or before is None or before <= 0 or hp <= before
-                or not _same_hp(row['hp'], before) or not _same_hp(_max_hp(row), max_hp)
+                or not continuous
                 or (hp > max_hp and not _same_hp(hp, max_hp))
                 or (spawn_frame is not None and event['frame'] <= spawn_frame + 1)
                 or event_key <= self._recovery_events.get(key, (-1, -1))):

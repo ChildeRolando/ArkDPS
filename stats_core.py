@@ -720,7 +720,7 @@ class Statistics:
     def record_enemy_state(self, sequence, kind, frame, game_time, source, amount,
                            eid, instance_uid, *, hp_before=None, hp_after=None,
                            phase_total_hp=None, phase_count=None, phase_from_birth=None,
-                           finish_reason=None, enemy_max_hp=None):
+                           finish_reason=None, enemy_max_hp=None, enemy_regen_ticks=None):
         if self.enemy_state_start_frame is None:
             return
         if (kind not in ENEMY_STATE_KINDS
@@ -751,6 +751,13 @@ class Statistics:
             event['hp_before'] = hp_before
         if hp_after is not None:
             event['hp_after'] = hp_after
+        if enemy_regen_ticks is not None:
+            if (kind != 'enemy_hp' or eid not in ('enemy_1061_zomshd', 'enemy_1061_zomshd_2')
+                    or type(enemy_regen_ticks) is not int or enemy_regen_ticks < 2
+                    or hp_before is None or hp_before <= 0 or enemy_max_hp is None
+                    or hp_after > enemy_max_hp or hp_after - hp_before != enemy_regen_ticks):
+                raise ValueError('invalid shieldguard recovery ticks')
+            event['enemy_regen_ticks'] = enemy_regen_ticks
         if enemy_max_hp is not None:
             event['enemy_max_hp'] = enemy_max_hp
         if kind == 'enemy_enter':

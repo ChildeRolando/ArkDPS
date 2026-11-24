@@ -717,6 +717,15 @@ def enemy_state_event(event):
         if kind != 'enemy_hp' or type(maximum) not in (int, float) or not 0 < maximum < math.inf:
             raise ValueError('invalid enemy max HP')
         result['enemy_max_hp'] = maximum
+    ticks = event.get('enemy_regen_ticks')
+    if ticks is not None:
+        before = result.get('hp_before')
+        after = result.get('hp_after')
+        if (kind != 'enemy_hp' or eid not in ('enemy_1061_zomshd', 'enemy_1061_zomshd_2')
+                or type(ticks) is not int or ticks < 2 or before is None or before <= 0
+                or maximum is None or after > maximum or after - before != ticks):
+            raise ValueError('invalid shieldguard recovery ticks')
+        result['enemy_regen_ticks'] = ticks
     reason = event.get('finish_reason')
     if kind == 'enemy_finish':
         if type(reason) is not int or reason == 0 or not -(1 << 31) <= reason < (1 << 31):

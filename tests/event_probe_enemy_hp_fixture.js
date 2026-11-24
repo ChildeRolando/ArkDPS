@@ -6,7 +6,7 @@ const {fixture} = require('./native_pc_frida_probe_fixture.js');
 const fp = value => BigInt(value) * 4294967296n;
 const plain = value => JSON.parse(JSON.stringify(value));
 
-function scenario(platform, raw = false) {
+function scenario(platform, raw = false, eid = 'enemy_test') {
   const adapter = platform === 'native_pc' ? 'event_probe_native_pc.js' : 'event_probe_android2791.js';
   const f = fixture({platform, enemyHpState: true, sourcePath: path.join(__dirname, '..', adapter),
     globals: raw ? {arkdpsCoalesceEnemyHp: false} : {}});
@@ -19,7 +19,7 @@ function scenario(platform, raw = false) {
   };
   f.vm.runInContext('probeAdapter.stampClock = observeScope', f.context);
 
-  const enemy = f.unit('enemy_test', 12), attributes = f.alloc(), cache = f.alloc();
+  const enemy = f.unit(eid, 12), attributes = f.alloc(), cache = f.alloc();
   const maxHpSlot = cache.add(0x20);
   f.write(enemy, f.enemyClass);
   f.write(enemy.add(0x40), fp(100));
@@ -97,6 +97,27 @@ for (const platform of ['native_pc', 'mumu']) {
     expected.push([220, 215, 5, 'all_defense'], [215, 230, 5, 'all_defense']);
     assert.deepEqual(observed, expected);
     assert.equal(hpEvents.at(-1).proof.method, 'Entity.SetHpInternalDirectly');
+  }
+
+  for (const eid of ['enemy_1061_zomshd', 'enemy_1061_zomshd_2', 'enemy_test']) {
+    const s = scenario(platform, false, eid);
+    for (let hp = 101; hp <= 107; hp++) s.setHp(hp);
+    const first = s.read();
+    const ranges = batch => batch.events.slice(1).map(e => [e.hp_before, e.hp_after, e.enemy_regen_ticks]);
+    const shieldguard = eid !== 'enemy_test';
+    assert.deepEqual(ranges(first), shieldguard ? [[100, 107, 7]] : [[100, 101, undefined], [101, 107, undefined]]);
+    s.setHp(108);
+    s.setHp(109, () => s.setPhase(5));
+    s.setHp(110);
+    s.setHp(120); // A separate larger recovery on the same frame.
+    s.setHp(80);  // Damage breaks the run.
+    s.setHp(81);
+    const next = s.read();
+    assert.deepEqual(next.events.slice(0, first.events.length), first.events);
+    if (shieldguard) assert.deepEqual(ranges(next).slice(1), [
+      [107, 108, undefined], [108, 110, 2], [110, 120, undefined],
+      [120, 80, undefined], [80, 81, undefined],
+    ]);
   }
 
   const attributes = scenario(platform);
