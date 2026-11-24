@@ -444,8 +444,22 @@
     <ScrollViewer x:Name="SettingsPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="20,0,20,0">
      <Grid MaxWidth="1080">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="SettingsRightColumn" Width="*"/></Grid.ColumnDefinitions>
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-      <Border x:Name="ConnectionForm" Grid.Row="0" Style="{StaticResource SurfaceCard}" Padding="20" VerticalAlignment="Top" Margin="0,0,12,12">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <StackPanel x:Name="SettingsConnectionColumn" Grid.Row="0" Margin="0,0,12,0">
+      <Border x:Name="ReleaseSettingsCard" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,12" Visibility="{Binding Visibility, ElementName=ReleaseSettings}">
+       <StackPanel x:Name="ReleaseSettings" Visibility="Collapsed">
+        <TextBlock Text="版本与更新" Style="{StaticResource CardTitle}" FontSize="20" Margin="0,0,0,14"/>
+        <WrapPanel>
+         <TextBlock x:Name="InstalledVersion" Style="{StaticResource FieldLabel}" Margin="0,0,16,8" VerticalAlignment="Center"/>
+         <Button x:Name="CheckUpdateButton" Content="检查更新" Click="CheckUpdateClick" Margin="0,0,8,8"/>
+         <Button x:Name="UpdateAction" Click="UpdateActionClick" Visibility="Collapsed" Margin="0,0,8,8"/>
+         <Button x:Name="UpdateReleasePage" Content="查看发布页" Click="OpenReleaseDownload" Visibility="Collapsed" Margin="0,0,0,8"/>
+        </WrapPanel>
+        <TextBlock x:Name="UpdateStatus" AutomationProperties.LiveSetting="Polite" Foreground="{DynamicResource Muted}" TextWrapping="Wrap"/>
+        <ProgressBar x:Name="UpdateProgressBar" Height="4" Margin="0,6,0,0" Visibility="Collapsed" AutomationProperties.Name="更新下载进度"/>
+       </StackPanel>
+      </Border>
+      <Border x:Name="ConnectionForm" Style="{StaticResource SurfaceCard}" Padding="20" VerticalAlignment="Top" Margin="0,0,0,12">
        <StackPanel>
         <TextBlock Text="连接设置" Style="{StaticResource CardTitle}" FontSize="20"/>
         <TextBlock Text="采集来源" Style="{StaticResource FieldLabel}" Margin="0,12,0,4"/>
@@ -474,6 +488,7 @@
         <TextBlock x:Name="DetectionNote" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
        </StackPanel>
       </Border>
+      </StackPanel>
       <Border x:Name="ConnectionEventForm" Grid.Row="0" Grid.Column="1" Style="{StaticResource SurfaceCard}" Padding="20" VerticalAlignment="Top" Margin="0,0,0,12">
        <StackPanel>
         <TextBlock Text="事件观察者与连接诊断" Style="{StaticResource CardTitle}" FontSize="20" TextWrapping="Wrap"/>
@@ -631,19 +646,7 @@
         <TextBlock x:Name="StackCaptureStatus" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
        </StackPanel>
       </Border>
-      <Border Grid.Row="5" Grid.ColumnSpan="2" Style="{StaticResource SurfaceCard}" Padding="20" Margin="0,0,0,20" Visibility="{Binding Visibility, ElementName=ReleaseSettings}">
-       <StackPanel x:Name="ReleaseSettings" Visibility="Collapsed">
-        <TextBlock Text="版本与更新" Style="{StaticResource CardTitle}" FontSize="20" Margin="0,0,0,14"/>
-        <WrapPanel>
-         <TextBlock x:Name="InstalledVersion" Style="{StaticResource FieldLabel}" Margin="0,0,16,8" VerticalAlignment="Center"/>
-         <Button x:Name="CheckUpdateButton" Content="检查更新" Click="CheckUpdateClick" Margin="0,0,8,8"/>
-         <Button x:Name="UpdateAction" Click="UpdateActionClick" Visibility="Collapsed" Margin="0,0,8,8"/>
-         <Button x:Name="UpdateReleasePage" Content="查看发布页" Click="OpenReleaseDownload" Visibility="Collapsed" Margin="0,0,0,8"/>
-        </WrapPanel>
-        <TextBlock x:Name="UpdateStatus" AutomationProperties.LiveSetting="Polite" Foreground="{DynamicResource Muted}" TextWrapping="Wrap"/>
-        <ProgressBar x:Name="UpdateProgressBar" Height="4" Margin="0,6,0,0" Visibility="Collapsed" AutomationProperties.Name="更新下载进度"/>
-       </StackPanel>
-      </Border>
+
      </Grid>
     </ScrollViewer>
    </Grid>

@@ -848,7 +848,7 @@ public partial class MainWindow : Window
         SettingsRightColumn.Width = stackedSettings ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
         Grid.SetColumn(ConnectionEventForm, stackedSettings ? 0 : 1);
         Grid.SetRow(ConnectionEventForm, stackedSettings ? 1 : 0);
-        ConnectionForm.Margin = new Thickness(0, 0, stackedSettings ? 0 : 12, 12);
+        SettingsConnectionColumn.Margin = new Thickness(0, 0, stackedSettings ? 0 : 12, 0);
         SettingsActionColumn.Width = stackedSettings ? new GridLength(0) : GridLength.Auto;
         Grid.SetColumn(SettingsApplyActions, stackedSettings ? 0 : 1);
         Grid.SetRow(SettingsApplyActions, stackedSettings ? 1 : 0);

@@ -65,6 +65,18 @@ internal static class NativeBackendSettingsTests
                 arrange.Invoke(window, null);
                 window.ContentRoot.UpdateLayout();
             }
+            bool HiddenUpdatesCollapse(double width, double visibleConnectionTop)
+            {
+                window.ReleaseSettings.Visibility = Visibility.Collapsed;
+                Measure(width);
+                var hiddenConnection = Bounds(window.ConnectionForm);
+                var leftColumn = Bounds(window.SettingsConnectionColumn);
+                bool collapsed = hiddenConnection.Top < visibleConnectionTop - 1
+                    && Math.Abs(hiddenConnection.Top - leftColumn.Top) <= 1;
+                window.ReleaseSettings.Visibility = Visibility.Visible;
+                Measure(width);
+                return collapsed;
+            }
             string originalTheme = Theme.Key;
             try
             {
@@ -77,11 +89,23 @@ internal static class NativeBackendSettingsTests
                         {
                             window.ConnectionPlatform.SelectedIndex = platform;
                             window.NativeEventBackend.SelectedIndex = backend;
+                            window.ReleaseSettings.Visibility = Visibility.Visible;
                             Measure(width);
                             string context = theme + " " + width + " " + platform + " " + backend;
                             var connection = Bounds(window.ConnectionForm);
                             var observer = Bounds(window.ConnectionEventForm);
                             var apply = Bounds(applyBar);
+                            var updates = Bounds(window.ReleaseSettingsCard);
+                            var connectionColumn = Bounds(window.SettingsConnectionColumn);
+                            Check(context + " updates occupy the top of the left column above connection",
+                                Math.Abs(updates.Top - connectionColumn.Top) <= 1 && updates.Bottom <= connection.Top);
+                            Check(context + " both left-column cards stay clear of the observer",
+                                connectionColumn.Bottom <= observer.Top + 1 || connectionColumn.Right <= observer.Left + 1);
+                            Check(context + " hiding updates removes their occupied space",
+                                HiddenUpdatesCollapse(width, connection.Top));
+                            connection = Bounds(window.ConnectionForm);
+                            observer = Bounds(window.ConnectionEventForm);
+                            apply = Bounds(applyBar);
                             Check(context + " connection and observer cards never overlap",
                                 !connection.IntersectsWith(observer));
                             Check(context + " shared action follows both input groups",
