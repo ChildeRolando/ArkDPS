@@ -38,10 +38,14 @@ def _flow(report):
     return report.get('game_flow') if report.get('game_flow_status') == 'available' else None
 
 
-def _capture_fields(read, context, *, event_identity_only=False):
+def _capture_fields(read, context, *, event_identity_only=False, counters_outside_event_frame=False):
     fields = {}
     for key, capture in (('actor_rows', capture_character_rows), ('roster', capture_roster),
                          ('presence', capture_presence)):
+        if key == 'actor_rows' and counters_outside_event_frame:
+            fields.update(actor_rows=None, actor_rows_status='not_requested',
+                          actor_rows_reason='outside_opening_event_frame')
+            continue
         if event_identity_only and key in ('roster', 'presence'):
             fields.update({key: None, f'{key}_status': 'not_requested',
                            f'{key}_reason': 'native_event_identity'})
@@ -314,6 +318,7 @@ class NativePcCollector:
         return lifecycle
 
     def _capture(self, read, context, *, event_identity_mark=None):
+        advanced = False
         bound = (event_identity_mark is not None
                  and event_identity_mark.get('native_stage_id') == context.get('stage_id')
                  and all(int(event_identity_mark['native_identity'][root], 16) == context.get(field)
@@ -339,7 +344,11 @@ class NativePcCollector:
             # Skip the redundant legacy identity walks. Retain actor counters
             # for the existing initial-skill baseline check and diagnostics;
             # the event-only adapter never splits them into player amounts.
-            fields = _capture_fields(read, context, event_identity_only=True)
+            # The shared event window discards counters if its opening mark
+            # already precedes this frame. A full character walk here only
+            # extends the independent clock bracket and can starve that window.
+            fields = _capture_fields(read, context, event_identity_only=True,
+                                     counters_outside_event_frame=advanced)
         else:
             fields = _capture_fields(read, context)
         scope = (tuple(context.get(key) for key in (

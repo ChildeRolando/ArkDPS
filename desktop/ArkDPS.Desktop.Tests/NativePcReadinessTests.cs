@@ -102,6 +102,12 @@ internal static class NativePcReadinessTests
         nativeReady["native_pc_bootstrap"]!["ready_generation"] = 1;
         nativeReady["native_pc_bootstrap"]!["lease"] = new JsonObject { ["pid"] = 42, ["created"] = 134398900000000001, ["source_build"] = "verified-build" };
         Check("native prepared does not claim JS observer ready", Read(nativeReady) is { Phase: "connected", Label: "自研 PC 组件已预载，正在准备采集" });
+        foreach (var coverage in new[] { "recording", "gap", "finished" })
+        {
+            nativeReady["observer_status"] = coverage;
+            nativeReady["event_status"] = coverage;
+            Check("battle coverage supersedes completed preload: " + coverage, !Read(nativeReady).Active);
+        }
         nativeReady["observer_status"] = "waiting_game_init";
         Check("native VM wait is explicit", Read(nativeReady).Label == "自研 PC 组件已预载，等待游戏初始化");
         nativeReady["native_pc_bootstrap"]!["ready_generation"] = 0;
@@ -147,6 +153,18 @@ internal static class NativePcReadinessTests
             }
             Render(authenticated);
             Check("fully ready observer still waits for battle normally", window.Status.Text == "PC 版 · 等待进入战斗");
+            nativeReady["native_pc_bootstrap"]!["ready_generation"] = 1;
+            nativeReady["observer_status"] = "recording";
+            nativeReady["event_status"] = "recording";
+            nativeReady["native_counter_scope"] = "events_only";
+            foreach (string status in new[] { "live", "stale", "live" })
+            {
+                nativeReady["status"] = status;
+                nativeReady["status_text"] = status == "stale" ? "数据已过期" : "正在统计";
+                Render(nativeReady);
+                Check("recording follows real sample freshness: " + status,
+                    window.Status.Text == (status == "stale" ? "数据已过期" : "PC 版 · 逐次统计"));
+            }
             Render(State(platform: "mumu", observer: "ready"));
             Check("MuMu main status is unchanged", window.Status.Text.Contains("观察中") && window.Status.Text.Contains("等待进入战斗"));
             Render(State(events: false));

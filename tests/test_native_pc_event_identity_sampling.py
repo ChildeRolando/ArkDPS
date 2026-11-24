@@ -100,6 +100,8 @@ def test_guarded_pc_reads_use_authorized_identity_only_for_a_matching_mark(tmp_p
     BattleRuntime().feed.acquire(collector, observer)
     assert ('roster' not in calls) is (scenario in ('match', 'next_tick', 'multi_tick'))
     assert ('presence' not in calls) is (scenario in ('match', 'next_tick', 'multi_tick'))
+    assert ('actor_rows' not in calls) is (scenario in ('next_tick', 'multi_tick'))
+    assert 'flow' in calls and 'enemy' in calls
 
 
 @pytest.mark.parametrize('mode', ['valid', 'unknown', 'foreign', 'no_observer'])

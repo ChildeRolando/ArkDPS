@@ -129,15 +129,15 @@ function autoLayout(k,name,namespace,count,specs){
  }
  nativeAutoLayouts.set(cacheKey,out);return out;
 }
-function scopeBlock(address,size,fields){
+function scopeBlock(address,size,fields,mismatch){
  const bytes=address.readByteArray(size);
  if(bytes===null||bytes.byteLength!==size)throw new Error('AutoChess block read unavailable');
  const view=new DataView(bytes);
  for(const [kind,offset,expected,high]of fields){
   if(kind==='p'){
    if(view.getUint32(offset,true)!==expected||view.getUint32(offset+4,true)!==high)
-    throw new Error('AutoChess scope block pointer changed');
-  }else if(view.getInt32(offset,true)!==expected)throw new Error('AutoChess scope block integer changed');
+    throw new Error(mismatch??'AutoChess scope block pointer changed');
+  }else if(view.getInt32(offset,true)!==expected)throw new Error(mismatch??'AutoChess scope block integer changed');
  }
 }
 function scopeGuardGroup(fields,existingBlock=false){
@@ -194,8 +194,28 @@ function validateScopeStage(stage,level,stagePointer){
  if(probeAdapter.autoChessReflected&&(!ptr(level).readPointer().equals(stage.levelClass)||
     !stagePointer.readPointer().equals(stage.stageClass)))throw new Error('AutoChess stage class changed');
 }
+// Preserve discovery order. Adjacent pointer/int witnesses in the same
+// 128-byte region can be compared from one copy on each independent pass.
+function rosterGuardPlan(guards){
+ const plan=[];
+ let fields=[],region=null;
+ for(const field of guards){
+  const [kind,address]=field;
+  const next=kind==='p'||kind==='i'?BigInt(address.toString())>>7n:null;
+  if(next!==region||next===null){
+   plan.push(...scopeGuardGroup(fields));
+   fields=[];
+  }
+  if(next===null)plan.push(field);
+  else fields.push(field);
+  region=next;
+ }
+ plan.push(...scopeGuardGroup(fields));
+ return plan;
+}
 function autoRead(){
  const guards=[],layouts=new Map();
+ let previousGuardCount=0,plan=null;
  function value(kind,address){
   let result;
   if(kind==='p')result=address.readPointer();
@@ -229,7 +249,14 @@ function autoRead(){
   guards.push(['text',address,result]);return result;
  };
  read.validate=()=>{
-  for(const [kind,address,before] of guards){
+  // The discovery pass is scalar. Build a plan only for repeated checks
+  // of a complete PC roster. Strings and unsigned fields stay scalar.
+  if(previousGuardCount===guards.length&&!probeAdapter.autoChessReflected)
+   plan??=rosterGuardPlan(guards);
+  else plan=null;
+  previousGuardCount=guards.length;
+  for(const [kind,address,before,size] of plan??guards){
+   if(kind==='block'){scopeBlock(address,size,before,'AutoChess changed during read');continue;}
    const after=kind==='p'?address.readPointer():kind==='i'?address.readS32():
     kind==='u'?address.readU32():kind==='b'?address.readU8():kind==='n'?address.readU64().toNumber():
     address.add(0x14).readUtf16String(address.add(0x10).readS32());

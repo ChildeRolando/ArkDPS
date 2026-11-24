@@ -32,7 +32,8 @@ internal readonly record struct NativePcReadiness(string Phase, string Label, bo
             return new("failed", error, true);
         // Observer readiness is independent proof that the runtime is already connected.
         // Battle/lobby status can resume its ordinary meaning at this point.
-        if (observer == "ready" || observer.Length == 0 && state.Text("event_status") == "recording")
+        if (observer is "ready" or "recording" or "gap" or "finished"
+            || observer.Length == 0 && state.Text("event_status") == "recording")
             return default;
 
         if (nativeHooks) return FromNativeHooks(bootstrap, observer);

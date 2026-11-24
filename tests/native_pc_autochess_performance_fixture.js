@@ -51,7 +51,7 @@ for(const roles of [32,40]){
   return {first,mark,drain,ack};
  },{rolesPerPlayer:roles/4}));
  check('warm_'+roles+'_read_budgets_and_callback_event_equivalence',()=>{
-  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?1584:1840,f=>f.mark()],
+  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?1052:1212,f=>f.mark()],
    ['10_output_pairs',3750,f=>modifierPairs(f,false)],['10_unlogged_pairs',3400,f=>modifierPairs(f,true)]]){
    const f=owned({rolesPerPlayer:roles/4}),measured=readCount(f,()=>call(f));
    assert.equal(measured.reads,budget,name+' native-read budget');
@@ -147,6 +147,31 @@ check('sustained_defense_marks_and_reads_progress_with_unresolved_token_hosts',(
    const recovered=f.mark().native_autochess_context;
    assert.equal(recovered.unknown_memberships.length,15);
    assert.equal(recovered.memberships.find(row=>row.data_uid===999)?.host_uid,101);
+  }
+ }
+});
+check('busy_defense_and_assist_can_mark_and_drain_when_one_scalar_sweep_outlasts_a_tick',()=>{
+ for(const phase of [4,5]){
+  const f=world({rolesPerPlayer:8});
+  f.write(f.machine.add(0x5c),phase);
+  f.mark();
+  const body=vm.runInContext('nativeAutoBodyCache.body',f.context);
+  const validate=body.read.validate;
+  let tick=0;
+  body.read.validate=()=>{
+   if(readCount(f,validate).reads>550){
+    tick++;
+    f.clock(tick*30,BigInt(tick)*4294967296n);
+   }
+  };
+  for(let i=0;i<3;i++){
+   modifierPairs(f,false);
+   const mark=f.mark();
+   assert.equal(mark.native_autochess_context?.phase,phase);
+   const batch=f.context.rpc.exports.readEvents(i*20,mark.sequence);
+   assert.equal(batch.retry,false);
+   assert.equal(batch.events.length,20);
+   assert.equal(f.context.rpc.exports.ackEvents(mark.sequence).acknowledged,(i+1)*20);
   }
  }
 });

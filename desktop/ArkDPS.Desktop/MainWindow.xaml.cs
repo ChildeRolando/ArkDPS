@@ -618,6 +618,8 @@ public partial class MainWindow : Window
             "reconnecting" or "locating" => (workerLabel,StatusAmber),
             "waiting" => ("PC 版 · 等待进入战斗",StatusAmber),
             "live" when ShowingCharacterCounters => (workerLabel,StatusAmber),
+            "live" when coverage=="recording" && State.Text("native_counter_scope")=="events_only"
+                => ("PC 版 · 逐次统计",StatusGreen),
             "live" or "degraded" => ("PC 版 · 累计统计",StatusGreen),
             _ => (workerLabel,StatusGray),
         } : status switch
