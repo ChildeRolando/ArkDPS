@@ -655,6 +655,10 @@ class NativeHookEventProbe:
     contract = NATIVE_PC_CONTRACT
     transfers_event_records = True
     provides_autochess_context = True
+    # Opt in to the existing guarded PC paths; neither capability bypasses
+    # opening-mark/independent-root proof or the host's typed retry budget.
+    native_autochess_identity_sampling = True
+    native_clock_busy_retry = True
     request_timeout = 5.0
     terminal_mark_timeout = .5
 

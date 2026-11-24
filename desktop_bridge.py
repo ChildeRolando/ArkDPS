@@ -1659,13 +1659,22 @@ class CollectionWorker:
                             runtime = self.session.runtime
                             feed, sessions = runtime.feed, runtime.sessions
                             consume_sequence = sessions.sequence
+                            native_clock_owner = (self.pc_runtime
+                                if current_config.native_pc_event_backend == 'native' else None)
                             clock_retry = (current_config.platform == 'native_pc' and current_enabled
-                                and current_config.native_pc_event_backend == 'frida'
+                                and (current_config.native_pc_event_backend == 'frida'
+                                     or (current_config.native_pc_event_backend == 'native'
+                                         and not current_config.native_pc_event_feed
+                                         and self.pc_source.backend == 'native'
+                                         and native_clock_owner is not None
+                                         and getattr(self.session.observer, 'runtime', None) is native_clock_owner
+                                         and getattr(self.session.observer, 'status', None) == ObserverStatus.READY))
                                 and self.native_pc_observer_factory is None and self.arkframework_root is None
                                 and getattr(self.session.observer, 'native_clock_busy_retry', False) is True
                                 and getattr(self.session.observer, 'contract', None) is NATIVE_PC_CONTRACT)
                             if clock_retry:
-                                owner = (current_revision, self.session, self.session.observer, runtime, feed, sessions)
+                                owner = (current_revision, self.session, self.session.observer, runtime, feed, sessions,
+                                         native_clock_owner)
                                 if clock_burst is not None and (self.stop.is_set() or current_revision != self._request_revision):
                                     clock_burst = None
                                     continue
@@ -1706,6 +1715,10 @@ class CollectionWorker:
                                         and self.session.observer is owner[2]
                                         and self.session.runtime is runtime and runtime.feed is feed
                                         and runtime.sessions is sessions and sessions.sequence == consume_sequence
+                                        and (owner[6] is None or (self.pc_runtime is owner[6]
+                                            and self.pc_source.backend == 'native'
+                                            and getattr(self.session.observer, 'runtime', None) is owner[6]
+                                            and getattr(self.session.observer, 'status', None) == ObserverStatus.READY))
                                         and sampling_observation is None
                                         and not self.stop.is_set() and current_revision == self._request_revision
                                         and _native_clock_busy(exc)

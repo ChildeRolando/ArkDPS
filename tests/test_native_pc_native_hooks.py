@@ -140,6 +140,81 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert probe.hook_disable_confirmed
 
 
+def test_native_hook_observer_declares_existing_guarded_identity_and_typed_busy_capabilities():
+    assert getattr(module.NativeHookEventProbe, 'native_autochess_identity_sampling', None) is True
+    assert getattr(module.NativeHookEventProbe, 'native_clock_busy_retry', None) is True
+
+
+@pytest.mark.parametrize('collection_mode', ['local', 'all'])
+@pytest.mark.parametrize('scenario', ['match', 'unverified', 'preparing', 'mark_retry',
+                                     'clock_changed', 'root_changed', 'stage_changed', 'comparison'])
+def test_real_native_hook_capability_uses_only_the_existing_independent_identity_gate(
+        tmp_path, monkeypatch, scenario, collection_mode):
+    from battle_lifecycle import BattleRuntime
+    from event_capture import CaptureRetry
+    from test_native_pc_autochess_collector_gate import fixture, ROOTS
+    from test_native_pc_event_identity_sampling import readers, AUTO
+
+    # Only acquisition is synthetic: reuse the owning guarded-PC fixture and
+    # real NativeHookEventProbe class capability, collector and BattleFeed.
+    calls = readers(monkeypatch)
+    collector, probe, fixture_observer, _, _ = fixture(tmp_path,
+        mode='unknown' if scenario == 'unverified' else 'valid', stage=AUTO, failed_field=None)
+    collector.allow_event_identity_sampling = scenario != 'comparison'
+    observer = module.NativeHookEventProbe.__new__(module.NativeHookEventProbe)
+    original_mark = fixture_observer.mark
+
+    def mark_with_mode():
+        mark = original_mark()
+        mark['native_stage_id'] = AUTO
+        mark['native_autochess_context']['collection_mode'] = collection_mode
+        if scenario == 'preparing':
+            mark['native_autochess_context']['phase'] = 3
+        if scenario == 'mark_retry':
+            mark['retry'] = True
+        return mark
+
+    observer.mark = mark_with_mode
+    def read_with_mode(through):
+        batch = fixture_observer.read_through(through)
+        batch['native_autochess_context']['collection_mode'] = collection_mode
+        if scenario == 'preparing':
+            batch['native_autochess_context']['phase'] = 3
+        return batch
+    observer.read_baseline = observer.read_through = read_with_mode
+    observer.commit_events = fixture_observer.commit_events
+    original_sample = probe.sample
+
+    def sample(*, extra_reader):
+        report = original_sample(extra_reader=extra_reader)
+        raw = report['sample']
+        context = dict(stage_id=AUTO, stage_status='available', frame=raw['frame'], game_time=raw['game_time'],
+            battle_controller=int(ROOTS['controller'], 16), battle_logger=int(ROOTS['logger'], 16),
+            battle_stats=int(ROOTS['stats'], 16), level_data=int(ROOTS['level'], 16))
+        if scenario == 'clock_changed':
+            context['frame'] += 1
+        elif scenario == 'root_changed':
+            context['battle_stats'] += 8
+        elif scenario == 'stage_changed':
+            context['stage_id'] = 'Obt/Main/level_main_01-07'
+        raw.update(extra_reader(None, context))
+        return report
+
+    probe.sample = sample
+    if scenario == 'mark_retry':
+        with pytest.raises(CaptureRetry):
+            BattleRuntime().feed.acquire(collector, observer)
+    else:
+        observation = BattleRuntime().feed.acquire(collector, observer)
+        if scenario == 'preparing':
+            assert observation.kind == 'preparing' and observation.reason == 'empty_roster'
+        elif scenario == 'match':
+            assert observation.kind == 'sample'
+    assert 'actor_rows' in calls  # This initial-skill witness is not skipped.
+    assert ('roster' not in calls) is (scenario == 'match')
+    assert ('presence' not in calls) is (scenario == 'match')
+
+
 def test_prevalidated_material_consumes_pinned_bytes_without_revalidating_or_reassembling_at_birth(
         prepared_setup, setup_probe, monkeypatch):
     prepare, _, _, loaders, pipes = prepared_setup

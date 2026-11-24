@@ -6,6 +6,8 @@
 截图报告线程终止值 `0xffffffff`；rc.2026112401 当时的默认日志不足以区分进程退出、未找到映射及模块返回值不匹配。
 后续 rc.2026112402 的一次真实诊断启动已确认：验证时进程仍活、模块查询成功，但没有找到组件映射；仍未定位其原因。
 rc.2026112403 校验前置后首次启动成功，但同一运行内第二次重启再次失败；当前仍不具备稳定启动或分发资格。
+rc.2026112404 随后的两次真实启动与握手均成功，旧实例清理后建立了新fence；用户又报告卫戍持续等待可靠采样。
+启动恢复与卫戍采样活性、正常终局、性能必须分别验收，仍不放行分发。
 此前离线检查及包摘要仍有效，但不能当作实机启动成功。原 ZIP 保留作证据，不反复加载或无证归因安全保护。
 
 本候选新增真正的进程内采集组件，不再要求外部程序先提供事件 JSONL。
@@ -809,3 +811,28 @@ ArkFramework [每轮重新建立baseline/fence](https://github.com/Mon4terTeam/A
 回执为原inputs下 `prearmed-live-startup-audit.json`、`prearmed-live-artifact-audit.json`、
 `prearmed-live-battle-prefix-audit.json`、`prearmed-second-startup-audit.json`、`prearmed-restart-admission-review.json`。
 这些真实结果和新离线修复分开登记；修后仍需新的受协调实机启动/退出/再启动证据，性能、正常终局和分发继续暂停。
+
+### rc.2026112404：重启正例与卫戍可靠采样过期
+
+同包真实两个出生实例71780、53724均映射确认、返回值核对及观察者握手成功，出生至准备完成约0.342s、0.406s。
+第二次记录真实 `watch_generation=2` 和fresh fence，旧观察者 `stopped.cleanup_ok=true`，未复现此前5秒失败清理等待。
+这只是当前同机的两个正例，不保证其它启动环境或长期稳定性。
+
+用户明确过期提示为“等待下一次可靠采样”，不是“等待 worker 响应”。默认日志已有新sample/历史，但不足以定位每次拒绝原因。
+用户开启调试后，冻结保存了一个有界实际前缀（8,371,407字节、949完整行；SHA `0387e1136908fbd9a1cbe2ca795aac4d3dd84acb958574c813684670a0a449aa`）。
+它包含local模式交战sample80条及34条重试汇总，后者有 `frame_or_lifecycle_changed` 和事件来源时钟变化；这些是观察记录，不等于桌面全部接纳或源全序证明。
+670条 `preparing / empty_roster` 均为phase3 PREPARE，是正常准备流程，不能靠放宽阶段门禁让它们进入金额统计。
+历史063553实机样本实际是all模式、独立高速读循环，不能据其元数据中的旧默认布局声称已覆盖local模式的WPF默认采样。
+私有原文只留在不分发的runtime inputs；派生回执 `rc2404-autochess-stale-debug-prefix-audit.json` 不输出账号或昵称。
+
+代码对照发现自研路径漏接两项既有采样能力：
+- 自研observer未声明 `native_autochess_identity_sampling`，因此无法进入共享的 `native_identity_sampling_mark → NativePcCollector.read_lifecycle_with_event_identity`。
+  新声明只授权现有入口：opening必须已绑定、available且phase4/5/6，现场阶段/时钟/根再次相符才省去冗余roster/presence/actions。
+  actor记录、五根、Q32、session、严格新基线及后续窗口守卫不变；partial、未知或失败mark不借这个flag变为已证。
+- 桌面有限时钟重试原先硬限Frida。自研默认运行时现在也可显式接入同一逻辑，且核对当前native startup owner、READY、空feed、非自定义/ArkFramework、精确contract和cap。
+  仍只处理未消费观察的typed native busy；最多3次的原40ms准入预算和5ms间隔、owner/revision/cancel检查不变。
+  普通ObserverReadRetry和看似时钟变化的字符串不获加速；Frida原分支不额外收紧。
+
+本次不改2秒过期阈值、不刷新旧样本采集时间，不伪造归属/补零、不修改DLL或三段JS、也不改变phase3与金额/ACK处理。
+两个接线缺口的离线正反例分别验证后再组合；它们是有证据的功能遗漏，但尚未证明是本次持续stale的全部原因。
+修后必须在local模式WPF实机比较可靠样本持续推进、同作用域有效覆盖和终局；调试日志开销不能拿来评分正常配置的性能。
