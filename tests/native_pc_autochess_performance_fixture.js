@@ -67,6 +67,41 @@ for(const roles of [32,40]){
   androidScopeReads.push({roles,reads:scope.reads});
  });
 }
+check('cold_roster_crossing_a_frame_can_progress_without_accepting_the_crossed_read',()=>{
+ for(const transition of ['unchanged','owner','round']){
+  const f=world({rolesPerPlayer:8,fixtureOptions:{globals:{arkdpsAutoChessMode:'local'}}});
+  const parse=f.context.readAutoChess;
+  let parses=0;
+  // The expensive full roster always spans a game tick. Revalidating the
+  // recorded fields fits within a tick. Waiting longer between calls cannot
+  // make an implementation which always restarts the full read progress.
+  f.context.readAutoChess=function(...args){
+   const body=parse.apply(this,args);
+   f.clock(++parses*30,BigInt(parses)*4294967296n);
+   return body;
+  };
+  f.clock(0,0n);
+  const rejected=f.mark();
+  assert.equal(rejected.retry,true);
+  assert.equal(rejected.autochess_binding_diagnostic.guard,'clock_changed');
+  assert.equal(rejected.native_autochess_context,undefined);
+  assert.equal(vm.runInContext('acknowledgedSequence',f.context),0);
+  assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
+  if(transition==='owner')f.write(f.players[2][1].add(0x18),f.text('replacement-owner'));
+  if(transition==='round')f.write(f.center.add(0x3c),2);
+  if(transition!=='unchanged')assert.equal(f.mark().retry,true,'changed scope requires a fresh roster');
+  const next=f.mark();
+  assert.equal(next.native_autochess_context?.status,'available','next guarded sample must progress');
+  assert.equal(next.frame,parses*30);
+  assert.equal(parses,transition==='unchanged'?1:2);
+  assert.equal(next.native_autochess_context.round,transition==='round'?2:1);
+  if(transition==='owner')assert.equal(next.native_autochess_context.players.find(p=>p.index===3).uid,'replacement-owner');
+  modifierPairs(f,false);
+  const closing=f.mark(),batch=f.context.rpc.exports.readEvents(0,closing.sequence);
+  assert.equal(batch.events.length,20);
+  assert.equal(f.context.rpc.exports.ackEvents(closing.sequence).acknowledged,closing.sequence);
+ }
+});
 check('first_body_guard_mismatch_falls_back_to_full_parse',()=>{
  const f=owned(),previous=vm.runInContext('nativeAutoBodyCache.body',f.context);
  const plan=vm.runInContext('nativeAutoCache.scopeGuards',f.context);

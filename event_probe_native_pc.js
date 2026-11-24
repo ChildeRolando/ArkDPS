@@ -160,11 +160,13 @@ const probeAdapter={
  readEnvelope(){
   const binding=nativeBinding();
   return {fields:{scoped_trace_count:scopedTraceCount,scoped_trace_dropped:scopedTraceDropped,
-   ...binding,...nativeInitialEnvelope(binding),retry:binding===null},ready:binding!==null};
+   ...binding,...nativeInitialEnvelope(binding),retry:binding===null,
+   ...(!binding&&nativeAutoBindingDiagnostic?{autochess_binding_diagnostic:nativeAutoBindingDiagnostic}:{})},ready:binding!==null};
  },
  markEnvelope(current){
   const binding=nativeBinding();
-  return {fields:{...binding,...nativeInitialEnvelope(binding)},ready:!(binding===null||current&&binding.native_frame!==current.frame
+  return {fields:{...binding,...nativeInitialEnvelope(binding),
+   ...(!binding&&nativeAutoBindingDiagnostic?{autochess_binding_diagnostic:nativeAutoBindingDiagnostic}:{})},ready:!(binding===null||current&&binding.native_frame!==current.frame
    ||current&&Number(BigInt(binding.native_fixed_time))/4294967296!==current.game_time)};
  },
  enterTerminalStateHook(invocation,args){

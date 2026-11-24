@@ -67,7 +67,7 @@ def test_event_identity_still_collects_enemy_flow_and_stage_plan(monkeypatch):
 
 
 @pytest.mark.parametrize('scenario', ['match', 'missing_capability', 'unverified', 'clock_changed',
-                                     'root_changed', 'comparison'])
+                                     'next_tick', 'new_native', 'terminal_tick', 'root_changed', 'comparison'])
 def test_guarded_pc_reads_use_authorized_identity_only_for_a_matching_mark(tmp_path, monkeypatch, scenario):
     calls = readers(monkeypatch)
     mode = 'unknown' if scenario == 'unverified' else 'valid'
@@ -86,6 +86,10 @@ def test_guarded_pc_reads_use_authorized_identity_only_for_a_matching_mark(tmp_p
                        battle_stats=int(ROOTS['stats'], 16), level_data=int(ROOTS['level'], 16))
         if scenario == 'clock_changed':
             context['frame'] += 1
+        if scenario in ('next_tick', 'new_native', 'terminal_tick'):
+            context.update(frame=raw['frame']+1, game_time=raw['game_time']+1/30,
+                           battle_state=3 if scenario == 'terminal_tick' else 2,
+                           battle_native=int(ROOTS['native'], 16) + (8 if scenario == 'new_native' else 0))
         if scenario == 'root_changed':
             context['battle_stats'] += 8
         raw.update(extra_reader(None, context))
@@ -93,8 +97,8 @@ def test_guarded_pc_reads_use_authorized_identity_only_for_a_matching_mark(tmp_p
 
     probe.sample = sample
     BattleRuntime().feed.acquire(collector, observer)
-    assert ('roster' not in calls) is (scenario == 'match')
-    assert ('presence' not in calls) is (scenario == 'match')
+    assert ('roster' not in calls) is (scenario in ('match', 'next_tick'))
+    assert ('presence' not in calls) is (scenario in ('match', 'next_tick'))
 
 
 @pytest.mark.parametrize('mode', ['valid', 'unknown', 'foreign', 'no_observer'])

@@ -613,10 +613,24 @@ function nativeBinding(){
    return unavailable('LevelData or stage identity changed during binding');
   const after=currentNativeIdentity(rejectRoot);
   if(after===null)return null;
-  if(clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed
-     ||Object.keys(before).some(key=>before[key]!==after[key])
+  const endFrame=clock.readU32(),endFixed=clock.add(4).readS64().toString();
+  if(Object.keys(before).some(key=>before[key]!==after[key])
      ||stateAddress.readS32()!==state||!probeAdapter.autoChessReflected&&str(stageAddress.readPointer())!==stage)
    return unavailable('battle roots, clock, state or stage changed during binding');
+  if(endFrame!==frame||endFixed!==fixed){
+   const rejected=unavailable('battle clock changed during binding','clock_changed');
+   if(!probeAdapter.autoChessReflected&&auto&&!auto.error&&auto.unknown.length===0
+      &&endFrame>frame&&BigInt(fixed)>=0n&&BigInt(endFixed)>BigInt(fixed)){
+    // Save only a candidate for readAutoChessBody's TWO fresh validation
+    // passes. A slow discovery spanning a tick cannot publish members or
+    // filter events. Repeating the full discovery would starve every retry.
+    nativeAutoCache=null;
+    nativeAutoOwners=null;
+    nativeAutoBodyCache={key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,
+     frame:endFrame,fixed:endFixed,body:auto};
+   }
+   return rejected;
+  }
   step='clock';
   if(BigInt(fixed)<0n)return unavailable('negative game clock');
   step='clock_stamp';

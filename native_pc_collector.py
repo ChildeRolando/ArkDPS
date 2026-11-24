@@ -316,11 +316,22 @@ class NativePcCollector:
     def _capture(self, read, context, *, event_identity_mark=None):
         bound = (event_identity_mark is not None
                  and event_identity_mark.get('native_stage_id') == context.get('stage_id')
-                 and event_identity_mark.get('frame') == context.get('frame')
-                 and event_identity_mark.get('game_time') == context.get('game_time')
                  and all(int(event_identity_mark['native_identity'][root], 16) == context.get(field)
                          for root, field in (('controller', 'battle_controller'), ('logger', 'battle_logger'),
                                              ('stats', 'battle_stats'), ('level', 'level_data'))))
+        if bound:
+            frame, when = event_identity_mark.get('frame'), event_identity_mark.get('game_time')
+            current_frame, current_time = context.get('frame'), context.get('game_time')
+            same_tick = (current_frame, current_time) == (frame, when)
+            # A tick can elapse between the opening mark and the independent
+            # snapshot. Only select the cheaper read here. Publication still
+            # requires both marks, the independent bracket and the same scope.
+            next_tick = (type(frame) is int and type(current_frame) is int
+                         and type(when) in (int, float) and type(current_time) in (int, float)
+                         and current_frame == frame + 1 and current_time > when
+                         and context.get('battle_state') == 2
+                         and context.get('battle_native') == int(event_identity_mark['native_identity']['native'], 16))
+            bound = same_tick or next_tick
         event_identity = ((self.event_identity_only or bound) and context.get('stage_status') == 'available'
                           and 'AUTOCHESS' in str(context.get('stage_id', '')).upper())
         if event_identity:

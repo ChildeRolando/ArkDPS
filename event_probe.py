@@ -930,7 +930,9 @@ class NativePcBinding:
         if operation not in ('mark', 'read') or result.get('error') or result.get('stopped'):
             return result
         if result.get('retry'):
-            raise ObserverReadRetry('官服 PC 事件来源 战局或时钟正在变化，请重试当前采集')
+            detail = autochess_root_failure(result)
+            raise ObserverReadRetry(f'官服 PC 事件来源 {operation} · {detail}' if detail else
+                                    f'官服 PC 事件来源 {operation} 战局或时钟正在变化，请重试当前采集')
         generation = result.get('native_generation')
         if type(generation) is not int or generation < 0:
             raise RuntimeError('官服 PC 事件来源 缺少事件世代')

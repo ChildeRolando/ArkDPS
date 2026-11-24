@@ -538,7 +538,8 @@ class NativePcBattleProbe:
         _require(0 <= game_time <= 864000, 'invalid_logic_clock')
         extra = {}
         if extra_reader is not None:
-            extra = extra_reader(reader.read_optional, {'battle_controller': battle, 'battle_logger': logger,
+            extra = extra_reader(reader.read_optional, {'battle_controller': battle, 'battle_native': native,
+                                              'battle_state': state, 'battle_logger': logger,
                                               'battle_stats': stats, 'level_data': level, 'frame': frame,
                                               'game_time': game_time,
                                               'stage_id': metadata['stage_id'],
