@@ -1679,14 +1679,14 @@ function beginDamageFormula(invocation,target,source,attack,eligible,nested){
   sourceId=entityId(source);
   if(!own(sourceId))return;
  }
- const scope={tid:invocation.tid,source,sourceId,target,targetUid,attack,when:time(),outer:!nested};
+ const scope={tid:invocation.tid,source,sourceId,target,targetUid,attack,when:time(false,false),outer:!nested};
  invocation.formula=scope;
  formulaScopes.set(invocation.tid,scope);
  mitigationCounts.formula_scopes++;
 }
 function finishDamageFormula(result){
  const scope=this.formula;
- if(!scope||!sameMitigationTime(scope.when,time()))return;
+ if(!scope||!sameMitigationTime(scope.when,time(false,false)))return;
  const type=scope.attack.add(mitigationMethods.damageType).readS32(),raw=fixedBits(result);
  const after=Number(raw)/4294967296;
  if(!mitigationDamageType(type)||!Number.isFinite(after)||after<0)return;
@@ -1724,7 +1724,7 @@ function enterDamageFactory(nativeArgs,index){
  this.enteredFactory=true;
  const batch=pendingFormulaDamage.get(this.tid);
  if(!batch||(batch.unowned.size===0&&batch.postFormulaHits.size===0))return;
- const when=time();
+ const when=time(false,false);
  if(!sameMitigationTime(batch,when))return;
  const type=probeAdapter.factoryArgument(nativeArgs,index).toInt32(),target=probeAdapter.factoryArgument(nativeArgs,index+3);
  if(!mitigationDamageType(type)||target.isNull()||!mitigationTargetId(target))return;
@@ -1757,7 +1757,7 @@ function enterDamageFactory(nativeArgs,index){
 }
 function finishDamageFactory(){
  const factory=this.factory;
- if(!factory||!sameMitigationTime(factory.when,time())||
+ if(!factory||!sameMitigationTime(factory.when,time(false,false))||
     !verifiedFactoryModifier(factory.result,factory.storage))return;
  mitigationCounts.factory_candidates++;
  rememberUnique(factory.batch.factories,factory.key,factory.result);
@@ -1823,7 +1823,7 @@ function installMitigationHooks(){
     const batch=pendingFormulaDamage.get(this.tid);
     if(!batch?.postFormulaAttacks.size)return;
     const key=args[0].toString(),candidate=batch.postFormulaAttacks.get(key);
-    if(candidate===undefined||!sameMitigationTime(batch,time()))return;
+    if(candidate===undefined||!sameMitigationTime(batch,time(false,false)))return;
     // Same-frame claims consume even ambiguous candidates or a mismatched type.
     batch.postFormulaAttacks.delete(key);
     if(candidate&&candidate.type===args[0].add(mitigationMethods.damageType).readS32()){
@@ -1835,7 +1835,7 @@ function installMitigationHooks(){
    if(this.postFormula){
     const candidate=this.postFormula,batch=this.postFormulaBatch;
     const beforeRaw=fixedBits(result);
-    if(beforeRaw<=0n||!sameMitigationTime(batch,time()))return;
+    if(beforeRaw<=0n||!sameMitigationTime(batch,time(false,false)))return;
     const key=formulaDamageKey(candidate.source,candidate.target,candidate.type);
     rememberUnique(batch.postFormulaHits,key,{...candidate,beforeRaw,before:Number(beforeRaw)/4294967296});
     return;
@@ -2343,7 +2343,9 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       return;
      }
     }
-    this.when=time();
+    // Nested modifier bookkeeping compares the clock and settlement generation.
+    // The published hit receives its own freshly verified scope at settlement.
+    this.when=time(false,false);
     if(this.name==='Buff.OnTakeDamage'){const s=stacks.get(this.tid)||[];s.push(args[0]);stacks.set(this.tid,s);this.pushed=true;return;}
     if(this.name.endsWith('.OnAfterOutputDamage')){
      // args[0] is the hidden IL2CPP `this` receiver; modifier is args[1].
@@ -2799,11 +2801,17 @@ function eventQuality(frame){
   mitigation_diagnostics:mitigationDiagnostics(),...enemyEntryQuality(frame)};
 }
 function markEvents(){
+ const pending=probeAdapter.pendingMarkCallbacks?.()??0;
+ if(pending>0&&!fatal&&!stopped)
+  return {sequence,epoch,active:pending,active_hooks:[...activeHooks.keys()],retry:true,error:null,stopped:false,
+   mark_retry_reason:'callback_pending_at_start'};
  if(coalesceEnemyHp&&!active)flushCoalescedEnemyHp();
  const terminal_boundary=currentTerminalBoundary();
  const prepared=probeAdapter.prepareEventEnvelope?.();
  let current;
- try{current=time(true);}
+ // Only the clock is consumed here. The adapter constructs and validates the
+ // scope attached to the mark inside its independently guarded envelope.
+ try{current=time(true,false);}
  catch(e){if(!terminal_boundary)throw e;current=null;}
  const envelope=probeAdapter.markEnvelope(current,prepared);
  const quality={...eventQuality(current?.frame),terminal_boundary:currentTerminalBoundary(terminal_boundary),

@@ -931,6 +931,11 @@ class NativePcBinding:
             return result
         if result.get('retry'):
             detail = autochess_root_failure(result)
+            if not detail and type(result.get('active')) is int and result['active'] > 0:
+                detail = ('采样开始时有未完成的战斗回调' if result.get('mark_retry_reason') == 'callback_pending_at_start'
+                          else '采样结束时仍有未完成的战斗回调')
+            if not detail and operation == 'mark' and type(result.get('native_frame')) is int:
+                detail = '独立战局时钟与采样标记未能对齐'
             raise ObserverReadRetry(f'官服 PC 事件来源 {operation} · {detail}' if detail else
                                     f'官服 PC 事件来源 {operation} 战局或时钟正在变化，请重试当前采集')
         generation = result.get('native_generation')

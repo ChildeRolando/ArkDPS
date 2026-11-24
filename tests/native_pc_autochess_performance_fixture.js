@@ -51,8 +51,8 @@ for(const roles of [32,40]){
   return {first,mark,drain,ack};
  },{rolesPerPlayer:roles/4}));
  check('warm_'+roles+'_read_budgets_and_callback_event_equivalence',()=>{
-  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?1052:1212,f=>f.mark()],
-   ['10_output_pairs',3750,f=>modifierPairs(f,false)],['10_unlogged_pairs',3400,f=>modifierPairs(f,true)]]){
+  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?974:1134,f=>f.mark()],
+   ['10_output_pairs',2190,f=>modifierPairs(f,false)],['10_unlogged_pairs',1840,f=>modifierPairs(f,true)]]){
    const f=owned({rolesPerPlayer:roles/4}),measured=readCount(f,()=>call(f));
    assert.equal(measured.reads,budget,name+' native-read budget');
    assert.equal(f.fullReads,1,'unchanged warm body must avoid parsing another full roster');
@@ -67,6 +67,33 @@ for(const roles of [32,40]){
   androidScopeReads.push({roles,reads:scope.reads});
  });
 }
+check('native_busy_marks_leave_the_game_thread_and_accept_the_next_quiet_window',()=>{
+ let pending=0,tick=0;
+ const f=owned({rolesPerPlayer:8,fixtureOptions:{globals:{__nativeActive:()=>pending}}});
+ modifierPairs(f,false);
+ pending=1;
+ const busy=readCount(f,()=>f.mark());
+ assert.equal(busy.result.retry,true);
+ assert.equal(busy.result.active,1);
+ assert.equal(busy.result.mark_retry_reason,'callback_pending_at_start');
+ assert.equal(busy.reads,0);
+ const body=vm.runInContext('nativeAutoBodyCache.body',f.context);
+ const validate=body.read.validate;
+ let passes=0;
+ body.read.validate=()=>{
+  validate();
+  if(++passes%2===1){tick++;f.clock(30*tick,4294967296n*BigInt(tick));}
+ };
+ pending=0;
+ const mark=f.mark();
+ assert.equal(mark.retry,undefined);
+ assert.equal(mark.native_autochess_context.memberships.length,32);
+ const batch=f.context.rpc.exports.readEvents(0,mark.sequence);
+ assert.equal(batch.retry,false);
+ assert.equal(batch.events.length,20);
+ assert(batch.events.every(e=>e.native_autochess_scope?.verified_same_frame===true));
+ assert.equal(f.context.rpc.exports.ackEvents(mark.sequence).acknowledged,20);
+});
 check('cold_roster_crossing_a_frame_can_progress_without_accepting_the_crossed_read',()=>{
  for(const transition of ['unchanged','owner','round']){
   const f=world({rolesPerPlayer:8,fixtureOptions:{globals:{arkdpsAutoChessMode:'local'}}});

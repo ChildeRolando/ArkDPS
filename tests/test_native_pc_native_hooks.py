@@ -16,6 +16,26 @@ from native_pc import event_source
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('response,expected', [
+    ({'active': 2, 'mark_retry_reason': 'callback_pending_at_start'}, '开始时'),
+    ({'active': 1, 'native_frame': 12}, '结束时'),
+    ({'active': 0, 'native_frame': 12}, '时钟'),
+])
+def test_busy_marks_preserve_rejection_and_report_debug_timing(monkeypatch, response, expected):
+    probe = module.NativeHookEventProbe(collector())
+    monkeypatch.setattr(probe, '_raw_request', lambda *_args, **_kwargs: dict(response, retry=True))
+    records = []
+    for enabled in (False, True):
+        probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: enabled)
+        with pytest.raises(ObserverReadRetry, match=expected):
+            probe.mark()
+        assert len(records) == int(enabled)
+    kind, timing = records[0]
+    assert (kind, timing['op'], timing['outcome'], timing['active']) == (
+        'native_hook_request_timing', 'mark', 'retry', response['active'])
+    assert timing['transport_ms'] >= 0 and timing['binding_ms'] >= 0
+
+
 def collector(*, build=module.BUILD_ID, initialized=True):
     process = SimpleNamespace(pid=42, process_instance=(42, 100),
                               process_alive=lambda: True, observer_boot_ready=lambda: initialized)

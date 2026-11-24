@@ -685,6 +685,10 @@ class NativeHookEventProbe:
         self._committed_sequence = self._acknowledged_sequence = 0
         self._ack_error = None
         self._autochess_enabled = None
+        self._timing_sink = self._timing_enabled = None
+
+    def set_request_timing_audit(self, sink=None, *, enabled=None):
+        self._timing_sink, self._timing_enabled = sink, enabled
 
     def set_autochess_setting(self, enabled):
         self._autochess_enabled = enabled
@@ -801,7 +805,33 @@ class NativeHookEventProbe:
         return result
 
     def _request(self, operation, *, timeout=None, **arguments):
-        return self.binding.bind(operation, self._raw_request(operation, timeout=timeout, **arguments))
+        if self._timing_sink is None or (self._timing_enabled and not self._timing_enabled()):
+            return self.binding.bind(operation, self._raw_request(operation, timeout=timeout, **arguments))
+        started = time.perf_counter()
+        received = raw = None
+        outcome = 'transport_error'
+        try:
+            raw = self._raw_request(operation, timeout=timeout, **arguments)
+            received = time.perf_counter()
+            outcome = 'binding_error'
+            result = self.binding.bind(operation, raw)
+            outcome = 'success'
+            return result
+        except ObserverReadRetry:
+            outcome = 'retry'
+            raise
+        finally:
+            finished = time.perf_counter()
+            try:
+                self._timing_sink('native_hook_request_timing', dict(
+                    op=operation, outcome=outcome, started_perf_counter=started,
+                    transport_ms=((finished if received is None else received)-started)*1000,
+                    binding_ms=None if received is None else (finished-received)*1000,
+                    active=raw.get('active') if isinstance(raw, dict) else None,
+                    batch_size=len(raw['events']) if isinstance(raw, dict) and isinstance(raw.get('events'), list) else None,
+                    reason=raw.get('mark_retry_reason') if isinstance(raw, dict) else None))
+            except Exception:
+                pass  # Diagnostics must not change delivery or ACK behavior.
 
     def remember_verified_mark(self, sample, mark):
         return self.binding.remember_verified_mark(sample, mark)

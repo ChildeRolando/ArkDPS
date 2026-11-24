@@ -74,7 +74,9 @@ for line in sys.stdin:
     probe.start()
     assert probe.status == ObserverStatus.READY
     assert probe.probe_modes['probe_source'] == dict(provider='internal-test-host', protocol=1, source_version=1)
-    assert _terminal_boundary(probe) is None
+    assert _terminal_boundary(probe) == {
+        'terminal_diagnostic': {'status': 'missing', 'reason': 'no_raw_terminal_boundary'},
+        'terminal_raw_mark': {}}
 
     mark = {'sequence': 1, 'source_build': 'fixture-build', 'native_session': 'fixture-battle'}
     events = [{'sequence': 1, 'kind': 'damage', 'source': 'char_砾'}]
@@ -83,7 +85,9 @@ for line in sys.stdin:
     batch = read_event_batch(probe, 1)
     assert batch == {'events': events, 'probe_contract': NATIVE_PC_CONTRACT.describe()}
     assert read_event_batch(probe, 1, baseline=True) == dict(batch, events=[])
-    assert _terminal_boundary(probe) == {'terminal_boundary': mark}
+    assert _terminal_boundary(probe) == {
+        'terminal_boundary': mark, 'terminal_raw_mark': {'terminal_boundary': mark},
+        'terminal_diagnostic': {'status': 'candidate', 'reason': 'raw_boundary_received'}}
     assert acknowledge_event_batch(probe, 0) is False
     assert acknowledge_event_batch(probe, 1) is True
 

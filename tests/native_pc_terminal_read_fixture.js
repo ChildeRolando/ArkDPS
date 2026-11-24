@@ -119,5 +119,12 @@ for(const range of [[-1,4],[0.5,4],[1,3],[1,5],[5,4],[1,'4'],[null,4]]){
  ctx.read=()=>{calls++;nativeActive=2;return {events:[{sequence:4}],hp_context:[{}],active:0,retry:false};};
  const raced=request();assert.equal(raced.retry,true);assert.equal(raced.active,2);assert.deepEqual(raced.events,[]);
  assert.deepEqual(raced.hp_context,[]);cases++;
+ // A quiet mark may complete its roster check while a battle callback is
+ // waiting for the VM. The outer bridge must still reject that result.
+ nativeActive=0;
+ ctx.mark=()=>{nativeActive=1;return {active:0,retry:false,sequence:4};};
+ vm.runInContext('rpc.exports.mark=()=>mark()',ctx);
+ const racedMark=JSON.parse(vm.runInContext('__arkdpsRequest(JSON.stringify({operation:"mark"}))',ctx));
+ assert.equal(racedMark.retry,true);assert.equal(racedMark.active,1);
 }
 console.log(JSON.stringify({owned_terminal_read_cases:cases,live_game:false}));

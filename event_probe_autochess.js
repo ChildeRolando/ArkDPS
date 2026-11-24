@@ -543,9 +543,9 @@ function stampAutoChessClock(when){
  }catch(e){nativeAutoCache=null;unknown(String(e));}
 }
 let nativeAutoBodyCache=null;
-function prepareAutoChessRetryBody(){
+function prepareAutoChessRetryBody(prepareWarm=false){
  const cached=nativeAutoBodyCache;
- if(!cached?.prepareBeforeClock||!nativeAutoStage?.enabled)return null;
+ if(!cached||(!cached.prepareBeforeClock&&!prepareWarm)||!nativeAutoStage?.enabled)return null;
  try{
   const roots=currentNativeIdentity(),stage=nativeAutoStage;
   if(!roots||cached.generation!==nativeGeneration||cached.epoch!==nativeAutoEpoch)return null;
