@@ -201,10 +201,11 @@ public partial class App : System.Windows.Application
                 if (CooperativeEventPackage != (manifest.RootElement.Get("native_pc_event_backend").ValueKind
                                                 == System.Text.Json.JsonValueKind.Object))
                     throw new IOException("桌面程序与 PC 事件候选清单不匹配。");
-                if (NativeHookCandidate != (manifest.RootElement.Get("native_pc_native_hooks").ValueKind
-                                            == System.Text.Json.JsonValueKind.Object))
-                    throw new IOException("桌面程序与自研启动候选清单不匹配。");
-                if (NativeHookCandidate) VerifyNativeHookPackage(manifest.RootElement);
+                bool nativeHooks = manifest.RootElement.Get("native_pc_native_hooks").ValueKind
+                    == System.Text.Json.JsonValueKind.Object;
+                if (NativeHookCandidate && !nativeHooks)
+                    throw new IOException("桌面程序与自研事件组件清单不匹配。");
+                if (nativeHooks) VerifyNativeHookPackage(manifest.RootElement);
                 InstalledVersion = version;
                 if (!NativeHookCandidate && packaged && manifest.RootElement.Number("update_protocol") == 1 &&
                     manifest.RootElement.Text("frida").Length > 0 &&
@@ -212,7 +213,7 @@ public partial class App : System.Windows.Application
                     UpdateHost = host;
             }
             else if (NativeHookCandidate)
-                throw new IOException("自研启动测试候选必须从完整且独立的新解压便携目录运行。");
+                throw new IOException("自研事件组件需要完整便携包。");
             var window = new MainWindow(); MainWindow = window;
             WriteStartupEvent("event=window_created");
             if (UpdateLaunch?.ReadyPipe != null || UpdateVerification != null || VerifyInternalCapture)
@@ -248,12 +249,18 @@ public partial class App : System.Windows.Application
         if (InternalEventPackage || CooperativeEventPackage || profile.Text("provider") != "arkdps-native-hooks"
             || profile.Get("protocol").ValueKind != System.Text.Json.JsonValueKind.Number
             || !profile.Get("protocol").TryGetInt32(out int protocol) || protocol != 1
-            || profile.Text("scope") != "official-pc-startup-test" || !profile.Bool("experimental")
+            || (NativeHookCandidate
+                ? profile.Text("scope") != "official-pc-startup-test"
+                    || profile.Get("experimental").ValueKind != System.Text.Json.JsonValueKind.True
+                    || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.False
+                    || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.False
+                : profile.Text("scope") != "official-pc"
+                    || profile.Get("experimental").ValueKind != System.Text.Json.JsonValueKind.False
+                    || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.True
+                    || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.True)
             || profile.Text("default_platform") != "native_pc" || profile.Text("default_backend") != "native"
-            || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.False
-            || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.False
             || manifest.Get("files").ValueKind != System.Text.Json.JsonValueKind.Object)
-            throw new IOException("自研启动候选的实验范围或默认来源清单不匹配。");
+            throw new IOException("自研事件组件的适用范围或默认来源清单不匹配。");
         string root = Path.GetFullPath(AppContext.BaseDirectory);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in manifest.Get("files").EnumerateObject())
@@ -265,21 +272,21 @@ public partial class App : System.Windows.Application
                 || name.StartsWith('/') || name.Split('/').Any(part => part is "" or "." or ".."
                     || part.EndsWith('.') || part.EndsWith(' '))
                 || digest.Length != 64 || !digest.All(Uri.IsHexDigit))
-                throw new IOException("自研启动候选的文件清单无效。");
+                throw new IOException("自研事件组件的文件清单无效。");
             string path = Path.GetFullPath(Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar)));
             if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
-                throw new IOException("自研启动候选缺少清单文件：" + name);
+                throw new IOException("自研事件组件缺少清单文件：" + name);
             for (FileSystemInfo? entry = new FileInfo(path); entry is not null && entry.FullName != root.TrimEnd(Path.DirectorySeparatorChar);
                  entry = entry is FileInfo info ? info.Directory : ((DirectoryInfo)entry).Parent)
                 if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException("自研启动候选不接受链接替换的文件：" + name);
+                    throw new IOException("自研事件组件不接受链接替换的文件：" + name);
             string actual = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
             if (!string.Equals(actual, digest, StringComparison.OrdinalIgnoreCase))
-                throw new IOException("自研启动候选文件摘要不一致：" + name);
+                throw new IOException("自研事件组件文件摘要不一致：" + name);
         }
         if (!names.Contains("ArkDPS.Desktop.exe") || !names.Contains("collector/desktop_bridge.py")
             || !names.Contains("python/python.exe"))
-            throw new IOException("自研启动候选缺少必要入口文件。");
+            throw new IOException("自研事件组件缺少必要入口文件。");
     }
 
     private static string ResolveDirectory(string path)

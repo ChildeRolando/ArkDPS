@@ -522,14 +522,12 @@
          <ComboBox x:Name="NativeEventBackend" SelectedIndex="0" AutomationProperties.Name="PC 事件后端"
                    SelectionChanged="NativeEventBackendChanged" Margin="0,0,0,10">
           <ComboBoxItem Content="Frida" Tag="frida"/>
-          <ComboBoxItem Content="自研" Tag="native"/>
+          <ComboBoxItem Content="自研（若遇“检测到环境存在异常”报错选择此选项）" Tag="native"/>
          </ComboBox>
-         <StackPanel x:Name="NativeHookCandidateNotes" Visibility="Collapsed">
-          <TextBlock Text="自研 PC 启动测试候选 · 不含 Frida" Foreground="{DynamicResource AccentText}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,6"/>
-          <TextBlock Text="1. 填写官服 PC 游戏目录，保持事件开启并应用设置。&#10;2. 等状态明确显示「自研监听已就绪」后，再正常启动或重启游戏。&#10;3. 进入大厅等待采集就绪，再开始对局。"
+         <StackPanel x:Name="NativeHookNotes" Visibility="Collapsed">
+          <TextBlock Text="自研 PC 事件采集" Foreground="{DynamicResource AccentText}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,6"/>
+          <TextBlock Text="1. 填写 PC 游戏目录，保持事件开启并应用设置。&#10;2. 等状态明确显示「自研监听已就绪」后，再正常启动或重启游戏。&#10;3. 进入大厅等待采集就绪，再开始对局。"
                      Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,8"/>
-          <TextBlock Text="请使用独立的新解压目录；不支持旧状态迁移、MuMu、Frida 或合作文件。性能、稳定性和卫戍完整交接尚未验证；本包禁止自动更新。"
-                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
          </StackPanel>
          <StackPanel x:Name="FridaEventNotes">
           <TextBlock Foreground="{DynamicResource Ink}" FontSize="13" LineHeight="21" TextWrapping="Wrap" Margin="0,0,0,10">
@@ -545,9 +543,9 @@
           <DockPanel>
            <Button Content="选择文件" DockPanel.Dock="Right" Click="ChooseNativeEventFeed" Margin="8,0,0,0"/>
            <TextBox x:Name="NativeEventFeed" AutomationProperties.Name="事件数据文件"
-                     ToolTip="留空使用实验原生 Hook；填写完整路径则读取合作来源的 JSONL"/>
+                     ToolTip="留空使用自研实时采集；填写完整路径则读取合作来源的 JSONL"/>
           </DockPanel>
-           <TextBlock Text="留空使用已构建的实验原生 Hook（尚待官服实机验收）；填写文件则读取合作来源。不可用时保留累计快照。"
+           <TextBlock Text="留空使用自研实时采集；填写文件则读取合作来源。"
                      Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
          </StackPanel>
         </StackPanel>

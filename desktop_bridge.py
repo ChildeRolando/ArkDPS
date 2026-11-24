@@ -323,7 +323,7 @@ class DesktopState:
         self.warnings = [x for x in (loaded.warning, config.warning,
                                      stage_names.catalog().warning) if x]
         if self.native_hook_profile is not None:
-            self.warnings.append('自研 PC 启动测试候选：请使用独立新解压目录；性能和卫戍完整交接尚未验证。')
+            self.warnings.append('此独立便携包固定使用自研 PC 事件后端。')
             if (directory / 'connection.json').is_file():
                 self.warnings.append('此目录已有连接设置；本候选不支持迁移旧 runtime。有效来源固定为官服 PC 自研、空合作文件，不会自动改写已保存连接。')
         self.history = BattleHistory(directory / 'history')

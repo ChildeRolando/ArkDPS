@@ -44,9 +44,9 @@ class PcEventSource:
             if not feed_path:
                 def native_hooks(collector, remote):
                     if (Path(self.collector_root).parent / 'metadata' / 'release.json').is_file():
-                        from native_pc.internal_entry import native_hook_candidate_profile
-                        if native_hook_candidate_profile(self.collector_root) is None:
-                            raise RuntimeError('此实验原生 Hook 尚未通过官服实机验收，不从便携包加载。')
+                        from native_pc.internal_entry import native_hook_package_profile
+                        if native_hook_package_profile(self.collector_root) is None:
+                            raise RuntimeError('此便携包缺少自研 PC 采集组件，不从便携包加载。')
                     raise RuntimeError('自研实时采集需要游戏目录，并须在客户端启动前准备独立原生运行时。')
 
                 return native_hooks

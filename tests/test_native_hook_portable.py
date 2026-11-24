@@ -367,3 +367,41 @@ def test_required_source_link_cannot_escape_the_package(portable, tmp_path):
         pytest.skip('local account cannot create symlinks; no privilege change requested')
     with pytest.raises(RuntimeError):
         module.native_hook_binary(portable['root'])
+
+
+def release_profile(portable):
+    portable['component'].update(scope='official-pc', experimental=False,
+        performance_verified=True, autochess_handoff_verified=True)
+    portable['manifest'].update(frida='17.26.1', frida_wheel_sha256='a' * 64,
+                                native_pc_gadget={}, frida_server={}, update_protocol=1)
+    portable['save_release']()
+
+
+def test_standard_package_admits_native_component_alongside_frida_and_updates(portable):
+    release_profile(portable)
+    path = portable['root'] / 'vendor/frida/17/FridaGadget.dll'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'owned-frida-component')
+    portable['manifest']['files'][path.relative_to(portable['bundle']).as_posix()] = hashed(path)
+    portable['save_release']()
+    assert module.native_hook_binary(portable['root']) == portable['binary']
+
+
+@pytest.mark.parametrize('field,value', [
+    ('experimental', True), ('experimental', 0), ('performance_verified', False),
+    ('performance_verified', 1), ('autochess_handoff_verified', False),
+    ('scope', 'production'), ('sha256', '0' * 64),
+])
+def test_standard_package_still_requires_exact_release_component(portable, field, value):
+    release_profile(portable)
+    portable['component'][field] = value
+    portable['save_release']()
+    with pytest.raises(RuntimeError):
+        module.native_hook_binary(portable['root'])
+
+
+def test_standard_package_keeps_full_source_integrity_checks(portable):
+    release_profile(portable)
+    (portable['root'] / 'event_probe_runtime.js').write_bytes(b'changed')
+    with pytest.raises(RuntimeError):
+        module.native_hook_binary(portable['root'])

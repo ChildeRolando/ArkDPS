@@ -113,12 +113,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         if (App.NativeHookCandidate)
         {
-            Title = "ArkDPS · 自研 PC 启动测试候选";
+            Title = "ArkDPS · 局内统计";
             ConnectionPlatform.SelectedIndex = NativeEventBackend.SelectedIndex = 1;
             ConnectionPlatform.IsEnabled = NativeEventBackend.IsEnabled = false;
-            NativeHookCandidateNotes.Visibility = Visibility.Visible;
+            NativeHookNotes.Visibility = Visibility.Visible;
             SystemTitle.TextTrimming = ModeLabel.TextTrimming = TextTrimming.CharacterEllipsis;
-            SystemTitle.ToolTip = "自研 PC 启动测试候选；仅供独立新解压目录启动检查，不代表完整发布验收。";
+            SystemTitle.ToolTip = "PC 自研事件采集";
         }
         CompactTrend.Bind(trendModel);
         OperatorTrend.Bind(trendModel);
@@ -698,10 +698,12 @@ public partial class MainWindow : Window
         MumuEventNotes.Visibility=native ? Visibility.Collapsed : Visibility.Visible;
         NativeEventNotes.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
         FridaEventNotes.Visibility=useFrida ? Visibility.Visible : Visibility.Collapsed;
-        NativeEventFeedFields.Visibility=useFrida || App.NativeHookCandidate ? Visibility.Collapsed : Visibility.Visible;
+        NativeHookNotes.Visibility=useFrida ? Visibility.Collapsed : Visibility.Visible;
+        NativeEventFeedFields.Visibility=!useFrida && (App.CooperativeEventPackage || NativeEventFeed.Text.Length > 0)
+            ? Visibility.Visible : Visibility.Collapsed;
         if (App.NativeHookCandidate)
         {
-            DetectionNote.Text="仅支持官服 PC 自研实时事件；不支持迁移旧 runtime，请使用新的独立解压目录。关闭事件仅使用快照，不切换 Frida。";
+            DetectionNote.Text="PC 自研实时事件采集。应用设置后等待监听就绪，再启动游戏。";
             return;
         }
         DetectionNote.Text=App.BridgeArguments.Any(x=>x is "--adb" or "--serial" or "--no-events"
@@ -928,11 +930,11 @@ public partial class MainWindow : Window
             Theme.IsBabel ? Visibility.Visible : Visibility.Collapsed;
         bool offline = App.BridgeArguments.Contains("--offline");
         SystemTitle.Visibility = loneTrail || App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
-        SystemTitle.Text = App.NativeHookCandidate ? "自研 PC · 启动测试候选" : "COMBAT DPS ANALYSIS SYSTEM";
+        SystemTitle.Text = "COMBAT DPS ANALYSIS SYSTEM";
         ModeLabel.Visibility = offline || loneTrail || App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
         ModeLabel.Text = offline ? "离线验收 · 合成数据 · 不访问游戏"
-            : App.NativeHookCandidate ? "独立新解压 · 性能 / 卫戍交接未验证" : "ARKDPS / ORBITAL CONSOLE";
-        ModeLabel.ToolTip = App.NativeHookCandidate ? "本包不含 Frida，不提供自动更新。请使用独立新解压目录，不迁移旧 runtime。" : null;
+            : "ARKDPS / ORBITAL CONSOLE";
+        ModeLabel.ToolTip = null;
         ArrangeThemeArtwork(ContentRoot.ActualWidth is > 0 and < 1100);
     }
 

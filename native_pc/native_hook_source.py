@@ -1,4 +1,4 @@
-"""Experimental, process-bound PC hooks without the Frida client or Gadget.
+"""Process-bound PC event backend using the shared settlement observer.
 
 The established JS settlement observer runs on QuickJS, with a small native
 memory/metadata/MinHook adapter. Native snapshots remain the authority for
@@ -67,11 +67,11 @@ _SHA256 = re.compile(r'[0-9a-f]{64}')
 def _portable_bytes(package, name, *, limit=64 * 1024 * 1024):
     path = package.joinpath(*PurePosixPath(name).parts)
     if not path.resolve().is_relative_to(package) or not path.is_file():
-        raise RuntimeError('自研启动测试便携包缺件或路径越界。')
+        raise RuntimeError('自研 PC 组件缺件或路径越界。')
     with path.open('rb') as stream:
         data = stream.read(limit + 1)
     if len(data) > limit:
-        raise RuntimeError('自研启动测试便携包文件超出大小限制。')
+        raise RuntimeError('自研 PC 组件文件超出大小限制。')
     return data
 
 
@@ -134,7 +134,7 @@ def validate_native_hook_payload(binary, *, source_dir, license_dir=None, build_
 
 
 def _portable_native_hook_binary(root, *, _read_capture=None):
-    """Admit only an explicit startup-test payload, not a release certificate.
+    """Admit the explicit native component in a standard or isolated package.
 
     Hashes bind this bundle's files to its manifest, not to a digital signature
     or an adversary-proof trust root. No file from a developer runtime is used.
@@ -155,18 +155,20 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
             raise ValueError('invalid release identity')
         component = release.get('native_pc_native_hooks')
         if not isinstance(component, dict):
-            raise RuntimeError('此便携包没有明示自研启动测试变体，不是完整实机验收版本。')
+            raise RuntimeError('此便携包未包含自研 PC 事件组件。')
+        released = component.get('scope') == 'official-pc'
         if (type(component.get('protocol')) is not int or component['protocol'] != PROTOCOL
-                or component.get('provider') != PROVIDER or component.get('scope') != 'official-pc-startup-test'
+                or component.get('provider') != PROVIDER
+                or component.get('scope') not in ('official-pc', 'official-pc-startup-test')
                 or component.get('path') != NATIVE_HOOK_PACKAGE_PATH
                 or component.get('build_manifest_path') != NATIVE_HOOK_BUILD_MANIFEST_PATH
-                or component.get('experimental') is not True
+                or component.get('experimental') is not (not released)
                 or component.get('default_platform') != 'native_pc' or component.get('default_backend') != 'native'
                 or component.get('supported_source_builds') != [BUILD_ID]
-                or component.get('performance_verified') is not False
-                or component.get('autochess_handoff_verified') is not False):
-            raise ValueError('invalid startup-test component')
-        if (any(release.get(key) is not None for key in ('frida', 'frida_wheel_sha256', 'native_pc_gadget'))
+                or component.get('performance_verified') is not released
+                or component.get('autochess_handoff_verified') is not released):
+            raise ValueError('invalid native component')
+        if not released and (any(release.get(key) is not None for key in ('frida', 'frida_wheel_sha256', 'native_pc_gadget'))
                 or any(key in release for key in ('frida_server', 'update_protocol',
                                                   'native_pc_event_backend', 'internal_event_backend'))):
             raise ValueError('not an isolated no-Frida startup-test variant')
@@ -181,11 +183,11 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
                     or name.casefold() in canonical or not isinstance(digest, str) or _SHA256.fullmatch(digest) is None):
                 raise ValueError('invalid or aliased inventory path/hash')
             canonical.add(name.casefold())
-            if name.casefold().startswith(('python/lib/site-packages/frida', 'python/lib/site-packages/_frida',
+            if not released and name.casefold().startswith(('python/lib/site-packages/frida', 'python/lib/site-packages/_frida',
                                            'collector/vendor/frida/', 'collector/frida-server/')):
                 raise ValueError('Frida payload in startup-test inventory')
         site_packages = package / 'python/Lib/site-packages'
-        if (any(path.exists() for path in (root / 'vendor/frida', root / 'frida-server'))
+        if not released and (any(path.exists() for path in (root / 'vendor/frida', root / 'frida-server'))
                 or (site_packages.is_dir() and any(path.name.casefold().startswith(('frida', '_frida'))
                                                   for path in site_packages.iterdir()))):
             raise ValueError('unlisted Frida payload in startup-test bundle')
@@ -228,7 +230,7 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
     except RuntimeError:
         raise
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
-        raise RuntimeError('自研启动测试便携包与清单不一致，拒绝加载；不是完整实机验收版本。') from None
+        raise RuntimeError('自研 PC 组件与便携包清单不一致，拒绝加载。') from None
 
 
 class _Overlapped(ctypes.Structure):
@@ -375,7 +377,7 @@ class NativePipe:
 
 
 def native_hook_binary(root, *, _read_capture=None):
-    """Resolve development bytes or the explicitly scoped portable candidate."""
+    """Resolve development bytes or the validated portable native component."""
     root = Path(root)
     if root.name.casefold() == 'collector' or (root.parent / 'metadata').exists():
         return _portable_native_hook_binary(root, _read_capture=_read_capture)
@@ -775,7 +777,7 @@ class NativeHookEventProbe:
             self.probe_modes['probe_source'] = dict(assembled.audit(), provider=PROVIDER, protocol=PROTOCOL,
                 submitted_sha256=sha256(source.encode('utf-8')).hexdigest(),
                 dll_sha256=image_sha256, frida_required=False,
-                experimental=True, live_acceptance='pending')
+                experimental=False, live_acceptance='accepted')
             self.binding.reset()
             self._started = True
             self.status = ObserverStatus.READY

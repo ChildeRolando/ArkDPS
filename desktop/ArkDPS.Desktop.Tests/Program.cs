@@ -131,6 +131,7 @@ internal static class Program
         MultiplayerViewTests.Run();
         MultiplayerSettingsTests.Run();
         NativePcReadinessTests.Run();
+        NativeBackendSettingsTests.Run();
         SamplingRejectionTests.Run();
         RefreshBudgetTests.Run();
         DesktopLogTests.Run();

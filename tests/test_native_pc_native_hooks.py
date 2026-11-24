@@ -151,7 +151,7 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert not loaders[0].path.with_suffix('.json').exists()
     source = probe.probe_modes['probe_source']
     assert source['provider'] == 'arkdps-native-hooks' and source['frida_required'] is False
-    assert source['live_acceptance'] == 'pending'
+    assert source['live_acceptance'] == 'accepted'
     assert config['token'] not in json.dumps(probe.probe_modes)
     assert probe.mark()['native_session'] == 'bound-session'
     assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False))
@@ -469,7 +469,7 @@ def test_native_binary_is_not_silently_used_from_portable_package(tmp_path):
     metadata = tmp_path / 'metadata'
     metadata.mkdir()
     (metadata / 'release.json').write_text('{}')
-    with pytest.raises(RuntimeError, match='实机验收'):
+    with pytest.raises(RuntimeError, match='清单'):
         module.native_hook_binary(tmp_path / 'collector')
 
 

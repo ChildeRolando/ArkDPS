@@ -333,3 +333,36 @@ def test_cli_native_hooks_is_mutually_exclusive(monkeypatch, other):
     with pytest.raises(SystemExit) as error:
         package.main()
     assert error.value.code == 2
+
+
+def test_standard_release_ships_both_backends_and_update_protocol(tmp_path, monkeypatch):
+    env = fake_build_environment(tmp_path, monkeypatch)
+    wheel = tmp_path / 'frida.whl'
+    with zipfile.ZipFile(wheel, 'w') as stream:
+        stream.writestr('frida/__init__.py', '# owned fixture')
+    server, license_file = tmp_path / 'server.xz', tmp_path / 'COPYING'
+    server.write_bytes(b'owned-server')
+    license_file.write_bytes(b'owned-license')
+    (env.root / 'vendor/frida/COPYING').write_text('owned Gadget license')
+    monkeypatch.setattr(package, 'pinned_input', lambda path, **kw: path)
+    monkeypatch.setattr(package, 'check', lambda *a: None)
+    def gadget(destination, **kwargs):
+        destination.mkdir(parents=True)
+        (destination / 'FridaGadget.dll').write_bytes(b'owned-gadget')
+    monkeypatch.setattr(package, 'stage_gadget', gadget)
+    monkeypatch.setattr(package, 'verify_native_hooks_release', lambda *a: {'verified': True})
+    output = tmp_path / 'output'
+    bundle = package.build(output, python_zip=env.python_zip, frida_wheel=wheel,
+        frida_server=server, frida_server_license=license_file, native_hook_dll=env.dll)
+    release = json.loads((bundle / 'metadata/release.json').read_text())
+    component = release['native_pc_native_hooks']
+    assert component['scope'] == 'official-pc' and component['experimental'] is False
+    assert component['performance_verified'] is True and component['autochess_handoff_verified'] is True
+    assert release['update_protocol'] == 1 and release['frida'] == package.FRIDA_VERSION
+    for name in ('frida_runtime.py', 'native_hook_runtime.py', 'native_hook_source.py', 'internal_event_source.py'):
+        assert 'collector/native_pc/' + name in release['files']
+    assert 'python/Lib/site-packages/frida/__init__.py' in release['files']
+    assert not any('ArkDpsNativeHookCandidate' in part for part in env.runs[0][0])
+    readme = (bundle / 'README.txt').read_text('utf-8-sig')
+    assert '检测到环境存在异常' in readme
+    assert '启动测试包' not in readme and '性能尚未验收' not in readme

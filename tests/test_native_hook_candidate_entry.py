@@ -89,7 +89,7 @@ def test_desktop_effective_defaults_leave_saved_config_bytes_unchanged(candidate
     assert path.read_bytes() == original
     view = state.snapshot()
     assert view['native_hook_candidate'] == PROFILE
-    assert any('性能' in warning and '交接' in warning for warning in view['warnings'])
+    assert any('固定使用自研 PC' in warning for warning in view['warnings'])
     assert any('此目录已有连接设置' in warning for warning in view['warnings'])
 
 
@@ -179,7 +179,10 @@ def test_candidate_ui_is_compile_gated_and_never_enables_updates_or_frida():
     assert '!App.CooperativeEventPackage && !App.NativeHookCandidate' in window
     assert 'App.NativeHookCandidate ? "effective_connection_config"' in window
     assert 'ConnectionPlatform.IsEnabled = NativeEventBackend.IsEnabled = false' in window
-    assert '自研 PC 启动测试候选' in xaml and '性能、稳定性和卫戍完整交接尚未验证' in xaml
+    assert '自研（若遇“检测到环境存在异常”报错选择此选项）' in xaml
+    assert '自研 PC 启动测试候选' not in xaml and '性能、稳定性和卫戍完整交接尚未验证' not in xaml
+    assert 'bool nativeHooks =' in app_source and 'if (nativeHooks) VerifyNativeHookPackage' in app_source
+    assert 'official-pc' in app_source
 
 
 def test_native_startup_candidate_missing_game_root_reports_configuration_not_old_package_denial(candidate, tmp_path):
@@ -211,3 +214,35 @@ def test_other_portable_variants_keep_denial_without_importing_absent_hook_modul
     with pytest.raises(RuntimeError, match='不从便携包加载'):
         factory(None, None)
     assert source.runtime is None
+
+
+def test_release_backend_keeps_saved_platform_and_backend_selectable(candidate, tmp_path):
+    root, manifest, verified = candidate
+    manifest.write_text(json.dumps(dict(native_pc_native_hooks=dict(PROFILE,
+        scope='official-pc', experimental=False, performance_verified=True,
+        autochess_handoff_verified=True))), encoding='utf-8')
+    assert entry.native_hook_package_profile(root)['scope'] == 'official-pc'
+    assert entry.native_hook_candidate_profile(root) is None
+    state = desktop_bridge.DesktopState(tmp_path / 'release-state')
+    assert state.effective_connection == state.connection
+    assert state.native_hook_profile is None
+    assert not any('测试' in warning or '尚未验证' in warning for warning in state.warnings)
+    for platform, backend in [('native_pc', 'native'), ('native_pc', 'frida'), ('mumu', 'frida')]:
+        config = dict(state.connection.to_dict(), platform=platform, native_pc_event_backend=backend)
+        state.command(dict(version=1, op='connection_apply', config=config, events=True))
+        assert state.effective_connection.platform == platform
+        assert state.effective_connection.native_pc_event_backend == backend
+    assert verified
+
+
+def test_release_no_game_root_reports_configuration(candidate, tmp_path):
+    from native_pc.event_source import PcEventSource
+    root, manifest, verified = candidate
+    manifest.write_text(json.dumps(dict(native_pc_native_hooks=dict(PROFILE,
+        scope='official-pc', experimental=False, performance_verified=True,
+        autochess_handoff_verified=True))), encoding='utf-8')
+    source = PcEventSource(tmp_path / 'release-state', collector_root=root)
+    factory = source.select(enabled=True, backend='native')
+    with pytest.raises(RuntimeError, match='需要游戏目录'):
+        factory(None, None)
+    assert verified == [root]

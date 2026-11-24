@@ -25,6 +25,16 @@
 
 手动 TCP 地址尚未在 adb 注册且探测报告设备不存在时，执行一次有超时的 `adb connect`，再重新检查连接和版本；USB 序列及已注册的离线设备不会因此重连。
 
+## PC 事件后端
+
+在连接设置选择 PC 平台和包含 `Arknights.exe` 的游戏目录，启用逐次事件。
+「PC 事件后端」可选 Frida 或自研；若遇“检测到环境存在异常”报错，选择「自研」。
+点击「应用设置并重连」，等待监听已就绪后正常启动或重启游戏，进入大厅等待事件就绪。
+
+配置中的 `platform: "native_pc"`、`native_game_root` 和 `native_pc_event_backend` 分别保存平台、游戏目录与后端选择，
+`native_pc_event_backend` 为 `frida` 或 `native`。标准便携包内置两种后端，应用内更新沿用连接设置。
+自研逐次事件与 Frida 共用统计接口，具体实机记录见[PC 自研事件后端](native-pc-native-hooks.md)。
+
 ## 自动检测
 
 1. 按“显式配置 → 环境变量 → Windows 注册表记录的 MuMu 安装目录 → 常见 MuMu 安装路径 → PATH”解析 `adb.exe`。注册表中的安装目录可以位于任意盘符。

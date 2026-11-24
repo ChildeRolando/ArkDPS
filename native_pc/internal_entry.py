@@ -11,8 +11,8 @@ HOST_PATH = f'collector/native_pc/internal_event_host/{HOST_NAME}'
 NATIVE_HOOK_CANDIDATE_KEY = 'native_pc_native_hooks'
 
 
-def native_hook_candidate_profile(root):
-    """Package-local launch policy, never a change to saved product defaults."""
+def native_hook_package_profile(root):
+    """Validate the packaged backend before deciding its launch policy."""
     manifest = portable_manifest(Path(root))
     if manifest is None or NATIVE_HOOK_CANDIDATE_KEY not in manifest:
         return None
@@ -21,6 +21,10 @@ def native_hook_candidate_profile(root):
     from native_pc.native_hook_source import native_hook_binary
     native_hook_binary(root)
     profile = manifest[NATIVE_HOOK_CANDIDATE_KEY]
+    if isinstance(profile, dict) and profile.get('scope') == 'official-pc':
+        # The loader owns payload integrity and the release capability fields.
+        # A standard package adds a selectable backend to the existing settings.
+        return dict(profile)
     if (not isinstance(profile, dict) or profile.get('provider') != 'arkdps-native-hooks'
             or type(profile.get('protocol')) is not int or profile['protocol'] != 1
             or profile.get('scope') != 'official-pc-startup-test'
@@ -30,6 +34,11 @@ def native_hook_candidate_profile(root):
             or manifest.get('internal_event_backend') or manifest.get('native_pc_event_backend')):
         raise ValueError('自研启动候选配置与便携包清单不一致。')
     return dict(profile)
+
+
+def native_hook_candidate_profile(root):
+    profile = native_hook_package_profile(root)
+    return profile if profile and profile.get('scope') == 'official-pc-startup-test' else None
 
 
 def validate_native_hook_candidate_connection(profile, config):
