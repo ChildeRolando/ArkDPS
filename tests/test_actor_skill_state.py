@@ -30,3 +30,14 @@ def test_owner_projection_cannot_change_actor_state():
     stats._close_skill_windows(3, battle_end=True)
     assert not stats.settlement_skill_active
     assert stats.skill_windows['owner'][0]['end'] == 3
+
+
+def test_token_host_resolver_rejects_side_mismatch_and_ambiguity():
+    from autochess_context import verified_roster_token_host
+    from roster import CharacterEntry
+    host = CharacterEntry('char_host', 1, False, False, None, None, 2)
+    token = CharacterEntry('token_child', 2, True, False, 'char_host', 1, 2)
+    assert verified_roster_token_host(token, [host]) == host
+    assert verified_roster_token_host(token, [host, host]) is None
+    wrong_side = CharacterEntry('char_host', 1, False, False, None, None, 3)
+    assert verified_roster_token_host(token, [wrong_side]) is None

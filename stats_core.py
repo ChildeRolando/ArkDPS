@@ -419,9 +419,9 @@ class Statistics:
                       partial_damage_enabled=self.partial_damage_enabled)
 
     def _skill_hit_observable(self, owner):
-        window = self.skill_active.get(owner)
-        if window is not None:
-            return self._unconfirmed_skill_reason(window, live=True) is None
+        windows = [window for (candidate, _), window in self.settlement_skill_active.items() if candidate == owner]
+        if windows:
+            return all(self._unconfirmed_skill_reason(window, live=True) is None for window in windows)
         return not self.skill_unknown and owner not in self.skill_incomplete
 
     def _observe_skill_hit(self, owner, amount, overkill):
@@ -2082,7 +2082,9 @@ class Statistics:
                 row['effective_damage'] = None
             skill_incomplete_reason = (
                 self.skill_incomplete.get(owner)
-                or self._unconfirmed_skill_reason(self.skill_active.get(owner), live=True))
+                or next((reason for (candidate, _), window in self.settlement_skill_active.items()
+                         if candidate == owner
+                         and (reason := self._unconfirmed_skill_reason(window, live=True)) is not None), None))
             skill_known = (coverage_complete and not self.skill_unknown
                            and skill_incomplete_reason is None)
             skill_value = self.skill_observed.get(owner, 0.0)

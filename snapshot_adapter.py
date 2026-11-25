@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 
 from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, lookup_native_actor,
-                               native_actor_lookup, native_autochess_event_identity, resolve_native_event_member)
+                               native_actor_lookup, native_autochess_event_identity, resolve_native_event_member, verified_roster_token_host)
 from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -576,12 +576,7 @@ class BattleStatisticsAdapter:
         return self._settlement_owner(actor, actor_uid=actor.unique_id)
 
     def _settlement_host(self, token):
-        hosts = self.settlement_roster.get(token.host_uid) or ()
-        if len(hosts) == 1:
-            host, = hosts
-            if not host.is_token and host.cid == token.host_key and host.player_side == token.player_side:
-                return host
-        return None
+        return verified_roster_token_host(token, self.settlement_roster.get(token.host_uid) or ())
 
     def _settlement_owner(self, actor, *, actor_uid):
         if self.settlement_version in (4, 5, 6, 7):

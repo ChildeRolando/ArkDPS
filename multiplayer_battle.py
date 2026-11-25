@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from math import isfinite
 
 from autochess_context import (lookup_native_actor, native_actor_lookup, native_autochess_event_identity,
-                              native_autochess_scope_id, resolve_native_event_member)
+                              native_autochess_scope_id, resolve_native_event_member, verified_roster_token_host)
 from character_catalog import load_character_names
 from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
@@ -735,9 +735,9 @@ class MultiplayerBattleStatistics:
         actor = entry
         if entry.is_token:
             host = self._native_entries.get(entry.host_uid)
-            if (host is None or host[0] != player_uid or host[1].cid != entry.host_key or host[1].is_token):
+            actor = verified_roster_token_host(entry, (host[1],) if host is not None and host[0] == player_uid else ())
+            if actor is None:
                 return 'token_host_unverified', None, None, None
-            actor = host[1]
         if player_uid not in self._players:
             return 'not_collected', player_uid, actor, entry
         return 'owned', player_uid, actor, entry
