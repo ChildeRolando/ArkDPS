@@ -223,6 +223,11 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
     def before_source_local_quality(value):
         if isinstance(value, dict):
             additions = set()
+            failure_fields = {'damage_settlement_failure_samples_version', 'damage_settlement_failure_samples'}
+            if failure_fields & value.keys():
+                from event_probe import settlement_failure_samples
+                assert settlement_failure_samples(value) == []
+                additions |= failure_fields
             source_fields = {'damage_settlement_source_quality_version',
                              'damage_settlement_unlocalized_unknown', 'damage_settlement_source_issues'}
             if source_fields & value.keys():

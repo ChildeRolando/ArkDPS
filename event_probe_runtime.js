@@ -337,6 +337,7 @@ let enemyDamageUnknown=false;
 let damageSettlementClock=null,damageSettlementScope=0,damageSettlementIssue=null,damageSettlementController=null;
 let damageSettlementUnlocalizedUnknown=false;
 const damageSettlementSourceIssues=new Map(),DAMAGE_SETTLEMENT_SOURCE_ISSUE_LIMIT=128;
+const damageSettlementFailureSamples=new Map(),DAMAGE_SETTLEMENT_FAILURE_SAMPLE_LIMIT=16;
 const enemyHpWrites=new Map();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
@@ -397,6 +398,7 @@ function resetDamageSettlementScope(){
  damageSettlementIssue=null;
  damageSettlementUnlocalizedUnknown=false;
  damageSettlementSourceIssues.clear();
+ damageSettlementFailureSamples.clear();
  damageSettlementController=null;
 }
 function damageSettlementStamp(frame,game_time,withEventScope=true){
@@ -606,6 +608,36 @@ function noteSettlementProofGap(scope,when,reason){
  if(qualification==='unknown'||!stableSettlementAnchor(scope,when))
   markDamageSettlementUnknown(when||scope.when,reason,scope);
 }
+function captureSettlementFailureSample(scope,when,reason,evidence={}){
+ // Diagnostic copies only: never read native memory or authorize a settlement.
+ if(!scope||!when||when.settlementScope!==damageSettlementScope)return;
+ const anchor=scope.settlementAnchor,point=scope.settlementFailureCheckpoint??{},
+  hp=scope.settlementObservedHp??scope.targetSettlementEvidence??scope.settlement?.evidence??{},
+  identity=anchor?.identity??evidence,stamp=when.native_autochess_scope;
+ const source=typeof scope.source==='string'?scope.source:null,
+  sourceUid=Number.isSafeInteger(scope.sourceCharacterUid)?scope.sourceCharacterUid:null,
+  target=typeof identity?.target==='string'?identity.target:null,
+  targetUid=typeof identity?.target_uid==='string'?identity.target_uid:null,
+  targetInstance=typeof identity?.target_instance==='string'?identity.target_instance:null;
+ const text=value=>typeof value==='string'?value.slice(0,200):null,
+  number=value=>Number.isFinite(value)?value:null;
+ const key=JSON.stringify([damageSettlementScope,stamp?.scope_key??null,source,sourceUid,target,targetUid,reason]);
+ if(damageSettlementFailureSamples.has(key)||damageSettlementFailureSamples.size>=DAMAGE_SETTLEMENT_FAILURE_SAMPLE_LIMIT)return;
+ damageSettlementFailureSamples.set(key,{sequence,frame:when.frame,game_time:when.game_time,
+  damage_settlement_scope:damageSettlementScope,reason:text(reason),method:text(scope.name),
+  source,source_character_uid:sourceUid,target,target_uid:targetUid,target_instance:targetInstance,
+  native_autochess_scope:stamp?{...stamp}:null,
+  hp_before:number(point.hpBefore??hp.hp_before??scope.targetHit?.hpBefore??scope.hpBefore),
+  hp_after:number(point.hpAfter??hp.hp_after),
+  native_signed_delta:number(hp.real_delta??point.real??scope.outputSettlement?.real??scope.real),
+  native_amount:number(point.nativeAmount??scope.outputSettlement?.amount??scope.amount),
+  shield_absorbed:number(point.absorbed??scope.numericShield),shield_unknown:scope.numericShieldUnknown===true,
+  cancel_reason:Number.isSafeInteger(point.cancel)?point.cancel:null,
+  nested:point.nested===true||scope.targetSettlementNested===true||!!scope.nestedParentSettlementProof||!!scope.nestedElementalChainProof,
+  settlement_ambiguous:scope.settlementAmbiguous===true,target_commit_rejected:scope.targetCommitRejected===true,
+  output_ambiguous:scope.outputAmbiguous===true,
+  nested_detail:scope.nestedSettlementFailure?text(JSON.stringify(scope.nestedSettlementFailure)):null});
+}
 function finalizeUnverifiedSettlement(scope,when){
  if(!enemyDamageReady)return;
  if(scope.settlementDomainEntry&&settlementScopeQualification(scope,when)==='outside')return;
@@ -616,7 +648,9 @@ function finalizeUnverifiedSettlement(scope,when){
  if(!scope.settlementFailureReason&&!(amount>0)&&!(a?.entryAmount>0))return;
  const reason=scope.settlementFailureReason||'missing same-hit target or output settlement proof';
  noteSettlementProofGap(scope,when,reason);
- if(settlementScopeQualification(scope,when)!=='potential'||!stableSettlementAnchor(scope,when))return;
+ if(settlementScopeQualification(scope,when)!=='potential'||!stableSettlementAnchor(scope,when)){
+  captureSettlementFailureSample(scope,when,reason);return;
+ }
  // Required amount zero is the pre-existing incomplete-record placeholder,
  // never a certificate of zero HP consumption. Actual and nominal stay absent.
  damageSettlement(scope,a.target,0,when,{identity:a.identity,type:a.type,unverified:true});
@@ -626,7 +660,9 @@ function damageSettlementQuality(){
   damage_settlement_scope:damageSettlementScope,enemy_damage_unknown:enemyDamageUnknown,
   damage_settlement_first_issue:damageSettlementIssue,damage_settlement_source_quality_version:1,
   damage_settlement_unlocalized_unknown:damageSettlementUnlocalizedUnknown,
-  damage_settlement_source_issues:[...damageSettlementSourceIssues.values()]};
+  damage_settlement_source_issues:[...damageSettlementSourceIssues.values()],
+  damage_settlement_failure_samples_version:1,
+  damage_settlement_failure_samples:[...damageSettlementFailureSamples.values()]};
 }
 function time(allowRetry = false, withEventScope = true) {
  // One owned copy for the opening clock, followed by the same independent
@@ -989,7 +1025,8 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
   // OnTakeDamage can return before the engine commits HP and realDelta.
   // Its unique same-scope target/HP-before proof is checked again against
   // the final signed Modifier result and actual HP at ApplyModifier return.
-  const evidence=overkillEvidence(scope.mod,target,hit.hpBefore,when.frame);
+  const evidence=overkillEvidence(scope.mod,target,hit.hpBefore,when.frame,scope);
+  if(evidence)scope.settlementObservedHp=evidence;
   if(!evidence||!targetSettlementIdentity(scope,hit,when)||
      fp(scope.mod.add(0x30))!==amount)return reject('target settlement final HP proof unavailable');
   // Final m_value is the nominal settlement amount. Its earlier stage values
@@ -1080,12 +1117,15 @@ function noteShield(frame,target,amount){if(!target||target.isNull())return;let 
 function shieldTotal(frame,target){const map=shieldByFrame.get(frame);return map&&target?(map.get(target.toString())||0):0;}
 // Only a fully verifiable HP settlement yields overkill evidence. Any missing or
 // contradictory field (shared with Python) leaves the metric unknown, never zero.
-function overkillEvidence(mod,targetPtr,hpBefore,frame){
+function overkillEvidence(mod,targetPtr,hpBefore,frame,diagnosticScope=null){
  try{
   if(hpBefore===null||hpBefore===undefined||!targetPtr||targetPtr.isNull())return null;
   const hpAfter=targetHp(targetPtr),key=targetKey(targetPtr),real=fp(mod.add(0x48));
-  if(!key||hpAfter===null||!Number.isFinite(real)||real>0)return null;
-  if(Math.abs((hpBefore-hpAfter)+real)>Math.max(0.01,Math.abs(real)*1e-6))return null;
+  if(!key||hpAfter===null||!Number.isFinite(real)||real>0||
+     Math.abs((hpBefore-hpAfter)+real)>Math.max(0.01,Math.abs(real)*1e-6)){
+   if(diagnosticScope)diagnosticScope.settlementObservedHp={hp_before:hpBefore,hp_after:hpAfter,real_delta:real};
+   return null;
+  }
   // m_value is the incoming value before shield/block settlement (captured
   // frame 697: value 14, realDelta 0, HP unchanged, BlockDamage absorbed 14).
   // Python subtracts the verified absorption; an unverified frame sends none.
@@ -1747,6 +1787,8 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   if(!actualTarget)return;
   const evidence={...actualTarget,damage_type:damageType,shield_absorbed:shield??null,
                   settlement_complete:complete};
+  if(!complete)captureSettlementFailureSample(scope,when,
+   scope.settlementFailureReason??'incomplete HP or shield settlement proof',evidence);
   if(Number.isFinite(nominal)&&nominal+0.01>=-real+(shield??0))
    evidence.nominal_amount=nominal;
   if(nested)evidence.settled_after_nested_kill=true;
@@ -1895,8 +1937,11 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  const pair=consistent&&shieldedZero?shieldMitigationEvidence(scope,type,shieldIncoming):
        consistent&&(real<0||absorbed>0||nested)?reduction:undefined;
  scope.outputSettlement=null;
+ scope.settlementFailureCheckpoint={real,nativeAmount,absorbed,cancel,nested,
+  hpBefore:exactEvidence?.hp_before??hit?.hpBefore,hpAfter:exactEvidence?.hp_after};
  if(unverified)noteSettlementProofGap(scope,when,scope.settlementFailureReason||'missing same-hit target or output settlement proof');
  const recipient=targetCommit?scope:output||scope;
+ recipient.settlementFailureCheckpoint=scope.settlementFailureCheckpoint;
  if(scope.nestedParentSettlementProof)recipient.nestedParentSettlementProof=scope.nestedParentSettlementProof;
  if(scope.settlementFailureReason)recipient.settlementFailureReason=scope.settlementFailureReason;
  if(scope.nestedSettlementFailure)recipient.nestedSettlementFailure=scope.nestedSettlementFailure;

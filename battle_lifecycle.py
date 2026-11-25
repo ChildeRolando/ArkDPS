@@ -26,7 +26,7 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
                          native_identity_sampling_mark, TerminalReadRetry,
                          verified_autochess_round_start, autochess_round_start_origin,
-                         settlement_source_quality_clear)
+                         settlement_source_quality_clear, settlement_failure_samples)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
@@ -122,6 +122,8 @@ def _autochess_successor_ends_round(previous, successor):
 
 
 def _same_autochess_boundary_quality(sample, reference, fence):
+    if settlement_failure_samples(fence) != settlement_failure_samples(reference):
+        return False
     for key in ('quality_contract_version', 'damage_settlement_quality_version',
                 'damage_settlement_source_quality_version'):
         if type(fence.get(key)) is not int or fence[key] != 1:

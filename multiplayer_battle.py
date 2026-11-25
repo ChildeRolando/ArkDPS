@@ -17,7 +17,7 @@ from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
 from event_probe import (contract_for, event_processing_payload, autochess_round_start_live_skill_uids, autochess_round_start_lifecycle_instances,
                          autochess_round_start_origin, settlement_source_quality_clear,
-                         verified_autochess_settlement_source_issues)
+                         verified_autochess_settlement_source_issues, settlement_failure_samples)
 from roster import CharacterEntry, RosterSnapshot
 from source_classification import classify_unmapped_source
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -110,6 +110,7 @@ class MultiplayerBattleStatistics:
         self._retired_contexts = set()
         self._retired_event_scopes = set()
         self._retired_settlement_scopes = {}
+        self._settlement_failure_samples = None
         self._presence_point = None
         self._presence_deployments = {}
         self._presence_skill_replaced = set()
@@ -897,6 +898,9 @@ class MultiplayerBattleStatistics:
         return events, {seq: event for seq, event in pending.items() if seq > through}
 
     def _settlement_quality(self, sample, payload):
+        failures = settlement_failure_samples(payload)
+        if failures is not None:
+            self._settlement_failure_samples = deepcopy(failures)
         ready = payload.get('damage_settlement_ready', payload.get('enemy_damage_ready'))
         unknown = payload.get('damage_settlement_unknown', payload.get('enemy_damage_unknown'))
         if ready is True and unknown is False and settlement_source_quality_clear(payload):
@@ -1370,6 +1374,9 @@ class MultiplayerBattleStatistics:
             note='编号仅对当前小局有效。结算伤害来自已观察事件，平均 DPS 按观察到的游戏时长计算；未知表示证据不足。',
             players=players, unknown_attribution=list(deepcopy(self._unknown).values()),
             reasons=sorted(self._reasons))
+        if self._settlement_failure_samples is not None:
+            result.update(damage_settlement_failure_samples_version=1,
+                          damage_settlement_failure_samples=deepcopy(self._settlement_failure_samples))
         if self._native_mode:
             phase = self._context['phase']
             context_available = self._active_context is not None

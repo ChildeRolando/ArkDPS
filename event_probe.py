@@ -436,6 +436,7 @@ _SETTLEMENT_SOURCE_QUALITY_FIELDS = ('damage_settlement_source_quality_version',
     'damage_settlement_unlocalized_unknown', 'damage_settlement_source_issues')
 _ROUND_START_QUALITY_OPTIONAL = ('boss_damage_ready', 'boss_damage_unknown', 'damage_settlement_ready',
     'damage_settlement_unknown', 'damage_settlement_first_issue', *_SETTLEMENT_SOURCE_QUALITY_FIELDS,
+    'damage_settlement_failure_samples_version', 'damage_settlement_failure_samples',
     'mitigation_error',
     'mitigation_diagnostics', 'enemy_entry_ready', 'enemy_entry_unknown', 'enemy_phase_ready',
     'enemy_phase_unknown', 'enemy_state_ready', 'enemy_state_unknown', 'enemy_state_error',
@@ -674,6 +675,47 @@ def settlement_source_quality_clear(payload):
     return type(version) is int and version == 1 and unlocalized is False and type(issues) is list and not issues
 
 
+def settlement_failure_samples(payload):
+    """Validate optional bounded diagnostics without interpreting numeric proof."""
+    from autochess_context import native_autochess_event_identity
+    version_key, samples_key = 'damage_settlement_failure_samples_version', 'damage_settlement_failure_samples'
+    if version_key not in payload and samples_key not in payload:
+        return None
+    samples = payload.get(samples_key)
+    integers = {'sequence', 'frame', 'damage_settlement_scope'}
+    numbers = {'game_time', 'hp_before', 'hp_after', 'native_signed_delta', 'native_amount', 'shield_absorbed'}
+    strings = {'reason', 'method', 'source', 'target', 'target_uid', 'target_instance', 'nested_detail'}
+    booleans = {'shield_unknown', 'nested', 'settlement_ambiguous', 'target_commit_rejected', 'output_ambiguous'}
+    fields = integers | numbers | strings | booleans | {'source_character_uid', 'cancel_reason', 'native_autochess_scope'}
+    if type(payload.get(version_key)) is not int or payload[version_key] != 1 or type(samples) is not list or len(samples) > 16:
+        raise StreamGap('invalid settlement failure samples declaration')
+    for point in samples:
+        if (not isinstance(point, dict) or point.keys() != fields
+                or any(type(point[key]) is not int or point[key] < 0 for key in integers)
+                or any(point[key] is not None and (type(point[key]) not in (int, float)
+                        or not isfinite(point[key])) for key in numbers)
+                or type(point['game_time']) not in (int, float) or point['game_time'] < 0
+                or any(point[key] is not None and (not isinstance(point[key], str) or len(point[key]) > 200)
+                       for key in strings)
+                or not point['reason'] or any(type(point[key]) is not bool for key in booleans)
+                or any(point[key] is not None and (type(point[key]) is not int or point[key] < 0)
+                       for key in ('source_character_uid', 'cancel_reason'))):
+            raise StreamGap('invalid settlement failure sample')
+        scope = point['native_autochess_scope']
+        if scope is not None:
+            if (not isinstance(scope, dict) or type(scope.get('protocol_version')) is not int
+                    or scope['protocol_version'] != 1 or scope.get('status') not in ('available', 'unknown')
+                    or type(scope.get('verified_same_frame')) is not bool
+                    or type(scope.get('frame')) is not int or type(scope.get('game_time')) not in (int, float)
+                    or scope.get('frame') != point['frame'] or scope.get('game_time') != point['game_time']):
+                raise StreamGap('invalid settlement failure sample scope')
+            if (scope['status'] == 'available' and native_autochess_event_identity(point) is None
+                    or scope['status'] == 'unknown' and (scope['verified_same_frame'] is not False
+                       or not isinstance(scope.get('reason'), str) or not scope['reason'])):
+                raise StreamGap('invalid settlement failure sample scope proof')
+    return samples
+
+
 def verified_autochess_settlement_source_issues(sample, payload, *, retired_scopes=None):
     """Validate localized issues against current or receiver-retired scope clocks.
 
@@ -825,6 +867,7 @@ class ProbeContract:
     def normalize_quality(self, payload):
         """Normalize declarations only; event records and measured values are untouched."""
         result = dict(payload)
+        settlement_failure_samples(payload)
         declared = 'quality_contract_version' in payload
         supported = type(payload.get('quality_contract_version')) is int and payload['quality_contract_version'] == 1
         if declared and not supported:

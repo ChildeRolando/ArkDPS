@@ -231,6 +231,51 @@ def production_pipeline():
     return json.loads(result.stdout)
 
 
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
+def test_default_failure_checkpoint_retains_actual_rejection_inputs_and_archives(production_pipeline, platform):
+    from battle_history import BattleRecord
+    from event_probe import settlement_failure_samples
+    from test_autochess_scope_end import OwnedScopeEnd
+
+    report = production_pipeline[platform]['bad_hp_difference']
+    samples = settlement_failure_samples(report['mark'])
+    assert report['batch']['hp_context'] == []  # detailed tracing remains off
+    point, = samples
+    assert point['hp_before'] == 50 and point['hp_after'] == 11
+    assert point['native_signed_delta'] == -40
+    assert point['native_amount'] == 40 and point['cancel_reason'] == 0
+    assert point['target_commit_rejected']
+    assert point['reason'] == 'target settlement final HP proof unavailable'
+    assert samples == settlement_failure_samples(report['batch'])
+    assert settlement_failure_samples(production_pipeline[platform]['nonlethal_cap']['mark']) == []
+
+    case = OwnedScopeEnd(platform)
+    original = case.fixture.observer.mark
+
+    def mark():
+        value = original()
+        value.update(damage_settlement_failure_samples_version=1,
+                     damage_settlement_failure_samples=deepcopy(samples))
+        return value
+
+    case.fixture.observer.mark = mark
+    case.advance(1.25)
+    case.fixture.poll()
+    _, archive = case.finish(phase=7)
+    saved = archive['last_sample']['multiplayer']
+    assert saved['damage_settlement_failure_samples'] == samples
+    BattleRecord.from_archive(archive)
+    # Existing logs omit this additive family; emitted fields remain strict.
+    broken = deepcopy(archive)
+    broken['last_sample']['multiplayer']['damage_settlement_failure_samples'][0]['frame'] = True
+    with pytest.raises(ValueError):
+        BattleRecord.from_archive(broken)
+    old = deepcopy(archive)
+    old['last_sample']['multiplayer'].pop('damage_settlement_failure_samples_version')
+    old['last_sample']['multiplayer'].pop('damage_settlement_failure_samples')
+    BattleRecord.from_archive(old)
+
+
 @pytest.mark.parametrize("platform,contract", BACKENDS)
 @pytest.mark.parametrize("scenario", ["target_return_before_apply_commit", "nonlethal_cap", "lethal_hit",
                                       "full_block_unit_before_shield", "full_block_unit_after_shield",

@@ -14,6 +14,7 @@ import tempfile
 from threading import RLock
 
 from autochess_context import MAX_MEMBERSHIPS, PHASE_NAMES, native_autochess_scope_id, valid_player_uid
+from event_probe import settlement_failure_samples
 
 
 POLICIES = {
@@ -214,6 +215,7 @@ def _validate_multiplayer(payload, battle_id, duration):
 
     def scope(value, *, compact):
         _require(isinstance(value, dict), 'invalid multiplayer scope')
+        settlement_failure_samples(value)
         _require(type(value.get('schema_version')) is int and value['schema_version'] in (1, 2),
                  'unsupported multiplayer schema_version')
         native = value['schema_version'] == 2
