@@ -158,6 +158,20 @@ class Statistics:
         self.partial_unquantified_damage = set()
         self.partial_unattributed_damage = False
 
+    @property
+    def legacy_observation_mode(self):
+        return self._legacy_observation_mode
+
+    @legacy_observation_mode.setter
+    def legacy_observation_mode(self, value):
+        if type(value) is not bool:
+            raise ValueError('legacy observation capability must be explicit')
+        prior = getattr(self, '_legacy_observation_mode', value)
+        if value != prior and (getattr(self, 'events', None) or getattr(self, 'settled', None)
+                               or getattr(self, 'settlement_skill_active', None)):
+            raise ValueError('observation capability cannot change after consumption')
+        self._legacy_observation_mode = value
+
     def observe_boss_damage(self, *, complete):
         if self.boss_damage is None:
             self.boss_damage = {}
@@ -401,6 +415,12 @@ class Statistics:
                                  hp, shield, complete, kind, nominal, before, after, *, killed=None,
                                  settled_after_nested_kill=False, world_only=False):
         """Record each confirmed component, preserving independently verified neighbors."""
+        if self.legacy_observation_mode:
+            # A legacy-only declaration and a native settlement certificate
+            # cannot describe the same observer stream. Retain prior facts,
+            # fail coverage, and never add this second interpretation.
+            self.settlement_stream_incomplete = True
+            raise ValueError('native settlement contradicts declared legacy observation capability')
         valid_target = self._enemy_identity(target, target_uid) and target.startswith(('enemy_', 'trap_'))
         previous = self.enemy_damage.get(target_uid) if valid_target and self.enemy_damage is not None else None
         if previous and previous['eid'] != target:

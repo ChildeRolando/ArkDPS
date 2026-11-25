@@ -102,3 +102,36 @@ def test_explicit_legacy_observation_mode_keeps_identity_and_partial_hp_quality(
     assert lane['known_hp_damage'] == lane['known_shield_damage'] == 0
     assert lane['complete'] is False
     assert stats.settled['owner'].legacy_effective == 10
+
+
+def test_legacy_capability_rejects_a_second_native_certificate_writer():
+    import pytest
+    stats = Statistics('capability-conflict', 0, event_coverage=True)
+    stats.settlement_enabled = stats.partial_damage_enabled = True
+    stats.legacy_observation_mode = True
+    stats.register_source('char_a', 'owner')
+    stats.snapshot(0, {'char_a': {'damage': 0, 'healing': 0}})
+    stats.snapshot(2, {'char_a': {'damage': 20, 'healing': 0}})
+    stats.event('legacy', 1, 'char_a', 'damage', 20, target='enemy_test',
+        hp_after=100, killed=False, damage_type=1)
+    with pytest.raises(ValueError, match='contradicts declared legacy'):
+        stats.record_damage_settlement(1, 'local', 'owner', 1, 'char_a',
+            'enemy_test', '7', 'native', 8, 0, True, 1, 20, None, None, killed=False)
+    assert stats.settlement_stream_incomplete
+    assert stats.settled['owner'].hits == 1
+    assert stats.settled['owner'].raw == 20
+    assert stats.settled['owner'].hp == 0
+    with pytest.raises(ValueError, match='cannot change after consumption'):
+        stats.legacy_observation_mode = False
+    assert stats.legacy_observation_mode is True
+
+
+def test_native_certificate_consumption_prevents_later_legacy_capability_selection():
+    import pytest
+    stats = Statistics('capability-conflict', 0)
+    stats.record_damage_settlement(1, 'local', 'owner', 1, 'char_a',
+        'enemy_test', '7', 'native', 8, 0, True, 1, 20, None, None, killed=False)
+    with pytest.raises(ValueError, match='cannot change after consumption'):
+        stats.legacy_observation_mode = True
+    assert stats.legacy_observation_mode is False
+    assert stats.settled['owner'].raw == 20
