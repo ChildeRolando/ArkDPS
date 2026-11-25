@@ -42,7 +42,7 @@ function scenario(platform,mode){
   assert.equal(entry.proof.native_enemy_birth.sequence_before_born,mode==='before_born'?1:0);
   assert.equal(entry.proof.native_enemy_birth.sequence_after_born,['before_born','inside_born'].includes(mode)?1:0);
  }
- if(mode==='valid')assert.deepEqual(Array.from(batch.events,e=>e.kind),['elemental_bar','enemy_enter','damage_settlement','elemental_burst']);
+ if(mode==='valid')assert.deepEqual(Array.from(batch.events,e=>e.kind),['elemental_bar','enemy_enter','damage_settlement']);
  return {mark,batch};
 }
 for(const platform of ['native_pc','android'])output[platform]=Object.fromEntries(['valid','before_born','reborn','reborn_new_bar','cycle_before_entry','new_born_cycle','uid_changed','inside_born'].map(mode=>[mode,scenario(platform,mode)]));

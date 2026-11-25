@@ -575,6 +575,13 @@ def pc_mechanism_evidence(events):
             and number(event.get('amount')) and event['amount'] > 0]
     bursts = [event for event in events if event.get('kind') == 'elemental_burst'
               and number(event.get('amount')) and event['amount'] > 0]
+    # A modern producer emits the elemental callback once, as its checked
+    # settlement certificate. Old paired wire remains independently validated.
+    legacy_bursts = list(bursts)
+    bursts += [event for event in events if event.get('kind') == 'damage_settlement'
+        and event.get('damage_type') == 5 and number(event.get('amount')) and event['amount'] > 0
+        and not any(clock_equal(event, old) and target_equal(event, old) and actor_equal(event, old)
+                    and event.get('real_delta') == old.get('real_delta') for old in legacy_bursts)]
     elemental_ok, elemental_bad, burst_settlements = [], [], {}
     verified_burst_pairs = {}
     used_settlements = set()
@@ -594,6 +601,8 @@ def pc_mechanism_evidence(events):
                            and event.get('nominal_amount') == burst.get('amount')
                            and event.get('killed') == burst.get('killed'))
                       and event['sequence'] not in used_settlements]
+        if burst.get('kind') == 'damage_settlement':
+            candidates = [burst] if settled(burst, elemental=True) else []
         matching_bars = [bar for bar in bars if proof_of(bar).get('method') == 'Entity.ApplyModifier'
                          and type(proof_of(bar).get('type')) is int and proof_of(bar)['type'] == 0
                          and type(proof_of(bar).get('target')) is int and proof_of(bar)['target'] == 5
@@ -768,7 +777,8 @@ def pc_mechanism_evidence(events):
         else:
             nested_bad.append(parent['sequence'])
 
-    chain_records = [event for event in events if chain_key in proof_of(event)]
+    chain_records = [event for event in events if chain_key in proof_of(event)
+                     and (not isinstance(proof_of(event)[chain_key], dict) or proof_of(event)[chain_key].get('version') != 2)]
     if chain_records:
         by_sequence = {}
         for event in events:
@@ -902,6 +912,144 @@ def pc_mechanism_evidence(events):
             sequence = event['sequence']
             if sequence not in chain_accepted and sequence not in nested_bad:
                 nested_bad.append(sequence)
+
+    # Modern certificates retain checked HP endpoints and reference only real
+    # settlement sequences. This is the v2 proof format; no synthetic legacy
+    # event, duplicate sequence or second copy of the same callback is needed.
+    modern_parents = [event for event in events if event.get('kind') == 'damage_settlement'
+        and (isinstance(proof_of(event).get(chain_key), dict)
+             and proof_of(event)[chain_key].get('version') == 2
+             or proof_of(event).get('nested_settlement')
+             and not any(old.get('kind') == 'damage' and clock_equal(event, old)
+                         and actor_equal(event, old) and target_equal(old, event)
+                         and proof_of(old).get('nested_settlement') == proof_of(event)['nested_settlement']
+                         for old in events))]
+    by_sequence = {}
+    for event in events:
+        seq = event.get('sequence')
+        if type(seq) is int and seq > 0:
+            by_sequence[seq] = None if seq in by_sequence else event
+
+    def modern_child(parent, child):
+        return (isinstance(child, dict) and settled(child) and hp_evidence(child)
+            and type(child.get('sequence')) is int and by_sequence.get(child['sequence']) is child
+            and child['sequence'] < parent['sequence'] and child['sequence'] not in used_child_bursts
+            and clock_equal(parent, child) and same_scope(parent, child) and target_equal(parent, child)
+            and child['shield_absorbed'] == 0 and child['real_delta'] < 0
+            and child['amount'] == -child['real_delta'] and child.get('killed') is (child['hp_after'] == 0)
+            and (owned_actor(child) or child.get('source') is None and child.get('source_character_uid') is None
+                 and child.get('damage_type') == 5)
+            and not proof_of(child).get(chain_key) and not proof_of(child).get('nested_settlement'))
+
+    def modern_witness(parent):
+        sequence = parent.get('sequence')
+        proof = proof_of(parent)
+        if (type(sequence) is not int or by_sequence.get(sequence) is not parent
+                or not settled(parent) or not hp_evidence(parent) or not owned_actor(parent)
+                or parent.get('damage_type') not in (1, 2, 3) or parent['shield_absorbed'] != 0
+                or parent['amount'] != -parent['real_delta']
+                or not number(parent.get('nominal_amount'), nonnegative=True)
+                or parent['nominal_amount'] + .01 < parent['amount']):
+            return None
+        observation = proof.get('native_modifier_observation')
+        if (not isinstance(observation, dict) or set(observation) != {'version', 'method', 'amount'}
+                or type(observation['version']) is not int or observation['version'] != 1
+                or observation['method'] != 'Entity.ApplyModifier'
+                or not number(observation['amount'], nonnegative=True)
+                or observation['amount'] != parent['nominal_amount']):
+            return None
+        checkpoint = proof.get('target_callback_checkpoint')
+        if (not isinstance(checkpoint, dict) or set(checkpoint) != {'version', 'method', 'returned', 'source',
+                'source_character_uid', 'target_uid', 'hp_before', 'frame', 'game_time'}
+                or type(checkpoint['version']) is not int or checkpoint['version'] != 1
+                or checkpoint['method'] != 'Unit.OnTakeDamage' or checkpoint['returned'] is not True
+                or not actor_equal(parent, checkpoint) or checkpoint['target_uid'] != parent['target_uid']
+                or not clock_equal(parent, checkpoint) or not number(checkpoint['hp_before'], nonnegative=True)):
+            return None
+        chain = proof.get(chain_key)
+        scalar = proof.get('nested_settlement')
+        if chain is not None:
+            fields = {'version', 'ordering', 'target_uid', 'parent_real_delta', 'parent_hp_before',
+                      'parent_hp_after', 'children'}
+            zero = parent.get('settled_after_nested_kill') is True
+            if zero:
+                fields.add('parent_entry_hp_before')
+            if (not isinstance(chain, dict) or set(chain) != fields or type(chain['version']) is not int
+                    or chain['version'] != 2 or scalar is not None or chain['target_uid'] != parent['target_uid']
+                    or chain['ordering'] not in ('parent_before_children', 'children_before_parent')
+                    or type(chain['children']) is not list or not 1 <= len(chain['children']) <= 16
+                    or any(not number(chain['parent_' + key]) or chain['parent_' + key] != parent[key]
+                           for key in ('hp_before', 'hp_after', 'real_delta'))):
+                return None
+            parent_first = chain['ordering'] == 'parent_before_children'
+            hp = parent['hp_after'] if parent_first else chain.get('parent_entry_hp_before') if zero else None
+            children = []
+            for step in chain['children']:
+                fields = {'source', 'settlement_sequence', 'hp_before', 'hp_after', 'real_delta'}
+                if (not isinstance(step, dict) or not fields <= set(step) <= fields | {'source_character_uid'}
+                        or type(step['settlement_sequence']) is not int
+                        or any(not number(step[key]) for key in ('hp_before', 'hp_after', 'real_delta'))
+                        or (not owned_actor(step) if step.get('source') is not None else step.get('source_character_uid') is not None)):
+                    return None
+                child = by_sequence.get(step['settlement_sequence'])
+                if (not modern_child(parent, child) or not actor_equal(step, child)
+                        or any(step[key] != child[key] for key in ('hp_before', 'hp_after', 'real_delta'))
+                        or hp is not None and hp != step['hp_before']
+                        or children and children[-1]['sequence'] >= child['sequence']):
+                    return None
+                children.append(child)
+                hp = step['hp_after']
+            if not parent_first and parent['hp_before'] != hp:
+                return None
+            if zero:
+                if (parent_first or parent['real_delta'] != 0 or parent['hp_before'] != 0
+                        or parent['hp_after'] != 0 or parent['nominal_amount'] <= 0 or parent.get('killed') is not True
+                        or not number(chain['parent_entry_hp_before']) or chain['parent_entry_hp_before'] <= 0
+                        or checkpoint['hp_before'] != chain['parent_entry_hp_before']):
+                    return None
+            elif parent['real_delta'] >= 0 or parent_first and parent.get('killed') is not False:
+                return None
+            ordering = chain['ordering']
+        else:
+            fields = {'target_uid', 'parent_real_delta', 'parent_hp_before', 'parent_hp_after',
+                      'child_hp_before', 'child_hp_after', 'child_real_delta'}
+            zero = parent.get('settled_after_nested_kill') is True
+            if zero:
+                fields |= {'ordering', 'parent_entry_hp_before'}
+            if (not isinstance(scalar, dict) or set(scalar) != fields
+                    or scalar['target_uid'] != parent['target_uid']
+                    or any(not number(scalar['child_' + key]) for key in ('hp_before', 'hp_after', 'real_delta'))
+                    or any(not number(scalar['parent_' + key]) or scalar['parent_' + key] != parent[key]
+                           for key in ('hp_before', 'hp_after', 'real_delta'))):
+                return None
+            children = [child for child in events if modern_child(parent, child)
+                and all(child[key] == scalar['child_' + key] for key in ('hp_before', 'hp_after', 'real_delta'))]
+            if len(children) != 1:
+                return None
+            child = children[0]
+            if zero:
+                if (scalar['ordering'] != 'child_before_parent_zero' or parent['real_delta'] != 0
+                        or parent['hp_before'] != 0 or parent['hp_after'] != 0 or parent['nominal_amount'] <= 0
+                        or parent.get('killed') is False or child['hp_after'] != 0 or scalar['parent_entry_hp_before'] != child['hp_before']
+                        or checkpoint['hp_before'] != scalar['parent_entry_hp_before']):
+                    return None
+                ordering = 'child_before_parent_zero'
+            else:
+                if (not parent['real_delta'] < 0 or not parent['hp_after'] > 0
+                        or parent.get('killed') is not False or child['hp_before'] != parent['hp_after']):
+                    return None
+                ordering = 'parent_before_child'
+        return dict(ordering=ordering, parent_sequence=sequence, parent_settlement_sequence=sequence,
+                    children=[dict(settlement_sequence=child['sequence']) for child in children])
+
+    for parent in modern_parents:
+        witness = modern_witness(parent)
+        if witness is None:
+            nested_bad.append(parent['sequence'])
+        else:
+            nested_ok.append(witness)
+            used_parent_settlements.add(parent['sequence'])
+            used_child_bursts.update(child['settlement_sequence'] for child in witness['children'])
 
     result = {name: dict(passed=bool(valid) and not invalid, positive_witnesses=valid,
                        invalid_sequences=invalid,

@@ -86,10 +86,9 @@ def test_actual_two_owner_batch_keeps_the_other_owner_complete(producer, platfor
 def test_real_identity_or_clock_failure_still_degrades_global_settlement_coverage(producer, platform, fault):
     report = producer["native_pc" if platform == "native_pc" else "android"]["global"][fault]
     assert report["batch"]["enemy_damage_unknown"] is True
-    if fault == "cross_time":
-        with pytest.raises(StreamGap, match="clock|watermark"):
-            capture(report, platform)
-        return
+    # The rejected cross-time callback no longer leaves an earlier hp_damage
+    # wire record. Its global quality failure must survive; the remaining
+    # certified event prefix itself need not invent an out-of-order event.
     rows, _, _ = capture(report, platform)
     b = rows["rows"][CIDS[1]]["settled_damage"]
     assert b["known_hp_damage"] == 40
