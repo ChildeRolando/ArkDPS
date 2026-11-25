@@ -364,6 +364,9 @@ class NativeHookRuntime:
                 raise RuntimeFailure('process_changed', '原生组件提交前进程实例、路径或唯一性已变化')
             if self._files() != self._build_signature:
                 raise RuntimeFailure('native_build_changed', '原生组件提交前客户端文件已变化')
+            if (self._prepared is None
+                    or getattr(self._prepared, 'source_build', None) != self._lease['source_build']):
+                raise RuntimeFailure('native_build_changed', '原生组件核实的客户端构建与启动租约不一致')
             return operation()
 
     def start(self):
@@ -463,6 +466,8 @@ class NativeHookRuntime:
                 self._check_cancelled()
                 if not self._alive(self._lease):
                     raise RuntimeFailure('process_changed', 'PC 进程在原生组件准备期间变化')
+                if getattr(candidate, 'source_build', None) != self._lease['source_build']:
+                    raise RuntimeFailure('native_build_changed', '原生组件核实的客户端构建与启动租约不一致')
                 self._ready_generation += 1
                 self._state(RuntimeState.READY)
             self._trace_startup('native_prepare_completed', preparation=self._last_preparation, snapshot_phase='after_prepare')

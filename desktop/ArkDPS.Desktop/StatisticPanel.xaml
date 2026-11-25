@@ -143,10 +143,7 @@
      <Border Width="28" Height="28" CornerRadius="2" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Inset}" ClipToBounds="True">
       <Grid><TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Accent}" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/><Image Source="{Binding Portrait}" Opacity="{Binding PortraitOpacity}" Stretch="UniformToFill"/></Grid>
      </Border>
-     <StackPanel Grid.Column="1" Margin="7,0,0,0" VerticalAlignment="Center">
-      <TextBlock Text="{Binding ActorName}" Foreground="{DynamicResource Ink}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-      <TextBlock Text="{Binding ActorIdentity}" Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="11" Margin="0,2,0,0" TextWrapping="NoWrap"/>
-     </StackPanel>
+     <TextBlock Grid.Column="1" Margin="7,0,0,0" VerticalAlignment="Center" Text="{Binding ActorName}" Foreground="{DynamicResource Ink}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
     </Grid>
     <Border Grid.Column="2" Background="Transparent" ToolTip="{Binding RankedBarTooltip}" Margin="4,0,10,0">
      <local:ContributionBar Data="{Binding Entry}" MetricCategory="{Binding MetricCategory}" Height="7" VerticalAlignment="Center"/>

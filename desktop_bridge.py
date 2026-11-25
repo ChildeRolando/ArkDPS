@@ -841,6 +841,11 @@ class DesktopState:
             uid = actor.get('uid', actor.get('actor_uid', actor.get('unique_id')))
             identity = dict(actor_uid=uid, player_side=side if side is not None else actor.get('player_side'),
                             portrait_id=actor.get('cid'))
+            # Older records appended the actor UID to the display name. Keep
+            # the identity fields and ledger key while presenting the name.
+            name = view['source'][owner].get('name')
+            if isinstance(name, str):
+                identity['name'] = name.removesuffix(f' · {uid}')
             if (owner_uid := player_uid if player_uid is not None else actor.get('player_uid')) is not None:
                 identity['player_uid'] = owner_uid
             view['source'][owner] = dict(view['source'][owner], **identity)

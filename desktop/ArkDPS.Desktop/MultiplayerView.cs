@@ -16,7 +16,6 @@ public sealed class MultiplayerView : ScrollViewer
     private readonly TextBlock notice = Label("", 13, "Muted");
     private readonly TextBlock scope = Label("", 12, "Muted");
     private readonly TextBlock selection = Label("", 16, "Ink", true);
-    private readonly TextBlock identity = Label("", 12, "Muted");
     private readonly UniformGrid comparisons = new() { Columns = 4 };
     private readonly Grid detail = new();
     private readonly PlayerButton[] players;
@@ -53,12 +52,8 @@ public sealed class MultiplayerView : ScrollViewer
         foreach (var player in players) comparisons.Children.Add(player);
         comparisons.Margin = new Thickness(-3, 0, -3, 14);
         body.Children.Add(comparisons);
-        selection.Margin = new Thickness(0, 0, 0, 4);
-        identity.Margin = new Thickness(0, 0, 0, 10);
-        identity.TextWrapping = TextWrapping.Wrap;
-        AutomationProperties.SetAutomationId(identity, "MultiplayerSelectedIdentity");
+        selection.Margin = new Thickness(0, 0, 0, 10);
         body.Children.Add(selection);
-        body.Children.Add(identity);
         detail.ColumnDefinitions.Add(new ColumnDefinition());
         detail.ColumnDefinitions.Add(new ColumnDefinition());
         detail.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -71,7 +66,6 @@ public sealed class MultiplayerView : ScrollViewer
         ranking.PinRequested = owner =>
         {
             inspector.Pin(owner, ranking.View);
-            UpdateIdentity(owner);
         };
         AutomationProperties.SetAutomationId(ranking, "MultiplayerOperatorRanking");
         AutomationProperties.SetName(ranking.Rows, "所选玩家的干员排行");
@@ -123,7 +117,7 @@ public sealed class MultiplayerView : ScrollViewer
         };
         if (previousDefense) notice.Text = "上轮防御 · 保留已观察数据。" + notice.Text;
         scope.Text = eligible ? "队伍展示已观察结算伤害（含过量）和观察时段平均 DPS。干员排行展示已观察有效伤害和接敌 DPS。协防数据单独统计。" : "";
-        comparisons.Visibility = selection.Visibility = identity.Visibility = detail.Visibility = scope.Visibility =
+        comparisons.Visibility = selection.Visibility = detail.Visibility = scope.Visibility =
             eligible ? Visibility.Visible : Visibility.Collapsed;
         foreach (var player in players)
         {
@@ -200,20 +194,6 @@ public sealed class MultiplayerView : ScrollViewer
             ranking.Empty.Visibility = Visibility.Visible;
         }
         inspector.Update(view);
-        if (defenseAvailable) UpdateIdentity(inspector.Owner);
-        else identity.Text = "";
-    }
-
-    private void UpdateIdentity(string? owner)
-    {
-        if (owner is null)
-        {
-            identity.Text = "干员按战斗 UID 分开记录。选择排行中的干员查看对应数据。";
-            return;
-        }
-        var row = ranking.View.Get("source").Get(owner);
-        string uid = row.Text("actor_uid");
-        identity.Text = "已选择战斗 UID " + (uid.Length > 0 ? uid : owner);
     }
 
     private void ArrangeComparison()

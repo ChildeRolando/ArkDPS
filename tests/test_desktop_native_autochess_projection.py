@@ -80,7 +80,7 @@ def test_accepted_four_account_views_and_local_panels_share_the_existing_rendere
     trend = snapshot['live_analysis']
     assert trend['team_total_damage'] is trend['team_average_dps'] is trend['team_recent_dps'] is None
     assert trend['observed_team_recent_dps'] == 150
-    assert trend['operators'] == [dict(owner_id=f'910000003:{CID}#301', name='灰喉 · 301', recent_dps=150)]
+    assert trend['operators'] == [dict(owner_id=f'910000003:{CID}#301', name='灰喉', recent_dps=150)]
     state.snapshot()
     assert sample == original  # View identity, flags and counters never enter raw/history data.
 

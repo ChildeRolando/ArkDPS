@@ -56,7 +56,6 @@ public sealed class RowItem : INotifyPropertyChanged
     public string ActorUid => Entry.Text("actor_uid");
     public string ActorName => ActorUid.Length > 0 && Name.EndsWith(" · " + ActorUid, StringComparison.Ordinal)
         ? Name[..^(ActorUid.Length + 3)] : Name;
-    public string ActorIdentity => ActorUid.Length > 0 ? "UID " + ActorUid : Id;
     public string CoverageMarker => MetricCoverage.HasPartial(Entry.Get("coverage")) ? "*" : "";
     public Visibility CoverageMarkerVisibility => CoverageMarker.Length>0 ? Visibility.Visible : Visibility.Collapsed;
     public string DisplayName => CoverageMarker.Length>0 ? CoverageMarker+" "+Name : Name;

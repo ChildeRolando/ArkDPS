@@ -970,7 +970,7 @@ class MultiplayerBattleStatistics:
                 continue
             name = self._names.get(entry.cid, entry.cid)
             row.update(id=owner, cid=entry.cid, unique_id=entry.unique_id,
-                       name=f'{name} · {entry.unique_id}')
+                       name=name)
             lane = row.get('settled_damage', {})
             row['observed_damage'] = lane.get('observed_damage')
             if self._native_mode and (owner in player.unknown_skill_prefix
