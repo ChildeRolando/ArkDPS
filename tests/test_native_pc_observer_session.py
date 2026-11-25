@@ -133,8 +133,7 @@ def test_disabled_native_pc_does_not_poll_boot_or_attach_observer():
         current.close()
 
 
-@pytest.mark.parametrize('remote,lifecycle', [(DEFAULT_FRIDA_REMOTE, True), ('endpoint', True),
-                                               (None, False)])
+@pytest.mark.parametrize('remote,lifecycle', [(DEFAULT_FRIDA_REMOTE, True), ('endpoint', True)])
 def test_pc_factory_cannot_opt_into_android_transport_or_non_lifecycle_mode(remote, lifecycle):
     def forbidden(*_args):
         pytest.fail('ineligible PC factory must not be constructed')
@@ -214,3 +213,14 @@ def test_pc_startup_cleanup_failure_retains_observer_for_shutdown_retry():
     assert Failed.stops == 2 and current._pending_observers == []
     assert collector.calls[-1] == 'close'
     assert current.cleanup_errors['observer'] == ['provider cleanup failed']
+
+
+def test_pc_default_session_enters_the_same_runtime_before_trusted_attach():
+    current, collector = session(TrustedObserver, lifecycle=False)
+    current.connect()
+    try:
+        assert current.runtime is not None
+        assert current.capture.observer is current.observer
+        assert collector.calls == ['connect', 'observer_start', 'lifecycle']
+    finally:
+        current.close()

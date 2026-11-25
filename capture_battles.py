@@ -22,15 +22,22 @@ from snapshot_adapter import AdapterError, MappingUnavailable
 
 
 def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
+    """Snapshot diagnostic via the production session, with the original journal.
+
+    This adapter changes only the evidence envelope. CollectionSession owns
+    connection/cleanup, BattleRuntime commits observations, and BattleSessions
+    alone selects terminal evidence. No second snapshot or finish loop lives here.
+    """
+    from collection_session import CollectionSession
+
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     runtime = BattleRuntime()
-    collector = None
+    session = None
     deadline = time.monotonic() + seconds
     reconnect_at = 0.
     summary = dict(feed=runtime.feed.id, samples=0, archives=0, errors=0,
                    adb=adb, serial=serial)
-    # Never silently replace an earlier evidence capture.
     with (output / 'observations.jsonl').open('x', encoding='utf-8') as stream:
         def write(record):
             stream.write(json.dumps(record, ensure_ascii=False, default=sorted) + '\n')
@@ -41,67 +48,93 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
             layout_override=dict(event_observation=False))
         header = context.header('lifecycle_capture', debug_mode=True)
         write({'header': {**summary, 'log_header': header['data']}})
+
+        pending_records = []
+
+        def flush_records():
+            if runtime.sessions.connection == 'disconnected':
+                for record in reversed(pending_records):
+                    if 'observation' in record:
+                        record['connection'] = 'disconnected'
+                        break
+            for record in pending_records:
+                write(record)
+            pending_records.clear()
+
+        def audit(kind, data):
+            # Keep old raw observations and archive schema, without deriving
+            # lifecycle facts from published/display samples.
+            if kind == 'lifecycle_observation':
+                pending_records.append({'observation': asdict(data)})
+            elif kind == 'archive_ready':
+                summary['archives'] += 1
+                pending_records.append({'archive_ready': data})
+            elif kind == 'connected':
+                diagnostics = data['diagnostics']
+                write({'connected': dict(pid=data['pid'],
+                    process_instance=data.get('process_instance'),
+                    version=diagnostics.get('version_actual'),
+                    environment=context.update_environment(diagnostics))})
+
         try:
             while time.monotonic() < deadline:
-                if collector is None:
+                if session is None:
                     if time.monotonic() < reconnect_at:
                         time.sleep(.2)
                         continue
-                    collector = Collector(adb, serial)
+                    session = CollectionSession(adb, serial, collector=Collector(adb, serial),
+                                                frida_remote=None, audit=audit)
+                    session.enable_lifecycle(runtime)
                     try:
-                        collector.connect(lifecycle=True)
-                        write({'connected': dict(
-                            pid=collector.core.mc.pid,
-                            process_instance=collector.core.mc.process_instance,
-                            version=collector.diagnostics.version_actual,
-                            environment=context.update_environment(vars(collector.diagnostics)))})
+                        session.connect()
                         print('lifecycle_ready', flush=True)
                     except Exception as exc:
-                        gap = runtime.disconnected(str(exc))
                         summary['errors'] += 1
-                        write({'observation': asdict(gap), 'connection': 'disconnected',
-                               'error': str(exc), 'phase': 'connect'})
-                        collector.close()
-                        collector = None
+                        runtime.disconnected(str(exc))
+                        write({'connection': 'disconnected', 'error': str(exc), 'phase': 'connect'})
+                        # A cleanup failure must retain this owner and abort,
+                        # rather than constructing a replacement session.
+                        session.close()
+                        flush_records()
+                        session = None
                         reconnect_at = time.monotonic() + 2
                         continue
                 try:
-                    observation = runtime.poll(collector)
-                    write({'observation': asdict(observation)})
-                    summary['samples'] += int(observation.kind == 'sample')
+                    session.read()
                 except CaptureRetry as exc:
-                    retry = {'retry': str(exc)}
                     if isinstance(exc, MappingRetry):
-                        # The attempted new generation can archive its predecessor.
-                        retry['observation'] = asdict(exc.observation)
-                    write(retry)
+                        for record in pending_records:
+                            raw = record.get('observation') or {}
+                            if raw.get('sequence') == exc.observation.sequence:
+                                record['retry'] = str(exc)
+                                break
+                    pending_records.append({'retry': str(exc)})
                 except Exception as exc:
                     summary['errors'] += 1
-                    # poll already issued the gap, preserve that exact sequence
-                    # in replay without recording the exception as a scene exit.
-                    gap = BattleObservation(runtime.feed.id, runtime.feed.sequence,
-                                            runtime.feed.generation, 'gap',
-                                            reason='read_unavailable')
-                    write({'observation': asdict(gap), 'error': str(exc)})
+                    write({'error': str(exc)})
                     if isinstance(exc, (BattleChanged, OSError)):
-                        gap = runtime.disconnected(str(exc))
-                        write({'observation': asdict(gap), 'connection': 'disconnected'})
-                        collector.close()
-                        collector = None
+                        session.close()
+                        write({'connection': 'disconnected'})
+                        session = None
                         reconnect_at = time.monotonic() + 2
-                for archive in runtime.sessions.pop_archives():
-                    summary['archives'] += 1
-                    write({'archive_ready': archive})
+                # Count accepted sample observations, not failed mapping attempts
+                # or terminal/display publications. The replay uses the same rule.
+                summary['samples'] += sum(int((r.get('observation') or {}).get('kind') == 'sample'
+                    and 'retry' not in r) for r in pending_records)
+                flush_records()
                 time.sleep(.2)
         finally:
-            if collector is not None:
-                collector.close()
-            gap = runtime.disconnected('capture_stopped')
-            write({'observation': asdict(gap), 'connection': 'disconnected'})
-            summary['last_state'] = runtime.sessions.live()
-            write({'summary': summary})
-            (output / 'summary.json').write_text(
-                json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+            try:
+                if session is not None:
+                    session.close()
+                else:
+                    runtime.disconnected('capture_stopped')
+            finally:
+                flush_records()
+                summary['last_state'] = runtime.sessions.live()
+                write({'summary': summary})
+                (output / 'summary.json').write_text(
+                    json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
     return summary
 
 

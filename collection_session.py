@@ -13,7 +13,6 @@ from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from event_probe import EventProbe
-from event_stream import StreamGap
 
 
 DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
@@ -103,6 +102,10 @@ class CollectionSession:
         return bool(self.frida_remote)
 
     def connect(self):
+        # All capabilities, including snapshot-only collection, use the same
+        # generation, terminal-evidence and archive owners.
+        if self.runtime is None:
+            self.enable_lifecycle()
         self.collector.connect(locate=False)
         process = collector_process(self.collector)
         self.audit('connected', {'diagnostics': vars(self.collector.diagnostics),
@@ -318,24 +321,12 @@ class CollectionSession:
         return True, self.observer
 
     def locate(self, *, force=False, wait_seconds=0, cancelled=None):
-        if self.runtime is not None:
-            return
-        deadline = time.monotonic() + wait_seconds
+        """Compatibility readiness gate; BattleFeed alone binds battle roots.
+
+        `force` no longer drives a second battle locator. Each read acquires
+        guarded lifecycle evidence, including when no battle is active yet.
+        """
         self.wait_for_game_init(wait_seconds=wait_seconds, cancelled=cancelled)
-        while True:
-            if cancelled is not None and cancelled():
-                raise InterruptedError('collection cancelled before battle')
-            try:
-                self.collector.locate_battle(force=force)
-                self.audit('battle_located', {})
-                return
-            except (BattleChanged, UnsupportedVersion):
-                raise
-            except SampleUnavailable as exc:
-                self.audit('waiting_for_battle', {'reason': str(exc)})
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(.2)
 
     def read(self):
         try:
@@ -348,43 +339,7 @@ class CollectionSession:
             raise
         if self.capture is None:
             raise RuntimeError('collection session is not connected')
-        if self.runtime is not None:
-            return self._read_lifecycle()
-        try:
-            stats = self.capture.adapter.statistics
-            result = (self.capture.snapshot() if self.capture.closed or stats is not None and stats.end_time is not None
-                      else self.capture.sample())
-        except StreamGap as exc:
-            self.event_status, self.event_error = 'gap', str(exc)
-            self.audit('event_gap', {'reason': str(exc), 'error_type': type(exc).__name__,
-                                     'statistics': self.capture.adapter.result()})
-            if self.observer is not None:
-                try:
-                    self.observer.stop()
-                except Exception as cleanup:
-                    self.cleanup_errors.setdefault('observer', []).append(str(cleanup))
-                    self.audit('observer_cleanup_error', {'reason': str(cleanup), 'error_type': type(cleanup).__name__})
-            result = self.capture.snapshot()
-        sample = dict(self.capture.last_sample)
-        if sample.get('state') == 3 and self.capture.adapter.statistics.end_time is None:
-            self.capture.adapter.finish(sample['game_time'])
-            result = self.capture.adapter.result()
-        stream = self.capture.adapter.event_stream
-        if (stream is not None and stream.closed and self.capture.adapter.statistics.end_time is not None
-                and not self.capture.adapter.statistics.event_coverage_broken):
-            self.event_status = 'finished'
-        elif stream is not None and stream.closed and self.event_status in ('ready', 'recording'):
-            self.event_status = 'gap'
-            self.event_error = 'event coverage closed by the statistics adapter'
-        elif stream is not None and not stream.closed:
-            self.event_status = 'recording'
-        sample.update(statistics=result, event_status=self.event_status, event_error=self.event_error,
-                      snapshot_revision=result.get('snapshot_revision'),
-                      event_watermark=({'sequence': stream.sequence, 'frame': stream.frame,
-                                        'game_time': stream.game_time} if stream else None))
-        self._attach_enemy(sample)
-        self.audit('published', sample)
-        return sample
+        return self._read_lifecycle()
 
     def _read_lifecycle(self):
         from snapshot_adapter import FrameMismatch
