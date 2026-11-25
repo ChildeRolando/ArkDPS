@@ -41,3 +41,25 @@ def test_token_host_resolver_rejects_side_mismatch_and_ambiguity():
     assert verified_roster_token_host(token, [host, host]) is None
     wrong_side = CharacterEntry('char_host', 1, False, False, None, None, 3)
     assert verified_roster_token_host(token, [wrong_side]) is None
+
+
+def test_legacy_available_effective_amount_does_not_fabricate_hp_certificate():
+    stats = Statistics('old-api', 0, event_coverage=True)
+    stats.register_source('source', 'owner')
+    stats.snapshot(0, {'source': {'damage': 0, 'healing': 0}})
+    stats.snapshot(2, {'source': {'damage': 100, 'healing': 0}})
+    stats.partial_damage_enabled = True
+    stats.event('hit', 1, 'source', 'damage', 100, target='enemy_test',
+        hp_before=80, hp_after=0, real_delta=-80, killed=True,
+        shield_absorbed=0, damage_type=1)
+    meter = stats.settled['owner']
+    assert meter.hits == 1 and meter.raw == 100
+    assert meter.hp == meter.shield == 0
+    assert meter.legacy_effective == 80
+    assert meter.unverified == 1
+    assert 'partial_damage' not in vars(stats)
+    assert 'observed_skill_splits' not in vars(stats)
+    assert 'overkill' not in vars(stats)
+    row = stats.result()['rows']['owner']
+    assert row['damage'] == 100 and row['effective_damage'] == 80
+    assert row['partial_damage']['effective_damage'] == 80
