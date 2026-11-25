@@ -542,6 +542,8 @@ class Statistics:
         if skill_reason is not None:
             row.update(skill_split_complete=False, skill_split_effective_complete=False,
                        skill_split_reason=skill_reason)
+        if self.mitigation_probe_incomplete:
+            row.update(mitigation_complete=False, mitigation_reason='伤害公式回调覆盖不足')
         if not self.settlement_sides_known:
             row['reason'] = '当前玩家阵营未确认'
             if 'overkill_unknown_reason' in row:
