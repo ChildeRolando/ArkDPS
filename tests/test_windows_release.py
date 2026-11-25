@@ -77,6 +77,21 @@ def test_package_backend_is_worker_import_closure_without_tk():
         assert (ROOT / name).is_file(), name
 
 
+def test_package_contains_local_imports_of_every_backend_module():
+    import ast
+    payload = set(package.BACKEND) | {'release_identity.py'}
+    for name in package.BACKEND:
+        if not name.endswith('.py'):
+            continue
+        for node in ast.walk(ast.parse((ROOT / name).read_text(encoding='utf-8'))):
+            modules = ([node.module] if isinstance(node, ast.ImportFrom) else
+                       [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
+            for module in modules:
+                dependency = (module or '').split('.')[0] + '.py'
+                if (ROOT / dependency).is_file():
+                    assert dependency in payload, (name, dependency)
+
+
 def test_frozen_capture_uses_manifest_not_git(tmp_path, monkeypatch):
     stub_git_and_clock(monkeypatch)
     monkeypatch.setattr(capture_cli.sys, 'frozen', True, raising=False)

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from capture_battles import _same_lifecycle_state, _same_statistics, replay_product
+from stats_core import Statistics
 from test_desktop_native_assist_projection import AssistBattle
 
 
@@ -159,3 +160,28 @@ def test_replay_does_not_normalize_healing_events_identity_clock_or_watermark():
     different = deepcopy(record)
     different['event_watermark']['sequence'] = 4
     assert not _same_lifecycle_state(record, different)
+
+
+@pytest.mark.parametrize('field, different', [
+    ('lifecycle_presence_seconds', 1),
+    ('lifecycle_presence_complete', True),
+    ('lifecycle_presence_window', [0, 2]),
+    ('lifecycle_terminal_complete', True),
+    ('observed_healing_window', [0, 2]),
+])
+def test_replay_accepts_absent_lifetime_derivations_but_checks_recorded_proof(field, different):
+    stats = Statistics('replay-life', 0, event_coverage=True)
+    stats.register_source('char_237_gravel', 'owner')
+    stats.snapshot(0, {'char_237_gravel': dict(damage=0, healing=0)})
+    stats.advance(1)
+    actual = stats.result()['rows']['owner']
+    derived = {'lifecycle_presence_seconds', 'lifecycle_presence_complete',
+               'lifecycle_presence_window', 'lifecycle_terminal_complete', 'observed_healing_window'}
+    assert derived <= actual.keys()
+    legacy = {key: value for key, value in actual.items() if key not in derived}
+    recorded = deepcopy(actual)
+    recorded[field] = different
+    for current_envelope, old_envelope, wrong_envelope in zip(
+            *map(_healing_replay_envelopes, (actual, legacy, recorded))):
+        assert _same_lifecycle_state(current_envelope, old_envelope)
+        assert not _same_lifecycle_state(current_envelope, wrong_envelope)

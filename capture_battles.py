@@ -109,7 +109,11 @@ _OBSERVED_HEALING_DERIVED_METRICS = frozenset({
     'observed_healing_total', 'observed_healing_complete', 'observed_recent_healing',
     'observed_recent_healing_window', 'observed_recent_healing_complete',
 })
-_OPTIONAL_DERIVED_METRICS = _OBSERVED_HEALING_DERIVED_METRICS | frozenset({
+_LIFECYCLE_DERIVED_METRICS = frozenset({
+    'lifecycle_presence_seconds', 'lifecycle_presence_complete',
+    'lifecycle_presence_window', 'lifecycle_terminal_complete', 'observed_healing_window',
+})
+_OPTIONAL_DERIVED_METRICS = _OBSERVED_HEALING_DERIVED_METRICS | _LIFECYCLE_DERIVED_METRICS | frozenset({
     'mitigation_rate', 'mitigation_before', 'mitigation_after', 'mitigation_unknown_reason',
     'observed_mitigation_rate', 'observed_mitigation_before', 'observed_mitigation_after',
     'mitigation_matched_hits',
@@ -166,7 +170,8 @@ def _recorded_metrics(row, recorded, *, optional=True):
         return row
     # Both ordinary and scoped old journals predate these derived values.
     # A new journal that supplies any of them still verifies it exactly.
-    optional_metrics = _OPTIONAL_DERIVED_METRICS if optional else _OBSERVED_HEALING_DERIVED_METRICS
+    optional_metrics = (_OPTIONAL_DERIVED_METRICS if optional else
+                        _OBSERVED_HEALING_DERIVED_METRICS | _LIFECYCLE_DERIVED_METRICS)
     out = {key: value for key, value in row.items()
            if key not in optional_metrics or key in recorded}
     if 'settled_damage' in row:
