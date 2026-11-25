@@ -403,7 +403,7 @@ class Statistics:
             return
         if source is not None and (self.boss_damage is not None or self.partial_damage_enabled):
             self.settlement_totals[source] = self.settlement_totals.get(source, 0.0) + amount
-        if self.boss_damage is None:
+        if self.boss_damage is None or self.settlement_enabled:
             return
         is_boss = classify_boss(target)
         if is_boss is None and amount > 0:
@@ -1858,6 +1858,35 @@ class Statistics:
         return (history[-1][1][kind] - baseline) / duration
 
     def _boss_row(self, owner, registered, row):
+        if self.settlement_enabled:
+            lane = self._settlement_row(owner, boss=True)
+            nominal_known = lane['observed_boss_damage_complete']
+            result = dict(lane,
+                settled_damage=lane,
+                damage=lane['observed_damage'] if nominal_known else None,
+                counter_snapshot_complete=False,
+                event_coverage_complete=nominal_known,
+                event_coverage_end=self.partial_watermark,
+                types_available=nominal_known,
+                types_stale=not nominal_known,
+                recent_damage=lane['observed_boss_recent_damage'],
+                recent_damage_window=lane['observed_boss_recent_window'],
+                recent_damage_by_type={},
+                skill_damage=lane['observed_skill_damage'] if lane['skill_split_complete'] else None,
+                non_skill_damage=lane['observed_non_skill_damage'] if lane['skill_split_complete'] else None,
+                skill_damage_effective=lane['observed_skill_damage_effective'] if lane['skill_split_effective_complete'] else None,
+                non_skill_damage_effective=lane['observed_non_skill_damage_effective'] if lane['skill_split_effective_complete'] else None,
+                skill_split_reason=lane.get('skill_split_reason'),
+                mitigation_rate=lane['observed_mitigation_rate'] if lane['mitigation_complete'] else None,
+                mitigation_before=lane['observed_mitigation_before'] if lane['mitigation_complete'] else None,
+                mitigation_after=lane['observed_mitigation_after'] if lane['mitigation_complete'] else None,
+                mitigation_unknown_reason=lane['mitigation_reason'],
+                partial_damage=lane,
+            )
+            if self.damage_settlement_version >= 7:
+                result['overkill_type_complete'] = lane['overkill_coverage_complete']
+                result['recent_overkill_damage'] = None
+            return result, lane['reason']
         end = self.boss_event_end
         reason = row.get('damage_scope_reason')
         if reason:
@@ -2170,9 +2199,10 @@ class Statistics:
             if self.settlement_enabled:
                 row['settled_damage'] = self._settlement_row(owner)
                 boss = row.setdefault('boss_damage', {})
-                boss['settled_damage'] = self._settlement_row(owner, boss=True)
+                if 'settled_damage' not in boss:
+                    boss['settled_damage'] = self._settlement_row(owner, boss=True)
                 if self.damage_settlement_version >= 7:
-                    for scope in (row, boss):
+                    for scope in (row,):
                         lane = scope['settled_damage']
                         scope.update(
                             effective_damage=lane['effective_damage'],
