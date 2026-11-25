@@ -8,8 +8,8 @@ import pytest
 
 from autochess_context import normalize_native_autochess
 from event_probe import (
-    StreamGap, autochess_round_start_origin, autochess_round_start_skill_known, contract_for,
-    ready_probe_modes, verified_autochess_round_start,
+    StreamGap, autochess_round_start_live_skill_uids, autochess_round_start_origin,
+    autochess_round_start_skill_known, contract_for, ready_probe_modes, verified_autochess_round_start,
 )
 from event_stream import baseline_barrier
 
@@ -198,3 +198,33 @@ def test_internal_origin_cannot_forge_skill_proof_from_shallow_coverage_booleans
     point['live_character_collection_empty'] = True
     point['quality'] = {'skill_ready': True, 'skill_unknown': False}
     assert not autochess_round_start_origin(zero) and not autochess_round_start_skill_known(zero)
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
+@pytest.mark.parametrize('uids,empty,expected', [
+    ([], True, frozenset()), ([301, 0xffffffff], False, frozenset({301, 0xffffffff})),
+    (None, False, None), (None, None, None),
+])
+def test_round_start_live_uid_evidence_keeps_existence_separate_from_counter_rows(platform, uids, empty, expected):
+    sample, drained, mark = inputs(platform)
+    point = drained['autochess_round_start']
+    point.update(version=2, live_character_collection_empty=empty, live_character_data_uids=uids)
+    zero, _, _, _ = verified_autochess_round_start(sample, drained, mark)
+    assert autochess_round_start_origin(zero)
+    assert autochess_round_start_live_skill_uids(zero) == expected
+    zero['autochess_round_start']['quality']['skill_ready'] = False
+    assert autochess_round_start_origin(zero)
+    assert autochess_round_start_live_skill_uids(zero) is None
+
+
+@pytest.mark.parametrize('uids,empty', [
+    ([1, 1], False), ([2, 1], False), ([True], False), ([0], False), ([-1], False),
+    ([0x100000000], False), ([1], True), ([1], None), ([], False),
+    (list(range(1, 130)), False), ({'uid': 1}, False),
+])
+def test_bad_live_uid_declaration_cannot_certify_round_start(uids, empty):
+    sample, drained, mark = inputs()
+    drained['autochess_round_start'].update(
+        version=2, live_character_collection_empty=empty, live_character_data_uids=uids)
+    with pytest.raises(StreamGap):
+        verified_autochess_round_start(sample, drained, mark)

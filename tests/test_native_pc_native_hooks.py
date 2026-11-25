@@ -2,6 +2,7 @@
 from hashlib import sha256
 import json
 from pathlib import Path
+import subprocess
 from threading import Lock
 from types import SimpleNamespace
 
@@ -15,6 +16,35 @@ from native_pc import event_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_native_quiet_mark_checks_real_adapter_and_invalid_fences():
+    completed = subprocess.run(
+        ['node', str(ROOT / 'tests/native_pc_autochess_quiet_boundary_fixture.js')],
+        cwd=ROOT, capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
+    assert completed.stdout.strip() == 'PASS_OWNED_QUIET_BOUNDARY'
+
+
+def test_only_ordinary_native_mark_opts_into_the_versioned_boundary(monkeypatch):
+    probe = module.NativeHookEventProbe(collector())
+    requests = []
+
+    def raw_request(operation, **arguments):
+        requests.append((operation, arguments))
+        return {'native_quiet_boundary_version': 1, 'native_deferred_callbacks': 2}
+
+    monkeypatch.setattr(probe, '_raw_request', raw_request)
+    monkeypatch.setattr(probe.binding, 'bind', lambda operation, response: response)
+    monkeypatch.setattr(probe.binding, 'bind_terminal_mark', lambda response: response)
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)))
+    probe.mark()
+    probe.read_terminal_mark()
+    assert requests == [('mark', {'timeout': None, 'native_quiet_boundary_version': 1}),
+                        ('mark', {'timeout': probe.terminal_mark_timeout})]
+    kind, timing = records[0]
+    assert kind == 'native_hook_request_timing'
+    assert timing['native_quiet_boundary_version'] == 1 and timing['native_deferred_callbacks'] == 2
 
 
 @pytest.mark.parametrize('response', [b'\xff\n', b'{private invalid JSON}\n', b'{"id":1,"id":1}\n'])
@@ -223,7 +253,8 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert config['token'] not in json.dumps(probe.probe_modes)
     assert probe.mark()['native_session'] == 'bound-session'
     assert probe.mark()['source_build'] == source_build
-    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False))
+    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False,
+                                             native_quiet_boundary_version=1))
     probe.stop()
     assert loaders[0].closed and pipes[0].closed
     assert probe.hook_disable_confirmed
@@ -842,7 +873,8 @@ def test_prepared_ui_preference_uses_initial_then_dynamic_mark_without_rewriting
     assert len(loaders) == 1 and loaders[0].config['source'] == source
     selected[0] = not enabled
     result = probe.mark()
-    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=not enabled))
+    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=not enabled,
+                                             native_quiet_boundary_version=1))
     assert result['native_autochess_context']['collection_mode'] == 'all'
     assert not any(operation in ('read', 'ack') for operation, _ in pipes[0].calls)
     probe.stop()

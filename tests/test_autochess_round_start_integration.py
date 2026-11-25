@@ -132,6 +132,9 @@ class OwnedRoundStart:
                 origin['native_generation'] -= 1
             if self.prefix_fault == 'live_actors':
                 origin['live_character_collection_empty'] = False
+            if self.prefix_fault == 'guarded_live_actors':
+                origin.update(version=2, live_character_collection_empty=False,
+                              live_character_data_uids=[101])
             packet.update(autochess_round_start=origin,
                           autochess_round_start_events=prefix,
                           autochess_round_start_events_complete=complete)
@@ -324,6 +327,31 @@ def test_origin_with_live_actors_replays_prefix_without_guessing_initial_skill(t
     assert source.ack == 8 and peer['observed_damage'] == 19
     assert ledger['observed_non_skill_damage'] is None
     assert ledger['skill_initial_unknown_hits'] == 1
+
+
+@pytest.mark.parametrize('phase', [4, 5])
+@pytest.mark.parametrize('later_skill_gap', [False, True])
+def test_zero_live_uid_proof_certifies_only_the_actor_absent_at_round_start(tmp_path, phase, later_skill_gap):
+    source, _, first = enter_late(tmp_path, phase=phase, prefix_fault='guarded_live_actors')
+    assert first.kind == 'sample'
+    assert source.ack == 7
+    battle = source.battle
+    if later_skill_gap:
+        original_batch = source.original_batch
+        source.original_batch = lambda through: dict(original_batch(through), skill_unknown=True)
+    battle.advance(1.5)
+    battle.advance(1.5, [source.hit(8, 1, 19), source.hit(9, 2, 23)])
+    source.poll()
+    players = battle.runtime.display_sample()['multiplayer']['players']
+    present = players[0]['actor_ledgers'][0]['ledger']
+    absent = players[1]['actor_ledgers'][0]['ledger']
+    assert present['observed_non_skill_damage'] is None
+    assert present['skill_initial_unknown_hits'] == 1
+    assert absent['observed_damage'] == 23
+    assert absent['observed_non_skill_damage'] == (None if later_skill_gap else 23)
+    assert absent['skill_initial_unknown_hits'] == 0
+    assert absent['skill_unclassified_hits'] == int(later_skill_gap)
+    assert source.ack == 9
 
 
 @pytest.mark.parametrize('early_peer_skill', [None, 'unmapped_uid', 'missing_uid', 'foreign_scope'],

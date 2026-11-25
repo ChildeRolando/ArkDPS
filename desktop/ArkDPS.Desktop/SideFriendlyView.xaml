@@ -10,7 +10,7 @@
   </Grid.RowDefinitions>
   <local:StatisticPanel x:Name="RankingPanel"/>
   <ScrollViewer x:Name="DetailViewport" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                Margin="0,8,0,0" Focusable="False">
+                Margin="0,8,0,0" Focusable="False" Visibility="Collapsed">
    <local:Inspector x:Name="Details" AutomationProperties.AutomationId="SideOperatorDetails"/>
   </ScrollViewer>
  </Grid>

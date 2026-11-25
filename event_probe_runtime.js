@@ -288,6 +288,8 @@ const enemyDamageReady=!!enemyEntryConfig
  &&cfg.methods.filter(m=>m.owner==='Entity'&&m.name==='OnAfterOutputDamage').length===1;
 let enemyDamageUnknown=false;
 let damageSettlementClock=null,damageSettlementScope=0,damageSettlementIssue=null,damageSettlementController=null;
+let damageSettlementUnlocalizedUnknown=false;
+const damageSettlementSourceIssues=new Map(),DAMAGE_SETTLEMENT_SOURCE_ISSUE_LIMIT=128;
 const enemyHpWrites=new Map();
 // Recoverable per-event gaps do not close the whole event stream.
 const unknownSources=new Set();
@@ -346,6 +348,8 @@ function resetDamageSettlementScope(){
  damageSettlementScope++;
  enemyDamageUnknown=false;
  damageSettlementIssue=null;
+ damageSettlementUnlocalizedUnknown=false;
+ damageSettlementSourceIssues.clear();
  damageSettlementController=null;
 }
 function damageSettlementStamp(frame,game_time,withEventScope=true){
@@ -378,11 +382,20 @@ function observeDamageSettlementController(identity,{starting=false}={}){
   resetDamageSettlementScope();
  damageSettlementController??=key;
 }
-function markDamageSettlementUnknown(when,reason){
+function markDamageSettlementUnknown(when,reason,scope){
  if(!enemyDamageReady)return;
- if(when.settlementScope!==damageSettlementScope)return;
+ if(when?.settlementScope!==damageSettlementScope)return;
  enemyDamageUnknown=true;
  damageSettlementIssue??={frame:when.frame,game_time:when.game_time,sequence,reason};
+ if(damageSettlementUnlocalizedUnknown)return;
+ const issue=verifiedSettlementIssueSource(scope,when);
+ if(!issue){damageSettlementUnlocalizedUnknown=true;return;}
+ const key=JSON.stringify([issue.native_autochess_scope.scope_key,issue.source,issue.source_character_uid]);
+ if(damageSettlementSourceIssues.has(key))return;
+ if(damageSettlementSourceIssues.size>=DAMAGE_SETTLEMENT_SOURCE_ISSUE_LIMIT){
+  damageSettlementUnlocalizedUnknown=true;return;
+ }
+ damageSettlementSourceIssues.set(key,issue);
 }
 // An actor-local proof gap needs more than a cached character id. Preserve
 // the exact ApplyModifier/owner/target scope; this anchor never supplies HP.
@@ -399,27 +412,46 @@ function readSettlementDomain(target,modifier,when){
   if(!point.id||point.klass.isNull()||!Number.isInteger(point.uid)||point.uid<0||point.uid>0xffffffff||
      !enemyEntryConfig?.assignable(enemyEntryConfig.bObject,point.klass))return point;
   if(point.id.startsWith('enemy_')||point.id.startsWith('trap_'))point.kind='potential';
-  else if(!enemyEntryConfig.assignable(enemyEntryConfig.enemy,point.klass)&&
-          (point.id.startsWith('token_')||point.id.startsWith('char_')&&settlementCharacterClass&&
-           enemyEntryConfig.assignable(settlementCharacterClass,point.klass)))point.kind='unrelated';
+  else if(!enemyEntryConfig.assignable(enemyEntryConfig.enemy,point.klass)){
+   if(point.id.startsWith('token_'))point.kind='unrelated';
+   else if(point.id.startsWith('char_')&&settlementCharacterClass&&
+           enemyEntryConfig.assignable(settlementCharacterClass,point.klass)){
+    point.kind='unrelated';point.nonEnemyCharacter=true;
+   }
+  }
  }catch(e){/* Unreadable or unknown identity is never proof of an unrelated target. */}
  return point;
 }
 function settlementDamageOperation(point){
  return !!point&&point.targetType===0&&[1,2,3,5].includes(point.type);
 }
-function sameSettlementDomain(a,b){
+function sameSettlementDomain(a,b,allowRetiredUid=false){
  return !!a&&!!b&&a.kind!=='unknown'&&b.kind!=='unknown'&&
   a.modifier.equals(b.modifier)&&a.target.equals(b.target)&&a.klass.equals(b.klass)&&
-  a.id===b.id&&a.uid===b.uid&&a.type===b.type&&a.targetType===b.targetType&&
+  a.id===b.id&&(allowRetiredUid||a.uid===b.uid)&&a.type===b.type&&a.targetType===b.targetType&&
   !!a.when&&!!b.when&&sameMitigationTime(a.when,b.when);
+}
+function retiredCharacterDomain(entry,current){
+ return entry?.nonEnemyCharacter===true&&current?.nonEnemyCharacter===true&&
+  entry.uid>0&&current.uid===0&&settlementDamageOperation(entry)&&sameSettlementDomain(entry,current,true);
+}
+function settlementDomainAmbiguous(scope){
+ return scope?.settlementDomainPotential||scope?.settlementDomainNested||scope?.targetSettlementNested||scope?.mitigationModifierReused||
+  scope?.targetHitAmbiguous||scope?.outputAmbiguous||scope?.settlementAmbiguous;
 }
 function observeSettlementDomain(scope,point){
  if(!enemyDamageReady)return;
  if(!scope)return;
  const entry=scope.settlementDomainEntry;
  if(settlementDamageOperation(point)&&point.kind==='potential')scope.settlementDomainPotential=true;
- if(point.kind==='unknown'||entry&&!sameSettlementDomain(entry,point))scope.settlementDomainUncertain=true;
+ // A typed non-enemy Character may release its instance UID during removal.
+ // Keep the observation sticky so a restored or changed UID is still a gap.
+ if(point.kind==='unknown')scope.settlementDomainUncertain=true;
+ else if(scope.settlementDomainRetiredCharacter||entry&&!sameSettlementDomain(entry,point)){
+  if(retiredCharacterDomain(entry,point)&&!settlementDomainAmbiguous(scope))
+   scope.settlementDomainRetiredCharacter=true;
+  else scope.settlementDomainUncertain=true;
+ }
  if(scope.tracksModifier&&scope.source&&own(scope.source)&&
     (settlementDamageOperation(entry)||settlementDamageOperation(point))&&
     (scope.settlementDomainPotential||scope.settlementDomainUncertain))scope.settlementCandidate=true;
@@ -428,6 +460,40 @@ function captureSettlementDomain(scope){
  if(!enemyDamageReady)return;
  scope.settlementDomainEntry=readSettlementDomain(scope.target,scope.mod,scope.when);
  observeSettlementDomain(scope,scope.settlementDomainEntry);
+}
+function captureSettlementIssueSource(scope){
+ // A friendly target can disappear in a settlement callback without proving
+ // any enemy HP change. Certify its actor independently of the target domain
+ // only in unusual candidate paths, without adding reads to ordinary hits.
+ if(!nativeAutoStage?.enabled||!scope.sourceCharacterUid||
+    !settlementDamageOperation(scope.settlementDomainEntry)||scope.settlementDomainEntry.kind==='potential')return;
+ try{
+  const entry=scope.when.native_autochess_scope?scope.when:stampEventScope({...scope.when});
+  const stamp=entry.native_autochess_scope;
+  if(stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||
+     !['all','local'].includes(stamp.collection_mode))return;
+  const source=scope.nativeModifierSource,instance=source.add(0x18).readU32();
+  if(!instance)return;
+  scope.settlementIssueSource={entry,source,instance,klass:source.readPointer(),
+   data:source.add(0x538).readPointer(),cid:scope.source,uid:scope.sourceCharacterUid};
+ }catch(e){/* Without an actor certificate a gap still belongs to the world. */}
+}
+function verifiedSettlementIssueSource(scope,when){
+ const a=scope?.settlementIssueSource;
+ if(!a||scope.mitigationModifierReused||damageModifier(scope.tid,scope.mod)!==scope||
+    !sameMitigationTime(a.entry,when))return null;
+ try{
+  const source=scope.mod.readPointer();
+  if(!source.equals(a.source)||source.add(0x18).readU32()!==a.instance||
+     !source.readPointer().equals(a.klass)||!source.add(0x538).readPointer().equals(a.data)||
+     entityId(source)!==a.cid||sourceCharacterUid(source,a.cid)!==a.uid)return null;
+  const closing=stampEventScope({...when});
+  if(!sameNativeEventScope(a.entry,closing))return null;
+  const stamp=closing.native_autochess_scope;
+  if(clock.readU32()!==when.frame||fp(clock.add(4))!==when.game_time)return null;
+  return {source:a.cid,source_character_uid:a.uid,frame:when.frame,game_time:when.game_time,
+   native_autochess_scope:{...stamp}};
+ }catch(e){return null;}
 }
 function settlementScopeQualification(scope,when,target=scope.target){
  if(!enemyDamageReady)return 'disabled';
@@ -440,6 +506,11 @@ function settlementScopeQualification(scope,when,target=scope.target){
  const parent=scope.modifierScope;
  if(parent&&parent!==scope)observeSettlementDomain(parent,current);
  if(scope.settlementDomainUncertain||parent?.settlementDomainUncertain)return 'unknown';
+ const retired=scope.settlementDomainRetiredCharacter?scope:parent?.settlementDomainRetiredCharacter?parent:null;
+ if(retired){
+  return !settlementDomainAmbiguous(scope)&&!settlementDomainAmbiguous(parent)&&
+   retiredCharacterDomain(retired.settlementDomainEntry,current)?'outside':'unknown';
+ }
  if(scope.settlementDomainPotential||parent?.settlementDomainPotential)return 'potential';
  const entry=scope.settlementDomainEntry;
  if(!sameSettlementDomain(entry,current))return 'unknown';
@@ -486,7 +557,7 @@ function noteSettlementProofGap(scope,when,reason){
  if(qualification==='outside')return;
  scope.settlementFailureReason??=reason;
  if(qualification==='unknown'||!stableSettlementAnchor(scope,when))
-  markDamageSettlementUnknown(when||scope.when,reason);
+  markDamageSettlementUnknown(when||scope.when,reason,scope);
 }
 function finalizeUnverifiedSettlement(scope,when){
  if(!enemyDamageReady)return;
@@ -506,7 +577,9 @@ function finalizeUnverifiedSettlement(scope,when){
 function damageSettlementQuality(){
  return {damage_settlement_quality_version:1,enemy_damage_ready:enemyDamageReady,
   damage_settlement_scope:damageSettlementScope,enemy_damage_unknown:enemyDamageUnknown,
-  damage_settlement_first_issue:damageSettlementIssue};
+  damage_settlement_first_issue:damageSettlementIssue,damage_settlement_source_quality_version:1,
+  damage_settlement_unlocalized_unknown:damageSettlementUnlocalizedUnknown,
+  damage_settlement_source_issues:[...damageSettlementSourceIssues.values()]};
 }
 function time(allowRetry = false, withEventScope = true) {
  const frame = clock.readU32();
@@ -546,6 +619,7 @@ const shieldByFrame=new Map();
 // Modifier& is borrowed only during the same-thread ApplyModifier invocation.
 // The pointer may be reused later, so retain no target evidence after return.
 const activeModifiers=new Map();
+const applyModifierDepth=new Map();
 let tracedModifierSequence=0,scopedTraceCount=0,scopedTraceDropped=0;
 let nestedParentTraceCount=0,nestedParentTraceDropped=0;
 const SCOPED_TRACE_LIMIT=4096;
@@ -701,10 +775,12 @@ function numericFullBlockSettlement(scope,hit,when,amount){
 }
 function observeNestedTargetSettlement(invocation){
  traceNestedParents(invocation,'child_entry');
+ const scopes=activeModifiers.get(invocation.tid);
+ if(!scopes?.length)return;
  try{
   if(!invocation.target||invocation.target.isNull()||
      ![1,2,3,4,5].includes(invocation.mod.add(0x68).readS32()))return;
-  for(const previous of activeModifiers.get(invocation.tid)||[]){
+  for(const previous of scopes){
    if(previous.target?.equals(invocation.target)&&sameMitigationTime(previous.when,invocation.when)){
     previous.nestedTargetCheckpoint=previous.targetSettlementNested?null:
       captureParentBeforeNestedSettlement(previous,invocation);
@@ -2426,6 +2502,15 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
   onEnter(args){
    active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);
+   if(this.name==='Entity.ApplyModifier'){
+    const depth=applyModifierDepth.get(this.tid)||0;
+    applyModifierDepth.set(this.tid,depth+1);
+    if(depth){
+     this.settlementDomainNested=true;
+     for(const parent of activeModifiers.get(this.tid)||[])
+      if(parent.settlementDomainEntry?.nonEnemyCharacter)parent.settlementDomainNested=true;
+    }
+   }
    try{
     if(this.name==='BattleController.OnCharacterFinished'){
      this.skillEnd=true;
@@ -2544,6 +2629,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        this.healingTarget={id:targetKey(this.target),uid:damageTargetUid(this.target)};
       if(enemyDamageReady&&[1,2,3,5].includes(type))this.settlementTargetUid=damageTargetUid(this.target);
       captureSettlementAnchor(this,type);
+      captureSettlementIssueSource(this);
       try{captureMitigation(this,this.mod.readPointer());}catch(e){/* Existing damage remains observable. */}
       if(type===5)this.elementalTargetUid=this.settlementTargetUid??damageTargetUid(this.target);
       if(this.source&&this.target&&!this.target.isNull()&&this.mod.add(0x60).readS32()===5&&
@@ -2767,6 +2853,11 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
     }
     else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);if(this.shieldScope)this.shieldScope.numericShieldUnknown=true;}
    }finally{
+    if(this.name==='Entity.ApplyModifier'){
+     const depth=applyModifierDepth.get(this.tid);
+     if(depth>1)applyModifierDepth.set(this.tid,depth-1);
+     else applyModifierDepth.delete(this.tid);
+    }
     if(this.tracksModifier){
      if(this.outputSettlement){
       if(endStamp&&sameMitigationTime(endStamp,this.when)&&!this.mitigationModifierReused)
@@ -2903,6 +2994,7 @@ function enemyEntryQuality(frame){
 }
 function eventQuality(frame){
  return {quality_contract_version:1,
+  autochess_round_start_ready:!!autoChessRoundResetMethod&&!cfg.autoChessRoundResetError,
   unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   source_attribution_version:1,
   partial_damage_version:7,
@@ -2986,10 +3078,11 @@ function installAutoChessRoundResetHook(){
      autoChessUnclaimedZero=null;
      clearAutoChessRoundQuality(entry.settlementScope);
      const {native_process_pid,native_generation,native_stage_id,native_identity,native_autochess_context,
-            live_character_collection_empty}=binding;
-     autoChessRoundStart=JSON.parse(JSON.stringify({version:1,source_method:label,
+            live_character_collection_empty,live_character_data_uids}=binding;
+     autoChessRoundStart=JSON.parse(JSON.stringify({version:2,source_method:label,
       frame:0,game_time:0,native_fixed_time:'0',sequence,epoch,active:0,native_process_pid,native_generation,
-      native_stage_id,native_identity,native_autochess_context,quality:eventQuality(0),live_character_collection_empty}));
+      native_stage_id,native_identity,native_autochess_context,quality:eventQuality(0),
+      live_character_collection_empty,live_character_data_uids}));
     }catch(e){/* The ordinary guarded sample remains available without the origin. */}
    }
   }));
@@ -2997,7 +3090,7 @@ function installAutoChessRoundResetHook(){
 }
 installAutoChessRoundResetHook();
 function markEvents(){
- const pending=probeAdapter.pendingMarkCallbacks?.()??0;
+ const pending=probeAdapter.markEntryCallbacks?.()??probeAdapter.pendingMarkCallbacks?.()??0;
  if(pending>0&&!fatal&&!stopped)
   return {sequence,epoch,active:pending,active_hooks:[...activeHooks.keys()],retry:true,error:null,stopped:false,
    mark_retry_reason:'callback_pending_at_start'};

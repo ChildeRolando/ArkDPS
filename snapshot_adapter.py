@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 
 from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, lookup_native_actor,
-                               native_autochess_event_identity, resolve_native_event_member)
+                               native_actor_lookup, native_autochess_event_identity, resolve_native_event_member)
 from character_catalog import load_character_names
 from roster import CharacterEntry, RosterSnapshot
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -188,6 +188,7 @@ class BattleStatisticsAdapter:
         self._world_identity = self._world_accounts = None
         self._world_context = self._world_last_context = None
         self._world_previous_context = None
+        self._world_actor_lookup = self._world_previous_actor_lookup = None
         self._world_native_session = None
 
     @property
@@ -277,6 +278,8 @@ class BattleStatisticsAdapter:
         self._world_accounts = (self._world_player_accounts(context) if context is not None else None)
         self._world_context = self._world_last_context = deepcopy(context)
         self._world_previous_context = None
+        self._world_actor_lookup = native_actor_lookup(self._world_context)
+        self._world_previous_actor_lookup = None
         self._world_native_session = sample.get('native_session')
         self.statistics = Statistics(session, start)
         self.session = session
@@ -464,7 +467,9 @@ class BattleStatisticsAdapter:
                 and tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round')) == self._world_identity
                 and self._world_player_accounts(context) == self._world_accounts):
             self._world_previous_context = self._world_context
+            self._world_previous_actor_lookup = self._world_actor_lookup
             self._world_context = self._world_last_context = deepcopy(context)
+            self._world_actor_lookup = native_actor_lookup(self._world_context)
         elif (end_state and self._world_native_session is not None
               and sample.get('native_session') == self._world_native_session):
             # A verified terminal handoff closes the old combat prefix. Its
@@ -473,6 +478,7 @@ class BattleStatisticsAdapter:
         else:
             self._world_context = None
             self._world_previous_context = None
+            self._world_actor_lookup = self._world_previous_actor_lookup = None
 
     def _world_event_gap(self, event):
         kind = event.get('kind')
@@ -493,13 +499,14 @@ class BattleStatisticsAdapter:
         source = event.get('source')
         if source is not None and classify_unmapped_source(source) is not None:
             return 'foreign', None, None
-        member = resolve_native_event_member(self._world_context, event, self._world_previous_context)
+        member = resolve_native_event_member(self._world_context, event, self._world_previous_context,
+            lookup=self._world_actor_lookup, previous_lookup=self._world_previous_actor_lookup)
         if member is None:
             return 'unknown', None, None
         actor = member
         if member['is_token']:
-            actor = lookup_native_actor(self._world_context, cid=member['host_key'],
-                                        data_uid=member['host_uid'])
+            actor = (self._world_actor_lookup or lookup_native_actor)(self._world_context,
+                cid=member['host_key'], data_uid=member['host_uid'])
             if actor is None or actor['is_token'] or actor['player_uid'] != member['player_uid']:
                 return 'unknown', None, None
         return 'local', f"{actor['player_uid']}:{actor['cid']}#{actor['data_uid']}", actor['data_uid']

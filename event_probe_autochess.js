@@ -495,6 +495,7 @@ function autoScope(roots,phase,round,frame,fixed,fingerprint,headerKey){
 function readAutoChess(identity,frame,fixed){
  const read=autoRead(),unknown=[];
  let unboundHosts=0,liveCharacterCollectionEmpty=null;
+ let liveCharacterDataUids=frame===0&&fixed==='0'?new Set():null;
  try{
   const header=autoHeader(identity,read),model=read.p(read.at(header.center,'playerDataModel'));
   read.object(model,'AutoChessPlayerDataModel',AUTO_NS,17,[[0,'m_allPlayerDatas',0x18,[21]]]);
@@ -564,9 +565,13 @@ function readAutoChess(identity,frame,fixed){
       if(autoIdentity(k,'BObject','Torappu.Battle')){bObject=k;break;}
       k=read.p(k.add(0x58));
      }
-     if(!character)continue;
+     if(!character){liveCharacterDataUids=null;continue;}
      read.layout(unit,autoLayout(character,'Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,[18]]]));
      const row=autoData(read.p(read.at(unit,'<data>k__BackingField')),read);
+     if(liveCharacterDataUids){
+      if(!bObject||liveCharacterDataUids.has(row.data_uid))liveCharacterDataUids=null;
+      else liveCharacterDataUids.add(row.data_uid);
+     }
      if(!row.is_token){
       const known=byUid.get(row.data_uid);
       if(!known||conflicts.has(row.data_uid))unknown.push({cid:row.cid,data_uid:row.data_uid,reason:'live role absent or conflicting in ChessInst'});
@@ -586,16 +591,18 @@ function readAutoChess(identity,frame,fixed){
       unknown.push({cid:row.cid,data_uid:row.data_uid,host_uid:row.host_uid,reason:'token host unavailable or conflicting'});continue;
      }
      add({...row,player_index:host.player_index,player_side:side});
-    }catch(e){unknown.push({reason:String(e)});}
+    }catch(e){liveCharacterDataUids=null;unknown.push({reason:String(e)});}
    }
-  }catch(e){unknown.push({reason:'token collection unavailable: '+String(e)});}
+  }catch(e){liveCharacterDataUids=null;unknown.push({reason:'token collection unavailable: '+String(e)});}
   read.validate();
   const fingerprint=JSON.stringify(players.map(p=>[p.index,p.uid]).sort((a,b)=>a[0]-b[0]));
   return {read,header,model,playerList,playerItems,playerVersion,ownerRefs,fingerprint,players,
    playerAddresses:{list:read.at(model,'m_allPlayerDatas'),items:read.at(playerList,'_items'),
     count:read.at(playerList,'_size'),version:read.at(playerList,'_version')},
    memberships:[...byUid.values()].filter(row=>!conflicts.has(row.data_uid)),unknown,
-   allInputsGuarded:unknown.length===unboundHosts,liveCharacterCollectionEmpty};
+   allInputsGuarded:unknown.length===unboundHosts,liveCharacterCollectionEmpty,
+   liveCharacterDataUids:liveCharacterDataUids&&conflicts.size===0?
+    [...liveCharacterDataUids].sort((left,right)=>left-right):null};
  }catch(e){return {error:String(e)};}
 }
 function finishAutoChess(result,identity,frame,fixed){
@@ -839,9 +846,13 @@ function nativeBinding(prepared=null,captureRoundStart=false){
   nativeLastBinding={key,frame,fixed};
   const result={native_process_pid:Process.id,native_identity:before,native_generation:nativeGeneration,
    native_frame:frame,native_fixed_time:fixed,native_stage_id:stage};
+  if(!probeAdapter.autoChessReflected)result.native_battle_state=state;
   if(enabled){
    result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
-   if(captureRoundStart)result.live_character_collection_empty=auto.liveCharacterCollectionEmpty??null;
+   if(captureRoundStart){
+    result.live_character_collection_empty=auto.liveCharacterCollectionEmpty??null;
+    result.live_character_data_uids=auto.liveCharacterDataUids??null;
+   }
    if(viewMode)result.autochess_view_mode=viewMode;
    const preparedHere=prepared!==null&&prepared===nativeAutoBodyCache&&prepared.body===auto;
    // A missing host can be a guarded negative result. Keep it only as a

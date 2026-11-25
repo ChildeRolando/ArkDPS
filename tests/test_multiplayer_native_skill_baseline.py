@@ -281,6 +281,22 @@ def test_missing_uid_prefix_is_diagnostic_without_guessing_all_same_cid_actors()
     assert result['reasons']
 
 
+@pytest.mark.parametrize('unmapped_uid,expected', [(999, 50), (None, None)])
+def test_unmapped_skill_end_does_not_poison_a_different_positive_data_uid(unmapped_uid, expected):
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0)
+    missing = dict(activation(2, 2), kind='skill_end', source_character_uid=unmapped_uid,
+                   proof={'method': 'Character.OnSkillFinish'})
+    result = consume(meter, 3, [activation(1, 1), missing, hit(3, 3, 3, 50)])
+    row = lane(result, 3)
+    assert row['observed_damage'] == 50
+    assert row['observed_skill_damage'] == expected
+    assert row['skill_initial_unknown_hits'] == 0
+    assert row['skill_unclassified_hits'] == (1 if expected is None else 0)
+    assert result['unknown_attribution'][0]['source_character_uid'] == unmapped_uid
+    assert result['unknown_attribution'][0]['kind'] == 'skill_end'
+
+
 def test_late_new_actor_without_a_verified_start_only_makes_its_own_skill_split_unknown():
     meter = MultiplayerBattleStatistics()
     consume(meter, 0, native=context(0, members=[member(3)]))

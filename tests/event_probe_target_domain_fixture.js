@@ -18,6 +18,22 @@ const bits=x=>BigInt(Math.round(x*4294967296)),specs=[
  ['unreadable_target','unreadable',12,true],['unreadable_class','bad_class',12,true],
  ['char_id_enemy_class','char_enemy',12,true],['enemy_uid0','enemy',0,true,'unit'],
  ['ally_uid0_to12','ally',0,true,'uid_changed'],['enemy_uid_changed','enemy',12,true,'uid_changed'],
+ ['ally_death_uid_zero','ally',12,false,'uid_clear'],
+ ['token_uid12_to0','token',12,true,'uid_clear'],
+ ['enemy_uid12_to0','enemy',12,true,'uid_clear'],
+ ['trap_uid12_to0','trap',12,true,'uid_clear'],
+ ['ally_uid12_to99','ally',12,true,'uid_changed'],
+ ['ally_noncharacter_uid12_to0','ally',12,true,'uid_clear_unit_class'],
+ ['ally_death_nested','ally',12,true,'uid_clear_nested'],
+ ['ally_death_nested_other_target','ally',12,true,'uid_clear_nested_other_target'],
+ ['ally_death_nested_enemy_source','ally',12,true,'uid_clear_nested_enemy_source'],
+ ['ally_death_inside_ally_apply','ally',12,true,'uid_clear_inside_ally'],
+ ['ally_death_inside_enemy_apply','ally',12,true,'uid_clear_inside_enemy'],
+ ['ally_death_inside_enemy_source','ally',12,true,'uid_clear_inside_enemy_source'],
+ ['ally_death_parallel_enemy_source','ally',12,false,'uid_clear_inside_enemy_source_other_thread'],
+ ['ally_death_retarget','ally',12,true,'uid_clear_retarget'],
+ ['ally_death_earlier_enemy','ally',12,true,'enemy_roundtrip_uid_clear'],
+ ['ally_death_uid_restored','ally',12,true,'uid_clear_restore'],
  ['enemy_to_ally','enemy',12,true,'to_ally'],['ally_to_enemy','ally',12,true,'to_enemy'],
  ['ally_enemy_ally','ally',12,true,'enemy_roundtrip'],['enemy_ally_enemy','enemy',12,true,'ally_roundtrip']
 ];
@@ -32,7 +48,7 @@ function scenario(platform,[name,kind,uid,global,mode]){
  let target=kind==='self'?source:f.unit(Object.hasOwn(ids,kind)?ids[kind]:'char_122_beagle',uid);
  const enemyClass=f.vm.runInContext('enemyEntryConfig.enemy',f.context);
  if(kind==='enemy'||kind==='char_enemy')f.write(target,enemyClass);
- if(mode==='unit_class')f.write(target,f.unitClass);
+ if(mode==='unit_class'||mode==='uid_clear_unit_class')f.write(target,f.unitClass);
  if(mode==='bobject_class')f.write(target,f.vm.runInContext('enemyEntryConfig.bObject',f.context));
  if(mode==='enemy_class')f.write(target,enemyClass);
  if(kind==='bad_class')f.write(target,f.ptr(0xdeadbeef));
@@ -44,18 +60,53 @@ function scenario(platform,[name,kind,uid,global,mode]){
  const mod=f.modifier(source,target,raw.amount,0,mode==='healing'?4:raw.damage_type);
  if(kind!=='unreadable')f.write(target.add(0x40),bits(raw.hp_before));
  const ac={threadId:1},tc={threadId:1};
+ let parent=null;
+ if(mode?.startsWith('uid_clear_inside')){
+  const enemy=mode==='uid_clear_inside_enemy';
+  const parentTarget=f.unit(enemy?'enemy_parent':'char_ally_parent',31);
+  if(enemy)f.write(parentTarget,enemyClass);
+  f.write(parentTarget.add(0x40),bits(50));
+  const untracked=mode.includes('enemy_source'),parentSource=untracked?f.unit('enemy_outer_source',32):source;
+  if(untracked)f.write(parentSource,enemyClass);
+  const parentModifier=f.modifier(parentSource,parentTarget,0,0,raw.damage_type);
+  parent={threadId:mode.endsWith('other_thread')?2:1};
+  apply.onEnter.call(parent,[parentTarget,parentModifier,f.ptr(0)]);
+  assert.equal(!!parent.tracksModifier,!untracked);
+ }
  if(mode!=='output_only')apply.onEnter.call(ac,[target,mod,f.ptr(0)]);
  if(mode==='unit')take.onEnter.call(tc,[target,mod,f.ptr(0)]);
- if(mode==='enemy_roundtrip'||mode==='ally_roundtrip'){
-  f.write(target.add(0x148),f.managedString(mode==='enemy_roundtrip'?'enemy_temporary':'char_122_beagle'));
-  f.write(target,mode==='enemy_roundtrip'?enemyClass:f.character);
+ if(mode?.startsWith('enemy_roundtrip')||mode==='ally_roundtrip'){
+  const temporaryEnemy=mode.startsWith('enemy_roundtrip');
+  f.write(target.add(0x148),f.managedString(temporaryEnemy?'enemy_temporary':'char_122_beagle'));
+  f.write(target,temporaryEnemy?enemyClass:f.character);
   const transient={threadId:1};output.onEnter.call(transient,[source,mod]);output.onLeave.call(transient);
   f.write(target.add(0x148),f.managedString(ids[kind]));f.write(target,kind==='enemy'?enemyClass:f.character);
+ }
+ if(mode?.startsWith('uid_clear_nested')){
+  const untracked=mode==='uid_clear_nested_enemy_source';
+  const sameTarget=untracked||mode==='uid_clear_nested';
+  const childTarget=sameTarget?target:f.unit('enemy_nested_other',31);
+  if(!sameTarget){f.write(childTarget,enemyClass);f.write(childTarget.add(0x40),bits(50));}
+  const childSource=untracked?f.unit('enemy_inner_source',32):source;
+  if(untracked)f.write(childSource,enemyClass);
+  const child=f.modifier(childSource,childTarget,0,0,raw.damage_type),nested={threadId:1};
+  apply.onEnter.call(nested,[childTarget,child,f.ptr(0)]);apply.onLeave.call(nested);
  }
  f.write(mod.add(0x48),bits(mode==='healing'?-raw.real_delta:raw.real_delta));
  if(kind!=='unreadable')f.write(target.add(0x40),bits(mode==='healing'?raw.hp_before-raw.real_delta:raw.hp_after));
  if(tc.started)take.onLeave.call(tc);
  if(mode==='uid_changed')f.write(target.add(0x18),uid===0?12:99);
+ if((mode==='uid_clear'||parent)&&kind==='ally'){
+  const finish=f.callback('OnCharacterFinished',f.controllerClass),death={threadId:1};
+  finish.onEnter.call(death,[f.controller,target,f.ptr(11)]);
+  f.write(target.add(0x18),0);
+  finish.onLeave.call(death);
+ }else if(mode?.includes('uid_clear'))f.write(target.add(0x18),0);
+ if(mode==='uid_clear_retarget')f.write(mod.add(0x10),f.unit(ids.ally,0));
+ if(mode==='uid_clear_restore'){
+  const transient={threadId:1};output.onEnter.call(transient,[source,mod]);output.onLeave.call(transient);
+  f.write(target.add(0x18),uid);
+ }
  if(mode==='to_ally'){f.write(target.add(0x148),f.managedString('char_122_beagle'));f.write(target,f.character);}
  if(mode==='to_enemy'){f.write(target.add(0x148),f.managedString('enemy_returned'));f.write(target,enemyClass);}
  if(mode==='output'||mode==='output_only'){
@@ -63,7 +114,14 @@ function scenario(platform,[name,kind,uid,global,mode]){
  }
  if(mode==='bad_clock_leave')f.write(f.vm.runInContext('clock',f.context).add(4),-1n);
  if(mode!=='output_only')apply.onLeave.call(ac);
+ if(parent){
+  assert.equal(f.vm.runInContext('enemyDamageUnknown',f.context),parent.threadId===ac.threadId,
+    'only same-thread nesting invalidates the retirement proof');
+  apply.onLeave.call(parent);
+ }
  if(mode==='bad_clock_leave')f.clock(raw.frame,bits(raw.game_time));
+ assert.equal(f.vm.runInContext('applyModifierDepth.size',f.context),0,
+  'every started ApplyModifier releases the per-thread depth');
  const afterUnrelated=f.context.rpc.exports.mark();
  assert.equal(afterUnrelated.active,0,'failed end-clock must still release its hook barrier');
  // Same-frame real enemy hit from another known actor must remain independently complete.

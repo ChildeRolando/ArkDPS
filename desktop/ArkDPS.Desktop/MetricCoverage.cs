@@ -27,7 +27,7 @@ internal static class MetricCoverage
     {
         var item=coverage.Get(metric);
         if(item.ValueKind!=JsonValueKind.Object) return "";
-        if(IsObservedDamage(metric))
+        if(IsScopeCoverage(metric,item))
             return item.Text("reason") is { Length: > 0 } reason ? reason : "覆盖不完整";
         string basis=item.Text("basis");
         return string.Join(" · ",new[]{Share(item),basis.Length>0 ? "分母："+basis : "",item.Text("reason")}
@@ -37,20 +37,22 @@ internal static class MetricCoverage
     internal static string Summary(JsonElement coverage,bool shortForm=false)
     {
         var lines=Metrics.Where(metric=>IsPartial(coverage,metric.Key))
-            .Select(metric=>metric.Label+" "+(shortForm && !IsObservedDamage(metric.Key)
+            .Select(metric=>metric.Label+" "+(shortForm && !IsScopeCoverage(metric.Key,coverage.Get(metric.Key))
                 ? ShortShare(coverage.Get(metric.Key)) : Detail(coverage,metric.Key)));
         string summary=string.Join(shortForm ? " · " : "\n",lines);
-        bool observationCoverage=HasHitCoverage(coverage) || HasObservedDamageCoverage(coverage);
+        bool observationCoverage=HasHitCoverage(coverage) || HasScopeCoverage(coverage);
         return summary.Length>0 && shortForm ? (observationCoverage ? "部分统计 · " : "统计失败占比 · ")+summary : summary;
     }
 
     internal static bool HasHitCoverage(JsonElement coverage) =>
         Metrics.Any(metric=>coverage.Get(metric.Key).Text("basis_kind")=="hits");
 
-    internal static bool HasObservedDamageCoverage(JsonElement coverage) =>
-        IsPartial(coverage,"observed_damage") || IsPartial(coverage,"observed_recent_damage");
+    internal static bool HasScopeCoverage(JsonElement coverage) =>
+        Metrics.Any(metric=>IsScopeCoverage(metric.Key,coverage.Get(metric.Key)));
 
-    private static bool IsObservedDamage(string metric) => metric is "observed_damage" or "observed_recent_damage";
+    private static bool IsScopeCoverage(string metric,JsonElement item) =>
+        item.ValueKind==JsonValueKind.Object &&
+        (metric is "observed_damage" or "observed_recent_damage" || item.Text("basis_kind")=="scope");
 
     private static string ShortShare(JsonElement item)=>item.Text("basis_kind")=="hits" ? Share(item) : Percentage(item);
 

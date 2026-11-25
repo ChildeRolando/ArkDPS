@@ -10,13 +10,14 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from math import isfinite
 
-from autochess_context import (lookup_native_actor, native_autochess_event_identity,
+from autochess_context import (lookup_native_actor, native_actor_lookup, native_autochess_event_identity,
                               native_autochess_scope_id, resolve_native_event_member)
 from character_catalog import load_character_names
 from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
-from event_probe import (contract_for, event_processing_payload, autochess_round_start_skill_known,
-                         autochess_round_start_origin)
+from event_probe import (contract_for, event_processing_payload, autochess_round_start_live_skill_uids,
+                         autochess_round_start_origin, settlement_source_quality_clear,
+                         verified_autochess_settlement_source_issues)
 from roster import CharacterEntry, RosterSnapshot
 from source_classification import classify_unmapped_source
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -90,7 +91,7 @@ class MultiplayerBattleStatistics:
         self._scope = None
         self._from_start = False
         self._skill_initialization = None
-        self._round_skill_initial_known = False
+        self._round_start_live_skill_uids = None
         self._sample_session = self._native_session = None
         self._settlement_version = None
         self._native_mode = False
@@ -100,6 +101,9 @@ class MultiplayerBattleStatistics:
         self._local_account_uid = None
         self._context = self._active_context = None
         self._previous_context = None
+        self._actor_lookup = self._previous_actor_lookup = lookup_native_actor
+        self._native_source_claims = {}
+        self._native_unverified_source_uids = set()
         self._context_fingerprint = None
         self._retired_contexts = set()
         self._retired_event_scopes = set()
@@ -180,6 +184,9 @@ class MultiplayerBattleStatistics:
         self._local_account_uid = context.get('self_player_uid') if context is not None else None
         self._context = self._active_context = deepcopy(context)
         self._previous_context = None
+        self._actor_lookup = self._previous_actor_lookup = lookup_native_actor
+        self._native_source_claims = {}
+        self._native_unverified_source_uids = set()
         self._context_fingerprint = new_context
         self._scope = (native_autochess_scope_id(context['identity'], self._context_fingerprint[3]) if self._native_mode
             else f'{round_id}:players:{self._epoch}')
@@ -187,7 +194,7 @@ class MultiplayerBattleStatistics:
         self._frame = sample['frame']
         self._from_start = self._start <= 1 and self._frame <= 30
         self._skill_initialization = None
-        self._round_skill_initial_known = False
+        self._round_start_live_skill_uids = None
         self._sample_session = sample.get('session')
         self._native_session = sample.get('native_session')
         self._players = {}
@@ -274,7 +281,9 @@ class MultiplayerBattleStatistics:
 
     def _bind_native(self, context):
         self._previous_context = self._active_context
+        self._previous_actor_lookup = self._actor_lookup
         self._context = self._active_context = deepcopy(context)
+        self._actor_lookup = native_actor_lookup(self._active_context)
         self._mode_declared = self._mode_declared or 'collection_mode' in context
         for row in context['players']:
             self._native_accounts[row['uid']] = dict(row)
@@ -286,6 +295,9 @@ class MultiplayerBattleStatistics:
             entry = CharacterEntry(member['cid'], member['data_uid'], member['is_token'],
                 member['is_predefined'], member['host_key'], member['host_uid'], member['player_side'])
             entries[entry.unique_id] = uid, entry
+            host_key = entry.host_key if entry.is_token else entry.cid
+            host_uid = entry.host_uid if entry.is_token else entry.unique_id
+            self._native_source_claims.setdefault((entry.cid, entry.unique_id), set()).add((uid, host_key, host_uid))
             if not entry.is_token and uid in self._players:
                 player = self._players[uid]
                 owner = self._source_key(entry, uid)
@@ -297,9 +309,16 @@ class MultiplayerBattleStatistics:
                              or type(item['source_character_uid']) is not int
                              or item['source_character_uid'] <= 0)
                         for item in self._unknown.values())
-                    if not self._round_skill_initial_known or unresolved_prefix:
-                        reason = ('actor_has_unverified_skill_prefix' if unresolved_prefix
-                                  else 'actor_joined_after_baseline')
+                    live_uids = self._round_start_live_skill_uids
+                    if unresolved_prefix:
+                        reason = 'actor_has_unverified_skill_prefix'
+                    elif live_uids is None:
+                        reason = 'actor_joined_after_baseline'
+                    elif entry.unique_id in live_uids:
+                        reason = 'round_start_actor_already_live'
+                    else:
+                        reason = None
+                    if reason is not None:
                         player.mark_unknown_skill_prefix(owner, entry.unique_id, reason)
                 player.actors[owner] = entry
                 player.statistics.register_source(owner, owner)
@@ -315,6 +334,9 @@ class MultiplayerBattleStatistics:
             self._native_aliases[uid].setdefault(entry.cid, set()).add(source)
         table = {row['index']: row['uid'] for row in context['players']}
         for unknown in context['unknown_memberships']:
+            data_uid = unknown.get('data_uid')
+            if type(data_uid) is int and 0 < data_uid <= 0xffffffff:
+                self._native_unverified_source_uids.add(data_uid)
             if classify_unmapped_source(unknown.get('cid')) is not None:
                 continue
             index = unknown.get('player_index', unknown.get('candidate_player_index'))
@@ -381,8 +403,16 @@ class MultiplayerBattleStatistics:
         complete = (drained.get('baseline_discarded_skill_events_complete') is True
                     and isinstance(discarded, list) and len(discarded) <= MAX_BASELINE_SKILL_EVENTS
                     and isinstance(retained, list) and len(retained) <= MAX_BASELINE_SKILL_EVENTS)
-        self._round_skill_initial_known = complete and autochess_round_start_skill_known(sample)
-        rejections = [] if self._round_skill_initial_known else self._native_initial_rejections(sample)
+        self._round_start_live_skill_uids = (
+            autochess_round_start_live_skill_uids(sample) if complete else None)
+        live_uids = self._round_start_live_skill_uids
+        if live_uids is not None:
+            rejections = []
+        elif (autochess_round_start_origin(sample)
+              and sample['autochess_round_start']['version'] == 2):
+            rejections = ['round_start_live_characters_unverified']
+        else:
+            rejections = self._native_initial_rejections(sample)
         if not complete:
             rejections.append('skill_prefix_incomplete')
         witnesses = sample.get('native_snapshot_witnesses')
@@ -393,14 +423,16 @@ class MultiplayerBattleStatistics:
                 and actor_rows.get('status') in ('available', 'unavailable', 'not_requested') else None),
             native_damage=sample.get('global_total') if _number(sample.get('global_total')) else None,
             native_healing=sample.get('global_heal') if _number(sample.get('global_heal')) else None)
-        if self._round_skill_initial_known:
+        if live_uids is not None:
             self._skill_initialization['source'] = 'producer_round_start'
-        if rejections:
-            for player in self._players.values():
-                for owner, entry in player.actors.items():
+        for player in self._players.values():
+            for owner, entry in player.actors.items():
+                if rejections:
                     player.mark_unknown_skill_prefix(owner, entry.unique_id, *rejections)
-            if not complete:
-                self._reasons.add('初始技能事件前缀证据不完整')
+                elif live_uids is not None and entry.unique_id in live_uids:
+                    player.mark_unknown_skill_prefix(owner, entry.unique_id, 'round_start_actor_already_live')
+        if not complete:
+            self._reasons.add('初始技能事件前缀证据不完整')
         # These records are uncertainty witnesses only. They do not open a
         # window, enter EventStream.received, or credit any pre-baseline amount.
         for group, start_summary in ((discarded, True), (retained, False)):
@@ -436,7 +468,7 @@ class MultiplayerBattleStatistics:
                     if event_mode != self._collection_mode:
                         self._reasons.add('初始技能前缀采集模式未确认')
                 data_uid = event.get('source_character_uid')
-                evidence = lookup_native_actor(self._context, cid=event.get('source'), data_uid=data_uid)
+                evidence = self._actor_lookup(self._context, cid=event.get('source'), data_uid=data_uid)
                 if evidence is None:
                     self._reasons.add('初始技能前缀存在角色UID缺证')
                     continue
@@ -525,7 +557,8 @@ class MultiplayerBattleStatistics:
         data_uid = event.get('source_character_uid')
         if type(data_uid) is not int or data_uid <= 0:
             return 'source_uid_missing', None, None, None
-        evidence = resolve_native_event_member(self._active_context, event, self._previous_context)
+        evidence = resolve_native_event_member(self._active_context, event, self._previous_context,
+            lookup=self._actor_lookup, previous_lookup=self._previous_actor_lookup)
         if evidence is None:
             return 'source_uid_unmapped', None, None, None
         player_uid = evidence['player_uid']
@@ -721,6 +754,39 @@ class MultiplayerBattleStatistics:
             raise StreamGap('multiplayer watermark has a missing tail')
         return events, {seq: event for seq, event in pending.items() if seq > through}
 
+    def _settlement_quality(self, sample, payload):
+        ready = payload.get('damage_settlement_ready', payload.get('enemy_damage_ready'))
+        unknown = payload.get('damage_settlement_unknown', payload.get('enemy_damage_unknown'))
+        if ready is True and unknown is False and settlement_source_quality_clear(payload):
+            return
+        reason = '结算事件质量未完整确认'
+        if self._native_mode and ready is True and unknown is True:
+            issues = verified_autochess_settlement_source_issues(sample, payload)
+            if issues is not None:
+                owners = []
+                for issue in issues:
+                    if issue['source_character_uid'] in self._native_unverified_source_uids:
+                        break
+                    state, uid, actor, _ = self._native_identity(issue)
+                    if state not in ('owned', 'not_collected'):
+                        break
+                    # Capture proved the actor identity, but it did not stamp
+                    # the account or a token host. Later rosters cannot select
+                    # one of multiple claims already seen within this scope.
+                    claims = self._native_source_claims.get((issue['source'], issue['source_character_uid']))
+                    if claims != {(uid, actor.cid, actor.unique_id)}:
+                        break
+                    if state == 'owned':
+                        owners.append((uid, actor))
+                else:
+                    for uid, actor in owners:
+                        self._players[uid].statistics.settlement_source_incomplete.add(self._source_key(actor, uid))
+                        self._player_reasons[uid].add(reason)
+                    return
+        self._reasons.add(reason)
+        for player in self._players.values():
+            player.statistics.settlement_stream_incomplete = True
+
     def _quality(self, sample, drained, damage_quality, *, initial):
         payload = contract_for(sample=sample, descriptor=drained.get('probe_contract')).normalize_quality(drained)
         for side, player in self._players.items():
@@ -868,12 +934,7 @@ class MultiplayerBattleStatistics:
         if self._settlement_version is not None and version != self._settlement_version:
             self.gap('结算事件版本发生变化')
             return
-        ready = quality.get('damage_settlement_ready', quality.get('enemy_damage_ready'))
-        unknown = quality.get('damage_settlement_unknown', quality.get('enemy_damage_unknown'))
-        if ready is not True or unknown is not False:
-            self._reasons.add('结算事件质量未完整确认')
-            for player in self._players.values():
-                player.statistics.settlement_stream_incomplete = True
+        self._settlement_quality(sample, quality)
         if self._baseline is None:
             self._now, self._frame = sample['game_time'], sample['frame']
             self._start = self._now
@@ -936,8 +997,12 @@ class MultiplayerBattleStatistics:
                         # never recipients of this event's amount or window.
                         # The receiver decides whether native cast evidence is
                         # an ignorable passive observation before marking them.
+                        skill_uid = (event.get('source_character_uid') if self._native_mode
+                                     and event['kind'] in ('skill_start', 'skill_end') else None)
                         unresolved_source_keys = tuple(owner for owner, candidate in player.actors.items()
-                            if candidate.cid == event.get('source'))
+                            if candidate.cid == event.get('source')
+                            and (type(skill_uid) is not int or skill_uid <= 0
+                                 or candidate.unique_id == skill_uid))
                     world_receipt = (self._native_mode and (event['kind'] in ENEMY_STATE_KINDS
                         or event['kind'] == 'elemental_burst' and event.get('source') is None))
                     player.stream.accept(None, unresolved_source_keys, skip_scope or world_receipt, session=player.statistics.session,

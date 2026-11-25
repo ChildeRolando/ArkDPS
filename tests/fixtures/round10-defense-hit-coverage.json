@@ -1,0 +1,50 @@
+{
+  "source": {
+    "release": "1.0.0-rc.2026112507",
+    "archive": "624e6caa83055dc0df11781875245d3e052246038ae56df2aebd78dfdb1e1173.json",
+    "sha256": "c055364eb2a9db6cb0fbbf21adcaa01af4349535f5ba43670aa77e26d556c600",
+    "generation": 64,
+    "round": 10,
+    "event_status": "gap",
+    "event_error": "未取得最终事件水位"
+  },
+  "statistics": {
+    "event_only_projection": true,
+    "rows": {
+      "shuidengxin": {
+        "name": "水灯心",
+        "settled_damage": {
+          "complete": false,
+          "reason": "结算事件覆盖不完整",
+          "observed_hits": 358,
+          "unverified_hits": 0,
+          "unverified_share": null,
+          "nominal_hits": 358,
+          "observed_damage": 268687.52182259085,
+          "observed_damage_complete": false,
+          "effective_damage": 265824.3686262574,
+          "engagement_damage": 1725.306794070359,
+          "engagement_damage_complete": false,
+          "engagement_effective_damage": 1706.921803101705,
+          "observed_skill_damage": 219029.12111626798,
+          "observed_non_skill_damage": 49658.400706322864,
+          "skill_unclassified_hits": 0,
+          "skill_damage_unverified_share": null,
+          "skill_split_complete": false,
+          "observed_skill_damage_effective": 216165.96791993454,
+          "observed_non_skill_damage_effective": 49658.400706322864,
+          "skill_effective_unclassified_hits": 0,
+          "skill_effective_damage_unverified_share": null,
+          "skill_split_effective_complete": false,
+          "skill_initial_unknown_hits": 0,
+          "skill_split_reason": "未观察到技能效果的实际结束",
+          "mitigation_matched_hits": 358,
+          "observed_mitigation_rate": 41.32436079875805,
+          "mitigation_complete": false,
+          "mitigation_unverified_share": null,
+          "mitigation_reason": "已记录命中的公式前后值均已配对，整局事件覆盖未确认"
+        }
+      }
+    }
+  }
+}

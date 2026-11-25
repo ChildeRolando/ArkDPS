@@ -63,10 +63,12 @@ for (const platform of ['native_pc', 'mumu']) {
     f.write(f.roleData[0].add(0x50), f.text('char_later'));
     f.clock(8, 8n * FIXED / 30n);
     const [later, batch] = baseline(f);
+    assert.equal(later.autochess_round_start_ready, true);
+    assert.equal(batch.autochess_round_start_ready, true);
     const start = batch.autochess_round_start;
     assert(start, platform + ':phase-' + phase);
     assert.equal(start.source_method, 'BattleController.ClearRunTimeData');
-    assert.equal(start.version, 1);
+    assert.equal(start.version, 2);
     assert.equal(start.frame, 0);
     assert.equal(start.game_time, 0);
     assert.equal(start.native_fixed_time, '0');
@@ -87,6 +89,7 @@ for (const platform of ['native_pc', 'mumu']) {
     assert.equal(start.quality.shield_unknown, false);
     assert.equal(start.quality.unknown_sources.length, 0);
     assert.equal(start.live_character_collection_empty, true);
+    assert.deepEqual(json(start.live_character_data_uids), []);
     assert.equal(batch.events.length, 0);
     assert.equal(batch.autochess_round_start_events_complete, true);
     const raw = f.context.rpc.exports.readEvents(0, later.sequence).events;
@@ -124,7 +127,10 @@ for (const platform of ['native_pc', 'mumu']) {
     const ready = f.messages.find(message => message.ready === true);
     assert.equal(ready.autochess_round_start_ready, false);
     assert.match(ready.autochess_round_start_error, /ClearRunTimeData signature/);
-    assert.equal(baseline(f)[1].autochess_round_start, undefined);
+    const [mark, batch] = baseline(f);
+    assert.equal(mark.autochess_round_start_ready, false);
+    assert.equal(batch.autochess_round_start_ready, false);
+    assert.equal(batch.autochess_round_start, undefined);
   }
 
   const staticSkillGap = fixture(platform);
@@ -171,10 +177,66 @@ for (const platform of ['native_pc', 'mumu']) {
   capture(occupied);
   const occupiedStart = baseline(occupied)[1].autochess_round_start;
   assert.equal(occupiedStart.live_character_collection_empty, false);
+  assert.deepEqual(json(occupiedStart.live_character_data_uids), [999]);
   occupied.vm.runInContext('skillUnknown=true', occupied.context);
   capture(occupied);
   assert.deepEqual(json(baseline(occupied)[1].autochess_round_start), json(occupiedStart));
   assert.equal(occupied.mark().skill_unknown, true, 'duplicate zero reset does not discard current quality');
+
+  for (const badUid of [0, 999]) {
+    const unreadable = fixture(platform, {token: true, tokenCount: 2});
+    unreadable.write(unreadable.tokenData[1].add(0x6c), badUid);
+    capture(unreadable);
+    const origin = baseline(unreadable)[1].autochess_round_start;
+    assert.equal(origin.live_character_collection_empty, false);
+    assert.equal(origin.live_character_data_uids, null,
+      'an unreadable or duplicate live UID cannot certify any absent actor');
+  }
+
+  for (const changed of [null, 'source_uid', 'scope']) {
+    const f = fixture(platform);
+    capture(f);
+    f.clock(30, FIXED);
+    const source = f.unit('char_shared', 11);
+    const sourceData = source.add(0x538).readPointer();
+    f.write(sourceData.add(0x6c), 101);
+    const target = f.unit('char_friendly', 12);
+    f.write(target.add(0x40), 10n * FIXED);
+    const modifier = f.modifier(source, target, 10, 0, 1);
+    const apply = f.callback('ApplyModifier', f.entity), invocation = {threadId: 1};
+    apply.onEnter.call(invocation, [target, modifier, f.ptr(0)]);
+    const take = f.callback('OnTakeDamage', f.unitClass), hit = {threadId: 1};
+    take.onEnter.call(hit, [target, modifier, f.ptr(0)]);
+    f.write(target.add(0x40), 0n);
+    f.write(modifier.add(0x48), -10n * FIXED);
+    take.onLeave.call(hit);
+    f.write(target.add(0x18), 99);
+    if (changed === 'source_uid') f.write(sourceData.add(0x6c), 102);
+    if (changed === 'scope') f.write(f.machine.add(0x5c), 5);
+    apply.onLeave.call(invocation);
+    const mark = f.mark(), batch = f.context.rpc.exports.readEvents(0, mark.sequence);
+    assert.equal(mark.enemy_damage_unknown, true, 'the world keeps its unknown target-domain quality');
+    assert.equal(mark.damage_settlement_first_issue.reason, 'unverified enemy settlement domain');
+    assert.equal(mark.damage_settlement_source_quality_version, 1);
+    assert.equal(mark.damage_settlement_unlocalized_unknown, changed !== null);
+    assert.equal(mark.damage_settlement_source_issues.length, changed === null ? 1 : 0);
+    if (changed === null) {
+      const issue = mark.damage_settlement_source_issues[0];
+      assert.equal(issue.source, 'char_shared');
+      assert.equal(issue.source_character_uid, 101);
+      assert.equal(issue.frame, 30);
+      assert.equal(issue.game_time, 1);
+      assert.equal(issue.native_autochess_scope.scope_key, mark.native_autochess_context.scope_key);
+    }
+    assert.equal(batch.events.filter(e => e.kind === 'damage_settlement').length, 0,
+      'localized quality does not invent a proven or incomplete HP settlement');
+    f.write(f.center.add(0x3c), 2);
+    capture(f);
+    const reset = f.mark();
+    assert.equal(reset.enemy_damage_unknown, false);
+    assert.equal(reset.damage_settlement_unlocalized_unknown, false);
+    assert.deepEqual(json(reset.damage_settlement_source_issues), [], 'source issues end with their original round');
+  }
 
   const capped = fixture(platform);
   capture(capped);

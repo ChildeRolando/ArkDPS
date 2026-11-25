@@ -75,6 +75,8 @@ function __module(name){
 const Process={platform:'windows',arch:'x64',id:__pid(),
  getModuleByName:__module,
  findModuleByAddress(address){const found=__findModule(ptr(address).value);return found===null?null:__module(found);}};
+let __arkdpsMarkRequest=null;
+function __arkdpsMarkEntryActive(){return __arkdpsMarkRequest?.entryActive??__nativeActive();}
 function NativeFunction(address,result,parameters){
  if(!Array.isArray(parameters)||parameters.length>12)throw new Error('unsupported native signature');
  const allowed=new Set(['pointer','uint','int','size_t','bool','void']);
@@ -82,6 +84,8 @@ function NativeFunction(address,result,parameters){
  const target=ptr(address).value;
  return function(...args){
   if(args.length!==parameters.length)throw new Error('native argument count mismatch');
+  // A native call could enter a hook recursively on this lock's owner.
+  if(__arkdpsMarkRequest!==null)__arkdpsMarkRequest.nativeCall=true;
   const raw=__nativeCall(target,args.map((v,i)=>parameters[i]==='bool'?(v?1n:0n):__integer(v)));
   switch(result){case 'void':return undefined;case 'pointer':return ptr(raw);case 'bool':return BigInt.asUintN(8,raw)!==0n;
    case 'int':return Number(BigInt.asIntN(32,raw));case 'uint':return Number(BigInt.asUintN(32,raw));case 'size_t':return Number(raw);}
@@ -100,23 +104,43 @@ function __arkdpsRequest(json){
  if(command.operation==='terminal_read'&&__nativeActive()>0)
   return JSON.stringify({events:[],hp_context:[],retry:true,terminal_only:true,terminal_read_version:1,
    active:__nativeActive(),active_hooks:[],after:command.after,through:command.through});
- let result;
+ let result,markRequest=null;
  switch(command.operation){
-  case 'mark':
+  case 'mark':{
    if(Object.prototype.hasOwnProperty.call(command,'autochess_enabled')&&typeof probeAdapter!=='undefined'&&typeof probeAdapter.setAutoChessMode==='function')
     probeAdapter.setAutoChessMode(command.autochess_enabled);
-   result=api.mark();break;
+   if(command.native_quiet_boundary_version===1)
+    __arkdpsMarkRequest=markRequest={entryActive:__nativeActive(),nativeCall:false};
+   try{result=api.mark();}finally{__arkdpsMarkRequest=null;}
+   break;
+  }
   case 'read':result=api.readEvents(command.after,command.through);break;
   case 'terminal_read':result=api.readTerminalEvents(command.after,command.through);break;
   case 'ack':result=api.ackEvents(command.sequence);break;
   case 'stop':result=api.stop();break;
   default:throw new Error('unknown operation');
  }
- // A native callback can be waiting for this JS lock. Never publish a quiet
- // fence while that invocation exists, even before its JS onEnter executes.
- if((command.operation==='mark'||command.operation==='terminal_read')&&__nativeActive()>0){
-  result.active=Math.max(result.active||0,__nativeActive());result.retry=true;
-  if(command.operation==='terminal_read'){result.events=[];result.hp_context=[];}
+ if(command.operation==='mark'||command.operation==='terminal_read'){
+  const pending=__nativeActive(),scope=result.native_autochess_context;
+  // The engine holds the same lock for this request and the JS onEnter.
+  // With no callback at entry, incoming threads have yet to run onEnter or
+  // the original function. Native calls made by the lock owner disqualify
+  // this boundary because the mutex permits recursive entry.
+  const defer=pending>0&&markRequest?.entryActive===0&&!markRequest.nativeCall&&
+   result.active===0&&Array.isArray(result.active_hooks)&&result.active_hooks.length===0&&
+   !result.retry&&result.error===null&&result.stopped===false&&result.terminal_boundary==null&&
+   result.native_battle_state===2&&scope?.protocol_version===1&&scope.status==='available'&&
+   scope.verified_same_frame===true&&[4,5,6].includes(scope.phase)&&
+   typeof scope.scope_key==='string'&&scope.scope_key.length>0&&Number.isSafeInteger(scope.round)&&scope.round>=0&&
+   ['all','local'].includes(scope.collection_mode)&&
+   scope.frame===result.frame&&scope.game_time===result.game_time;
+  const outstanding=Math.max(pending,markRequest?.entryActive??0);
+  if(defer){
+   result.native_quiet_boundary_version=1;result.native_deferred_callbacks=pending;
+  }else if(outstanding>0){
+   result.active=Math.max(result.active||0,outstanding);result.retry=true;
+   if(command.operation==='terminal_read'){result.events=[];result.hp_context=[];}
+  }
  }
  return JSON.stringify(result);
 }

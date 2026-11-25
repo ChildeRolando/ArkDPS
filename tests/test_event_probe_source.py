@@ -220,8 +220,43 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
             return [before_terminal_read(item) for item in value]
         return value
 
-    assert digest(payload) == terminal_read_hashes.get(args[0], extended_hashes.get(args[0], expected))
-    assert digest(before_terminal_read(payload)) == extended_hashes.get(args[0], expected)
+    def before_source_local_quality(value):
+        if isinstance(value, dict):
+            additions = set()
+            source_fields = {'damage_settlement_source_quality_version',
+                             'damage_settlement_unlocalized_unknown', 'damage_settlement_source_issues'}
+            if source_fields & value.keys():
+                assert value.get('quality_contract_version') == 1
+                assert source_fields <= value.keys()
+                assert type(value['damage_settlement_source_quality_version']) is int
+                assert value['damage_settlement_source_quality_version'] == 1
+                assert type(value['damage_settlement_unlocalized_unknown']) is bool
+                assert isinstance(value['damage_settlement_source_issues'], list)
+                assert len(value['damage_settlement_source_issues']) <= 128
+                # These normal wire goldens cannot silently acquire a new
+                # failure, localized or global. Failure cases have separate
+                # real callback and hostile certificate tests.
+                assert value['damage_settlement_source_issues'] == []
+                assert value['damage_settlement_unlocalized_unknown'] is False
+                additions |= source_fields
+            if 'autochess_round_start_ready' in value:
+                assert value.get('quality_contract_version') == 1 or value.get('ready') is True
+                assert type(value['autochess_round_start_ready']) is bool
+                additions.add('autochess_round_start_ready')
+            if 'native_battle_state' in value:
+                assert isinstance(value.get('native_identity'), dict)
+                assert type(value['native_battle_state']) is int and value['native_battle_state'] in (2, 3)
+                additions.add('native_battle_state')
+            return {key: before_source_local_quality(item) for key, item in value.items() if key not in additions}
+        if isinstance(value, list):
+            return [before_source_local_quality(item) for item in value]
+        return value
+
+    # Validate only the additive, typed contract above, then compare every
+    # original event/number/quality field against its unchanged frozen hash.
+    prior_payload = before_source_local_quality(payload)
+    assert digest(prior_payload) == terminal_read_hashes.get(args[0], extended_hashes.get(args[0], expected))
+    assert digest(before_terminal_read(prior_payload)) == extended_hashes.get(args[0], expected)
     additions = {'initial_boundary', 'initial_boundary_diagnostics', 'terminal_boundary_diagnostics'}
     observed_additions = set()
 
@@ -265,4 +300,4 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
             return [original_contract(item) for item in value]
         return value
 
-    assert digest(original_contract(before_terminal_read(payload))) == expected
+    assert digest(original_contract(before_terminal_read(prior_payload))) == expected

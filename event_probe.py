@@ -428,11 +428,15 @@ _ROUND_START_BINDING = ('native_process_pid', 'native_generation', 'native_stage
 _ROUND_START_POINT_KEYS = {*_ROUND_START_BINDING, 'version', 'source_method', 'frame', 'game_time',
     'native_fixed_time', 'sequence', 'epoch', 'active', 'native_autochess_context', 'quality',
     'live_character_collection_empty'}
+_ROUND_START_POINT_V2_KEYS = {*_ROUND_START_POINT_KEYS, 'live_character_data_uids'}
 _ROUND_START_QUALITY_FLAGS = ('damage_unknown', 'engagement_unknown', 'shield_unknown',
     'skill_unknown', 'skill_ready', 'mitigation_unknown', 'mitigation_ready',
     'enemy_damage_ready', 'enemy_damage_unknown', 'source_character_uid_ready')
+_SETTLEMENT_SOURCE_QUALITY_FIELDS = ('damage_settlement_source_quality_version',
+    'damage_settlement_unlocalized_unknown', 'damage_settlement_source_issues')
 _ROUND_START_QUALITY_OPTIONAL = ('boss_damage_ready', 'boss_damage_unknown', 'damage_settlement_ready',
-    'damage_settlement_unknown', 'damage_settlement_first_issue', 'mitigation_error',
+    'damage_settlement_unknown', 'damage_settlement_first_issue', *_SETTLEMENT_SOURCE_QUALITY_FIELDS,
+    'mitigation_error',
     'mitigation_diagnostics', 'enemy_entry_ready', 'enemy_entry_unknown', 'enemy_phase_ready',
     'enemy_phase_unknown', 'enemy_state_ready', 'enemy_state_unknown', 'enemy_state_error',
     'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error')
@@ -452,9 +456,23 @@ def _round_start_time(value):
 
 
 def _valid_round_start_point(point):
-    return (isinstance(point, dict) and point.keys() == _ROUND_START_POINT_KEYS
-            and type(point['version']) is int and point['version'] == 1
-            and point['source_method'] == 'BattleController.ClearRunTimeData'
+    if not isinstance(point, dict) or type(point.get('version')) is not int:
+        return False
+    if point['version'] == 1:
+        if point.keys() != _ROUND_START_POINT_KEYS:
+            return False
+    elif point['version'] == 2:
+        if point.keys() != _ROUND_START_POINT_V2_KEYS:
+            return False
+        live = point['live_character_data_uids']
+        if live is not None and (not isinstance(live, list) or len(live) > 128
+                or any(type(uid) is not int or not 0 < uid <= 0xffffffff for uid in live)
+                or live != sorted(set(live))
+                or point['live_character_collection_empty'] is not (not live)):
+            return False
+    else:
+        return False
+    return (point['source_method'] == 'BattleController.ClearRunTimeData'
             and type(point['frame']) is int and point['frame'] == 0
             and _round_start_time(point['game_time']) and point['game_time'] == 0
             and point['native_fixed_time'] == '0'
@@ -595,14 +613,62 @@ def autochess_round_start_origin(sample):
     return True
 
 
-def autochess_round_start_skill_known(sample):
-    """Require independent zero-clock evidence that there are no live actors."""
+def autochess_round_start_live_skill_uids(sample):
+    """Return the independently witnessed live data UIDs at zero, or None."""
     if not autochess_round_start_origin(sample):
-        return False
+        return None
     point = sample['autochess_round_start']
     quality = point['quality']
-    return (point['live_character_collection_empty'] is True and isinstance(quality, dict)
-            and quality.get('skill_ready') is True and quality.get('skill_unknown') is False)
+    if quality.get('skill_ready') is not True or quality.get('skill_unknown') is not False:
+        return None
+    if point['version'] == 1:
+        return frozenset() if point['live_character_collection_empty'] is True else None
+    live = point['live_character_data_uids']
+    return frozenset(live) if live is not None else None
+
+
+def autochess_round_start_skill_known(sample):
+    """Whether every actor was absent at the independently witnessed zero clock."""
+    return autochess_round_start_live_skill_uids(sample) == frozenset()
+
+
+def settlement_source_quality_clear(payload):
+    """Accept legacy absence or a coherent, explicitly empty source declaration."""
+    if not any(key in payload for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS):
+        return True
+    version, unlocalized, issues = (payload.get(key) for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS)
+    return type(version) is int and version == 1 and unlocalized is False and type(issues) is list and not issues
+
+
+def verified_autochess_settlement_source_issues(sample, payload):
+    """Return only fully localized source issues from the current combat scope."""
+    from autochess_context import native_autochess_event_identity
+
+    version, unlocalized, issues = (payload.get(key) for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS)
+    if (type(version) is not int or version != 1
+            or unlocalized is not False
+            or not isinstance(issues, list) or not 0 < len(issues) <= 128
+            or not native_autochess_event_baseline(sample)):
+        return None
+    context = sample['autochess_context']
+    mode = context.get('collection_mode')
+    if mode not in ('all', 'local'):
+        return None
+    current = tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round'))
+    fields = {'source', 'source_character_uid', 'frame', 'game_time', 'native_autochess_scope'}
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.keys() != fields:
+            return None
+        cid, uid, frame, when = (issue[key] for key in ('source', 'source_character_uid', 'frame', 'game_time'))
+        if (not isinstance(cid, str) or len(cid) > 128 or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
+                or type(uid) is not int or not 0 < uid <= 0xffffffff
+                or type(frame) is not int or not 0 <= frame <= sample['frame']
+                or not _round_start_time(when) or when > sample['game_time']
+                or frame == sample['frame'] and when != sample['game_time']
+                or native_autochess_event_identity(issue) != current
+                or issue['native_autochess_scope'].get('collection_mode') != mode):
+            return None
+    return issues
 
 
 def autochess_root_failure(mark):

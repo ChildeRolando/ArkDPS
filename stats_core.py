@@ -357,6 +357,7 @@ class Statistics:
         self.damage_settlement_version = 0
         self.settlement_sides_known = False
         self.settlement_stream_incomplete = False
+        self.settlement_source_incomplete = set()
         self.settled = {}
         self.settled_boss = {}
         self.settlement_missing = {}
@@ -623,6 +624,7 @@ class Statistics:
         end = self.partial_watermark if self.partial_watermark is not None else self.event_coverage_start
         stream_complete = (self.event_coverage and not self.event_coverage_broken
                            and end == self.now and not self.settlement_stream_incomplete
+                           and owner not in self.settlement_source_incomplete
                            and (self.damage_settlement_version >= 6 or not self.settlement_unscoped)
                            and self.settlement_sides_known)
         missing = self.settlement_missing.get(owner, 0)

@@ -859,7 +859,9 @@ class NativeHookEventProbe:
                     binding_ms=None if received is None else (finished-received)*1000,
                     active=raw.get('active') if isinstance(raw, dict) else None,
                     batch_size=len(raw['events']) if isinstance(raw, dict) and isinstance(raw.get('events'), list) else None,
-                    reason=raw.get('mark_retry_reason') if isinstance(raw, dict) else None))
+                    reason=raw.get('mark_retry_reason') if isinstance(raw, dict) else None,
+                    **({key: raw[key] for key in ('native_quiet_boundary_version', 'native_deferred_callbacks')
+                        if type(raw.get(key)) is int} if isinstance(raw, dict) else {})))
             except Exception:
                 pass  # Diagnostics must not change delivery or ACK behavior.
 
@@ -870,7 +872,7 @@ class NativeHookEventProbe:
         return {} if self._autochess_enabled is None else dict(autochess_enabled=self._autochess_enabled())
 
     def mark(self):
-        return self._request('mark', **self._mark_options())
+        return self._request('mark', native_quiet_boundary_version=1, **self._mark_options())
 
     def read_terminal_mark(self):
         self.last_terminal_response = None

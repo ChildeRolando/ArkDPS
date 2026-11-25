@@ -159,6 +159,7 @@ const probeAdapter={
  baselineEnvelope(fields,records,acknowledged,through){return discardedAutoChessSkills(fields,records,acknowledged,through);},
  prepareEventEnvelope(){return prepareAutoChessRetryBody(typeof __nativeActive==='function');},
  pendingMarkCallbacks(){return typeof __nativeActive==='function'?__nativeActive():0;},
+ markEntryCallbacks(){return typeof __arkdpsMarkEntryActive==='function'?__arkdpsMarkEntryActive():this.pendingMarkCallbacks();},
  readEnvelope(prepared){
   const binding=nativeBinding(prepared);
   return {fields:{scoped_trace_count:scopedTraceCount,scoped_trace_dropped:scopedTraceDropped,

@@ -89,7 +89,7 @@ for(const roles of [32,40]){
  },{rolesPerPlayer:roles/4}));
  check('warm_'+roles+'_read_budgets_and_callback_event_equivalence',()=>{
   for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?973:1133,f=>f.mark()],
-   ['10_output_pairs',2190,f=>modifierPairs(f,false)],['10_unlogged_pairs',1840,f=>modifierPairs(f,true)]]){
+   ['10_output_pairs',2180,f=>modifierPairs(f,false)],['10_unlogged_pairs',1830,f=>modifierPairs(f,true)]]){
    const f=owned({rolesPerPlayer:roles/4}),measured=readCount(f,()=>call(f));
    assert.equal(measured.reads,budget,name+' native-read budget');
    assert.equal(f.fullReads,1,'unchanged warm body must avoid parsing another full roster');

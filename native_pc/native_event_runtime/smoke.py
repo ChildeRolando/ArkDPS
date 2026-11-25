@@ -121,6 +121,46 @@ send(SLOW_FIXTURE?{ready:true,fixture:'self-owned-stop-concurrency',activity:act
 '''.replace('OFFSETS', json.dumps(offsets)).replace('SLOW_FIXTURE', json.dumps(slow))
 
 
+def quiet_mark_source(binary, result_buffer, *, autochess):
+    return fixture_source(binary, slow=True) + r'''
+const markWaiting=Memory.alloc(8), sretBuffer=ptr(RESULT_BUFFER);
+markWaiting.writeU64(0);
+let testedArrival=false, readThrough=0, acknowledged=0;
+const completed=()=>records.filter(event=>event.name==='Sret'&&event.phase==='leave')
+    .map((_,index)=>({sequence:index+1,frame:30*(index+1),game_time:index+1}));
+rpc.exports.mark=()=>{
+ const entry=__arkdpsMarkEntryActive(), sequence=completed().length;
+ const frame=sequence*30,game_time=sequence;
+ if(!testedArrival&&entry===0){
+  testedArrival=true;markWaiting.writeU64(1);
+  const deadline=Date.now()+3000;
+  while(__nativeActive()===0&&Date.now()<deadline){}
+  if(__nativeActive()===0)throw new Error('owned callback did not reach mark');
+ }
+ return {active:entry,active_hooks:[],retry:entry>0,error:null,stopped:false,
+  sequence,epoch:1,frame,game_time,native_battle_state:2,
+  result_buffer:[0,8,16,24].map(offset=>sretBuffer.add(offset).readU64().toString()),
+  native_autochess_context:AUTOCHESS?{protocol_version:1,status:'available',
+   verified_same_frame:true,phase:4,round:12,scope_key:'fixture:autochess:1',
+   collection_mode:'all',frame,game_time}:null};
+};
+rpc.exports.readEvents=(after,through)=>{
+ const events=completed();
+ if(after<acknowledged||through>events.length||after>through)return {error:'range unavailable'};
+ readThrough=Math.max(readThrough,through);
+ return {events:events.slice(after,through)};
+};
+rpc.exports.ackEvents=through=>{
+ if(through>readThrough)return {error:'ack beyond read',acknowledged};
+ acknowledged=Math.max(acknowledged,through);
+ return {acknowledged};
+};
+rpc.exports.readTerminalEvents=()=>({events:[1],hp_context:[2]});
+send({ready:true,fixture:'self-owned-quiet-mark-concurrency', markWaiting:markWaiting.toString(),
+ activity:activity.toString()});
+'''.replace('RESULT_BUFFER', json.dumps(result_buffer)).replace('AUTOCHESS', json.dumps(autochess))
+
+
 def child(binary):
     """Child owns its own test functions, memory and LoadLibrary invocation."""
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -135,6 +175,16 @@ def child(binary):
     libraries = []
     background = []
     background_results = Queue()
+    result_type = ctypes.c_uint64 * 4
+    result_buffer = result_type()
+
+    def owned_sret():
+        # The Windows x64 hidden return buffer is the first native argument.
+        function = libraries[0].ArkDpsTestSret
+        function.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64]
+        function.restype = ctypes.c_void_p
+        function(ctypes.addressof(result_buffer), 17, 29)
+        return list(result_buffer)
 
     def code_digest():
         return {name: sha256(ctypes.string_at(ctypes.cast(getattr(libraries[0], 'ArkDpsTest' + name), ctypes.c_void_p).value, 32)).hexdigest()
@@ -153,6 +203,15 @@ def child(binary):
         elif operation == 'memory':
             address = int(command['address'], 16)
             print(json.dumps(dict(value=ctypes.c_uint64.from_address(address).value)), flush=True)
+        elif operation == 'owned-sret-buffer':
+            result_buffer[:] = (0, 0, 0, 0)
+            print(json.dumps(dict(address=hex(ctypes.addressof(result_buffer)))), flush=True)
+        elif operation == 'call-owned-sret':
+            print(json.dumps(dict(result=owned_sret())), flush=True)
+        elif operation == 'start-owned-sret':
+            background = [Thread(target=lambda: background_results.put(owned_sret()))]
+            background[0].start()
+            print(json.dumps(dict(started=1)), flush=True)
         elif operation == 'start-threads':
             function_name = command.get('function', 'Integer')
             function = getattr(libraries[0], 'ArkDpsTest' + function_name)
@@ -280,6 +339,86 @@ class Fixture:
         self.process.stdin.close()
         self.process.stdout.close()
         self.process.stderr.close()
+
+
+def check_quiet_mark_boundaries(binary):
+    from native_pc.native_hook_source import NativePipe
+    binary = Path(binary).resolve()
+    checks = {}
+    with TemporaryDirectory(prefix='arkdps-quiet-mark-') as temporary:
+        for case in ('autochess', 'ordinary', 'terminal-mark'):
+            fixture = Fixture(Path(temporary) / case, binary)
+            pipe = None
+            try:
+                buffer = fixture.command('owned-sret-buffer')['address']
+                fixture.configure(source=quiet_mark_source(binary, buffer, autochess=case != 'ordinary'))
+                fixture.command('load')
+                pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
+                ready = pipe.request('initialize', token=fixture.token)['ready']
+                assert fixture.command('call-owned-sret')['result'] == [17, 29, 46, 12]
+                fixture.command('owned-sret-buffer')
+                results = Queue()
+
+                def request_mark():
+                    try:
+                        options = {} if case == 'terminal-mark' else {'native_quiet_boundary_version': 1}
+                        results.put(pipe.request('mark', **options))
+                    except Exception as exc:
+                        results.put(exc)
+
+                pending = Thread(target=request_mark, daemon=True)
+                pending.start()
+                deadline = time.monotonic() + 5
+                while fixture.command('memory', address=ready['markWaiting'])['value'] != 1:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError('owned slow mark did not start')
+                    time.sleep(.005)
+                assert fixture.command('start-owned-sret')['started'] == 1
+                mark = results.get(timeout=5)
+                pending.join(timeout=5)
+                if isinstance(mark, Exception):
+                    raise mark
+                assert mark['result_buffer'] == ['0'] * 4, mark
+                assert (mark['sequence'], mark['frame'], mark['game_time']) == (1, 30, 1), mark
+                assert fixture.command('join-threads')['results'] == [[17, 29, 46, 12]]
+                if case == 'autochess':
+                    assert mark['active'] == 0 and mark['retry'] is False, mark
+                    assert mark['native_quiet_boundary_version'] == 1 and mark['native_deferred_callbacks'] == 1
+                    assert pipe.request('read', after=0, through=1)['events'] == [
+                        {'sequence': 1, 'frame': 30, 'game_time': 1}]
+                    denied = pipe.request('ack', sequence=2)
+                    assert denied.get('error') == 'ack beyond read' and denied['acknowledged'] == 0
+                    assert pipe.request('ack', sequence=1)['acknowledged'] == 1
+                    following = pipe.request('mark', native_quiet_boundary_version=1)
+                    assert (following['sequence'], following['frame'], following['game_time']) == (2, 60, 2)
+                    assert pipe.request('read', after=1, through=2)['events'] == [
+                        {'sequence': 2, 'frame': 60, 'game_time': 2}]
+                    assert pipe.request('ack', sequence=2)['acknowledged'] == 2
+                    fixture.command('start-threads', function='Slow')
+                    deadline = time.monotonic() + 5
+                    while fixture.command('memory', address=ready['activity'])['value'] != 1:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError('did not enter owned slow originals')
+                        time.sleep(.005)
+                    prior = pipe.request('mark', native_quiet_boundary_version=1)
+                    assert prior['active'] > 0 and prior['retry'] is True, prior
+                    assert 'native_quiet_boundary_version' not in prior
+                    terminal = pipe.request('terminal_read', after=1, through=2)
+                    assert terminal['events'] == [] and terminal['hp_context'] == [] and terminal['retry'] is True
+                    assert fixture.command('join-threads')['results'] == [523] * 4
+                else:
+                    assert mark['active'] == 1 and mark['retry'] is True, mark
+                    assert 'native_quiet_boundary_version' not in mark
+                stopped = pipe.request('stop')
+                assert stopped['active'] == 0 and stopped['native_quiet'] is True, stopped
+                checks[case] = {'mark_sequence': mark['sequence'], 'active': mark['active'],
+                                'retry': mark['retry'], 'original_waited': True,
+                                'deferred_callbacks': mark.get('native_deferred_callbacks', 0)}
+            finally:
+                if pipe is not None:
+                    pipe.close()
+                fixture.close()
+    return checks
 
 
 def check_smoke(binary=DEFAULT_OUTPUT):
@@ -685,6 +824,7 @@ def main():
     result = check_smoke(args.binary)
     result['authenticated_diagnostics'] = check_diagnostics(args.binary)
     result['oversized_response'] = check_oversized_response(args.binary)
+    result['quiet_mark_boundaries'] = check_quiet_mark_boundaries(args.binary)
     if args.dual_hook:
         result['dual_hook_comparator'] = check_dual_hook(args.binary)
     if args.output:

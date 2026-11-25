@@ -1159,31 +1159,39 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
     typed = _effective_by_type(row)
     effective = _effective_damage(row)
     hits = lane.get('observed_hits')
+    has_hits = type(hits) is int and hits > 0
+    unverified = lane.get('unverified_hits')
+    settled_hits_verified = has_hits and type(unverified) is int and unverified == 0
     for key in ('effective_damage', 'recent_effective_damage', 'engagement_effective_damage',
                 'effective_damage_by_type', 'engagement', 'skill_damage', 'skill_effective_damage', 'mitigation'):
         coverage.pop(key, None)
 
-    def mark(key, share_key=None, *, basis=None, reason=reason):
+    def mark(key, share_key=None, *, basis=None, reason=reason, scope_only=False):
         share = lane.get(share_key) if share_key else None
-        if not _finite(share) or not 0 <= share <= 1:
+        if scope_only or not _finite(share) or not 0 <= share <= 1:
             share = basis = None
         item = coverage[key] = dict(failed_share=share, basis=basis, reason=reason)
-        if share_key:
+        if scope_only:
+            item['basis_kind'] = 'scope'
+        elif share_key:
             item['basis_kind'] = 'hits'
-        unverified = lane.get('unverified_hits')
         if (share_key in ('unverified_share', 'engagement_effective_damage_unverified_share')
-                and share is not None and type(hits) is int and type(unverified) is int
-                and 0 <= unverified <= hits and hits > 0 and math.isclose(share, unverified / hits)):
+                and share is not None and has_hits and type(unverified) is int
+                and 0 < unverified <= hits and math.isclose(share, unverified / hits)):
             item.update(unverified_hits=unverified, observed_hits=hits)
 
     if not complete and _finite(effective):
-        mark('effective_damage', 'unverified_share', basis='可对账的伤害命中数')
+        mark('effective_damage', 'unverified_share', basis='可对账的伤害命中数',
+             scope_only=settled_hits_verified)
     if not complete and _finite(row.effective_observed()):
-        mark('engagement_effective_damage', 'engagement_effective_damage_unverified_share', basis='可对账的伤害命中数')
+        mark('engagement_effective_damage', 'engagement_effective_damage_unverified_share',
+             basis='可对账的伤害命中数', scope_only=settled_hits_verified)
     if not row.settled_recent_complete() and _valid_window(row.effective_recent_window()) and _finite(row.effective_recent()):
-        mark('recent_effective_damage', 'recent_effective_damage_unverified_share', basis='近 5 秒可对账的伤害命中数')
+        mark('recent_effective_damage', 'recent_effective_damage_unverified_share',
+             basis='近 5 秒可对账的伤害命中数', scope_only=settled_hits_verified)
     if lane.get('engagement_damage_complete', complete) is not True and _finite(row.engagement(Category.DAMAGE)):
-        mark('engagement', 'engagement_damage_unverified_share', basis='可对账的伤害命中数')
+        mark('engagement', 'engagement_damage_unverified_share', basis='可对账的伤害命中数',
+             scope_only=has_hits and type(lane.get('nominal_hits')) is int and lane['nominal_hits'] == hits)
     if typed and (not complete or exceeds_native_damage(effective, sum(typed.values()))):
         mark('effective_damage_by_type')
     for suffix in ('', '_effective'):
@@ -1191,19 +1199,21 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
         non_skill = lane.get('observed_non_skill_damage' + suffix)
         key = 'skill_effective_damage' if suffix else 'skill_damage'
         missed = lane.get('skill_effective_unclassified_hits' if suffix else 'skill_unclassified_hits')
-        counted = type(missed) is int and type(hits) is int and 0 <= missed <= hits and hits > 0
+        counted = has_hits and type(missed) is int and 0 <= missed <= hits
         if (lane.get('skill_split' + suffix + '_complete') is not True
                 and (counted and missed > 0 or _finite(skill) and _finite(non_skill) and skill + non_skill > 0)):
             mark(key, key + '_unverified_share', basis='可对账的伤害命中数',
-                 reason=lane.get('skill_split_reason') or reason)
-            if counted:
+                 reason=lane.get('skill_split_reason') or reason, scope_only=counted and missed == 0)
+            if counted and missed > 0:
                 coverage[key].update(unverified_hits=missed, observed_hits=hits)
                 initial = lane.get('skill_initial_unknown_hits')
                 if type(initial) is int and 0 <= initial <= missed:
                     coverage[key]['skill_initial_unknown_hits'] = initial
     if lane.get('mitigation_complete') is not True and _finite(lane.get('observed_mitigation_rate')):
+        matched = lane.get('mitigation_matched_hits')
         mark('mitigation', 'mitigation_unverified_share', basis='可对账的伤害命中数',
-             reason=lane.get('mitigation_reason') or reason)
+             reason=lane.get('mitigation_reason') or reason,
+             scope_only=has_hits and type(matched) is int and matched == hits)
     if row.damage is None and _finite(lane.get('observed_boss_damage')):
         if lane.get('observed_boss_damage_complete') is not True:
             mark('boss_damage')

@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from panel_model import (Category, DAMAGE_COLORS, EventAvailability, PanelCollection,
@@ -1020,6 +1023,37 @@ def test_skill_coverage_reports_observed_opening_hits_even_after_archive_gap():
             assert (item['unverified_hits'], item['observed_hits'], item['skill_initial_unknown_hits']) == (1, 4, 1)
             assert item['failed_share'] == (.25 if live else None)
         assert lane['unverified_hits'] == 0 and lane['observed_skill_damage'] == 200
+
+
+def test_archived_defense_verified_hits_keep_metric_scope_gap_without_failed_hit_ratio():
+    path = Path(__file__).with_name('fixtures') / 'round10-defense-hit-coverage.json'
+    fixture = json.loads(path.read_text(encoding='utf-8'))
+    statistics = fixture['statistics']
+    lane = statistics['rows']['shuidengxin']['settled_damage']
+    assert fixture['source']['event_error'] == '未取得最终事件水位'
+    assert lane['observed_hits'] == lane['nominal_hits'] == lane['mitigation_matched_hits'] == 358
+    assert lane['unverified_hits'] == lane['skill_unclassified_hits'] == 0
+    config = PanelConfig(effective_only=True, rate_basis=RateBasis.ENGAGEMENT)
+
+    entry, = render_panel(config, rows_from_statistics(statistics)).entries
+    assert entry.value == lane['effective_damage']
+    assert set(entry.coverage) == {'effective_damage', 'engagement_effective_damage'}
+    coverage = entry.detail['coverage']
+    assert coverage['skill_damage']['reason'] == '未观察到技能效果的实际结束'
+    for metric in ('effective_damage', 'engagement_effective_damage', 'engagement',
+                   'skill_damage', 'skill_effective_damage', 'mitigation'):
+        item = coverage[metric]
+        assert item['basis_kind'] == 'scope'
+        assert item['failed_share'] is item['basis'] is None
+        assert 'unverified_hits' not in item and 'observed_hits' not in item
+
+    # A verified effective and rate window can accompany a missing skill endpoint.
+    lane.update(complete=True, engagement_damage_complete=True, mitigation_complete=True,
+                observed_damage_complete=True, reason=None, skill_damage_unverified_share=0,
+                skill_effective_damage_unverified_share=0)
+    entry, = render_panel(config, rows_from_statistics(statistics)).entries
+    assert entry.coverage == {} and not entry.incomplete
+    assert entry.detail['coverage']['skill_damage']['basis_kind'] == 'scope'
 
 
 def test_missing_terminal_does_not_claim_recorded_paired_hits_lack_formula_evidence():
