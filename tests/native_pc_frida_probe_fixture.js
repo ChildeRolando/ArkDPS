@@ -19,7 +19,7 @@ function loadProbeSource(sourcePath) {
 }
 
 function fixture({platform = 'native_pc', sourcePath = process.argv[2],
-  settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false,
+  settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false, characterLifecycle = false,
   loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, roundResetMethod = false, nullClassIndex = null,
   unreadableClassIndex = null, extraNullRow = false, lazySkillFields = false,
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
@@ -187,6 +187,27 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
         {parameters:[ability,reason,last],result:voidType,flags:options.staticMethod?452|0x10:452});
     }
   }
+  const lifecycleEnumValues=new Map(),lifecycleDeclaring=new Map();
+  if(characterLifecycle){
+    const options=typeof characterLifecycle==='object'?characterLifecycle:{};
+    const values={NONE:0,REACH_EXIT:1,HP_ZERO:2,FALLDOWN:3,WITHDRAW:4,DEADLIKE_WITHDRAW:5,SILENT_WITHDRAW:6,OTHER:7,HP_ZERO_WITH_NO_SOURCE:8,REPLACED:9,RESPAWN_SELF:10,MOVE_LIKE_RESPAWN_SELF:11,MOVE_LIKE_RESPAWN_EXTERNAL:12};
+    const reason=type('FinishReason','',{valueType:true,size:4,isEnum:true});
+    const reasonClass=skillCastTypeInfo.get(reason.toString()).klass;
+    lifecycleDeclaring.set(reasonClass.toString(),options.wrongEnumOwner?abilityClass:entity);
+    const table=alloc();write(reasonClass.add(0x80),table);write(reasonClass.add(0x124),Object.keys(values).length);
+    Object.entries(values).forEach(([name,value],i)=>{
+      const field=table.add(i*32);write(field,text(name));write(field.add(16),reasonClass);
+      lifecycleEnumValues.set(field.toString(),options.wrongEnumValue&&name==='HP_ZERO'?99:value);
+    });
+    const voidType=type('Void','System',{valueType:true});
+    const actor=type('Character','Torappu.Battle',{klassPointer:options.wrongActor?entity:character});
+    for(const m of methodTables.get(controllerClass.toString()).records)
+      if(m.add(0x18).readPointer().readCString()==='OnCharacterFinished')
+        skillCastMethodTypes.set(m.toString(),{parameters:[actor,reason],result:voidType,flags:0});
+    for(const m of methodTables.get(bObject.toString()).records)
+      if(m.add(0x18).readPointer().readCString()==='Born')
+        skillCastMethodTypes.set(m.toString(),{parameters:[],result:voidType,flags:0});
+  }
   if(roundResetMethod){
     const reset=methodTables.get(controllerClass.toString()).records[Object.keys(controllerMethods).indexOf('ClearRunTimeData')];
     skillCastMethodTypes.set(reset.toString(),{parameters:[],flags:roundResetMethod.static?0x10:0,
@@ -250,7 +271,9 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     il2cpp_type_is_byref:t=>!!skillCastTypeInfo.get(t.toString()).byRef,
     il2cpp_class_get_namespace:k=>k.add(0x18).readPointer(),
     il2cpp_field_get_type:f=>skillCastFieldTypes.get(f.toString()),
-    il2cpp_field_get_flags:()=>typeof skillCastState==='object'&&skillCastState.waitStatic?0x10:1,
+    il2cpp_field_get_flags:f=>lifecycleEnumValues.has(f.toString())?0x40:typeof skillCastState==='object'&&skillCastState.waitStatic?0x10:1,
+    il2cpp_class_get_declaring_type:k=>lifecycleDeclaring.get(k.toString())||ptr(0),
+    il2cpp_field_static_get_value:(f,out)=>write(out,lifecycleEnumValues.get(f.toString())),
     il2cpp_class_is_valuetype:k=>!!skillCastTypeInfo.get(k.toString())?.valueType,
     il2cpp_class_is_enum:k=>!!skillCastTypeInfo.get(k.toString())?.isEnum,
     il2cpp_class_value_size:k=>skillCastTypeInfo.get(k.toString())?.size??0,

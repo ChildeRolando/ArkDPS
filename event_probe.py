@@ -462,7 +462,7 @@ def _valid_round_start_point(point):
         if point.keys() != _ROUND_START_POINT_KEYS:
             return False
     elif point['version'] == 2:
-        if point.keys() != _ROUND_START_POINT_V2_KEYS:
+        if point.keys() not in (_ROUND_START_POINT_V2_KEYS, _ROUND_START_POINT_V2_KEYS | {'lifecycle_baseline'}):
             return False
         live = point['live_character_data_uids']
         if live is not None and (not isinstance(live, list) or len(live) > 128
@@ -625,6 +625,40 @@ def autochess_round_start_live_skill_uids(sample):
         return frozenset() if point['live_character_collection_empty'] is True else None
     live = point['live_character_data_uids']
     return frozenset(live) if live is not None else None
+
+
+def autochess_round_start_lifecycle_instances(sample):
+    """Independent full live-body witness at the original zero boundary."""
+    if not autochess_round_start_origin(sample):
+        return None
+    point = sample['autochess_round_start']
+    raw = point.get('lifecycle_baseline')
+    if (not isinstance(raw, dict) or raw.keys() != {'version', 'complete', 'frame', 'game_time', 'fixed', 'units'}
+            or type(raw['version']) is not int or raw['version'] != 1 or raw['complete'] is not True
+            or type(raw['frame']) is not int or raw['frame'] != 0
+            or type(raw['game_time']) not in (int, float) or raw['game_time'] != 0 or raw['fixed'] != '0'
+            or not isinstance(raw['units'], list) or len(raw['units']) > 128):
+        return None
+    context = point['native_autochess_context']
+    members = {m['data_uid']: m for m in context['memberships']}
+    accounts = {p['index']: p['uid'] for p in context['players']}
+    uids, instances, result = set(), set(), []
+    for row in raw['units']:
+        if (not isinstance(row, dict) or row.keys() != {'cid', 'data_uid', 'instance_uid', 'player_index',
+                'player_uid', 'player_side', 'inited', 'borned', 'disappeared'}
+                or row['inited'] is not True or row['borned'] is not True or row['disappeared'] is not False
+                or type(row['data_uid']) is not int or not 0 < row['data_uid'] <= 0xffffffff
+                or type(row['instance_uid']) is not int or not 0 < row['instance_uid'] <= 0xffffffff
+                or type(row['player_index']) is not int or type(row['player_side']) is not int
+                or row['data_uid'] in uids or row['instance_uid'] in instances):
+            return None
+        member = members.get(row['data_uid'])
+        if (not member or member.get('is_token') is not False or member.get('cid') != row['cid']
+                or member.get('player_index') != row['player_index'] or member.get('player_side') != row['player_side']
+                or accounts.get(row['player_index']) != row['player_uid']):
+            return None
+        uids.add(row['data_uid']); instances.add(row['instance_uid']); result.append(dict(row))
+    return tuple(result)
 
 
 def autochess_round_start_skill_known(sample):

@@ -15,7 +15,7 @@ from autochess_context import (lookup_native_actor, native_actor_lookup, native_
 from character_catalog import load_character_names
 from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
-from event_probe import (contract_for, event_processing_payload, autochess_round_start_live_skill_uids,
+from event_probe import (contract_for, event_processing_payload, autochess_round_start_live_skill_uids, autochess_round_start_lifecycle_instances,
                          autochess_round_start_origin, settlement_source_quality_clear,
                          verified_autochess_settlement_source_issues)
 from roster import CharacterEntry, RosterSnapshot
@@ -73,6 +73,7 @@ class MultiplayerBattleStatistics:
         self._base_round = None
         self._epoch = -1
         self._players = {}
+        self._pending_lifecycles = []
         self._roster = {}
         self._operators = {}
         self._received = {}
@@ -92,6 +93,7 @@ class MultiplayerBattleStatistics:
         self._from_start = False
         self._skill_initialization = None
         self._round_start_live_skill_uids = None
+        self._lifecycle_baseline = None
         self._sample_session = self._native_session = None
         self._settlement_version = None
         self._native_mode = False
@@ -233,9 +235,11 @@ class MultiplayerBattleStatistics:
         self._from_start = self._start <= 1 and self._frame <= 30
         self._skill_initialization = None
         self._round_start_live_skill_uids = None
+        self._lifecycle_baseline = None
         self._sample_session = sample.get('session')
         self._native_session = sample.get('native_session')
         self._players = {}
+        self._pending_lifecycles = []
         slots = ([(row['uid'], row['index'], row['nick_name']) for row in context['players']]
                  if self._native_mode else [(side, None, None) for side in range(1, 5)])
         for key, slot, name in slots:
@@ -404,6 +408,12 @@ class MultiplayerBattleStatistics:
                         reason = None
                     if reason is not None:
                         player.mark_unknown_skill_prefix(owner, entry.unique_id, reason)
+                baseline = (self._lifecycle_baseline or {}).get(entry.unique_id)
+                if baseline and baseline['player_uid'] == uid and baseline['cid'] == entry.cid:
+                    player.statistics.deployment_lifecycle.seed_zero(owner, entry.unique_id, baseline['instance_uid'])
+                elif (self._round_start_live_skill_uids is not None
+                        and entry.unique_id in self._round_start_live_skill_uids):
+                    player.statistics.deployment_lifecycle.unknown.add(owner)
                 player.actors[owner] = entry
                 player.statistics.register_source(owner, owner)
         self._native_entries = entries
@@ -490,6 +500,13 @@ class MultiplayerBattleStatistics:
         self._round_start_live_skill_uids = (
             autochess_round_start_live_skill_uids(sample) if complete else None)
         live_uids = self._round_start_live_skill_uids
+        baseline = autochess_round_start_lifecycle_instances(sample)
+        self._lifecycle_baseline = {row['data_uid']: row for row in baseline} if baseline is not None else None
+        for player_uid, player in self._players.items():
+            for owner, entry in player.actors.items():
+                row = (self._lifecycle_baseline or {}).get(entry.unique_id)
+                if row and row['player_uid'] == player_uid and row['cid'] == entry.cid:
+                    player.statistics.deployment_lifecycle.seed_zero(owner, entry.unique_id, row['instance_uid'])
         if live_uids is not None:
             rejections = []
         elif (autochess_round_start_origin(sample)
@@ -515,6 +532,8 @@ class MultiplayerBattleStatistics:
                     player.mark_unknown_skill_prefix(owner, entry.unique_id, *rejections)
                 elif live_uids is not None and entry.unique_id in live_uids:
                     player.mark_unknown_skill_prefix(owner, entry.unique_id, 'round_start_actor_already_live')
+                    if (owner, entry.unique_id) not in player.statistics.deployment_lifecycle.bodies:
+                        player.statistics.deployment_lifecycle.unknown.add(owner)
         if not complete:
             self._reasons.add('初始技能事件前缀证据不完整')
         # These records are uncertainty witnesses only. They do not open a
@@ -1106,8 +1125,14 @@ class MultiplayerBattleStatistics:
             # are separate. A later per-event failure freezes stream coverage,
             # while every scoped core retains this already accepted clock.
             self._now, self._frame = sample['game_time'], sample['frame']
+            self._bind_pending_lifecycles()
             for event in events:
                 state, side, actor, entry = self._identity(event)
+                if (event.get('actor_lifecycle') and state not in ('owned', 'foreign_scope', 'non_team', 'not_collected')):
+                    if len(self._pending_lifecycles) < 1024:
+                        self._pending_lifecycles.append(event)
+                    else:
+                        self._reasons.add('部署生命周期待归属前缀超限')
                 skip_scope = state in ('foreign_scope', 'event_scope_unverified',
                                        'event_scope_mismatch', 'elemental_scope_unverified')
                 if state == 'foreign_scope':
@@ -1183,6 +1208,21 @@ class MultiplayerBattleStatistics:
                 player.stream.stop()
             player.statistics.settlement_stream_incomplete = True
 
+    def _bind_pending_lifecycles(self):
+        pending = []
+        for event in self._pending_lifecycles:
+            state, side, actor, entry = self._identity(event)
+            if state == 'owned' and not entry.is_token:
+                owner = self._source_key(actor, side)
+                self._players[side].statistics.deployment_lifecycle.observe(owner, actor.unique_id,
+                    event.get('source_instance_uid'), event['kind'], event['game_time'],
+                    event.get('actor_lifecycle') if event['kind'] != 'skill_end'
+                        or event['actor_lifecycle'].get('reason') == event.get('skill_reason') else None,
+                    frame=event['frame'])
+            elif state not in ('foreign_scope', 'non_team', 'not_collected'):
+                pending.append(event)
+        self._pending_lifecycles = pending
+
     def finish(self, game_time=None, *, complete=False):
         if not self._enabled or self._ended:
             return self.result()
@@ -1227,6 +1267,11 @@ class MultiplayerBattleStatistics:
                         and not lane.get('skill_split_reason')):
                     lane['skill_split_reason'] = '部分命中的采集起点技能状态未确认'
             row['observed_damage'] = lane.get('observed_damage')
+            row.update(player.statistics.deployment_lifecycle.result(owner,
+                player.stream.game_time if player.stream is not None else player.statistics.now,
+                continuous=self._from_start and not self._reasons and not self._player_reasons.get(side)
+                    and player.statistics.event_coverage and not player.statistics.event_coverage_broken,
+                archived=self._ended, start_time=player.statistics.event_coverage_start))
             if self._native_mode and (owner in player.unknown_skill_prefix
                     or owner in player.statistics.settlement_skill_unassigned):
                 row.update(skill_coverage_complete=False, skill_active_seconds=None)

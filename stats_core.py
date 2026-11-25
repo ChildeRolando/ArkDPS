@@ -12,6 +12,7 @@ from math import isclose, isfinite
 
 from boss_catalog import classify_boss
 from damage_settlement import DamageSettlement, observed_amount
+from deployment_lifecycle import DeploymentLifecycle
 from source_classification import classify_unmapped_source
 
 # Native DamageType values used by the verified 2.7.91 event probe.
@@ -326,6 +327,9 @@ class Statistics:
         # supplemental; an unmapped source or a missing hook makes the split
         # unknown rather than closing the authoritative damage stream.
         self.skill_active = {}
+        self.deployment_lifecycle = DeploymentLifecycle()
+        self.settlement_skill_deployment_unknown = set()
+        self.lifecycle_watermark = start_time
         self.skill_windows = {}
         self.skill_observed = {}
         self.non_skill_observed = {}
@@ -995,6 +999,8 @@ class Statistics:
 
     @classmethod
     def _unconfirmed_skill_reason(cls, window, *, live=False):
+        if window is not None and 'owner_dead_at' in window:
+            return '未观察到同实例的永久退场证明'
         if window is None or ('cast_completed_at' not in window and 'movement_at' not in window):
             return None
         if cls._is_ammo_window(window):
@@ -1029,14 +1035,14 @@ class Statistics:
             self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
 
     def _record_skill_transition(self, owner, source, kind, game_time, *,
-                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None, frame=None):
+                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None, frame=None, deployment=None, terminal=False):
         self._apply_skill_transition(
             self.skill_active, owner, source, kind, game_time, key=key, skill_id=skill_id,
             name=name, method=method, reason=reason, wait_for_end=wait_for_end,
-            close=self._close_skill_window, actor=actor, frame=frame)
+            close=self._close_skill_window, actor=actor, frame=frame, deployment=deployment, terminal=terminal)
 
     def record_settlement_skill(self, owner, actor, source, kind, game_time, *,
-                                key, skill_id, name, method, reason, wait_for_end=None, frame=None):
+                                key, skill_id, name, method, reason, wait_for_end=None, frame=None, deployment=None, terminal=False):
         def close(identity, _time, _reason, *, confirmed):
             window = self.settlement_skill_active.pop(identity)
             if (not confirmed and identity not in self.settlement_skill_initial_pending
@@ -1050,7 +1056,7 @@ class Statistics:
         effect_started = self._apply_skill_transition(
             self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
-            wait_for_end=wait_for_end, close=close, actor=actor, frame=frame)
+            wait_for_end=wait_for_end, close=close, actor=actor, frame=frame, deployment=deployment, terminal=terminal)
         if effect_started:
             # Earlier unclassified hits stay in the damage ledger's denominator.
             self.settlement_skill_initial_pending.discard(identity)
@@ -1065,9 +1071,9 @@ class Statistics:
                 self.settlement_skill_past_incomplete.add(owner)
 
         elif (kind == 'skill_end'
-                and method in ('Character.OnSkillFinish', 'Character.SwitchOutFromSkillState')
+                and (terminal or method in ('Character.OnSkillFinish', 'Character.SwitchOutFromSkillState'))
                 and type(actor) is int and actor > 0 and self.owners.get(source) == owner
-                and any(isinstance(value, str) and value for value in (key, skill_id))
+                and (terminal or any(isinstance(value, str) and value for value in (key, skill_id)))
                 and identity not in self.settlement_skill_active):
             # A verified effect endpoint proves this actor is inactive from
             # here onward, even if its activation was outside our observation.
@@ -1085,6 +1091,12 @@ class Statistics:
             # callback proves the effect is still open. Only a break across
             # the native event clock makes a previously timed interval unknown.
             self._pending_skill_observation_uncertainty[identity] = game_time
+
+    def mark_settlement_skill_cast_unmatched(self, owner, actor):
+        # Actor ownership is already proven. Missing activation is a state gap,
+        # distinct from an unknown initial state or owner-wide attribution gap.
+        self.settlement_skill_incomplete.add((owner, actor))
+        self._mark_skill_observation_uncertain(owner, actor)
 
     def mark_settlement_skill_initial_unknown(self, owner, actor):
         identity = (owner, actor)
@@ -1115,9 +1127,16 @@ class Statistics:
 
     def _apply_skill_transition(self, active, identity_key, source, kind, game_time, *,
                                 key, skill_id, name, method, reason, close,
-                                wait_for_end=None, actor=None, frame=None):
+                                wait_for_end=None, actor=None, frame=None, deployment=None, terminal=False):
         self._validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id, frame)
         window = active.get(identity_key)
+        if (window is not None and deployment is not None and window.get('deployment') is not None
+                and deployment != window['deployment']):
+            # A late callback from an older deployed body cannot touch this window.
+            if kind != 'skill_start':
+                return
+            close(identity_key, game_time, 'deployment_changed', confirmed=False)
+            window = None
         identity = {key, skill_id} - {None}
         active_identity = {window['key'], window['id']} - {None} if window is not None else set()
         same_skill = not active_identity or not identity or not active_identity.isdisjoint(identity)
@@ -1137,12 +1156,18 @@ class Statistics:
             if window is None:
                 active[identity_key] = {
                     'start': game_time, 'source': source, 'key': key, 'id': skill_id,
-                    'name': name, 'effect_started': effect_started, 'actor': actor}
+                    'name': name, 'effect_started': effect_started, 'actor': actor, 'deployment': deployment}
                 return effect_started
             elif source == window['source'] and same_skill and effect_started:
                 window['effect_started'] = True
                 return True
             return False
+        if terminal and method == 'BattleController.OnCharacterFinished':
+            if (window is not None and actor == window.get('actor') and deployment is not None
+                    and deployment == window.get('deployment') and source == window['source']):
+                same_endpoint = window.get('owner_dead_at', game_time) == game_time
+                close(identity_key, game_time, reason, confirmed=same_endpoint)
+            return
         if method == 'BasicSkill.OnCastFinish' and not self._native_cast_window_matches(
                 window, source, key, skill_id, actor):
             if wait_for_end is True:
@@ -1164,6 +1189,10 @@ class Statistics:
             # the skill's damage effect is still active.
             # A normal return can also report the same cast completion when
             # the same actor and skill just confirmed that its effect remains.
+            if reason == 2 and deployment is not None and deployment == window.get('deployment'):
+                window.setdefault('cast_completed_at', game_time)
+                window['owner_dead_at'] = game_time
+                return
             if reason == 1 or (reason == 0 and window['effect_started']
                     and type(actor) is int and actor > 0
                     and frame is not None and window.get('native_cast_return_frame') == frame
@@ -1172,10 +1201,10 @@ class Statistics:
                     and self._native_cast_window_matches(window, source, key, skill_id, actor)):
                 window.setdefault('cast_completed_at', game_time)
                 return
-        if method == 'BattleController.OnCharacterFinished' and reason == 11:
+        if method == 'BattleController.OnCharacterFinished' and reason in (11, 12):
             # Entity.FinishReason.MOVE_LIKE_RESPAWN_SELF reports both Ulpian
             # S3's outward move on the cast-completion frame and his return.
-            if 'skchr_ulpia_3' in active_identity:
+            if reason == 11 and 'skchr_ulpia_3' in active_identity:
                 moved_at = window.setdefault('movement_at', game_time)
                 if moved_at == window.get('cast_completed_at') and game_time > moved_at:
                     close(identity_key, game_time, reason, confirmed=True)
@@ -1458,7 +1487,7 @@ class Statistics:
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
               verified_skill_end_owner=None, skill_method=None, skill_wait_for_end=None,
-              skill_actor=None, skill_frame=None,
+              skill_actor=None, skill_frame=None, skill_deployment=None, skill_terminal=False,
               mitigation_before=None, mitigation_after=None, settled_after_nested_kill=False):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
@@ -1607,7 +1636,8 @@ class Statistics:
             self._record_skill_transition(
                 owner, source, kind, game_time, key=skill_key, skill_id=skill_id,
                 name=skill_name, method=skill_method or target_instance, reason=skill_reason,
-                wait_for_end=skill_wait_for_end, actor=skill_actor, frame=skill_frame)
+                wait_for_end=skill_wait_for_end, actor=skill_actor, frame=skill_frame,
+                deployment=skill_deployment, terminal=skill_terminal)
             return
         if kind == 'hp_damage':
             friendly = (isinstance(target, str)
@@ -1705,6 +1735,8 @@ class Statistics:
                    and self.event_watermark == self.now
                    and (self.event_coverage_end is None or self.event_coverage_end == self.now))
         result = dict(observed_healing_total=total,
+                      observed_healing_window=(self.event_coverage_start, self.event_watermark)
+                          if covered and total is not None else None,
                       observed_healing_complete=covered and gap is None and total is not None,
                       observed_recent_healing=None, observed_recent_healing_window=None,
                       observed_recent_healing_complete=False)
@@ -2087,6 +2119,10 @@ class Statistics:
                 row.update(effective_damage=None, overkill_damage=None, overkill_damage_by_type=None,
                            overkill_coverage_complete=False, overkill_type_complete=False,
                            overkill_unknown_reason=PRE_OBSERVER_DAMAGE)
+            row.update(self.deployment_lifecycle.result(owner, self.lifecycle_watermark,
+                continuous=self.start_time == 0 and self.event_coverage_start == 0
+                    and self.event_coverage and not self.event_coverage_broken,
+                archived=self.end_time is not None, start_time=self.event_coverage_start))
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())

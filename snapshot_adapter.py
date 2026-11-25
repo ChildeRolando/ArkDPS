@@ -390,7 +390,7 @@ class BattleStatisticsAdapter:
                         # Modern observers provide actor evidence. A matching
                         # prefab alone cannot turn an unknown UID into our hit.
                         event['unresolved_source'] = True
-            if kind in ('elemental_bar', 'skill_start', 'skill_end'):
+            if kind in ('elemental_bar', 'skill_start', 'skill_end', 'character_born'):
                 if (self.settlement_version in (6, 7) and kind != 'elemental_bar'
                         and isinstance(source, str) and source in self.settlement_tokens):
                     # A summon can use its own skill. Its callbacks cannot
@@ -399,7 +399,7 @@ class BattleStatisticsAdapter:
                 else:
                     event['settlement_identity'] = self._settlement_identity(
                         source, event.get('source_character_uid'))
-        supplemental = kind in ('hp_damage', 'skill_start', 'skill_end', 'enemy_damage')
+        supplemental = kind in ('hp_damage', 'skill_start', 'skill_end', 'enemy_damage', 'character_born')
         if supplemental and self.event_stream.closed:
             # Supplemental evidence may still be in flight after authoritative
             # coverage ended. Drop it without raising again.

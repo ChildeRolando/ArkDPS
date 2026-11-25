@@ -108,3 +108,17 @@ PC 继续通过原有独立低频 `capture_presence` 读活角色，点的时钟
 MuMu 可选读取限制为 4096 个引用、128 个角色、12000 次计费操作、256 KiB 和 12ms 墙钟预算；超限立即保留未知，不连续重试。敌人只做类型判别，不读取 Character 数据。只缓存不可变元数据布局，活值、根、时钟、角色生命周期、单位引用及作用域仍双次现场校验。预算和受控夹具证明有界行为，不代表模拟器实机 FPS。
 
 宿主先接受原有事件窗口，再严格校验可选字段与 closing mark、当前账号成员和阵营，发布 `{version:1, binding:'event_mark', sample_seq, frame, game_time, units}`。它绑定 closing mark 的真实时间，不能拿更早的独立累计快照时间拒收或替换。可选失败发布 `units: null`，未调度不发布字段。每次真实尝试先递增序号，即使整个窗口后来被拒绝；消费者只连接相邻尝试，不能越过未发布的失败。PC 新点沿用自己的物理时钟与相邻尝试约束，旧无序号记录保留原有兼容读取。两种时钟依据不得混用。
+
+## 真实部署生命周期（可选 version 1）
+
+两端共享生产者在元数据验证 `BObject.Born(): Void` 及 `BattleController.OnCharacterFinished(Character, Entity.FinishReason): Void` 后发布真实本体边界。验证包括枚举 declaring type、Int32 布局及每个 literal；`Entity.FinishReason` 与 `Ability.FinishReason` 绝不通用。能力不可验证时不发布证书，完整分母保持未知。没有读取 `m_createdTime` / `m_deadTime` 作为出生或死亡时间。
+
+`character_born` 是独立事件，amount=0，不开启技能。它只在同 Character、data UID、部署 instance UID、原始 frame/Q32 时钟及 scope 保持一致，且 Born 调用使 borned 从 false 变为 true、isDisappeared 为 false 时发布。`skill_end` 的 CharacterFinished 记录可携带同样的 body 证书，不要求当前有技能键或窗口。
+
+两种记录的显式字段为 `source_instance_uid: uint32>0` 和 `actor_lifecycle: {version:1,state:'born'|'finish',instance_uid,data_uid,frame,game_time,fixed}`；fixed 是原始非负 Q32 Int64 十进制字符串。finish 另含 `reason_type:'Torappu.Battle.Entity.FinishReason'`、`reason:Int32`。scope 沿用该回调的原始 `native_autochess_scope`，不能借后继快照补写。`event_processing_payload` 保留这些字段；EventStream 完成顺序、时间、scope 与本家 actor 归属校验后，才把证书交给 Statistics 的部署归约器。
+
+永久终点只接受已验证 literal `REACH_EXIT / HP_ZERO / FALLDOWN / WITHDRAW / DEADLIKE_WITHDRAW / SILENT_WITHDRAW / HP_ZERO_WITH_NO_SOURCE / REPLACED`。NONE、OTHER、RESPAWN_SELF 与 MOVE_LIKE_RESPAWN_SELF/EXTERNAL 不认证永久终点。11/12 仍保留移动语义，不能终止本体生命周期。
+
+技能回调和 typed native cast 返回在已证身份下透传 `source_instance_uid`；实际 Modifier 来源在入口和返回保持同身份时也透传该字段，不能拿召唤实例 UID 冒充宿主本体。无匹配激活窗的 wait=true cast 保留 `(owner,dataUID,instanceUID)` 的未知状态，不升级为 owner-wide 归属缺证，也不假造生效开始。真实未来激活只恢复未来分类；已记录的未知命中保留。
+
+零帧 point v2 可独立附带 `lifecycle_baseline:{version:1,complete:true,frame:0,game_time:0,fixed:'0',units:[...]}`。每个 unit 含 `cid,data_uid,instance_uid,player_index,player_uid,player_side,inited:true,borned:true,disappeared:false`。生产者从原始零帧完整 UnitManager 集合读取，经既有类型/布局验证、完整引用读取、账号匹配和双次现场 guard；非本体 token 不进入集合。缺字段、短读、重复 data/native UID、非法flags或名单冲突使该独立证书不可用，不改旧技能初态语义。消费者只按同 point 的玩家/member、原始scope与零时钟归约，从0截入当前小局分母，不声称该本体在备战时的出生时间。旧 point v1/v2 无证书时保守兼容。

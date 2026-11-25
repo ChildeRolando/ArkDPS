@@ -502,6 +502,7 @@ function readAutoChess(identity,frame,fixed){
  const read=autoRead(),unknown=[];
  let unboundHosts=0,liveCharacterCollectionEmpty=null;
  let liveCharacterDataUids=frame===0&&fixed==='0'?new Set():null;
+ let lifecycleInstances=frame===0&&fixed==='0'?[]:null;const lifecycleUids=new Set(),lifecycleBodies=new Set();
  try{
   const header=autoHeader(identity,read),model=read.p(read.at(header.center,'playerDataModel'));
   read.object(model,'AutoChessPlayerDataModel',AUTO_NS,17,[[0,'m_allPlayerDatas',0x18,[21]]]);
@@ -571,12 +572,34 @@ function readAutoChess(identity,frame,fixed){
       if(autoIdentity(k,'BObject','Torappu.Battle')){bObject=k;break;}
       k=read.p(k.add(0x58));
      }
-     if(!character){liveCharacterDataUids=null;continue;}
+     if(!character){liveCharacterDataUids=null;lifecycleInstances=null;continue;}
      read.layout(unit,autoLayout(character,'Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,[18]]]));
      const row=autoData(read.p(read.at(unit,'<data>k__BackingField')),read);
      if(liveCharacterDataUids){
       if(!bObject||liveCharacterDataUids.has(row.data_uid))liveCharacterDataUids=null;
       else liveCharacterDataUids.add(row.data_uid);
+     }
+     if(lifecycleInstances){
+      try{
+       if(!bObject)throw new Error('lifecycle BObject missing');
+       read.layout(unit,autoLayout(bObject,'BObject','Torappu.Battle',9,[
+        [1,'<instanceUid>k__BackingField',0x18,[9]],[3,'<playerSide>k__BackingField',0x20,[17]],
+        [4,'<inited>k__BackingField',0x24,[2]],[5,'<borned>k__BackingField',0x25,[2]],
+        [6,'<isDisappeared>k__BackingField',0x26,[2]]]));
+       const inited=read.b(read.at(unit,'<inited>k__BackingField')),borned=read.b(read.at(unit,'<borned>k__BackingField')),
+        disappeared=read.b(read.at(unit,'<isDisappeared>k__BackingField'));
+       if(inited>1||borned>1||disappeared>1)throw new Error('lifecycle invalid flags');
+       if(inited===1&&borned===1&&disappeared===0&&!row.is_token){
+        const instance_uid=read.u(read.at(unit,'<instanceUid>k__BackingField')),
+         player_side=read.i(read.at(unit,'<playerSide>k__BackingField')),known=byUid.get(row.data_uid);
+        if(!instance_uid||lifecycleUids.has(row.data_uid)||lifecycleBodies.has(instance_uid)||!known||conflicts.has(row.data_uid)
+           ||known.cid!==row.cid||known.player_side!==player_side||known.is_token)throw new Error('lifecycle body identity');
+        lifecycleUids.add(row.data_uid);lifecycleBodies.add(instance_uid);
+        lifecycleInstances.push({cid:row.cid,data_uid:row.data_uid,instance_uid,player_side,
+         player_index:known.player_index,player_uid:players.find(p=>p.index===known.player_index)?.uid,
+         inited:true,borned:true,disappeared:false});
+       }
+      }catch(e){lifecycleInstances=null;}
      }
      if(!row.is_token){
       const known=byUid.get(row.data_uid);
@@ -597,9 +620,9 @@ function readAutoChess(identity,frame,fixed){
       unknown.push({cid:row.cid,data_uid:row.data_uid,host_uid:row.host_uid,reason:'token host unavailable or conflicting'});continue;
      }
      add({...row,player_index:host.player_index,player_side:side});
-    }catch(e){liveCharacterDataUids=null;unknown.push({reason:String(e)});}
+    }catch(e){liveCharacterDataUids=null;lifecycleInstances=null;unknown.push({reason:String(e)});}
    }
-  }catch(e){liveCharacterDataUids=null;unknown.push({reason:'token collection unavailable: '+String(e)});}
+  }catch(e){liveCharacterDataUids=null;lifecycleInstances=null;unknown.push({reason:'token collection unavailable: '+String(e)});}
   read.validate();
   const fingerprint=JSON.stringify(players.map(p=>[p.index,p.uid]).sort((a,b)=>a[0]-b[0]));
   return {read,header,model,playerList,playerItems,playerVersion,ownerRefs,fingerprint,players,
@@ -607,6 +630,7 @@ function readAutoChess(identity,frame,fixed){
     count:read.at(playerList,'_size'),version:read.at(playerList,'_version')},
    memberships:[...byUid.values()].filter(row=>!conflicts.has(row.data_uid)),unknown,
    allInputsGuarded:unknown.length===unboundHosts,liveCharacterCollectionEmpty,
+   lifecycleBaseline:lifecycleInstances&&conflicts.size===0?{version:1,complete:true,frame:0,game_time:0,fixed:'0',units:lifecycleInstances}:null,
    liveCharacterDataUids:liveCharacterDataUids&&conflicts.size===0?
     [...liveCharacterDataUids].sort((left,right)=>left-right):null};
  }catch(e){return {error:String(e)};}
@@ -975,6 +999,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
    if(captureRoundStart){
     result.live_character_collection_empty=auto.liveCharacterCollectionEmpty??null;
     result.live_character_data_uids=auto.liveCharacterDataUids??null;
+    result.lifecycle_baseline=auto.lifecycleBaseline??null;
    }
    if(viewMode)result.autochess_view_mode=viewMode;
    const preparedHere=prepared!==null&&prepared===nativeAutoBodyCache&&prepared.body===auto;

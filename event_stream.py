@@ -9,6 +9,7 @@ from copy import deepcopy
 from math import isfinite
 
 from stats_core import ENEMY_STATE_KINDS, Statistics
+from deployment_lifecycle import lifecycle_proof
 from event_probe import BarrierBusy, StreamGap, contract_for
 
 
@@ -124,7 +125,7 @@ class EventStream:
                cancel_reason=None, shield_absorbed=None, target_instance=None,
                target_uid=None, enemy_damage_owner=None,
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-               skill_method=None, skill_wait_for_end=None,
+               skill_method=None, skill_wait_for_end=None, source_instance_uid=None, actor_lifecycle=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
                enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None, enemy_regen_ticks=None,
                mitigation_before=None, mitigation_after=None,
@@ -143,7 +144,7 @@ class EventStream:
                        phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
                        finish_reason, enemy_max_hp, enemy_regen_ticks, mitigation_before, mitigation_after,
                        source_character_uid, unresolved_source, settled_after_nested_kill,
-                       settlement_complete, nominal_amount, settlement_identity)
+                       settlement_complete, nominal_amount, settlement_identity, source_instance_uid, actor_lifecycle)
         if session != self.session or not self._nonnegative_int(sequence):
             self._fail('session or sequence is invalid')
         if sequence <= self.sequence:
@@ -195,8 +196,11 @@ class EventStream:
         native_cast = (skill_method or target_instance) == 'BasicSkill.OnCastFinish'
         skill_actor = (settlement_identity[2] if settlement_identity and settlement_identity[0] == 'local'
                        else source_character_uid if not self.statistics.settlement_enabled else None)
+        retired_skill = (kind in ('skill_start', 'skill_end') and settlement_identity
+            and settlement_identity[0] == 'local' and self.statistics.deployment_lifecycle.is_retired(
+                settlement_identity[1], settlement_identity[2], source_instance_uid))
         try:
-            if native_cast:
+            if native_cast and not retired_skill:
                 self.statistics._validate_skill_cast_state(
                     kind, 'BasicSkill.OnCastFinish', skill_reason, skill_wait_for_end, skill_key, skill_id)
                 if self.statistics.settlement_enabled:
@@ -207,16 +211,39 @@ class EventStream:
                                and self.statistics._native_cast_window_matches(
                                    self.statistics.settlement_skill_active.get((owner, actor)),
                                    source, skill_key, skill_id, actor))
+                    if matches and source_instance_uid is not None:
+                        matches = all(window.get('deployment') in (None, source_instance_uid) for window in (
+                            self.statistics.skill_active.get(owner),
+                            self.statistics.settlement_skill_active.get((owner, actor))))
                     if not matches:
                         identity = (owner, actor)
                         before_observed_activation = (
                             state == 'local' and identity in self.statistics.settlement_skill_initial_pending
                             and identity not in self.statistics.settlement_skill_active)
-                        if skill_wait_for_end is False or before_observed_activation:
+                        typed_unmatched = (state == 'local' and type(actor) is int and actor > 0
+                                           and type(source_instance_uid) is int and source_instance_uid > 0)
+                        if typed_unmatched and skill_wait_for_end is True:
+                            self.statistics.settlement_skill_deployment_unknown.add((owner, actor, source_instance_uid))
+                            current = self.statistics.settlement_skill_active.get((owner, actor))
+                            other_body = current is not None and current.get('deployment') not in (None, source_instance_uid)
+                            if not before_observed_activation and not other_body:
+                                self.statistics.mark_settlement_skill_cast_unmatched(owner, actor)
+                        if skill_wait_for_end is False or before_observed_activation or typed_unmatched:
                             ignore_unmatched_native_cast = True
                         else:
                             raise ValueError('native cast state has no matching actor activation')
-            if self.statistics.settlement_enabled and kind == 'damage_settlement':
+            terminal = lifecycle_proof(actor_lifecycle, kind=kind, actor=skill_actor,
+                instance=source_instance_uid, frame=frame, game_time=game_time) == 'finish'
+            terminal = terminal and actor_lifecycle['reason'] == skill_reason
+            if self.statistics.settlement_enabled and settlement_identity and settlement_identity[0] == 'local':
+                self.statistics.deployment_lifecycle.observe(settlement_identity[1], settlement_identity[2],
+                    source_instance_uid, kind, game_time,
+                    actor_lifecycle if kind != 'skill_end' or terminal else None, frame=frame)
+            if retired_skill:
+                pass
+            elif kind == 'character_born':
+                pass
+            elif self.statistics.settlement_enabled and kind == 'damage_settlement':
                 state, owner, actor = settlement_identity or ('unknown', None, None)
                 self.statistics.record_damage_settlement(
                     game_time, state, owner, actor, source, target, target_uid, target_instance, amount, shield_absorbed,
@@ -266,19 +293,19 @@ class EventStream:
                     skill_key=skill_key, skill_id=skill_id, skill_name=skill_name,
                     skill_reason=skill_reason, skill_method=skill_method,
                     skill_wait_for_end=skill_wait_for_end,
-                    skill_actor=skill_actor,
+                    skill_actor=skill_actor, skill_deployment=source_instance_uid, skill_terminal=terminal,
                     skill_frame=frame if kind in ('skill_start', 'skill_end') else None,
                     verified_skill_end_owner=verified_skill_end_owner,
                     mitigation_before=mitigation_before, mitigation_after=mitigation_after,
                     settled_after_nested_kill=settled_after_nested_kill)
-            if (self.statistics.settlement_enabled and settlement_identity and not ignore_unmatched_native_cast
+            if (self.statistics.settlement_enabled and settlement_identity and not ignore_unmatched_native_cast and not retired_skill
                     and kind in ('skill_start', 'skill_end') and settlement_identity[0] == 'local'
                     and settlement_identity[2] is not None):
                 _state, owner, actor = settlement_identity
                 self.statistics.record_settlement_skill(
                     owner, actor, source, kind, game_time, key=skill_key, skill_id=skill_id,
                     name=skill_name, method=skill_method or target_instance, reason=skill_reason,
-                    wait_for_end=skill_wait_for_end, frame=frame)
+                    wait_for_end=skill_wait_for_end, frame=frame, deployment=source_instance_uid, terminal=terminal)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':
@@ -343,3 +370,4 @@ class EventStream:
         self.frame = frame
         self.game_time = game_time
         self.statistics.mark_boss_watermark(game_time)
+        self.statistics.lifecycle_watermark = game_time

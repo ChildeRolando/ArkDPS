@@ -27,6 +27,7 @@ let terminalMethods=null;
 let autoChessRoundResetMethod=null;
 let sourceCharacterClasses=null,settlementCharacterClass=null;
 let skillCastStateMethods=null,skillCastStateReady=false;
+let characterLifecycleMethods=null;
 function uniqueMethod(klass,name,argCount) {
  const matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
@@ -90,6 +91,50 @@ function resolveSkillCastState(basicSkill,character,skillData,ability,bObject,en
  if(matches.length!==1)throw new Error('unsupported BasicSkill.OnCastFinish signature');
  return {address:matches[0],wait:fields.m_waitForSkillEnd,basicSkill,character,skillData,bObject,entity,
   characterData:sourceCharacterClasses.data,assignable:api('il2cpp_class_is_assignable_from','bool',['pointer','pointer'])};
+}
+// Optional lifecycle capability: verify the enum owner and literal values in live metadata.
+function resolveCharacterLifecycle(character,entity,bObject,controller){
+ const from=api('il2cpp_class_from_type','pointer',['pointer']);
+ const parent=api('il2cpp_class_get_declaring_type','pointer',['pointer']);
+ const byref=api('il2cpp_type_is_byref','bool',['pointer']);
+ const argc=api('il2cpp_method_get_param_count','uint',['pointer']);
+ const param=api('il2cpp_method_get_param','pointer',['pointer','uint']);
+ const result=api('il2cpp_method_get_return_type','pointer',['pointer']);
+ const flags=api('il2cpp_method_get_flags','uint',['pointer','pointer']);
+ const isEnum=api('il2cpp_class_is_enum','bool',['pointer']);
+ const size=api('il2cpp_class_value_size','int',['pointer','pointer']);
+ const fieldFlags=api('il2cpp_field_get_flags','uint',['pointer']);
+ const literal=api('il2cpp_field_static_get_value','void',['pointer','pointer']);
+ const scratch=Memory.alloc(8);
+ function signature(owner,name,parameters){
+  const matches=[];
+  for(const m of classMethods(owner)){
+   if(!m.add(0x20).readPointer().equals(owner)||m.add(0x18).readPointer().readCString()!==name||argc(m)!==parameters.length||(flags(m,scratch)&0x10))continue;
+   const r=result(m);if(byref(r)||className(from(r))!=='Void')continue;
+   const types=parameters.map((_,i)=>param(m,i));
+   if(types.some((t,i)=>byref(t)||!parameters[i](from(t))))continue;
+   const address=m.readPointer();if(!address.isNull()&&Process.findModuleByAddress(address)?.name===il.name)matches.push({address,types});
+  }
+  if(matches.length!==1)throw new Error('unsupported lifecycle signature '+name);
+  return matches[0];
+ }
+ let reasonClass=null;
+ const finish=signature(controller,'OnCharacterFinished',[k=>k.equals(character),k=>{
+  if(className(k)!=='FinishReason'||!parent(k).equals(entity)||!isEnum(k)||size(k,scratch)!==4)return false;
+  reasonClass=k;return true;
+ }]);
+ const expected={NONE:0,REACH_EXIT:1,HP_ZERO:2,FALLDOWN:3,WITHDRAW:4,DEADLIKE_WITHDRAW:5,SILENT_WITHDRAW:6,OTHER:7,HP_ZERO_WITH_NO_SOURCE:8,REPLACED:9,RESPAWN_SELF:10,MOVE_LIKE_RESPAWN_SELF:11,MOVE_LIKE_RESPAWN_EXTERNAL:12};
+ const table=reasonClass.add(0x80).readPointer(),count=reasonClass.add(0x124).readU16(),seen=new Set();
+ if(count>64)throw new Error('unbounded finish enum');
+ for(let i=0;i<count;i++){
+  const f=table.add(i*32),name=f.readPointer().readCString();if(!(name in expected))continue;
+  if(!f.add(16).readPointer().equals(reasonClass)||(fieldFlags(f)&0x40)===0)throw new Error('nonliteral finish enum');
+  literal(f,scratch);if(scratch.readS32()!==expected[name])throw new Error('unsupported finish enum value');seen.add(name);
+ }
+ if(seen.size!==Object.keys(expected).length)throw new Error('incomplete finish enum');
+ expectFields(bObject,{'<instanceUid>k__BackingField':0x18,'<borned>k__BackingField':0x25,'<isDisappeared>k__BackingField':0x26});
+ return {character,bObject,finish:finish.address,born:signature(bObject,'Born',[]).address,
+  assignable:api('il2cpp_class_is_assignable_from','bool',['pointer','pointer']),reasons:expected};
 }
 function resolveMitigationMethods(formula,entity,modifier,bObject){
  if(!formula)throw new Error('BattleFormula missing');
@@ -208,6 +253,8 @@ try{
  const SF=fieldOffsets(found.SkillData,['prefabKey','skillId','name']);
  skillF={charSkill:CF.m_skill,owner:BF.m_owner,data:BF.m_data,
   prefab:SF.prefabKey,id:SF.skillId,name:SF.name};
+ try{characterLifecycleMethods=resolveCharacterLifecycle(found.Character,found.Entity,found.BObject,found.BattleController);}
+ catch(e){cfg.characterLifecycleError=String(e);}
  try{skillCastStateMethods=resolveSkillCastState(found.BasicSkill,found.Character,found.SkillData,found.Ability,found.BObject,found.Entity);}
  catch(e){cfg.skillCastStateError=String(e);}
  clock=found.BattleController.add(0xb8).readPointer().add(0x14);
@@ -1693,6 +1740,7 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   if(scope.nestedElementalChainProof)proof.nested_elemental_chain=scope.nestedElementalChainProof;
   if(!complete&&scope.nestedSettlementFailure)proof.nested_settlement_detail=scope.nestedSettlementFailure;
   if(!complete&&scope.settlementFailureReason)proof.settlement_unknown_reason=scope.settlementFailureReason;
+  const instance=verifiedSourceInstance(scope);if(instance)evidence.source_instance_uid=instance;
   const event=record(scope.source,'damage_settlement',real===0?0:-real,when,proof,
          {...evidence,...reduction},scope.sourceCharacterUid);
   if(event){scope.settlementRecordEmitted=true;scope.settlementRecord=event;}
@@ -2589,6 +2637,54 @@ function skillIdentity(charPtr,skillPtr){
   return {skill_key:key||id||null,skill_id:id||null,skill_name:name||null};
  }catch(e){return {};}
 }
+function verifiedSourceInstance(scope){
+ if(!enemyEntryConfig&&!characterLifecycleMethods)return null;
+ try{
+  const p=scope.nativeModifierSource,uid=scope.nativeSourceInstanceUid;
+  if(!p||p.isNull()||!Number.isSafeInteger(uid)||uid<=0||p.add(0x18).readU32()!==uid
+    ||entityId(p)!==scope.source||sourceCharacterUid(p,scope.source)!==scope.sourceCharacterUid)return null;
+  return uid;
+ }catch(e){return null;}
+}
+function beginCharacterLifecycle(actor){
+ try{
+ if(!characterLifecycleMethods||!actor||actor.isNull()||!actor.readPointer().equals(characterLifecycleMethods.character))return null;
+ const source=entityId(actor),uid=sourceCharacterUid(actor,source),instance=actor.add(0x18).readU32();
+ if(!source?.startsWith('char_')||!uid||!instance)return null;
+ const when=time(),fixed=clock.add(4).readS64().toString();
+ if(clock.readU32()!==when.frame)return null;
+ return {actor,source,uid,instance,when,fixed};
+ }catch(e){return null;}
+}
+function endCharacterLifecycle(start,end){
+ const current=beginCharacterLifecycle(start.actor);
+ if(!current||!sameMitigationTime(start.when,end)||!sameMitigationTime(current.when,end)||current.fixed!==start.fixed
+    ||current.source!==start.source||current.uid!==start.uid||current.instance!==start.instance)return null;
+ return {version:1,instance_uid:current.instance,data_uid:current.uid,frame:end.frame,game_time:end.game_time,fixed:current.fixed};
+}
+function installCharacterBornHook(){
+ if(!characterLifecycleMethods)return;
+ const label='BObject.Born.character';
+ const hook=Interceptor.attach(characterLifecycleMethods.born,{
+  onEnter(args){
+   if(stopped||fatal)return;
+   // Born may allocate instanceUid inside the call. Capture receiver/data and the raw clock first.
+   if(!args[0].readPointer().equals(characterLifecycleMethods.character))return;
+   if(args[0].add(0x25).readU8()!==0)return;
+   this.started=true;beginEnemyHook(label);this.actor=args[0];this.when=time();
+   this.fixed=clock.add(4).readS64().toString();this.source=entityId(this.actor);
+   this.uid=sourceCharacterUid(this.actor,this.source);
+  },
+  onLeave(){if(!this.started)return;try{
+   const end=time(),identity=beginCharacterLifecycle(this.actor);
+   if(!identity||!this.uid||identity.uid!==this.uid||identity.source!==this.source||!sameMitigationTime(this.when,end)
+      ||identity.fixed!==this.fixed||this.actor.add(0x25).readU8()!==1||this.actor.add(0x26).readU8()!==0)return;
+   const proof=endCharacterLifecycle(identity,end);if(!proof)return;
+   record(identity.source,'character_born',0,end,{method:'BObject.Born'},
+    {source_instance_uid:identity.instance,actor_lifecycle:{...proof,state:'born'}},identity.uid);
+  }finally{endEnemyHook(label);}}
+ });hooks.push(hook);
+}
 function nativeSkillCastIdentity(skill,observation=null){
  const config=skillCastStateMethods;
  if(!config||!skill||skill.isNull())return null;
@@ -2644,7 +2740,7 @@ function installSkillCastStateHook(){
      if(wait!==0&&wait!==1)throw new Error('invalid native skill wait Boolean');
      if(clock.readU32()!==end.frame||clock.add(4).readS64().toString()!==this.fixed)throw new Error('native skill fixed clock changed');
      record(current.source,'skill_end',1,end,{method:label},
-      {...current.info,skill_reason:this.reason,skill_wait_for_end:wait===1},current.sourceUid);
+      {...current.info,skill_reason:this.reason,skill_wait_for_end:wait===1,source_instance_uid:current.ownerUid},current.sourceUid);
     }catch(e){if(this.confirmedLocal)skillUnknown=true;}
     finally{endEnemyHook(label);}
    }
@@ -2682,6 +2778,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      // A deployable's removal does not end its owner's skill.
      if(!this.source.startsWith('char_')){this.ignore=true;return;}
      this.sourceCharacterUid=sourceCharacterUid(args[1],this.source);
+     this.lifecycle=beginCharacterLifecycle(args[1]);
      this.skillReason=args[2].toInt32();
      return;
     }
@@ -2692,6 +2789,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       try{
        this.source=entityId(args[0]);
        this.sourceCharacterUid=sourceCharacterUid(args[0],this.source);
+       this.lifecycle=beginCharacterLifecycle(args[0]);
        this.skill=skillIdentity(args[0],method==='OnAfterSkill'?args[1]:null);
        this.skillReason=(method==='OnAfterSkill'&&args[2])?args[2].toInt32():null;
       }catch(e){skillUnknown=true;this.ignore=true;}
@@ -2710,6 +2808,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{
       const source=this.mod.readPointer();
       this.nativeModifierSource=source;
+      this.nativeSourceInstanceUid=(!enemyEntryConfig&&!characterLifecycleMethods)||source.isNull()?null:source.add(0x18).readU32();
       this.source=source.isNull()?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
      }catch(e){this.source=null;this.sourceReadFailed=true;}
@@ -2772,6 +2871,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{
       const source=this.mod.readPointer();
       this.nativeModifierSource=source;
+      this.nativeSourceInstanceUid=(!enemyEntryConfig&&!characterLifecycleMethods)||source.isNull()?null:source.add(0x18).readU32();
       this.nativeSourceNull=source.isNull();
       this.source=this.nativeSourceNull?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
@@ -2861,6 +2961,14 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      const info=this.skill||{};
      const evidence={skill_key:info.skill_key||null,skill_id:info.skill_id||null,skill_name:info.skill_name||null};
      if(this.skillEnd)evidence.skill_reason=this.skillReason;
+     if(this.lifecycle){
+      const identity=endCharacterLifecycle(this.lifecycle,end);
+      if(identity){
+       evidence.source_instance_uid=identity.instance_uid;
+       if(this.name==='BattleController.OnCharacterFinished')evidence.actor_lifecycle={...identity,
+        state:'finish',reason_type:'Torappu.Battle.Entity.FinishReason',reason:this.skillReason};
+      }
+     }
      try{record(this.source,this.skillStart?'skill_start':'skill_end',1,end,{method:this.name},evidence,this.sourceCharacterUid);}catch(e){skillUnknown=true;}
      return;
     }
@@ -2996,6 +3104,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
                    (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
      }
      try{
+      const instance=verifiedSourceInstance(this);if(instance)evidence={...evidence,source_instance_uid:instance};
       const event=record(this.source,kind,amount,end,proof,evidence,this.sourceCharacterUid);
       if(kind==='damage')noteUnpairedDamage(this,event,type);
      }catch(e){fatal=String(e);}
@@ -3040,6 +3149,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
  }));
 }
 installEnemyEntryHooks();
+installCharacterBornHook();
 installEnemyPhaseHook();
 installEnemyStateHooks();
 installMitigationHooks();
@@ -3245,11 +3355,11 @@ function installAutoChessRoundResetHook(){
      autoChessUnclaimedZero=null;
      clearAutoChessRoundQuality(entry.settlementScope);
      const {native_process_pid,native_generation,native_stage_id,native_identity,native_autochess_context,
-            live_character_collection_empty,live_character_data_uids}=binding;
+            live_character_collection_empty,live_character_data_uids,lifecycle_baseline}=binding;
      autoChessRoundStart=JSON.parse(JSON.stringify({version:2,source_method:label,
       frame:0,game_time:0,native_fixed_time:'0',sequence,epoch,active:0,native_process_pid,native_generation,
       native_stage_id,native_identity,native_autochess_context,quality:eventQuality(0),
-      live_character_collection_empty,live_character_data_uids}));
+      live_character_collection_empty,live_character_data_uids,...(lifecycle_baseline?{lifecycle_baseline}:{})}));
     }catch(e){/* The ordinary guarded sample remains available without the origin. */}
    }
   }));
@@ -3324,6 +3434,7 @@ send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  coalesce_enemy_hp:coalesceEnemyHp,trace_hp_context:traceHpContext,
  source_character_uid_ready:sourceCharacterClasses!==null,source_character_uid_error:cfg.sourceCharacterUidError||null,
  skill_finish_error:cfg.skillFinishError||null,
+ character_lifecycle_ready:!!characterLifecycleMethods,character_lifecycle_error:cfg.characterLifecycleError||null,
  skill_cast_state_ready:skillCastStateReady,skill_cast_state_error:cfg.skillCastStateError||null,
  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
  mitigation_diagnostics:mitigationDiagnostics(),
