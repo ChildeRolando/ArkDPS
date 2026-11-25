@@ -341,6 +341,20 @@ def empty_text(config, source, complete, view):
     return '暂无输出（已知为零）'
 
 
+# Inspector identity/presence, legacy composition and exact rate denominators only.
+# Amount evidence and ratios are in details_by_owner; raw replay remains untouched.
+from contextvars import ContextVar
+_VIEW_MATERIALIZATION = ContextVar('arkdps_view_materialization', default=None)
+
+INSPECTOR_SOURCE_FIELDS = frozenset({
+    'name', 'portrait_id', 'present', 'healing', 'shield_absorbed', 'sources',
+    'burst_unknown_reason', 'damage_by_type', 'types_available', 'types_stale',
+    'observed_skill_coverage', 'observed_skill_active_seconds', 'skill_timed_presence_seconds',
+    'presence_complete', 'presence_seconds', 'observed_presence_seconds',
+    'active_damage', 'active_healing', 'engagement_damage', 'engagement_healing',
+    'event_coverage_complete', 'actor_uid', 'player_uid', 'player_side',
+})
+
 class DesktopState:
     """Single-threaded command owner; collector input is queued by its worker."""
     def __init__(self, directory=None):
@@ -855,7 +869,22 @@ class DesktopState:
         return 'live', '正在统计'
 
     def view(self, config, statistics, complete=None, event=None):
-        statistics = panel_statistics(config, statistics, history=event is not None and not event.live)
+        context = _VIEW_MATERIALIZATION.get()
+        context = context if context is not None and context['owner'] is self else None
+        history = event is not None and not event.live
+        scope_key = (id(statistics), config.boss_scope, config.effective_only if config.boss_scope else False, history)
+        view_key = (scope_key, config, complete, event, self.layout.number_units)
+        if context is not None and view_key in context['views']:
+            return deepcopy(context['views'][view_key])
+        if context is not None and scope_key in context['scopes']:
+            _, statistics, rows = context['scopes'][scope_key]
+        else:
+            original = statistics
+            statistics = panel_statistics(config, statistics, history=history)
+            rows = rows_from_statistics(statistics)
+            if context is not None:
+                # Retain the original object so Python cannot reuse its id in this snapshot.
+                context['scopes'][scope_key] = original, statistics, rows
         source = statistics.get('rows') or {}
         number_units = self.layout.number_units
         if complete is None or config.boss_scope:
@@ -889,7 +918,6 @@ class DesktopState:
                     pending = ('次伤害命中未归属' if 'unscoped_hits' in settlement
                                else '次命中的归属或目标待确认')
                     coverage_note = f'全队{scope}覆盖不完整 · {unassigned} {pending}'
-        rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
                                    team_note=note, team_coverage_note=coverage_note,
@@ -906,10 +934,13 @@ class DesktopState:
             number_units=number_units)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
-        view['source'] = source
+        view['source'] = {owner: {key: value for key, value in row.items() if key in INSPECTOR_SOURCE_FIELDS}
+                          for owner, row in source.items()}
         if scope_label := statistics.get('display_scope_label'):
             view['scope_label'] = scope_label
             view['title'] = f"{scope_label} · {view['title']}"
+        if context is not None:
+            context['views'][view_key] = deepcopy(view)
         return view
 
     def _actor_view(self, config, statistics, actors, *, side=None, player_uid=None, event=None):
@@ -1040,6 +1071,15 @@ class DesktopState:
         return result
 
     def snapshot(self):
+        # Exact publication boundary: shared within this snapshot only. A same-frame
+        # money/quality/identity correction on the next poll always recomputes.
+        token = _VIEW_MATERIALIZATION.set(dict(owner=self, scopes={}, views={}))
+        try:
+            return self._snapshot()
+        finally:
+            _VIEW_MATERIALIZATION.reset(token)
+
+    def _snapshot(self):
         sample, multiplayer, analysis, presentation_note = self._presented_battle()
         desired = self.layout.multiplayer_enabled
         supported = self.effective_connection.platform == 'native_pc'

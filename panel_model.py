@@ -13,7 +13,7 @@ numbers from the previous battle.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping
 
@@ -787,7 +787,7 @@ class PanelEntry:
     incomplete: bool
     segments: tuple[dict, ...]
     segments_complete: bool
-    detail: dict
+    detail: InitVar[dict]
     # value | no_engagement | unknown | unavailable | unsupported
     rate_state: str = 'value'
     # Complete display text for the rate column: '123/s', '无接敌' or '—'.
@@ -795,6 +795,10 @@ class PanelEntry:
     rate_note: str = ''
     cumulative_display_value: str = '—'
     coverage: dict = field(default_factory=dict)
+
+    def __post_init__(self, detail):
+        # Python compatibility alias to the one owner detail, never a wire field.
+        self.detail = detail
 
 
 @dataclass

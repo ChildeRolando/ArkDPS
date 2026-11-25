@@ -88,7 +88,6 @@ public sealed class Inspector : Border
         var entry=index<0 ? default : entries[index];
         bool effective=config.Text("category")=="damage" && config.Bool("effective_only");
         var detail=view.Get("details_by_owner").Get(owner);
-        if(detail.ValueKind!=JsonValueKind.Object) detail=entry.Get("detail");
         var coverage=detail.Get("coverage");
         var rates=view.Get("rates").Get(owner);
         var shareInfo=SharePresentation.From(view);

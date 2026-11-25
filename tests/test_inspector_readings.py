@@ -57,3 +57,11 @@ def test_legacy_overkill_retains_native_basis_and_zero_unknown():
         'overkill_damage': 20})['overkill']['fraction'] == .2
     reading = inspector_readings({}, {'damage': 0, 'overkill_damage': 0})['overkill']
     assert reading['fraction'] is None and '累计总伤为零' in reading['explanation']
+
+
+def test_frozen_cross_language_readings():
+    import json
+    from pathlib import Path
+    path = Path(__file__).parents[1] / 'desktop/ArkDPS.Desktop.Tests/Fixtures/inspector-readings.json'
+    for case in json.loads(path.read_text(encoding='utf8')):
+        assert inspector_readings(case['row'], case['detail']) == case['readings'], case['name']
