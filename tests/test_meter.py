@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from metrics import Meter, observation_age
+from metrics import observation_age
+from stats_core import Statistics
+from panel_model import Category, RateBasis, rows_from_statistics
 from collector import decode_character, SampleUnavailable, gs
 
 
@@ -14,64 +16,88 @@ def sample(t, damage, session='a', observed_at=0):
                 sum_damage=damage,global_total=damage,observed_at=observed_at)
 
 
+def native_stats(start=0, session='a'):
+    stats = Statistics(session, start)
+    stats.register_source('char_a', 'char_a')
+    return stats
+
+
+def native_snapshot(stats, when, damage, extra=None):
+    counters = {'char_a': dict(damage=damage, healing=0)}
+    if extra:
+        for source, amount in extra.items():
+            stats.register_source(source, source)
+            counters[source] = dict(damage=amount, healing=0)
+    stats.snapshot(when, counters)
+    return stats.result()['rows']
+
+
 def test_pause_uses_game_clock_not_wall_time():
-    m=Meter()
-    a=m.update(sample(10,100,observed_at=1))
-    b=m.update(sample(10,100,observed_at=101))
-    assert a['rows'][0]['dps']==b['rows'][0]['dps']==10
-    assert len(m.history)==1
-    assert b['rows'][0]['recent_dps'] is None
+    stats = native_stats(10)
+    a = native_snapshot(stats, 10, 100)['char_a']
+    b = native_snapshot(stats, 10, 100)['char_a']
+    assert a['damage'] == b['damage'] == 100
+    assert len(stats.sources['char_a']['history']) == 1
+    assert b['recent_damage'] is None
+    # The product additionally requires proved presence for full-cycle DPS.
+    assert rows_from_statistics(stats.result())[0].rate(Category.DAMAGE, RateBasis.FULL_CYCLE) is None
 
 
 def test_start_mid_battle_does_not_invent_past_window():
-    m=Meter()
+    stats = native_stats(30)
     for n in range(10):
-        out=m.update(sample(30+n*.5,1000+n*50))
-        assert out['rows'][0]['recent_dps'] is None
-    out=m.update(sample(35,1500))
-    assert out['rows'][0]['recent_dps']==100
+        rows = native_snapshot(stats, 30+n*.5, 1000+n*50)
+        assert rows['char_a']['recent_damage'] == (None if n == 0 else 100)
+        assert rows['char_a']['recent_damage_window'] == (None if n == 0 else (30, 30+n*.5))
+    assert native_snapshot(stats, 35, 1500)['char_a']['recent_damage'] == 100
 
 
 def test_speed_does_not_double_dps():
-    m=Meter()
+    stats = native_stats()
     for n in range(11):
-        out=m.update(sample(n*.5,n*50,observed_at=n*.25))
-    assert out['rows'][0]['recent_dps']==100
-    assert out['rows'][0]['dps']==100
+        rows = native_snapshot(stats, n*.5, n*50)
+    assert rows['char_a']['recent_damage'] == 100
+    # No wall-clock input enters the production Statistics.snapshot contract.
+    assert rows_from_statistics(stats.result())[0].rate(Category.DAMAGE, RateBasis.RECENT_5S) == 100
 
 
 def test_new_session_clears_rolling_history():
-    m=Meter()
-    for n in range(7):m.update(sample(n,n*100))
-    out=m.update(sample(1,50,'b'))
-    assert out['rows'][0]['dps']==50
-    assert out['rows'][0]['recent_dps'] is None
+    old = native_stats()
+    for n in range(7): native_snapshot(old, n, n*100)
+    current = native_stats(1, 'b')
+    rows = native_snapshot(current, 1, 50)
+    assert current.session != old.session and rows['char_a']['damage'] == 50
+    assert rows['char_a']['recent_damage'] is None
 
 
 def test_time_rewind_and_counter_reset_clear_history():
-    for new in (sample(1,50),sample(7,10)):
-        m=Meter()
-        for n in range(7):m.update(sample(n,n*100))
-        assert m.update(new)['rows'][0]['recent_dps'] is None
+    for when, damage in ((1, 50), (7, 10)):
+        old = native_stats()
+        for n in range(7): native_snapshot(old, n, n*100)
+        # A changed epoch is established by the lifecycle owner. The canonical
+        # ledger rejects reusing an old epoch instead of silently rewriting it.
+        with pytest.raises(ValueError): native_snapshot(old, when, damage)
+        current = native_stats(when, 'new-epoch')
+        assert native_snapshot(current, when, damage)['char_a']['recent_damage'] is None
 
 
 def test_missing_window_boundary_is_unknown():
-    m=Meter()
-    m.update(sample(0,0))
-    m.update(sample(4,400))
-    assert m.update(sample(6,600))['rows'][0]['recent_dps'] is None
+    stats = native_stats()
+    native_snapshot(stats, 0, 0)
+    native_snapshot(stats, 6, 600)
+    assert native_snapshot(stats, 8, 800)['char_a']['recent_damage'] is None
 
 
 def test_new_operator_not_double_counted():
-    m=Meter()
+    stats = native_stats()
     for n in range(7):
-        x=sample(n,n*100)
-        if n>=3:
-            x['rows'].append(dict(id='char_b',damage=50*(n-2)))
-            x['sum_damage']+=50*(n-2)
-        out=m.update(x)
-    assert len(out['rows'])==2
-    assert out['rows'][1]['recent_dps']==40
+        rows = native_snapshot(stats, n, n*100, {'char_b': 50*(n-2)} if n>=3 else None)
+    assert len(rows) == 2
+    assert rows['char_a']['recent_damage'] == 100
+    # A later source keeps its observed rate but lacks a full-window certificate.
+    assert rows['char_b']['recent_damage'] == 50
+    assert rows['char_b']['recent_damage_window'] is None
+    assert rows['char_b']['damage'] == 200
 
 
 def blocks(values):
@@ -98,7 +124,9 @@ def test_invalid_damage_is_rejected_not_zero_filled(invalid):
 
 
 def test_zero_time_has_no_division_by_zero():
-    assert Meter().update(sample(0,0))['rows'][0]['dps'] is None
+    stats = native_stats()
+    native_snapshot(stats, 0, 0)
+    assert rows_from_statistics(stats.result())[0].rate(Category.DAMAGE, RateBasis.FULL_CYCLE) is None
 
 
 def test_delayed_queue_cannot_refresh_old_observation():
@@ -168,9 +196,10 @@ def test_live_redeploy_and_new_battle_evidence():
     assert [r['damage'] for r in old['rows'] if r['id']=='char_502_nblade']==[2560]
     assert not [r for r in new['rows'] if r['id']=='char_502_nblade']
     assert new['session']!=old['session']
-    m=Meter()
-    m.update(old)
-    result=m.update(new)
-    assert result['sum_damage']==373
-    assert len(m.history)==1
-    assert all(r['recent_dps'] is None for r in result['rows'])
+    stats = Statistics(new['session'], new['game_time'])
+    for row in new['rows']: stats.register_source(row['id'], row['id'])
+    stats.snapshot(new['game_time'], {row['id']: dict(damage=row['damage'], healing=row.get('healing', 0)) for row in new['rows']})
+    result = stats.result()
+    assert sum(row['damage'] for row in result['rows'].values()) == 373
+    assert all(len(source['history']) == 1 for source in stats.sources.values())
+    assert all(row['recent_damage'] is None for row in result['rows'].values())

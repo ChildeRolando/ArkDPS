@@ -5,7 +5,7 @@ import pytest
 
 from panel_model import (Category, DAMAGE_COLORS, EventAvailability, PanelCollection,
                          PanelConfig, PanelSourceRow, Ranking, RateBasis, detail_rates,
-                         format_compact, non_team_note, panel_statistics, render_board, render_panel,
+                         format_compact, non_team_note, panel_statistics, render_panel,
                          rows_from_statistics, team_status)
 from stats_core import DAMAGE_SCOPE_MISMATCH, Statistics
 
@@ -125,7 +125,7 @@ def test_totals_and_recent_panels_coexist_with_separate_rankings():
     rows = [src('A', damage=1000, recent_damage=100),
             src('B', damage=500, recent_damage=0),
             src('C', damage=500, recent_damage=50)]
-    totals, recents = render_board([total(), recent()], rows)
+    totals, recents = [render_panel(config, rows) for config in (total(), recent())]
     assert [e.owner_id for e in totals.entries] == ['A', 'B', 'C']
     assert [e.owner_id for e in recents.entries] == ['A', 'C']
     assert totals.entries[1].share == pytest.approx(0.25)

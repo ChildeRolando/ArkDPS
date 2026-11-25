@@ -5,10 +5,21 @@ from unittest.mock import patch
 import pytest
 
 from battle_history import BattleHistory, BattleRecord
-from battle_share import (json_bytes, record_labels, record_statistics, record_view,
+from battle_share import (json_bytes, record_labels, record_statistics,
                           write_export)
 from panel_model import PanelConfig, Category
 from test_battle_history import record
+
+
+def history_panel(record, config):
+    from tempfile import TemporaryDirectory
+    from pathlib import Path
+    from desktop_bridge import DesktopState
+    with TemporaryDirectory() as directory:
+        state = DesktopState(Path(directory))
+        state.selected = record
+        state.history_config = config
+        return state._selected_history()['view']
 
 
 def exported_record(payload):
@@ -30,16 +41,16 @@ def test_export_is_exact_versioned_record_with_unknown_zero_precision_and_covera
     assert display['stage']['stage_name'] == record_labels(original)[0]
     assert original.to_dict() == data
     assert '结果未知' in record_labels(original)
-    view = record_view(original, PanelConfig(category=Category.SHIELD))
-    assert not view.entries
-    assert not view.share_known
+    view = history_panel(original, PanelConfig(category=Category.SHIELD))
+    assert not view['entries']
+    assert not view['share_known']
 
 
 @pytest.mark.parametrize('practice', [True, False, None])
 @pytest.mark.parametrize('outcome', ['victory', 'defeat', 'abandoned', 'unknown'])
 def test_all_metadata_states_remain_browsable(practice, outcome):
     original = record(practice=practice, outcome=outcome)
-    assert record_view(original, PanelConfig()).entries[0].value == 230.
+    assert history_panel(original, PanelConfig())['entries'][0]['value'] == 230.
     if practice is None:
         assert '演习状态未知' in record_labels(original)
 
@@ -104,11 +115,11 @@ def test_historical_shares_use_frozen_coverage_not_optional_compatibility_flag()
     for key in ('unknown_sources', 'unmapped_tokens', 'ambiguous_sources', 'mapping_conflicts', 'missing_fields'):
         data['statistics'][key] = []
     data['statistics']['rows']['a']['counter_snapshot_complete'] = True
-    view = record_view(BattleRecord.from_dict(data), PanelConfig())
-    assert view.share_known
-    assert view.entries[0].share == 1.
+    view = history_panel(BattleRecord.from_dict(data), PanelConfig())
+    assert view['share_known']
+    assert view['entries'][0]['share'] == 1.
     data['statistics']['unknown_sources'] = ['unmapped']
-    assert not record_view(BattleRecord.from_dict(data), PanelConfig()).share_known
+    assert not history_panel(BattleRecord.from_dict(data), PanelConfig())['share_known']
 
 
 def _complete_record():
@@ -127,10 +138,10 @@ def test_classified_non_team_source_is_named_without_blocking_shares():
     stats['non_team_sources'] = ['trap_321_shnbox']
     stats['non_team_output'] = {'trap_321_shnbox': {'damage': 0., 'healing': 0.}}
     stats['totals_complete'] = True
-    view = record_view(BattleRecord.from_dict(data), PanelConfig())
-    assert view.share_known and view.entries[0].share == 1.
-    assert 'trap_321_shnbox' in view.share_note
-    assert '已排除非队伍来源' in view.share_note
+    view = history_panel(BattleRecord.from_dict(data), PanelConfig())
+    assert view['share_known'] and view['entries'][0]['share'] == 1.
+    assert 'trap_321_shnbox' in view['share_note']
+    assert '已排除非队伍来源' in view['share_note']
 
 
 def test_real_unknown_source_keeps_history_share_partial_and_is_named():
@@ -139,12 +150,12 @@ def test_real_unknown_source_keeps_history_share_partial_and_is_named():
     stats['totals_complete'] = True
     stats['unknown_sources'] = ['char_mystery']
     original = BattleRecord.from_dict(data)
-    view = record_view(original, PanelConfig())
-    assert not view.share_known
-    assert view.share_scope == 'known'
-    assert view.entries[0].share == 1.
-    assert 'char_mystery' in view.share_reason
-    assert '未归属统计来源' in view.share_reason
+    view = history_panel(original, PanelConfig())
+    assert not view['share_known']
+    assert view['share_scope'] == 'known'
+    assert view['entries'][0]['share'] == 1.
+    assert 'char_mystery' in view['share_reason']
+    assert '未归属统计来源' in view['share_reason']
     assert 'share_scope' not in exported_record(json_bytes(original))[1]['statistics']
 
 
@@ -163,9 +174,9 @@ def test_legacy_record_is_recomputed_from_finished_native_evidence():
     assert normalized['totals_complete'] is True
     assert normalized['unknown_sources'] == []
     assert normalized['non_team_sources'] == ['trap_321_shnbox']
-    view = record_view(BattleRecord.from_dict(data), PanelConfig())
-    assert view.share_known and view.share_scope == 'team'
-    assert 'trap_321_shnbox' in view.share_note
+    view = history_panel(BattleRecord.from_dict(data), PanelConfig())
+    assert view['share_known'] and view['share_scope'] == 'team'
+    assert 'trap_321_shnbox' in view['share_note']
 
 
 def test_legacy_record_without_finished_evidence_stays_incomplete():
@@ -178,7 +189,7 @@ def test_legacy_record_without_finished_evidence_stays_incomplete():
         row['counter_snapshot_complete'] = False
     data['last_sample']['state'] = 2
     data['last_sample']['guard'] = {'complete': True, 'start': 10, 'end': 10}
-    view = record_view(BattleRecord.from_dict(data), PanelConfig())
-    assert not view.share_known
-    assert view.share_scope == 'unavailable'
-    assert '累计快照不完整' in view.share_reason
+    view = history_panel(BattleRecord.from_dict(data), PanelConfig())
+    assert not view['share_known']
+    assert view['share_scope'] == 'unavailable'
+    assert '累计快照不完整' in view['share_reason']

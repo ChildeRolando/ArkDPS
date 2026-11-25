@@ -73,7 +73,7 @@ python -m pytest tests/test_panel_model.py tests/test_desktop_bridge.py tests/te
 
 ## 实时 GUI（ARK-9，Tk 实现已封存）
 
-`App.render` 只将 `sample.statistics` 交给 `rows_from_statistics` / `render_board`，
+`App.render` 只将 `sample.statistics` 交给 `rows_from_statistics` / `render_panel`，
 不使用兼容投影的旧 `sample.rows` 或全局平均 DPS。多面板共享同一份结果，
 各自持有不可变 `PanelConfig`，更改配置不修改统计、来源行或其他面板。
 新建使用默认配置，复制分配新 ID，删除不影响战局记录；最后一个面板保留。

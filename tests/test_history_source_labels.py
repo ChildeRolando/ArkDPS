@@ -1,3 +1,4 @@
+from test_battle_share import history_panel
 """Historical source labels use stored route metadata, never the current source."""
 import json
 
@@ -5,7 +6,7 @@ import pytest
 
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from battle_history import BattleRecord
-from battle_share import json_bytes, record_display, record_view
+from battle_share import json_bytes, record_display
 from connection import ConnectionConfig
 from desktop_bridge import DesktopState, PROTOCOL_VERSION
 from panel_model import PanelConfig, Ranking, RateBasis
@@ -87,10 +88,10 @@ def test_autochess_history_missing_player_scope_keeps_raw_record(tmp_path, platf
 
     snapshot = state.snapshot()
     index, detail = snapshot['history'][0], snapshot['history_selected']
-    standalone = record_view(original, PanelConfig())
+    standalone = history_panel(original, PanelConfig())
     expected = ('char_328_cammou', 482) if unverified and not counter_scope else ('a', 230)
     assert [(row['owner_id'], row['value']) for row in detail['view']['entries']] == [expected]
-    assert [(row.owner_id, row.value) for row in standalone.entries] == [expected]
+    assert [(row['owner_id'], row['value']) for row in standalone['entries']] == [expected]
     assert original.unverified_autochess_scope is unverified
     if unverified:
         assert index['scope_warning'] == detail['scope_warning'] == '卫戍快照 · 玩家归属未知'
@@ -100,10 +101,10 @@ def test_autochess_history_missing_player_scope_keeps_raw_record(tmp_path, platf
         assert detail['labels'][1] == '演习状态未知'
         assert detail['view']['share_known'] is False
         assert detail['multiplayer'] is None
-        assert standalone.entries[0].name.casefold() in index['search']
+        assert standalone['entries'][0]['name'].casefold() in index['search']
         if not counter_scope:
             for basis in RateBasis:
-                assert not record_view(original, PanelConfig(ranking=Ranking.DPS, rate_basis=basis)).entries
+                assert not history_panel(original, PanelConfig(ranking=Ranking.DPS, rate_basis=basis))['entries']
     else:
         assert 'scope_warning' not in index and 'scope_warning' not in detail
         assert detail['outcome'] == '胜利'

@@ -10,8 +10,7 @@ import tempfile
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from battle_history import BattleRecord
 from character_catalog import load_character_names
-from panel_model import (DAMAGE_ORDER, DIAGNOSTIC_LABELS, EventAvailability, panel_statistics, render_panel,
-                         rows_from_statistics, team_status)
+from panel_model import DAMAGE_ORDER, DIAGNOSTIC_LABELS, team_status
 from source_classification import classify_unmapped_source
 import stage_names
 
@@ -203,19 +202,6 @@ def record_statistics(record, *, for_panel=False):
 def record_status(record):
     return team_status(record_statistics(record, for_panel=True))
 
-
-def record_view(record, config):
-    stats = panel_statistics(config, record_statistics(record, for_panel=True), history=True)
-    complete, reason, note = team_status(stats)
-    if config.boss_scope:
-        reason = stats['boss_damage_reason'] or reason
-        complete = complete and stats['boss_damage_available']
-        note = ''
-    if record.unverified_autochess_scope:
-        reason = AUTOCHESS_SNAPSHOT_NOTE
-    return render_panel(config, rows_from_statistics(stats), team_complete=complete,
-                        team_reason=reason, team_note=note,
-                        event=EventAvailability(record.event_status, record.event_error, live=False))
 
 
 def record_complete(record):

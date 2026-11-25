@@ -1860,16 +1860,3 @@ def render_panel(config: PanelConfig,
                                             and certified_totals == len(rows)),
                      footer_rate_complete=(footer_rate is not None and team_complete and team_rate_complete
                                            and certified_rates == len(rows)))
-
-
-def render_board(configs: Iterable[PanelConfig],
-                 rows: Iterable[PanelSourceRow], *,
-                 team_complete: bool = True,
-                 team_reason: str = '',
-                 team_note: str = '',
-                 number_units: str = DEFAULT_NUMBER_UNITS) -> list[PanelView]:
-    rows = list(rows)
-    return [render_panel(config, rows, team_complete=team_complete,
-                         team_reason=team_reason, team_note=team_note,
-                         number_units=number_units)
-            for config in configs]
