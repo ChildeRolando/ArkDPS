@@ -1110,7 +1110,7 @@ def test_nonlethal_gate_accepts_the_shared_producers_ten_frozen_field_callback_r
     nested = module.pc_mechanism_evidence(events)['nested']
     assert nested['passed'] is True and len(nested['positive_witnesses']) == 1
     witness = nested['positive_witnesses'][0]
-    assert witness['ordering'] == 'parent_before_child' and witness['child_kind'] == 'elemental_burst'
+    assert witness['ordering'] == 'parent_before_child' and witness['child_kind'] == 'damage_settlement'
     child = next(event for event in events if event['sequence'] == witness['child_sequence'])
     assert child['source'] is None and child['hp_after'] > 0 and child['killed'] is False
     # A valid HP parent certificate alone is not evidence of fresh bar coverage.

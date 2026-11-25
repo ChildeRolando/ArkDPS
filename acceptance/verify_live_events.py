@@ -580,7 +580,8 @@ def pc_mechanism_evidence(events):
     legacy_bursts = list(bursts)
     bursts += [event for event in events if event.get('kind') == 'damage_settlement'
         and event.get('damage_type') == 5 and number(event.get('amount')) and event['amount'] > 0
-        and not any(clock_equal(event, old) and target_equal(event, old) and actor_equal(event, old)
+        and ('hp_before' in event or 'native_modifier_observation' in proof_of(event))
+        and not any(clock_equal(event, old) and target_equal(old, event) and actor_equal(event, old)
                     and event.get('real_delta') == old.get('real_delta') for old in legacy_bursts)]
     elemental_ok, elemental_bad, burst_settlements = [], [], {}
     verified_burst_pairs = {}
@@ -1039,8 +1040,12 @@ def pc_mechanism_evidence(events):
                         or parent.get('killed') is not False or child['hp_before'] != parent['hp_after']):
                     return None
                 ordering = 'parent_before_child'
-        return dict(ordering=ordering, parent_sequence=sequence, parent_settlement_sequence=sequence,
+        witness = dict(ordering=ordering, parent_sequence=sequence, parent_settlement_sequence=sequence,
+                    child_kind='damage_settlement',
                     children=[dict(settlement_sequence=child['sequence']) for child in children])
+        if len(children) == 1:
+            witness.update(child_sequence=children[0]['sequence'], child_settlement_sequence=children[0]['sequence'])
+        return witness
 
     for parent in modern_parents:
         witness = modern_witness(parent)
