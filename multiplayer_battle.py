@@ -15,7 +15,8 @@ from autochess_context import (lookup_native_actor, native_autochess_event_ident
 from character_catalog import load_character_names
 from event_stream import EventStream, StreamGap
 from event_capture import apply_event_quality
-from event_probe import contract_for, event_processing_payload
+from event_probe import (contract_for, event_processing_payload, autochess_round_start_skill_known,
+                         autochess_round_start_origin)
 from roster import CharacterEntry, RosterSnapshot
 from source_classification import classify_unmapped_source
 from stats_core import ENEMY_STATE_KINDS, Statistics
@@ -89,6 +90,7 @@ class MultiplayerBattleStatistics:
         self._scope = None
         self._from_start = False
         self._skill_initialization = None
+        self._round_skill_initial_known = False
         self._sample_session = self._native_session = None
         self._settlement_version = None
         self._native_mode = False
@@ -185,6 +187,7 @@ class MultiplayerBattleStatistics:
         self._frame = sample['frame']
         self._from_start = self._start <= 1 and self._frame <= 30
         self._skill_initialization = None
+        self._round_skill_initial_known = False
         self._sample_session = sample.get('session')
         self._native_session = sample.get('native_session')
         self._players = {}
@@ -287,7 +290,17 @@ class MultiplayerBattleStatistics:
                 player = self._players[uid]
                 owner = self._source_key(entry, uid)
                 if owner not in player.actors and self._baseline is not None:
-                    player.mark_unknown_skill_prefix(owner, entry.unique_id, 'actor_joined_after_baseline')
+                    unresolved_prefix = any(
+                        item['source'] == entry.cid and item['kind'] in ('skill_start', 'skill_end')
+                        and item['reason'] != 'event_scope_mismatch'
+                        and (item['source_character_uid'] == entry.unique_id
+                             or type(item['source_character_uid']) is not int
+                             or item['source_character_uid'] <= 0)
+                        for item in self._unknown.values())
+                    if not self._round_skill_initial_known or unresolved_prefix:
+                        reason = ('actor_has_unverified_skill_prefix' if unresolved_prefix
+                                  else 'actor_joined_after_baseline')
+                        player.mark_unknown_skill_prefix(owner, entry.unique_id, reason)
                 player.actors[owner] = entry
                 player.statistics.register_source(owner, owner)
         self._native_entries = entries
@@ -368,7 +381,8 @@ class MultiplayerBattleStatistics:
         complete = (drained.get('baseline_discarded_skill_events_complete') is True
                     and isinstance(discarded, list) and len(discarded) <= MAX_BASELINE_SKILL_EVENTS
                     and isinstance(retained, list) and len(retained) <= MAX_BASELINE_SKILL_EVENTS)
-        rejections = self._native_initial_rejections(sample)
+        self._round_skill_initial_known = complete and autochess_round_start_skill_known(sample)
+        rejections = [] if self._round_skill_initial_known else self._native_initial_rejections(sample)
         if not complete:
             rejections.append('skill_prefix_incomplete')
         witnesses = sample.get('native_snapshot_witnesses')
@@ -379,6 +393,8 @@ class MultiplayerBattleStatistics:
                 and actor_rows.get('status') in ('available', 'unavailable', 'not_requested') else None),
             native_damage=sample.get('global_total') if _number(sample.get('global_total')) else None,
             native_healing=sample.get('global_heal') if _number(sample.get('global_heal')) else None)
+        if self._round_skill_initial_known:
+            self._skill_initialization['source'] = 'producer_round_start'
         if rejections:
             for player in self._players.values():
                 for owner, entry in player.actors.items():
@@ -865,7 +881,8 @@ class MultiplayerBattleStatistics:
             if self._native_mode:
                 # A short clock is insufficient: counters may already include
                 # output, and an old journal prefix is not this phase's start.
-                self._from_start &= (sequence == 0 and not drained.get('events')
+                self._from_start &= (autochess_round_start_origin(sample)
+                    or sequence == 0 and not drained.get('events')
                     and _number(sample.get('global_total')) and sample['global_total'] == 0
                     and _number(sample.get('global_heal')) and sample['global_heal'] == 0
                     and all(isinstance(row, dict) and _number(row.get('damage'))

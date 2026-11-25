@@ -24,6 +24,7 @@ let probeHooksReady=false;
 let enemyEntryConfig=null,enemyPhaseMethods=null,enemyStateMethods=null,enemyAttributesReady=false;
 let mitigationMethods=null;
 let terminalMethods=null;
+let autoChessRoundResetMethod=null;
 let sourceCharacterClasses=null,settlementCharacterClass=null;
 let skillCastStateMethods=null,skillCastStateReady=false;
 function uniqueMethod(klass,name,argCount) {
@@ -35,6 +36,24 @@ function uniqueMethod(klass,name,argCount) {
  }
  if(matches.length!==1||matches[0].isNull()||Process.findModuleByAddress(matches[0])?.name!==il.name)
   throw new Error('missing or ambiguous method '+name);
+ return matches[0];
+}
+function resolveAutoChessRoundReset(controller){
+ const name='ClearRunTimeData',argc=api('il2cpp_method_get_param_count','uint',['pointer']);
+ const flags=api('il2cpp_method_get_flags','uint',['pointer','pointer']);
+ const result=api('il2cpp_method_get_return_type','pointer',['pointer']);
+ const classFrom=api('il2cpp_class_from_type','pointer',['pointer']);
+ const byRef=api('il2cpp_type_is_byref','bool',['pointer']),out=Memory.alloc(4);
+ const matches=[];
+ for(const method of classMethods(controller)){
+  if(!method.add(0x20).readPointer().equals(controller)||
+     method.add(0x18).readPointer().readCString()!==name||argc(method)!==0)continue;
+  const type=result(method),klass=classFrom(type),address=method.readPointer();
+  if((flags(method,out)&0x10)===0&&!byRef(type)&&!klass.isNull()&&className(klass)==='Void'&&
+     klass.add(0x18).readPointer().readCString()==='System'&&!address.isNull()&&
+     Process.findModuleByAddress(address)?.name===il.name)matches.push(address);
+ }
+ if(matches.length!==1)throw new Error('unsupported BattleController.ClearRunTimeData signature');
  return matches[0];
 }
 function resolveSkillCastState(basicSkill,character,skillData,ability,bObject,entity){
@@ -198,6 +217,8 @@ try{
    destroy:uniqueMethod(found.BattleController,'OnDestroy',0),
    state:uniqueMethod(found.BattleController,'set_state',1)};
  }catch(e){if(probeAdapter.terminalRequired)throw e;cfg.terminalError=String(e);}
+ try{autoChessRoundResetMethod=resolveAutoChessRoundReset(found.BattleController);}
+ catch(e){cfg.autoChessRoundResetError=String(e);}
  // Init and movement share the layer update, but Init can find a tile before
  // Born completes. Observe both transitions and emit once both are true.
  try{
@@ -283,6 +304,8 @@ const queue=[],hpContext=[];
 // Internal provenance only; never a new or rewritten field on the wire event.
 const queueSettlementScopes=new WeakMap();
 let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
+let autoChessRoundStart=null,autoChessUnclaimedZero=null;
+const AUTOCHESS_ROUND_START_EVENT_LIMIT=2048;
 const stacks=new Map(), hooks=[];
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
@@ -1180,6 +1203,43 @@ function discardedAutoChessSkills(fields,records,acknowledged,through){
  if(expected<=through)result.baseline_discarded_skill_events_complete=false;
  return result;
 }
+function sameAutoChessRoundStartBinding(point,fields){
+ if(!point||!fields||point.native_generation!==fields.native_generation||
+    point.native_process_pid!==fields.native_process_pid||point.native_stage_id!==fields.native_stage_id||
+    !['controller','native','logger','stats','level'].every(key=>point.native_identity[key]===fields.native_identity?.[key]))return false;
+ return sameNativeEventScope({native_autochess_scope:point.native_autochess_context},
+                            {native_autochess_scope:fields.native_autochess_context});
+}
+function autoChessRoundStartEnvelope(fields,records,acknowledged,through){
+ const point=autoChessRoundStart;
+ if(!sameAutoChessRoundStartBinding(point,fields))return {};
+ // An already released origin prefix cannot be rebuilt after a host rebind.
+ // Keep the historical source point internally, without offering a bootstrap.
+ if(acknowledged>point.sequence)return {autochess_round_start_unavailable:'prefix_already_acknowledged'};
+ const result={autochess_round_start:point,autochess_round_start_events:[],autochess_round_start_events_complete:false};
+ const count=through-point.sequence,offset=point.sequence-acknowledged;
+ // Validate the retained prefix before offering it, including its paged form.
+ // Only a single transport-sized prefix needs a copy for the baseline reply.
+ if(count<0||count>EVENT_BUFFER_LIMIT||offset+count>records.length)return result;
+ const start={native_autochess_scope:point.native_autochess_context};
+ const current=fields.native_autochess_context;
+ let previousFrame=0,previousTime=0;
+ for(let index=0;index<count;index++){
+  const event=records[offset+index],scope=event?.native_autochess_scope;
+  if(event?.sequence!==point.sequence+index+1)return result;
+  if(!sameNativeEventScope(start,event)||scope.frame!==event.frame||scope.game_time!==event.game_time||
+     !Number.isSafeInteger(event.frame)||event.frame<previousFrame||event.frame>current.frame||
+     !Number.isFinite(event.game_time)||event.game_time<previousTime||event.game_time>current.game_time||
+     event.frame===previousFrame&&event.game_time!==previousTime||
+     event.frame===current.frame&&event.game_time!==current.game_time)
+   return {autochess_round_start_unavailable:'invalid_prefix_scope_or_clock'};
+  previousFrame=event.frame;previousTime=event.game_time;
+ }
+ if(count>AUTOCHESS_ROUND_START_EVENT_LIMIT)return result;
+ result.autochess_round_start_events=records.slice(offset,offset+count);
+ result.autochess_round_start_events_complete=true;
+ return result;
+}
 function sameNativeEventScope(left,right){
  const a=left.native_autochess_scope,b=right.native_autochess_scope;
  if(a===undefined&&b===undefined)return true;
@@ -1256,7 +1316,8 @@ function readEvents(after,through){
  result.events=queue.slice(after-acknowledgedSequence,through-acknowledgedSequence);
  if(after===through&&typeof probeAdapter.baselineEnvelope==='function'){
   try{
-   Object.assign(result,probeAdapter.baselineEnvelope(envelope.fields,queue,acknowledgedSequence,through));
+   Object.assign(result,probeAdapter.baselineEnvelope(envelope.fields,queue,acknowledgedSequence,through),
+                 autoChessRoundStartEnvelope(envelope.fields,queue,acknowledgedSequence,through));
   }catch(e){
    result.baseline_discarded_skill_events=[];
    result.baseline_discarded_skill_events_complete=false;
@@ -2854,6 +2915,87 @@ function eventQuality(frame){
   mitigation_ready:mitigationReady,mitigation_unknown:!mitigationReady,mitigation_error:cfg.mitigationError||null,
   mitigation_diagnostics:mitigationDiagnostics(),...enemyEntryQuality(frame)};
 }
+function autoChessResetOwner(controller){
+ const identity=currentNativeIdentity();
+ if(!identity||identity.controller!==controller.toString())return null;
+ const stageAddress=ptr(identity.level).add(probeAdapter.autoChessStageOffset??0x18);
+ const stagePointer=stageAddress.readPointer(),stage=str(stagePointer);
+ if(typeof stage!=='string'||!/AUTOCHESS/i.test(stage))return null;
+ return {identity,stagePointer,stage};
+}
+function sameAutoChessResetOwner(left,right){
+ return !!left&&!!right&&left.stage===right.stage&&left.stagePointer.equals(right.stagePointer)&&
+  Object.keys(left.identity).every(key=>left.identity[key]===right.identity[key]);
+}
+function clearAutoChessRoundQuality(previousScope){
+ if(damageSettlementScope===previousScope){
+  resetDamageSettlementScope();
+  damageSettlementStamp(0,0,false);
+ }
+ unknownSources.clear();engagementUnknownSources.clear();
+ shieldUnknown=false;damageUnknown=false;engagementUnknown=false;skillUnknown=false;
+ shieldByFrame.clear();shieldUnknownByFrame.clear();
+ awaitingEnemyTile.clear();enemyHealthPhases.clear();pendingEnemyRebirth.clear();enemyHpWrites.clear();
+ enemyEntryFrame=0;enemyEntryUnknown=false;enemyPhaseUnknown=false;enemyStateUnknown=false;bossDamageUnknown=false;
+}
+function installAutoChessRoundResetHook(){
+ if(!autoChessRoundResetMethod)return;
+ const label='BattleController.ClearRunTimeData';
+ const otherCallbacks=()=>active>0||(probeAdapter.pendingMarkCallbacks?.()??0)>1;
+ try{
+  hooks.push(Interceptor.attach(autoChessRoundResetMethod,{
+   onEnter(args){
+    if(!probeHooksReady||stopped||fatal)return;
+    const unclaimed=autoChessUnclaimedZero;
+    autoChessUnclaimedZero=null;
+    const idle=!otherCallbacks();
+    beginEnemyHook(label);this.roundResetStarted=true;
+    if(!idle)return;
+    try{
+     const controller=args[0],owner=autoChessResetOwner(controller);
+     if(!owner)return;
+     const opening=time(true,false);
+     if(!opening)return;
+     // The loader can reset in PREPARE, then StartGame finds the same zero.
+     // Only a previously guarded zero with no intervening callback can carry
+     // that start forward. A second clear cannot erase a first clear's gap.
+     if(opening.frame===0&&opening.game_time===0&&epoch!==1&&
+        (!sameAutoChessResetOwner(unclaimed,owner)||unclaimed.sequence!==sequence||unclaimed.epoch!==epoch-1))return;
+     // A pending HP tail belongs to the old clock. Queue it before taking the
+     // immutable per-round sequence origin, never at the new game clock.
+     if(coalesceEnemyHp)resetEnemyHpCoalescing();
+     this.roundReset={...owner,controller,sequence,epoch,settlementScope:damageSettlementScope};
+    }catch(e){/* An unreadable opening owner cannot prove a new origin. */}
+   },
+   onLeave(){
+    if(!this.roundResetStarted)return;
+    endEnemyHook(label);
+    const entry=this.roundReset;
+    if(!entry||stopped||fatal||otherCallbacks()||sequence!==entry.sequence||epoch!==entry.epoch)return;
+    try{
+     if(clock.readU32()!==0||clock.add(4).readS64().toString()!=='0')return;
+     const binding=nativeBinding(null,true),context=binding?.native_autochess_context;
+     const closing=autoChessResetOwner(entry.controller);
+     if(!sameAutoChessResetOwner(entry,closing)||otherCallbacks()||sequence!==entry.sequence||
+        epoch!==entry.epoch||clock.readU32()!==0||clock.add(4).readS64().toString()!=='0')return;
+     autoChessUnclaimedZero={...closing,sequence,epoch};
+     if(!binding||context?.status!=='available'||context.verified_same_frame!==true||
+        ![4,5,6].includes(context.phase)||binding.native_frame!==0||binding.native_fixed_time!=='0'||
+        binding.native_stage_id!==entry.stage||Object.keys(entry.identity).some(key=>
+          binding.native_identity[key]!==entry.identity[key])||sameAutoChessRoundStartBinding(autoChessRoundStart,binding))return;
+     autoChessUnclaimedZero=null;
+     clearAutoChessRoundQuality(entry.settlementScope);
+     const {native_process_pid,native_generation,native_stage_id,native_identity,native_autochess_context,
+            live_character_collection_empty}=binding;
+     autoChessRoundStart=JSON.parse(JSON.stringify({version:1,source_method:label,
+      frame:0,game_time:0,native_fixed_time:'0',sequence,epoch,active:0,native_process_pid,native_generation,
+      native_stage_id,native_identity,native_autochess_context,quality:eventQuality(0),live_character_collection_empty}));
+    }catch(e){/* The ordinary guarded sample remains available without the origin. */}
+   }
+  }));
+ }catch(e){cfg.autoChessRoundResetError=String(e);}
+}
+installAutoChessRoundResetHook();
 function markEvents(){
  const pending=probeAdapter.pendingMarkCallbacks?.()??0;
  if(pending>0&&!fatal&&!stopped)
@@ -2910,6 +3052,8 @@ probeHooksReady=true;
 receiveEventRequest();
 send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
+ autochess_round_start_ready:!!autoChessRoundResetMethod&&!cfg.autoChessRoundResetError,
+ autochess_round_start_error:cfg.autoChessRoundResetError||null,
  coalesce_enemy_hp:coalesceEnemyHp,trace_hp_context:traceHpContext,
  source_character_uid_ready:sourceCharacterClasses!==null,source_character_uid_error:cfg.sourceCharacterUidError||null,
  skill_finish_error:cfg.skillFinishError||null,

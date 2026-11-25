@@ -331,7 +331,24 @@ def test_same_scope_late_terminal_improves_retained_defense_without_switching_sc
     assert_retained(views['late_terminal'], terminal['multiplayer']['scope'], (110, 210, 310, 410))
 
 
-def test_new_defense_keeps_prior_result_until_its_first_settlement(tmp_path, monkeypatch):
+def test_late_terminal_refreshes_review_cache_during_a_new_defense(tmp_path, monkeypatch):
+    state, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'deferred_terminal', 'assist_busy', 'prepare',
+         'next_defense_baseline', 'late_terminal'])
+    terminal = next(raw for action, raw, _ in accepted if action == 'deferred_terminal')
+    current = next(raw for action, raw, _ in accepted if action == 'next_defense_baseline')
+    assert state.last is current
+    assert state._defense_sample['multiplayer'] == terminal['multiplayer']
+    assert state._defense_sample['multiplayer'] is not terminal['multiplayer']
+    after_tail = views['late_terminal']
+    assert after_tail['battle_id'] == current['battle_id']
+    assert after_tail['game_time'] == current['game_time']
+    assert after_tail['panels'] == views['next_defense_baseline']['panels']
+    assert after_tail['multiplayer']['scope'] == current['multiplayer']['scope']
+    assert after_tail['totals']['damage'] is None
+
+
+def test_accepted_new_defense_displays_its_own_baseline_before_first_settlement(tmp_path, monkeypatch):
     _, _, _, events, views, accepted = run_chain(tmp_path, monkeypatch,
         ['defense_baseline', 'defense_hits', 'assist_busy', 'assist_baseline', 'prepare',
          'next_defense_baseline', 'next_defense_hits'])
@@ -340,8 +357,12 @@ def test_new_defense_keeps_prior_result_until_its_first_settlement(tmp_path, mon
     assert_retained(views['prepare'], old['multiplayer']['scope'])
     snapshot = views['next_defense_baseline']
     assert new['multiplayer']['scope'] != old['multiplayer']['scope']
-    assert_retained(snapshot, old['multiplayer']['scope'])
-    assert '等待本轮防御数据' in snapshot['status_text']
+    assert snapshot['battle_id'] == new['battle_id'] != old['battle_id']
+    assert snapshot['game_time'] == new['game_time']
+    assert view_values(snapshot) == [] and four_values(snapshot) == [[], [], [], []]
+    assert snapshot['totals']['damage'] is None
+    assert snapshot['multiplayer']['scope'] == new['multiplayer']['scope']
+    assert not snapshot['multiplayer'].get('previous_defense')
     assert view_values(views['next_defense_hits']) == [21]
     assert four_values(views['next_defense_hits']) == [[7], [14], [21], [28]]
     assert views['next_defense_hits']['multiplayer']['scope'] == new['multiplayer']['scope']
@@ -354,11 +375,14 @@ def test_new_defense_keeps_prior_result_until_its_first_settlement(tmp_path, mon
 
 
 def test_real_zero_settlement_is_useful_and_replaces_prior_defense(tmp_path, monkeypatch):
-    _, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+    state, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
         ['defense_baseline', 'defense_hits', 'prepare', 'next_defense_baseline',
          'next_defense_zero_hits'])
     old = next(raw for action, raw, _ in accepted if action == 'defense_hits')
-    assert_retained(views['next_defense_baseline'], old['multiplayer']['scope'])
+    assert_retained(views['prepare'], old['multiplayer']['scope'])
+    baseline = views['next_defense_baseline']
+    assert baseline['multiplayer']['scope'] != old['multiplayer']['scope']
+    assert [p['observed_damage'] for p in baseline['multiplayer']['players']] == [None] * 4
     current = views['next_defense_zero_hits']['multiplayer']
     assert current['scope'] != old['multiplayer']['scope']
     assert not current.get('previous_defense')
@@ -366,6 +390,8 @@ def test_real_zero_settlement_is_useful_and_replaces_prior_defense(tmp_path, mon
     raw = next(raw for action, raw, _ in accepted if action == 'next_defense_zero_hits')
     assert all(any(a['ledger']['nominal_hits'] > 0 for a in p['actor_ledgers'])
                for p in raw['multiplayer']['players'])
+    assert state._defense_sample['multiplayer'] == raw['multiplayer']
+    assert state._defense_sample['multiplayer'] is not raw['multiplayer']
 
 
 def test_guarded_absence_invalidates_defense_retention_instead_of_resurrecting_it(tmp_path, monkeypatch):

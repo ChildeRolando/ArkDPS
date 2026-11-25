@@ -214,6 +214,11 @@ class FridaEventObserver:
     def read_baseline(self, sequence):
         return self._read_event_range(sequence, sequence)
 
+    def read_round_start_range(self, after, through):
+        if after < max(self._committed_sequence, self._acknowledged_sequence):
+            raise RuntimeError('round-start event range has already been committed')
+        return self._read_event_range(after, through)
+
     def _read_event_range(self, after, through):
         if self._ack_error:
             raise RuntimeError(self._ack_error)

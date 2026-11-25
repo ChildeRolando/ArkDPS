@@ -22,7 +22,8 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          autochess_event_mark_context, verified_autochess_event_window,
                          autochess_root_failure, autochess_scope_detail,
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
-                         native_identity_sampling_mark, TerminalReadRetry)
+                         native_identity_sampling_mark, TerminalReadRetry,
+                         verified_autochess_round_start, autochess_round_start_origin)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
@@ -199,6 +200,11 @@ def _event_barrier(before, sample, after, *, contract=None, capture=None):
     marks. The Android clock window uses an independent root read. The
     same-frame path still requires the established scope and its exact clock.
     """
+    if autochess_round_start_origin(sample):
+        # The producer retained this real historical zero fence. The native
+        # counter witness stays at its actual later read time; it supplies
+        # roots, not a pretend zero-time cumulative snapshot.
+        return baseline_barrier(before, sample, after, contract=contract)
     contract = contract or contract_for(sample=sample)
     if 'autochess_snapshot_anchor' in sample:
         anchor = sample['autochess_snapshot_anchor']
@@ -1208,11 +1214,27 @@ class BattleSessions:
             # A guarded new generation retires the old battle even if the new
             # roster cannot yet be mapped. Keep the old adapter for display;
             # its independent archive copy cannot be lost with the new sample.
+            event_observation = observation
             if observation.generation > self.generation:
                 self._archive('new_battle', successor=observation)
+                bootstrap = None
+                bootstrap_error = None
+                if observation.events and isinstance(observation.events.get('drain'), dict):
+                    try:
+                        bootstrap = verified_autochess_round_start(observation.sample,
+                            observation.events['drain'], observation.events.get('after'))
+                    except StreamGap as exc:
+                        # Keep the independent current snapshot, but never ACK
+                        # an advertised historical prefix whose proof failed.
+                        bootstrap_error = str(exc)
                 adapter = BattleStatisticsAdapter()
-                adapter.update(observation.sample, observation.roster,
-                               **self._source_attribution(observation))
+                if bootstrap is not None:
+                    zero_sample, zero_mark, zero_drain, replay_drain = bootstrap
+                    zero_roster = RosterSnapshot(0)
+                    adapter.update(zero_sample, zero_roster)
+                else:
+                    adapter.update(observation.sample, observation.roster,
+                                   **self._source_attribution(observation))
                 self.adapter = adapter
                 self.capture = LiveEventCapture(None)
                 self.capture.adapter = adapter
@@ -1228,12 +1250,22 @@ class BattleSessions:
                 self.metadata = self._metadata(observation.sample)
                 self.snapshot_intervals = []
                 self._snapshot_open = False
+                if bootstrap is not None:
+                    zero_observation = replace(observation, sample=zero_sample, roster=zero_roster,
+                        events=dict(before=zero_mark, after=zero_mark,
+                                    sequence=zero_mark['sequence'], drain=zero_drain))
+                    self._events(zero_observation)
+                    adapter.update(observation.sample, observation.roster)
+                    event_observation = replace(observation,
+                        events=dict(observation.events, drain=replay_drain))
+                elif bootstrap_error is not None:
+                    event_observation = replace(observation, events={'error': bootstrap_error})
             else:
                 self.adapter.update(observation.sample, observation.roster,
                                     **self._source_attribution(observation, self.adapter.event_stream,
                                                               capture=self.capture))
                 self._merge_metadata(observation.sample)
-            self._events(observation)
+            self._events(event_observation)
             self.latest_sample = deepcopy(observation.sample)
             self._retain_multiplayer()
             self._snapshot_accepted()

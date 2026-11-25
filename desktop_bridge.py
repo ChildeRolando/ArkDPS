@@ -6,6 +6,7 @@ Python alone owns collection, ADB, metrics and archives. No Tk imports.
 from __future__ import annotations
 import argparse
 import base64
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
@@ -479,7 +480,8 @@ class DesktopState:
             self._set_autochess_scene(value)
         elif kind == 'sample':
             scene = autochess_scene(value) if self._autochess_scene_announced else None
-            if scene != self._autochess_scene and value.get('native_counter_scope') != NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
+            character_counters = value.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+            if scene != self._autochess_scene and not character_counters:
                 # A late terminal DTO may finish the cached defense. It cannot
                 # take over the live assist or reset the current presentation.
                 self._remember_defense(value, scene, late=True)
@@ -494,7 +496,8 @@ class DesktopState:
                 self.last_progress = time.monotonic()
                 self.last_frame = frame
             self.last = value
-            self._sample_scene = scene
+            # Newly read unscoped counters remain displayable until the next scene announcement.
+            self._sample_scene = self._autochess_scene if character_counters and scene is None else scene
             self.event_status, self.event_error = value.get('event_status'), value.get('event_error')
             self.update_live_analysis(value)
             self._remember_defense(value, scene)
@@ -623,51 +626,44 @@ class DesktopState:
         if not current and not (same_scope and sample.get('state') == 3):
             return
         if old is not None and _defense_has_settlement(old) and not _defense_has_settlement(sample):
-            # The next native phase can precede its actual combat. Retain the
-            # useful prior result through empty baselines, including reconnects.
+            # Preparation can still show the last defense with observed output.
             return
-        # The worker transfers an owned DTO. Retain only the presentation
-        # fields, since the shared world statistics can contain a large journal.
-        self._defense_sample = {key: sample[key] for key in (
+        # Keep the review data independent of the live sample, excluding the
+        # shared world statistics journal.
+        self._defense_sample = deepcopy({key: sample[key] for key in (
             'native_counter_scope', 'multiplayer', 'battle_id', 'session', 'game_time',
             'battle_metadata', 'event_status', 'event_error', 'frame', 'state', 'enemy'
-        ) if key in sample}
+        ) if key in sample})
         if not late:
-            self._defense_analysis = (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis)
+            self._defense_analysis = deepcopy(
+                (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis))
         else:
             self._defense_analysis = (None, None, None)
 
     def _presented_battle(self):
         sample = self.last or {}
         analysis = (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis)
-        if sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
-            return sample, None, analysis, None
         scene, defense = self._autochess_scene, self._defense_sample
+        if (sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+                and self._sample_scene == scene):
+            return sample, None, analysis, None
         if scene is None:
             multiplayer = _preparing_multiplayer() if self.lifecycle == 'preparing' else sample.get('multiplayer')
             return sample, multiplayer, analysis, None
-        if scene.phase in (5, 6):
+        if scene.phase in (4, 5, 6):
             multiplayer = sample.get('multiplayer') or {}
-            kind = 'assist' if scene.phase == 5 else 'boss'
+            kind = {4: 'defense', 5: 'assist', 6: 'boss'}[scene.phase]
             if (self._sample_scene == scene and multiplayer.get('scope') == scene.scope
                     and multiplayer.get('scope_kind') == kind and multiplayer.get('available') is True):
                 return sample, multiplayer, analysis, None
+            if scene.phase == 4:
+                return {}, None, (None,) * 3, '等待本轮防御数据'
             label = '当前协防战场' if scene.phase == 5 else '当前首领战场'
             return dict(statistics=dict(rows={}, display_scope_label=label)), None, (None,) * 3, label + ' · 等待数据'
         if defense is not None:
             multiplayer = defense['multiplayer']
-            if (scene.phase == 4 and scene.scope == multiplayer['scope']
-                    and self._sample_scene == scene and sample.get('frame') == defense.get('frame')
-                    and sample.get('multiplayer') is multiplayer
-                    and sample.get('event_status') in ('recording', 'finished')
-                    and defense.get('state') != 3 and self.lifecycle not in ('preparing', 'ended', 'finalizing')):
-                return defense, multiplayer, self._defense_analysis, None
             note = f"上一场防御 · 第 {multiplayer['native_round']} 回合"
-            waiting = scene.phase == 4 and scene.scope != multiplayer['scope']
-            return (defense, dict(multiplayer, previous_defense=True, note=note),
-                    self._defense_analysis, ('等待本轮防御数据 · ' if waiting else '') + note)
-        if scene.phase == 4:
-            return {}, None, (None,) * 3, '等待本轮防御数据'
+            return defense, dict(multiplayer, previous_defense=True, note=note), self._defense_analysis, note
         return {}, _preparing_multiplayer(), (None,) * 3, None
 
     def update_live_analysis(self, sample):

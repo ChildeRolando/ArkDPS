@@ -494,7 +494,7 @@ function autoScope(roots,phase,round,frame,fixed,fingerprint,headerKey){
 }
 function readAutoChess(identity,frame,fixed){
  const read=autoRead(),unknown=[];
- let unboundHosts=0;
+ let unboundHosts=0,liveCharacterCollectionEmpty=null;
  try{
   const header=autoHeader(identity,read),model=read.p(read.at(header.center,'playerDataModel'));
   read.object(model,'AutoChessPlayerDataModel',AUTO_NS,17,[[0,'m_allPlayerDatas',0x18,[21]]]);
@@ -553,6 +553,7 @@ function readAutoChess(identity,frame,fixed){
     if(!autoIdentity(read.p(items),'Unit[]','Torappu.Battle'))throw new Error('AutoChess token array class');
     const capacity=read.n(items.add(0x18));if(capacity<count||capacity>4096)throw new Error('AutoChess token capacity');
    }
+   liveCharacterCollectionEmpty=count===0;
    for(let i=0;i<count;i++){
     const unit=read.p(items.add(0x20+i*8));
     try{
@@ -594,7 +595,7 @@ function readAutoChess(identity,frame,fixed){
    playerAddresses:{list:read.at(model,'m_allPlayerDatas'),items:read.at(playerList,'_items'),
     count:read.at(playerList,'_size'),version:read.at(playerList,'_version')},
    memberships:[...byUid.values()].filter(row=>!conflicts.has(row.data_uid)),unknown,
-   allInputsGuarded:unknown.length===unboundHosts};
+   allInputsGuarded:unknown.length===unboundHosts,liveCharacterCollectionEmpty};
  }catch(e){return {error:String(e)};}
 }
 function finishAutoChess(result,identity,frame,fixed){
@@ -729,7 +730,7 @@ function readAutoChessViewMode(manager){
   return {in_step_mode:step===1,enable_view_multi_battle:multi===1};
  }catch(e){return null;}
 }
-function nativeBinding(prepared=null){
+function nativeBinding(prepared=null,captureRoundStart=false){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded
  // Windows sampler. The host binds this evidence to its battle serial.
  let step='root_identity';nativeAutoBindingDiagnostic=null;
@@ -840,6 +841,7 @@ function nativeBinding(prepared=null){
    native_frame:frame,native_fixed_time:fixed,native_stage_id:stage};
   if(enabled){
    result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
+   if(captureRoundStart)result.live_character_collection_empty=auto.liveCharacterCollectionEmpty??null;
    if(viewMode)result.autochess_view_mode=viewMode;
    const preparedHere=prepared!==null&&prepared===nativeAutoBodyCache&&prepared.body===auto;
    // A missing host can be a guarded negative result. Keep it only as a

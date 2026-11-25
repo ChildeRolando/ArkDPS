@@ -120,6 +120,10 @@ def test_native_character_counter_rows_keep_their_scope_without_player_or_team_t
     assert current['live_analysis']['team_total_damage'] is None
     assert current['live_analysis']['team_recent_dps'] is None
     assert current['multiplayer_scope_unverified'] and current['multiplayer'] is None
+    state.accept('autochess_scene', NativeAutoChessScene(('prior-match',), 'next', 4, 2, 'all'))
+    waiting = state.snapshot()
+    assert waiting['status'] == 'waiting' and waiting['battle_id'] is None
+    assert waiting['panels'][0]['entries'] == [] and waiting['live_analysis'] is None
 
 
 def run_worker(tmp_path, monkeypatch, actions, *, platform='mumu'):

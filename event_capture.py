@@ -5,9 +5,12 @@ records until the host has committed the corresponding watermark.
 """
 from collections import deque
 
+from autochess_context import normalize_native_autochess
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
-from event_probe import bind_native_autochess_pair, contract_for, event_processing_payload
+from event_probe import (NativePcBinding, NativePcProbeContract, _ROUND_START_BINDING, _ROUND_START_PREFIX_LIMIT,
+                         _autochess_scope_key, _round_start_integer, _valid_round_start_point,
+                         bind_native_autochess_pair, contract_for, event_processing_payload)
 from roster import RosterUnavailable
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
@@ -63,6 +66,74 @@ class CaptureRetry(RuntimeError):
     """No stable frame was obtained; queued events remain available."""
 
 
+_ROUND_START_READ_SIZE = 2048
+
+
+def _round_start_read_scope(payload):
+    scope_key = _autochess_scope_key(payload)
+    fixed = payload.get('native_fixed_time')
+    if (scope_key is None or not isinstance(fixed, str) or not 0 < len(fixed) <= 19
+            or not fixed.isascii() or not fixed.isdecimal() or int(fixed) > 0x7fffffffffffffff):
+        raise StreamGap('invalid AutoChess round-start read clock or roots')
+    context = normalize_native_autochess(payload.get('native_autochess_context'),
+        expected_frame=payload.get('native_frame', payload.get('frame')),
+        expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope_key)
+    if (context.get('status') not in ('available', 'partial') or not context.get('match_key')
+            or context.get('phase') not in (4, 5, 6) or context.get('self_player_uid') is None
+            or context.get('collection_mode') not in ('all', 'local')):
+        raise StreamGap('invalid AutoChess round-start read scope or account table')
+    accounts = tuple(sorted((row['index'], row['uid']) for row in context['players']))
+    return (context['identity'], context['match_key'], context['self_player_index'],
+            context['self_player_uid'], context['collection_mode'], accounts)
+
+
+def _read_long_round_start_prefix(observer, sequence, batch, contract):
+    point = batch.get('autochess_round_start')
+    if (batch.get('autochess_round_start_events_complete') is not False
+            or batch.get('autochess_round_start_events') != []
+            or not _valid_round_start_point(point) or not _round_start_integer(sequence)
+            or not _ROUND_START_READ_SIZE < sequence - point['sequence'] <= _ROUND_START_PREFIX_LIMIT):
+        return batch
+    read_range = getattr(observer, 'read_round_start_range', None)
+    if not callable(read_range):
+        raise StreamGap('event probe cannot read bounded AutoChess round-start prefixes')
+    # PC binds these two fields in the host observer. Android replies carry
+    # raw native roots, which the host checks against the independent sample.
+    transport_keys = ('native_session', 'source_build')
+    text_keys = ('native_stage_id', *(key for key in transport_keys
+                 if isinstance(contract, NativePcProbeContract) or key in batch))
+    if (any(not NativePcBinding._same(batch.get(key), point[key]) for key in _ROUND_START_BINDING)
+            or any(not isinstance(batch.get(key), str) or not batch[key] for key in text_keys)):
+        raise StreamGap('AutoChess round-start origin does not match its first read')
+    scope = _round_start_read_scope(batch)
+    if _round_start_read_scope(point) != scope:
+        raise StreamGap('AutoChess round-start origin scope or accounts changed')
+    binding_keys = (*_ROUND_START_BINDING, *transport_keys)
+    records = []
+    for after in range(point['sequence'], sequence, _ROUND_START_READ_SIZE):
+        through = min(after + _ROUND_START_READ_SIZE, sequence)
+        try:
+            chunk = read_range(after, through)
+        except (ObserverReadRetry, BattleChanged, UnsupportedVersion, StreamGap):
+            raise
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise StreamGap('could not read the AutoChess round-start event range') from exc
+        if not isinstance(chunk, dict) or chunk.get('error') or chunk.get('stopped'):
+            raise StreamGap('could not read the AutoChess round-start event range')
+        if chunk.get('retry'):
+            raise CaptureRetry('AutoChess round-start event range requires a new read')
+        if (any((key in chunk) != (key in batch)
+                or not NativePcBinding._same(chunk.get(key), batch.get(key)) for key in binding_keys)
+                or _round_start_read_scope(chunk) != scope):
+            raise StreamGap('AutoChess round-start event range changed its source or scope')
+        events = chunk.get('events')
+        if (not isinstance(events, list) or len(events) != through - after
+                or any(not isinstance(event, dict) for event in events)):
+            raise StreamGap('incomplete AutoChess round-start event range')
+        records.extend(events)
+    return dict(batch, autochess_round_start_events=records, autochess_round_start_events_complete=True)
+
+
 def read_event_batch(observer, sequence, *, baseline=False):
     contract = contract_for(observer)
     if (contract.bounded_reads_required
@@ -73,8 +144,12 @@ def read_event_batch(observer, sequence, *, baseline=False):
         read_baseline = getattr(observer, 'read_baseline', None) if baseline else None
         if callable(read_baseline):
             batch = read_baseline(sequence)
-            if not (batch.get('error') or batch.get('stopped')) and batch.get('events') != []:
-                raise StreamGap('event baseline did not return an empty window')
+            if not isinstance(batch, dict):
+                raise StreamGap('invalid event baseline response')
+            if not (batch.get('error') or batch.get('stopped') or batch.get('retry')):
+                if batch.get('events') != []:
+                    raise StreamGap('event baseline did not return an empty window')
+                batch = _read_long_round_start_prefix(observer, sequence, batch, contract)
         elif hasattr(observer, 'read_through'):
             batch = observer.read_through(sequence)
         else:
