@@ -75,7 +75,8 @@ def test_accepted_four_account_views_and_local_panels_share_the_existing_rendere
         assert panel['footer_total'] == 300 and panel['footer_total_complete'] is False
         assert panel['share_known'] is False and '原生累计未知' in panel['share_reason']
         assert panel['metric_label'].startswith('已观察')
-        assert panel['source'][entry['owner_id']]['damage'] is None
+        assert 'damage' not in panel['source'][entry['owner_id']]
+        assert panel['footer_total_complete'] is False
     assert snapshot['totals']['damage'] is snapshot['totals']['healing'] is None
     trend = snapshot['live_analysis']
     assert trend['team_total_damage'] is trend['team_average_dps'] is trend['team_recent_dps'] is None
@@ -357,7 +358,7 @@ def test_damage_empty_gate_keeps_other_family_evidence_in_the_source(tmp_path):
     view, = state.snapshot()['panels']
     entry, = view['entries']
     assert entry['value'] == 25
-    assert view['source'][entry['owner_id']]['observed_healing'] == 40
+    assert view['details_by_owner'][entry['owner_id']]['observed_healing'] == 40
 
 
 def test_a_real_zero_settlement_is_distinct_from_an_empty_baseline(tmp_path):
@@ -447,8 +448,9 @@ def test_saved_native_history_renders_only_verified_self_without_changing_record
     assert entry['player_uid'] == '910000003'
     assert view['metric_label'].startswith('已观察')
     assert view['footer_total'] == 300 and view['footer_total_complete'] is False
-    assert view['source'][entry['owner_id']]['damage'] is None
-    assert view['source'][entry['owner_id']]['settled_damage']['observed_damage'] == 300
+    assert 'damage' not in view['source'][entry['owner_id']]
+    assert view['footer_total_complete'] is False
+    assert view['details_by_owner'][entry['owner_id']]['settled_damage']['observed_damage'] == 300
     assert view['details_by_owner'][entry['owner_id']]['effective_damage'] == 300
     assert selected['multiplayer']['players'][2]['observed_damage'] == 300
     state.accept('lifecycle', 'preparing')

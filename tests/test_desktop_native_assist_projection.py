@@ -63,7 +63,8 @@ def assert_scene(view, amounts=(100, 200, 400)):
         assert entry['portrait_id'] == CID and entry['player_side'] == 1
         assert view['source'][entry['owner_id']]['player_uid'] == uid
         assert view['source'][entry['owner_id']]['actor_uid'] == actor_uid
-        assert view['source'][entry['owner_id']]['damage'] is None
+        assert 'damage' not in view['source'][entry['owner_id']]
+        assert view['footer_total_complete'] is False
         assert view['details_by_owner'][entry['owner_id']]['effective_damage'] == entry['value']
 
 
