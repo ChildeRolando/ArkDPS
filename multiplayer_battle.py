@@ -880,6 +880,8 @@ class MultiplayerBattleStatistics:
             stats = player.statistics
             stats.partial_damage_enabled = stats.settlement_enabled = True
             stats.damage_settlement_version = version
+            stats.legacy_observation_mode = (drained.get('enemy_damage_ready') is False
+                and drained.get('enemy_damage_unknown') is False)
             stats.event_coverage = True
             stats.start_late_event_coverage()
             player.stream = EventStream(stats, session=stats.session,
@@ -930,6 +932,8 @@ class MultiplayerBattleStatistics:
             self._settlement_failure_samples = deepcopy(failures)
         ready = payload.get('damage_settlement_ready', payload.get('enemy_damage_ready'))
         unknown = payload.get('damage_settlement_unknown', payload.get('enemy_damage_unknown'))
+        if ready is False and unknown is False and all(player.statistics.legacy_observation_mode for player in self._players.values()):
+            return
         if ready is True and unknown is False and settlement_source_quality_clear(payload):
             return
         reason = '结算事件质量未完整确认'

@@ -75,3 +75,30 @@ def test_nominal_and_effective_keep_separate_activity_triggers():
     assert row['active_effective_damage'] == 1.5
     assert row['engagement_damage'] == 100 / 1.5
     assert row['engagement_effective_damage'] == 40 / 1.5
+
+
+def test_explicit_legacy_observation_mode_keeps_identity_and_partial_hp_quality():
+    from event_stream import EventStream
+    stats = Statistics('old-observer', 0, event_coverage=True)
+    stats.settlement_enabled = stats.settlement_sides_known = True
+    stats.damage_settlement_version = 7
+    stats.legacy_observation_mode = True
+    stats.partial_damage_enabled = True
+    stats.register_source('char_a', 'owner')
+    stats.snapshot(0, {'char_a': {'damage': 0, 'healing': 0}})
+    stream = EventStream(stats, session=stats.session, baseline_frame=0, baseline_sequence=0)
+    stats.snapshot(2, {'char_a': {'damage': 10, 'healing': 0}})
+    common = dict(session=stats.session, frame=30, game_time=1, source='char_a',
+        kind='damage', target='enemy_test', killed=False, hp_after=100, damage_type=1,
+        mitigation_before=20, mitigation_after=10)
+    stream.accept(sequence=1, source_character_uid=2,
+        settlement_identity=('foreign', None, None), amount=999, **common)
+    stream.accept(sequence=2, source_character_uid=1,
+        settlement_identity=('local', 'owner', 1), amount=10, **common)
+    stream.watermark(session=stats.session, sequence=2, frame=60, game_time=2)
+    lane = stats.result()['rows']['owner']['settled_damage']
+    assert lane['observed_damage'] == 10 and lane['observed_hits'] == 1
+    assert lane['observed_damage_complete'] and lane['mitigation_complete']
+    assert lane['known_hp_damage'] == lane['known_shield_damage'] == 0
+    assert lane['complete'] is False
+    assert stats.settled['owner'].legacy_effective == 10

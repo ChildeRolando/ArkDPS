@@ -132,6 +132,7 @@ class Statistics:
         # values. Current observers declare the stricter settlement policy.
         self.reconcile_damage_scope = False
         self.settlement_enabled = False
+        self.legacy_observation_mode = False
         self.damage_settlement_version = 0
         self.settlement_sides_known = False
         self.settlement_stream_incomplete = False
@@ -163,13 +164,14 @@ class Statistics:
         self.boss_damage_incomplete |= not complete
 
     def _record_boss_damage(self, source, owner, when, target, amount, damage_type,
-                            overkill, reason=None, before=None, after=None, *, actual=None):
+                            overkill, reason=None, before=None, after=None, *, actual=None, actor=None):
         if isinstance(target, str) and target.startswith(('char_', 'token_')):
             return
-        if self.settlement_enabled:
+        if self.settlement_enabled and not self.legacy_observation_mode:
             return
         kind = NATIVE_DAMAGE_TYPES.get(damage_type) if type(damage_type) is int else None
-        skill = any(candidate == owner for candidate, _ in self.settlement_skill_active) if self._skill_hit_observable(owner) else None
+        skill = (self._settlement_skill(owner, actor) if self.legacy_observation_mode else
+                 any(candidate == owner for candidate, _ in self.settlement_skill_active) if self._skill_hit_observable(owner) else None)
         effective = max(0.0, amount - overkill) if overkill is not None else None
         pair = self._mitigation_pair(amount, before, after)
         args = (when, actual or 0, None, kind, False, skill, amount,
@@ -1443,7 +1445,7 @@ class Statistics:
             raise ValueError('event outside ordered observation')
         self.events[event_id] = payload
         self.last_event_time = game_time
-        if self.settlement_enabled and kind in ('damage', 'elemental_burst'):
+        if self.settlement_enabled and not self.legacy_observation_mode and kind in ('damage', 'elemental_burst'):
             # The certificate is the sole amount writer. Legacy outputs remain
             # ordered receipts, not another damage/skill/formula account.
             if kind == 'damage':
@@ -1503,7 +1505,7 @@ class Statistics:
                 self._record_mitigation(source, attributed, amount, mitigation_before, mitigation_after)
             burst_overkill = max(0.0, amount - actual)
             self._record_boss_damage(source, attributed, game_time, target, amount, 5, burst_overkill,
-                                     before=mitigation_before, after=mitigation_after, actual=actual)
+                                     before=mitigation_before, after=mitigation_after, actual=actual, actor=skill_actor)
             if not self.settlement_enabled:
                 self.settlement_supplements.setdefault(attributed, 0.0)
                 if source is None:
@@ -1547,7 +1549,7 @@ class Statistics:
                 shield_absorbed=shield_absorbed, settled_after_nested_kill=settled_after_nested_kill)
             self._record_boss_damage(
                 source, owner, game_time, target, amount, damage_type,
-                overkill if known else None, reason, mitigation_before, mitigation_after)
+                overkill if known else None, reason, mitigation_before, mitigation_after, actor=skill_actor)
             if known:
                 if killed and target_instance and settled_after_nested_kill is False:
                     self._discard_elemental_instance(target_instance, legacy=True)

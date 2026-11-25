@@ -235,7 +235,7 @@ class EventStream:
                 instance=source_instance_uid, frame=frame, game_time=game_time) == 'finish'
             terminal = terminal and actor_lifecycle['reason'] == skill_reason
             if self.statistics.settlement_enabled and settlement_identity and settlement_identity[0] == 'local':
-                if kind in ('damage_settlement', 'healing') and verified_body_source:
+                if (kind in ('damage_settlement', 'healing') or kind == 'damage' and self.statistics.legacy_observation_mode) and verified_body_source:
                     self.statistics.deployment_lifecycle.note_body_output(settlement_identity[1], settlement_identity[2],
                         source_instance_uid, game_time)
                 self.statistics.deployment_lifecycle.observe(settlement_identity[1], settlement_identity[2],
