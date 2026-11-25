@@ -371,10 +371,26 @@ class LiveEventCapture:
                 if version >= 3:
                     self.adapter.statistics.settlement_enabled = True
                     self.adapter.statistics.damage_settlement_version = version
+                    # Capability fallback is an explicit initial producer declaration,
+                    # never a missing flag normalized to False or a later family change.
+                    if self.initial_drain:
+                        self.adapter.statistics.legacy_observation_mode = (
+                            drained.get('enemy_damage_ready') is False
+                            and drained.get('enemy_damage_unknown') is False
+                            and (mark is None or mark.get('enemy_damage_ready') is False
+                                 and mark.get('enemy_damage_unknown') is False))
                     ready = damage_quality.get('damage_settlement_ready', damage_quality.get('enemy_damage_ready'))
                     unknown = damage_quality.get('damage_settlement_unknown',
                                                  damage_quality.get('enemy_damage_unknown'))
-                    self.adapter.statistics.settlement_stream_incomplete |= (ready is not True or bool(unknown))
+                    deliberate_legacy = (
+                        getattr(self.adapter.statistics, 'legacy_observation_mode', False)
+                        and drained.get('enemy_damage_ready') is False
+                        and drained.get('enemy_damage_unknown') is False
+                        and (mark is None or mark.get('enemy_damage_ready') is False
+                             and mark.get('enemy_damage_unknown') is False)
+                        and not bool(unknown))
+                    self.adapter.statistics.settlement_stream_incomplete |= (
+                        ready is not True and not deliberate_legacy or bool(unknown))
             self._apply_quality(contract.normalize_quality(drained), damage_quality)
             self.pending.extend(drained['events'])
             while self.pending:
