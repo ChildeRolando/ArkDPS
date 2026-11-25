@@ -32,7 +32,7 @@ def established():
               body(2, 'character_born', 1, cid='char_peer', uid=302, instance=20),
               body(3, 'character_born', 1, uid=401, instance=30)]
     consume(meter, 1, births, native=native(1), battle_metadata=META)
-    event = hit(4, 3, 2, 100, cid='char_peer', uid=302,
+    event = hit(4, 3, 2, 100, cid='char_peer', uid=302, source_instance_uid=20,
                 event_scope=stamp(when=2, collection_mode='all'))
     consume(meter, 2, [event], native=native(2), battle_metadata=META)
     return meter
