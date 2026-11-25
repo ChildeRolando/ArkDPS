@@ -27,6 +27,46 @@ def outgoing_counter_event(event):
                 and target.startswith(('char_', 'token_')))
 
 
+def native_counter_observations(events):
+    """Yield original counter witnesses; never synthesize old wire records."""
+    single = _single_settlement_wire(events)
+    for event in events:
+        kind = event.get('kind')
+        amount = event.get('amount')
+        if single and kind == 'damage_settlement' and event.get('source') is not None:
+            target = event.get('target')
+            if isinstance(target, str) and target.startswith(('char_', 'token_')):
+                continue
+            witness = (event.get('proof') or {}).get('native_modifier_observation')
+            if (not isinstance(witness, dict) or set(witness) != {'version', 'method', 'amount'}
+                    or type(witness.get('version')) is not int or witness['version'] != 1
+                    or witness.get('method') != 'Entity.ApplyModifier'):
+                raise ValueError('native counter certificate lacks a verified modifier observation')
+            amount = witness['amount']
+            dtype = event.get('damage_type')
+            if type(dtype) is not int or dtype not in (1, 2, 3, 5):
+                raise ValueError('native counter certificate has no known native type')
+            field = PC_F32_TYPES[dtype]
+        elif kind == 'healing':
+            if 'damage_type' in event and event['damage_type'] != 4:
+                raise ValueError('PC f32 healing event has a conflicting native type')
+            field = 'healing'
+        elif not single and kind == 'elemental_burst' and event.get('source') is not None:
+            if type(event.get('damage_type')) is not int or event['damage_type'] != 5:
+                raise ValueError('explicitly sourced PC burst has no elemental native counter type')
+            field = 'elemental'
+        elif not single and kind == 'damage' and outgoing_counter_event(event):
+            dtype = event.get('damage_type')
+            if type(dtype) is not int or dtype not in (1, 2, 3, 5):
+                raise ValueError('PC f32 damage event has no known native type')
+            field = PC_F32_TYPES[dtype]
+        else:
+            continue
+        if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0:
+            raise ValueError('native counter observation amount must be finite and nonnegative')
+        yield event, field, amount
+
+
 def near(left, right):
     if (type(left) not in (int, float) or type(right) not in (int, float)
             or not math.isfinite(left) or not math.isfinite(right)
@@ -97,34 +137,17 @@ def check_native_f32_counters(events, publications, *, source_domain='all', read
                 or clock[1] < previous_event_clock[1]):
             raise failure('PC f32 model event clock is missing or out of order')
         previous_event_clock = clock
-        if event['kind'] == 'healing':
-            if 'damage_type' in event and event['damage_type'] != 4:
-                raise failure('PC f32 healing event has a conflicting native type')
-            field = 'healing'
-        elif event['kind'] == 'elemental_burst' and event.get('source') is not None:
-            if type(event.get('damage_type')) is not int or event['damage_type'] != 5:
-                raise failure('explicitly sourced PC burst has no elemental native counter type')
-            field = 'elemental'
-        elif event['kind'] == 'damage' and outgoing_counter_event(event):
-            dtype = event.get('damage_type')
-            if type(dtype) is not int or dtype not in (1, 2, 3, 5):
-                raise failure('PC f32 damage event has no known native type')
-            field = PC_F32_TYPES[dtype]
-        else:
-            continue
-        amount = event.get('amount')
-        if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0:
-            raise failure('PC f32 model has an invalid nominal event amount')
+    for event, field, amount in native_counter_observations(events):
         if not isinstance(event.get('source'), str) or not event['source']:
             raise failure('PC f32 counter event has no source identity')
         if source_domain == 'owned' and not owned(event['source']):
             raise failure('PC f32 counter event source is outside the declared owned domain')
-        relevant.append((event, field))
+        relevant.append((event, field, amount))
     if previous != final:
         raise failure('PC f32 model event prefix does not reach the published watermark')
     by_source = defaultdict(list)
-    for event, field in relevant:
-        by_source[event['source']].append((event, field))
+    for event, field, amount in relevant:
+        by_source[event['source']].append((event, field, amount))
     seeds, values, cursors, checks = {}, {}, {}, Counter()
     excluded, all_native_sources, validated_rows = {}, set(), 0
     applied = changed_updates = 0
@@ -180,7 +203,7 @@ def check_native_f32_counters(events, publications, *, source_domain='all', read
                     continue
             modeled_present.add(source)
             if source not in seeds:
-                before_seed = [event['sequence'] for event, _field in by_source[source]
+                before_seed = [event['sequence'] for event, _field, _amount in by_source[source]
                                if event['sequence'] <= through]
                 if (source_domain == 'owned' and through > baseline
                         and any(row[field] > 0 for field in PC_F32_TYPES.values()) and not before_seed):
@@ -192,10 +215,10 @@ def check_native_f32_counters(events, publications, *, source_domain='all', read
                         counter_event_sequences=before_seed,
                         reason='first_independently_observed_source_row_is_a_seed_not_a_modelled_zero_origin'))
             else:
-                for event, field in by_source[source]:
+                for event, field, amount in by_source[source]:
                     if cursors[source] < event['sequence'] <= through:
                         prior = values[source][field]
-                        values[source][field] = f32(prior + f32(event['amount']))
+                        values[source][field] = f32(prior + f32(amount))
                         changed_updates += values[source][field] != prior
                         applied += 1
                 cursors[source] = through
@@ -1191,7 +1214,7 @@ def pc_records(records, summary, publications):
     return stream.received
 
 
-def check_pc_families(accepted, rows, ownership, deltas):
+def check_pc_families(accepted, rows, ownership, deltas, *, elemental_owners=None):
     """Reconcile a window with attributed hits and directly observed skill endings."""
     from stats_core import NATIVE_DAMAGE_TYPES, Statistics
 
@@ -1200,18 +1223,21 @@ def check_pc_families(accepted, rows, ownership, deltas):
             raise ValueError(f'no positive native PC {family} delta to reconcile')
     if not any(e['kind'] == 'shield_absorbed' and e['amount'] > 0 for e in accepted):
         raise ValueError('no positive PC shield absorption')
+    counter_witnesses = {event['sequence']: amount for event, _, amount in native_counter_observations(accepted)}
     hp, shield, absorbed_by_source = Counter(), Counter(), Counter()
     active, durations, windows = {}, Counter(), Counter()
     for event in accepted:
         source, kind = event['source'], event['kind']
         if kind == 'shield_absorbed':
             absorbed_by_source[source] += event['amount']
-        if kind in ('damage', 'healing') and event['amount'] > 0 and (
+        if event['sequence'] in counter_witnesses and counter_witnesses[event['sequence']] > 0 and (
                 source not in deltas or event['sequence'] <= deltas[source]['start_sequence']):
             raise ValueError('PC event has no preceding native counter baseline')
         if kind not in ('damage_settlement', 'skill_start', 'skill_end'):
             continue
         owner = ownership.get(source)
+        if source is None and kind == 'damage_settlement' and event.get('damage_type') == 5:
+            owner = (elemental_owners or {}).get(event['sequence'])
         if not owner:
             raise ValueError('unattributed PC settlement or skill')
         if kind == 'damage_settlement':
@@ -1388,6 +1414,10 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
     partial, zeros = [], []
     sources_with_absorption = set()
     excluded_friendly_damage = []
+    single_wire = _single_settlement_wire(accepted)
+    counter_witnesses = (list(native_counter_observations(accepted)) if single_wire or pc_f32_counters else
+        [(event, event['kind'], event['amount']) for event in accepted
+         if event['kind'] in ('damage', 'healing') and outgoing_counter_event(event)])
     previous_time = first['game_time']
     previous_frame = first['frame']
     for event in accepted:
@@ -1456,6 +1486,15 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 eid=eid, frame=event['frame'], game_time=event['game_time'],
                 phase_total_hp=total, phase_count=count, phase_from_birth=from_birth)
             continue
+        if single_wire and kind == 'damage_settlement' and source is not None:
+            nominal = event.get('nominal_amount')
+            if type(nominal) not in (int, float) or not math.isfinite(nominal) or nominal < 0:
+                raise ValueError('single-wire nominal observation is missing')
+            if source not in ownership:
+                raise ValueError('unowned single-wire nominal observation')
+            target = event.get('target')
+            if not (isinstance(target, str) and target.startswith(('char_', 'token_'))):
+                totals[ownership[source], 'damage'] += nominal
         if kind in ('damage_settlement', 'hp_damage', 'elemental_bar', 'elemental_burst', 'skill_start', 'skill_end'):
             continue
         if source not in ownership or kind not in ('damage', 'healing', 'shield_absorbed'):
@@ -1502,29 +1541,38 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
     counter_deltas = {}
     f32_evidence = check_pc_f32_counters(accepted, publications,
         source_domain=pc_f32_source_domain or 'all') if pc_f32_counters else None
-    supplement_evidence = check_pc_owner_counter_supplements(accepted, publications, ownership) if pc_f32_counters else None
+    need_supplements = pc_f32_counters or single_wire and any(event['kind'] == 'damage_settlement'
+        and event.get('damage_type') == 5 and event.get('source') is None for event in accepted)
+    supplement_evidence = check_pc_owner_counter_supplements(accepted, publications, ownership) if need_supplements else None
+    if single_wire and supplement_evidence is not None:
+        for owner, amount in supplement_evidence['final_nominal_supplements'].items():
+            totals[owner, 'damage'] += amount
     for source, (baseline, sequence, game_time) in references.items():
         if source not in ownership or source not in native:
             continue
         check = {'start': game_time, 'end': last['game_time'], 'start_sequence': sequence}
         for kind in ('damage', 'healing'):
             delta = native[source][kind] - baseline[kind]
-            observed = sum(event['amount'] for event in accepted if event['source'] == source
-                           and (event['kind'] == kind or pc_f32_counters and kind == 'damage'
-                                and event['kind'] == 'elemental_burst' and event['source'] is not None)
-                           and event['sequence'] > sequence
-                           and outgoing_counter_event(event))
+            observed = sum(amount for event, field, amount in counter_witnesses
+                           if event['source'] == source and event['sequence'] > sequence
+                           and (field == 'healing' if kind == 'healing' else field != 'healing'))
             if not pc_f32_counters:
                 near(delta, observed)
             check[kind] = {'native_delta': delta, 'observed_events': observed}
         counter_deltas[source] = check
+    elemental_owners = {item['settlement_sequence']: item['owner'] for item in
+        supplement_evidence['source_null_burst_witnesses']} if supplement_evidence else {}
+    pc_family_evidence = check_pc_families(accepted, rows, ownership, counter_deltas,
+        elemental_owners=elemental_owners) if pc_settlements else None
     for owner, row in rows.items():
         for kind, field in (('damage', 'observed_damage'), ('healing', 'observed_healing'),
                             ('shield_absorbed', 'shield_absorbed')):
             near(totals[owner, kind], row[field])
         if row['counter_snapshot_complete'] and not pc_f32_counters:
             for kind in ('damage', 'healing'):
-                near(sum(native[source][kind] for source in row['sources'] if source in native), row[kind])
+                near(sum(native[source][kind] for source in row['sources'] if source in native)
+                     + (supplement_evidence['final_nominal_supplements'].get(owner, 0)
+                        if kind == 'damage' and supplement_evidence else 0), row[kind])
     for item in source_owners:
         source, owner = item.split('=', 1)
         if ownership.get(source) != owner or source not in sources_with_absorption:
@@ -1580,7 +1628,7 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
         result['enemy_state_complete'] = published_enemy_state['complete']
         result['enemy_state_events'] = len(enemy_state_events)
     if pc_settlements:
-        result['native_pc_settlements'] = check_pc_families(accepted, rows, ownership, counter_deltas)
+        result['native_pc_settlements'] = pc_family_evidence
     return result
 
 
