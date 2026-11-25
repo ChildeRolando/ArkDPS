@@ -283,6 +283,25 @@ def test_retired_localized_quality_does_not_poison_new_scope_or_reassign_old_own
     assert meter._sequence == 3 and not meter._closed
 
 
+def test_changed_account_graph_with_reused_event_stamp_cannot_reassign_numeric_issue():
+    meter = MultiplayerBattleStatistics()
+    metadata = dict(platform='native_pc', stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m12')
+    native = lambda t, players=PLAYERS: dict(context(t, members=[member(3)], players=players),
+                                            collection_mode='all')
+    consume(meter, 0, native=native(0), battle_metadata=metadata)
+    consume(meter, 1, native=native(1), battle_metadata=metadata)
+    changed_players = deepcopy(PLAYERS)
+    changed_players[2]['uid'] = 'new-account'
+    consume(meter, 1, native=native(1, changed_players), battle_metadata=metadata)
+    issue = dict(source=CID, source_character_uid=301, frame=30, game_time=1,
+                 native_autochess_scope=stamp(when=1, collection_mode='all'))
+    result = consume(meter, 2, native=native(2, changed_players), battle_metadata=metadata,
+        quality=dict(enemy_damage_unknown=True, damage_settlement_unknown=True,
+            damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=False,
+            damage_settlement_source_issues=[issue]))
+    assert '结算事件质量未完整确认' in result['reasons']
+
+
 @pytest.mark.parametrize('legacy_name', [False, True])
 def test_native_strategy_operator_uses_its_catalog_name_and_own_portrait_id(tmp_path, legacy_name):
     from desktop_bridge import DesktopState, _event_only_statistics

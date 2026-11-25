@@ -891,6 +891,10 @@ class MultiplayerBattleStatistics:
                 for issue in issues:
                     identity = native_autochess_event_identity(issue)
                     retired = self._retired_settlement_scopes.get(identity)
+                    if identity == self._context_fingerprint[:3] and retired is not None:
+                        # An account graph changed without a new event stamp.
+                        # The certificate cannot distinguish those two owners.
+                        break
                     if identity != self._context_fingerprint[:3] and retired is not None:
                         # Never resolve a retired CID/UID through today's owner.
                         # Ambiguous or unproved historical ownership stays global.
