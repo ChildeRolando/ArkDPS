@@ -212,6 +212,10 @@ def _recorded_metrics(row, recorded, *, optional=True):
            if key not in optional_metrics or key in recorded}
     if 'settled_damage' in row:
         out['settled_damage'] = _recorded_settlement(row['settled_damage'], recorded.get('settled_damage'))
+    if 'partial_damage' in out and isinstance(recorded.get('partial_damage'), dict):
+        # Modern partial rows mirror the same settlement evidence. Apply only
+        # its guarded diagnostic-version comparison, never numeric repair.
+        out['partial_damage'] = _recorded_settlement(row['partial_damage'], recorded['partial_damage'])
     if 'boss_damage' in row:
         out['boss_damage'] = _recorded_metrics(row['boss_damage'], recorded.get('boss_damage'), optional=optional)
     return out
