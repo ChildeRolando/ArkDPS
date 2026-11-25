@@ -1453,7 +1453,8 @@ class BattleSessions:
                 self._terminal_seen = False
                 self._last_event_mark = None
                 self.multiplayer = None
-                if previous_multiplayer is not None:
+                if (previous_multiplayer is not None and observation.events
+                        and isinstance(observation.events.get('drain'), dict)):
                     from multiplayer_battle import MultiplayerBattleStatistics
                     self.multiplayer = MultiplayerBattleStatistics()
                     self.multiplayer.inherit_settlement_scopes(previous_multiplayer, observation.sample)
