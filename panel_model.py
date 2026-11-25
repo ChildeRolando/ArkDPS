@@ -288,6 +288,9 @@ class PanelSourceRow:
     # the engagement interval and is None when presence was never certified.
     presence_seconds: float | None = None
     presence_complete: bool = False
+    # Only exact lifecycle evidence uses this window. Sampled lower bounds
+    # never populate it and cannot certify a full-cycle denominator.
+    lifecycle_presence_window: tuple[float, float] | None = None
     damage_by_type: Mapping[str, float] = field(default_factory=dict)
     # Event-derived overkill is a subset of damage, never part of the ranking
     # denominator. It stays None unless the whole event stream proved it.
@@ -333,6 +336,7 @@ class PanelSourceRow:
     observed_healing: float | None = None
     observed_healing_total: float | None = None
     observed_healing_complete: bool = False
+    observed_healing_window: tuple[float, float] | None = None
     observed_recent_healing: float | None = None
     observed_recent_healing_window: tuple[float, float] | None = None
     observed_recent_healing_complete: bool = False
@@ -474,6 +478,26 @@ class PanelSourceRow:
         if (not _finite(total) or not _finite(self.presence_seconds)
                 or self.presence_seconds <= 0 or not self.presence_complete):
             return None
+        if self.event_only_projection and self.lifecycle_presence_window is not None:
+            if not self.source_complete or not self.event_complete:
+                return None
+            if category is Category.DAMAGE and self.settled_damage is not None:
+                certificate = 'complete' if effective else 'observed_damage_complete'
+                window = self.settled_damage.get('observed_damage_window')
+                if (self.settled_damage.get(certificate) is not True
+                        or not isinstance(window, (tuple, list))
+                        or tuple(window) != self.lifecycle_presence_window):
+                    return None
+            elif category is Category.HEALING:
+                if (not self.observed_healing_complete
+                        or self.observed_healing_window != self.lifecycle_presence_window):
+                    return None
+            else:
+                return None
+            # The denominator is the body's verified on-field duration.
+            # Attributed summons and damage over time can continue after it
+            # leaves; their engagement interval is not additional body time.
+            return total / self.presence_seconds
         if category is Category.DAMAGE and self.settled_damage is not None and (effective or self.damage is None):
             certificate = ('complete' if effective else 'observed_damage_complete'
                            if self.event_only_projection else 'observed_boss_damage_complete')
@@ -591,7 +615,9 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
             'name', 'present', 'sources', 'presence_seconds', 'presence_complete',
             'skill_active_seconds', 'skill_coverage_complete', 'skill_window_count',
             'observed_presence_seconds', 'observed_skill_active_seconds',
-            'observed_skill_coverage', 'skill_timed_presence_seconds', 'skill_seen') if key in row}
+            'observed_skill_coverage', 'skill_timed_presence_seconds', 'skill_seen',
+            'lifecycle_presence_seconds', 'lifecycle_presence_complete',
+            'lifecycle_presence_window', 'lifecycle_terminal_complete') if key in row}
         rows[owner] = {
             **scoped, **identity,
             'counter_snapshot_complete': scoped.get('counter_snapshot_complete') is True,
@@ -620,9 +646,25 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
     }
 
 
+def _lifecycle_presence(row: Mapping, result: Mapping):
+    window = row.get('lifecycle_presence_window')
+    seconds = row.get('lifecycle_presence_seconds')
+    start = row.get('coverage_start', result.get('coverage_start'))
+    if (row.get('lifecycle_presence_complete') is not True
+            or not isinstance(window, (tuple, list)) or len(window) != 2
+            or not all(_finite(value) for value in (*window, seconds, start))
+            or window[0] != start or not 0 <= window[0] <= window[1] == result.get('game_time')
+            or not 0 <= seconds <= window[1] - window[0]
+            or result.get('ended') is True and row.get('lifecycle_terminal_complete') is not True):
+        return None
+    return seconds, tuple(window)
+
+
 def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
     """Convert an adapter/Statistics result into panel rows without inventing data."""
     rows: list[PanelSourceRow] = []
+    event_only = (result.get('event_only_projection') is True
+                  and result.get('native_counter_scope') == 'unavailable')
     unresolved = {source for key, _ in DIAGNOSTIC_LABELS if key != 'missing_fields'
                   for source in _name_list(result.get(key))}
     for owner, row in (result.get('rows') or {}).items():
@@ -642,6 +684,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
         healing_window_complete = (row.get('observed_recent_healing_complete') is True
                                    and _valid_window(healing_window)
                                    and 0 <= healing_window[0] < healing_window[1] == result.get('game_time'))
+        life = _lifecycle_presence(row, result) if event_only else None
+        healing_total_window = row.get('observed_healing_window')
         rows.append(PanelSourceRow(
             owner_id=owner,
             name=row.get('name') or owner,
@@ -657,12 +701,16 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             active_damage=row.get('active_damage'),
             active_healing=row.get('active_healing'),
             recent_overkill=row.get('recent_overkill_damage'),
-            presence_seconds=row.get('presence_seconds'),
-            presence_complete=bool(row.get('presence_complete', False)),
+            presence_seconds=life[0] if life is not None else row.get('presence_seconds'),
+            presence_complete=life is not None or bool(row.get('presence_complete', False)),
+            lifecycle_presence_window=life[1] if life is not None else None,
             observed_damage=row.get('observed_damage'),
             observed_healing=row.get('observed_healing'),
             observed_healing_total=row.get('observed_healing_total', row.get('observed_healing')),
             observed_healing_complete=row.get('observed_healing_complete') is True,
+            observed_healing_window=(tuple(healing_total_window)
+                if isinstance(healing_total_window, (tuple, list)) and len(healing_total_window) == 2
+                and all(_finite(value) for value in healing_total_window) else None),
             observed_recent_healing=row.get('observed_recent_healing'),
             observed_recent_healing_window=healing_window,
             observed_recent_healing_complete=healing_window_complete,
@@ -706,8 +754,7 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             source_complete=owner not in unresolved and unresolved.isdisjoint(sources),
             partial_damage=partial,
             settled_damage=settled,
-            event_only_projection=(result.get('event_only_projection') is True
-                                   and result.get('native_counter_scope') == 'unavailable'),
+            event_only_projection=event_only,
             damage_scope_reason=scope_reason,
             mitigation_unknown_reason=row.get('mitigation_unknown_reason'),
             observed_mitigation_rate=row.get('observed_mitigation_rate'),
@@ -1421,6 +1468,8 @@ def render_panel(config: PanelConfig,
 
     def metric_complete(row: PanelSourceRow, basis: RateBasis | None = None,
                         *, recent: bool = False) -> bool:
+        if basis is RateBasis.FULL_CYCLE and row.lifecycle_presence_window is not None:
+            return row.full_cycle(category, effective=effective) is not None
         if observed_healing and row.event_only_projection and row.source_complete:
             if (recent or basis is RateBasis.RECENT_5S) and row.recent_healing is None:
                 return row.recent(category) is not None
