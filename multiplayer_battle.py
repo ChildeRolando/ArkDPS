@@ -1286,6 +1286,14 @@ class MultiplayerBattleStatistics:
 
     def _player_result(self, side, player):
         stats = player.statistics.result()
+        pending_lifecycle_uids = set()
+        pending_lifecycle_unlocalized = False
+        for event in self._pending_lifecycles:
+            uid = event.get('source_character_uid')
+            if type(uid) is int and 0 < uid <= 0xffffffff:
+                pending_lifecycle_uids.add(uid)
+            else:
+                pending_lifecycle_unlocalized = True
         # Core entry snapshots own their event dicts but retain the internal
         # flat numeric attribute dict. Detach that last mutable leaf here.
         enemy_entry = stats.get('enemy_entry')
@@ -1317,7 +1325,8 @@ class MultiplayerBattleStatistics:
                 continuous=self._from_start and not self._lifecycle_unknown_all
                     and side not in self._lifecycle_unknown_players
                     and player.actors[owner].unique_id not in self._lifecycle_unknown_uids
-                    and not self._pending_lifecycles
+                    and not pending_lifecycle_unlocalized
+                    and entry.unique_id not in pending_lifecycle_uids
                     and player.statistics.event_coverage and not player.statistics.event_coverage_broken,
                 archived=self._ended, start_time=player.statistics.event_coverage_start))
             if self._native_mode and (owner in player.unknown_skill_prefix

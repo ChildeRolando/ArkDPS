@@ -101,7 +101,9 @@ def test_unresolved_lifecycle_prefix_is_temporary_but_overflow_is_permanent():
     meter = established()
     pending = body(5, 'character_born', 3, uid=501, instance=50)
     result = consume(meter, 3, [pending], native=native(3), battle_metadata=META)
-    assert meter._pending_lifecycles and not any(lifetimes(result).values())
+    # An exact, different data UID is not an unknown endpoint for these bodies.
+    # Its own prefix stays pending until an account/roster can establish it.
+    assert meter._pending_lifecycles and all(lifetimes(result).values())
     result = consume(meter, 4, native=native(4, [*MEMBERS, member(1, uid=501)]), battle_metadata=META)
     assert not meter._pending_lifecycles
     assert all(lifetimes(result).values())
@@ -113,3 +115,26 @@ def test_unresolved_lifecycle_prefix_is_temporary_but_overflow_is_permanent():
                      native=native(5), battle_metadata=META)
     assert meter._lifecycle_unknown_all
     assert not any(lifetimes(result).values())
+
+
+@pytest.mark.parametrize('uid', [None, 0, True])
+def test_lifecycle_prefix_without_a_usable_uid_still_blocks_known_bodies(uid):
+    meter = established()
+    pending = body(5, 'character_born', 3, uid=999, instance=50)
+    pending['source_character_uid'] = uid
+    result = consume(meter, 3, [pending], native=native(3), battle_metadata=META)
+    assert meter._pending_lifecycles
+    assert not any(lifetimes(result).values())
+
+
+def test_foreign_unbound_cleanup_endpoint_cannot_erase_known_deployed_body_time():
+    meter = established()
+    pending = body(5, 'skill_end', 3, uid=999, instance=50)
+    pending['proof'] = {'method': 'BattleController.OnCharacterFinished'}
+    result = consume(meter, 3, [pending], native=native(3), battle_metadata=META)
+    assert meter._pending_lifecycles
+    assert all(lifetimes(result).values())
+    assert all(lifetimes(result, 4).values())
+    known = player(result, 3)['statistics']['rows']['910000003:char_peer#302']
+    assert known['lifecycle_presence_seconds'] == 2
+    assert known['settled_damage']['effective_damage'] == 100
