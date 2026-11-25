@@ -36,7 +36,8 @@
 
 ## 实现契约
 
-- [从采集钩子到展示的重构规划](collection-refactor-plan.md) — 基于测12源码的并行实现清单、状态机、唯一归属、删除次序与验收门禁；规划稿，尚未实施。
+- [从采集钩子到展示的重构规划](collection-refactor-plan.md) — 基于测12源码冻结的并行实现清单、状态机、唯一归属与删除次序。
+- [采集链重构实施记录](collection-refactor-implementation.md) — D01–D26 的代码收敛、阶段回归、私测交付与仍未完成的实机性能验收。
 
 - [WPF 桌面运行时与同包分发](desktop-runtime.md) — C#/Python 所有权、唯一 stdio v1 协议、运行时与可选依赖打包、离线验收边界。
 
