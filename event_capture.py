@@ -417,6 +417,10 @@ class LiveEventCapture:
                     'enemy_damage_ready': mark.get('enemy_damage_ready') is True,
                     'enemy_damage_unknown': mark.get('enemy_damage_unknown') is not False,
                 }
+            if (not self.initial_drain and getattr(self.adapter.statistics, 'legacy_observation_mode', False)
+                    and (drained.get('enemy_damage_ready') is True
+                         or mark is not None and mark.get('enemy_damage_ready') is True)):
+                raise StreamGap('enemy certificate capability changed within a legacy observation stream')
             version = drained.get('partial_damage_version')
             if type(version) is int and version in (1, 2, 3, 4, 5, 6, 7):
                 self.adapter.statistics.partial_damage_enabled = True
