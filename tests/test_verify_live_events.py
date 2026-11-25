@@ -766,12 +766,13 @@ def single_settlement_supplement_window(*, explicit_source=False):
     ordinary, bar, settlement, burst = events
     ordinary = dict(ordinary, kind='damage_settlement', damage_type=1,
                     nominal_amount=ordinary['amount'], source_character_uid=1,
-                    proof={'method': 'Entity.ApplyModifier', 'native_modifier_observation':
+                    proof={'method': 'Entity.ApplyModifier', 'settlement_wire_version': 2, 'native_modifier_observation':
                            {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': ordinary['amount']}})
     settlement.update({key: burst[key] for key in
                        ('hp_before', 'hp_after', 'real_delta', 'cancel_reason', 'killed')})
     settlement['proof']['native_modifier_observation'] = {
         'version': 1, 'method': 'Entity.ApplyModifier', 'amount': burst['amount']}
+    settlement['proof']['settlement_wire_version'] = 2
     publications[-1]['event_watermark']['sequence'] = settlement['sequence']
     return [ordinary, bar, settlement], publications
 
@@ -798,7 +799,7 @@ def test_single_settlement_supplement_preserves_nominal_and_real_sequence_withou
 
 @pytest.mark.parametrize('fault', ('hp', 'actual', 'nominal', 'uid', 'source', 'clock', 'stage',
                                   'cancel', 'shield', 'missing_endpoint', 'incomplete', 'output_source_null',
-                                  'reused_certificate', 'future_supplement'))
+                                  'reused_certificate', 'future_supplement', 'missing_format'))
 def test_single_settlement_supplement_rejects_bad_raw_evidence_without_legacy_fallback(fault):
     events, publications = single_settlement_supplement_window()
     certificate = events[-1]
@@ -821,7 +822,26 @@ def test_single_settlement_supplement_rejects_bad_raw_evidence_without_legacy_fa
         publications[-1]['statistics']['rows']['char_a']['burst_added_settlement'] = 60
     elif fault == 'future_supplement':
         publications[1]['statistics']['rows']['char_a']['burst_added_settlement'] = 30
+    elif fault == 'missing_format': certificate['proof'].pop('settlement_wire_version')
     with pytest.raises(ValueError):
+        module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+
+
+def test_non_enemy_observation_cannot_disable_same_prefix_single_certificate_supplement():
+    events, publications = single_settlement_supplement_window()
+    events.append(dict(sequence=4, frame=2, game_time=2, kind='damage', source='char_a',
+                       amount=99, damage_type=1, target='char_ally', target_type=1))
+    publications[-1]['event_watermark']['sequence'] = 4
+    result = module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+    assert result['final_nominal_supplements'] == {'char_a': 30}
+    assert result['source_null_burst_witnesses'][0]['settlement_sequence'] == 3
+
+
+@pytest.mark.parametrize('version', (True, '2', 1, 3, None))
+def test_unknown_single_certificate_format_cannot_fall_back_to_empty_legacy_observations(version):
+    events, publications = single_settlement_supplement_window()
+    events[-1]['proof']['settlement_wire_version'] = version
+    with pytest.raises(ValueError, match='wire version'):
         module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
 
 

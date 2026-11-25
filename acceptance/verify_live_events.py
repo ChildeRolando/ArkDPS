@@ -278,15 +278,27 @@ def _complete_elemental_settlement_emitter(event):
             and type(event.get('killed')) is bool)
 
 
-def _single_settlement_wire(events):
-    """Select one counter input format for an already guarded ordered prefix.
+def _single_settlement_event(event):
+    """Recognize the literal producer format, independently of other domains.
 
-    One loaded shared producer uses one fixed capability set. Old recordings
-    retain their original legacy records; certificates are never counted again
-    alongside them. A missing witness in the selected format remains a failure.
+    A modern enemy certificate can coexist with a non-enemy observation. The
+    presence of that independent legacy-shaped record must not change how the
+    certificate is interpreted. Old paired recordings have no v2 marker.
     """
-    return (any(event.get('kind') == 'damage_settlement' for event in events)
-            and not any(event.get('kind') in ('damage', 'hp_damage', 'elemental_burst') for event in events))
+    proof = event.get('proof')
+    if event.get('kind') != 'damage_settlement' or not isinstance(proof, dict) or 'settlement_wire_version' not in proof:
+        return False
+    if type(proof['settlement_wire_version']) is not int or proof['settlement_wire_version'] != 2:
+        raise ValueError('unsupported raw settlement wire version')
+    return True
+
+
+def _single_settlement_wire(events):
+    formats = [_single_settlement_event(event) for event in events if event.get('kind') == 'damage_settlement']
+    modern = any(formats)
+    if modern and not all(formats):
+        raise ValueError('mixed raw settlement wire versions in one producer prefix')
+    return modern
 
 
 def _complete_single_elemental_witness(event):
@@ -327,7 +339,7 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
 
     bursts = [event for event in events if event['kind'] == 'elemental_burst']
     single_wire = _single_settlement_wire(events)
-    standalone = [event for event in events if single_wire and event.get('kind') == 'damage_settlement'
+    standalone = [event for event in events if _single_settlement_event(event)
                   and event.get('damage_type') == 5]
     stage = (publications[0].get('battle_metadata') or {}).get('stage_id')
     session = publications[0].get('native_session')
