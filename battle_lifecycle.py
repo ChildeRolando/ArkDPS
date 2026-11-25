@@ -30,6 +30,8 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          native_identity_sampling_mark, TerminalReadRetry,
                          verified_autochess_round_start, autochess_round_start_origin,
                          pending_scope_anchor, verified_pending_scope_start,
+                         pending_scope_successor, verified_pending_scope_successor,
+                         _verified_pending_scope_anchor,
                          settlement_source_quality_clear, settlement_failure_samples)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
@@ -197,6 +199,67 @@ def _native_pc_guarded_clock_reset(previous, successor):
                 and int(new['after']['native_fixed_time']) < int(old['after']['native_fixed_time']))
     except (KeyError, ValueError, TypeError, AttributeError, struct.error):
         return False
+
+
+
+def _verified_pending_empty_handoff(anchor, latest, successor):
+    """Distinguish a real empty serial reset from a legal late zero-output exit."""
+    origin, _, _ = _verified_pending_scope_anchor(anchor)
+    previous, _, _ = _verified_pending_scope_anchor(latest)
+    evidence = {key: latest[key] for key in ('before', 'after', 'sequence', 'drain')}
+    evidence['pending_scope_start'] = dict(version=1, anchor=anchor, pages=[])
+    verified_pending_scope_start(previous, evidence, previous_sequence=anchor['sequence'])
+    current, _ = verified_pending_scope_successor(successor)
+    old_scene, new_scene = autochess_scene(previous), autochess_scene(current)
+    if (old_scene is None or new_scene is None or old_scene.match != new_scene.match
+            or old_scene.collection_mode != new_scene.collection_mode
+            or old_scene.scope == new_scene.scope):
+        raise StreamGap('pending empty scope handoff changed its process/match/accounts')
+    mark, before, after = latest['after'], successor['before'], successor['after']
+    for fence in (mark, before, after):
+        if (type(fence.get('sequence')) is not int or fence['sequence'] != anchor['sequence']
+                or type(fence.get('epoch')) is not int or fence['epoch'] != mark['epoch']
+                or type(fence.get('active')) is not int or fence['active'] != 0
+                or fence.get('active_hooks') != [] or fence.get('stopped') is not False
+                or fence.get('error') is not None or fence.get('retry', False) is not False
+                or fence.get('terminal_boundary') is not None
+                or type(fence.get('native_battle_state')) is not int or fence['native_battle_state'] != 2
+                or 'native_quiet_boundary_version' in fence or 'native_deferred_callbacks' in fence):
+            raise StreamGap('pending empty scope handoff has an unread tail or nonquiet source')
+    if (before['frame'] != after['frame'] or before['game_time'] != after['game_time']
+            or type(mark.get('native_generation')) is not int):
+        raise StreamGap('pending empty scope handoff crossed a source clock')
+    reset = _native_pc_guarded_clock_reset(previous, current)
+    if reset:
+        if (anchor['after']['epoch'] != mark['epoch']
+                or any(type(fence.get('native_generation')) is not int
+                       or fence['native_generation'] != mark['native_generation'] + 1
+                       or fence.get('native_identity') != mark.get('native_identity')
+                       or fence.get('native_process_pid') != mark.get('native_process_pid')
+                       for fence in (before, after))):
+            raise StreamGap('pending empty reset lacks a strict source-generation fence')
+        # No callback was entered during the entire witnessed pre-start fragment.
+        # Retained uncertainty must not be silently discarded with that fragment.
+        for fence in (anchor['after'], mark, before, after):
+            if (fence.get('enemy_damage_unknown') is not False
+                    or fence.get('damage_unknown') is not False
+                    or fence.get('damage_settlement_unlocalized_unknown') is not False
+                    or fence.get('damage_settlement_source_issues') != []):
+                raise StreamGap('pending empty reset contains unresolved source evidence')
+        return 'reset'
+    if (not _autochess_successor_ends_round(old_scene, new_scene)
+            or current['native_session'] != previous['native_session']
+            or tuple(current['battle_identity']) != tuple(previous['battle_identity'])
+            or current['frame'] <= previous['frame'] or current['game_time'] <= previous['game_time']):
+        raise StreamGap('pending zero-output scope exit is not an independently proved successor')
+    for fence in (before, after):
+        if (fence.get('native_generation') != mark.get('native_generation')
+                or fence.get('native_identity') != mark.get('native_identity')
+                or type(fence.get('damage_settlement_scope')) is not int
+                or fence['damage_settlement_scope'] != mark.get('damage_settlement_scope')
+                or not _same_autochess_boundary_quality(previous, mark, fence)):
+            raise StreamGap('pending zero-output scope exit changed raw source quality/roots')
+    return 'scope_end'
 
 
 def _same_autochess_boundary_quality(sample, reference, fence):
@@ -523,6 +586,24 @@ class BattleFeed:
         return self._emit('gap', reason=reason, read_error=detail)
 
     def _end(self, reason, sample=None, roster=None, *, observer=None, capture=None):
+        if self._pending_scope is not None:
+            pending = self._pending_scope
+            latest = pending_scope_anchor(pending['latest']['sample'], pending['latest']['evidence'],
+                                          pending['latest']['roster_frame'])
+            held = deepcopy(latest['sample'])
+            held['session'] = f'{self.id}:{pending["generation"]}'
+            evidence = {key: deepcopy(latest[key]) for key in ('before', 'after', 'sequence', 'drain')}
+            evidence.update(pending_scope_start=dict(version=1, anchor=deepcopy(pending['anchor']), pages=[]),
+                pending_scope_end=dict(version=1, reason=reason, lifecycle=deepcopy(self.current_lifecycle),
+                                       terminal_evidence=_terminal_boundary(observer, capture=None)))
+            self.retired, self.retired_clock, self.retired_session = self.identity, self.clock, self.native_session
+            self.retired_stage = self.stage
+            self.identity = self.clock = self.frame = self.native_session = self.stage = None
+            self.autochess_identity = None
+            self.terminal = False
+            observation = self._emit('sample', held, RosterSnapshot(latest['roster_frame']),
+                                     reason=reason, events=evidence, observer=observer)
+            return replace(observation, generation=pending['generation'])
         if self.identity is None:
             return self._emit('waiting', reason=reason)
         # FINISHED can precede OnDestroy. Even after the final cumulative pair
@@ -765,10 +846,6 @@ class BattleFeed:
                              published_generation, published_capture, published_observer, capture):
         """Retain an empty late anchor until its first explicitly acquired prefix."""
         pending = self._pending_scope
-        if (pending is not None and published_generation == pending['generation']
-                and published_capture is not None and published_capture.baseline_sequence is not None):
-            # Consumption committed; ACK retry belongs exclusively to Runtime.
-            self._pending_scope = pending = None
         if pending is not None:
             if observer is not pending['observer']:
                 raise CaptureRetry('pending scope observer changed before its prefix committed')
@@ -788,6 +865,7 @@ class BattleFeed:
                 and sample.get('state') == 2 and type(sample.get('frame')) is int and sample['frame'] > 0
                 and type(sample.get('game_time')) in (int, float) and sample['game_time'] > 0
                 and not roster.entries and isinstance(result, dict) and not result.get('error')
+                and (stream is None or observer is published_observer)
                 and result.get('sequence') == previous and isinstance(result.get('drain'), dict)
                 and result['drain'].get('events') == [] and 'autochess_round_start' not in result['drain']):
             try:
@@ -957,7 +1035,24 @@ class BattleFeed:
         # A same-controller round reset can still prove the old stream ended
         # at its last accepted watermark, without draining preparation events.
         capture = published_capture if generation == published_generation else None
-        if not preparing and not scope_unavailable:
+        pending_handoff = None
+        pending = self._pending_scope
+        if (pending is not None and not scope_unavailable and context_identity is not None
+                and context_identity != pending['anchor']['sample']['autochess_context']['identity']):
+            if observer is not pending['observer']:
+                raise CaptureRetry('pending scope observer changed before its empty handoff')
+            latest = pending_scope_anchor(pending['latest']['sample'], pending['latest']['evidence'],
+                                          pending['latest']['roster_frame'])
+            successor = pending_scope_successor(sample, events)
+            mode = _verified_pending_empty_handoff(pending['anchor'], latest, successor)
+            pending_handoff = dict(version=1, anchor=deepcopy(pending['anchor']),
+                                   latest=latest, successor=successor, mode=mode)
+        if pending_handoff is not None and pending_handoff['mode'] == 'reset':
+            # Only a strict serial/generation reset with no entered callbacks can
+            # supersede the witnessed pre-start fragment. The new zero is real.
+            events = self._drain(observer, events, sample, capture=None)
+            events['pending_scope_superseded'] = pending_handoff
+        elif pending_handoff is None and not preparing and not scope_unavailable:
             events, pending_empty = self._pending_scope_drain(observer, events, sample, roster,
                 generation=generation, published_generation=published_generation,
                 published_capture=published_capture, published_observer=published_observer, capture=capture)
@@ -997,6 +1092,17 @@ class BattleFeed:
             self.autochess_identity = None
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
+        if pending_handoff is not None and pending_handoff['mode'] == 'scope_end':
+            pending = self._pending_scope
+            latest = pending_handoff['latest']
+            held_sample = deepcopy(latest['sample'])
+            held_sample['session'] = f'{self.id}:{pending["generation"]}'
+            held_events = {key: deepcopy(latest[key]) for key in ('before', 'after', 'sequence', 'drain')}
+            held_events.update(pending_scope_start=dict(version=1, anchor=deepcopy(pending['anchor']), pages=[]),
+                pending_scope_exit=dict(version=1, successor=pending_handoff['successor'], next_generation=generation))
+            observation = self._emit('sample', held_sample, RosterSnapshot(latest['roster_frame']),
+                                     events=held_events, observer=observer)
+            return replace(observation, generation=pending['generation'])
         if scope_unavailable:
             return self._emit('scope_unavailable', sample, roster,
                               reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED, events=events)
@@ -1563,6 +1669,60 @@ class BattleSessions:
             self.connection = 'connected'
             self.reason = observation.reason
         elif observation.kind == 'sample':
+            pending_fields = {'pending_scope_start', 'pending_scope_exit', 'pending_scope_end',
+                              'pending_scope_superseded'} & (observation.events or {}).keys()
+            if pending_fields and observation.generation <= self.generation:
+                raise StreamGap('pending scope transaction cannot reinitialize an established generation')
+            if (len(pending_fields & {'pending_scope_exit', 'pending_scope_end', 'pending_scope_superseded'}) > 1
+                    or 'pending_scope_superseded' in pending_fields and 'pending_scope_start' in pending_fields):
+                raise StreamGap('conflicting pending scope handoff transactions')
+            pending_exit = (observation.events or {}).get('pending_scope_exit')
+            pending_end = (observation.events or {}).get('pending_scope_end')
+            if pending_end is not None:
+                if (not isinstance(pending_end, dict)
+                        or set(pending_end) != {'version', 'reason', 'lifecycle', 'terminal_evidence'}
+                        or type(pending_end.get('version')) is not int or pending_end['version'] != 1
+                        or pending_end['reason'] != observation.reason
+                        or pending_end['lifecycle'] != observation.lifecycle
+                        or not isinstance(pending_end['terminal_evidence'], dict)):
+                    raise StreamGap('invalid pending scope interrupted-end transaction')
+                life = observation.lifecycle
+                reason = pending_end['reason']
+                valid_end = (
+                    reason == 'process_changed' and life is None
+                    or isinstance(life, dict) and (
+                        reason == 'battle_absent' and life.get('battle') is None
+                        or reason == 'battle_initializing' and type(life.get('state')) is int and life['state'] in (0, 1)
+                        or reason in ('finished', 'replaced') and (life.get('state') == 3
+                            or life.get('transiting') is True and life.get('target') == 'battle_finish')))
+                start = (observation.events or {}).get('pending_scope_start')
+                if not valid_end or not isinstance(start, dict) or start.get('pages') != []:
+                    raise StreamGap('pending scope end lacks its original lifecycle departure')
+            superseded = (observation.events or {}).get('pending_scope_superseded')
+            if superseded is not None:
+                if (not isinstance(superseded, dict)
+                        or set(superseded) != {'version', 'anchor', 'latest', 'successor', 'mode'}
+                        or type(superseded.get('version')) is not int or superseded['version'] != 1
+                        or superseded['mode'] != 'reset'
+                        or _verified_pending_empty_handoff(superseded['anchor'], superseded['latest'], superseded['successor']) != 'reset'
+                        or pending_scope_successor(observation.sample, observation.events) != superseded['successor']):
+                    raise StreamGap('invalid pending scope supersession transaction')
+                previous_stream = self.adapter.event_stream if self.adapter is not None else None
+                expected = previous_stream.sequence if previous_stream is not None else 0
+                if superseded['anchor']['sequence'] != expected:
+                    raise StreamGap('pending scope supersession changed its accepted cursor')
+            if pending_exit is not None:
+                if (not isinstance(pending_exit, dict) or set(pending_exit) != {'version', 'successor', 'next_generation'}
+                        or type(pending_exit.get('version')) is not int or pending_exit['version'] != 1
+                        or type(pending_exit['next_generation']) is not int
+                        or pending_exit['next_generation'] != observation.generation + 1):
+                    raise StreamGap('invalid pending zero-output scope exit transaction')
+                start = (observation.events or {}).get('pending_scope_start')
+                if not isinstance(start, dict) or start.get('pages') != []:
+                    raise StreamGap('pending empty scope exit contains an unexpected event prefix')
+                latest = pending_scope_anchor(observation.sample, observation.events, observation.roster.frame)
+                if _verified_pending_empty_handoff(start['anchor'], latest, pending_exit['successor']) != 'scope_end':
+                    raise StreamGap('pending scope exit cannot discard a reset fragment')
             if observation.generation <= 0 or observation.sample['session'] != f'{self.feed_id}:{observation.generation}':
                 raise ValueError('sample does not match its observation generation')
             if observation.generation == self.generation and (
@@ -1642,6 +1802,19 @@ class BattleSessions:
             self.state = 'playing'
             self.connection = 'connected'
             self.reason = ''
+            if pending_exit is not None:
+                # Preserve the real late zero-output scope. The existing strict
+                # zero-origin/terminal-body rules still decide completeness.
+                self._archive('pending_scope_exit')
+                self.preparing_generation = pending_exit['next_generation']
+                self.state, self.reason = 'preparing', 'pending_scope_exit'
+            elif pending_end is not None:
+                # This endpoint proves the observed empty interval only. An absent
+                # or changed source cannot certify an unread terminal prefix.
+                self._archive(pending_end['reason'])
+                self.preparing_generation = None
+                self.state, self.reason = 'ended', pending_end['reason']
+                self.connection = 'disconnected' if pending_end['reason'] == 'process_changed' else 'connected'
         elif observation.kind == 'terminal':
             if (observation.generation != self.generation or self.adapter is None
                     or self._archived):
@@ -1733,7 +1906,17 @@ class BattleRuntime:
     def _consume(self, observation):
         self.record(observation)
         try:
-            return self.sessions.consume(observation)
+            consumed = self.sessions.consume(observation)
+            pending = self.feed._pending_scope
+            evidence = observation.events or {}
+            if consumed and pending is not None and ('pending_scope_start' in evidence or 'pending_scope_superseded' in evidence):
+                stream = self.sessions.adapter.event_stream if self.sessions.adapter is not None else None
+                if (stream is not None and stream.sequence == evidence['sequence']
+                        and stream.frame == observation.sample['frame']
+                        and (not self.sessions.capture.closed or 'pending_scope_exit' in evidence
+                             or 'pending_scope_end' in evidence)):
+                    self.feed._pending_scope = None
+            return consumed
         except MappingUnavailable as exc:
             # The native battle and event attachment remain valid while
             # ownership settles. Preserve the queue and the last good view.

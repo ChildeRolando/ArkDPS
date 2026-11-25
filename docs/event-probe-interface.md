@@ -162,3 +162,16 @@ scope缓存失败后仅允许一次有界scope-only恢复：根、完整账号�
 
 
 敌人首次地图层入场可能晚于真实 Born。既有 BObject.Born 回调在同指针/类/CID/native UID、borned 从0到1、原始 frame/Q32/scope 不变时，可保存只读出生证书；延后的 enemy_enter 附 `proof.native_enemy_birth`（version1、source_method、target/native UID/native pointer、原始时钟、Born-enter前及成功return后的原始sequence、return epoch）。无额外钩子或RPC。回收、假死/重生、换scope或读取失败清除此可选证书。宿主严格校验后，仅当元素条同UID与同native pointer、其原始序号严格位于Born成功return与首次entry之间，且bar进入时的原始epoch严格晚于Born-return epoch（仅pending delayed body的bar附此小型标记）、原时钟顺序及连续覆盖成立时，保留这条本周期证据。无证书仍按原规则清条，不从“首次看到entry”猜出生；Born前或Born内部旧条、同UID回收新周期、不同pointer/UID、坏entry/坏重生、观测gap不能借此恢复。真实reborn仍清旧条，新bar只恢复未来归属。该边界已由PC/MuMu拥有内存原生产回调验证，不声称解释缺原始guard的测10第14回合11笔元素归属未知。
+
+
+## 正时间空 scope 锚点（pending_scope_start v1）
+
+这是宿主采集事务，不是 producer 零帧证书。Feed 在新 scope 的独立 playing 读、原始前后静默 mark、空 baseline 与已接受 cursor 一致时，保存真实正 frame/game_time 和原 observer；pending 不推进 ACK，也不发布新的金额基线。无此原始锚点的旧录制保留原合同，不能事后补造。
+
+首次后续事件必须由采集层调用 `read_round_start_range(anchor.sequence, closing.sequence]`，按2048条分页、总100000条及32MiB原始JSON预算读取。`events.pending_scope_start` 恰有 `version/anchor/pages`；anchor 恰有真实 `sample/roster_frame/before/after/sequence/drain`，每页恰有 `after/through/batch`。页与合并 drain 的事件字节语义必须一致，序号完整连续，capture clock 位于锚点与当前端点之间，同帧时间相同；每页重新验证 source/session/build/generation、五根、scope 和唯一账号表。重试、换 observer、缺页、冲突或超预算均不 ACK，不改读当前 baseline 兜底。
+
+Sessions 只消费已取得的事务，不调用 observer。初始化用 anchor 的真实 frame/time 与该帧空 roster，随后回放全部前缀，再交 Runtime 确认。新typed字段不接受consumer提供的zero/技能初态/生命周期完整声明；PC重验原native_window_guard、serial/PID birth的canonical绑定，Android重验独立guard/roots/session。正时间仍是晚覆盖；观察窗口内已证金额可以完整，但不能升级为完整整scope、已知技能初态或完整body在场。
+
+无reset的合法零输出scope不能丢弃：`pending_scope_exit` 保存原始独立successor，并物化anchor和最后同scope空窗口后归档，沿用严格终局/body门禁，缺证仍未知。明确absence/finished/process-change通过 `pending_scope_end` 保留原lifecycle及原terminal诊断并归档已知观察窗口，不证明未读尾部、不推进更高ACK。原队列不因零伤害或timeout被释放。
+
+只有 `pending_scope_superseded` 的原始独立PC serial严格+1、原生generation严格+1、PID birth/build/五根/manager/账号相同、两时钟确实回退、整个空片段没有进入callback且source无未定位失败时，才允许用真实reset替代pre-start空片段。它和正时间初始化是不同事务；不把旧锚点重标成零，不以新scope标志自证reset。未知版本、冲突事务、已建立generation上的重初始化一律拒绝。

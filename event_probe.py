@@ -762,6 +762,33 @@ def pending_scope_anchor(sample, evidence, roster_frame):
     return anchor
 
 
+
+def pending_scope_successor(sample, evidence):
+    """Record raw successor fences without granting a start/zero interpretation."""
+    native = sample.get('native_session', sample.get('session'))
+    point = {key: deepcopy(value) for key, value in sample.items() if key in _PENDING_SCOPE_SAMPLE_FIELDS}
+    point.update(session=native, native_session=native)
+    point['battle_metadata'] = {key: sample['battle_metadata'][key] for key in (
+        'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
+    result = dict(sample=point, **{key: deepcopy(evidence[key]) for key in ('before', 'after', 'sequence')})
+    verified_pending_scope_successor(result)
+    return result
+
+
+def verified_pending_scope_successor(raw):
+    if not isinstance(raw, dict) or set(raw) != {'sample', 'before', 'after', 'sequence'}:
+        raise StreamGap('invalid pending scope successor shape')
+    point = raw['sample']
+    if (not isinstance(point, dict) or not set(point) <= _PENDING_SCOPE_SAMPLE_FIELDS
+            or point.get('session') != point.get('native_session') or point.get('state') != 2):
+        raise StreamGap('invalid pending scope successor raw sample')
+    context, sequence = verified_autochess_event_window(point, raw['before'], raw['after'],
+        anchor=point.get('autochess_snapshot_anchor', point))
+    if context != point.get('autochess_context') or sequence != raw['sequence']:
+        raise StreamGap('pending scope successor disagrees with its independent raw window')
+    return point, context
+
+
 def _pending_scope_identity(sample, mark, *, read=False):
     if read:
         from autochess_context import normalize_native_autochess
@@ -885,6 +912,13 @@ def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):
         cursor = page['through']
     if cursor != through or size > _PENDING_SCOPE_BYTES:
         raise StreamGap('pending scope prefix does not reach release watermark')
+    try:
+        wire_size = len(json.dumps(dict(sample=sample, evidence=evidence),
+                                   ensure_ascii=True, allow_nan=False).encode('utf-8'))
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise StreamGap('invalid pending scope transaction JSON') from exc
+    if wire_size > _PENDING_SCOPE_BYTES:
+        raise StreamGap('pending scope recorded transaction exceeds byte budget')
     from autochess_context import native_autochess_event_identity
     scope = tuple(identity[0][key] for key in ('scope_key', 'phase', 'round'))
     frame, when = point['frame'], point['game_time']
