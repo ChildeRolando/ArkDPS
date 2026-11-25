@@ -2,7 +2,7 @@
 
 日期：2026-11-26。规划基线为 `066bcb9a184d8c9fb3222560973511c620dc44d3`，生产基线为 `667bb2e320c76ad60f64b02a5a5e6a4a4b6b2b86`。实施分支为 `codex/collection-refactor`。本记录对应[重构规划](collection-refactor-plan.md)的 D01–D26；代码、离线验证、实机验收分开登记。
 
-状态：D01–D26 代码收敛及本机离线门禁完成。本次交付为私测 `1.0.0-rc.2026112613`；包与桌面副本的源提交、SHA 和实际路径见 `runtime/refactor-evidence/package-delivery.json`。没有发布正式版、合并 main 或操作正在运行的游戏，实机性能验收尚未完成。
+状态：D01–D26 代码收敛及本机离线门禁完成。以下保留私测 `1.0.0-rc.2026112613` 的冻结交付记录；当时包与桌面副本的源提交、SHA 和实际路径见 `runtime/refactor-evidence/package-delivery.json`，没有操作正在运行的游戏。后续公开 rc.42 的交付及迁移见[发布说明](release-rc42.md)。实机性能验收尚未完成。
 
 ## 已改变的运行路径
 
