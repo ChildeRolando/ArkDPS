@@ -160,10 +160,12 @@ def read_event_batch(observer, sequence, *, baseline=False):
         raise CaptureRetry(str(exc)) from exc
 
 
-def read_pending_scope_prefix(observer, anchor, evidence, sample):
+def read_pending_scope_prefix(observer, anchor, evidence, sample, *, cursor_lifetime):
     """Acquire retained pages once; Sessions and multiplayer never read them."""
     from event_probe import (_verified_pending_scope_anchor, _PENDING_SCOPE_PAGE_SIZE,
-                             verified_pending_scope_start, _ROUND_START_PREFIX_LIMIT, _PENDING_SCOPE_BYTES)
+                             verified_pending_scope_start, _ROUND_START_PREFIX_LIMIT, _PENDING_SCOPE_BYTES,
+                             check_cursor_lifetime)
+    check_cursor_lifetime(observer, cursor_lifetime)
     point, _, contract = _verified_pending_scope_anchor(anchor)
     after, through = anchor['sequence'], evidence['sequence']
     if (type(through) is not int or not after <= through <= after + _ROUND_START_PREFIX_LIMIT):
@@ -177,7 +179,9 @@ def read_pending_scope_prefix(observer, anchor, evidence, sample):
     while after < through:
         end = min(after + _PENDING_SCOPE_PAGE_SIZE, through)
         try:
+            check_cursor_lifetime(observer, cursor_lifetime)
             batch = read_range(after, end)
+            check_cursor_lifetime(observer, cursor_lifetime)
         except ObserverReadRetry as exc:
             raise CaptureRetry(str(exc)) from exc
         if isinstance(batch, dict) and batch.get('retry'):
@@ -199,7 +203,9 @@ def read_pending_scope_prefix(observer, anchor, evidence, sample):
     # Empty ranges still use a real raw read at the current endpoint, not a
     # new baseline that could exclude the first later hit.
     try:
+        check_cursor_lifetime(observer, cursor_lifetime)
         batch = pages[-1]['batch'] if pages else read_range(after, through)
+        check_cursor_lifetime(observer, cursor_lifetime)
     except ObserverReadRetry as exc:
         raise CaptureRetry(str(exc)) from exc
     if not isinstance(batch, dict) or batch.get('retry'):

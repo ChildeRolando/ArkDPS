@@ -11,7 +11,12 @@ from test_autochess_scope_end import OwnedScopeEnd
 
 def pending_case(monkeypatch):
     import test_autochess_scope_end
-    monkeypatch.setattr(test_autochess_scope_end, 'CrossingPcBattle', CollectorClockBattle)
+    from event_probe import reset_probe_cursor
+    class SourceWithLifetime(CollectorClockBattle):
+        def __init__(self):
+            super().__init__()
+            reset_probe_cursor(self.observer)
+    monkeypatch.setattr(test_autochess_scope_end, 'CrossingPcBattle', SourceWithLifetime)
     case = OwnedScopeEnd('native_pc', phase=4, mode='all')
     source = case.fixture
     source.range_reads = []
@@ -277,3 +282,91 @@ def test_pending_prefix_byte_budget_rejects_before_ack_or_receiver_initializatio
     with pytest.raises(StreamGap, match='byte budget'): source.poll()
     assert source.commits == [0, 1] and source.queue[0]['amount'] == 75
     assert source.runtime.sessions.generation == 1
+
+
+@pytest.mark.parametrize('point', ['before_range', 'during_range', 'before_consume', 'before_ack'])
+def test_same_observer_new_stream_lifetime_cannot_reuse_or_ack_pending_anchor(monkeypatch, point):
+    from event_probe import reset_probe_cursor
+    case = pending_case(monkeypatch); source = case.fixture
+    start_pending(case)
+    case.advance(2, amount=75)
+    if point == 'before_range':
+        reset_probe_cursor(source.observer)
+        with pytest.raises(StreamGap, match='lifetime'): source.poll()
+    elif point == 'during_range':
+        original = source.observer.read_round_start_range
+        def restart(after, through):
+            result = original(after, through)
+            reset_probe_cursor(source.observer)
+            return result
+        source.observer.read_round_start_range = restart
+        with pytest.raises(StreamGap, match='lifetime'): source.poll()
+    else:
+        observation = source.runtime._acquire(source.collector, source.observer)
+        if point == 'before_consume':
+            reset_probe_cursor(source.observer)
+            count = len(case.records)
+            with pytest.raises(StreamGap, match='lifetime'): source.runtime._consume(observation)
+            assert len(case.records) == count  # Live-rejected prefixes are not replayable observations.
+        else:
+            assert source.runtime._consume(observation)
+            reset_probe_cursor(source.observer)
+            source.runtime._acknowledge_observation(observation, source.observer, True)
+            assert source.runtime.sessions.multiplayer.result()['players'][2]['observed_damage'] == 75
+    assert source.commits == [0, 1] and source.queue[0]['amount'] == 75
+
+
+@pytest.mark.parametrize('fault', ['whole_release', 'page_stale', 'page_future', 'page_bool'])
+def test_sequence_growth_requires_strict_epoch_growth_and_valid_raw_page_epoch(monkeypatch, fault):
+    case = pending_case(monkeypatch); source = case.fixture
+    start_pending(case); case.advance(2, amount=75)
+    observation = source.runtime._acquire(source.collector, source.observer)
+    raw = asdict(observation)
+    epoch = raw['events']['pending_scope_start']['anchor']['after']['epoch']
+    if fault == 'whole_release':
+        for key in ('before', 'after', 'drain'): raw['events'][key]['epoch'] = epoch
+        raw['events']['pending_scope_start']['pages'][0]['batch']['epoch'] = epoch
+    else:
+        batch = raw['events']['pending_scope_start']['pages'][0]['batch']
+        batch['epoch'] = epoch if fault == 'page_stale' else epoch+10 if fault == 'page_future' else True
+    with pytest.raises(StreamGap): source.runtime.sessions.consume(observation_from_json(raw))
+    assert source.commits == [0, 1] and source.runtime.sessions.generation == 1
+
+
+def test_fresh_positive_time_attachment_keeps_original_immediate_late_baseline(monkeypatch):
+    from battle_lifecycle import BattleRuntime
+    from event_probe import reset_probe_cursor
+    case = pending_case(monkeypatch); source = case.fixture
+    source.runtime = BattleRuntime(); source.sequence = 0; source.queue = []; source.commits = []
+    reset_probe_cursor(source.observer)
+    case.advance(10)
+    observation = source.poll()
+    assert observation.kind == 'sample' and source.runtime.feed._pending_scope is None
+    assert observation.sample['game_time'] == 10 and source.commits == [0]
+    assert source.runtime.sessions.adapter.event_stream.baseline_frame == 300
+    assert source.runtime.sessions.multiplayer.result()['coverage_start'] == 10
+
+
+def test_changed_epoch_without_old_prefix_seal_uses_immediate_late_baseline(monkeypatch):
+    case = pending_case(monkeypatch); source = case.fixture
+    case.extra_epoch += 1
+    case.advance(1.5, phase=5)
+    observation = source.poll()
+    assert observation.kind == 'sample' and source.runtime.feed._pending_scope is None
+    assert source.runtime.sessions.multiplayer.result()['coverage_start'] == 1.5
+    case.advance(2, amount=75); source.poll()
+    assert source.runtime.sessions.multiplayer.result()['players'][2]['observed_damage'] == 75
+
+
+def test_ack_retry_cannot_commit_a_previous_source_prefix_after_same_object_restart(monkeypatch):
+    from event_probe import reset_probe_cursor
+    case = pending_case(monkeypatch); source = case.fixture
+    start_pending(case); case.advance(2, amount=75)
+    source.observer.commit_events = lambda sequence: False
+    source.poll()
+    assert source.runtime._pending_event_ack is not None
+    reset_probe_cursor(source.observer)
+    case.advance(2.5)
+    with pytest.raises(StreamGap, match='lifetime'): source.poll()
+    assert source.commits == [0, 1]
+    assert source.queue[0]['amount'] == 75

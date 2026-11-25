@@ -166,9 +166,9 @@ scope缓存失败后仅允许一次有界scope-only恢复：根、完整账号�
 
 ## 正时间空 scope 锚点（pending_scope_start v1）
 
-这是宿主采集事务，不是 producer 零帧证书。Feed 在新 scope 的独立 playing 读、原始前后静默 mark、空 baseline 与已接受 cursor 一致时，保存真实正 frame/game_time 和原 observer；pending 不推进 ACK，也不发布新的金额基线。无此原始锚点的旧录制保留原合同，不能事后补造。
+这是宿主采集事务，不是 producer 零帧证书。仅在同一 observer 寿命内，旧零起点 combat 前缀通过既有严格 successor watermark 封口、并观察到 phase/round 先行的正时间新 scope 时，Feed 保存独立 playing 读、原始前后静默 mark、与已接受 cursor 一致的空 baseline、真实正 frame/game_time 及原 observer；fresh late-attach 或旧前缀不能严格封口时仍立即建立原有晚基线，不额外等待首事件。pending 不推进 ACK，也不发布新的金额基线。无此原始锚点的旧录制保留原合同，不能事后补造。
 
-首次后续事件必须由采集层调用 `read_round_start_range(anchor.sequence, closing.sequence]`，按2048条分页、总100000条及32MiB原始JSON预算读取。`events.pending_scope_start` 恰有 `version/anchor/pages`；anchor 恰有真实 `sample/roster_frame/before/after/sequence/drain`，每页恰有 `after/through/batch`。页与合并 drain 的事件字节语义必须一致，序号完整连续，capture clock 位于锚点与当前端点之间，同帧时间相同；每页重新验证 source/session/build/generation、五根、scope 和唯一账号表。重试、换 observer、缺页、冲突或超预算均不 ACK，不改读当前 baseline 兜底。
+首次后续事件必须由采集层调用 `read_round_start_range(anchor.sequence, closing.sequence]`，按2048条分页、总100000条及32MiB原始JSON预算读取。`events.pending_scope_start` 恰有 `version/anchor/pages`；anchor 恰有真实 `sample/roster_frame/before/after/sequence/drain`，每页恰有 `after/through/batch`。页与合并 drain 的事件字节语义必须一致，序号完整连续，capture clock 位于锚点与当前端点之间，同帧时间相同；每页重新验证 source/session/build/generation、五根、scope 和唯一账号表。序号跨锚点增长时 callback epoch 必须严格增长；若原始页声明 epoch，还须在锚点与closing epoch之间单调且不伪零。重试、换 observer、同对象重启导致 `_cursor_lifetime` 改变、缺页、冲突或超预算均不 ACK，不改读当前 baseline 兜底。寿命令牌在read前后、consumer交接与ACK前分别重验；令牌是现场owner边界，不接受回放payload自报令牌来授权新source。
 
 Sessions 只消费已取得的事务，不调用 observer。初始化用 anchor 的真实 frame/time 与该帧空 roster，随后回放全部前缀，再交 Runtime 确认。新typed字段不接受consumer提供的zero/技能初态/生命周期完整声明；PC重验原native_window_guard、serial/PID birth的canonical绑定，Android重验独立guard/roots/session。正时间仍是晚覆盖；观察窗口内已证金额可以完整，但不能升级为完整整scope、已知技能初态或完整body在场。
 

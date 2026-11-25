@@ -86,6 +86,15 @@ def reset_probe_cursor(probe):
     probe._cursor_lifetime = object()
 
 
+def probe_cursor_lifetime(probe):
+    return getattr(probe, '_cursor_lifetime', None)
+
+
+def check_cursor_lifetime(probe, lifetime):
+    if probe_cursor_lifetime(probe) is not lifetime:
+        raise StreamGap('event probe cursor lifetime changed during acquisition')
+
+
 def acknowledgement_matches(reply, sequence, *, exact_fields=False):
     """Interpret the common ACK value without weakening a transport envelope."""
     return (isinstance(reply, dict) and not reply.get('error')
@@ -874,6 +883,9 @@ def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):
             raise StreamGap('pending scope release changed its source/generation')
     if (not anchor['sequence'] <= through <= anchor['sequence'] + _ROUND_START_PREFIX_LIMIT
             or evidence['after']['epoch'] < origin['epoch']
+            or through > anchor['sequence'] and evidence['after']['epoch'] <= origin['epoch']
+            or evidence['before']['epoch'] < origin['epoch']
+            or evidence['before']['sequence'] > anchor['sequence'] and evidence['before']['epoch'] <= origin['epoch']
             or sample['frame'] < point['frame'] or sample['game_time'] < point['game_time']):
         raise StreamGap('pending scope release clock or cursor regressed')
     pages, records, cursor, size = transaction['pages'], [], anchor['sequence'], 0
@@ -884,6 +896,7 @@ def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):
         raise StreamGap('invalid pending scope raw JSON') from exc
     if len(pages) > (_ROUND_START_PREFIX_LIMIT + _PENDING_SCOPE_PAGE_SIZE - 1) // _PENDING_SCOPE_PAGE_SIZE:
         raise StreamGap('pending scope prefix exceeds page budget')
+    page_epoch = origin['epoch']
     for page in pages:
         if (not isinstance(page, dict) or set(page) != {'after', 'through', 'batch'}
                 or type(page['after']) is not int or type(page['through']) is not int
@@ -899,6 +912,12 @@ def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):
         if (page_identity != identity or any((key in batch) != (key in origin)
                 or not NativePcBinding._same(batch.get(key), origin.get(key)) for key in binding)):
             raise StreamGap('pending scope prefix page changed source/scope/accounts')
+        if 'epoch' in batch:
+            epoch = batch['epoch']
+            if (not _round_start_integer(epoch) or not page_epoch <= epoch <= evidence['after']['epoch']
+                    or epoch <= origin['epoch']):
+                raise StreamGap('pending scope page epoch regressed or lacks callback entry')
+            page_epoch = epoch
         events = batch.get('events')
         if not isinstance(events, list) or len(events) != page['through'] - cursor:
             raise StreamGap('incomplete pending scope event prefix')
@@ -941,6 +960,10 @@ def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):
         raise StreamGap('pending scope published drain differs from its raw pages')
     if replay.get('error') or replay.get('stopped') or replay.get('retry'):
         raise StreamGap('pending scope release drain is unavailable')
+    if 'epoch' in replay and (not _round_start_integer(replay['epoch'])
+            or not page_epoch <= replay['epoch'] <= evidence['after']['epoch']
+            or through > anchor['sequence'] and replay['epoch'] <= origin['epoch']):
+        raise StreamGap('pending scope release drain has an invalid callback epoch')
     contract.validate_binding(sample, replay)
     _, read_identity = _pending_scope_identity(sample, replay, read=True)
     if read_identity != identity or any((key in replay) != (key in origin)
