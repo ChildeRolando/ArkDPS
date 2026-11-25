@@ -24,6 +24,11 @@ const rows=[
   parent:[3827311.8947653356,3825273.89277103,2038.0019943059888],
   steps:[[null,3839075.7441209694,3837325.744160085,1749.9999608844519],
    [blaze,3837325.744160085,3827311.8947653356,10013.849394749384]]},
+ {name:'r15_qiubai_f1096_children_kill_zero_parent',recorded:29099,recordedLine:1045,actor:qiu,type:2,
+  frame:1096,when:54.783333097584546,order:before,zeroAfterChildren:true,
+  parent:[0,0,13460.557857912034],
+  steps:[[null,12223.53406901937,5223.534225481562,6999.9998435378075],
+   [blaze,5223.534225481562,0,24995.746728045167]]},
 ];
 const synthetic=(count,order=after,lethal=false)=>({
  name:lethal?'owned_children_first_parent_kill':'owned_'+count+'_elemental_steps',
@@ -38,6 +43,7 @@ const faults=['parent_real_missing','parent_final_hp_changed','parent_checkpoint
  'child_target_cid','child_target_class','child_shield_unknown','child_record_changed',
  'child_wrong_scope','cross_thread_hp_write','unsupported_third_child','chain_limit',
  'untracked_retarget_same_modifier','cross_thread_untracked_already_active',
+ 'zero_parent_nonzero_real','zero_parent_cancelled','zero_parent_no_lethal_child','zero_parent_missing_child',
  'children_first_missing_parent_real','children_first_checkpoint_nonzero','children_first_parent_hp_disagrees'];
 function run(platform,row,fault=null){
  const f=world({platform:platform==='android'?'mumu':'native_pc',fixtureOptions:{settlement:true}});
@@ -55,9 +61,9 @@ function run(platform,row,fault=null){
  const outer={threadId:1},parentHit={threadId:1};
  const childFirst=row.order===before;
  const openingHp=childFirst?row.steps[0][1]:parentBefore;
- f.write(target.add(0x40),fixed(openingHp));
+ f.write(target.add(0x40),fixed(row.completedBeforeAnchor?openingHp+2:openingHp));
  let foreign=null;
- if(row.parallel||fault==='cross_thread_untracked_already_active'){
+ if(row.parallel||row.completedBeforeAnchor||fault==='cross_thread_untracked_already_active'){
   const foreignTarget=row.parallel?f.unit('enemy_concurrent_other',701):target;
   if(row.parallel){f.write(foreignTarget,f.enemyClass);f.write(foreignTarget.add(0x40),fixed(100));}
   const foreignSource=f.unit('enemy_concurrent_source',702);
@@ -69,6 +75,9 @@ function run(platform,row,fault=null){
   if(foreign.tracksModifier)throw new Error('enemy source accidentally entered the owned money stack');
  }
  apply.onEnter.call(outer,[target,modifier,f.ptr(0)]);
+ if(row.completedBeforeAnchor){
+  f.write(target.add(0x40),fixed(openingHp));apply.onLeave.call(foreign);foreign=null;
+ }
  take.onEnter.call(parentHit,[target,modifier,f.ptr(0)]);
  if(!childFirst&&fault!=='parent_checkpoint_pending')take.onLeave.call(parentHit);
  if(!childFirst){
@@ -77,6 +86,7 @@ function run(platform,row,fault=null){
  }else if(fault==='children_first_checkpoint_nonzero')f.write(modifier.add(0x48),fixed(-1));
 
  const steps=row.steps.map(step=>[...step]);
+ if(fault==='zero_parent_no_lethal_child')steps[steps.length-1][2]=1;
  if(fault==='unsupported_third_child'){
   const hp=steps[steps.length-1][2];
   steps.push([blaze,hp,hp-1,1,2]);
@@ -121,6 +131,7 @@ function run(platform,row,fault=null){
   if(last&&fault==='child_target_cid')f.write(target.add(0x148),f.managedString('enemy_changed'));
   if(last&&fault==='child_target_class')f.write(target,f.character);
   if(last&&fault==='child_shield_unknown')invocation.numericShieldUnknown=true;
+  if(last&&fault==='zero_parent_missing_child')invocation.numericShieldUnknown=true;
   if(last&&fault==='child_cancelled')f.write(child.add(0x70),1);
   if(last&&fault==='child_wrong_scope')f.write(f.machine.add(0x5c),5);
   f.write(child.add(0x48),fixed(hpAfter-hpBefore+(last&&fault==='child_real_changed'?1:0)));
@@ -135,7 +146,9 @@ function run(platform,row,fault=null){
  }
  if(childFirst){
   take.onLeave.call(parentHit);
-  f.write(modifier.add(0x48),fixed(fault==='children_first_missing_parent_real'?0:parentReal));
+  f.write(modifier.add(0x48),fixed(fault==='zero_parent_nonzero_real'?-1:
+   fault==='children_first_missing_parent_real'?0:parentReal));
+  if(fault==='zero_parent_cancelled')f.write(modifier.add(0x70),1);
   f.write(target.add(0x40),fixed(parentAfter+(fault==='children_first_parent_hp_disagrees'?1:0)));
  }else if(fault==='parent_checkpoint_pending')take.onLeave.call(parentHit);
  if(fault==='parent_final_hp_changed')f.write(target.add(0x40),fixed(123));
@@ -144,6 +157,7 @@ function run(platform,row,fault=null){
  if(f.vm.runInContext('activeApplyScopes.size',f.context)!==0)throw new Error('raw ApplyModifier activity leaked');
  const mark=f.mark(),batch=f.context.rpc.exports.readEvents(0,mark.sequence);
  return {name:row.name,recorded:row.recorded??null,order:row.order,mark,batch,
+  zero_after_children:!!row.zeroAfterChildren,
   provenance:row.recorded?{...rc08,original_capture_line:row.recordedLine,original_event_sequence:row.recorded}:null,
   expected:{parent:{source:row.actor,source_character_uid:301,amount:-parentReal,
     hp_before:parentBefore,hp_after:parentAfter,damage_type:row.type,nominal_amount:nominal},children:expectedChildren}};
@@ -153,9 +167,13 @@ for(const platform of ['android','native_pc']){
  output[platform]={
   valid:[...rows,synthetic(1),synthetic(3),synthetic(16),synthetic(2,before,true),
    {...synthetic(1),name:'owned_child_same_source_as_parent',steps:[[qiu,180,179,1]]},
-   {...synthetic(2),name:'different_target_untracked_thread_is_independent',parallel:true}].map(row=>run(platform,row)),
+   {...synthetic(2),name:'different_target_untracked_thread_is_independent',parallel:true},
+   {...synthetic(2),name:'same_target_thread_completed_before_hp_anchor',completedBeforeAnchor:true}].map(row=>run(platform,row)),
+  legacy_zero:run(platform,{...synthetic(1,before),name:'single_lethal_child_before_zero_parent',
+   zeroAfterChildren:true,parent:[0,0,10],steps:[[blaze,100,0,150]]}),
   invalid:Object.fromEntries(faults.map(fault=>[fault,run(platform,
-   fault==='chain_limit'?synthetic(17):fault.startsWith('children_first')?rows[2]:rows[0],fault)]))
+   fault==='chain_limit'?synthetic(17):fault.startsWith('children_first')?rows[2]:
+    fault.startsWith('zero_parent')?rows[3]:rows[0],fault)]))
  };
 }
 process.stdout.write(JSON.stringify(output));

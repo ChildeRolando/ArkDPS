@@ -27,7 +27,7 @@ internal readonly record struct SharePresentation(string Label, string Details, 
         string label=scope switch
         {
             "team"=>"全队同口径占比",
-            "known"=>"已知数据内占比",
+            "known"=>"伤害占比",
             _=>"占比未知"
         };
         string reason=scope=="team" ? "" : view.Text("share_reason");

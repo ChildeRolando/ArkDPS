@@ -28,7 +28,7 @@ def producer():
 
 def accounts(records):
     identities = {}
-    nominal, hp, hits, bars = Counter(), Counter(), Counter(), {}
+    nominal, hp, hits, overkill, bars = Counter(), Counter(), Counter(), Counter(), {}
     for event in records:
         source, uid = event.get('source'), event.get('source_character_uid')
         if source is not None:
@@ -46,10 +46,12 @@ def accounts(records):
             assert owner is not None
             hp[owner] += event['amount'] + event['shield_absorbed']
             hits[owner] += 1
+            if event.get('killed') is True or event.get('settled_after_nested_kill') is True:
+                overkill[owner] += max(0, event['nominal_amount'] - event['amount'] - event['shield_absorbed'])
             if event['damage_type'] == 5 and source is not None:
                 bars.pop(target, None)
     assert hp
-    return identities, nominal, hp, hits
+    return identities, nominal, hp, hits, overkill
 
 
 def quality_of(report, platform):
@@ -65,7 +67,7 @@ def test_multi_stage_certificates_keep_amounts_owners_and_replay_once(producer, 
     for report in producer['android' if platform == 'mumu' else platform]['valid']:
         records = report['batch']['events']
         original = deepcopy(records)
-        identities, nominal, expected, hits = accounts(records)
+        identities, nominal, expected, hits, overkill = accounts(records)
 
         class Collector:
             session = 'owned-elemental-chain'
@@ -104,6 +106,7 @@ def test_multi_stage_certificates_keep_amounts_owners_and_replay_once(producer, 
             assert lane['complete'] is True and lane['unverified_hits'] == 0
             assert lane['observed_hits'] == hits[cid], (report['name'], cid, lane, hits[cid])
             assert lane['known_hp_damage'] + lane['known_shield_damage'] == pytest.approx(amount)
+            assert lane['overkill_damage'] == pytest.approx(overkill[cid])
         world = result['enemy_damage']['by_uid']
         assert sum(row['amount'] for row in world.values()) == pytest.approx(sum(expected.values()))
         observer.records = deepcopy(records)
@@ -116,7 +119,7 @@ def test_multi_stage_certificates_keep_amounts_owners_and_replay_once(producer, 
 def test_solo_and_multiplayer_use_same_certificates_without_same_name_leak(producer, platform, mode):
     for report in producer[platform]['valid']:
         records = deepcopy(report['batch']['events'])
-        identities, _nominal, expected, hits = accounts(records)
+        identities, _nominal, expected, hits, overkill = accounts(records)
         members = [member(3, uid=uid, cid=cid) for cid, uid in identities.items()]
         # An explicitly foreign actor of the same CID is present concurrently.
         peer_cid = next(iter(identities))
@@ -143,6 +146,7 @@ def test_solo_and_multiplayer_use_same_certificates_without_same_name_leak(produ
             assert lane['complete'] is True and lane['unverified_hits'] == 0
             assert lane['observed_hits'] == hits[cid], (report['name'], cid, lane, hits[cid])
             assert lane['known_hp_damage'] + lane['known_shield_damage'] == pytest.approx(amount)
+            assert lane['overkill_damage'] == pytest.approx(overkill[cid])
         assert result['unknown_attribution'] == []
         if mode == 'local':
             assert not player(result, 1)['actor_ledgers']

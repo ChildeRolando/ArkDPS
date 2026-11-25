@@ -845,8 +845,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
      ||BigInt(fixed)<BigInt(nativeLastBinding.fixed)))nativeGeneration++;
   nativeLastBinding={key,frame,fixed};
   const result={native_process_pid:Process.id,native_identity:before,native_generation:nativeGeneration,
-   native_frame:frame,native_fixed_time:fixed,native_stage_id:stage};
-  if(!probeAdapter.autoChessReflected)result.native_battle_state=state;
+   native_frame:frame,native_fixed_time:fixed,native_stage_id:stage,native_battle_state:state};
   if(enabled){
    result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
    if(captureRoundStart){

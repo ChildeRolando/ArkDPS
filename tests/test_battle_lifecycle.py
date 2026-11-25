@@ -919,7 +919,7 @@ def test_finish_marker_must_match_last_accepted_battle_watermark(ending, fault):
 
 
 @pytest.mark.parametrize('preparing', [False, True])
-@pytest.mark.parametrize('fault', [None, 'no_observer', 'sequence', 'epoch', 'identity',
+@pytest.mark.parametrize('fault', [None, 'no_observer', 'different_observer', 'sequence', 'epoch', 'identity',
                                     'native_session', 'frame_did_not_reset', 'uncommitted_tail'])
 def test_same_native_round_reset_retires_only_the_last_verified_watermark(preparing, fault):
     collector, runtime = FakeCollector(), BattleRuntime()
@@ -974,6 +974,8 @@ def test_same_native_round_reset_retires_only_the_last_verified_watermark(prepar
         observed_events.append(dict(sequence=3, frame=0, game_time=0., source='a',
                                     kind='damage', amount=100.))
     use_observer = None if fault == 'no_observer' else observer
+    if fault == 'different_observer':
+        use_observer = SimpleNamespace(**vars(observer))
     successor = runtime.poll(collector, use_observer)
     assert successor.generation == previous.generation + 1
     assert successor.kind == ('preparing' if preparing else 'sample')
@@ -996,6 +998,8 @@ def test_same_native_round_reset_retires_only_the_last_verified_watermark(prepar
         assert archive['event_status'] == 'gap'
         assert archive['event_error'] == '未取得最终事件水位'
         assert archive['statistics']['rows']['a']['skill_damage_effective'] is None
+        if fault == 'different_observer':
+            assert successor.round_reset is None
     assert not runtime.sessions.consume(successor)
     assert not runtime.sessions.pop_archives()
 

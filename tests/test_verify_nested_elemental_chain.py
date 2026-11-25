@@ -37,6 +37,15 @@ def test_every_owned_chain_and_sourced_single_passes_the_raw_mechanism_gate(prod
             assert witness['children'] == [
                 {key: step[key] for key in ('settlement_sequence', 'burst_sequence')}
                 for step in chain['children']]
+            if parent.get('settled_after_nested_kill') is True:
+                by_sequence = {event['sequence']: event for event in events}
+                target = by_sequence[witness['parent_target_sequence']]
+                settlement = by_sequence[witness['parent_settlement_sequence']]
+                assert target['hp_before'] == chain['parent_entry_hp_before'] > 0
+                assert target['sequence'] > chain['children'][-1]['burst_sequence']
+                assert settlement['amount'] == settlement['shield_absorbed'] == parent['real_delta'] == 0
+                assert settlement['nominal_amount'] == parent['amount'] > 0
+                assert parent['killed'] is settlement['killed'] is True
         assert events == original
 
 
@@ -126,3 +135,70 @@ def test_chain_gate_rejects_wrong_loose_or_mutated_raw_references(producer, faul
     result = pc_mechanism_evidence(events)['nested']
     assert result['passed'] is False and result['positive_witnesses'] == []
     assert result['invalid_sequences']
+
+
+@pytest.mark.parametrize('fault', ['missing_entry', 'rewritten_entry', 'entry_scope', 'entry_source_uid',
+    'duplicate_entry', 'parent_damage_flag', 'parent_settlement_flag', 'parent_killed_flag',
+    'nonzero_parent_real', 'zero_nominal', 'wrong_child_first_order', 'last_child_not_lethal',
+    'truncated_chain', 'changed_certified_opening_hp'])
+def test_children_kill_zero_parent_requires_original_target_entry_and_exact_zero_accounting(producer, fault):
+    report = next(report for report in producer['native_pc']['valid']
+                  if report['name'] == 'r15_qiubai_f1096_children_kill_zero_parent')
+    events = deepcopy(report['batch']['events'])
+    parent = next(event for event in events if event['kind'] == 'damage'
+                  and 'nested_elemental_chain' in event['proof'])
+    settlement = next(event for event in events if event['kind'] == 'damage_settlement'
+                      and 'nested_elemental_chain' in event['proof'])
+    chain = parent['proof']['nested_elemental_chain']
+    entry = next(event for event in events if event['kind'] == 'hp_damage'
+                 and event['source'] == parent['source'])
+    by_sequence = {event['sequence']: event for event in events}
+
+    if fault == 'missing_entry':
+        events.remove(entry)
+    elif fault == 'rewritten_entry':
+        entry['hp_before'] -= 1
+    elif fault == 'entry_scope':
+        entry['native_autochess_scope']['round'] += 1
+    elif fault == 'entry_source_uid':
+        entry['source_character_uid'] += 1
+    elif fault == 'duplicate_entry':
+        events.append(deepcopy(entry))
+    elif fault == 'parent_damage_flag':
+        parent['settled_after_nested_kill'] = False
+    elif fault == 'parent_settlement_flag':
+        settlement['settled_after_nested_kill'] = False
+    elif fault == 'parent_killed_flag':
+        parent['killed'] = settlement['killed'] = False
+    elif fault == 'nonzero_parent_real':
+        parent['real_delta'] = chain['parent_real_delta'] = -1
+        parent['hp_before'] = chain['parent_hp_before'] = settlement['amount'] = 1
+    elif fault == 'zero_nominal':
+        parent['amount'] = settlement['nominal_amount'] = 0
+    elif fault == 'wrong_child_first_order':
+        chain['ordering'] = 'parent_before_children'
+    elif fault == 'last_child_not_lethal':
+        step = chain['children'][-1]
+        step['hp_after'] = 1
+        step['real_delta'] += 1
+        burst = by_sequence[step['burst_sequence']]
+        burst.update(hp_after=1, real_delta=step['real_delta'], killed=False)
+        child = by_sequence[step['settlement_sequence']]
+        child.update(amount=-step['real_delta'], killed=False)
+    elif fault == 'truncated_chain':
+        chain['children'].pop(0)
+        chain['parent_entry_hp_before'] = chain['children'][0]['hp_before']
+    elif fault == 'changed_certified_opening_hp':
+        # All child endpoints and amounts still reconcile. Only the
+        # independent Unit entry exposes the false original HP claim.
+        step = chain['children'][0]
+        step['hp_before'] -= 1
+        step['real_delta'] += 1
+        chain['parent_entry_hp_before'] = step['hp_before']
+        burst = by_sequence[step['burst_sequence']]
+        burst.update(hp_before=step['hp_before'], real_delta=step['real_delta'])
+        by_sequence[step['settlement_sequence']]['amount'] = -step['real_delta']
+    settlement['proof']['nested_elemental_chain'] = deepcopy(chain)
+    result = pc_mechanism_evidence(events)['nested']
+    assert result['passed'] is False and result['positive_witnesses'] == []
+    assert parent['sequence'] in result['invalid_sequences']

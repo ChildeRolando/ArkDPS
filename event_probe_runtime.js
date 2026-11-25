@@ -735,11 +735,28 @@ function leaveModifier(scope){
  if(index!==-1)scopes.splice(index,1);
  if(!scopes.length)activeModifiers.delete(scope.tid);
 }
+function possiblySameSettlementTarget(left,right){
+ return !left||left.isNull()||!right||right.isNull()||left.equals(right);
+}
+function activeTargetSettlementOverlap(scope,target){
+ const local=activeApplyScopes.get(scope.tid);
+ if(activeApplyScopes.size===1&&local?.length===1)return false;
+ for(const [thread,calls] of activeApplyScopes){
+  let afterParent=thread!==scope.tid;
+  for(const call of calls){
+   if(call===scope){afterParent=true;continue;}
+   // Other targets on this thread can be real ancestors. Only later calls,
+   // foreign-thread writers, and any shared Modifier can overlap this hit.
+   if(call.mod?.equals(scope.mod)||afterParent&&possiblySameSettlementTarget(call.target,target))return true;
+  }
+ }
+ return false;
+}
 function beginTargetSettlement(invocation,scope){
  try{
   if(knownNonEnemyTarget(invocation.target))return;
   const hit=scope.targetHit,source=invocation.mod.readPointer();
-  if(!hit||scope.targetHitAmbiguous||!scope.target?.equals(invocation.target)||
+  if(!hit||!Number.isFinite(hit.hpBefore)||scope.targetHitAmbiguous||!scope.target?.equals(invocation.target)||
      !scope.mod.equals(invocation.mod)||!scope.nativeModifierSource?.equals(source)||
      !hit.uid||hit.uid!==scope.settlementTargetUid||!sameMitigationTime(scope.when,invocation.when))return;
   const type=invocation.mod.add(0x68).readS32();
@@ -748,12 +765,25 @@ function beginTargetSettlement(invocation,scope){
   hit.commit={source,sourceUid,sourceClass:source.readPointer(),targetClass:hit.target.readPointer(),
     targetKey:targetKey(hit.target),modifier:invocation.mod,entryAmount:invocation.amount,type,
     when:invocation.when,returned:false,invalid:false};
+  if(scope.nestedModifierConflict||scope.mitigationModifierReused||activeTargetSettlementOverlap(scope,hit.target)){
+   scope.targetSettlementNested=true;
+   noteNestedSettlementFailure(scope,'target_entry','overlapping_target_or_modifier');
+  }else{
+   // The first independent HP observation starts this settlement interval.
+   // An already ended writer cannot participate in its subsequent debit.
+   if(scope.nestedCrossThreadActivity)scope.nestedCrossThreadActivity=false;
+   if(scope.nestedBeforeTarget){
+    scope.nestedBeforeTarget=false;
+    scope.targetSettlementNested=false;
+   }
+  }
   invocation.targetSettlementScope=scope;invocation.targetSettlementHit=hit;
  }catch(e){/* Missing target proof keeps strict settlement partial. */}
 }
 function targetSettlementIdentity(scope,hit,when,allowShieldCancel=false){
  const commit=hit?.commit;
  return !!commit&&!commit.invalid&&scope.targetHit===hit&&!scope.targetHitAmbiguous&&
+  !scope.nestedModifierConflict&&!scope.targetObservationCrossThreadActivity&&
   !scope.outputAmbiguous&&!scope.settlementAmbiguous&&!scope.mitigationModifierReused&&
   sameMitigationTime(scope.when,when)&&sameMitigationTime(commit.when,when)&&
   damageModifier(scope.tid,scope.mod)===scope&&scope.mod.equals(commit.modifier)&&
@@ -787,8 +817,9 @@ function observeNestedTargetSettlement(invocation){
      if(concurrent.mod?.equals(invocation.mod)){
       concurrent.nestedModifierConflict=true;invocation.nestedModifierConflict=true;
      }
-     if(thread!==invocation.tid&&hasTarget&&concurrent.target?.equals(target)){
+     if(thread!==invocation.tid&&possiblySameSettlementTarget(concurrent.target,target)){
       concurrent.nestedCrossThreadActivity=true;invocation.nestedCrossThreadActivity=true;
+      if(concurrent.targetHit)concurrent.targetObservationCrossThreadActivity=true;
      }
     }
    }
@@ -799,6 +830,12 @@ function observeNestedTargetSettlement(invocation){
   if(![1,2,3,4,5].includes(type))return;
   for(const previous of scopes){
    if(previous.target?.equals(invocation.target)&&sameMitigationTime(previous.when,invocation.when)){
+    if(!previous.targetHit){
+     // Keep the original conservative state until the first target read can
+     // prove that no child is still in flight. A missing read never clears it.
+     previous.nestedBeforeTarget=true;previous.targetSettlementNested=true;
+     continue;
+    }
     if(previous.targetSettlementNested){
      previous.nestedTargetCheckpoint=null;
      const chain=previous.nestedElementalChain,last=chain&&chain.steps[chain.steps.length-1];
@@ -1171,11 +1208,12 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
   if(!checkpoint||!sameMitigationTime(checkpoint.when,when)||
      !hit?.commit?.returned||hit.commit.type!==type||!sameMitigationTime(hit.commit.returnWhen,when)||
      !target?.equals(hit.target)||!targetSettlementIdentity(scope,hit,when)||
-     (childrenFirst?!(parentReal<0):parentReal!==checkpoint.real)||fp(scope.mod.add(0x30))!==amount||
+     (childrenFirst?!Number.isFinite(parentReal)||parentReal>0:parentReal!==checkpoint.real)||
+     fp(scope.mod.add(0x30))!==amount||
      !Number.isFinite(amount)||amount+0.01<-parentReal||
      scope.numericShieldUnknown||scope.unmatchedShield||scope.numericShield>0||
      shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
-  let parentBefore=checkpoint.hpBefore,parentAfter=checkpoint.hpAfter;
+  let parentBefore=checkpoint.hpBefore,parentAfter=checkpoint.hpAfter,zeroAfterChildren=false;
   const proof={target_uid:String(checkpoint.uid),parent_real_delta:parentReal,
    parent_hp_before:checkpoint.hpBefore,parent_hp_after:checkpoint.hpAfter};
   if(checkpoint.ordinary){
@@ -1195,7 +1233,13 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
    }
    const finalHp=targetHp(target);
    if(childrenFirst){
-    if(finalHp===null||!(hp>finalHp)||Math.abs(hp-finalHp+parentReal)>Math.max(0.01,Math.abs(parentReal)*1e-6))return null;
+    if(parentReal===0){
+     // The same independent chain can exhaust the target before the parent
+     // applies anything. Keep the observed nominal hit as full overkill.
+     if(chain.steps.length<2||!(amount>0)||hp!==0||finalHp!==0)return null;
+     zeroAfterChildren=true;proof.parent_entry_hp_before=checkpoint.hpBefore;
+    }else if(finalHp===null||!(hp>finalHp)||
+             Math.abs(hp-finalHp+parentReal)>Math.max(0.01,Math.abs(parentReal)*1e-6))return null;
     parentBefore=proof.parent_hp_before=hp;parentAfter=proof.parent_hp_after=finalHp;
    }else if(finalHp!==hp)return null;
    if(chain.steps.length===1&&!childrenFirst){
@@ -1211,7 +1255,8 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
   }
   return {target:hit.commit.targetKey,real_delta:parentReal,
    hp_before:parentBefore,hp_after:parentAfter,killed:parentAfter===0,
-   target_type:0,damage_type:type,cancel_reason:0,shield_absorbed:0};
+   target_type:0,damage_type:type,cancel_reason:0,shield_absorbed:0,
+   ...(zeroAfterChildren?{settled_after_nested_kill:true}:{})};
  }catch(e){return null;}
 }
 function rememberNestedElementalKill(child,when,evidence,burstRecord){
@@ -1760,7 +1805,8 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
      (targetCommit||output)&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
      !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===chainBefore);
  let killed;
- if(capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0&&real<0)killed=true;
+ if(capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0&&
+    (real<0||nested&&targetCommit&&scope.nestedElementalChainProof))killed=true;
  if(capturedHp&&exactEvidence.killed===false&&exactEvidence.hp_after>0)killed=false;
  // A matched output can leave HP and shield unchanged during a target
  // transition. Keep the ordinary damage event without adding a zero hit.

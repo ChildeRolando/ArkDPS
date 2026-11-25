@@ -37,6 +37,19 @@ function baseline(f) {
 function json(value) { return JSON.parse(JSON.stringify(value)); }
 
 for (const platform of ['native_pc', 'mumu']) {
+  const stateProof = fixture(platform);
+  const stateAddress = stateProof.controller.add(platform === 'mumu' ? stateProof.androidBattleLayout.state : 0x228);
+  for (const state of [2, 3]) {
+    stateProof.write(stateAddress, state);
+    const [mark, batch] = baseline(stateProof);
+    assert.equal(mark.native_battle_state, state);
+    assert.equal(batch.native_battle_state, state);
+  }
+  stateProof.write(stateAddress, 1);
+  const rejectedState = stateProof.mark();
+  assert.equal(rejectedState.retry, true);
+  assert.equal(rejectedState.native_battle_state, undefined);
+
   for (const phase of [4, 5, 6]) {
     const f = fixture(platform);
     const ready = f.messages.find(message => message.ready === true);

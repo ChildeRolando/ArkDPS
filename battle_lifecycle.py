@@ -23,7 +23,8 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          autochess_root_failure, autochess_scope_detail,
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
                          native_identity_sampling_mark, TerminalReadRetry,
-                         verified_autochess_round_start, autochess_round_start_origin)
+                         verified_autochess_round_start, autochess_round_start_origin,
+                         settlement_source_quality_clear, verified_autochess_settlement_source_issues)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
@@ -105,6 +106,50 @@ def autochess_scene(sample):
 native_autochess_scene = autochess_scene  # Existing offline fixture entry point.
 
 
+def _autochess_successor_ends_round(previous, successor):
+    if (previous is None or successor is None or previous.match != successor.match
+            or previous.scope == successor.scope
+            or previous.phase not in (4, 5, 6)
+            or previous.collection_mode not in ('local', 'all')
+            or previous.collection_mode != successor.collection_mode):
+        return False
+    return (successor.phase == 7 and previous.round == successor.round
+            or successor.phase in (3, previous.phase) and successor.round == previous.round + 1)
+
+
+def _same_autochess_boundary_quality(sample, reference, fence):
+    for key in ('quality_contract_version', 'damage_settlement_quality_version',
+                'damage_settlement_source_quality_version'):
+        if type(fence.get(key)) is not int or fence[key] != 1:
+            return False
+    for key in ('enemy_damage_ready', 'enemy_damage_unknown', 'damage_settlement_unlocalized_unknown',
+                'shield_unknown', 'damage_unknown', 'engagement_unknown', 'skill_unknown',
+                'mitigation_ready', 'mitigation_unknown'):
+        if type(fence.get(key)) is not bool or fence[key] != reference[key]:
+            return False
+    for key in ('unknown_sources', 'engagement_unknown_sources'):
+        names = fence.get(key)
+        if (type(names) is not list or names != reference[key]
+                or any(not isinstance(name, str) or not name for name in names)):
+            return False
+    issues, first = fence['damage_settlement_source_issues'], fence['damage_settlement_first_issue']
+    if (type(issues) is not list or issues != reference['damage_settlement_source_issues']
+            or first != reference['damage_settlement_first_issue']):
+        return False
+    if not fence['enemy_damage_unknown']:
+        return first is None and settlement_source_quality_clear(fence)
+    if (not isinstance(first, dict) or type(first.get('frame')) is not int
+            or not 0 <= first['frame'] <= sample['frame']
+            or type(first.get('game_time')) not in (int, float) or not 0 <= first['game_time'] <= sample['game_time']
+            or type(first.get('sequence')) is not int or not 0 <= first['sequence'] <= reference['sequence']
+            or not isinstance(first.get('reason'), str) or not first['reason']):
+        return False
+    if not issues:
+        return fence['damage_settlement_unlocalized_unknown']
+    localized = dict(fence, damage_settlement_unlocalized_unknown=False)
+    return verified_autochess_settlement_source_issues(sample, localized) is not None
+
+
 @dataclass(frozen=True)
 class BattleObservation:
     feed: str
@@ -118,6 +163,7 @@ class BattleObservation:
     lifecycle: dict | None = None
     round_reset: dict | None = None
     read_error: dict | None = None
+    autochess_successor: dict | None = None
 
 
 class MappingRetry(CaptureRetry):
@@ -292,7 +338,7 @@ class BattleFeed:
         self.autochess_identity = None
 
     def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None,
-              read_error=None, observer=None):
+              read_error=None, observer=None, autochess_successor=None):
         self.sequence += 1
         memo = None
         if events and getattr(observer, 'transfers_event_records', False):
@@ -303,7 +349,8 @@ class BattleFeed:
                 memo = {id(records): records}
         return BattleObservation(self.id, self.sequence, self.generation,
                                  kind, deepcopy(sample), roster, reason, deepcopy(events, memo),
-                                 deepcopy(self.current_lifecycle), deepcopy(round_reset), deepcopy(read_error))
+                                 deepcopy(self.current_lifecycle), deepcopy(round_reset), deepcopy(read_error),
+                                 deepcopy(autochess_successor))
 
     @property
     def battle_waiting(self):
@@ -551,7 +598,7 @@ class BattleFeed:
         return evidence
 
     def acquire(self, collector, observer=None, *, published_generation=0,
-                preparing_generation=None, published_capture=None):
+                preparing_generation=None, published_capture=None, published_observer=None):
         """Bracket cumulative/roster reads with the live singleton and flow.
 
         Failed reads are unknown. Only an observed null/destroyed singleton,
@@ -705,10 +752,23 @@ class BattleFeed:
         if not preparing and not scope_unavailable:
             events = self._drain(observer, events, sample, capture=capture)
         round_reset = None
-        if clock_reset and not scope_unavailable and events is not None and 'sequence' in events:
+        if (clock_reset and not scope_unavailable and observer is not None and observer is published_observer
+                and self.generation == published_generation and events is not None and 'sequence' in events):
             drained = events.get('drain') or {}
             if not (drained.get('error') or drained.get('stopped')):
                 round_reset = {key: events[key] for key in ('before', 'after', 'sequence')}
+        # Keep the original successor marks even on preparation, which does
+        # not publish an event drain or advance the acknowledged cursor.
+        autochess_successor = None
+        if (same_native and not clock_reset and scope_changed and not scope_unavailable
+                and self.generation == published_generation and observer is not None
+                and observer is published_observer and events and not events.get('error')
+                and all(key in events for key in ('before', 'after', 'sequence'))
+                and metadata.get('platform') in ('native_pc', 'android')
+                and published_capture is not None
+                and _autochess_successor_ends_round(
+                    autochess_scene(published_capture.last_sample or {}), autochess_scene(sample))):
+            autochess_successor = {key: events[key] for key in ('before', 'after', 'sequence')}
         if changed:
             self.generation = generation
             self.terminal = False
@@ -731,8 +791,10 @@ class BattleFeed:
                               reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED, events=events)
         if preparing:
             reason = 'awaiting_character_output' if character_counters else 'empty_roster'
-            return self._emit('preparing', sample, roster, reason=reason, round_reset=round_reset)
-        return self._emit('sample', sample, roster, events=events, round_reset=round_reset, observer=observer)
+            return self._emit('preparing', sample, roster, reason=reason, round_reset=round_reset,
+                              autochess_successor=autochess_successor)
+        return self._emit('sample', sample, roster, events=events, round_reset=round_reset, observer=observer,
+                          autochess_successor=autochess_successor)
 
 
 class BattleSessions:
@@ -931,6 +993,63 @@ class BattleSessions:
         except (KeyError, ValueError, TypeError):
             return False
 
+    def _autochess_successor_matches_watermark(self, observation, stream):
+        evidence = observation.autochess_successor
+        previous, successor = self.latest_sample, observation.sample
+        contract = self.capture.contract
+        if (not isinstance(evidence, dict) or not isinstance(successor, dict)
+                or not isinstance(contract, (NativePcProbeContract, MuMuAutoChessProbeContract))
+                or observation.generation != self.generation + 1 or self.capture.closed or self.capture.pending
+                or stream.baseline_frame != 0 or self.adapter.statistics.event_coverage_start != 0):
+            return False
+        try:
+            build = previous['battle_metadata']['source_build']
+            if (not _autochess_successor_ends_round(autochess_scene(previous), autochess_scene(successor))
+                    or previous['state'] != 2 or successor['state'] != 2
+                    or previous['native_session'] != successor['native_session']
+                    or tuple(previous['battle_identity']) != tuple(successor['battle_identity'])
+                    or previous['battle_metadata']['platform'] != successor['battle_metadata']['platform']
+                    or not isinstance(build, str) or not build or build != successor['battle_metadata']['source_build']
+                    or successor['frame'] <= previous['frame']
+                    or successor['game_time'] <= previous['game_time']):
+                return False
+            mark, before, after = self._last_event_mark, evidence['before'], evidence['after']
+            # Sequence excludes a queued tail, epoch excludes even an entered
+            # callback without output. A quiet source mark flushes staged HP.
+            if (type(mark.get('damage_settlement_scope')) is not int or mark['damage_settlement_scope'] < 0
+                    or type(mark.get('native_generation')) is not int or mark['native_generation'] < 0
+                    or type(evidence['sequence']) is not int or evidence['sequence'] != stream.sequence):
+                return False
+            for fence in (mark, before, after):
+                if (type(fence.get('active')) is not int or fence['active'] != 0
+                        or fence.get('active_hooks') != [] or fence.get('stopped') is not False
+                        or fence['error'] is not None or fence.get('retry', False) is not False
+                        or fence['terminal_boundary'] is not None
+                        or type(fence.get('native_battle_state')) is not int or fence['native_battle_state'] != 2
+                        or 'native_quiet_boundary_version' in fence or 'native_deferred_callbacks' in fence
+                        or not _same_autochess_boundary_quality(previous, mark, fence)
+                        or type(fence.get('damage_settlement_scope')) is not int
+                        or fence['damage_settlement_scope'] != mark['damage_settlement_scope']
+                        or type(fence.get('native_generation')) is not int
+                        or fence['native_generation'] != mark['native_generation']
+                        or fence.get('native_identity') != mark['native_identity']
+                        or fence.get('sequence') != stream.sequence or fence.get('epoch') != mark['epoch']):
+                    return False
+            if (stream.frame != previous['frame'] or stream.game_time != previous['game_time']
+                    or self.adapter.last_game_time != stream.game_time
+                    or before['frame'] < stream.frame or before['game_time'] < stream.game_time
+                    or before['frame'] == stream.frame and before['game_time'] != stream.game_time
+                    or autochess_event_mark_context(previous, mark) != previous['autochess_context']
+                    or baseline_barrier(mark, previous, mark, contract=contract) != stream.sequence):
+                return False
+            context, sequence = verified_autochess_event_window(successor, before, after,
+                anchor=successor.get('autochess_snapshot_anchor'))
+            old_scope = previous['autochess_context']['identity']['scope_key']
+            return (context == successor['autochess_context'] and sequence == stream.sequence
+                    and int(context['identity']['scope_key'].rsplit(':', 1)[1]) > int(old_scope.rsplit(':', 1)[1]))
+        except (KeyError, ValueError, TypeError, AttributeError):
+            return False
+
     def _finish_at_verified_watermark(self, observation):
         if (self.event_status != 'recording' or self._last_event_mark is None or
                 self.latest_sample is None):
@@ -941,7 +1060,8 @@ class BattleSessions:
         if observation.kind in ('sample', 'preparing'):
             if getattr(self.capture, 'terminal_pending', False):
                 return False
-            if not self._clock_reset_matches_watermark(observation, stream):
+            if (not self._clock_reset_matches_watermark(observation, stream)
+                    and not self._autochess_successor_matches_watermark(observation, stream)):
                 return False
         elif not self._terminal_boundary_matches_watermark(observation, stream):
             return False
@@ -1358,6 +1478,7 @@ class BattleRuntime:
         self.pending_history = deque()
         self.record = lambda observation: None
         self._pending_event_ack = None
+        self._accepted_event_observer = None
 
     def _consume(self, observation):
         self.record(observation)
@@ -1369,10 +1490,15 @@ class BattleRuntime:
             raise MappingRetry(str(exc), observation) from exc
 
     def _acquire(self, collector, observer):
+        published_observer = None
+        accepted = self._accepted_event_observer
+        if accepted is not None and accepted[1] == self.sessions.generation:
+            published_observer = accepted[0]
         return self.feed.acquire(collector, observer,
                                  published_generation=self.sessions.generation,
                                  preparing_generation=self.sessions.preparing_generation,
-                                 published_capture=self.sessions.capture)
+                                 published_capture=self.sessions.capture,
+                                 published_observer=published_observer)
 
     def _acknowledge_observation(self, observation, observer, consumed):
         """Release accepted data without turning a lost ack response into a gap."""
@@ -1399,6 +1525,7 @@ class BattleRuntime:
                     remember(identity_sample, evidence['after'])
                 pending_ack = (observer, stream.sequence, ack_binding,
                                deepcopy(evidence['after']) if is_terminal_tail else None)
+                self._accepted_event_observer = (observer, observation.generation)
                 current_ack = True
         retry_ack = pending_ack is not None
         if retry_ack and not current_ack and contract.ack_mark_required:
@@ -1450,9 +1577,9 @@ class BattleRuntime:
                             and _native_pc_autochess(metadata, metadata.get('stage_id'))):
                         self._consume(replace(observation, kind='scope_unavailable', sample=native,
                                               reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED,
-                                              events=None, round_reset=None))
+                                              events=None, round_reset=None, autochess_successor=None))
                     else:
-                        self._consume(replace(observation, sample=native, events=None))
+                        self._consume(replace(observation, sample=native, events=None, autochess_successor=None))
                     observation = self._acquire(collector, observer)
             consumed = self._consume(observation)
             self._acknowledge_observation(observation, observer, consumed)
@@ -1464,6 +1591,7 @@ class BattleRuntime:
                 raise
             if isinstance(exc, BattleChanged):
                 self._pending_event_ack = None
+                self._accepted_event_observer = None
                 self._consume(self.feed.gap('process_changed'))
                 raise
             if isinstance(exc, SnapshotGap):
@@ -1476,15 +1604,23 @@ class BattleRuntime:
 
     def process_changed(self):
         self._pending_event_ack = None
+        self._accepted_event_observer = None
         self.feed.current_lifecycle = None
         self._consume(self.feed._end('process_changed'))
 
     def disconnected(self, reason):
         self._pending_event_ack = None
+        self._accepted_event_observer = None
         observation = self.feed.gap(reason)
         self._consume(observation)
         self.sessions.connection = 'disconnected'
         return observation
+
+    def observer_retired(self, observer):
+        if self._accepted_event_observer is not None and self._accepted_event_observer[0] is observer:
+            self._accepted_event_observer = None
+        if self._pending_event_ack is not None and self._pending_event_ack[0] is observer:
+            self._pending_event_ack = None
 
     def display_sample(self):
         """Compatibility projection for the existing prototype window."""
