@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -44,6 +45,8 @@ ACCEPTED_POLICIES = (
     {**POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY},
     {**PRE_BY_TYPE_POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY})
 _LOCK = RLock()
+VALIDATED_HISTORY_CACHE_LIMIT = 128
+VALIDATED_HISTORY_CACHE_BYTES = 64 * 1024 * 1024
 
 
 class HistoryError(ValueError):
@@ -700,15 +703,36 @@ class BattleHistory:
 
     def __init__(self, directory):
         self.directory = Path(directory)
+        # Cache validation of exact bytes, never file mtimes or caller-owned
+        # mutable records. Retention still reads every file before pruning.
+        self._validated_reads = OrderedDict()
+        self._validated_read_bytes = 0
 
     def path_for(self, battle_id):
         _require(isinstance(battle_id, str) and bool(battle_id.strip()), 'invalid battle_id')
         return self.directory / (hashlib.sha256(battle_id.encode('utf-8')).hexdigest() + '.json')
 
     def _read(self, path):
-        with path.open(encoding='utf-8') as stream:
-            record = BattleRecord.from_dict(json.load(stream, object_pairs_hook=_unique_keys))
+        raw = path.read_bytes()
+        digest = hashlib.sha256(raw).digest()
+        cached = self._validated_reads.get(path)
+        if cached is not None and cached[0] == digest:
+            self._validated_reads.move_to_end(path)
+            # Every reader receives independent data, including private leaves.
+            return BattleRecord(json.loads(cached[1]))
+        if cached is not None:
+            self._validated_read_bytes -= len(self._validated_reads.pop(path)[1])
+        record = BattleRecord.from_dict(json.loads(raw.decode('utf-8'), object_pairs_hook=_unique_keys))
         _require(self.path_for(record.battle_id) == path, 'filename battle_id mismatch')
+        encoded = json.dumps(record._data, ensure_ascii=True, allow_nan=False,
+                             separators=(',', ':')).encode('utf-8')
+        if len(encoded) <= VALIDATED_HISTORY_CACHE_BYTES and VALIDATED_HISTORY_CACHE_LIMIT > 0:
+            self._validated_reads[path] = digest, encoded
+            self._validated_read_bytes += len(encoded)
+            while (len(self._validated_reads) > VALIDATED_HISTORY_CACHE_LIMIT
+                   or self._validated_read_bytes > VALIDATED_HISTORY_CACHE_BYTES):
+                _, (_, expired) = self._validated_reads.popitem(last=False)
+                self._validated_read_bytes -= len(expired)
         return record
 
     def _scan(self):
