@@ -370,3 +370,25 @@ def test_ack_retry_cannot_commit_a_previous_source_prefix_after_same_object_rest
     with pytest.raises(StreamGap, match='lifetime'): source.poll()
     assert source.commits == [0, 1]
     assert source.queue[0]['amount'] == 75
+
+
+def test_one_raw_scope_parser_preserves_zero_frame_fallback_without_loosening_pending():
+    from event_probe import autochess_raw_read_scope
+    from event_capture import _round_start_read_scope
+    from test_round_start_chunk_reads import binding
+    raw = binding(30)
+    original = deepcopy(raw)
+    context, identity = autochess_raw_read_scope(raw, require_native_frame=True)
+    assert identity == _round_start_read_scope(raw)
+    assert raw == original and context['frame'] == 30
+    fallback = deepcopy(raw)
+    fallback['frame'] = fallback.pop('native_frame')
+    assert _round_start_read_scope(fallback) == identity
+    with pytest.raises(StreamGap, match='raw native frame'):
+        autochess_raw_read_scope(fallback, require_native_frame=True)
+    for mutation in ('clock', 'account'):
+        invalid = deepcopy(raw)
+        if mutation == 'clock': invalid['native_fixed_time'] = '１'
+        else: invalid['native_autochess_context']['players'][0]['uid'] = invalid['native_autochess_context']['players'][1]['uid']
+        with pytest.raises(StreamGap): _round_start_read_scope(invalid)
+        with pytest.raises(StreamGap): autochess_raw_read_scope(invalid, require_native_frame=True)

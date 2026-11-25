@@ -6,11 +6,10 @@ records until the host has committed the corresponding watermark.
 from collections import deque
 from copy import deepcopy
 
-from autochess_context import normalize_native_autochess
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
 from event_probe import (NativePcBinding, NativePcProbeContract, _ROUND_START_BINDING, _ROUND_START_PREFIX_LIMIT,
-                         _autochess_scope_key, _round_start_integer, _valid_round_start_point,
+                         autochess_raw_read_scope, _round_start_integer, _valid_round_start_point,
                          bind_native_autochess_pair, contract_for, event_processing_payload)
 from roster import RosterUnavailable
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
@@ -71,21 +70,8 @@ _ROUND_START_READ_SIZE = 2048
 
 
 def _round_start_read_scope(payload):
-    scope_key = _autochess_scope_key(payload)
-    fixed = payload.get('native_fixed_time')
-    if (scope_key is None or not isinstance(fixed, str) or not 0 < len(fixed) <= 19
-            or not fixed.isascii() or not fixed.isdecimal() or int(fixed) > 0x7fffffffffffffff):
-        raise StreamGap('invalid AutoChess round-start read clock or roots')
-    context = normalize_native_autochess(payload.get('native_autochess_context'),
-        expected_frame=payload.get('native_frame', payload.get('frame')),
-        expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope_key)
-    if (context.get('status') not in ('available', 'partial') or not context.get('match_key')
-            or context.get('phase') not in (4, 5, 6) or context.get('self_player_uid') is None
-            or context.get('collection_mode') not in ('all', 'local')):
-        raise StreamGap('invalid AutoChess round-start read scope or account table')
-    accounts = tuple(sorted((row['index'], row['uid']) for row in context['players']))
-    return (context['identity'], context['match_key'], context['self_player_index'],
-            context['self_player_uid'], context['collection_mode'], accounts)
+    # Historical zero-origin frame fallback stays in the canonical parser.
+    return autochess_raw_read_scope(payload)[1]
 
 
 def _read_long_round_start_prefix(observer, sequence, batch, contract):

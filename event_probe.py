@@ -798,25 +798,43 @@ def verified_pending_scope_successor(raw):
     return point, context
 
 
-def _pending_scope_identity(sample, mark, *, read=False):
-    if read:
-        from autochess_context import normalize_native_autochess
-        fixed, frame = mark.get('native_fixed_time'), mark.get('native_frame')
-        scope = _autochess_scope_key(mark)
-        if (scope is None or not isinstance(fixed, str) or not re.fullmatch(r'[0-9]{1,19}', fixed)
-                or int(fixed) > 0x7fffffffffffffff or type(frame) is not int or frame < 0):
-            raise StreamGap('pending scope read has an invalid raw native clock')
-        context = normalize_native_autochess(mark.get('native_autochess_context'), expected_frame=frame,
-            expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope)
-    else:
-        context = autochess_event_mark_context(sample, mark)
+def _autochess_scope_accounts(context):
+    """Identity of a normalized combat scope, without borrowing live membership."""
     if (context is None or context.get('status') not in ('available', 'partial')
             or context.get('phase') not in (4, 5, 6) or not context.get('match_key')
             or context.get('self_player_uid') is None or context.get('collection_mode') not in ('all', 'local')):
-        raise StreamGap('pending scope lacks independently bound raw scope/accounts')
-    return context, (context['identity'], context['match_key'], context['self_player_index'],
-                     context['self_player_uid'], context['collection_mode'],
-                     tuple(sorted((row['index'], row['uid']) for row in context['players'])))
+        raise StreamGap('invalid AutoChess read scope or account table')
+    return (context['identity'], context['match_key'], context['self_player_index'],
+            context['self_player_uid'], context['collection_mode'],
+            tuple(sorted((row['index'], row['uid']) for row in context['players'])))
+
+
+def autochess_raw_read_scope(payload, *, require_native_frame=False):
+    """Interpret the one raw read envelope used by zero and late-start origins.
+
+    Existing zero-origin reads permit their historical frame fallback. The new
+    pending contract requires native_frame explicitly; neither origin gains the
+    other's start/quality/completeness rights from this shared identity parser.
+    """
+    from autochess_context import normalize_native_autochess
+    scope = _autochess_scope_key(payload)
+    fixed = payload.get('native_fixed_time')
+    if (scope is None or not isinstance(fixed, str) or not 0 < len(fixed) <= 19
+            or not fixed.isascii() or not fixed.isdecimal() or int(fixed) > 0x7fffffffffffffff):
+        raise StreamGap('invalid AutoChess read clock or roots')
+    frame = payload.get('native_frame', payload.get('frame'))
+    if require_native_frame and (type(payload.get('native_frame')) is not int or frame < 0):
+        raise StreamGap('pending scope read requires a raw native frame')
+    context = normalize_native_autochess(payload.get('native_autochess_context'), expected_frame=frame,
+        expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope)
+    return context, _autochess_scope_accounts(context)
+
+
+def _pending_scope_identity(sample, mark, *, read=False):
+    if read:
+        return autochess_raw_read_scope(mark, require_native_frame=True)
+    context = autochess_event_mark_context(sample, mark)
+    return context, _autochess_scope_accounts(context)
 
 
 def _verified_pending_scope_anchor(anchor):
