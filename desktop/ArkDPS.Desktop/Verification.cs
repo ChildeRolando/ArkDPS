@@ -620,73 +620,66 @@ public partial class MainWindow
             UpdateEnemySummary();
         }
     }
+    // Frozen Python projections: verification exercises rendering, never a second metric reducer.
+    private static System.Text.Json.Nodes.JsonNode VerificationReading(string name,string metric)
+    {
+        using var stream=typeof(Inspector).Assembly.GetManifestResourceStream("ArkDPS.InspectorReadings")
+            ?? throw new InvalidOperationException("missing Python Inspector readings fixture");
+        var cases=System.Text.Json.Nodes.JsonNode.Parse(stream)!.AsArray();
+        return cases.First(item=>item!["name"]!.GetValue<string>()==name)!["readings"]![metric]!.DeepClone();
+    }
+
     private void VerifyMitigationDisplay()
     {
         var original = Panels.Values.First().View;
         var fixture = System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
         string owner = original.Get("entries").Items().First().Text("owner_id");
-        var pinnedRow = fixture["source"]![owner]!;
         var inspector = new Inspector { CompactReference = true };
         inspector.Pin(owner, original);
         FrameworkElement Ratio() => FindAutomationElement(inspector, "CompactOperatorRatioMitigation")
             ?? throw new InvalidOperationException("missing mitigation ring");
-        void Apply() => inspector.Update(JsonSerializer.SerializeToElement(fixture));
+        void Apply(string name)
+        {
+            fixture["details_by_owner"]![owner]!["readings"]!["mitigation"]=VerificationReading(name,"mitigation");
+            inspector.Update(JsonSerializer.SerializeToElement(fixture));
+        }
         Require(HasText(Ratio(),"—"),"unavailable mitigation rendered as zero");
-        pinnedRow["observed_mitigation_rate"]=58.4695;
-        pinnedRow["observed_mitigation_after"]=7660.38;
-        pinnedRow["mitigation_matched_hits"]=27;
-        pinnedRow["mitigation_unknown_reason"]="部分伤害缺少同次命中的公式前后值";
-        Apply();
+        Apply("verify_observed");
         var observedMitigation=Ratio();
         Require(HasText(observedMitigation,"58%") && HasText(observedMitigation,"已观察减伤率") &&
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock observedTip} &&
                 observedTip.Text.Contains("护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害") &&
                 observedTip.Text.Contains("已配对的 27 击"),
                 "partial mitigation did not expose its measured value and sample scope");
-        pinnedRow["observed_mitigation_rate"]=-11.32;
-        Apply();
+        Apply("verify_negative");
         Require(HasText(observedMitigation,"-11%") && HasText(observedMitigation,"已观察减伤率") &&
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock negativeTip} &&
                 negativeTip.Text.Contains("无法确定差额来自哪项修正") &&
                 negativeTip.Text.Contains("已配对的 27 击"),
                 "negative observed mitigation did not retain its sign, uncertainty and sample scope");
-        pinnedRow["observed_mitigation_rate"]=0.23;
-        Apply();
+        Apply("verify_small");
         Require(observedMitigation.ToolTip is ToolTip {Content:TextBlock smallTip} &&
                 smallTip.Text.Contains("舍入前比例 0.23%"),
                 "a small nonzero rate did not retain its precision in the explanation");
-        pinnedRow["observed_mitigation_rate"]=2.235178087e-6;
-        pinnedRow["observed_mitigation_before"]=166730.00013;
-        pinnedRow["observed_mitigation_after"]=166729.99641;
-        pinnedRow["mitigation_matched_hits"]=68;
-        pinnedRow["mitigation_unknown_reason"]="事件覆盖已结束";
-        Apply();
+        Apply("verify_observed_zero");
         Require(HasText(observedMitigation,"0%") && HasText(observedMitigation,"已观察减伤率") &&
                 observedMitigation.ToolTip is ToolTip {Content:TextBlock zeroTip} &&
                 zeroTip.Text.Contains("公式前 166,730，结算 166,730") &&
                 zeroTip.Text.Contains("测量精度内相同") && zeroTip.Text.Contains("已配对的 68 击") &&
                 zeroTip.Text.Contains("事件覆盖已结束"),
                 "verified zero mitigation did not expose its paired values and coverage gap");
-        pinnedRow["observed_mitigation_rate"]=58.4695;
-        pinnedRow["mitigation_rate"]=0;
-        Apply();
+        Apply("verify_complete_zero");
         Require(HasText(Ratio(),"0%") &&
                 HasText(Ratio(),"被减伤率") &&
                 !HasText(Ratio(),"已观察减伤率"),
                 "complete zero mitigation did not take precedence over the observed subset");
 
-        fixture["details_by_owner"]![owner]!["settled_damage"]=System.Text.Json.Nodes.JsonNode.Parse("""
-            {"observed_mitigation_rate":23,"observed_mitigation_before":1000,
-             "observed_mitigation_after":770,"mitigation_matched_hits":3,"mitigation_complete":false,
-             "mitigation_reason":"仅核实三次命中"}
-            """);
-        Apply();
+        Apply("verify_per_hit");
         Require(HasText(Ratio(),"23%") && HasText(Ratio(),"已观察减伤率") &&
                 Ratio().ToolTip is ToolTip {Content:TextBlock perHitTip} &&
                 perHitTip.Text.Contains("已配对的 3 击") && perHitTip.Text.Contains("仅核实三次命中"),
                 "verified per-hit mitigation was replaced by aggregate mitigation");
-        fixture["details_by_owner"]![owner]!["settled_damage"]!["observed_mitigation_rate"]=null;
-        Apply();
+        Apply("verify_missing");
         Require(HasText(Ratio(),"—") && !HasText(Ratio(),"0%"),
                 "missing per-hit mitigation borrowed legacy data");
     }
@@ -817,6 +810,7 @@ public partial class MainWindow
                 HasText(historyInspector,"已观察溢出总伤属性构成"),
                 "published partial raw types were replaced by stale native types");
 
+        detail["readings"]!["overkill"]=VerificationReading("verify_overflow_partial","overkill");
         detail["overkill_base_damage"]=100;
         detail["overkill_coverage_complete"]=false;
         detail["observed_overkill_damage"]=10;
@@ -830,6 +824,7 @@ public partial class MainWindow
                 overflowTip.Text.Contains("同一批已核实命中") && overflowTip.Text.Contains("25%") &&
                 HasText(historyInspector,"已观察过量伤害"),
                 "partial overflow did not use its own confirmed basis or show the evidence gap");
+        detail["readings"]!["overkill"]=VerificationReading("verify_overflow_zero","overkill");
         detail["overkill_coverage_complete"]=true;
         detail["observed_overkill_damage"]=0;
         detail["overkill_damage"]=0;
@@ -992,7 +987,7 @@ public partial class MainWindow
         var liveView=fixture["panels"]!.AsArray()[0]!;
         string pinnedOwner=liveView["entries"]!.AsArray()[0]!["owner_id"]!.GetValue<string>();
         var pinnedRow=liveView["source"]![pinnedOwner]!;
-        pinnedRow["mitigation_rate"]=18.34;
+        liveView["details_by_owner"]![pinnedOwner]!["readings"]!["mitigation"]=VerificationReading("verify_layout","mitigation");
         var pinnedDetail=liveView["details_by_owner"]![pinnedOwner]!;
         var savedCoverage=pinnedDetail["skill_coverage"]?.DeepClone();
         pinnedDetail["skill_coverage"]=0.0036;
@@ -2620,6 +2615,7 @@ public partial class MainWindow
         var effectiveView = Panels[id].View;
         var partialView = System.Text.Json.Nodes.JsonNode.Parse(effectiveView.GetRawText())!;
         var partialSplit = partialView["details_by_owner"]![owner]!;
+        partialSplit["readings"]!["skill_split"]=VerificationReading("verify_skill_partial","skill_split");
         partialSplit["skill_split_effective_complete"] = false;
         partialSplit["skill_damage_effective"] = null;
         partialSplit["non_skill_damage_effective"] = null;

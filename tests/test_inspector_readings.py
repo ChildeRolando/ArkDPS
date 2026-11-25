@@ -62,6 +62,6 @@ def test_legacy_overkill_retains_native_basis_and_zero_unknown():
 def test_frozen_cross_language_readings():
     import json
     from pathlib import Path
-    path = Path(__file__).parents[1] / 'desktop/ArkDPS.Desktop.Tests/Fixtures/inspector-readings.json'
+    path = Path(__file__).parents[1] / 'desktop/ArkDPS.Desktop/VerificationFixtures/inspector-readings.json'
     for case in json.loads(path.read_text(encoding='utf8')):
         assert inspector_readings(case['row'], case['detail']) == case['readings'], case['name']

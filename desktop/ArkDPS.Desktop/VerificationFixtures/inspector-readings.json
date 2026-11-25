@@ -1,0 +1,1139 @@
+[
+  {
+    "name": "legacy",
+    "row": {
+      "damage": 100,
+      "overkill_damage": 20
+    },
+    "detail": {
+      "damage": 100,
+      "overkill_damage": 20
+    },
+    "readings": {
+      "overkill": {
+        "amount": 20,
+        "numerator": 20,
+        "denominator": 100,
+        "fraction": 0.2,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n尚无同一击的公式前伤害与结算伤害。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "partial",
+    "row": {
+      "damage": 9000
+    },
+    "detail": {
+      "overkill_base_damage": 100,
+      "observed_overkill_damage": 25,
+      "overkill_coverage_complete": false,
+      "overkill_matched_hits": 2,
+      "overkill_unverified_share": 0.5
+    },
+    "readings": {
+      "overkill": {
+        "amount": 25,
+        "numerator": 25,
+        "denominator": 100,
+        "fraction": 0.25,
+        "observed": true,
+        "label": "已观察伤害溢出率",
+        "explanation": "过量伤害 ÷ 同一批已核实命中的（有效伤害 ＋ 过量伤害）。\n已核实 2 击。\n未核实命中占比 50%。",
+        "basis": "matched_hits"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n尚无同一击的公式前伤害与结算伤害。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "zero",
+    "row": {},
+    "detail": {
+      "settled_damage": {
+        "complete": true,
+        "observed_hits": 0
+      },
+      "skill_split_complete": true,
+      "skill_damage": 0,
+      "non_skill_damage": 0
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：缺少与原生总伤同口径的过量证据。",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": true,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n本次未造成伤害，无法计算占比。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": true,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n本次未造成伤害，无法计算占比。"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "本次未造成伤害，没有可配对的命中。",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n本次未造成伤害，没有可配对的命中。"
+      },
+      "legacy_overkill_note": "过量未知：缺少与原生总伤同口径的过量证据。"
+    }
+  },
+  {
+    "name": "scope",
+    "row": {
+      "mitigation_rate": 20
+    },
+    "detail": {
+      "damage_scope_reason": "scope冲突",
+      "observed_skill_damage": 1,
+      "observed_non_skill_damage": 1
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\nscope冲突",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "scope冲突",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\nscope冲突"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "scope冲突",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\nscope冲突"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "scope冲突",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\nscope冲突"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "split",
+    "row": {},
+    "detail": {
+      "skill_split_complete": true,
+      "skill_damage": 30,
+      "non_skill_damage": 70,
+      "observed_skill_damage_effective": 40,
+      "observed_non_skill_damage_effective": 60,
+      "skill_split_reason": "技能窗口缺口"
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": 30,
+          "non_skill": 70,
+          "numerator": 30,
+          "denominator": 100,
+          "fraction": 0.3,
+          "complete": true,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。"
+        },
+        "effective": {
+          "skill": 40,
+          "non_skill": 60,
+          "numerator": 40,
+          "denominator": 100,
+          "fraction": 0.4,
+          "complete": false,
+          "observed": true,
+          "label": "已观察技能期有效伤害占比",
+          "reason": "技能窗口缺口",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n按已观察且可归入技能期或非技能期的伤害计算。\n整局统计缺口：技能窗口缺口"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n尚无同一击的公式前伤害与结算伤害。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "negative",
+    "row": {},
+    "detail": {
+      "settled_damage": {
+        "mitigation_complete": true,
+        "observed_mitigation_rate": -25,
+        "mitigation_matched_hits": 2,
+        "observed_mitigation_before": 100,
+        "observed_mitigation_after": 125
+      }
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：缺少与原生总伤同口径的过量证据。",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": -0.25,
+        "numerator": 125,
+        "denominator": 100,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n结算伤害高于公式前伤害时，比例为负。当前观察记录两端数值，无法确定差额来自哪项修正。\n配对命中合计：公式前 100，结算 125。\n已配对的 2 击。"
+      },
+      "legacy_overkill_note": "过量未知：缺少与原生总伤同口径的过量证据。"
+    }
+  },
+  {
+    "name": "small",
+    "row": {},
+    "detail": {
+      "settled_damage": {
+        "mitigation_complete": true,
+        "observed_mitigation_rate": 0.23,
+        "mitigation_matched_hits": 2,
+        "observed_mitigation_before": 100,
+        "observed_mitigation_after": 99.77
+      }
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：缺少与原生总伤同口径的过量证据。",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0.0023,
+        "numerator": 99.77,
+        "denominator": 100,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n配对命中合计：公式前 100，结算 100。\n舍入前比例 0.23%。\n已配对的 2 击。"
+      },
+      "legacy_overkill_note": "过量未知：缺少与原生总伤同口径的过量证据。"
+    }
+  },
+  {
+    "name": "precision_zero",
+    "row": {},
+    "detail": {
+      "settled_damage": {
+        "mitigation_complete": false,
+        "observed_mitigation_rate": 2.235e-06,
+        "mitigation_matched_hits": 68,
+        "observed_mitigation_before": 166730.00013,
+        "observed_mitigation_after": 166729.99641,
+        "mitigation_reason": "事件覆盖已结束"
+      }
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：缺少与原生总伤同口径的过量证据。",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0,
+        "numerator": 166729.99641,
+        "denominator": 166730.00013,
+        "observed": true,
+        "label": "已观察减伤率",
+        "reason": "事件覆盖已结束",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n配对命中合计：公式前 166,730，结算 166,730。\n配对命中的公式前后伤害在测量精度内相同。\n仅统计已配对的 68 击。\n整局统计缺口：事件覆盖已结束"
+      },
+      "legacy_overkill_note": "过量未知：缺少与原生总伤同口径的过量证据。"
+    }
+  },
+  {
+    "name": "verify_observed",
+    "row": {
+      "observed_mitigation_rate": 58.4695,
+      "observed_mitigation_after": 7660.38,
+      "mitigation_matched_hits": 27,
+      "mitigation_unknown_reason": "部分伤害缺少同次命中的公式前后值"
+    },
+    "detail": {},
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0.584695,
+        "numerator": 7660.38,
+        "denominator": null,
+        "observed": true,
+        "label": "已观察减伤率",
+        "reason": "部分伤害缺少同次命中的公式前后值",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n仅统计已配对的 27 击。\n整局统计缺口：部分伤害缺少同次命中的公式前后值"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_negative",
+    "row": {
+      "observed_mitigation_rate": -11.32,
+      "observed_mitigation_after": 7660.38,
+      "mitigation_matched_hits": 27,
+      "mitigation_unknown_reason": "部分伤害缺少同次命中的公式前后值"
+    },
+    "detail": {},
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": -0.11320000000000001,
+        "numerator": 7660.38,
+        "denominator": null,
+        "observed": true,
+        "label": "已观察减伤率",
+        "reason": "部分伤害缺少同次命中的公式前后值",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n结算伤害高于公式前伤害时，比例为负。当前观察记录两端数值，无法确定差额来自哪项修正。\n仅统计已配对的 27 击。\n整局统计缺口：部分伤害缺少同次命中的公式前后值"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_small",
+    "row": {
+      "observed_mitigation_rate": 0.23,
+      "observed_mitigation_after": 7660.38,
+      "mitigation_matched_hits": 27,
+      "mitigation_unknown_reason": "部分伤害缺少同次命中的公式前后值"
+    },
+    "detail": {},
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0.0023,
+        "numerator": 7660.38,
+        "denominator": null,
+        "observed": true,
+        "label": "已观察减伤率",
+        "reason": "部分伤害缺少同次命中的公式前后值",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n舍入前比例 0.23%。\n仅统计已配对的 27 击。\n整局统计缺口：部分伤害缺少同次命中的公式前后值"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_observed_zero",
+    "row": {
+      "observed_mitigation_rate": 2.235178087e-06,
+      "observed_mitigation_after": 166729.99641,
+      "mitigation_matched_hits": 68,
+      "mitigation_unknown_reason": "事件覆盖已结束",
+      "observed_mitigation_before": 166730.00013
+    },
+    "detail": {},
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0,
+        "numerator": 166729.99641,
+        "denominator": 166730.00013,
+        "observed": true,
+        "label": "已观察减伤率",
+        "reason": "事件覆盖已结束",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n配对命中合计：公式前 166,730，结算 166,730。\n配对命中的公式前后伤害在测量精度内相同。\n仅统计已配对的 68 击。\n整局统计缺口：事件覆盖已结束"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_complete_zero",
+    "row": {
+      "observed_mitigation_rate": 58.4695,
+      "observed_mitigation_after": 166729.99641,
+      "mitigation_matched_hits": 68,
+      "mitigation_unknown_reason": "事件覆盖已结束",
+      "observed_mitigation_before": 166730.00013,
+      "mitigation_rate": 0
+    },
+    "detail": {},
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n配对命中的公式前后伤害在测量精度内相同。\n已配对的 68 击。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_per_hit",
+    "row": {
+      "mitigation_rate": 0
+    },
+    "detail": {
+      "settled_damage": {
+        "observed_mitigation_rate": 23,
+        "observed_mitigation_before": 1000,
+        "observed_mitigation_after": 770,
+        "mitigation_matched_hits": 3,
+        "mitigation_complete": false,
+        "mitigation_reason": "仅核实三次命中"
+      }
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：缺少与原生总伤同口径的过量证据。",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0.23,
+        "numerator": 770,
+        "denominator": 1000,
+        "observed": true,
+        "label": "已观察减伤率",
+        "reason": "仅核实三次命中",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n配对命中合计：公式前 1,000，结算 770。\n仅统计已配对的 3 击。\n整局统计缺口：仅核实三次命中"
+      },
+      "legacy_overkill_note": "过量未知：缺少与原生总伤同口径的过量证据。"
+    }
+  },
+  {
+    "name": "verify_missing",
+    "row": {
+      "mitigation_rate": 0
+    },
+    "detail": {
+      "settled_damage": {
+        "observed_mitigation_rate": null,
+        "observed_mitigation_before": 1000,
+        "observed_mitigation_after": 770,
+        "mitigation_matched_hits": 3,
+        "mitigation_complete": false,
+        "mitigation_reason": "仅核实三次命中"
+      }
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：缺少与原生总伤同口径的过量证据。",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "仅核实三次命中",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n仅核实三次命中"
+      },
+      "legacy_overkill_note": "过量未知：缺少与原生总伤同口径的过量证据。"
+    }
+  },
+  {
+    "name": "verify_overflow_partial",
+    "row": {},
+    "detail": {
+      "overkill_base_damage": 100,
+      "overkill_coverage_complete": false,
+      "observed_overkill_damage": 10,
+      "overkill_matched_hits": 3,
+      "overkill_unverified_share": 0.25
+    },
+    "readings": {
+      "overkill": {
+        "amount": 10,
+        "numerator": 10,
+        "denominator": 100,
+        "fraction": 0.1,
+        "observed": true,
+        "label": "已观察伤害溢出率",
+        "explanation": "过量伤害 ÷ 同一批已核实命中的（有效伤害 ＋ 过量伤害）。\n已核实 3 击。\n未核实命中占比 25%。",
+        "basis": "matched_hits"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n尚无同一击的公式前伤害与结算伤害。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_overflow_zero",
+    "row": {},
+    "detail": {
+      "overkill_base_damage": 100,
+      "overkill_coverage_complete": true,
+      "overkill_damage": 0,
+      "observed_overkill_damage": 0,
+      "overkill_matched_hits": 3,
+      "overkill_unverified_share": 0
+    },
+    "readings": {
+      "overkill": {
+        "amount": 0,
+        "numerator": 0,
+        "denominator": 100,
+        "fraction": 0.0,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 同一批已核实命中的（有效伤害 ＋ 过量伤害）。\n已核实 3 击。",
+        "basis": "matched_hits"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n尚无同一击的公式前伤害与结算伤害。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_skill_partial",
+    "row": {},
+    "detail": {
+      "skill_split_effective_complete": false,
+      "observed_skill_damage_effective": 25,
+      "observed_non_skill_damage_effective": 75,
+      "skill_split_reason": "技能窗口未覆盖全部伤害事件"
+    },
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "技能窗口未覆盖全部伤害事件",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n技能窗口未覆盖全部伤害事件"
+        },
+        "effective": {
+          "skill": 25,
+          "non_skill": 75,
+          "numerator": 25,
+          "denominator": 100,
+          "fraction": 0.25,
+          "complete": false,
+          "observed": true,
+          "label": "已观察技能期有效伤害占比",
+          "reason": "技能窗口未覆盖全部伤害事件",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n按已观察且可归入技能期或非技能期的伤害计算。\n整局统计缺口：技能窗口未覆盖全部伤害事件"
+        }
+      },
+      "mitigation": {
+        "fraction": null,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。\n尚无同一击的公式前伤害与结算伤害。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  },
+  {
+    "name": "verify_layout",
+    "row": {
+      "mitigation_rate": 18.34
+    },
+    "detail": {},
+    "readings": {
+      "overkill": {
+        "amount": null,
+        "numerator": null,
+        "denominator": null,
+        "fraction": null,
+        "observed": false,
+        "label": "伤害溢出率",
+        "explanation": "过量伤害 ÷ 原生累计总伤（含过量）。\n过量未知：事件观察未建立覆盖或已中断",
+        "basis": "native_total"
+      },
+      "skill_split": {
+        "nominal": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期伤害 ÷ 已拆分的总伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        },
+        "effective": {
+          "skill": null,
+          "non_skill": null,
+          "numerator": null,
+          "denominator": null,
+          "fraction": null,
+          "complete": false,
+          "observed": false,
+          "label": "技能期有效伤害占比",
+          "reason": "事件观察或技能窗口未覆盖。",
+          "explanation": "技能期有效伤害 ÷ 已拆分的总有效伤害。被动技能的伤害归入非技能期。\n事件观察或技能窗口未覆盖。"
+        }
+      },
+      "mitigation": {
+        "fraction": 0.1834,
+        "numerator": null,
+        "denominator": null,
+        "observed": false,
+        "label": "被减伤率",
+        "reason": "",
+        "explanation": "1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。"
+      },
+      "legacy_overkill_note": "过量未知：事件观察未建立覆盖或已中断"
+    }
+  }
+]

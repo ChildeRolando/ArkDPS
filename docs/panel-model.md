@@ -71,14 +71,14 @@ python -m pytest tests/test_panel_model.py tests/test_desktop_bridge.py tests/te
 - 护盾最近 5 秒与接敌速率依赖 ARK-5 的事件数据；模型已支持 `recent_shield`，但当前适配器尚未提供。
 - 托盘、连接/事件设置与布局持久化见[设置、托盘与窗口配置恢复](settings-and-layout.md)；历史浏览与分享见下节 ARK-12。
 
-## 实时 GUI（ARK-9，Tk 实现已封存）
+## 实时 WPF 面板
 
-`App.render` 只将 `sample.statistics` 交给 `rows_from_statistics` / `render_panel`，
+`DesktopState.view` 将选定 scope 的 `sample.statistics` 交给 `rows_from_statistics` / `render_panel`，
 不使用兼容投影的旧 `sample.rows` 或全局平均 DPS。多面板共享同一份结果，
 各自持有不可变 `PanelConfig`，更改配置不修改统计、来源行或其他面板。
 新建使用默认配置，复制分配新 ID，删除不影响战局记录；最后一个面板保留。
 
-`StatisticPanel`（WPF 由 `StatisticPanel.xaml.cs` 承担；Tk 版本已封存）只负责原生显示：伤害分段柱、治疗/护盾柱、离场灰像、姓名与最多 1 位小数的数值悬停、有效伤害开关、
+`StatisticPanel.xaml.cs` 负责原生显示：伤害分段柱、治疗/护盾柱、离场灰像、姓名与最多 1 位小数的数值悬停、有效伤害开关、
 按 owner ID 固定的分类/累计/活跃时间/覆盖/来源详情。近期行隐藏时固定详情继续更新，换局清除固定选择。
 
 侧栏再次左键点击同一已选 owner 时，同步清除列表选择和详情固定状态，并折叠详情视口以归还排行空间。随后刷新不能重新展开；再次点击可打开，点击另一个 owner 切换详情。暂离排行时保留已展开的固定详情，返回时仍按同 owner 选择。主面板与历史面板继续使用各自既有交互。
@@ -208,3 +208,28 @@ WPF 侧由 `desktop/ArkDPS.Desktop/App.xaml.cs` 与 `Verification.cs` 覆盖主�
 筛选/换局历史隔离与文字对比度；`tests/test_wpf_contract.py` 固定对比度下限。原 `tests/test_ui_theme.py`
 与 `acceptance/verify_ui_themes.py` 已随 Tk 归档封存，其窗口/托盘测量不再可运行。**离线回执不是实际游戏
 收到点击的证据，也不等于物理托盘图标双击验收。**
+
+
+## 展示读数与发布缓存（R6）
+
+`details_by_owner` 是 wire 中唯一的 owner 详情索引，entries 不再嵌入 detail。
+RowItem、Inspector 与截图导出按 owner 查同一索引；Python PanelEntry 的 detail 只保留指向同一字典的兼容引用，dataclass 序列化不包含它。
+`source` 只携 Inspector 的身份、在场、旧式属性构成和接敌分母实际使用字段；原采样与历史中的原始统计不裁剪。
+
+`panel_model.inspector_readings` 唯一选择溢出率、技能期名义/有效占比、减伤率的完整或观察证据，输出分子分母、fraction、状态、理由和解释。
+C# Inspector 只取读数并格式化，不能以原生总量或旧字段重算、fallback。
+完整零命中保留未知占比，负减伤保留符号，固定点接近零保留测量解释；对应同份 Python/WPF golden 位于 `desktop/ArkDPS.Desktop/VerificationFixtures/inspector-readings.json`。
+现有 WPF 验收也注入该 canonical DTO，不在测试端重建业务算法。
+
+排行、固定详情和普通/首领趋势通过 `PanelSourceRow.rate` 取得同口径值。
+趋势另外要求当前时刻完整窗口证书；不完整的首领观察子集仍明确单列，不并成完整全队曲线。
+固定详情继续用接敌速率，不随侧栏 rate_basis 改口径。
+
+DesktopState 对每次接收事件推进 presentation revision，配置或来源请求变化同样失效。
+同 revision、原始 rows 身份、session/游戏时刻、counter/观察模式、目标 scope 与相同配置复用规范化和 DTO，最多保留128个scope/view；返给调用方的是独立副本。
+FIFO 每个已接收采样仍维护趋势和峰值；稳定 poll 只复用展示计算，采样年龄、IPC状态和独立 FPS 每次重算。
+同帧金额/quality/actor修订必须经过 accept 推进 revision；不能把 frame 当作唯一缓存键。
+
+旧 `metrics.Meter`、`panel_model.render_board`、`battle_share.record_view` 已删除。
+年龄仍由 `observation_age` 计算；对应功能测试使用 Statistics/PanelSourceRow 或 DesktopState 的实际历史展示路径。
+Meter 的旧完整五秒/一秒插值/静默reset策略不再作为产品合同；当前观察窗口和显式epoch边界保持现有统计核心规则。

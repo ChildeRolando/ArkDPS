@@ -20,6 +20,7 @@
     <DefineConstants>$(DefineConstants);ARKDPS_NATIVE_HOOK_CANDIDATE</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="VerificationFixtures/inspector-readings.json" LogicalName="ArkDPS.InspectorReadings" />
     <Resource Include="Assets/LoneTrail/*.png" />
     <Resource Include="Assets/People/**/*.png;Assets/People/**/*.jpg" />
     <Resource Include="Assets/Babel/**/*.png;Assets/Babel/**/*.jpg" />
