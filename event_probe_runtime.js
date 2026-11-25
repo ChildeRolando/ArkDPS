@@ -2037,8 +2037,11 @@ function mitigationTargetId(target){
  const id=targetKey(target);
  return id&&!id.startsWith('char_')&&!id.startsWith('token_')?id:null;
 }
-function noteUnpairedDamage(scope,event,type){
- if(!event?.source||!(event.amount>0)||event.mitigation_before!==undefined)return;
+function noteUnpairedSettlement(scope,when,type,amount,evidence){
+ // Diagnostics describe this measured native modifier, not whether a second
+ // legacy wire record happened to be emitted. Formula/amount provenance stays
+ // unchanged when modern consumers no longer need that record.
+ if(stopped||fatal||!scope.source||!(amount>0)||evidence?.mitigation_before!==undefined)return;
  try{
   const target=mitigationTargetId(scope.target);
   if(!target||scope.target.equals(scope.mod.readPointer()))return;
@@ -2048,12 +2051,12 @@ function noteUnpairedDamage(scope,event,type){
    const caller=scope.returnAddress;
    if(caller&&Process.findModuleByAddress(caller)?.name===il.name)callerRva=caller.sub(il.base).toString();
   }catch(e){/* The sample remains useful without a caller address. */}
-  const prior=unpairedDamageSamples.findIndex(sample=>sample.source===event.source&&sample.target===target&&
+  const prior=unpairedDamageSamples.findIndex(sample=>sample.source===scope.source&&sample.target===target&&
    sample.damage_type===type&&sample.caller_rva===callerRva);
   if(prior!==-1)unpairedDamageSamples.splice(prior,1);
   else if(unpairedDamageSamples.length>=UNPAIRED_DAMAGE_SAMPLE_LIMIT)unpairedDamageSamples.shift();
-  unpairedDamageSamples.push({source:event.source,target,damage_type:type,frame:event.frame,
-   amount:event.amount,caller_rva:callerRva});
+  unpairedDamageSamples.push({source:scope.source,target,damage_type:type,frame:when.frame,
+   amount,caller_rva:callerRva});
  }catch(e){/* A diagnostic must not change delivery of the queued event. */}
 }
 function formulaDamageKey(source,target,type){return [source,target,type].join('/');}
@@ -3201,7 +3204,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
          rememberNestedElementalSettlement(this,end,evidence,event);
          rememberNestedElementalKill(this,end,evidence,event);
         }catch(e){/* Independently verified burst remains queued. */}
-        noteUnpairedDamage(this,event,type);
+        noteUnpairedSettlement(this,end,type,amount,evidence);
        }catch(e){fatal=String(e);}
       }else{
        if(owned)settleDamage(this,this.target,end,amount,type);
@@ -3267,7 +3270,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      try{
       const instance=verifiedSourceInstance(this);if(instance)evidence={...evidence,source_instance_uid:instance};
       const event=record(this.source,kind,amount,end,proof,evidence,this.sourceCharacterUid);
-      if(kind==='damage')noteUnpairedDamage(this,event,type);
+      if(kind==='damage')noteUnpairedSettlement(this,end,type,amount,evidence);
      }catch(e){fatal=String(e);}
     }else{
      const after=dynamic(this.bb);

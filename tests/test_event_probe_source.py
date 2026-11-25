@@ -185,7 +185,7 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     if args == ["tests/native_pc_settlement_order_fixture.js"]:
-        payload = {backend: {name: value for name, value in cases.items() if name != 'rejected'}
+        payload = {backend: {name: value for name, value in cases.items() if name not in ('rejected', 'without_legacy_wire')}
                    for backend, cases in payload.items()}
     elif args == ["tests/event_probe_pipeline_fixture.js"]:
         normal = ('target_return_before_apply_commit', 'nonlethal_cap', 'lethal_hit',
