@@ -160,7 +160,8 @@ def test_new_serial_does_not_authorize_a_missing_prefix_or_replaced_observer(fau
 
 
 @pytest.mark.parametrize('fault', ['birth', 'roots', 'digest', 'serial_bool', 'guard_clock',
-                                  'missing_guard', 'account', 'build', 'epoch', 'quiet_deferred'])
+                                  'missing_guard', 'account', 'build', 'epoch', 'quiet_deferred',
+                                  'fence_account', 'fence_raw_clock', 'fence_scope_clock', 'fence_scope'])
 def test_pc_serial_reset_replay_rechecks_independent_guard_and_source_fences(fault):
     case = OwnedScopeEnd('native_pc', phase=4, mode='all')
     reset_native_clock(case)
@@ -190,6 +191,18 @@ def test_pc_serial_reset_replay_rechecks_independent_guard_and_source_fences(fau
         guard['source_build'] += '-other'
     elif fault == 'epoch':
         reset['after']['epoch'] += 1
+    elif fault == 'fence_account':
+        for side in ('before', 'after'):
+            reset[side]['native_autochess_context']['players'][0]['uid'] += '-forged'
+    elif fault == 'fence_raw_clock':
+        for side in ('before', 'after'):
+            reset[side].update(native_frame=999, native_fixed_time='not-q32')
+    elif fault == 'fence_scope_clock':
+        for side in ('before', 'after'):
+            reset[side]['native_autochess_context']['frame'] += 1
+    elif fault == 'fence_scope':
+        for side in ('before', 'after'):
+            reset[side]['native_autochess_context']['scope_key'] += '-forged'
     else:
         reset['after'].update(native_quiet_boundary_version=1, native_deferred_callbacks=1)
     replay = BattleSessions(successor.feed)

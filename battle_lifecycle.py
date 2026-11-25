@@ -1171,6 +1171,12 @@ class BattleSessions:
                                or fence.get('native_process_pid') != mark.get('native_process_pid')
                                for fence in (before, after))):
                     return False
+                if autochess_event_mark_context(previous, mark) != previous['autochess_context']:
+                    return False
+                context, through = verified_autochess_event_window(next_sample, before, after,
+                    anchor=next_sample.get('autochess_snapshot_anchor'))
+                if context != next_sample['autochess_context'] or through != stream.sequence:
+                    return False
             return (baseline_barrier(mark, previous, mark) == stream.sequence
                     and stream.frame == mark['frame'] and stream.game_time == mark['game_time']
                     and baseline_barrier(evidence['before'], next_sample, after) == stream.sequence
