@@ -10,6 +10,8 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 import math
 import re
+import hashlib
+import struct
 import time
 import uuid
 
@@ -117,8 +119,82 @@ def _autochess_successor_ends_round(previous, successor):
             or previous.collection_mode not in ('local', 'all')
             or previous.collection_mode != successor.collection_mode):
         return False
+    # Defense can hand off to assistance before the shared round clock resets.
+    # This only identifies a candidate scope boundary; the consumer still
+    # requires the unchanged observer sequence/epoch and all native fences.
     return (successor.phase == 7 and previous.round == successor.round
+            or previous.phase == 4 and successor.phase == 5 and previous.round == successor.round
             or successor.phase in (3, previous.phase) and successor.round == previous.round + 1)
+
+
+def _native_pc_guarded_clock_reset(previous, successor):
+    """Recognize the collector's serial change using both independent reads.
+
+    PC sessions include the sampler serial, which increments on clock reset.
+    Equal Unity roots alone are insufficient: verify the exact two guarded
+    serials, process birth, stage/build and their canonical session digests.
+    This identifies a candidate only; source epoch/sequence fences still own
+    whether that candidate can finish any event prefix.
+    """
+    try:
+        scenes = [autochess_scene(sample) for sample in (previous, successor)]
+        if (None in scenes or scenes[0].match != scenes[1].match
+                or scenes[0].phase not in (4, 5, 6) or scenes[1].phase != scenes[0].phase
+                or scenes[1].round not in (scenes[0].round, scenes[0].round + 1)
+                or scenes[0].scope == scenes[1].scope
+                or scenes[0].collection_mode != scenes[1].collection_mode
+                or successor['frame'] >= previous['frame']
+                or successor['game_time'] >= previous['game_time']):
+            return False
+        guards = []
+        roots = ('controller', 'native', 'logger', 'stats', 'level')
+        for sample in (previous, successor):
+            meta, guard = sample['battle_metadata'], sample['native_window_guard']
+            if (type(sample.get('state')) is not int or sample['state'] != 2
+                    or meta['platform'] != 'native_pc' or guard.get('version') != 1
+                    or type(guard['version']) is not int or guard.get('source') != 'native_pc_guarded_read'
+                    or guard['source_build'] != meta['source_build']
+                    or not isinstance(meta['source_build'], str) or not meta['source_build']
+                    or type(guard['battle_serial']) is not int or guard['battle_serial'] < 1
+                    or guard['process_instance_before'] != guard['process_instance_after']
+                    or type(guard['process_instance_before']) not in (list, tuple)
+                    or len(guard['process_instance_before']) != 2
+                    or any(type(word) is not int or word <= 0 for word in guard['process_instance_before'])
+                    or guard['before'] != guard['after']):
+                return False
+            point = guard['after']
+            identity, frame, fixed = point['native_identity'], point['frame'], point['native_fixed_time']
+            anchor = sample.get('autochess_snapshot_anchor', sample)
+            if (type(identity) is not dict or set(identity) != set(roots)
+                    or any(not isinstance(identity[key], str)
+                           or re.fullmatch(r'0x[0-9a-fA-F]{1,16}', identity[key]) is None
+                           or not 0x10000 <= int(identity[key], 16) <= 0x7fffffffffff
+                           or int(identity[key], 16) % 8 for key in roots)
+                    or type(frame) is not int or not 0 <= frame <= sample['frame']
+                    or not isinstance(fixed, str) or not re.fullmatch(r'[0-9]{1,19}', fixed)
+                    or int(fixed) > 0x7fffffffffffffff
+                    or int(fixed) / (1 << 32) > sample['game_time']
+                    or anchor['frame'] != frame or type(anchor['frame']) is not int
+                    or type(anchor['game_time']) not in (int, float)
+                    or anchor['game_time'] != int(fixed) / (1 << 32)
+                    or point['stage_id'] != meta['stage_id']):
+                return False
+            digest = hashlib.sha256(struct.pack('<6Q', *[int(identity[key], 16) for key in roots],
+                                                guard['battle_serial'])).hexdigest()
+            expected_session = ':'.join(map(str, (*guard['process_instance_before'], digest)))
+            if (sample.get('native_session', sample['session']) != expected_session
+                    or tuple(sample['battle_identity']) != (digest,)):
+                return False
+            guards.append(guard)
+        old, new = guards
+        return (new['battle_serial'] == old['battle_serial'] + 1
+                and new['process_instance_before'] == old['process_instance_before']
+                and new['source_build'] == old['source_build']
+                and new['after']['native_identity'] == old['after']['native_identity']
+                and new['after']['frame'] < old['after']['frame']
+                and int(new['after']['native_fixed_time']) < int(old['after']['native_fixed_time']))
+    except (KeyError, ValueError, TypeError, AttributeError, struct.error):
+        return False
 
 
 def _same_autochess_boundary_quality(sample, reference, fence):
@@ -805,6 +881,10 @@ class BattleFeed:
         frame_reset = (metadata.get('platform') == 'native_pc' and self.frame is not None
                        and sample['frame'] < self.frame)
         clock_reset = same_native and self.clock is not None and (now < self.clock or frame_reset)
+        if (not clock_reset and published_capture is not None
+                and self.generation == published_generation and observer is not None
+                and observer is published_observer):
+            clock_reset = _native_pc_guarded_clock_reset(published_capture.last_sample or {}, sample)
         context = sample.get('autochess_context') or {}
         native_context_known = context.get('status') in ('available', 'partial')
         context_identity = context.get('identity') if native_context_known else None
@@ -1063,14 +1143,34 @@ class BattleSessions:
         if not isinstance(evidence, dict) or observation.generation != self.generation + 1 or not next_sample:
             return False
         try:
+            native_serial_reset = _native_pc_guarded_clock_reset(previous, next_sample)
             if (not previous['native_session']
-                    or next_sample['native_session'] != previous['native_session']
-                    or tuple(next_sample['battle_identity']) != tuple(previous['battle_identity'])
+                    or not native_serial_reset and (next_sample['native_session'] != previous['native_session']
+                        or tuple(next_sample['battle_identity']) != tuple(previous['battle_identity']))
                     or next_sample['frame'] >= previous['frame']
                     or next_sample['game_time'] >= previous['game_time']):
                 return False
             mark = self._last_event_mark
             after = evidence['after']
+            if native_serial_reset:
+                before = evidence['before']
+                if (not isinstance(self.capture.contract, NativePcProbeContract)
+                        or type(mark.get('native_generation')) is not int
+                        or mark['native_generation'] < 0
+                        or any(type(fence.get('native_battle_state')) is not int
+                               or fence['native_battle_state'] != 2
+                               or fence.get('stopped') is not False or fence.get('error') is not None
+                               or fence.get('terminal_boundary') is not None
+                               or fence.get('active_hooks') != [] or fence.get('retry', False) is not False
+                               or 'native_quiet_boundary_version' in fence
+                               or 'native_deferred_callbacks' in fence
+                               for fence in (mark, before, after))
+                        or any(type(fence.get('native_generation')) is not int
+                               or fence['native_generation'] != mark['native_generation'] + 1
+                               or fence.get('native_identity') != mark.get('native_identity')
+                               or fence.get('native_process_pid') != mark.get('native_process_pid')
+                               for fence in (before, after))):
+                    return False
             return (baseline_barrier(mark, previous, mark) == stream.sequence
                     and stream.frame == mark['frame'] and stream.game_time == mark['game_time']
                     and baseline_barrier(evidence['before'], next_sample, after) == stream.sequence

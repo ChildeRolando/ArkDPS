@@ -17,13 +17,13 @@ from test_pc_autochess_cross_frame_admission import CrossingPcBattle
 
 
 class OwnedScopeEnd:
-    def __init__(self, platform, *, phase=6, start=0):
+    def __init__(self, platform, *, phase=6, start=0, mode=None):
         self.platform = platform
         self.fixture = CrossingPcBattle() if platform == 'native_pc' else AndroidAutoChessBattle()
         self.records = []
         self.fixture.runtime.record = self.records.append
         self.extra_epoch = 0
-        self.mode = 'all' if phase == 5 else 'local'
+        self.mode = mode or ('all' if phase == 5 else 'local')
         if platform == 'native_pc':
             raw_binding = self.fixture.binding
 
@@ -99,6 +99,7 @@ def selected_effective(tmp_path, archive, rate_basis=RateBasis.RECENT_5S):
 @pytest.mark.parametrize('platform', ['native_pc', 'android'])
 @pytest.mark.parametrize('old_phase,new_phase,next_round', [
     (6, 7, False), (5, 7, False), (4, 7, False),
+    (4, 5, False),
     (4, 3, True), (5, 3, True), (4, 4, True), (5, 5, True), (6, 6, True),
 ])
 def test_certified_no_tail_finishes_at_accepted_old_watermark_and_history_has_no_scope_star(
@@ -247,8 +248,8 @@ def test_lifecycle_receiver_replacement_carries_only_retired_numeric_witnesses(p
 
 
 @pytest.mark.parametrize('platform', ['native_pc', 'android'])
-@pytest.mark.parametrize('phase', [3, 5, 102])
-def test_same_round_prepare_help_or_restart_do_not_prove_the_old_scope_ended(platform, phase):
+@pytest.mark.parametrize('phase', [3, 102])
+def test_same_round_prepare_or_restart_do_not_prove_the_old_scope_ended(platform, phase):
     case = OwnedScopeEnd(platform, phase=4)
     successor, archive = case.finish(phase=phase)
     assert successor.autochess_successor is None
