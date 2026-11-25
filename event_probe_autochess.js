@@ -716,7 +716,7 @@ function stampAutoChessClock(when,allowRefresh=true){
    throw new Error('AutoChess stage cache changed');
   }
   if(!cached||Object.keys(before).some(k=>before[k]!==cached.identity[k]))throw new Error('AutoChess scope cache unavailable');
-  const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
+  const openingClock=checkedNativeView(clock,12),frame=openingClock.getUint32(0,true),fixed=openingClock.getBigInt64(4,true).toString();
   if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time){
    unknown('AutoChess event clock mismatch');return;
   }
@@ -731,7 +731,8 @@ function stampAutoChessClock(when,allowRefresh=true){
      !nativeAutoStage.stageAddress.readPointer().equals(stagePointer))throw new Error('AutoChess changed during read');
   const after=currentNativeIdentity();
   if(!after||Object.keys(before).some(k=>before[k]!==after[k]))throw new Error('AutoChess event scope changed');
-  if(clock.readU32()!==frame||clock.add(4).readS64().toString()!==fixed){
+  const closingClock=checkedNativeView(clock,12);
+  if(closingClock.getUint32(0,true)!==frame||closingClock.getBigInt64(4,true).toString()!==fixed){
    unknown('AutoChess event scope changed');return;
   }
   const scope_key=autoScope(cached.roots,phase,round,frame,fixed,cached.fingerprint,cached.headerKey);

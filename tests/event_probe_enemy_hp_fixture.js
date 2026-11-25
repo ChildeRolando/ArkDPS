@@ -66,6 +66,8 @@ function scenario(platform, raw = false, eid = 'enemy_test', shared = null, {ini
     setPhase: value => {phase = value;}, setMode: value => {mode = value;}};
 }
 
+module.exports={scenario};
+if(require.main===module){
 for (const platform of ['native_pc', 'mumu']) {
   for (const raw of [false, true]) {
     const s = scenario(platform, raw);
@@ -158,4 +160,4 @@ for (const platform of ['native_pc', 'mumu']) {
   }
 }
 
-module.exports={scenario};
+}

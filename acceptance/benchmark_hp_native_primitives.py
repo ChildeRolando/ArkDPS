@@ -15,6 +15,7 @@ from native_pc.native_hook_source import NativePipe
 
 def source(binary, runtime):
     clock = runtime[runtime.index('function time('):runtime.index('function buff(')]
+    block = runtime[runtime.index('function checkedNativeView('):runtime.index('function time(')] if 'function checkedNativeView(' in runtime else ''
     start = runtime.index('const terminalClassNames=') if 'const terminalClassNames=' in runtime else runtime.index('function terminalIdentity(')
     identity = runtime[start:runtime.index('function currentTerminalBoundary(')]
     offset = export_offsets(binary)['ArkDpsTestInteger']
@@ -31,7 +32,7 @@ const clock=Memory.alloc(16);clock.writeU64(30);clock.add(4).writeU64(4294967296
 function fp(address){return Number(BigInt(address.readS64().toString()))/4294967296;}
 function className(address){return address.add(0x10).readPointer().readCString();}
 function damageSettlementStamp(frame,game_time){return {frame,game_time};}
-''' + clock + identity + r'''
+''' + block + clock + identity + r'''
 let entered=0,left=0,failures=0;
 const hook=Interceptor.attach(Process.getModuleByName('ArkDPS.NativeEvents.dll').base.add(OFFSET),{
  onEnter(){entered++;const a=time(false,false),x=terminalIdentity(controller,controllerClass);if(a.frame!==30||a.game_time!==1||!x)failures++;},
@@ -47,29 +48,33 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--binary',required=True,type=Path)
     parser.add_argument('--output',required=True,type=Path)
+    parser.add_argument('--baseline-ref',default='a782091')
+    parser.add_argument('--count',type=int,default=1216)
     args=parser.parse_args()
+    if not 1 <= args.count <= 1216:
+        parser.error('--count must be between 1 and 1216')
     binary=args.binary.resolve()
     expected='551cbc03224f0cc85bde790644e783edb8ae0457e9bb370c75332ff3d268879a'
     assert hashlib.sha256(binary.read_bytes()).hexdigest()==expected
     args.output.parent.mkdir(parents=True,exist_ok=True)
     results={}
     with TemporaryDirectory(prefix='owned-native-primitives-',dir=args.output.parent) as temporary:
-        for name,runtime in [('baseline',subprocess.check_output(['git','show','a782091:event_probe_runtime.js'],cwd=ROOT,text=True,encoding='utf-8')),('candidate',(ROOT/'event_probe_runtime.js').read_text(encoding='utf-8'))]:
+        for name,runtime in [('baseline',subprocess.check_output(['git','show',args.baseline_ref+':event_probe_runtime.js'],cwd=ROOT,text=True,encoding='utf-8')),('candidate',(ROOT/'event_probe_runtime.js').read_text(encoding='utf-8'))]:
             fixture=Fixture(Path(temporary)/name,binary);pipe=None
             try:
                 fixture.configure(source=source(binary,runtime));fixture.command('load')
                 pipe=NativePipe(fixture.pipe_name,fixture.identity['pid']);pipe.request('initialize',token=fixture.token)
-                cold=fixture.command('benchmark',count=1216)
-                warm=fixture.command('benchmark',count=1216)
+                cold=fixture.command('benchmark',count=args.count)
+                warm=fixture.command('benchmark',count=args.count)
                 marks=pipe.request('mark')
-                assert marks=={'entered':2432,'left':2432,'failures':0},marks
-                assert cold['total']==warm['total']==650*1216
+                assert marks=={'entered':args.count*2,'left':args.count*2,'failures':0},marks
+                assert cold['total']==warm['total']==650*args.count
                 results[name]={'cold':cold,'warm':warm,'proof':marks}
                 pipe.request('stop')
             finally:
                 if pipe:pipe.close()
                 fixture.close()
-    result={'classification':'self_owned_native_quickjs_primitives_not_full_hp_callback_not_game','dll_sha256':expected,'count_per_phase':1216,'concurrency':1,'results':results,'lock_time':None,'limits':'Measured elapsed_ns includes ctypes, native trampoline and actual QuickJS enter/leave clock+identity reads. This does not measure full HP/scope callbacks, isolated lock occupancy or game FPS.'}
+    result={'classification':'self_owned_native_quickjs_primitives_not_full_hp_callback_not_game','dll_sha256':expected,'baseline_ref':args.baseline_ref,'count_per_phase':args.count,'concurrency':1,'results':results,'lock_time':None,'limits':'Measured elapsed_ns includes ctypes, native trampoline and actual QuickJS enter/leave clock+identity reads. This does not measure full HP/scope callbacks, isolated lock occupancy or game FPS.'}
     args.output.write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps(result))
 

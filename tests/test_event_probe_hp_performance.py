@@ -39,3 +39,10 @@ def test_real_r5_hp_fragment_compaction_preserves_shared_consumers():
             projections.append({'rows': view['rows'], 'totals': view['totals'],
                                 'complete': view['enemy_state_complete']})
         assert projections[0] == projections[1]
+
+
+def test_hp_bulk_reads_preserve_live_fields_and_fail_closed():
+    fixture = Path(__file__).with_name('event_probe_hp_bulk_fixture.js')
+    run = subprocess.run(['node', str(fixture)], capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stderr
+    assert len(json.loads(run.stdout)['checks']) == 22

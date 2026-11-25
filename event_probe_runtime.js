@@ -677,6 +677,11 @@ function damageSettlementQuality(){
   damage_settlement_failure_samples_version:1,
   damage_settlement_failure_samples:[...damageSettlementFailureSamples.values()]};
 }
+function checkedNativeView(address,size){
+ const bytes=address.readByteArray(size);
+ if(bytes===null||bytes.byteLength!==size)throw new Error('native block read unavailable');
+ return new DataView(bytes);
+}
 function time(allowRetry = false, withEventScope = true) {
  // One owned copy for the opening clock, followed by the same independent
  // frame guard as before. Native PC pays one bridge call instead of two;
@@ -1748,8 +1753,7 @@ function refreshEnemyEntryFrame(frame) {
  }
  enemyEntryFrame=frame;
 }
-function isEnemy(object) {
- const klass=object.readPointer();
+function isEnemy(object,klass=object.readPointer()) {
  if(klass.equals(enemyEntryConfig.enemy))return true;
  const key=klass.toString();
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
@@ -2374,8 +2378,18 @@ function enemyAttribute(data,index) {
 function enemyMaxHp(enemy) {
  if(!enemyAttributesReady)return null;
  try{
-  const data=enemyCachedAttributes(enemy);
-  return data?enemyAttribute(data,MAX_HP_ATTRIBUTE):null;
+  const attributes=enemy.add(0xb0).readPointer();
+  if(attributes.isNull())return null;
+  const cached=attributes.add(0x68).readPointer();
+  if(cached.isNull())return null;
+  const count=cached.add(0x18).readU32();
+  if(!count||count>64)return null;
+  // Only after the live length admits slot zero, copy its obscuring key,
+  // current value and ready flag. No live field survives this invocation.
+  const view=checkedNativeView(cached.add(0x20),0x14);
+  if(view.getUint8(0x10)!==1)return null;
+  const value=Number(BigInt.asIntN(64,view.getBigUint64(0,true)^view.getBigUint64(8,true)))/4294967296;
+  return value>0&&value<1e10?value:null;
  }catch(e){return null;}
 }
 function enemyEntryAttributes(enemy) {
@@ -2586,7 +2600,9 @@ function installEnemyStateHooks() {
        }
        return;
       }
-      enemyTarget=isEnemy(enemy);
+      const identity=checkedNativeView(enemy,0x1c);
+      const klass=ptr(identity.getBigUint64(0,true)),uid=identity.getUint32(0x18,true);
+      enemyTarget=isEnemy(enemy,klass);
       // Before Born, enemy HP initialization is covered by enemy_enter.
       // Stage traps never create an entry; the host admits them via snapshot.
       if(enemyTarget&&!enemy.add(0x25).readU8())return;
@@ -2594,7 +2610,7 @@ function installEnemyStateHooks() {
       // This setter publishes only the closing scope. The opening clock still
       // detects a new round and brackets the write with the closing clock.
       const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
-      const when=time(false,!deferScope),uid=enemy.add(0x18).readU32();
+      const when=time(false,!deferScope);
       refreshEnemyEntryFrame(when.frame);
       if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
       if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
@@ -2618,10 +2634,11 @@ function installEnemyStateHooks() {
       enemyHpWrites.delete(key);
       if(stopped||fatal||superseded)return;
       const end=time(false,!deferScope);
-      if(end.frame!==when.frame||end.game_time!==when.game_time||enemy.add(0x18).readU32()!==uid)
+      const closing=checkedNativeView(enemy.add(0x18),0x30);
+      if(end.frame!==when.frame||end.game_time!==when.game_time||closing.getUint32(0,true)!==uid)
        throw new Error('enemy HP callback changed identity or crossed a frame');
-      const hp=targetHp(enemy);
-      if(hp===null)throw new Error('enemy HP unreadable after callback');
+      const hp=Number(closing.getBigInt64(0x28,true))/4294967296;
+      if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
       if(hp===hpBefore&&maxHpBefore===null)return;
       const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
       if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
@@ -3282,7 +3299,9 @@ function terminalClassName(klass){
 }
 function terminalIdentity(controller,controllerClass,reject){
  if(controller.isNull())return reject?.('singleton_empty')??null;
- const klass=controller.readPointer();
+ const nativeOffset=probeAdapter.nativeOffset??0x10;
+ const controllerFields=nativeOffset===0x10?checkedNativeView(controller,0x18):null;
+ const klass=controllerFields?ptr(controllerFields.getBigUint64(0,true)):controller.readPointer();
  if(!klass.equals(controllerClass)){
   if(!reject)return null;
   let observed=null;
@@ -3290,19 +3309,21 @@ function terminalIdentity(controller,controllerClass,reject){
   return reject('controller_class_mismatch',observed);
  }
  // Use the same two ownership references as the guarded native snapshot.
- const native=controller.add(probeAdapter.nativeOffset??0x10).readPointer();
+ const native=controllerFields?ptr(controllerFields.getBigUint64(0x10,true)):controller.add(nativeOffset).readPointer();
  const logger=controller.add(probeAdapter.loggerOffset).readPointer();
  const level=controller.add(probeAdapter.levelOffset).readPointer();
  if(native.isNull())return reject?.('native_missing')??null;
  if(logger.isNull())return reject?.('logger_missing')??null;
  if(level.isNull())return reject?.('level_missing')??null;
  if(!native.add(probeAdapter.nativeOwnerOffset??0x28).readPointer().equals(controller))return reject?.('native_owner_mismatch')??null;
- const loggerClass=terminalClassName(logger.readPointer());
+ const loggerFields=(probeAdapter.loggerOwnerOffset??0x18)===0x18&&(probeAdapter.statsOffset??0x30)===0x30?
+  checkedNativeView(logger,0x38):null;
+ const loggerClass=terminalClassName(loggerFields?ptr(loggerFields.getBigUint64(0,true)):logger.readPointer());
  if(loggerClass!=='BattleLogger')return reject?.('logger_class_mismatch',loggerClass)??null;
- if(!logger.add(probeAdapter.loggerOwnerOffset??0x18).readPointer().equals(controller))return reject?.('logger_owner_mismatch')??null;
+ if(!(loggerFields?ptr(loggerFields.getBigUint64(0x18,true)):logger.add(probeAdapter.loggerOwnerOffset??0x18).readPointer()).equals(controller))return reject?.('logger_owner_mismatch')??null;
  const levelClass=terminalClassName(level.readPointer());
  if(levelClass!=='LevelData')return reject?.('level_class_mismatch',levelClass)??null;
- const stats=logger.add(probeAdapter.statsOffset??0x30).readPointer();
+ const stats=loggerFields?ptr(loggerFields.getBigUint64(0x30,true)):logger.add(probeAdapter.statsOffset??0x30).readPointer();
  if(stats.isNull())return reject?.('stats_missing')??null;
  const statsClass=terminalClassName(stats.readPointer());
  if(statsClass!=='BattleStats')return reject?.('stats_class_mismatch',statsClass)??null;
