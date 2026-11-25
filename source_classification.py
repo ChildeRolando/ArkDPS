@@ -37,3 +37,12 @@ def classify_unmapped_source(cid, roster_cids=()):
     if cid in roster_cids:
         return None
     return None
+
+
+DIAGNOSTIC_LABELS = (
+    ('unknown_sources', '未归属统计来源'),
+    ('unmapped_tokens', '未确认归属的召唤物'),
+    ('ambiguous_sources', '归属歧义统计来源'),
+    ('mapping_conflicts', '归属冲突统计来源'),
+    ('missing_fields', '字段缺失统计来源'),
+)

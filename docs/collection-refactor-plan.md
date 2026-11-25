@@ -258,3 +258,5 @@ R8统一运行完整Python回归和既有Windows CI发布门禁。自有进程ho
 - 可恢复性：各阶段有明确删除对象、依赖及失败反例；单阶段可回滚到前一个完整匹配包，旧原始文件不迁写。
 - 新的架构抽象：无。ACK公共规则归现有ProbeContract，技能/元素归现有Statistics，指标读数归现有panel_model；不另设注册中心或跨层utils层。
 - 实际验证：规划条目唯一性、阶段完整性、测试命令目标存在性、Markdown围栏、审计复制SHA及差异格式检查。未执行生产回归、打包或实机验收；这些仍是实施阶段的门禁。
+
+D24已将活动历史兼容解释收口到`BattleRecord.normalized_statistics()`；`battle_share.record_statistics()`仅委派。每个record首次读取时计算一次规范化读数，展示投影复用同一私有事实，公开返回值独立深拷贝。`from_dict`分别保有原始JSON字段存在性与经验证的解释视图，`to_dict`/导出保留输入缺失、null、零及旧policies；未知默认只用于读取。History缓存仍认证原文件字节SHA，128条/64MiB预算仅覆盖编码raw载荷，不包括活跃record及调用方副本。

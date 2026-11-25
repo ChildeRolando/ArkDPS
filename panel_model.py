@@ -17,8 +17,8 @@ from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping
 
-from source_classification import classify_unmapped_source
-from stats_core import DAMAGE_SCOPE_MISMATCH, exceeds_native_damage
+from source_classification import classify_unmapped_source, DIAGNOSTIC_LABELS
+from stats_core import DAMAGE_SCOPE_MISMATCH, DAMAGE_TYPE_KEYS, exceeds_native_damage
 
 DAMAGE_COLORS = {
     'physical': '#e5484d',   # red
@@ -26,7 +26,7 @@ DAMAGE_COLORS = {
     'elemental': '#9b5cf6',  # purple
     'true': '#ffffff',       # white
 }
-DAMAGE_ORDER = ('physical', 'arts', 'elemental', 'true')
+DAMAGE_ORDER = DAMAGE_TYPE_KEYS
 SCHEMA_VERSION = 1
 
 
@@ -838,14 +838,6 @@ class PanelView:
 def _finite(value: float | None) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
-
-DIAGNOSTIC_LABELS = (
-    ('unknown_sources', '未归属统计来源'),
-    ('unmapped_tokens', '未确认归属的召唤物'),
-    ('ambiguous_sources', '归属歧义统计来源'),
-    ('mapping_conflicts', '归属冲突统计来源'),
-    ('missing_fields', '字段缺失统计来源'),
-)
 
 
 def _name_list(value) -> list[str]:

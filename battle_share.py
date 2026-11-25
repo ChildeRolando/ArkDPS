@@ -1,25 +1,16 @@
 """Read-only sharing of a validated BattleRecord, never a live sample."""
 from datetime import datetime
-from functools import cache
 import json
 import os
 from pathlib import Path
-import re
 import tempfile
 
-from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
-from battle_history import BattleRecord
-from character_catalog import load_character_names
-from panel_model import DAMAGE_ORDER, DIAGNOSTIC_LABELS, team_status
-from source_classification import classify_unmapped_source
+from battle_history import BattleRecord, AUTOCHESS_SNAPSHOT_LABEL, AUTOCHESS_SNAPSHOT_NOTE
+from panel_model import team_status
 import stage_names
 
 
 OUTCOMES = {'victory': '胜利', 'defeat': '失败', 'abandoned': '退出', 'unknown': '结果未知'}
-AUTOCHESS_SNAPSHOT_LABEL = '卫戍快照 · 玩家归属未知'
-AUTOCHESS_SNAPSHOT_NOTE = '按角色键记录客户端累计伤害和治疗。玩家归属、回合及整场结果未知。'
-_CHARACTER_KEY = re.compile(r'[A-Za-z0-9_#.-]{1,110}')
-_history_character_names = cache(load_character_names)
 
 
 def record_labels(record):
@@ -65,138 +56,9 @@ def record_stage(record):
     return stage_names.resolve(record.metadata['stage_id'])
 
 
-def _legacy_totals_complete(stats, sample):
-    """Infer cumulative-totals completeness for pre-ARK-24 records.
-
-    Earlier builds cleared every source's ``counter_snapshot_complete`` at the
-    battle boundary, so a False flag on an ended record does not by itself mean
-    a collection gap. Fall back only on positive evidence: the frozen result is
-    ended, no diagnostic reports an unknown/incomplete source, the final native
-    sample is a complete FINISHED (state 3) frame, and every row's sources were
-    present in that sample with both cumulative counters.
-    """
-    if stats.get('ended') is not True:
-        return False
-    if any(stats.get(key) for key, _ in DIAGNOSTIC_LABELS):
-        return False
-    guard = sample.get('guard')
-    guard = guard if isinstance(guard, dict) else {}
-    native_rows = sample.get('rows')
-    if (sample.get('state') != 3 or guard.get('complete') is not True
-            or not isinstance(native_rows, list)):
-        return False
-    native_ids = {item.get('id') for item in native_rows if isinstance(item, dict)}
-    for row in stats['rows'].values():
-        if row.get('damage') is None or row.get('healing') is None:
-            return False
-        if not set(row.get('sources') or ()) <= native_ids:
-            return False
-    return True
-
-
-def _native_output(sample):
-    """Last native cumulative rows, used only to label unmapped sources."""
-    rows = sample.get('rows')
-    if not isinstance(rows, list):
-        return {}
-    return {item.get('id'): item for item in rows if isinstance(item, dict)}
-
-
-def _legacy_autochess_rows(sample):
-    """Project only the last native CID counters from archives predating scoped snapshots."""
-    raw = sample.get('rows')
-    if not isinstance(raw, list) or not raw:
-        return {}
-    names = _history_character_names()
-    rows, seen = {}, set()
-
-    def amount(value):
-        # Native rows are floats with each typed component at most 1e15.
-        return value if type(value) in (int, float) and 0 <= value <= 4e15 else None
-
-    for item in raw:
-        cid = item.get('id') if isinstance(item, dict) else None
-        if not isinstance(cid, str) or not _CHARACTER_KEY.fullmatch(cid):
-            continue
-        if cid in seen:
-            rows.pop(cid, None)
-            continue
-        seen.add(cid)
-        damage, healing = amount(item.get('damage')), amount(item.get('healing'))
-        if damage is None and healing is None:
-            continue
-        by_type = {key: value for key in DAMAGE_ORDER if (value := amount(item.get(key))) is not None}
-        rows[cid] = dict(name=names.get(cid, cid), damage=damage, healing=healing, damage_by_type=by_type,
-                         sources=[cid], counter_snapshot_complete=damage is not None and healing is not None)
-    return rows
-
-
-def _legacy_non_team(stats, native):
-    """Move recognised non-team keys out of a pre-ARK-24 unknown list.
-
-    Old records classified nothing, so a known map-device key was written as
-    unknown and blocked shares forever. The classification rule is pure over
-    the statistic key; output amounts come from the record's final native rows.
-    """
-    unknown = stats.get('unknown_sources') or []
-    if not isinstance(unknown, list):
-        return
-    blocked = set()
-    for key in ('unmapped_tokens', 'ambiguous_sources', 'mapping_conflicts'):
-        blocked.update(item for item in stats.get(key) or () if isinstance(item, str))
-    remaining, moved, output = [], [], {}
-    for cid in unknown:
-        if (isinstance(cid, str) and cid not in blocked
-                and classify_unmapped_source(cid) is not None):
-            moved.append(cid)
-            row = native.get(cid) or {}
-            damage, healing = row.get('damage'), row.get('healing')
-            valid = (isinstance(damage, (int, float)) and damage >= 0
-                     and isinstance(healing, (int, float)) and healing >= 0)
-            output[cid] = {'damage': damage if valid else None,
-                           'healing': healing if valid else None}
-        else:
-            remaining.append(cid)
-    stats['unknown_sources'] = remaining
-    stats['non_team_sources'] = sorted(moved)
-    stats['non_team_output'] = output
-
-
 def record_statistics(record, *, for_panel=False):
-    """Return frozen statistics with totals completeness resolved for display.
-
-    New records carry ``totals_complete`` and the source classification from
-    the statistics core. Legacy records are normalized from the evidence
-    above, including reclassifying recognised non-team keys; missing totals
-    stay incomplete instead of being zero-filled.
-    """
-    if for_panel:
-        unverified = record.unverified_autochess_scope
-        if unverified:
-            sample = record.last_sample
-            if sample.get('native_counter_scope') != NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
-                return dict(rows=_legacy_autochess_rows(sample), ended=True, totals_complete=False,
-                            display_scope_label=AUTOCHESS_SNAPSHOT_LABEL)
-        fields = ('rows', 'ended', 'totals_complete', 'non_team_sources', 'non_team_output',
-                  'boss_damage_available', 'boss_damage_reason', 'settlement_unassigned',
-                  *(key for key, _ in DIAGNOSTIC_LABELS))
-        stats = record.statistics_fields(fields)
-        if unverified:
-            return dict(stats, totals_complete=False, display_scope_label=AUTOCHESS_SNAPSHOT_LABEL)
-    else:
-        stats = record.statistics
-    if 'non_team_sources' in stats and 'totals_complete' in stats:
-        return stats
-    sample = record.last_sample
-    if 'non_team_sources' not in stats:
-        _legacy_non_team(stats, _native_output(sample))
-    if 'totals_complete' not in stats:
-        complete = _legacy_totals_complete(stats, sample)
-        stats['totals_complete'] = complete
-        if complete:
-            for row in stats['rows'].values():
-                row['counter_snapshot_complete'] = True
-    return stats
+    """Compatibility call site; archive interpretation belongs to BattleRecord."""
+    return record.normalized_statistics(for_panel=for_panel)
 
 
 def record_status(record):

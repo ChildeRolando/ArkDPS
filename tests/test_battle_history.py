@@ -611,7 +611,9 @@ def test_overkill_fields_round_trip_and_old_records_stay_readable_as_unknown(tmp
     assert legacy_row['overkill_damage'] is None
     assert legacy_row['overkill_coverage_complete'] is False
     assert restored_legacy.statistics['overkill_damage'] is None
-    assert restored_legacy.to_dict()['policies']['overkill'].startswith('observed_')
+    assert restored_legacy.to_dict()['policies'] == legacy['policies']
+    assert 'overkill' not in restored_legacy.to_dict()['policies']
+    assert 'overkill_damage' not in restored_legacy.to_dict()['statistics']['rows']['a']
 
 
 def test_invalid_overkill_coverage_is_rejected():
