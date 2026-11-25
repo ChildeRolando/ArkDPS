@@ -51,6 +51,10 @@ function run(platform,row,fault=null){
  f.write(f.roleData[0].add(0x50),f.text(blaze));
  f.write(f.roleData[2].add(0x50),f.text(row.actor));
  f.clock(row.frame,fixed(row.when));f.mark();
+ if(fault==='legacy_burst_changed')f.vm.runInContext(`{
+  const original=record;record=function(...args){const event=original(...args);
+   if(event?.kind==='elemental_burst')event.real_delta+=1;return event;};
+ }`,f.context);
  const source=f.unit(row.actor,10),explicit=f.unit(blaze,11),target=f.unit('enemy_9029_acfnc_2',501);
  f.write(source.add(0x538).readPointer().add(0x6c),301);
  f.write(explicit.add(0x538).readPointer().add(0x6c),101);
@@ -169,6 +173,7 @@ for(const platform of ['android','native_pc']){
    {...synthetic(1),name:'owned_child_same_source_as_parent',steps:[[qiu,180,179,1]]},
    {...synthetic(2),name:'different_target_untracked_thread_is_independent',parallel:true},
    {...synthetic(2),name:'same_target_thread_completed_before_hp_anchor',completedBeforeAnchor:true}].map(row=>run(platform,row)),
+  legacy_burst_changed:run(platform,rows[0],'legacy_burst_changed'),
   legacy_zero:run(platform,{...synthetic(1,before),name:'single_lethal_child_before_zero_parent',
    zeroAfterChildren:true,parent:[0,0,10],steps:[[blaze,100,0,150]]}),
   invalid:Object.fromEntries(faults.map(fault=>[fault,run(platform,

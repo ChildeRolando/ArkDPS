@@ -109,3 +109,20 @@ def test_inconsistent_or_unbounded_chain_never_supplies_parent_evidence(producer
         assert proof['settlement_unknown_reason'] == 'nested modifier changed target settlement scope', fault
         assert proof['nested_settlement_detail']['stage'] in ('target_entry', 'child_entry', 'child_close', 'parent_close')
         assert 0 <= proof['nested_settlement_detail']['verified_children'] <= 16
+
+
+@pytest.mark.parametrize('platform', ['android', 'native_pc'])
+def test_nested_hp_chain_is_bound_to_checked_settlement_not_legacy_burst(producer, platform):
+    report = producer[platform]['legacy_burst_changed']
+    parent = parent_record(report)
+    assert parent['settlement_complete'] is True
+    children = [e for e in report['batch']['events'] if e['kind'] == 'damage_settlement' and e['damage_type'] == 5]
+    bursts = [e for e in report['batch']['events'] if e['kind'] == 'elemental_burst']
+    for child, burst, expected in zip(children, bursts, report['expected']['children']):
+        assert child['hp_before'] == expected['hp_before']
+        assert child['hp_after'] == expected['hp_after']
+        assert child['real_delta'] == -child['amount']
+        assert child['cancel_reason'] == 0
+        assert burst['real_delta'] != child['real_delta']
+    assert parent['hp_before'] == report['expected']['parent']['hp_before']
+    assert parent['hp_after'] == report['expected']['parent']['hp_after']

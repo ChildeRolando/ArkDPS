@@ -258,6 +258,15 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
                 assert value.get('ready') is True and value.get('character_lifecycle_ready') is False
                 assert value['character_lifecycle_error'] is None or isinstance(value['character_lifecycle_error'], str)
                 additions.add('character_lifecycle_error')
+            if value.get('kind') == 'damage_settlement' and 'hp_before' in value:
+                hp_fields = {'hp_before', 'hp_after', 'real_delta', 'cancel_reason'}
+                assert hp_fields <= set(value)
+                assert all(type(value[key]) in (int, float) for key in hp_fields)
+                assert value['hp_before'] >= value['hp_after'] >= 0
+                assert value['real_delta'] == -value['amount']
+                assert abs(value['hp_before'] - value['hp_after'] + value['real_delta']) <= max(.01, value['amount'] * 1e-6)
+                assert value['cancel_reason'] == 0
+                additions |= hp_fields
             if 'source_instance_uid' in value:
                 assert value.get('kind') in ('damage', 'healing', 'damage_settlement', 'skill_start', 'skill_end')
                 assert type(value['source_instance_uid']) is int and 0 < value['source_instance_uid'] <= 0xffffffff

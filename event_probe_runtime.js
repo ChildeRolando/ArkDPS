@@ -1261,19 +1261,16 @@ function captureNestedElementalStep(parent,child,checkpoint,hpBefore){
  }catch(e){return null;}
 }
 function matchesNestedElementalRecords(step,uid,target,when){
- const {child,cid,settlement,burst,hpBefore,hpAfter,real}=step,killed=hpAfter===0;
+ const {child,cid,settlement,hpBefore,hpAfter,real}=step,killed=hpAfter===0;
  return child.settlementRecordEmitted&&settlement===child.settlementRecord&&
   settlement?.kind==='damage_settlement'&&settlement.source===cid&&settlement.source_character_uid===step.uid&&
   settlement.damage_type===5&&settlement.settlement_complete===true&&settlement.shield_absorbed===0&&
   settlement.killed===killed&&settlement.amount===-real&&settlement.target_uid===String(uid)&&
   settlement.target===step.targetId&&settlement.target_instance===target.toString()&&
   settlement.frame===when.frame&&settlement.game_time===when.game_time&&
-  burst?.kind==='elemental_burst'&&burst.source===cid&&burst.source_character_uid===step.uid&&burst.damage_type===5&&
-  burst.target_instance===settlement.target_instance&&burst.target===settlement.target&&
-  burst.hp_before===hpBefore&&burst.hp_after===hpAfter&&burst.real_delta===real&&burst.killed===killed&&
-  burst.frame===when.frame&&burst.game_time===when.game_time&&burst.cancel_reason===0&&burst.shield_absorbed===0&&
-  Number.isSafeInteger(settlement.sequence)&&Number.isSafeInteger(burst.sequence)&&settlement.sequence<burst.sequence&&
-  sameNativeEventScope(settlement,when)&&sameNativeEventScope(burst,when);
+  settlement.hp_before===hpBefore&&settlement.hp_after===hpAfter&&settlement.real_delta===real&&
+  settlement.cancel_reason===0&&Number.isSafeInteger(settlement.sequence)&&
+  sameNativeEventScope(settlement,when);
 }
 function closeNestedElementalStep(step,uid,when,evidence,burst){
  const {child,source,cid,hpBefore}=step,target=child.target;
@@ -1343,7 +1340,7 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
    for(const step of chain.steps){
     if(step.hpBefore!==hp||step.settlement.sequence<=sequence||
        !matchesNestedElementalRecords(step,checkpoint.uid,target,when))return null;
-    hp=step.hpAfter;sequence=step.burst.sequence;
+    hp=step.hpAfter;sequence=step.settlement.sequence;
    }
    const finalHp=targetHp(target);
    if(childrenFirst){
@@ -1396,15 +1393,15 @@ function damageSettledAfterNestedKill(scope,when,amount){
  const kill=scope.nestedElementalKill,hit=scope.targetHit;
  if(!kill||kill.hpBefore!==hit?.hpBefore||scope.targetHitAmbiguous||scope.outputAmbiguous||scope.mitigationModifierReused||
     !scope.nativeModifierSource||!(amount>0)||!sameMitigationTime(kill.when,when))return null;
- const target=hit.target,mod=scope.mod,child=kill.child,settlement=kill.settlementRecord,burst=kill.burstRecord;
+ const target=hit.target,mod=scope.mod,child=kill.child,settlement=kill.settlementRecord;
  if(!child?.settlementRecordEmitted||!settlement||settlement!==child.settlementRecord||
     settlement.kind!=='damage_settlement'||settlement.settlement_complete!==true||settlement.damage_type!==5||
     settlement.target_uid!==String(kill.uid)||settlement.target_instance!==target.toString()||
     settlement.shield_absorbed!==0||settlement.amount!==-kill.real||settlement.killed!==true||
-    !burst||burst.kind!=='elemental_burst'||burst.target_instance!==target.toString()||
-    burst.real_delta!==kill.real||burst.hp_before!==kill.hpBefore||burst.hp_after!==kill.hpAfter||
+    settlement.real_delta!==kill.real||settlement.hp_before!==kill.hpBefore||settlement.hp_after!==kill.hpAfter||
+    settlement.cancel_reason!==0||!Number.isSafeInteger(settlement.sequence)||
     !sameMitigationTime(child.when,when)||settlement.frame!==when.frame||settlement.game_time!==when.game_time||
-    burst.frame!==when.frame||burst.game_time!==when.game_time||
+    !sameNativeEventScope(settlement,when)||
     kill.hpAfter!==0||kill.observedAfterChild!==kill.hpAfter)return null;
  const parentAfter=targetHp(target),parentReal=fp(mod.add(0x48));
  if(damageTargetUid(target)!==kill.uid||!target.equals(mod.add(0x10).readPointer())||
@@ -1792,7 +1789,7 @@ function knownNonEnemyTarget(target){
  const key=targetKey(target);
  return key&&!key.startsWith('enemy_')&&!key.startsWith('trap_');
 }
-function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed,evidenceMethod}={}) {
+function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed,evidenceMethod,hpEvidence}={}) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
  const qualification=settlementScopeQualification(scope,when,target);
  if(qualification==='outside')return;
@@ -1814,6 +1811,17 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
    evidence.nominal_amount=nominal;
   if(nested)evidence.settled_after_nested_kill=true;
   if(typeof killed==='boolean')evidence.killed=killed;
+  // Only the same-hit checked HP closure may enter this certificate. These
+  // endpoints replace the legacy burst record as the nested chain witness.
+  if(hpEvidence){
+   if(hpEvidence.real_delta!==real||hpEvidence.cancel_reason!==0||
+      !Number.isFinite(hpEvidence.hp_before)||!Number.isFinite(hpEvidence.hp_after)||
+      hpEvidence.hp_before<0||hpEvidence.hp_after<0||
+      Math.abs(hpEvidence.hp_before-hpEvidence.hp_after+real)>Math.max(0.01,Math.abs(real)*1e-6))
+    throw new Error('invalid checked settlement HP checkpoint');
+   Object.assign(evidence,{hp_before:hpEvidence.hp_before,hp_after:hpEvidence.hp_after,
+    real_delta:real,cancel_reason:0});
+  }
   const proof={method:scope.name};if(evidenceMethod)proof.evidence_method=evidenceMethod;
   const tokenHost=autoTokenHostEvidence(scope,when);
   if(tokenHost)proof.native_autochess_token_host=tokenHost;
@@ -1967,7 +1975,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  if(scope.settlementFailureReason)recipient.settlementFailureReason=scope.settlementFailureReason;
  if(scope.nestedSettlementFailure)recipient.nestedSettlementFailure=scope.nestedSettlementFailure;
  const event=damageSettlement(recipient,target,settledReal,when,{nominal,shield:absorbed,type,nested,unverified,killed,
-                   identity:output?.settlementIdentity,reduction:pair,
+                   identity:output?.settlementIdentity,reduction:pair,hpEvidence:capturedHp?exactEvidence:undefined,
                    evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
  if(event){scope.settlementRecordEmitted=true;scope.settlementRecord=event;}

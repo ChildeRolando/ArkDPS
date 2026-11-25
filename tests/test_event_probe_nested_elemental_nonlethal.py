@@ -21,7 +21,7 @@ FAULTS = ['parent_callback_not_returned', 'missing_parent_real', 'parent_hp_mism
     'changed_parent_type', 'parent_cancelled', 'cross_frame', 'cross_time', 'cross_scope', 'second_child_hp_discontinuous',
     'child_delta_mismatch', 'child_hp_mismatch', 'child_cancelled', 'child_shield_unknown',
     'child_incomplete', 'child_settlement_amount', 'child_settlement_uid', 'child_settlement_instance',
-    'child_settlement_clock', 'child_burst_delta', 'changed_child_source', 'reused_modifier']
+    'child_settlement_clock', 'child_certificate_delta', 'changed_child_source', 'reused_modifier']
 
 
 @pytest.fixture(scope='module')

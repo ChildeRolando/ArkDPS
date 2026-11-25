@@ -11,7 +11,7 @@ const faults=['parent_callback_not_returned','missing_parent_real','parent_hp_mi
  'changed_parent_type','parent_cancelled','cross_frame','cross_time','cross_scope','second_child_hp_discontinuous',
  'child_delta_mismatch','child_hp_mismatch','child_cancelled','child_shield_unknown',
  'child_incomplete','child_settlement_amount','child_settlement_uid','child_settlement_instance',
- 'child_settlement_clock','child_burst_delta','changed_child_source','reused_modifier'];
+ 'child_settlement_clock','child_certificate_delta','changed_child_source','reused_modifier'];
 function run(platform,group,index,fault=null){
  const a=group.raw_child_entry.record,b=group.raw_child_return.record;
  const f=fixture({platform,settlement:true,sourcePath:path.join(__dirname,'..',
@@ -38,9 +38,9 @@ function run(platform,group,index,fault=null){
     }return event;};
   }`,f.context);
  }
- if(fault==='child_burst_delta')f.vm.runInContext(`{
+ if(fault==='child_certificate_delta')f.vm.runInContext(`{
   const original=record;record=function(...args){const event=original(...args);
-   if(event?.kind==='elemental_burst')event.real_delta+=1;return event;};
+   if(event?.kind==='damage_settlement'&&event.damage_type===5)event.real_delta+=1;return event;};
  }`,f.context);
  const apply=f.callback('ApplyModifier',f.entity),take=f.callback('OnTakeDamage',f.unitClass);
  const outer={threadId:1},hit={threadId:1},elemental={threadId:1},inner={threadId:1};
