@@ -120,8 +120,13 @@ function scenario(platform, fault) {
   const batch = f.context.rpc.exports.readEvents(0, mark.sequence);
   assert.equal(batch.enemy_damage_ready, true);
   assert.equal(batch.mitigation_ready, true);
-  assert.equal(batch.events.filter(e => e.kind === 'damage').length,
-    0, platform + ':' + fault);
+  const legacy=batch.events.filter(e=>e.kind==='damage');
+  if(legacy.length){
+    assert.equal(legacy.length,1,platform+':'+fault);
+    assert(batch.enemy_damage_unknown,platform+':'+fault+' retains explicit failed-domain quality');
+    assert(!batch.events.some(e=>e.kind==='damage_settlement'&&e.source===legacy[0].source),
+      platform+':'+fault+' cannot duplicate one modifier as legacy and certificate');
+  }
   const valid = ['target_return_before_apply_commit', 'nonlethal_cap', 'lethal_hit',
     'full_block_unit_before_shield', 'full_block_unit_after_shield'].includes(fault) || !!late && !late.invalid;
   return {initial_mark: initialMark, initial_batch: initialBatch,

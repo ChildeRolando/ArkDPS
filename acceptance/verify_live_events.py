@@ -594,6 +594,7 @@ def pc_mechanism_evidence(events):
                  and equal(min(before, incoming), event['amount']))
         (shield_ok if valid else shield_bad).append(event.get('sequence'))
 
+    _single_settlement_wire(events)  # Reject malformed/mixed declared producer formats.
     bars = [event for event in events if event.get('kind') == 'elemental_bar'
             and number(event.get('amount')) and event['amount'] > 0]
     bursts = [event for event in events if event.get('kind') == 'elemental_burst'
@@ -603,7 +604,7 @@ def pc_mechanism_evidence(events):
     legacy_bursts = list(bursts)
     bursts += [event for event in events if event.get('kind') == 'damage_settlement'
         and event.get('damage_type') == 5 and number(event.get('amount')) and event['amount'] > 0
-        and ('hp_before' in event or 'native_modifier_observation' in proof_of(event))
+        and _single_settlement_event(event)
         and not any(clock_equal(event, old) and target_equal(old, event) and actor_equal(event, old)
                     and event.get('real_delta') == old.get('real_delta') for old in legacy_bursts)]
     elemental_ok, elemental_bad, burst_settlements = [], [], {}
@@ -802,7 +803,8 @@ def pc_mechanism_evidence(events):
             nested_bad.append(parent['sequence'])
 
     chain_records = [event for event in events if chain_key in proof_of(event)
-                     and (not isinstance(proof_of(event)[chain_key], dict) or proof_of(event)[chain_key].get('version') != 2)]
+                     and not (_single_settlement_event(event) and isinstance(proof_of(event)[chain_key], dict)
+                              and proof_of(event)[chain_key].get('version') == 2)]
     if chain_records:
         by_sequence = {}
         for event in events:
@@ -940,14 +942,8 @@ def pc_mechanism_evidence(events):
     # Modern certificates retain checked HP endpoints and reference only real
     # settlement sequences. This is the v2 proof format; no synthetic legacy
     # event, duplicate sequence or second copy of the same callback is needed.
-    modern_parents = [event for event in events if event.get('kind') == 'damage_settlement'
-        and (isinstance(proof_of(event).get(chain_key), dict)
-             and proof_of(event)[chain_key].get('version') == 2
-             or proof_of(event).get('nested_settlement')
-             and not any(old.get('kind') == 'damage' and clock_equal(event, old)
-                         and actor_equal(event, old) and target_equal(old, event)
-                         and proof_of(old).get('nested_settlement') == proof_of(event)['nested_settlement']
-                         for old in events))]
+    modern_parents = [event for event in events if _single_settlement_event(event)
+        and (proof_of(event).get(chain_key) is not None or proof_of(event).get('nested_settlement') is not None)]
     by_sequence = {}
     for event in events:
         seq = event.get('sequence')

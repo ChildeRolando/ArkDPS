@@ -668,6 +668,16 @@ function finalizeUnverifiedSettlement(scope,when){
  // never a certificate of zero HP consumption. Actual and nominal stay absent.
  damageSettlement(scope,a.target,0,when,{identity:a.identity,type:a.type,unverified:true,nativeModifierAmount:amount});
 }
+function finalizeModifierSettlement(scope,when){
+ if(scope.settlementFinalizationAttempted)return;
+ scope.settlementFinalizationAttempted=true;
+ if(scope.outputSettlement){
+  if(when&&sameMitigationTime(when,scope.when)&&!scope.mitigationModifierReused)
+   flushOutputSettlement(scope,when);
+  else noteSettlementProofGap(scope,when,'output did not share the modifier clock');
+ }
+ finalizeUnverifiedSettlement(scope,when);
+}
 function damageSettlementQuality(){
  return {damage_settlement_quality_version:1,enemy_damage_ready:enemyDamageReady,
   damage_settlement_scope:damageSettlementScope,enemy_damage_unknown:enemyDamageUnknown,
@@ -1421,9 +1431,6 @@ function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error(
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
 function record(source,kind,amount,when,proof,evidence,sourceUid){
- // The current v7 settlement capability owns damage facts. Legacy inputs
- // remain readable on the host; incapable producers keep their existing wire.
- if(enemyDamageReady&&['damage','hp_damage','elemental_burst'].includes(kind))return;
  if(coalesceEnemyHp)flushCoalescedEnemyHp();
  if(source!==null&&sourceUid!==undefined)evidence={...evidence,source_character_uid:sourceUid};
  const event=enqueueEvent(source,kind,amount,when,proof,evidence);
@@ -1825,7 +1832,7 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
    Object.assign(evidence,{hp_before:hpEvidence.hp_before,hp_after:hpEvidence.hp_after,
     real_delta:real,cancel_reason:0,target_type:0});
   }
-  const proof={method:scope.name};if(evidenceMethod)proof.evidence_method=evidenceMethod;
+  const proof={method:scope.name,settlement_wire_version:2};if(evidenceMethod)proof.evidence_method=evidenceMethod;
   if(hpEvidence)Object.assign(proof,{type:damageType,target:0});
   if(Number.isFinite(nativeModifierAmount)&&nativeModifierAmount>=0)
    proof.native_modifier_observation={version:1,method:'Entity.ApplyModifier',amount:nativeModifierAmount};
@@ -3011,6 +3018,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      if(traceHpContext)try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      if(this.name==='Unit.OnTakeDamage'&&this.source){
       const scope=damageModifier(this.tid,this.mod);
+      this.modifierScope=scope;
       if(scope)observeSettlementDomain(scope,readSettlementDomain(this.target,this.mod,this.when));
       if(scope&&scope.source===this.source&&sameMitigationTime(scope.when,this.when)){
        if(scope.targetHit)scope.targetHitAmbiguous=true;
@@ -3156,7 +3164,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
      if(!this.target||this.target.isNull())return;
-     if(!enemyDamageReady&&this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
+     if((!enemyDamageReady||this.modifierScope?.settlementDomainEntry?.kind!=='potential')&&this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
       const targetKeyValue=targetKey(this.target)||this.target.toString();
       const shield=shieldContextUnknown(end.frame,this.target)?null:shieldTotal(end.frame,this.target);
       try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()},this.sourceCharacterUid);}catch(e){fatal=String(e);}
@@ -3209,7 +3217,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        try{
         if(owned)settleDamage(this,this.target,end,amount,type,reduction,evidence);
         else settleSourcelessBurst(this,evidence,end,amount,reduction);
-        if(!enemyDamageReady)record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
+        if(!this.settlementRecordEmitted)record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
         if(this.settlementRecord)try{
          rememberNestedElementalSettlement(this,end,evidence);
          rememberNestedElementalKill(this,end,evidence);
@@ -3278,8 +3286,13 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
                    (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
      }
      if(kind==='damage'&&enemyDamageReady){
-      noteUnpairedSettlement(this,end,type,amount,evidence);
-      return;
+      finalizeModifierSettlement(this,end);
+      if(this.settlementRecordEmitted){
+       noteUnpairedSettlement(this,end,type,amount,evidence);
+       return;
+      }
+      // This independent native observation has no certificate replacement.
+      // Keep it with its existing quality failure/outside-domain semantics.
      }
      try{
       const instance=verifiedSourceInstance(this);if(instance)evidence={...evidence,source_instance_uid:instance};
@@ -3313,12 +3326,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      if(raw?.length===0)activeApplyScopes.delete(this.tid);
     }
     if(this.tracksModifier){
-     if(this.outputSettlement){
-      if(endStamp&&sameMitigationTime(endStamp,this.when)&&!this.mitigationModifierReused)
-       flushOutputSettlement(this,endStamp);
-      else noteSettlementProofGap(this,endStamp,'output did not share the modifier clock');
-     }
-     finalizeUnverifiedSettlement(this,endStamp);
+     finalizeModifierSettlement(this,endStamp);
      leaveModifier(this);
     }
     if(this.started){active--;const left=(activeHooks.get(this.name)||1)-1;if(left>0)activeHooks.set(this.name,left);else activeHooks.delete(this.name);}

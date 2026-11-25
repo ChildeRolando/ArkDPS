@@ -115,7 +115,7 @@ for (const platform of ['native_pc', 'android']) {
     const batch = observe(platform, scenario);
     assert.equal(batch.enemy_damage_unknown, false, platform + ':' + scenario);
     assert.deepEqual(Array.from(batch.events, event => [event.kind, event.amount]),
-      [['hp_damage', 40]], platform + ':' + scenario);
+      [], platform + ':' + scenario);
     assert.equal(batch.shield_unknown, scenario === 'previous_shield_fault');
   }
   for (const scenario of ['other_cancellation', 'nonzero_amount', 'changed_hp', 'nonzero_delta',

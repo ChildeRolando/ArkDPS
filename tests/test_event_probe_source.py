@@ -297,8 +297,8 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
     modern_hashes = {
         # Deliberate v7 single-certificate wire. The pre-migration hashes above
         # remain historical evidence, not a demand to recreate deleted events.
-        'tests/native_pc_settlement_order_fixture.js': 'c2c264c8b5a3566590eaa1bd264998f6981e043d43e44bc14e298cfcb5786069',
-        'tests/event_probe_pipeline_fixture.js': '975df187ac99cf969f654730e675e7acf823405e0d9dcbd4bd433029e2cc5dff',
+        'tests/native_pc_settlement_order_fixture.js': '0d954c7302d8f446eb521993b2a8161f6522013f9c4ebc322d39be8e74b13733',
+        'tests/event_probe_pipeline_fixture.js': '3d5ad51722d9f3532c41162693ab1e2ed57a8b94281391f0631149905105a153',
     }
     if args[0] in modern_hashes:
         assert digest(payload) == modern_hashes[args[0]]
