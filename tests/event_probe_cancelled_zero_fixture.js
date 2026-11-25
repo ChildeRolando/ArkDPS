@@ -24,6 +24,11 @@ function observe(platform, scenario) {
 
   function unreadableShieldClock() {
     f.clock(30, undefined);
+    const nativeClock = f.vm.runInContext('clock', f.context);
+    // The same deliberate field fault must remain unreadable through scalar
+    // and bulk APIs; it must never become a genuine zero-time regression.
+    assert.throws(() => nativeClock.add(4).readS64(), /undefined/);
+    assert.throws(() => nativeClock.readByteArray(12), /Unreadable fixture address/);
     const call = {threadId: 1};
     block.onEnter.call(call, [f.alloc(), f.alloc(), modifier, f.ptr(0), f.ptr(FIXED)]);
     block.onLeave.call(call);

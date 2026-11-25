@@ -75,6 +75,10 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
         // Scalar fixture cells omit struct padding; real allocated bytes exist.
         if (!memory.has(key)) { offset += 4; continue; }
         const value = memory.get(key);
+        // An explicit undefined cell models an unreadable native field. It is
+        // not omitted padding: DataView's NaN-to-zero conversion would invent
+        // a valid clock and hide faults after production switched to bulk reads.
+        if (value === undefined) throw Error('Unreadable fixture address ' + key);
         if (value instanceof Pointer || typeof value === 'bigint') {
           assert(offset + 8 <= size, 'owned pointer exceeds byte-read range');
           view.setBigUint64(offset, BigInt.asUintN(64, value instanceof Pointer ? value.value : value), true);
