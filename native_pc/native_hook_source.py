@@ -164,7 +164,7 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
                 or component.get('build_manifest_path') != NATIVE_HOOK_BUILD_MANIFEST_PATH
                 or component.get('experimental') is not (not released)
                 or component.get('default_platform') != 'native_pc' or component.get('default_backend') != 'native'
-                or component.get('supported_source_builds') != [BUILD_ID]
+                or component.get('supported_source_builds') != list(access.KNOWN_BUILDS)
                 or component.get('performance_verified') is not released
                 or component.get('autochess_handoff_verified') is not released):
             raise ValueError('invalid native component')
@@ -512,6 +512,7 @@ class PreparedNativeHooks:
         self.commit = lambda operation: operation()
         self._lock = Lock()
         self._attempted = self._prepared = self._closed = False
+        self.source_build = None
         self._loader = self._config = self._staged = None
         self._assembled = self._source = self._pipe_name = self._token = None
         self._image_sha256 = self._config_sha256 = None
@@ -536,8 +537,11 @@ class PreparedNativeHooks:
             if self.cancelled():
                 raise InterruptedError('原生组件预加载已取消')
             build, _ = access.verify_build(self.game_root)
-            if (not build.get('known_build') or not build.get('amd64') or build.get('source_build') != BUILD_ID):
-                raise RuntimeError('预加载需要指纹匹配的官服 Windows x64 构建')
+            source_build = build.get('source_build')
+            if (build.get('known_build') is not True or build.get('amd64') is not True
+                    or type(source_build) is not str or source_build not in access.KNOWN_BUILDS):
+                raise RuntimeError('预加载需要已适配且指纹匹配的 Windows x64 PC 客户端')
+            self.source_build = source_build
             material = self.material
             if material is None:
                 material = prepare_native_hook_material(self.root)
@@ -597,8 +601,9 @@ class PreparedNativeHooks:
                 selected_root = getattr(probe.collector.diagnostics, 'native_game_root', None)
             if (tuple(process.process_instance) != self.process_instance or process.pid != self.process_instance[0]
                     or selected_root is None or not access.same_path(selected_root, self.game_root)
-                    or probe.root.resolve() != self.root):
-                raise RuntimeError('原生预加载与采集器进程实例、游戏路径或源码目录不匹配')
+                    or probe.root.resolve() != self.root
+                    or probe.collector.diagnostics.version_actual != self.source_build):
+                raise RuntimeError('原生预加载与采集器进程实例、游戏路径、源码目录或客户端版本不匹配')
             self._identity()
             # The immutable prepared program contains no UI preference prefix.
             # Preferences use the existing typed mark control, not a weaker
@@ -620,7 +625,7 @@ class PreparedNativeHooks:
             return dict(prepared=self._prepared, claimed=self.claimed, closed=self._closed,
                         process_instance=self.process_instance, prepared_at=self.prepared_at,
                         prepared_wall_time=self.prepared_wall_time, expires_at=self.expires_at,
-                        valid_seconds=self.valid_seconds, source_build=BUILD_ID,
+                        valid_seconds=self.valid_seconds, source_build=self.source_build,
                         source_sha256=sha256(self._source.encode('utf-8')).hexdigest() if self._source else None,
                         dll_sha256=self._image_sha256, hook_disable_confirmed=self.hook_disable_confirmed,
                         cleanup_errors=dict(self.cleanup_errors),
@@ -701,9 +706,10 @@ class NativeHookEventProbe:
         self._attempted = True
         diagnostics, process = self.collector.diagnostics, self.collector.process
         if (not diagnostics.connection_ok or diagnostics.version_status != VersionStatus.COMPATIBLE
-                or diagnostics.version_actual != BUILD_ID):
+                or type(diagnostics.version_actual) is not str
+                or diagnostics.version_actual not in access.KNOWN_BUILDS):
             self.status = ObserverStatus.INCOMPATIBLE
-            raise RuntimeError('ArkPie 实时采集需要指纹匹配的官服 Windows x64 构建')
+            raise RuntimeError('ArkPie 实时采集需要已适配且指纹匹配的 Windows x64 PC 客户端')
         instance = getattr(process, 'process_instance', None)
         if (type(instance) in (tuple, list) and len(instance) == 2
                 and all(type(value) is int and value > 0 for value in instance)

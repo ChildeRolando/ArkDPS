@@ -26,7 +26,7 @@ from roster import CharacterEntry, RosterSnapshot
 from source_classification import classify_unmapped_source
 
 
-SNAPSHOT_ONLY = '官服 PC 事件观察尚未连接，当前显示原生累计统计。'
+SNAPSHOT_ONLY = 'PC 事件观察尚未连接，当前显示原生累计统计。'
 ENEMY_SAMPLE_INTERVAL = 1.0
 ENEMY_MAX_AGE = 2.5
 STAGE_PLAN_RETRY_INTERVAL = 1.0
@@ -139,11 +139,11 @@ class NativePcCollector:
 
     def connect(self, *, locate=False):
         if self.process is not None:
-            raise RuntimeError('官服 PC 采集器已连接')
+            raise RuntimeError('PC 采集器已连接')
         if self.game_root is None:
             self.diagnostics.status = DetectionStatus.ERROR
             self.diagnostics.code = 'native_root_required'
-            self.diagnostics.error = '请在设置中填写包含 Arknights.exe 的官服 PC 游戏目录。'
+            self.diagnostics.error = '请在设置中填写包含 Arknights.exe 的PC 游戏目录。'
             raise SampleUnavailable(self.diagnostics.error)
         try:
             self.process = self.probe_factory(self.game_root)
@@ -155,16 +155,16 @@ class NativePcCollector:
             if exc.status == 'unsupported_build':
                 diag.code = 'native_unsupported_build'
                 diag.version_status = VersionStatus.INCOMPATIBLE
-                diag.error = '官服 PC 客户端版本未通过校验。请确认游戏目录，或等待本版本适配。'
+                diag.error = 'PC 客户端版本未通过校验。请确认游戏目录，或等待本版本适配。'
                 raise UnsupportedVersion(diag.error, diagnostics=diag) from exc
             if diag.details.get('win32_error') == 5 and exc.status == 'process_access_failed':
                 diag.code = 'native_permission_denied'
                 diag.error = 'Windows 拒绝打开游戏只读句柄。请在管理员 PowerShell 中启动 ArkDPS。'
             elif exc.reason == 'process_not_unique':
                 diag.status = DetectionStatus.NO_INSTANCE
-                diag.error = '请打开设置目录对应的官服 PC 客户端，并保持一个游戏实例。'
+                diag.error = '请打开设置目录对应的PC 客户端，并保持一个游戏实例。'
             else:
-                diag.error = f'官服 PC 客户端暂不可读取（{exc.reason}）。'
+                diag.error = f'PC 客户端暂不可读取（{exc.reason}）。'
             raise SampleUnavailable(diag.error) from exc
         diag = self.diagnostics
         diag.status = DetectionStatus.READY_UNIQUE
@@ -176,7 +176,7 @@ class NativePcCollector:
         diag.native_game_root = str(self.game_root.resolve())
         diag.process_pid = self.process.pid
         diag.process_created_filetime = self.process.process_instance[1]
-        diag.message = '官服 PC 已连接 · 只读累计统计'
+        diag.message = 'PC 已连接 · 只读累计统计'
         diag.details = {'build': self.process.build, 'fixed_module_bytes_match': True}
 
     def observer_binding(self, *, frame, game_time, native_identity, native_stage_id,
@@ -190,19 +190,19 @@ class NativePcCollector:
         """
         process = self.process
         if process is None or not process.process_alive():
-            raise ProcessChanged('官服 PC 游戏进程已退出，无法确认事件归属。')
+            raise ProcessChanged('PC 游戏进程已退出，无法确认事件归属。')
         if (type(native_process_pid) is not int or native_process_pid != process.pid
                 or not isinstance(native_identity, dict)
                 or set(native_identity) != {'controller', 'native', 'logger', 'stats', 'level'}):
-            raise SnapshotGap('官服 PC 事件来源 的进程或战局根无效。')
+            raise SnapshotGap('PC 事件来源 的进程或战局根无效。')
         roots = []
         for key in ('controller', 'native', 'logger', 'stats', 'level'):
             value = native_identity[key]
             if not isinstance(value, str) or re.fullmatch(r'0x[0-9a-fA-F]{1,16}', value) is None:
-                raise SnapshotGap('官服 PC 事件来源 的战局根格式无效。')
+                raise SnapshotGap('PC 事件来源 的战局根格式无效。')
             address = int(value, 16)
             if not 0x10000 <= address <= 0x00007FFFFFFFFFFF or address % 8:
-                raise SnapshotGap('官服 PC 事件来源 的战局根范围无效。')
+                raise SnapshotGap('PC 事件来源 的战局根范围无效。')
             roots.append(address)
         if (type(frame) is not int or not 0 <= frame <= 0xFFFFFFFF
                 or type(game_time) not in (int, float) or not math.isfinite(game_time)
@@ -212,7 +212,7 @@ class NativePcCollector:
                 or int(native_fixed_time) > 0x7FFFFFFFFFFFFFFF
                 or int(native_fixed_time) / (1 << 32) != game_time
                 or not isinstance(native_stage_id, str) or not native_stage_id):
-            raise SnapshotGap('官服 PC 事件来源 的原始逻辑时钟或关卡无效。')
+            raise SnapshotGap('PC 事件来源 的原始逻辑时钟或关卡无效。')
         identity = tuple(roots)
         serial = process.battle_serial_for(identity, frame, int(native_fixed_time), native_stage_id)
         words = (*identity, serial)
@@ -222,7 +222,7 @@ class NativePcCollector:
 
     def observer_boot_ready(self):
         if self.process is None:
-            raise SampleUnavailable('官服 PC 采集器尚未连接。')
+            raise SampleUnavailable('PC 采集器尚未连接。')
         ready = self.process.observer_boot_ready()
         self.observer_boot_reason = None if ready else getattr(self.process, 'observer_boot_reason', None)
         self.diagnostics.details['observer_boot'] = dict(ready=ready, reason=self.observer_boot_reason)
@@ -230,7 +230,7 @@ class NativePcCollector:
 
     def locate_lifecycle(self):
         if self.process is None:
-            raise SampleUnavailable('官服 PC 采集器尚未连接')
+            raise SampleUnavailable('PC 采集器尚未连接')
 
     def read_lifecycle_with_event_identity(self, mark):
         return self.read_lifecycle(event_identity_mark=mark if self.allow_event_identity_sampling else None)
@@ -260,17 +260,17 @@ class NativePcCollector:
         if status in ('process_exited', 'process_changed'):
             self._optional_recovery = None
             self._reset_stage_plan()
-            raise ProcessChanged('官服 PC 游戏进程已变化，正在重新连接。')
+            raise ProcessChanged('PC 游戏进程已变化，正在重新连接。')
         if status == 'sample_retry' and report.get('reason') == 'frame_or_lifecycle_changed':
-            raise NativeClockBusy('官服 PC 战局正在准备或跨帧重试（frame_or_lifecycle_changed）')
+            raise NativeClockBusy('PC 战局正在准备或跨帧重试（frame_or_lifecycle_changed）')
         if status in ('waiting_game_init', 'battle_not_ready', 'sample_retry'):
-            raise SampleUnavailable(f'官服 PC 战局正在准备或跨帧重试（{report.get("reason")}）')
+            raise SampleUnavailable(f'PC 战局正在准备或跨帧重试（{report.get("reason")}）')
         if status != 'sample_available':
             self._reset_stage_plan()
             diagnostic = report.get('diagnostic')
             detail = (f'{diagnostic["api"]}({diagnostic["win32_error"]})'
                       if diagnostic else report.get('reason'))
-            raise SnapshotGap(f'官服 PC 采样暂不可用（{detail}）')
+            raise SnapshotGap(f'PC 采样暂不可用（{detail}）')
         raw = report['sample']
         # The probe can see a reset while the roster is unavailable. Keep that
         # boundary even if the next publishable frame has caught up to the old one.
@@ -289,7 +289,7 @@ class NativePcCollector:
                 identity_words = (*[int(roots[key], 16) for key in ('controller', 'native', 'logger', 'stats', 'level')],
                                   raw['battle_serial'])
             except (KeyError, TypeError, ValueError) as error:
-                raise SnapshotGap('官服 PC 原始采样守卫不完整或身份冲突') from error
+                raise SnapshotGap('PC 原始采样守卫不完整或身份冲突') from error
         else:
             identity_words = (*self.process.battle_identity, raw['battle_serial'])
         identity = hashlib.sha256(struct.pack(f'<{len(identity_words)}Q', *identity_words)).hexdigest()
@@ -491,7 +491,7 @@ class NativePcCollector:
         pending, self._pending = self._pending, None
         if pending is None or pending[0] is not lifecycle:
             self._rollback_optional()
-            raise SnapshotGap('官服 PC 的同帧累计及编队数据已失效')
+            raise SnapshotGap('PC 的同帧累计及编队数据已失效')
         report = pending[1]
         raw = report['sample']
         missing = [key for key in ('actor_rows', 'roster')
@@ -501,7 +501,7 @@ class NativePcCollector:
         if missing and not event_candidate:
             self._rollback_optional()
             key = missing[0]
-            raise SnapshotGap(f'官服 PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
+            raise SnapshotGap(f'PC 同帧数据不完整（{raw.get(f"{key}_reason", key)}）')
         self._observe_stage_plan(raw)
         rows = [] if 'actor_rows' in missing else raw['actor_rows']
         battle = lifecycle['battle']

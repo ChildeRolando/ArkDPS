@@ -130,7 +130,8 @@ def setup_probe(tmp_path, monkeypatch):
     return make, loaders, pipes
 
 
-def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe, monkeypatch):
+@pytest.mark.parametrize('source_build', list(module.access.KNOWN_BUILDS))
+def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe, monkeypatch, source_build):
     import builtins
     original = builtins.__import__
     def reject_frida(name, *args, **kwargs):
@@ -139,7 +140,7 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
         return original(name, *args, **kwargs)
     monkeypatch.setattr(builtins, '__import__', reject_frida)
     make, loaders, pipes = setup_probe
-    probe = make()
+    probe = make(build=source_build)
     probe.set_autochess_setting(lambda: False)
     probe.start()
     assert probe.status == ObserverStatus.READY
@@ -154,6 +155,7 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert source['live_acceptance'] == 'accepted'
     assert config['token'] not in json.dumps(probe.probe_modes)
     assert probe.mark()['native_session'] == 'bound-session'
+    assert probe.mark()['source_build'] == source_build
     assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False))
     probe.stop()
     assert loaders[0].closed and pipes[0].closed
@@ -548,22 +550,25 @@ def prepared_setup(tmp_path, monkeypatch, setup_probe):
     return prepare, probe, state, loaders, pipes
 
 
-def test_preparation_loads_without_vm_or_pipe_then_adopts_after_vm_gate(prepared_setup, monkeypatch):
-    prepare, make_probe, _, loaders, pipes = prepared_setup
+@pytest.mark.parametrize('source_build', list(module.access.KNOWN_BUILDS))
+def test_preparation_loads_without_vm_or_pipe_then_adopts_after_vm_gate(prepared_setup, monkeypatch, source_build):
+    prepare, make_probe, state, loaders, pipes = prepared_setup
+    state.build = source_build
     monkeypatch.setenv('ARKDPS_COALESCE_ENEMY_HP', '0')
     prepared = prepare().prepare((42, 100))
     assert len(loaders) == 1 and loaders[0].loaded and not pipes
     assert prepared.hook_disable_confirmed and not prepared.claimed
     assert prepared.prepared_at is not None and prepared.expires_at == prepared.prepared_at + 120
     assert prepared.diagnostics()['prepared'] is True
+    assert prepared.diagnostics()['source_build'] == source_build
     config = loaders[0].config
     assert config['source'].startswith('globalThis.arkdpsCoalesceEnemyHp = false;\n')
     assert config['token'] not in json.dumps(prepared.diagnostics())
-    not_ready = make_probe(prepared, initialized=False)
+    not_ready = make_probe(prepared, initialized=False, build=source_build)
     with pytest.raises(RuntimeError, match='IL2CPP'):
         not_ready.start()
     assert not prepared.claimed and not pipes and not loaders[0].closed
-    probe = make_probe(prepared)
+    probe = make_probe(prepared, build=source_build)
     probe.start()
     assert prepared.claimed and probe._loader is loaders[0] and len(loaders) == 1
     assert pipes[0].calls[0][0] == 'initialize'
@@ -573,6 +578,19 @@ def test_preparation_loads_without_vm_or_pipe_then_adopts_after_vm_gate(prepared
     assert not loaders[0].closed and not pipes[0].closed
     probe.stop()
     assert loaders[0].closed and pipes[0].closed and probe.hook_disable_confirmed
+
+
+def test_preparation_cannot_be_adopted_with_another_registered_pc_build(prepared_setup):
+    prepare, make_probe, state, loaders, pipes = prepared_setup
+    official, bilibili = module.access.KNOWN_BUILDS
+    state.build = bilibili
+    prepared = prepare().prepare((42, 100))
+    assert prepared.diagnostics()['source_build'] == bilibili
+    with pytest.raises(RuntimeError, match='客户端版本不匹配'):
+        make_probe(prepared, build=official).start()
+    assert not prepared.claimed and not pipes and not loaders[0].closed
+    prepared.close()
+    assert loaders[0].closed
 
 
 @pytest.mark.parametrize('birth', [(0, 100), (42, 0), (True, 100), (42,), '42'])

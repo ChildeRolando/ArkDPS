@@ -186,20 +186,22 @@ def test_new_exact_process_loads_once_and_close_preserves_live_component(environ
     assert environment.api.opened == environment.api.closed
 
 
-def test_optional_process_preparation_runs_after_checks_before_any_gadget_load(environment):
+@pytest.mark.parametrize('source_build', tuple(module.access.KNOWN_BUILDS))
+def test_optional_process_preparation_runs_after_checks_before_any_gadget_load(environment, source_build):
     calls = []
     runtime = None
     def prepare(instance):
         assert instance == (100, environment.api.rows[100].created)
-        assert runtime._verified_build[1] == module.access.BUILD_ID
+        assert runtime._verified_build[1] == source_build
         assert runtime._asset_signature is not None
         assert not runtime.config_path.exists() and not runtime.lease_path.exists()
         assert not environment.loaders.instances and not environment.loaders.loads
         calls.append(instance)
-    runtime = environment.make(prepare_process=prepare).start()
+    runtime = environment.make(source_build=source_build, prepare_process=prepare).start()
     wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
     pid = add_new(environment, runtime)
     lease = runtime.wait_ready(2)
+    assert lease['source_build'] == source_build
     assert calls == [(pid, lease['created'])]
     assert environment.loaders.loads == [(pid, environment.gadget)]
     state = runtime.describe()
@@ -249,14 +251,13 @@ def test_preparation_rechecks_same_process_birth_before_gadget_mutation(environm
     assert not runtime.config_path.exists() and not runtime.lease_path.exists() and not environment.loaders.loads
 
 
-def test_preparation_rejects_non_official_build_without_calling_external_loader(environment):
+@pytest.mark.parametrize('source_build', ['win-x64:unknown', None, False, [], {}])
+def test_preparation_rejects_unregistered_build_without_calling_external_loader(environment, source_build):
     calls = []
-    runtime = environment.make(source_build=module.access.BILIBILI_BUILD_ID,
+    runtime = environment.make(source_build=source_build,
                                prepare_process=calls.append).start()
-    wait_for(runtime, lambda state: state['status'] == 'waiting_for_process')
-    add_new(environment, runtime)
     state = wait_for(runtime, lambda state: state['status'] == 'failed')
-    assert state['code'] == 'process_prepare_unsupported_build'
+    assert state['code'] == 'native_unsupported_build'
     assert not calls and not environment.loaders.loads and not runtime.config_path.exists()
 
 

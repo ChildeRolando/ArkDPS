@@ -405,7 +405,8 @@ class NativePcFridaRuntime:
             return self._verified_build[1]
         build, _ = self.build_check(self.game_root)
         source_build = build.get('source_build')
-        if build.get('known_build') is not True or source_build not in access.KNOWN_BUILDS:
+        if (build.get('known_build') is not True or type(source_build) is not str
+                or source_build not in access.KNOWN_BUILDS):
             raise RuntimeFailure('native_unsupported_build', 'PC 客户端构建不匹配；请等待适配此版本')
         if signature != tuple(self._file_token(self.game_root / name) for name in access.KNOWN_FILES):
             raise RuntimeFailure('native_build_changed', 'PC 客户端文件正在变化；请完成更新后重试')
@@ -717,9 +718,6 @@ class NativePcFridaRuntime:
                   'source_build': source_build, 'gadget_path': str(self.gadget_path),
                   'gadget_sha256': GADGET_SHA256, 'status': 'loading'}
         if self.prepare_process is not None:
-            if source_build != access.BUILD_ID:
-                raise RuntimeFailure('process_prepare_unsupported_build',
-                                     'Startup preparation requires the verified official PC build')
             self._check_cancelled()
             if not self._alive(record):
                 raise RuntimeFailure('process_changed', 'PC process identity changed before startup preparation')

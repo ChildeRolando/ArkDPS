@@ -35,7 +35,7 @@ def near(left, right):
 
 
 def check_pc_f32_counters(events, publications, *, source_domain='all'):
-    """PC compatibility entry; caller must first validate official PC guards."""
+    """PC compatibility entry; caller must first validate registered PC build guards."""
     return check_native_f32_counters(events, publications, source_domain=source_domain, reader_profile='native_pc')
 
 
@@ -745,12 +745,12 @@ def pc_records(records, summary, publications):
     if __package__ in (None, '') and str(Path(__file__).resolve().parents[1]) not in sys.path:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from event_stream import baseline_barrier, validate_native_event_batch
-    from native_pc.probe_native_pc import KNOWN_FILES
-    from native_pc_collector import BUILD_ID
+    from native_pc.probe_native_pc import KNOWN_BUILDS
 
     connections = [r['data'] for r in records if r['kind'] == 'connected']
     instance = summary.get('process_instance')
-    if (summary.get('platform') != 'native_pc' or summary.get('game_version') != BUILD_ID
+    source_build = summary.get('game_version')
+    if (summary.get('platform') != 'native_pc' or type(source_build) is not str or source_build not in KNOWN_BUILDS
             or not isinstance(instance, list) or len(instance) != 2
             or not all(type(value) is int and value > 0 for value in instance)
             or summary.get('pid') != instance[0] or len(connections) != 1):
@@ -762,9 +762,9 @@ def pc_records(records, summary, publications):
     files = {entry['file']: entry['sha256'] for entry in build.get('files', [])
              if entry.get('sha256_matches') is True}
     if (connection.get('pid') != instance[0] or connection.get('process_instance') != instance
-            or diagnostics.get('platform') != 'native_pc' or diagnostics.get('version_actual') != BUILD_ID
+            or diagnostics.get('platform') != 'native_pc' or diagnostics.get('version_actual') != source_build
             or details.get('fixed_module_bytes_match') is not True or build.get('known_build') is not True
-            or files != KNOWN_FILES):
+            or files != KNOWN_BUILDS[source_build]):
         raise ValueError('missing matching PC build verification')
 
     native_session = publications[0].get('native_session')
@@ -785,7 +785,7 @@ def pc_records(records, summary, publications):
             evidence, sample = data['events'], data['sample']
             metadata = sample.get('battle_metadata') or {}
             if (sample.get('session') != session or sample.get('native_session') != native_session
-                    or metadata.get('platform') != 'native_pc' or metadata.get('source_build') != BUILD_ID):
+                    or metadata.get('platform') != 'native_pc' or metadata.get('source_build') != source_build):
                 raise ValueError('wrong native PC battle or build')
             seq = baseline_barrier(evidence['before'], sample, evidence['after'])
             batch = evidence['drain']

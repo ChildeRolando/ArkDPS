@@ -49,7 +49,8 @@ class Api:
 class Preparations:
     def __init__(self):
         self.instances, self.loads = [], []
-        self.failure = self.before_commit = None
+        self.failure = self.before_commit = self.after_commit = None
+        self.source_build = lambda: module.access.BUILD_ID
         self.fail_cleanup = False
 
     def __call__(self, game_root, *, root, runtime_dir, material):
@@ -61,23 +62,28 @@ class Preparations:
 
             def __init__(self):
                 self.process_instance = None
+                self.source_build = None
                 self.close_calls = 0
                 self.root, self.runtime_dir = root, runtime_dir
                 self.material = material
 
             def prepare(self, birth):
                 self.process_instance = birth
+                self.source_build = owner.source_build()
                 if owner.before_commit:
                     owner.before_commit(self)
                 if owner.failure:
                     raise RuntimeFailure('owned_prepare_failed', owner.failure)
                 self.commit(lambda: owner.loads.append(birth))
+                if owner.after_commit:
+                    owner.after_commit(self)
                 self._prepared = True
                 self.expires_at = time.monotonic() + 120
 
             def diagnostics(self):
                 return dict(prepared=self._prepared, claimed=self.claimed, closed=self._closed,
                             process_instance=self.process_instance, expires_at=self.expires_at,
+                            source_build=self.source_build,
                             loader=dict(submitted=bool(self.process_instance), verification_complete=self._prepared))
 
             def close(self):
@@ -113,6 +119,7 @@ def env(tmp_path, monkeypatch):
         material_calls.append(source)
         return material
     build = {'known_build': True, 'amd64': True, 'source_build': module.access.BUILD_ID}
+    factory.source_build = lambda: build.get('source_build')
 
     def make(**options):
         runtime = NativeHookRuntime(root, runtime_dir=tmp_path / 'state', collector_root=tmp_path / 'source',
@@ -149,13 +156,15 @@ def ready(env, runtime, pid=100):
     return runtime.wait_ready(3)
 
 
-def test_only_new_exact_birth_is_prepared_and_close_releases_unclaimed(env):
+@pytest.mark.parametrize('source_build', list(module.access.KNOWN_BUILDS))
+def test_only_new_exact_birth_is_prepared_and_close_releases_unclaimed(env, source_build):
+    env.build['source_build'] = source_build
     env.api.rows[3] = env.row(1)
     runtime = arm(env)
     assert env.factory.loads == []
     env.api.rows.clear()
     lease = ready(env, runtime)
-    assert lease == dict(pid=100, created=runtime.describe()['armed_filetime'] + 100, source_build=module.access.BUILD_ID)
+    assert lease == dict(pid=100, created=runtime.describe()['armed_filetime'] + 100, source_build=source_build)
     assert env.factory.loads == [(lease['pid'], lease['created'])]
     assert runtime.describe()['frida_required'] is False
     assert runtime._alive(lease) is True
@@ -221,13 +230,16 @@ def test_permission_preflight_never_elevates_or_prepares(env):
     assert not env.api.opened and not env.factory.instances
 
 
-@pytest.mark.parametrize('field,value', [('known_build', False), ('amd64', False), ('source_build', 'bilibili-build')])
-def test_only_official_fingerprint_is_admitted(env, field, value):
+@pytest.mark.parametrize('field,value', [
+    ('known_build', False), ('known_build', 1), ('amd64', False), ('amd64', 1),
+    ('source_build', 'unregistered-build'), ('source_build', None), ('source_build', []),
+])
+def test_only_registered_pc_fingerprints_are_admitted(env, field, value):
     env.build[field] = value
     runtime = env.make().start()
     wait_for(runtime, lambda r: r['status'] == 'failed')
     assert runtime.code == 'native_unsupported_build'
-    assert not env.factory.instances
+    assert not env.factory.instances and not env.material_calls
 
 
 def test_cancel_before_windows_commit_submits_nothing(env):
@@ -251,6 +263,35 @@ def test_commit_rechecks_birth_path_uniqueness_and_build(env):
     env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 1)
     wait_for(runtime, lambda r: r['status'] == 'process_failed')
     assert not env.factory.loads
+
+
+@pytest.mark.parametrize('source_build', list(module.access.KNOWN_BUILDS))
+def test_commit_rejects_another_prepared_build_even_if_file_signature_is_unchanged(env, source_build):
+    env.build['source_build'] = source_build
+    other_build = next(build for build in module.access.KNOWN_BUILDS if build != source_build)
+    runtime = arm(env)
+    signature = runtime._files()
+    # The preparation's independent verification observes another registered
+    # build without relying on a file-stat change to reveal the disagreement.
+    env.factory.source_build = lambda: other_build
+    env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 1)
+    report = wait_for(runtime, lambda r: r['status'] == 'process_failed')
+    assert report['code'] == 'native_build_changed' and runtime._files() == signature
+    assert report['lease']['source_build'] == source_build and report['ready_generation'] == 0
+    assert not env.factory.loads and env.factory.instances[0]._closed
+
+
+@pytest.mark.parametrize('source_build', list(module.access.KNOWN_BUILDS))
+def test_ready_commit_rejects_prepared_build_change_after_windows_submission(env, source_build):
+    env.build['source_build'] = source_build
+    other_build = next(build for build in module.access.KNOWN_BUILDS if build != source_build)
+    runtime = arm(env)
+    env.factory.after_commit = lambda prepared: setattr(prepared, 'source_build', other_build)
+    env.api.rows[1] = env.row(runtime.describe()['armed_filetime'] + 1)
+    report = wait_for(runtime, lambda r: r['status'] == 'process_failed')
+    assert report['code'] == 'native_build_changed' and report['ready_generation'] == 0
+    assert env.factory.loads == [(1, report['lease']['created'])]
+    assert env.factory.instances[0]._closed
 
 
 def test_alive_never_uses_recycled_pid_or_wrong_path(env):

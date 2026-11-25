@@ -43,7 +43,7 @@
 
 - DPS算法为「接敌」时，视图携带事件能力：`rate_available`、`rate_reason`、`rate_hint`、`rate_action`、`rate_action_label`。只有 `event_status` 为 `recording`/`finished` 才视为可用；`failed`、`unavailable`、`stopped`、`gap`、`attaching`/`ready` 都给出可读原因与恢复入口。
 - 实时面板的恢复入口是「重试事件观察」（重新连接采集，不重启应用）或「打开连接设置」；历史记录只提供连接设置入口，并明确该局无法补采。
-- 官服 PC 的累计快照与只含累计量的历史显示逐次事件缺失的原因，保留近 5 秒口径入口。此时接敌面板的事件观察恢复操作不适用。
+- PC 的累计快照与只含累计量的历史显示逐次事件缺失的原因，保留近 5 秒口径入口。此时接敌面板的事件观察恢复操作不适用。
 - 逐行 `rate_state` 区分：`value`（有值）、`no_engagement`（事件覆盖完整且该干员零事件，显示「无接敌」）、`unknown`（覆盖或在场时间不完整）、`unavailable`（事件观察不可用）。`rate_text` 是对应的完整显示文本（`123/s`、`无接敌` 或 `—`），`rate_note` 说明可靠零/未知原因。全周期DPS使用 `presence_seconds`（观察在场秒数）和 `presence_complete`，不以接敌活跃时间冒充。
 - 事件不可用时不得以 0、墙钟时间或近 5 秒速率冒充接敌速率；速率选择器仍允许切回「近 5 秒」，并给出原因提示。
 - 实时视图的事件能力来自当前样本 `event_status`/`event_error`；历史视图来自 `BattleRecord.event_status`/`event_error` 与逐行 `shield_coverage_start`/`event_coverage_end`。覆盖不完整时注明可靠区间，未覆盖区间保持未知、不补零。

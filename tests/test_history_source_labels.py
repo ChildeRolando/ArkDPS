@@ -13,7 +13,7 @@ from test_battle_history import record
 
 
 @pytest.mark.parametrize('platform,label', [
-    ('native_pc', '官服 PC'), ('android', 'Android（ADB）'),
+    ('native_pc', 'PC'), ('android', 'Android（ADB）'),
     (None, '来源未记录'), ('unknown', '来源未记录'),
 ])
 def test_display_source_uses_explicit_route_and_preserves_raw_record(platform, label):

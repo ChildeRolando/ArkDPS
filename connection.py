@@ -715,7 +715,7 @@ def _require_mumu(config: ConnectionConfig) -> None:
         diag = ConnectionDiagnostics(
             status=DetectionStatus.ERROR, platform=config.platform,
             native_game_root=config.native_game_root, code='native_unavailable',
-            version_expected=None, message='官服 PC 连接需使用原生采集器，无需 ADB 检测。')
+            version_expected=None, message='PC 连接需使用原生采集器，无需 ADB 检测。')
         raise ConnectionUnavailable(diag.message, diag)
 
 

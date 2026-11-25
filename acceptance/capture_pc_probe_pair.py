@@ -70,7 +70,7 @@ def _wait_for_game_exit(process_instance):
             if exc.code == 87:  # The original process no longer exists.
                 return
         except KeyboardInterrupt:
-            print('保护等待仍在继续：请先从游戏界面正常退出官服 PC，不要结束采集器。', flush=True)
+            print('保护等待仍在继续：请先从游戏界面正常退出PC，不要结束采集器。', flush=True)
         except Exception:
             pass  # A failed query is not proof of exit.
         finally:
@@ -116,7 +116,7 @@ class _CloseOrder:
         if not self.native_safe and not self.game_exit_confirmed:
             self.unsafe_wait_required = True
             print('FATAL_KEEPALIVE 原生 Hook 卸载未获确认；Frida 保持加载。'
-                  '请从游戏界面正常退出官服 PC；本采集器将保护等待，不能先关闭。', flush=True)
+                  '请从游戏界面正常退出PC；本采集器将保护等待，不能先关闭。', flush=True)
             self.on_unsafe_wait(self.process_instance)
             self.game_exit_confirmed = True
 
@@ -221,7 +221,7 @@ def run_pair(args, *, runtime_factory=None, capture=run_capture, on_unsafe_wait=
     try:
         runtime.start()
         if bootstrap_dir is None:
-            print('WAITING_GAME 请正常重启官服 PC；两套采集器均就绪前不要开始演习。', flush=True)
+            print('WAITING_GAME 请正常重启PC；两套采集器均就绪前不要开始演习。', flush=True)
         else:
             print('RECONNECTING_GAME 正在核对旧运行时与当前游戏进程实例；无需再次重启，两套就绪前不要开始演习。', flush=True)
         lease = runtime.wait_ready(args.wait_seconds, cancelled=stop_file.exists)
@@ -333,7 +333,7 @@ def run_pair(args, *, runtime_factory=None, capture=run_capture, on_unsafe_wait=
             # Normally the Frida worker performs this protected wait itself.
             # Cover a caller-supplied capture that failed before invoking its gate.
             close_order.unsafe_wait_required = True
-            print('FATAL_KEEPALIVE 请先正常退出官服 PC，采集器保留 Frida 所有权。', flush=True)
+            print('FATAL_KEEPALIVE 请先正常退出PC，采集器保留 Frida 所有权。', flush=True)
             close_order.on_unsafe_wait(close_order.process_instance)
             close_order.game_exit_confirmed = True
             runtime.close()

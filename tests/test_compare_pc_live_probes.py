@@ -289,7 +289,7 @@ def test_invalid_prefix_evidence_cannot_be_used_for_cross_probe_comparison(tmp_p
 
 def test_live_label_requires_known_build_fingerprint_and_is_still_an_assertion(tmp_path):
     capture(tmp_path / 'left', build='win-x64:synthetic')
-    with pytest.raises(ValueError, match='official PC fingerprints'):
+    with pytest.raises(ValueError, match='registered PC fingerprints'):
         read_capture(tmp_path / 'left', 'native-hooks')
     capture(tmp_path / 'right')
     source = read_capture(tmp_path / 'right', 'frida')

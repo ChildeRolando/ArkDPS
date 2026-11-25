@@ -98,6 +98,9 @@ internal static class MultiplayerViewTests
                 surface.UpdateLayout();
             }
             Arrange();
+            Check(skin + size.Width + " actor ranking shows names without internal UID labels",
+                VisualChildren(panel.Rows).OfType<TextBlock>().Any(text => text.Text == "同型干员1") &&
+                !VisualChildren(panel.Rows).OfType<TextBlock>().Any(text => text.Text.Contains("UID")));
             var visibility = panel.Selectors.Visibility;
             var height = panel.Selectors.DesiredSize.Height;
             for (int cycle = 0; cycle < 3; cycle++)
@@ -353,10 +356,11 @@ internal static class MultiplayerViewTests
         Check("read only player ranking keeps stable visible selectors without live actions", surface.Ranking.Selectors.Visibility == Visibility.Visible &&
             surface.Ranking.Actions.Visibility == Visibility.Collapsed && !surface.Ranking.Category.IsEnabled && surface.Ranking.Command is null);
         surface.Ranking.Rows.SelectedItem = surface.Ranking.Rows.Items[0];
-        Check("operator pin preserves CID plus UID owner", surface.DetailInspector.Owner == "char_same@101" && Text(surface).Contains("战斗 UID 101"));
+        Check("operator pin preserves CID plus UID owner without a visible actor identity label", surface.DetailInspector.Owner == "char_same@101" && !Text(surface).Contains("战斗 UID"));
         Check("portrait identity does not replace the UID selection identity", ((RowItem)surface.Ranking.Rows.Items[0]).Portrait is not null &&
             Children(surface.DetailInspector).OfType<Image>().Any(image => image.Source is not null) && surface.DetailInspector.Owner == "char_same@101");
-        Check("actor row exposes complete UID separately from the name", ((RowItem)surface.Ranking.Rows.Items[0]).ActorIdentity == "UID 101" &&
+        Check("actor row retains internal UID and presents the operator name", ((RowItem)surface.Ranking.Rows.Items[0]).ActorUid == "101" &&
+            ((RowItem)surface.Ranking.Rows.Items[0]).ActorName == "同型干员1" &&
             surface.Ranking.Rows.ItemTemplate == surface.Ranking.FindResource("ActorRow"));
         surface.SelectPlayer("account-2");
         Check("choosing another player clears previous pin", surface.DetailInspector.Owner is null && surface.Ranking.Rows.SelectedItem is null);

@@ -80,7 +80,8 @@ def player(result, index):
     return next(p for p in result['players'] if p['player_uid'] == PLAYERS[index - 1]['uid'])
 
 
-def test_native_strategy_operator_uses_its_catalog_name_and_own_portrait_id(tmp_path):
+@pytest.mark.parametrize('legacy_name', [False, True])
+def test_native_strategy_operator_uses_its_catalog_name_and_own_portrait_id(tmp_path, legacy_name):
     from desktop_bridge import DesktopState, _event_only_statistics
     from panel_model import PanelConfig
 
@@ -90,12 +91,19 @@ def test_native_strategy_operator_uses_its_catalog_name_and_own_portrait_id(tmp_
     consume(meter, 0, native=context(0, members=roster))
     result = consume(meter, 2, [hit(1, 3, 1, cid=cid)], native=context(2, members=roster))
     local = player(result, 3)
+    if legacy_name:
+        for row in local['statistics']['rows'].values():
+            row['name'] += ' · 301'
+    original = deepcopy(local)
     view = DesktopState(tmp_path)._actor_view(
         PanelConfig(), _event_only_statistics(local['statistics']), local['actor_ledgers'],
         player_uid=local['player_uid'])
     entry, = view['entries']
-    assert entry['name'] == '暴躁铁皮 · 301'
+    assert entry['name'] == '暴躁铁皮'
     assert entry['portrait_id'] == cid
+    assert entry['actor_uid'] == 301 and entry['player_uid'] == local['player_uid']
+    assert view['source'][entry['owner_id']]['name'] == '暴躁铁皮'
+    assert local == original
 
 
 def test_native_same_cid_four_data_uids_belong_to_real_accounts_without_native_totals():

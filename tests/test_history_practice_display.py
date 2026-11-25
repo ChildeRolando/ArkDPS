@@ -27,7 +27,7 @@ def test_old_pc_loader_hint_only_changes_display_practice(practice, evidence, so
     assert display['labels'][1] == '演习状态未知'
     assert display['labels'][2] == '胜利'
     assert display['stage_raw'] == 'Obt/Main/level_main_01-07'
-    assert display['source_label'] == '官服 PC'
+    assert display['source_label'] == 'PC'
     assert original.metadata == raw['metadata']
     assert original.to_dict() == raw
     exported = json.loads(json_bytes(original))

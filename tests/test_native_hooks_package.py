@@ -140,11 +140,11 @@ def test_no_frida_payload_assertion(name):
 def test_metadata_binds_only_startup_test_component():
     files = {hooks.NATIVE_HOOK_PACKAGE_PATH: 'a' * 64, hooks.NATIVE_HOOK_BUILD_MANIFEST_PATH: 'b' * 64}
     value = package.native_hook_component(files)
-    from native_pc.probe_native_pc import BUILD_ID
+    from native_pc.probe_native_pc import KNOWN_BUILDS
     assert value == dict(provider='arkdps-native-hooks', protocol=1, scope='official-pc-startup-test',
                          path=hooks.NATIVE_HOOK_PACKAGE_PATH, build_manifest_path=hooks.NATIVE_HOOK_BUILD_MANIFEST_PATH,
                          sha256='a' * 64, build_manifest_sha256='b' * 64,
-                         default_platform='native_pc', default_backend='native', supported_source_builds=[BUILD_ID],
+                         default_platform='native_pc', default_backend='native', supported_source_builds=list(KNOWN_BUILDS),
                          experimental=True, performance_verified=False, autochess_handoff_verified=False)
 
 

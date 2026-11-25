@@ -93,8 +93,8 @@ def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, s
     if event is None or event.status in ('recording', 'finished'):
         return True, '', '', '', ''
     if event.status == 'snapshot_only':
-        return (False, '官服 PC 缺少接敌速率所需的逐次事件',
-                '官服 PC 已提供累计量和有覆盖的近 5 秒速率。', '', '')
+        return (False, 'PC 缺少接敌速率所需的逐次事件',
+                'PC 已提供累计量和有覆盖的近 5 秒速率。', '', '')
     error = _error_summary(event.error)
     detail = f'（{error}）' if error else ''
     if event.live:

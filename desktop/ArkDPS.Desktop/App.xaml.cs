@@ -95,7 +95,7 @@ public partial class App : System.Windows.Application
                     throw new ArgumentException("ArkPie 启动测试候选不支持该启动方式：" + arg);
                 if (NativeHookCandidate && (arg == "--platform" && arguments.ElementAtOrDefault(i + 1) != "native_pc"
                     || arg == "--native-pc-event-backend" && arguments.ElementAtOrDefault(i + 1) != "native"))
-                    throw new ArgumentException("此候选仅支持官服 PC ArkPie 实时采集。");
+                    throw new ArgumentException("此候选仅支持PC ArkPie 实时采集。");
                 if (InternalEventPackage && arg is not ("--offline" or "--internal-capture" or "--state-dir" or "--verify-internal"))
                     throw new ArgumentException("内部事件候选不支持参数：" + arg);
                 switch (arg)
