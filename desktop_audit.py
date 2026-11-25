@@ -188,6 +188,7 @@ KEY_EVENTS = {
     'native_hook_request_failed': ('op', 'error_type', 'win32_error', 'code', 'response_bytes',
                                    'response_limit', 'requested_event_count'),
     'lifecycle_state': ('previous', 'state'),
+    'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
     'capture_retry': ('error_type', 'code'),
     'capture_error': ('error_type', 'code'),
@@ -200,6 +201,41 @@ KEY_EVENTS[NATIVE_HOOK_STARTUP_OVERFLOW] = ('utc', 'event', 'provider', 'dropped
                                            'total_dropped_records', 'diagnostic_records_complete')
 REPEATED_KEY_EVENTS = frozenset(('connection_failed', 'frida_keepalive', 'native_pc_bootstrap',
                                 'capture_retry', 'capture_error', 'history_error', 'observer_error'))
+_CAPTURE_HEALTH_PHASES = frozenset(('stale', 'still_stale', 'recovered'))
+_CAPTURE_HEALTH_CODES = frozenset((
+    'sample_gap', 'publication_delay', 'callback_busy', 'native_clock_busy', 'event_barrier_busy',
+    'observer_retry', 'mapping_unavailable', 'autochess_scope_unverified', 'lifecycle_transition',
+    'sample_unavailable', 'read_failed', 'capture_retry'))
+_CAPTURE_HEALTH_CONTEXT = {
+    'platform': frozenset(('mumu', 'native_pc')),
+    'event_backend': frozenset(('disabled', 'frida', 'native', 'cooperative')),
+    'observer_status': frozenset(('disabled', 'waiting_game_init', 'snapshot_only', 'attaching',
+                                  'ready', 'recording', 'gap', 'finished', 'failed',
+                                  'incompatible', 'stopped', 'unavailable')),
+    'lifecycle': frozenset(('waiting', 'playing', 'preparing', 'frozen', 'finalizing', 'ended')),
+}
+
+
+def _capture_health_fields(data):
+    if type(data) is not dict:
+        return None
+    phase, code = data.get('phase'), data.get('code')
+    if (type(phase) is not str or phase not in _CAPTURE_HEALTH_PHASES
+            or type(code) is not str or code not in _CAPTURE_HEALTH_CODES):
+        return None
+    result = {'phase': phase, 'code': code}
+    for name, allowed in _CAPTURE_HEALTH_CONTEXT.items():
+        value = data.get(name)
+        if isinstance(value, Enum):
+            value = value.value
+        if type(value) is str and value in allowed:
+            result[name] = value
+    for name in ('age_ms', 'gap_ms', 'attempt_ms', 'retry_count', 'generation'):
+        value = data.get(name)
+        if type(value) is int and value >= 0:
+            result[name] = min(value, 2**31 - 1)
+    result['utc'] = datetime.now(timezone.utc).isoformat()
+    return result
 
 
 def _event_fields(data, fields):
@@ -331,6 +367,10 @@ class DesktopCaptureJournal:
                 data = sanitize_native_hook_startup(data, event=kind)
                 if data is None:
                     return
+            elif kind == 'capture_health':
+                data = _capture_health_fields(data)
+                if data is None:
+                    return
             detailed = bool(self.debug_enabled())
             if detailed != self._detailed:
                 previous = self._detailed
@@ -360,7 +400,7 @@ class DesktopCaptureJournal:
                     return
                 if kind in REPEATED_KEY_EVENTS:
                     self._last_key_events[kind] = data.copy()
-                if not native_startup:
+                if not native_startup and kind != 'capture_health':
                     data['utc'] = datetime.now(timezone.utc).isoformat()
             if self.size >= self.segment_bytes:
                 self._close_segment()

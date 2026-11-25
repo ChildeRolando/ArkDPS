@@ -28,14 +28,14 @@ from battle_lifecycle import (BattleRuntime, MappingRetry, NATIVE_PC_AUTOCHESS_S
 from battle_share import (AUTOCHESS_SNAPSHOT_NOTE, json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
-from collector import BattleChanged, NativeClockBusy, ProcessChanged, SnapshotGap, ROOT
+from collector import BattleChanged, NativeClockBusy, ProcessChanged, SampleUnavailable, SnapshotGap, ROOT
 from connection import (PC_EVENT_BACKENDS, ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
                         DetectionStatus, detect_instances, native_event_feed_path, resolve_configured)
 from desktop_audit import (DesktopCaptureJournal, NATIVE_HOOK_STARTUP_EVENTS,
                             NATIVE_HOOK_STARTUP_OVERFLOW, sanitize_native_hook_startup)
 from event_capture import CaptureRetry
 from event_observer import ObserverReadRetry, ObserverStatus
-from event_probe import BarrierBusy, NATIVE_PC_CONTRACT
+from event_probe import BarrierBusy, CallbackBusyMark, NATIVE_PC_CONTRACT
 from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from log_context import LogContext
@@ -45,6 +45,7 @@ from panel_model import (Category, EventAvailability, PanelConfig, Ranking, Rate
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
                          settled_boss_damage_rates, team_status, format_compact)
 import stage_names
+from snapshot_adapter import FrameMismatch
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
@@ -53,6 +54,8 @@ BRIDGE_EVENT_LIMIT = 32
 BRIDGE_EVENT_BUDGET = .025
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
+CAPTURE_STALE_SECONDS = 2.
+CAPTURE_STALE_REPORT_PERIOD = 30.
 NATIVE_BUSY_ATTEMPTS = 3
 NATIVE_BUSY_BUDGET = .04
 NATIVE_BUSY_REST = .005
@@ -103,7 +106,9 @@ def _native_clock_busy(error):
             return False
         if not isinstance(error, (CaptureRetry, ObserverReadRetry, BarrierBusy, NativeClockBusy)):
             return False
-        leaf_busy = isinstance(error, (BarrierBusy, NativeClockBusy))
+        # A native mark with active callbacks is a typed fence rejection.
+        # Generic ObserverReadRetry still has no such acquisition proof.
+        leaf_busy = isinstance(error, (BarrierBusy, CallbackBusyMark, NativeClockBusy))
         error = error.__cause__
     return leaf_busy and error is None
 
@@ -481,7 +486,7 @@ class DesktopState:
                 return
             self.sampling_rejection = None
             self._waiting_for_connection_sample = False
-            if self.last is not None and observation_age(self.last) > 2:
+            if self.last is not None and observation_age(self.last) > CAPTURE_STALE_SECONDS:
                 self.analysis_interrupted = True
             self.error = ''
             frame = (value.get('session'), value.get('frame'))
@@ -800,7 +805,7 @@ class DesktopState:
             label = self._sampling_rejection_label()
             if self.last:
                 label += ' · 保留最后有效记录'
-                if observation_age(self.last) > 2:
+                if observation_age(self.last) > CAPTURE_STALE_SECONDS:
                     return 'stale', '数据已过期 · ' + label
             return 'sampling_rejected', label
         if self._waiting_for_connection_sample:
@@ -812,7 +817,7 @@ class DesktopState:
             return 'waiting', '等待战斗数据'
         if self.lifecycle in ('ended', 'finalizing', 'frozen'):
             return self.lifecycle, {'ended': '战斗结束', 'finalizing': '等待结算确认', 'frozen': '战局冻结'}[self.lifecycle]
-        if observation_age(self.last) > 2:
+        if observation_age(self.last) > CAPTURE_STALE_SECONDS:
             return 'stale', '数据已过期 · 等待下一次可靠采样 · 保留最后有效记录'
         if time.monotonic() - self.last_progress > .8:
             return 'paused', '暂停 / 等待战斗推进'
@@ -1206,6 +1211,97 @@ class DesktopState:
         return None
 
 
+def _capture_retry_code(error, observation_kind, observation_reason):
+    if observation_kind == 'scope_unavailable' and observation_reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED:
+        return 'autochess_scope_unverified'
+    if isinstance(error, MappingRetry):
+        return 'mapping_unavailable'
+    code = ('lifecycle_transition' if observation_kind in ('waiting', 'preparing', 'terminal', 'end', 'gap')
+            else 'capture_retry')
+    # A busy wrapper can conceal a deeper read or transport failure.
+    for _ in range(16):
+        if error.__cause__ is None:
+            break
+        error = error.__cause__
+    else:
+        return code
+    if isinstance(error, CallbackBusyMark):
+        return 'callback_busy'
+    if isinstance(error, NativeClockBusy):
+        return 'native_clock_busy'
+    if isinstance(error, BarrierBusy):
+        return 'event_barrier_busy'
+    if isinstance(error, (SnapshotGap, FrameMismatch, OSError)):
+        return 'read_failed'
+    if isinstance(error, ObserverReadRetry):
+        return 'observer_retry'
+    if isinstance(error, SampleUnavailable):
+        return 'sample_unavailable'
+    return code
+
+
+class _CaptureHealth:
+    """Report gaps in the worker's accepted acquisition clock."""
+
+    def __init__(self, emit):
+        self.emit = emit
+        self.reset()
+
+    def reset(self):
+        self.generation = None
+        self.captured = None
+        self._clear_episode()
+
+    def _clear_episode(self):
+        self.gap_since = self.last_notice = self.reason = None
+        self.retries = 0
+
+    def observe(self, *, now, started, generation, active, captured=None, code=None):
+        if not active:
+            self.reset()
+            return
+        if generation != self.generation:
+            self.reset()
+            self.generation = generation
+        if code is not None and self.captured is not None:
+            self.reason = code
+            self.retries += 1
+        if type(captured) not in (int, float) or not math.isfinite(captured):
+            captured = None
+        previous = self.captured
+        # One slow successful read can leave a visible gap between samples.
+        oldest = min(previous, captured) if previous is not None and captured is not None else (
+            previous if previous is not None else captured)
+        if oldest is None:
+            return
+        if now - oldest > CAPTURE_STALE_SECONDS:
+            if self.gap_since is None:
+                self.gap_since = oldest
+                if self.reason is None:
+                    self.reason = ('publication_delay' if captured is not None and now - captured > CAPTURE_STALE_SECONDS
+                                   else 'sample_gap')
+            if self.last_notice is None or now - self.last_notice >= CAPTURE_STALE_REPORT_PERIOD:
+                self._report('stale' if self.last_notice is None else 'still_stale', now, oldest, started)
+                self.last_notice = now
+        if captured is not None:
+            self.captured = captured
+            if now - captured <= CAPTURE_STALE_SECONDS:
+                if self.gap_since is not None:
+                    self._report('recovered', now, captured, started)
+                self._clear_episode()
+
+    def _report(self, phase, now, captured, started):
+        values = dict(phase=phase, code=self.reason, age_ms=round(max(0, now - captured) * 1000),
+                      attempt_ms=round(max(0, now - started) * 1000), retry_count=self.retries,
+                      generation=self.generation)
+        if phase == 'recovered':
+            values['gap_ms'] = round((now - self.gap_since) * 1000)
+        try:
+            self.emit(values)
+        except Exception:
+            pass  # Health diagnostics cannot invalidate a sample or change retry behavior.
+
+
 class CollectionWorker:
     """Owns the sole CollectionSession, never references WPF or pipe objects."""
     def __init__(self, state, *, endpoint=DEFAULT_FRIDA_REMOTE, native_pc_observer_factory=None,
@@ -1511,6 +1607,28 @@ class CollectionWorker:
                                     last_transient_transition[transition] = now
                             last_lifecycle = value.kind
                     journal.write(kind, value)
+
+                pending_capture_health = []
+
+                def enqueue_capture_health(value):
+                    backend = 'disabled'
+                    if current_enabled:
+                        backend = 'frida'
+                        if current_config.platform == 'native_pc':
+                            backend = ('cooperative' if current_config.native_pc_event_feed else
+                                       current_config.native_pc_event_backend)
+                    pending_capture_health.append(dict(value, platform=current_config.platform,
+                        event_backend=backend, observer_status=observer_state[0], lifecycle=sessions.state))
+
+                def flush_capture_health():
+                    for value in pending_capture_health:
+                        try:
+                            audit('capture_health', value)
+                        except Exception:
+                            pass  # Health diagnostics cannot stop collection or shutdown.
+                    pending_capture_health.clear()
+
+                capture_health = _CaptureHealth(enqueue_capture_health)
                 self._bootstrap_audit = audit
                 regeneration = None
                 try:
@@ -1583,6 +1701,7 @@ class CollectionWorker:
                             endpoint_bound = False
                             retries = 0
                             last_retry_audit = float('-inf')
+                            capture_health.reset()
                             last_live_frame = None
                             last_battle_waiting = None
                             session_bootstrap_generation = None
@@ -1748,6 +1867,7 @@ class CollectionWorker:
                             sampling_observation = None
                             try:
                                 sample = self.session.read()
+                                finished = time.monotonic()
                                 publish_autochess_scene(runtime)
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
@@ -1758,7 +1878,12 @@ class CollectionWorker:
                                         if frame != last_live_frame:
                                             next_live_read = started + COLLECTION_PERIOD
                                         last_live_frame = frame
+                                capture_health.observe(now=finished, started=started,
+                                    generation=sessions.generation,
+                                    active=current_revision == self._request_revision and sessions.state == 'playing',
+                                    captured=sample.get('captured_monotonic') if sample else None)
                             except CaptureRetry as exc:
+                                finished = time.monotonic()
                                 publish_autochess_scene(runtime)
                                 lifecycle = runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
@@ -1795,6 +1920,12 @@ class CollectionWorker:
                                     # _read_lifecycle reports successfully consumed non-sample
                                     # observations as retries. A gap or an old state is not proof.
                                     publish_sampling_rejection(None)
+                                code = _capture_retry_code(exc, observed_kind if current_observation else None,
+                                                           observed_reason if current_observation else None)
+                                active = (current_revision == self._request_revision and (lifecycle == 'playing' or
+                                          code in ('mapping_unavailable', 'autochess_scope_unverified')))
+                                capture_health.observe(now=finished, started=started,
+                                    generation=sessions.generation, active=active, code=code)
                                 if lifecycle == 'playing' or isinstance(exc, MappingRetry):
                                     retries += 1
                                     now = time.monotonic()
@@ -1810,6 +1941,7 @@ class CollectionWorker:
                                         retries = 0
                                         last_retry_audit = now
                             except BattleChanged as exc:
+                                capture_health.reset()
                                 if isinstance(exc, ProcessChanged):
                                     publish_autochess_scene(runtime, exited=True)
                                 self.events.put(('error', str(exc)))
@@ -1817,6 +1949,7 @@ class CollectionWorker:
                                 self.last_connect_attempt = time.monotonic()
                                 self._retry_connection(current_revision)
                             except Exception as exc:
+                                capture_health.reset()
                                 audit('capture_error', {'error_type': type(exc).__name__,
                                       'reason': str(exc).partition('\n')[0][:200],
                                       'monotonic': time.monotonic()})
@@ -1871,6 +2004,8 @@ class CollectionWorker:
                         # Pace successful live reads start-to-start, with a short
                         # rest even if capture took longer than the whole period.
                         # Idle, paused and retry paths keep their existing backoff.
+                        if pending_capture_health and clock_retry_delay is None:
+                            flush_capture_health()  # Keep disk I/O out of a pending native burst.
                         delay = (clock_retry_delay if clock_retry_delay is not None else
                                  COLLECTION_PERIOD if next_live_read is None else
                                  max(COLLECTION_MIN_REST, next_live_read - time.monotonic()))
@@ -1878,6 +2013,7 @@ class CollectionWorker:
                 finally:
                     # Session shutdown writes final audit records; keep its sink open.
                     # A transient cleanup failure gets one retry before the sink closes.
+                    flush_capture_health()
                     if not self.release():
                         self.release()
                     if not self._close_pc_runtime():

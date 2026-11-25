@@ -54,6 +54,22 @@ def test_first_native_pipe_failure_keeps_operation_and_error_code_without_debug(
                                    utc=failure['data']['utc'])
 
 
+@pytest.mark.parametrize('debug_mode', [False, True])
+def test_capture_health_always_keeps_only_bounded_operational_fields(tmp_path, debug_mode):
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header, debug_mode=debug_mode) as journal:
+        data = dict(phase='stale', code='callback_busy', age_ms=2400, retry_count=8, attempt_ms=25,
+                    platform='native_pc', event_backend='native', observer_status='recording',
+                    lifecycle='playing', generation=7)
+        journal.write('capture_health', dict(data, reason='C:/private/game.log', target='private_device',
+                                             event={'amount': 9}, gap_ms=True, utc='invalid'))
+        journal.write('capture_health', dict(data, code='private_person'))
+    log, = tmp_path.glob('wpf-*.jsonl')
+    _, record = _records(log)
+    assert record == {'kind': 'capture_health', 'data': dict(data, utc=record['data']['utc'])}
+    assert record['data']['utc'].endswith('+00:00')
+
+
 def test_desktop_enemy_state_delta_restores_prefix_across_records_and_resets():
     records = []
     writer = DesktopAuditWriter(records.append)
