@@ -248,6 +248,31 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
                 assert value.get('quality_contract_version') == 1 or value.get('ready') is True
                 assert type(value['autochess_round_start_ready']) is bool
                 additions.add('autochess_round_start_ready')
+            if 'character_lifecycle_ready' in value:
+                assert value.get('quality_contract_version') == 1 or value.get('ready') is True
+                # These frozen scenarios do not install the optional typed
+                # lifecycle methods. New producer fixtures prove the enabled path.
+                assert value['character_lifecycle_ready'] is False
+                additions.add('character_lifecycle_ready')
+            if 'character_lifecycle_error' in value:
+                assert value.get('ready') is True and value.get('character_lifecycle_ready') is False
+                assert value['character_lifecycle_error'] is None or isinstance(value['character_lifecycle_error'], str)
+                additions.add('character_lifecycle_error')
+            if 'source_instance_uid' in value:
+                assert value.get('kind') in ('damage', 'healing', 'damage_settlement', 'skill_start', 'skill_end')
+                assert type(value['source_instance_uid']) is int and 0 < value['source_instance_uid'] <= 0xffffffff
+                assert isinstance(value.get('source'), str) and value['source'].startswith(('char_', 'token_'))
+                additions.add('source_instance_uid')
+            if 'skill_cast_invocation' in value:
+                assert value.get('kind') == 'skill_end'
+                assert (value.get('proof') or {}).get('method') in ('BasicSkill.OnCastFinish',
+                    'Character.OnAfterSkill', 'Character.OnSkillFinish', 'Character.SwitchOutFromSkillState')
+                assert type(value['skill_cast_invocation']) is int and 0 < value['skill_cast_invocation'] <= 9007199254740991
+                assert 'source_instance_uid' in value
+                additions.add('skill_cast_invocation')
+            # No lifecycle capability exists in these old normal scenarios;
+            # never erase a newly invented birth/terminal event to match a hash.
+            assert 'actor_lifecycle' not in value and 'lifecycle_baseline' not in value
             if 'native_battle_state' in value:
                 assert isinstance(value.get('native_identity'), dict)
                 assert type(value['native_battle_state']) is int and value['native_battle_state'] in (2, 3)

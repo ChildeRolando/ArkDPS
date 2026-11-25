@@ -374,7 +374,9 @@ check('body_clock_root_and_closing_owner_guards_remain_mandatory',()=>{
   let reads=0;
   p.readPointer=function(){if(this.equals(uid)&&++reads===2)f.write(uid,f.text('009999999'));return read.call(this);};
   let stamp;try{stamp=f.stamp();}finally{p.readPointer=read;}
-  assert.equal(reads,2);assert.equal(stamp.native_autochess_scope.status,'unknown');
+  // Opening and closing guards detect the change; the bounded recovery
+  // probe performs one additional read but cannot certify the changed account.
+  assert.equal(reads,3);assert.equal(stamp.native_autochess_scope.status,'unknown');
  }
  const bad=owned();packet(bad);bad.write(bad.controller.add(0x158),bad.ptr(0));
  assert.equal(bad.stamp().native_autochess_scope.status,'unknown');
