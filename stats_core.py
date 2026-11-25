@@ -173,7 +173,7 @@ class Statistics:
         skill = (self._settlement_skill(owner, actor) if self.legacy_observation_mode else
                  any(candidate == owner for candidate, _ in self.settlement_skill_active) if self._skill_hit_observable(owner) else None)
         effective = max(0.0, amount - overkill) if overkill is not None else None
-        pair = self._mitigation_pair(amount, before, after)
+        pair = not self.mitigation_probe_incomplete and self._mitigation_pair(amount, before, after)
         args = (when, actual or 0, None, kind, False, skill, amount,
                 before if pair else None, after if pair else None)
         # Old APIs carry an independently verified effective amount, but do not
@@ -465,7 +465,7 @@ class Statistics:
             if source is not None and element:
                 self.discard_settlement_bar(target_uid)
             return
-        if nominal is None or not self._mitigation_pair(nominal, before, after):
+        if self.mitigation_probe_incomplete or nominal is None or not self._mitigation_pair(nominal, before, after):
             before = after = None
         if source is None and element and nominal is not None:
             self.settlement_supplements[owner] = self.settlement_supplements.get(owner, 0.0) + nominal
