@@ -76,6 +76,9 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
                     version=diagnostics.get('version_actual'),
                     environment=context.update_environment(diagnostics))})
 
+        # Even a zero-duration/never-connected diagnostic records its final
+        # disconnect through the same Runtime commit owner.
+        runtime.record = lambda observation: audit('lifecycle_observation', observation)
         try:
             while time.monotonic() < deadline:
                 if session is None:

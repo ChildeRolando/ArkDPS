@@ -58,3 +58,35 @@ def test_unbracketed_state_three_cannot_finish_a_default_session(monkeypatch):
         assert current.runtime.sessions.latest_sample['frame'] == initial['frame']
     finally:
         current.close()
+
+
+def test_empty_diagnostic_keeps_its_disconnect_replayable(tmp_path):
+    summary = capture_battles.capture(0, tmp_path)
+    replayed = capture_battles.replay(tmp_path / 'observations.jsonl')
+    assert summary['samples'] == replayed['samples'] == 0
+    assert summary['archives'] == replayed['archives'] == 0
+    assert replayed['last_state']['connection'] == 'disconnected'
+
+
+def test_sessions_cannot_implicitly_retire_a_generation_on_backward_clock():
+    from copy import deepcopy
+    from dataclasses import replace
+    from snapshot_adapter import FrameMismatch
+    from test_battle_lifecycle import begin
+
+    _, runtime, first = begin()
+    sessions = runtime.sessions
+    original_stats = sessions.adapter.statistics
+    original_result = sessions.adapter.result()
+    sample = deepcopy(first.sample)
+    sample.update(frame=first.sample['frame'] - 1, game_time=first.sample['game_time'] - 1)
+    sample['rows'][0]['damage'] = 1
+    backwards = replace(first, sequence=first.sequence + 1, sample=sample,
+                        roster=replace(first.roster, frame=sample['frame']))
+    with pytest.raises(FrameMismatch, match='new generation'):
+        sessions.consume(backwards)
+    assert sessions.adapter.statistics is original_stats
+    assert sessions.adapter.result() == original_result
+    assert original_stats.end_time is None
+    assert sessions.sequence == first.sequence
+    assert not sessions.pop_archives()

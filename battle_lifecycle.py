@@ -1540,7 +1540,10 @@ class BattleSessions:
                         # Keep the independent current snapshot, but never ACK
                         # an advertised historical prefix whose proof failed.
                         bootstrap_error = str(exc)
-                adapter = BattleStatisticsAdapter()
+                # Sessions alone selects generation retirement. The reducer
+                # must not silently finish/restart on a malformed same-generation
+                # sample or an unannounced clock reset.
+                adapter = BattleStatisticsAdapter(lifecycle_managed=True)
                 if bootstrap is not None:
                     zero_sample, zero_mark, zero_drain, replay_drain = bootstrap
                     zero_roster = RosterSnapshot(0)
