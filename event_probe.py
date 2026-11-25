@@ -119,10 +119,75 @@ def event_processing_payload(record):
     payload = dict(record)
     proof = payload.pop('proof', None)
     payload.pop('native_autochess_scope', None)
+    payload.pop('enemy_birth_proof', None)
+    payload.pop('elemental_bar_birth', None)
     if (payload.get('kind') in ('skill_start', 'skill_end')
             and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
         payload['skill_method'] = proof['method']
+    if payload.get('kind') == 'elemental_bar':
+        marker = proof.get('native_enemy_bar_birth') if isinstance(proof, dict) else None
+        if (isinstance(marker, dict) and marker.keys() == {'version', 'sequence_after_born', 'epoch_after_born', 'modifier_enter_epoch'}
+                and type(marker['version']) is int and marker['version'] == 1
+                and all(type(marker[k]) is int and 0 <= marker[k] <= 9007199254740991
+                        for k in ('sequence_after_born', 'epoch_after_born', 'modifier_enter_epoch'))
+                and marker['modifier_enter_epoch'] > marker['epoch_after_born']
+                and type(record.get('sequence')) is int and marker['sequence_after_born'] < record['sequence']):
+            payload['elemental_bar_birth'] = dict(marker)
+    if payload.get('kind') == 'enemy_enter':
+        payload['enemy_birth_proof'] = validated_enemy_birth_proof(record)
     return payload
+
+
+def validated_enemy_birth_proof(record):
+    """Optional original Born boundary; never manufacture one from admission."""
+    raw = record.get('proof')
+    birth = raw.get('native_enemy_birth') if isinstance(raw, dict) else None
+    if not isinstance(birth, dict):
+        return None
+    if (type(record.get('frame')) is not int or not 0 <= record['frame'] <= 0xffffffff
+            or type(record.get('sequence')) is not int or not 0 < record['sequence'] <= 9007199254740991
+            or type(record.get('game_time')) not in (int, float) or not 0 <= record['game_time'] <= 2147483648):
+        return None
+    required = {'version', 'source_method', 'target', 'target_uid', 'target_instance', 'frame',
+                'game_time', 'fixed', 'sequence_before_born', 'sequence_after_born', 'epoch_after_born'}
+    if birth.keys() not in (required, required | {'native_autochess_scope'}):
+        return None
+    if (type(birth['version']) is not int or birth['version'] != 1 or birth['source_method'] != 'BObject.Born'
+            or not isinstance(birth['target'], str) or not birth['target'].startswith('enemy_')
+            or birth['target'] != record.get('target') or birth['target_uid'] != record.get('target_instance')
+            or not isinstance(birth['target_uid'], str) or not re.fullmatch(r'[1-9][0-9]{0,9}', birth['target_uid'])
+            or int(birth['target_uid']) > 0xffffffff
+            or not isinstance(birth['target_instance'], str)
+            or not re.fullmatch(r'0x[1-9a-f][0-9a-f]{0,15}', birth['target_instance'])
+            or not 0x10000 <= int(birth['target_instance'], 16) <= 0x7fffffffffff
+            or int(birth['target_instance'], 16) % 8
+            or type(birth['frame']) is not int or not 0 <= birth['frame'] <= record.get('frame', -1)
+            or type(birth['game_time']) not in (int, float) or not 0 <= birth['game_time'] <= record.get('game_time', -1)
+            or not isinstance(birth['fixed'], str) or not re.fullmatch(r'0|[1-9][0-9]{0,18}', birth['fixed'])
+            or int(birth['fixed']) > (1 << 63) - 1 or int(birth['fixed']) / 4294967296 != birth['game_time']
+            or birth['frame'] == record['frame'] and birth['game_time'] != record['game_time']
+            or type(birth['sequence_before_born']) is not int
+            or type(birth['sequence_after_born']) is not int or type(birth['epoch_after_born']) is not int
+            or not 0 <= birth['epoch_after_born'] <= 9007199254740991
+            or not 0 <= birth['sequence_before_born'] <= birth['sequence_after_born'] < record.get('sequence', -1)):
+        return None
+    opening, closing = birth.get('native_autochess_scope'), record.get('native_autochess_scope')
+    if ('native_autochess_scope' in birth) != ('native_autochess_scope' in record):
+        return None
+    if opening is not None or closing is not None:
+        if (not isinstance(opening, dict) or not isinstance(closing, dict)
+                or type(opening.get('protocol_version')) is not int or opening['protocol_version'] != 1
+                or type(closing.get('protocol_version')) is not int or closing['protocol_version'] != 1
+                or not isinstance(opening.get('scope_key'), str) or not opening['scope_key']
+                or type(opening.get('phase')) is not int or opening['phase'] not in (4, 5, 6)
+                or type(opening.get('round')) is not int or opening['round'] < 0
+                or opening.get('collection_mode') not in ('all', 'local')
+                or opening.get('status') != 'available' or opening.get('verified_same_frame') is not True
+                or opening.get('frame') != birth['frame'] or opening.get('game_time') != birth['game_time']
+                or closing.get('status') != 'available' or closing.get('verified_same_frame') is not True
+                or any(opening.get(key) != closing.get(key) for key in ('scope_key', 'phase', 'round', 'collection_mode'))):
+            return None
+    return {**{key: birth[key] for key in required}, 'entry_sequence': record['sequence']}
 
 
 def _autochess_scope_key(payload):

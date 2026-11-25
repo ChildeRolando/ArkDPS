@@ -376,6 +376,7 @@ class Statistics:
         self.settlement_missing = {}
         self.settlement_boss_missing = {}
         self.settlement_bars = {}
+        self.settlement_bar_origins = {}
         self.settlement_supplements = {}
         self.settlement_overkill = {}
         self.settlement_unassigned = {'hits': 0, 'hp': 0.0, 'shield': 0.0}
@@ -524,23 +525,52 @@ class Statistics:
             return
         existing['amount'] += amount
 
-    def record_settlement_bar(self, target_uid, target, instance, state, owner, actor):
+    def record_settlement_bar(self, target_uid, target, instance, state, owner, actor, *, sequence=None, frame=None, game_time=None, birth=None):
         if (not self._enemy_identity(target if target is not None else 'elemental_bar', target_uid)
                 or not isinstance(instance, str) or not instance):
             if isinstance(instance, str) and instance:
                 self.settlement_bars = {uid: bar for uid, bar in self.settlement_bars.items()
                                         if bar[1] != instance}
+                self.settlement_bar_origins = {uid: origin for uid, origin in self.settlement_bar_origins.items()
+                                               if uid in self.settlement_bars}
             else:
                 self.settlement_bars.clear()
+                self.settlement_bar_origins.clear()
             return
         self.settlement_bars[target_uid] = (target, instance, state, owner, actor)
+        self.settlement_bar_origins[target_uid] = (sequence, frame, game_time, birth)
 
-    def clear_settlement_bar(self, target_uid, kind):
+    def discard_settlement_bar(self, target_uid):
+        self.settlement_bar_origins.pop(target_uid, None)
+        return self.settlement_bars.pop(target_uid, None)
+
+    def clear_settlement_bar(self, target_uid, kind, *, birth_proof=None):
         # Death can be reported before the damage callback returns. Retain
         # attribution until its burst consumes it, or the UID is admitted
-        # again by entry or rebirth.
+        # again by entry or rebirth. A delayed first admission can preserve
+        # only a bar proved to have followed this exact native Born boundary.
         if kind in ('enemy_enter', 'enemy_reborn') and isinstance(target_uid, str):
-            self.settlement_bars.pop(target_uid, None)
+            bar = self.settlement_bars.get(target_uid)
+            origin = self.settlement_bar_origins.get(target_uid)
+            if (kind == 'enemy_enter' and isinstance(birth_proof, dict) and bar and origin
+                    and self.event_coverage and not self.event_coverage_broken
+                    and birth_proof.get('target_uid') == target_uid
+                    and birth_proof.get('target_instance') == bar[1]
+                    and bar[0] in (None, birth_proof.get('target'))
+                    and type(origin[0]) is int and type(origin[1]) is int and type(origin[2]) in (int, float)
+                    and isinstance(origin[3], dict) and origin[3].get('version') == 1
+                    and type(birth_proof.get('sequence_after_born')) is int
+                    and type(birth_proof.get('epoch_after_born')) is int
+                    and origin[3].get('sequence_after_born') == birth_proof['sequence_after_born']
+                    and origin[3].get('epoch_after_born') == birth_proof['epoch_after_born']
+                    and type(origin[3].get('modifier_enter_epoch')) is int
+                    and origin[3]['modifier_enter_epoch'] > birth_proof['epoch_after_born']
+                    and type(birth_proof.get('entry_sequence')) is int
+                    and birth_proof['sequence_after_born'] < origin[0] < birth_proof['entry_sequence']
+                    and type(birth_proof.get('frame')) is int and birth_proof['frame'] <= origin[1]
+                    and type(birth_proof.get('game_time')) in (int, float) and self.event_coverage_start <= birth_proof['game_time'] <= origin[2]):
+                return
+            self.discard_settlement_bar(target_uid)
 
     def record_damage_settlement(self, when, state, owner, actor, source, target, target_uid, instance,
                                  hp, shield, complete, kind, nominal, before, after, *, killed=None,
@@ -552,7 +582,7 @@ class Statistics:
             valid_target = False
         element = type(kind) is int and kind == 5
         if source is None and element and valid_target:
-            bar = self.settlement_bars.pop(target_uid, None)
+            bar = self.discard_settlement_bar(target_uid)
             if bar and bar[0] in (None, target) and bar[1] == instance:
                 _, _, state, owner, actor = bar
         if state == 'foreign' or isinstance(target, str) and target.startswith(('char_', 'token_')):
@@ -608,7 +638,7 @@ class Statistics:
             if not complete:
                 self.observe_enemy_damage(complete=False)
             if source is not None and element:
-                self.settlement_bars.pop(target_uid, None)
+                self.discard_settlement_bar(target_uid)
             return
         if nominal is None or not self._mitigation_pair(nominal, before, after):
             before = after = None
@@ -633,7 +663,7 @@ class Statistics:
         elif boss is None:
             self.settlement_boss_missing[owner] = self.settlement_boss_missing.get(owner, 0) + 1
         if source is not None and element:
-            self.settlement_bars.pop(target_uid, None)
+            self.discard_settlement_bar(target_uid)
 
     def _settlement_skill(self, owner, actor):
         identity = (owner, actor)

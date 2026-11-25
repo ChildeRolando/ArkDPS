@@ -339,7 +339,7 @@ try{
 let sequence=0, hpSequence=0, epoch=0, active=0, fatal=null, stopped=false;
 const activeHooks=new Map();
 let enemyEntryReady=false,enemyEntryUnknown=false,enemyEntryFrame=null;
-const awaitingEnemyTile=new Map(),enemyClassCache=new Map();
+const awaitingEnemyTile=new Map(),enemyClassCache=new Map(),enemyBirthProofs=new Map();
 let enemyPhaseReady=false,enemyPhaseUnknown=false;
 const enemyHealthPhases=new Map(),pendingEnemyRebirth=new Map();
 let enemyStateReady=false,enemyStateUnknown=false;
@@ -1093,6 +1093,7 @@ function recordElementalBar(scope,when,amount){
  if(tokenHost)proof.native_autochess_token_host=tokenHost;
  const characterForm=autoCharacterFormEvidence(scope,when);
  if(characterForm)proof.native_autochess_character_form=characterForm;
+ if(scope.elementalBarBirthReturn)proof.native_enemy_bar_birth=scope.elementalBarBirthReturn;
  record(scope.source,'elemental_bar',amount,when,proof,evidence,scope.sourceCharacterUid);
  scope.elementalBarRecorded=true;
 }
@@ -1742,7 +1743,7 @@ function readTerminalEvents(after,through){
 function refreshEnemyEntryFrame(frame) {
  if(enemyEntryFrame!==null&&frame<enemyEntryFrame){
   resetEnemyHpCoalescing();
-  awaitingEnemyTile.clear();
+  awaitingEnemyTile.clear();enemyBirthProofs.clear();
   enemyEntryUnknown=false;
   enemyHealthPhases.clear();
   pendingEnemyRebirth.clear();
@@ -2411,8 +2412,13 @@ function recordEnemyEntry(enemy,uid,when,method) {
  includeEnemyHp(evidence,enemy);
  const attributes=enemyEntryAttributes(enemy);
  if(attributes)evidence.enemy_entry_attributes=attributes;
- awaitingEnemyTile.delete(uid);
- record(null,'enemy_enter',0,when,{method},evidence);
+ const birth=enemyBirthProofs.get(uid),proof={method};
+ try{if(birth&&birth.target_instance===enemy.toString()&&birth.target===entityId(enemy)&&
+    birth.klass===enemy.readPointer().toString()&&sameNativeEventScope(birth,when)){
+  const {klass,...certificate}=birth;proof.native_enemy_birth=certificate;
+ }}catch(e){/* Optional birth evidence cannot reject the existing admission. */}
+ awaitingEnemyTile.delete(uid);enemyBirthProofs.delete(uid);
+ record(null,'enemy_enter',0,when,proof,evidence);
 }
 function installEnemyEntryHooks() {
  if(!enemyEntryConfig)return;
@@ -2436,6 +2442,14 @@ function installEnemyEntryHooks() {
       if(!isBorn&&!awaitingEnemyTile.has(uid))return;
       this.enemy=enemy;this.uid=uid;this.when=when;
       beginEnemyHook(label);
+      if(isBorn){
+       enemyBirthProofs.delete(uid);
+       try{this.birth={version:1,source_method:'BObject.Born',target:entityId(enemy),target_uid:String(uid),
+        target_instance:enemy.toString(),klass:enemy.readPointer().toString(),frame:when.frame,
+        game_time:when.game_time,fixed:clock.add(4).readS64().toString(),sequence_before_born:sequence,
+        ...(when.native_autochess_scope!==undefined?{native_autochess_scope:{...when.native_autochess_scope}}:{})};
+       }catch(e){/* Keep the ordinary guarded enemy entry without this option. */}
+      }
      }catch(e){enemyEntryUnknown=true;}
     },
     onLeave(){
@@ -2448,10 +2462,15 @@ function installEnemyEntryHooks() {
       const enemy=this.enemy,uid=this.uid;
       if(enemy.add(0x18).readU32()!==uid)throw new Error('enemy identity changed during entry');
       if(enemy.add(0x26).readU8()){
-       awaitingEnemyTile.delete(uid);
+       awaitingEnemyTile.delete(uid);enemyBirthProofs.delete(uid);
        return;
       }
       if(!enemy.add(0x25).readU8())return;
+      if(isBorn&&this.birth)try{
+       if(uid>0&&this.birth.target===entityId(enemy)&&this.birth.klass===enemy.readPointer().toString()
+          &&this.birth.fixed===clock.add(4).readS64().toString()&&sameNativeEventScope(this.birth,when))
+        enemyBirthProofs.set(uid,{...this.birth,sequence_after_born:sequence,epoch_after_born:epoch});
+      }catch(e){enemyBirthProofs.delete(uid);}
       if(isBorn&&enemyPhaseReady){
        const hp=targetHp(enemy);
        if(hp>0)enemyHealthPhases.set(uid,{total:hp,count:1,fromBirth:true});
@@ -2462,14 +2481,14 @@ function installEnemyEntryHooks() {
       }
       if(!isBorn&&!awaitingEnemyTile.has(uid))return;
       recordEnemyEntry(enemy,uid,when,method);
-     }catch(e){enemyEntryUnknown=true;}
+     }catch(e){enemyBirthProofs.delete(this.uid);enemyEntryUnknown=true;}
      finally{endEnemyHook(label);}
     }
    }));
   }
   installed.push(Interceptor.attach(enemyEntryConfig.recycle,{
    onEnter(args){
-     if(!awaitingEnemyTile.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size
+     if(!awaitingEnemyTile.size&&!enemyBirthProofs.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size
         &&!enemyHpBirths.size)return;
     try{
      const object=args[0],uid=object.add(0x18).readU32();
@@ -2481,6 +2500,7 @@ function installEnemyEntryHooks() {
       // Retire an in-flight setter before the pooled pointer can be reused.
       enemyHpWrites.delete(object.toString());
      if(awaitingEnemyTile.get(uid)?.equals(object))awaitingEnemyTile.delete(uid);
+     enemyBirthProofs.delete(uid);
      enemyHealthPhases.delete(uid);
      pendingEnemyRebirth.delete(uid);
     }catch(e){enemyEntryUnknown=true;}
@@ -2505,7 +2525,7 @@ function installEnemyPhaseHook() {
       const enemy=args[0],when=time(),uid=enemy.add(0x18).readU32();
       refreshEnemyEntryFrame(when.frame);
       if(pendingEnemyRebirth.has(uid))return;
-      pendingEnemyRebirth.set(uid,'waiting');
+      pendingEnemyRebirth.set(uid,'waiting');enemyBirthProofs.delete(uid);
       omitPendingHpWrite(enemy);
       this.started=true;beginEnemyHook('Enemy.DoFakeDeath');
       try{
@@ -2525,7 +2545,7 @@ function installEnemyPhaseHook() {
     try{
      const enemy=args[0],when=time();
      refreshEnemyEntryFrame(when.frame);
-     this.uid=enemy.add(0x18).readU32();
+     this.uid=enemy.add(0x18).readU32();enemyBirthProofs.delete(this.uid);
       if(pendingEnemyRebirth.get(this.uid)!=='waiting'){
       enemyPhaseUnknown=true;
       return;
@@ -2681,7 +2701,7 @@ function installEnemyStateHooks() {
        if(enemy.add(0x26).readU8())enemyEntryUnknown=true;
        else recordEnemyEntry(enemy,uid,when,label);
       }
-      awaitingEnemyTile.delete(uid);
+      awaitingEnemyTile.delete(uid);enemyBirthProofs.delete(uid);
      }
      pendingEnemyRebirth.delete(uid);
      omitPendingHpWrite(enemy);
@@ -2878,7 +2898,7 @@ function shouldObserveCallback({owner,name}){
 for(const m of cfg.methods.filter(shouldObserveCallback)){
  hooks.push(Interceptor.attach(ptr(m.address),{
   onEnter(args){
-   active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
+   active++;epoch++;this.callbackEpoch=epoch;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);
    if(this.name==='Entity.ApplyModifier'){
     let raw=activeApplyScopes.get(this.tid);
@@ -3020,8 +3040,14 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       if(this.source&&this.target&&!this.target.isNull()&&this.mod.add(0x60).readS32()===5&&
          type===0){
        this.elementalBarTarget={pointer:this.target,uid:null};
-       try{this.elementalBarTarget.uid=this.target.add(0x18).readU32();}
-       catch(e){/* The normal bar record still has its target pointer. */}
+       try{
+        this.elementalBarTarget.uid=this.target.add(0x18).readU32();
+        const birth=enemyBirthProofs.get(this.elementalBarTarget.uid);
+        if(birth&&birth.target_instance===this.target.toString()&&birth.klass===this.target.readPointer().toString()
+           &&birth.target===entityId(this.target)&&this.callbackEpoch>birth.epoch_after_born&&sameNativeEventScope(birth,this.when))
+         this.elementalBarBirthReturn={version:1,sequence_after_born:birth.sequence_after_born,
+          epoch_after_born:birth.epoch_after_born,modifier_enter_epoch:this.callbackEpoch};
+       }catch(e){/* The normal bar record still has its target pointer. */}
       }
      }
      traceModifierPhase(this,'enter');
@@ -3448,7 +3474,7 @@ function clearAutoChessRoundQuality(previousScope){
  unknownSources.clear();engagementUnknownSources.clear();
  shieldUnknown=false;damageUnknown=false;engagementUnknown=false;skillUnknown=false;
  shieldByFrame.clear();shieldUnknownByFrame.clear();
- awaitingEnemyTile.clear();enemyHealthPhases.clear();pendingEnemyRebirth.clear();enemyHpWrites.clear();
+ awaitingEnemyTile.clear();enemyBirthProofs.clear();enemyHealthPhases.clear();pendingEnemyRebirth.clear();enemyHpWrites.clear();
  enemyEntryFrame=0;enemyEntryUnknown=false;enemyPhaseUnknown=false;enemyStateUnknown=false;bossDamageUnknown=false;
 }
 function installAutoChessRoundResetHook(){

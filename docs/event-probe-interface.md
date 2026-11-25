@@ -138,3 +138,6 @@ scope缓存失败后仅允许一次有界scope-only恢复：根、完整账号�
 
 
 普通嵌套子结算的真实零 HP 终点不再被当作缺证：父回调已返回、父原生 realDelta 与父 HP 检查点在子入口独立闭环，子有自己的完整原生结算证书、killed 与 HP=0 一致，且父结束时身份/时钟/原始 realDelta 未变、目标仍等于子真实终点时，可保留父独立扣血。父不承担子击杀，子的名义伤害和过量不变；不从整段 HP 差或名义量反算任一击。UID 归零、子缺证、重复/额外子回调、盾未知、父字段变化或终点不连续仍拒绝。此分支由 PC/MuMu 真实生产回调的拥有内存夹具验证，不代表测10 R9/R10 溯光星源未核实命中的原始原因已经确认；那些历史归档未保存逐笔 guard。
+
+
+敌人首次地图层入场可能晚于真实 Born。既有 BObject.Born 回调在同指针/类/CID/native UID、borned 从0到1、原始 frame/Q32/scope 不变时，可保存只读出生证书；延后的 enemy_enter 附 `proof.native_enemy_birth`（version1、source_method、target/native UID/native pointer、原始时钟、Born-enter前及成功return后的原始sequence、return epoch）。无额外钩子或RPC。回收、假死/重生、换scope或读取失败清除此可选证书。宿主严格校验后，仅当元素条同UID与同native pointer、其原始序号严格位于Born成功return与首次entry之间，且bar进入时的原始epoch严格晚于Born-return epoch（仅pending delayed body的bar附此小型标记）、原时钟顺序及连续覆盖成立时，保留这条本周期证据。无证书仍按原规则清条，不从“首次看到entry”猜出生；Born前或Born内部旧条、同UID回收新周期、不同pointer/UID、坏entry/坏重生、观测gap不能借此恢复。真实reborn仍清旧条，新bar只恢复未来归属。该边界已由PC/MuMu拥有内存原生产回调验证，不声称解释缺原始guard的测10第14回合11笔元素归属未知。

@@ -127,7 +127,7 @@ class EventStream:
                skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
                skill_method=None, skill_wait_for_end=None, source_instance_uid=None, actor_lifecycle=None, skill_cast_invocation=None,
                phase_total_hp=None, phase_count=None, phase_from_birth=None,
-               enemy_entry_attributes=None, finish_reason=None, enemy_max_hp=None, enemy_regen_ticks=None,
+               enemy_entry_attributes=None, enemy_birth_proof=None, elemental_bar_birth=None, finish_reason=None, enemy_max_hp=None, enemy_regen_ticks=None,
                mitigation_before=None, mitigation_after=None,
                source_character_uid=None, unresolved_source=False, settled_after_nested_kill=False,
                settlement_complete=None, nominal_amount=None, settlement_identity=None,
@@ -141,7 +141,7 @@ class EventStream:
                        target_type, damage_type, cancel_reason, shield_absorbed,
                        target_instance, target_uid, enemy_damage_owner,
                        skill_key, skill_id, skill_name, skill_reason, skill_method, skill_wait_for_end,
-                       phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes,
+                       phase_total_hp, phase_count, phase_from_birth, enemy_entry_attributes, enemy_birth_proof, elemental_bar_birth,
                        finish_reason, enemy_max_hp, enemy_regen_ticks, mitigation_before, mitigation_after,
                        source_character_uid, unresolved_source, settled_after_nested_kill,
                        settlement_complete, nominal_amount, settlement_identity, source_instance_uid, actor_lifecycle, skill_cast_invocation)
@@ -180,11 +180,11 @@ class EventStream:
                                or kind == 'damage_settlement' and damage_type == 5)
             if kind == 'elemental_bar':
                 self.statistics.record_settlement_bar(target_uid, target, target_instance,
-                                                       'foreign', None, None)
+                                                       'foreign', None, None, sequence=sequence, frame=frame, game_time=game_time, birth=elemental_bar_birth)
             elif elemental_burst:
                 for uid, bar in tuple(self.statistics.settlement_bars.items()):
                     if uid == target_uid or bar[1] == target_instance:
-                        self.statistics.settlement_bars.pop(uid, None)
+                        self.statistics.discard_settlement_bar(uid)
             if kind == 'elemental_bar' or elemental_burst:
                 # Keep foreign target witnesses from leaving earlier local
                 # buildup available to an eventual source-null explosion.
@@ -329,9 +329,11 @@ class EventStream:
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':
+                self.statistics.clear_settlement_bar(target_instance, 'enemy_enter')
                 self.statistics.mark_enemy_entry_unknown()
                 self.statistics.mark_enemy_state_unknown()
             elif kind == 'enemy_reborn':
+                self.statistics.clear_settlement_bar(target_instance, 'enemy_reborn')
                 self.statistics.mark_enemy_phase_unknown()
                 self.statistics.mark_enemy_state_unknown()
             elif kind == 'enemy_damage':
@@ -340,7 +342,8 @@ class EventStream:
                 if isinstance(source, str) and source:
                     self.statistics.mark_overkill_unknown(source)
                 if kind == 'elemental_bar':
-                    self.statistics.record_settlement_bar(target_uid, target, target_instance, 'unknown', None, None)
+                    self.statistics.record_settlement_bar(target_uid, target, target_instance, 'unknown', None, None,
+                        sequence=sequence, frame=frame, game_time=game_time, birth=elemental_bar_birth)
             elif kind in ('skill_start', 'skill_end') and (self.statistics.settlement_enabled or native_cast):
                 typed_actor = (settlement_identity and settlement_identity[0] == 'local'
                     and type(settlement_identity[2]) is int and settlement_identity[2] > 0
@@ -363,14 +366,15 @@ class EventStream:
             if self.statistics.settlement_enabled and settlement_identity:
                 state, owner, actor = settlement_identity
                 if kind == 'elemental_bar':
-                    self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor)
+                    self.statistics.record_settlement_bar(target_uid, target, target_instance, state, owner, actor,
+                        sequence=sequence, frame=frame, game_time=game_time, birth=elemental_bar_birth)
                 elif (kind in ('skill_start', 'skill_end') and state == 'unknown'
                       and not ignore_unmatched_native_cast):
                     self._mark_settlement_skill_unassigned(source, unresolved_source_keys,
                         skill_method or target_instance, skill_reason)
             if self.statistics.settlement_enabled and kind in ('enemy_enter', 'enemy_fake_death',
                                                                'enemy_reborn', 'enemy_finish'):
-                self.statistics.clear_settlement_bar(target_instance, kind)
+                self.statistics.clear_settlement_bar(target_instance, kind, birth_proof=enemy_birth_proof)
             if kind in ENEMY_STATE_KINDS:
                 try:
                     self.statistics.record_enemy_state(
