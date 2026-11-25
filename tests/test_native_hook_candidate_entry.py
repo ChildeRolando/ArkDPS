@@ -98,7 +98,7 @@ def test_desktop_effective_defaults_leave_saved_config_bytes_unchanged(candidate
 def test_connection_apply_rejects_unavailable_route_before_persisting(candidate, tmp_path, change):
     state = desktop_bridge.DesktopState(tmp_path / 'state')
     config = dict(state.effective_connection.to_dict(), **change)
-    with pytest.raises(ValueError, match='仅支持官服 PC'):
+    with pytest.raises(ValueError, match='仅支持 PC'):
         state.command(dict(version=1, op='connection_apply', config=config, events=True))
     assert not (state.directory / 'connection.json').exists()
     assert not (state.directory / 'layout.json').exists()

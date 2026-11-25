@@ -283,34 +283,34 @@ class NativePcFridaObserver(FridaEventObserver):
 
     def __init__(self, collector, remote=None):
         if remote is not None:
-            raise ValueError('官服 PC Frida 使用本机进程，frida_remote 必须为 None')
+            raise ValueError('PC Frida 使用本机进程，frida_remote 必须为 None')
         super().__init__(collector, remote)
         self.binding = NativePcBinding(collector)
 
     def _message(self, message, data):
         payload = message.get('payload')
         if isinstance(payload, dict) and payload.get('ready') and payload.get('arch') != 'x64':
-            message = {'type': 'error', 'description': '官服 PC Frida 探针必须运行在 Windows x64 进程'}
+            message = {'type': 'error', 'description': 'PC Frida 探针必须运行在 Windows x64 进程'}
         super()._message(message, data)
 
     def _attach_session(self, frida):
         process = self.collector.process
         if not process.process_alive():
-            raise RuntimeError('官服 PC 游戏进程已退出，请重新连接')
+            raise RuntimeError('PC 游戏进程已退出，请重新连接')
         instance = process.process_instance
         if (not isinstance(instance, tuple) or len(instance) != 2
                 or instance[0] != process.pid or type(instance[1]) is not int or instance[1] <= 0):
-            raise RuntimeError('官服 PC 缺少已验证的进程创建时间')
+            raise RuntimeError('PC 缺少已验证的进程创建时间')
         try:
             return frida.get_local_device().attach(process.pid, realm='native')
         except frida.PermissionDeniedError as exc:
-            raise RuntimeError('Windows 拒绝 Frida 访问官服 PC 游戏进程，请以管理员权限启动 ArkDPS') from exc
+            raise RuntimeError('Windows 拒绝 Frida 访问PC 游戏进程，请以管理员权限启动 ArkDPS') from exc
         except frida.ProcessNotRespondingError as exc:
             raise RuntimeError('Frida 本机附加未完成，代理会话未建立；PC 事件探针尚未执行：' + str(exc)) from exc
 
     def _probe_source(self):
         if not self.collector.process.process_alive():
-            raise RuntimeError('官服 PC 游戏进程已退出，请重新连接')
+            raise RuntimeError('PC 游戏进程已退出，请重新连接')
         self.binding.reset()
         assembled = assemble_probe_source('native_pc')
         self._probe_source_manifest = assembled.audit()

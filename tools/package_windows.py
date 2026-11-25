@@ -27,7 +27,7 @@ from native_pc.internal_entry import HOST_NAME, HOST_PATH
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
 from windows_manifest import verify_executable_manifest
-DEFAULT_VERSION = '1.0.0-rc.39'
+DEFAULT_VERSION = '1.0.0-rc.40'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
@@ -143,19 +143,19 @@ def stage_native_hook_payload(binary, collector, notices):
 
 def native_hook_component(files, *, released=False):
     from native_pc.native_hook_source import NATIVE_HOOK_PACKAGE_PATH, NATIVE_HOOK_BUILD_MANIFEST_PATH
-    from native_pc.probe_native_pc import BUILD_ID
+    from native_pc.probe_native_pc import KNOWN_BUILDS
     return dict(provider='arkdps-native-hooks', protocol=1, scope='official-pc' if released else 'official-pc-startup-test',
                 path=NATIVE_HOOK_PACKAGE_PATH, build_manifest_path=NATIVE_HOOK_BUILD_MANIFEST_PATH,
                 sha256=files[NATIVE_HOOK_PACKAGE_PATH],
                 build_manifest_sha256=files[NATIVE_HOOK_BUILD_MANIFEST_PATH],
-                default_platform='native_pc', default_backend='native', supported_source_builds=[BUILD_ID],
+                default_platform='native_pc', default_backend='native', supported_source_builds=list(KNOWN_BUILDS),
                 experimental=not released, performance_verified=released, autochess_handoff_verified=released)
 
 
 def native_hooks_readme(version):
     return (
-        f'ArkDPS {version} · 官服 PC ArkPie 事件启动测试包（实验候选）\n\n'
-        '本包仅面向已适配构建的官服 Windows PC，不包含 Frida 客户端、Gadget 或服务端。\n'
+        f'ArkDPS {version} · PC ArkPie 事件启动测试包（实验候选）\n\n'
+        '本包仅面向已适配构建的 Windows PC，不包含 Frida 客户端、Gadget 或服务端。\n'
         '无需安装 Python 或 .NET；不支持 MuMu、合作事件文件或自动更新。\n'
         '单独解压到新的可写目录，不要覆盖标准版；不要复制或继承旧 runtime、配置或战绩。\n'
         '先启动 ArkDPS.Desktop.exe，允许正常的管理员权限提示，在设置中填写游戏目录。\n'
@@ -168,7 +168,7 @@ def native_hooks_readme(version):
         '已知限制：这是启动测试，不是正式上线或完整兼容验收。性能尚未验收；\n'
         '卫戍多阶段交接仍可能出现事件覆盖 gap / partial，不能把显示数值当完整逐笔账。\n'
         '不要据此宣称性能、卫戍完整性或所有战斗机制均已通过。性能体感仅作反馈，不是测量结论。\n\n'
-        '手动反馈：Windows 版本、官服游戏版本/文件校验结果、是否先启动 ArkDPS、\n'
+        '手动反馈：Windows 版本、PC 客户端版本/文件校验结果、是否先启动 ArkDPS、\n'
         '监听/初始化状态、是否进入大厅、客户端错误码/崩溃、正常退出结果。\n'
         '启动失败可保留游戏错误截图及 collector/runtime/wpf-startup.log、\n'
         'collector/runtime/wpf-collector*.log，并在脱敏后手动反馈；本包不自动上传。\n'
@@ -532,16 +532,16 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     metadata = bundle / 'metadata'
     metadata.mkdir()
     pc_instructions = (
-        '官服 PC 请填写 Arknights.exe 所在目录。逐次事件需要先启动 ArkDPS，再启动游戏。\n'
+        'PC 请填写 Arknights.exe 所在目录。逐次事件需要先启动 ArkDPS，再启动游戏。\n'
         'PC 事件组件随游戏保留到正常退出，仅通过本机认证端点连接。关闭观察者可只采累计。\n'
         if with_events else
-        '本包仅包含累计快照。官服 PC 请填写 Arknights.exe 所在目录，并关闭「启用观察者」。\n')
+        '本包仅包含累计快照。PC 请填写 Arknights.exe 所在目录，并关闭「启用观察者」。\n')
     if released_hooks:
         pc_instructions += ('PC 事件后端可选择 Frida 或 ArkPie；若遇“检测到环境存在异常”报错，选择 ArkPie。\n'
                             '切换后端后应用设置，等监听就绪，再正常重启游戏。\n')
     if with_native_events:
         pc_instructions = (
-            '官服 PC 请填写 Arknights.exe 所在目录，然后选择「PC 事件后端」。\n'
+            'PC 请填写 Arknights.exe 所在目录，然后选择「PC 事件后端」。\n'
             'Frida：先启动 ArkDPS，按连接提示启动或重启游戏。\n'
             'ArkPie：指定合作来源写入的 JSONL 文件。事件不可用时继续显示累计快照。\n'
             '合作来源写入工具：.\\python\\python.exe -I -B -m native_pc.live_event_bridge --help\n'
@@ -559,7 +559,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         f'ArkDPS {version} · Windows x64\n\n'
         '解压到可写目录，双击 ArkDPS.Desktop.exe。无需安装 Python 或 .NET。\n'
         'ArkDPS 始终申请管理员权限，请允许 Windows 提升提示；取消提示不会启动程序。\n'
-        '在设置中选择 MuMu 或官服 PC。MuMu 需要开启 Root，并使用已适配的安卓游戏 2.7.91。\n'
+        '在设置中选择 MuMu 或 PC（官服与 B 服）。MuMu 需要开启 Root，并使用已适配的安卓游戏 2.7.91。\n'
         f'{pc_instructions}'
         f'{observer_instructions}'
         '「卫戍队友DPS」仅支持具有多战场视野的 PC 客户端，适用于官服和 B 服。MuMu 及其它端的防御只统计本家。\n'
@@ -667,7 +667,7 @@ def main():
     parser.add_argument('--version', default=DEFAULT_VERSION)
     parser.add_argument('--python-zip',type=Path)
     parser.add_argument('--frida-wheel',type=Path)
-    parser.add_argument('--frida-gadget-archive',type=Path, help='verified official PC Gadget XZ input')
+    parser.add_argument('--frida-gadget-archive',type=Path, help='verified PC Gadget XZ input')
     parser.add_argument('--frida-server', type=Path, help='reuse the pinned Android server .xz')
     parser.add_argument('--frida-server-license', type=Path, help='reuse the pinned server COPYING text')
     variants = parser.add_mutually_exclusive_group()

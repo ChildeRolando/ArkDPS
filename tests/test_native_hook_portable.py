@@ -63,7 +63,7 @@ def portable(tmp_path, monkeypatch):
         path=dll_path, sha256=hashed(binary),
         build_manifest_path=build_path.relative_to(bundle).as_posix(), build_manifest_sha256=hashed(build_path),
         experimental=True, default_platform='native_pc', default_backend='native',
-        supported_source_builds=[module.BUILD_ID], performance_verified=False, autochess_handoff_verified=False)
+        supported_source_builds=list(module.access.KNOWN_BUILDS), performance_verified=False, autochess_handoff_verified=False)
     manifest = dict(format=2, protocol=1, head='a' * 40, frida=None, frida_wheel_sha256=None,
         native_pc_gadget=None, native_pc_native_hooks=component,
         files={p.relative_to(bundle).as_posix(): hashed(p) for p in bundle.rglob('*') if p.is_file()})
@@ -180,7 +180,8 @@ def test_other_portable_variants_never_fall_back_to_a_development_dll(portable, 
     ('path', '../escape.dll'), ('path', 'collector\\native_pc\\native_event_runtime\\ArkDPS.NativeEvents.dll'),
     ('build_manifest_path', 'C:/escape.json'), ('experimental', 1), ('experimental', False),
     ('default_platform', 'android'), ('default_backend', 'frida'),
-    ('supported_source_builds', []), ('supported_source_builds', [module.BUILD_ID, 'unknown']),
+    ('supported_source_builds', []), ('supported_source_builds', [module.BUILD_ID]),
+    ('supported_source_builds', [module.BUILD_ID, 'unknown']),
     ('performance_verified', 0), ('performance_verified', True),
     ('autochess_handoff_verified', None), ('autochess_handoff_verified', True),
     ('sha256', 'a' * 63), ('sha256', True), ('build_manifest_sha256', 'A' * 64),

@@ -46,7 +46,7 @@ def record_display(record):
         # Older valid archives can predate the operating system's time zone table.
         pass
     platform = metadata.get('platform')
-    source_label = ('官服 PC' if platform == 'native_pc' else
+    source_label = ('PC' if platform == 'native_pc' else
                     'Android（ADB）' if platform == 'android' else '来源未记录')
     display = dict(battle_id=record.battle_id, stage=stage.label, stage_description=stage.description,
                 stage_detail=stage.detail, stage_raw=stage.raw, outcome=outcome,

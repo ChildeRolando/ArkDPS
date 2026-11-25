@@ -18,7 +18,7 @@ Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](http
 
 ### 观察者
 
-标准便携包内置 PC ArkPie 组件，以及 [Frida 17.26.1](https://github.com/frida/frida/releases/tag/17.26.1) 的 Windows 客户端、PC Gadget 与供 MuMu 12 x86_64 Android 使用的设备端服务。观察者默认开启。MuMu 在选定实例、游戏版本通过校验且游戏完成初始化后，自动准备并启动包内服务；已有可用服务时复用。官服 PC 需要先启动 ArkDPS，再正常启动游戏，在设置页确认自动就绪。首次准备使用本地包内文件，无需联网或手动下载。
+标准便携包内置 PC ArkPie 组件，以及 [Frida 17.26.1](https://github.com/frida/frida/releases/tag/17.26.1) 的 Windows 客户端、PC Gadget 与供 MuMu 12 x86_64 Android 使用的设备端服务。观察者默认开启。MuMu 在选定实例、游戏版本通过校验且游戏完成初始化后，自动准备并启动包内服务；已有可用服务时复用。PC 需要先启动 ArkDPS，再正常启动游戏，在设置页确认自动就绪。首次准备使用本地包内文件，无需联网或手动下载。
 
 如果服务准备失败，设置页的连接诊断会显示原因。实时页仍可显示伤害与治疗累计，缺少事件证据的指标显示为未知。修改连接设置后可点击「应用设置并重连」。[事件采集与验收](event-capture.md)
 

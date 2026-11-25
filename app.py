@@ -73,13 +73,13 @@ def parser_for():
     parser.add_argument('--platform', choices=('mumu', 'native_pc'),
                         help='select the game platform for this launch')
     parser.add_argument('--native-game-root',
-                        help='set the directory containing the official PC client Arknights.exe')
+                        help='set the directory containing the PC client Arknights.exe')
     parser.add_argument('--native-pc-event-backend', choices=PC_EVENT_BACKENDS,
                         help='override the saved PC event kernel for this launch')
     parser.add_argument('--native-pc-event-feed', type=native_event_feed_path,
                         help='absolute path to the cooperative live JSONL input for the native PC kernel')
     parser.add_argument('--arkframework-root', type=Path,
-                        help='官服 PC 采集时从此 ArkFramework 目录单独记录 BetterBattle 的逐笔持续回复')
+                        help='PC 采集时从此 ArkFramework 目录单独记录 BetterBattle 的逐笔持续回复')
     parser.add_argument('--capture-seconds', type=float, default=0)
     parser.add_argument('--internal-capture', metavar='SCENARIO',
                         help='run a controlled PC event capture and print its receipt')
@@ -155,7 +155,7 @@ def main(*, native_pc_observer_factory=None):
         args.platform = 'native_pc'
     if args.arkframework_root is not None:
         if args.platform == 'mumu' or args.frida_remote:
-            parser.error('--arkframework-root 仅用于官服 PC')
+            parser.error('--arkframework-root 仅用于PC')
         args.platform = 'native_pc'
         args.arkframework_root = args.arkframework_root.expanduser().resolve()
     if args.require_events and args.frida_remote == '':
@@ -178,7 +178,7 @@ def main(*, native_pc_observer_factory=None):
             args.native_pc_event_feed = args.native_pc_event_feed or saved.native_pc_event_feed
         args.native_game_root = args.native_game_root or saved.native_game_root
         if not args.native_game_root:
-            parser.error('官服 PC 采集需要 --native-game-root，或已保存的游戏目录')
+            parser.error('PC 采集需要 --native-game-root，或已保存的游戏目录')
         if args.frida_remote:
             parser.error('--frida-remote 只支持 MuMu')
         if native_pc_observer_factory is not None and args.frida_remote is None:

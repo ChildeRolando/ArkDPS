@@ -44,7 +44,7 @@ def native_hook_candidate_profile(root):
 def validate_native_hook_candidate_connection(profile, config):
     if profile is not None and (config.platform != 'native_pc'
             or config.native_pc_event_backend != 'native' or config.native_pc_event_feed):
-        raise ValueError('此启动测试候选仅支持官服 PC ArkPie 实时采集；不支持 MuMu、Frida 或合作事件文件。')
+        raise ValueError('此启动测试候选仅支持 PC ArkPie 实时采集；不支持 MuMu、Frida 或合作事件文件。')
 
 
 def native_hook_candidate_defaults(profile, config):
@@ -61,7 +61,7 @@ def native_hook_candidate_arguments(profile, args):
             or args.native_pc_event_feed or args.frida_remote not in (None, '')
             or args.adb is not None or args.serial is not None or args.arkframework_root is not None
             or args.internal_capture is not None):
-        raise ValueError('此启动测试候选仅支持官服 PC ArkPie 实时采集；不支持 MuMu、Frida、合作文件或内部回放。')
+        raise ValueError('此启动测试候选仅支持 PC ArkPie 实时采集；不支持 MuMu、Frida、合作文件或内部回放。')
     args.platform, args.native_pc_event_backend, args.native_pc_event_feed = 'native_pc', 'native', None
 
 

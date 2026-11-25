@@ -89,7 +89,7 @@ def event_label(status, error=None):
               'disabled': '事件已关闭 · 使用伤害/治疗快照',
               'unavailable': '事件关闭或不可用 · 使用伤害/治疗快照',
               'finished': '事件观察结束 · 保留已覆盖区间'}
-    labels['snapshot_only'] = '官服 PC 累计快照 · 逐事件不可用'
+    labels['snapshot_only'] = 'PC 累计快照 · 逐事件不可用'
     return labels.get(status, '等待事件能力诊断') + (f'（{error}）' if error else '')
 
 
@@ -325,7 +325,7 @@ class DesktopState:
         if self.native_hook_profile is not None:
             self.warnings.append('此独立便携包固定使用 ArkPie PC 事件后端。')
             if (directory / 'connection.json').is_file():
-                self.warnings.append('此目录已有连接设置；本候选不支持迁移旧 runtime。有效来源固定为官服 PC ArkPie、空合作文件，不会自动改写已保存连接。')
+                self.warnings.append('此目录已有连接设置；本候选不支持迁移旧 runtime。有效来源固定为PC ArkPie、空合作文件，不会自动改写已保存连接。')
         self.history = BattleHistory(directory / 'history')
         self.records = {}
         self.selected = None
@@ -1591,7 +1591,7 @@ class CollectionWorker:
                                     diag_dict = diag.as_dict()
                                     observe_environment(diag_dict, config)
                                     self.events.put(('diagnostic', diag_dict))
-                                    text = (diag.message or '已连接官服 PC · 累计快照'
+                                    text = (diag.message or '已连接PC · 累计快照'
                                             if config.platform == 'native_pc' else
                                             f'已连接 {diag.selected_serial} · 游戏 {diag.version_actual}')
                                     self.events.put(('connection', text))
@@ -2000,7 +2000,7 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                 config = effective[0] if effective is not None else state.effective_connection
                 platform = cmd.get('platform', config.platform)
                 if state.native_hook_profile is not None and platform != 'native_pc':
-                    raise ValueError('此启动测试候选不支持 MuMu 检测，请选择官服 PC。')
+                    raise ValueError('此启动测试候选不支持 MuMu 检测，请选择PC。')
                 if platform == 'native_pc':
                     native_root = cmd.get('native_game_root', config.native_game_root)
                     ConnectionConfig.from_dict({'platform': platform, 'native_game_root': native_root})
@@ -2008,7 +2008,7 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                         status=DetectionStatus.NO_INSTANCE, platform='native_pc',
                         native_game_root=native_root,
                         code='native_root_required' if not native_root else 'native_unavailable',
-                        message='官服 PC 无需 ADB 检测；请填写游戏目录并应用连接设置以检查构建和读取权限。',
+                        message='PC 无需 ADB 检测；请填写游戏目录并应用连接设置以检查构建和读取权限。',
                         version_expected=None).as_dict()
                 elif platform == 'mumu':
                     result = detect_instances(cmd.get('adb') or None,

@@ -23,7 +23,7 @@ internal static class HistorySourceLabelTests
 
     internal static void Run()
     {
-        foreach (var (platform, label) in new[] { ("native_pc", "官服 PC"), ("android", "Android（ADB）") })
+        foreach (var (platform, label) in new[] { ("native_pc", "PC"), ("android", "Android（ADB）") })
         {
             var item = Item(platform, label);
             Check(platform + " shared source label reaches summary", item.SourceLabel == label &&

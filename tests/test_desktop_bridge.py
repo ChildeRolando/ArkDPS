@@ -2118,7 +2118,7 @@ def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed
         state.effective_connection = worker.effective[0]
         for kind, value in events:
             state.accept(kind, value)
-        assert state.snapshot()['event_text'] == '官服 PC 累计快照 · 逐事件不可用'
+        assert state.snapshot()['event_text'] == 'PC 累计快照 · 逐事件不可用'
 
 
 @pytest.mark.parametrize('first_platform', ['mumu', 'native_pc'])
@@ -2575,7 +2575,7 @@ def test_native_engagement_explains_snapshot_only_without_an_observer_action(tmp
     selected = state.snapshot()['history_selected']
     assert selected['event_status'] == 'unavailable'
     for view in (live, selected['view']):
-        assert '官服 PC' in view['rate_reason'] and '逐次事件' in view['rate_reason']
+        assert 'PC' in view['rate_reason'] and '逐次事件' in view['rate_reason']
         assert not view['rate_available'] and not view['rate_action'] and not view['rate_action_label']
         assert view['entries'] and all(entry['rate'] is None for entry in view['entries'])
 

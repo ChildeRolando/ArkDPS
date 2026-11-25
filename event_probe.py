@@ -939,22 +939,22 @@ class NativePcBinding:
                 detail = ('采样开始时有未完成的战斗回调' if result.get('mark_retry_reason') == 'callback_pending_at_start'
                           else '采样结束时仍有未完成的战斗回调')
                 if operation == 'mark':
-                    raise CallbackBusyMark(f'官服 PC 事件来源 {operation} · {detail}')
+                    raise CallbackBusyMark(f'PC 事件来源 {operation} · {detail}')
             if not detail and operation == 'mark' and type(result.get('native_frame')) is int:
                 detail = '独立战局时钟与采样标记未能对齐'
-            raise ObserverReadRetry(f'官服 PC 事件来源 {operation} · {detail}' if detail else
-                                    f'官服 PC 事件来源 {operation} 战局或时钟正在变化，请重试当前采集')
+            raise ObserverReadRetry(f'PC 事件来源 {operation} · {detail}' if detail else
+                                    f'PC 事件来源 {operation} 战局或时钟正在变化，请重试当前采集')
         generation = result.get('native_generation')
         if type(generation) is not int or generation < 0:
-            raise RuntimeError('官服 PC 事件来源 缺少事件世代')
+            raise RuntimeError('PC 事件来源 缺少事件世代')
         frame = result.get('native_frame', result.get('frame'))
         fixed_time = result.get('native_fixed_time')
         if (not isinstance(fixed_time, str) or not fixed_time.isdecimal()
                 or len(fixed_time) > 20 or int(fixed_time) > 0x7FFFFFFFFFFFFFFF):
-            raise RuntimeError('官服 PC 事件来源 缺少精确逻辑时钟')
+            raise RuntimeError('PC 事件来源 缺少精确逻辑时钟')
         game_time = int(fixed_time) / (1 << 32)
         if operation == 'mark' and (result.get('frame') != frame or result.get('game_time') != game_time):
-            raise RuntimeError('官服 PC 事件来源 标记与原始逻辑时钟不一致')
+            raise RuntimeError('PC 事件来源 标记与原始逻辑时钟不一致')
         from collector import ProcessChanged, SampleUnavailable, UnsupportedVersion
         try:
             binding = self.collector.observer_binding(
@@ -968,10 +968,10 @@ class NativePcBinding:
         session = binding['native_session']
         previous = self.generation_sessions.get(generation)
         if previous is not None and previous != session:
-            raise RuntimeError('官服 PC 事件来源 事件世代与已确认战局不一致')
+            raise RuntimeError('PC 事件来源 事件世代与已确认战局不一致')
         previous_generation = self.session_generations.get(session)
         if previous_generation is not None and previous_generation != generation:
-            raise RuntimeError('官服 PC 原生战局未能区分已观察到的新事件世代，当前事件覆盖已中断')
+            raise RuntimeError('PC 原生战局未能区分已观察到的新事件世代，当前事件覆盖已中断')
         self.generation_sessions[generation] = session
         self.session_generations[session] = generation
         bound = dict(result, **binding)

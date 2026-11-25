@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from native_pc.probe_native_pc import BUILD_ID, BILIBILI_BUILD_ID
+
 
 spec = importlib.util.spec_from_file_location(
     'verify_live_events', Path(__file__).resolve().parents[1] / 'acceptance' / 'verify_live_events.py')
@@ -206,33 +208,34 @@ def test_verifier_rejects_invalid_enemy_max_hp(value):
         module.enemy_state_event(event)
 
 
-def pc_capture(directory, *, with_events=True):
+def pc_capture(directory, *, with_events=True, source_build=None):
     """Publish through the production session with controlled collector/observer inputs."""
     from dataclasses import replace
     from types import SimpleNamespace
     from capture_cli import json_value
     from collection_session import CollectionSession
-    from native_pc.probe_native_pc import KNOWN_FILES
-    from native_pc_collector import BUILD_ID
+    from native_pc.probe_native_pc import BUILD_ID, KNOWN_BUILDS
+
+    source_build = source_build or BUILD_ID
     from test_lifecycle_events import native_connection
 
     runtime, collector, observer, snapshot, state, producer, _, _ = native_connection()
     details = dict(fixed_module_bytes_match=True, build=dict(known_build=True, files=[
-        dict(file=name, sha256=digest, sha256_matches=True) for name, digest in KNOWN_FILES.items()]))
+        dict(file=name, sha256=digest, sha256_matches=True) for name, digest in KNOWN_BUILDS[source_build].items()]))
     collector.diagnostics = SimpleNamespace(platform='native_pc', connection_ok=True,
-                                            version_actual=BUILD_ID, details=details)
+                                            version_actual=source_build, details=details)
     collector.connect = lambda **_: None
     collector.close = collector.locate_lifecycle = observer.start = observer.stop = lambda: None
     original_lifecycle, original_roster = collector.read_lifecycle, snapshot.read_roster
     def lifecycle():
         life = original_lifecycle()
-        life['metadata']['source_build'] = BUILD_ID
+        life['metadata']['source_build'] = source_build
         return life
     collector.read_lifecycle = lifecycle
     snapshot.read_roster = lambda: replace(original_roster(), local_player_side=0)
     original_mark, original_read = observer.mark, observer.read_through
-    observer.mark = lambda: dict(original_mark(), source_build=BUILD_ID)
-    observer.read_through = lambda seq: dict(original_read(seq), source_build=BUILD_ID,
+    observer.mark = lambda: dict(original_mark(), source_build=source_build)
+    observer.read_through = lambda seq: dict(original_read(seq), source_build=source_build,
         partial_damage_version=7, source_attribution_version=1, damage_settlement_ready=True,
         damage_settlement_unknown=False)
     base = dict(frame=2, game_time=1, source='char_a', source_character_uid=1)
@@ -265,14 +268,15 @@ def pc_capture(directory, *, with_events=True):
         session.read()
     finally:
         session.close()
-    summary = dict(platform='native_pc', pid=10, process_instance=[10, 1234], game_version=BUILD_ID,
+    summary = dict(platform='native_pc', pid=10, process_instance=[10, 1234], game_version=source_build,
                    head='test-candidate', error=None)
     (directory / 'summary.json').write_text(json.dumps(summary))
     return records
 
 
-def test_pc_four_families_are_reconciled_with_separate_damage_bases(tmp_path):
-    records = pc_capture(tmp_path)
+@pytest.mark.parametrize('source_build', [BUILD_ID, BILIBILI_BUILD_ID])
+def test_pc_four_families_are_reconciled_with_separate_damage_bases(tmp_path, source_build):
+    records = pc_capture(tmp_path, source_build=source_build)
     (tmp_path / 'capture.jsonl').write_text('\n'.join(map(json.dumps, records)))
     receipt = module.verify(tmp_path, pc_settlements=True)
     audit = receipt['native_pc_settlements']
@@ -283,6 +287,35 @@ def test_pc_four_families_are_reconciled_with_separate_damage_bases(tmp_path):
     assert audit['paired_skill_windows'] == {'char_a': 1} and audit['skill_seconds'] == {'char_a': 1}
     assert receipt['event_prefix_from_initial_boundary_complete'] is False
     assert receipt['native_cumulative_from_zero_complete'] is False
+
+
+@pytest.mark.parametrize('source_build', [BUILD_ID, BILIBILI_BUILD_ID])
+@pytest.mark.parametrize('fault', ['unknown_build', 'invalid_build', 'diagnostics', 'files', 'sample', 'batch'])
+def test_pc_receipt_rejects_unknown_or_mixed_registered_builds(tmp_path, source_build, fault):
+    from native_pc.probe_native_pc import KNOWN_BUILDS
+
+    records = pc_capture(tmp_path, source_build=source_build)
+    other = BILIBILI_BUILD_ID if source_build == BUILD_ID else BUILD_ID
+    connection = next(r['data'] for r in records if r['kind'] == 'connected')
+    observation = next(r['data'] for r in records if r['kind'] == 'lifecycle_observation'
+                       and (r['data'].get('events') or {}).get('drain') is not None)
+    if fault in ('unknown_build', 'invalid_build'):
+        summary = json.loads((tmp_path / 'summary.json').read_text())
+        summary['game_version'] = 'win-x64:unknown' if fault == 'unknown_build' else []
+        (tmp_path / 'summary.json').write_text(json.dumps(summary))
+    elif fault == 'diagnostics':
+        connection['diagnostics']['version_actual'] = other
+    elif fault == 'files':
+        connection['diagnostics']['details']['build']['files'] = [
+            dict(file=name, sha256=digest, sha256_matches=True)
+            for name, digest in KNOWN_BUILDS[other].items()]
+    elif fault == 'sample':
+        observation['sample']['battle_metadata']['source_build'] = other
+    else:
+        observation['events']['drain']['source_build'] = other
+    (tmp_path / 'capture.jsonl').write_text('\n'.join(map(json.dumps, records)))
+    with pytest.raises(ValueError):
+        module.verify(tmp_path, pc_settlements=True)
 
 
 def test_basic_current_pc_record_verification_does_not_claim_strict_settlement_mechanisms(tmp_path):

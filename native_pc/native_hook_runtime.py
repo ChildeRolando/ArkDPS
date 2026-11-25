@@ -140,6 +140,7 @@ class NativeHookRuntime:
         self._attempted, self._observers = set(), set()
         self._retry_requested = True
         self._build_signature = None
+        self._source_build = None
         self._ready_generation = 0
         self._last_preparation = None
         self._material = None
@@ -270,9 +271,10 @@ class NativeHookRuntime:
             raise RuntimeFailure('native_permission_denied', '请以管理员权限启动 ArkDPS；不会自动提权')
         before = self._files()
         build, _ = self.build_check(self.game_root)
+        source_build = build.get('source_build')
         if (build.get('known_build') is not True or build.get('amd64') is not True
-                or build.get('source_build') != access.BUILD_ID):
-            raise RuntimeFailure('native_unsupported_build', 'ArkPie 实时采集只接受指纹匹配的官服 Windows x64 构建')
+                or type(source_build) is not str or source_build not in access.KNOWN_BUILDS):
+            raise RuntimeFailure('native_unsupported_build', 'ArkPie 实时采集需要已适配且指纹匹配的 Windows x64 PC 客户端')
         if self._files() != before:
             raise RuntimeFailure('native_build_changed', 'PC 客户端文件正在变化，请完成更新后重试')
         material_started = time.perf_counter()
@@ -294,6 +296,7 @@ class NativeHookRuntime:
                 return False  # A newer explicit request superseded this result.
             armed = self.clock.time_ns() // 100 + FILETIME_EPOCH
             self._build_signature, self.api = before, api
+            self._source_build = source_build
             self._material = material
             self._material_ready = True
             self._material_generation += 1
@@ -420,7 +423,7 @@ class NativeHookRuntime:
                     raise RuntimeFailure(self.code or 'startup_failed', self.error or 'ArkPie PC 启动失败')
                 remaining = deadline - self.clock.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError('请保持 ArkDPS 开启，再正常启动新的官服 PC 游戏实例')
+                    raise TimeoutError('请保持 ArkDPS 开启，再正常启动新的 PC 游戏实例')
                 self._condition.wait(min(.1, remaining))
 
     def _discard_unclaimed(self):
@@ -446,7 +449,7 @@ class NativeHookRuntime:
             if not self._material_ready or self._material is None:
                 raise RuntimeFailure('native_material_not_ready', 'ArkPie 组件完整预校验尚未就绪')
             self._attempted.add(birth)
-            self._lease = dict(pid=birth[0], created=birth[1], source_build=access.BUILD_ID)
+            self._lease = dict(pid=birth[0], created=birth[1], source_build=self._source_build)
             candidate = self.prepared_factory(self.game_root, root=self.collector_root, runtime_dir=self.runtime_dir,
                                               material=self._material)
             self._prepared = candidate  # Publish ownership before any mutation-capable call.
@@ -541,12 +544,12 @@ class NativeHookRuntime:
                     or fence != (self._armed, self._watch_generation)):
                 return
             if len(matches) > 1:
-                self._state(RuntimeState.WAITING_PROCESS, 'ambiguous_process', '请保留一个相同路径的官服 PC 实例')
+                self._state(RuntimeState.WAITING_PROCESS, 'ambiguous_process', '请保留一个相同路径的 PC 实例')
             elif matches and matches[0][1] > self._armed and matches[0] not in self._attempted:
                 selected = matches[0]
             else:
                 self._state(RuntimeState.WAITING_PROCESS, 'restart_required' if matches else None,
-                            '请保持 ArkDPS 开启，再正常重启官服 PC 游戏' if matches else None)
+                            '请保持 ArkDPS 开启，再正常重启 PC 游戏' if matches else None)
         if selected is not None:
             self._prepare(selected, fence=fence)
 

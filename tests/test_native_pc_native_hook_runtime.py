@@ -149,13 +149,15 @@ def ready(env, runtime, pid=100):
     return runtime.wait_ready(3)
 
 
-def test_only_new_exact_birth_is_prepared_and_close_releases_unclaimed(env):
+@pytest.mark.parametrize('source_build', list(module.access.KNOWN_BUILDS))
+def test_only_new_exact_birth_is_prepared_and_close_releases_unclaimed(env, source_build):
+    env.build['source_build'] = source_build
     env.api.rows[3] = env.row(1)
     runtime = arm(env)
     assert env.factory.loads == []
     env.api.rows.clear()
     lease = ready(env, runtime)
-    assert lease == dict(pid=100, created=runtime.describe()['armed_filetime'] + 100, source_build=module.access.BUILD_ID)
+    assert lease == dict(pid=100, created=runtime.describe()['armed_filetime'] + 100, source_build=source_build)
     assert env.factory.loads == [(lease['pid'], lease['created'])]
     assert runtime.describe()['frida_required'] is False
     assert runtime._alive(lease) is True
@@ -221,13 +223,16 @@ def test_permission_preflight_never_elevates_or_prepares(env):
     assert not env.api.opened and not env.factory.instances
 
 
-@pytest.mark.parametrize('field,value', [('known_build', False), ('amd64', False), ('source_build', 'bilibili-build')])
-def test_only_official_fingerprint_is_admitted(env, field, value):
+@pytest.mark.parametrize('field,value', [
+    ('known_build', False), ('known_build', 1), ('amd64', False), ('amd64', 1),
+    ('source_build', 'unregistered-build'), ('source_build', None), ('source_build', []),
+])
+def test_only_registered_pc_fingerprints_are_admitted(env, field, value):
     env.build[field] = value
     runtime = env.make().start()
     wait_for(runtime, lambda r: r['status'] == 'failed')
     assert runtime.code == 'native_unsupported_build'
-    assert not env.factory.instances
+    assert not env.factory.instances and not env.material_calls
 
 
 def test_cancel_before_windows_commit_submits_nothing(env):

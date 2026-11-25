@@ -26,7 +26,7 @@ internal sealed class HistoryItem
     public string Practice=>Data.Get("labels").Items().ElementAtOrDefault(1).Text();
     public string SourceLabel=>Data.Text("source_label") is {Length:>0} source ? source : Data.Text("platform") switch
     {
-        "native_pc"=>"官服 PC", "android"=>"Android（ADB）", _=>"来源未记录",
+        "native_pc"=>"PC", "android"=>"Android（ADB）", _=>"来源未记录",
     };
     public string Summary=>string.Join(" · ",new[]{Data.Text("scope_warning"),SourceLabel,Outcome,Data.Text("duration")}
         .Where(value=>value.Length>0));

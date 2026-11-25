@@ -111,7 +111,7 @@ class CollectionSession:
         if self._is_native_pc():
             self.event_error = getattr(self.collector, 'event_capability', {}).get('error')
             if self.observer_factory is not None and not self._observer_requested():
-                self.event_error = '官服 PC 观察者需要生命周期模式及 frida_remote=None'
+                self.event_error = 'PC 观察者需要生命周期模式及 frida_remote=None'
             if self._observer_requested() and callable(getattr(self.collector, 'observer_boot_ready', None)):
                 self.event_status, self.event_error = WAITING_GAME_INIT, None
                 self._next_boot_check = float('-inf')

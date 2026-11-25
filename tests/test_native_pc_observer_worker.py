@@ -281,7 +281,7 @@ def test_pc_without_enabled_internal_provider_preserves_snapshot_only(tmp_path, 
     assert ('native_collector', 'recorded-game-root', enabled) in calls
     assert ('session', True, None, None, '', None) in calls
     assert ('observer', ('snapshot_only', None)) in events
-    assert state.snapshot()['event_text'] == '官服 PC 累计快照 · 逐事件不可用'
+    assert state.snapshot()['event_text'] == 'PC 累计快照 · 逐事件不可用'
 
 
 @pytest.mark.parametrize('enabled', [True, False])

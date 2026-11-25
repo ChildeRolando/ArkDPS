@@ -551,7 +551,7 @@ def read_capture(directory, source_type, *, native_session=None):
     if source_type in ('native-hooks', 'frida') and (
             build not in KNOWN_BUILDS or build_check.get('known_build') is not True
             or files != KNOWN_BUILDS[build]):
-        raise ValueError('claimed game source has no matching official PC fingerprints')
+        raise ValueError('claimed game source has no matching registered PC fingerprints')
 
     identity = None
     local_binding = None
