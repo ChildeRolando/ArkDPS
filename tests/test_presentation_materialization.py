@@ -18,9 +18,9 @@ def test_one_publication_normalizes_scope_once_and_crops_only_wire(tmp_path):
         replace(config, panel_id='recent', ranking=Ranking.RECENT)))
     with patch('desktop_bridge.rows_from_statistics', wraps=desktop_bridge.rows_from_statistics) as normalize:
         snapshot = state.snapshot()
-        assert normalize.call_count == 1
+        assert normalize.call_count == 0  # Prepared by accept/update_live_analysis.
         state.snapshot()
-        assert normalize.call_count == 1  # Stable revision reuses work across polls.
+        assert normalize.call_count == 0  # Stable revision reuses work across polls.
     for view in snapshot['panels']:
         assert all('detail' not in entry for entry in view['entries'])
         assert 'private_proof' not in view['source']['a']
@@ -68,16 +68,16 @@ def test_same_frame_quality_event_and_config_revision_invalidate_cached_views(tm
     state.accept('sample', data)
     with patch('desktop_bridge.rows_from_statistics', wraps=desktop_bridge.rows_from_statistics) as normalize:
         state.snapshot(); state.snapshot()
-        assert normalize.call_count == 1
+        assert normalize.call_count == 0
         changed = deepcopy(data)
         changed['statistics']['rows']['a']['overkill_unknown_reason'] = 'new same-frame quality'
         state.accept('sample', changed)
         view = state.snapshot()['panels'][0]
-        assert normalize.call_count == 2
+        assert normalize.call_count == 3  # Main plus two target-scope certificates prepared once.
         assert view['details_by_owner']['a']['overkill_unknown_reason'] == 'new same-frame quality'
         state.persist(replace(state.layout, panels=(replace(state.layout.panels[0], ranking=Ranking.RECENT),)))
         state.snapshot()
-        assert normalize.call_count == 3
+        assert normalize.call_count == 4
 
 
 def test_freshness_overlay_keeps_aging_without_rebuilding_statistics(tmp_path, monkeypatch):
@@ -90,5 +90,31 @@ def test_freshness_overlay_keeps_aging_without_rebuilding_statistics(tmp_path, m
         monkeypatch.setattr(desktop_bridge.time, 'monotonic', lambda: 110)
         second = state.snapshot()
         assert first['status'] != second['status']
-        assert normalize.call_count == 1
+        assert normalize.call_count == 0
 
+
+
+def test_chart_and_detail_use_canonical_row_rates_with_separate_full_window_admission():
+    from panel_model import (Category, RateBasis, EventAvailability, rows_from_statistics,
+        live_damage_rates, detail_rates, settled_boss_damage_rates)
+    raw = dict(name='A', damage=100, recent_damage=20, recent_damage_window=(1, 6),
+        counter_snapshot_complete=True, event_coverage_complete=True,
+        overkill_coverage_complete=True, recent_overkill_damage=25,
+        observed_damage=80, overkill_damage=10, active_damage=2)
+    statistics = {'game_time': 6, 'rows': {'a': raw}}
+    row, = rows_from_statistics(statistics)
+    team, operators = live_damage_rates(statistics, 6, effective=True)
+    assert team == operators[0]['recent_dps'] == row.rate(Category.DAMAGE, RateBasis.RECENT_5S, effective=True) == 15
+    detail = detail_rates([row], EventAvailability('ready'), effective=True)
+    assert detail['a']['damage']['value'] == row.rate(Category.DAMAGE, RateBasis.ENGAGEMENT, effective=True) == 35
+    assert live_damage_rates(statistics, 7, effective=True)[0] is None
+    lane = dict(observed_boss_recent_damage=5, observed_boss_recent_window=(1, 6),
+        observed_boss_recent_damage_complete=False, observed_boss_damage=25,
+        recent_effective_damage=4, recent_effective_damage_window=(1, 6),
+        recent_effective_damage_complete=False, effective_damage=20)
+    scoped = {'game_time': 6, 'rows': {'a': {'settled_damage': lane}}}
+    canonical, = rows_from_statistics(scoped)
+    team, operators = settled_boss_damage_rates(scoped, 6, effective=False)
+    assert team is None and operators[0]['recent_dps'] is None
+    assert operators[0]['observed_recent_dps'] == canonical.rate(Category.DAMAGE, RateBasis.RECENT_5S) == 5
+    assert canonical.recent_window(Category.DAMAGE) == (1, 6)

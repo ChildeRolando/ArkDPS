@@ -741,7 +741,8 @@ class DesktopState:
             return
 
         terminal = statistics.get('ended') is True or self.lifecycle in ('ended', 'frozen', 'finalizing')
-        team_recent, operators = live_damage_rates(statistics, game_time)
+        _, analysis_rows, _ = self._scope_rows(PanelConfig(), statistics, context=self._materialized_views)
+        team_recent, operators = live_damage_rates(statistics, game_time, prepared_rows=analysis_rows)
         scope_label = statistics.get('display_scope_label')
         character_counters = sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
         if scope_label and not character_counters:
@@ -798,17 +799,17 @@ class DesktopState:
         boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
         for effective, state_field in ((False, 'boss_live_analysis'), (True, 'boss_effective_live_analysis')):
             config = PanelConfig(boss_only=True, effective_only=effective)
-            boss_statistics = panel_statistics(config, statistics)
+            boss_statistics, boss_rows, _ = self._scope_rows(config, statistics, context=self._materialized_views)
             previous_boss = getattr(self, state_field)
             if boss_statistics['boss_damage_available'] or previous_boss is not None:
                 setattr(self, state_field, self.boss_trend_point(
                     boss_statistics, battle_id, game_time, previous_boss,
-                    terminal=terminal, covered=boss_coverage, effective=effective))
+                    terminal=terminal, covered=boss_coverage, effective=effective, prepared_rows=boss_rows))
         self.analysis_interrupted = False
 
     def boss_trend_point(self, statistics, battle_id, game_time, previous, *,
-                         terminal, covered, effective=False):
-        settled = settled_boss_damage_rates(statistics, game_time, effective=effective)
+                         terminal, covered, effective=False, prepared_rows=None):
+        settled = settled_boss_damage_rates(statistics, game_time, effective=effective, prepared_rows=prepared_rows)
         if settled is None:
             team_recent, operators = live_damage_rates(statistics, game_time, effective=effective)
             complete, _, _ = team_status(statistics)
@@ -878,28 +879,30 @@ class DesktopState:
             return 'degraded', '正在统计 · 事件降级'
         return 'live', '正在统计'
 
-    def view(self, config, statistics, complete=None, event=None):
-        context = _VIEW_MATERIALIZATION.get()
-        context = context if context is not None and context['owner'] is self else None
-        history = event is not None and not event.live
+    def _scope_rows(self, config, statistics, *, history=False, context=None):
         # Projection wrappers are shallow; the raw rows identify the accepted scope.
         # Revision binds same-frame money/quality changes; retain rows to prevent id reuse.
         scope_key = (self._presentation_revision, id(statistics.get('rows')), statistics.get('session'),
                      statistics.get('game_time'), statistics.get('native_counter_scope'),
                      statistics.get('event_only_projection'), statistics.get('display_scope_label'),
                      config.boss_scope, config.effective_only if config.boss_scope else False, history)
+        if context is not None and scope_key in context['scopes']:
+            _, scoped, rows = context['scopes'][scope_key]
+        else:
+            scoped = panel_statistics(config, statistics, history=history)
+            rows = rows_from_statistics(scoped)
+            if context is not None:
+                context['scopes'][scope_key] = statistics, scoped, rows
+        return scoped, rows, scope_key
+
+    def view(self, config, statistics, complete=None, event=None):
+        context = _VIEW_MATERIALIZATION.get()
+        context = context if context is not None and context['owner'] is self else None
+        statistics, rows, scope_key = self._scope_rows(config, statistics,
+            history=event is not None and not event.live, context=context)
         view_key = (scope_key, config, complete, event, self.layout.number_units)
         if context is not None and view_key in context['views']:
             return deepcopy(context['views'][view_key])
-        if context is not None and scope_key in context['scopes']:
-            _, statistics, rows = context['scopes'][scope_key]
-        else:
-            original = statistics
-            statistics = panel_statistics(config, statistics, history=history)
-            rows = rows_from_statistics(statistics)
-            if context is not None:
-                # Retain the original object so Python cannot reuse its id in this snapshot.
-                context['scopes'][scope_key] = original, statistics, rows
         source = statistics.get('rows') or {}
         number_units = self.layout.number_units
         if complete is None or config.boss_scope:

@@ -546,6 +546,8 @@ class PanelSourceRow:
         if (category is Category.DAMAGE and self.event_only_projection
                 and self.recent_damage is None and self.settled_damage is not None):
             return self.settled_damage.get('observed_recent_damage_window')
+        if category is Category.DAMAGE and self.recent_damage is None and self.settled_damage is not None:
+            return self.settled_damage.get('observed_boss_recent_window')
         return {Category.DAMAGE: self.recent_damage_window,
                 Category.HEALING: self.recent_healing_window,
                 Category.SHIELD: self.recent_shield_window}[category]
@@ -926,40 +928,36 @@ def _valid_window(window) -> bool:
             and 0 < window[1] - window[0] <= 5)
 
 
-def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool = False
-                      ) -> tuple[float | None, list[dict]]:
-    """Publish certified damage rates independently of the active panel."""
-    operators = []
-    windows = []
-    for owner, row in sorted((statistics.get('rows') or {}).items()):
-        settled = _settled_damage(row) if effective else None
-        observed = (statistics.get('event_only_projection') is True
-                    and statistics.get('native_counter_scope') == 'unavailable'
-                    and row.get('recent_damage') is None and not effective)
-        if observed:
-            settled = _settled_damage(row)
-        rate = row.get('recent_damage')
-        window = row.get('recent_damage_window')
-        certified = (row.get('counter_snapshot_complete') is True
-                     and _valid_window(window) and 0 <= window[0] < window[1] == game_time
-                     and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
-        if settled is not None:
-            rate_key = 'observed_recent_damage' if observed else 'recent_effective_damage'
-            rate = settled.get(rate_key)
-            window = settled.get(rate_key + '_window')
-            certified = (settled.get(rate_key + '_complete', settled.get('complete')) is True
-                         and (not observed or settled.get('observed_damage') is not None)
-                         and _valid_window(window) and 0 <= window[0] < window[1] == game_time
-                         and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
-        elif certified and effective:
-            excess = row.get('recent_overkill_damage')
-            certified = (row.get('overkill_coverage_complete') is True
-                         and not damage_scope_reason(row)
-                         and not (row.get('partial_damage') or {}).get('recent_damage_scope_reason')
-                         and _finite(excess) and not isinstance(excess, bool) and excess >= 0)
-            if certified:
-                rate = max(0.0, rate - excess / (window[1] - window[0]))
-        operators.append(dict(owner_id=owner, name=row.get('name') or owner,
+def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool = False,
+                      prepared_rows=None) -> tuple[float | None, list[dict]]:
+    """Chart the canonical row rate, admitting only a certified current window.
+
+    The panel may show a named observed subset. A chart's full-team series needs
+    the separate complete-window certificate; this never changes its numerator.
+    """
+    operators, windows = [], []
+    for row in sorted(rows_from_statistics(statistics) if prepared_rows is None else prepared_rows,
+                      key=lambda value: value.owner_id):
+        rate = row.rate(Category.DAMAGE, RateBasis.RECENT_5S, effective=effective)
+        observed = row.event_only_projection and row.recent_damage is None and not effective
+        lane = row.settled_damage if effective or observed else None
+        window = row.effective_recent_window() if effective else row.recent_window(Category.DAMAGE)
+        valid = (_valid_window(window) and 0 <= window[0] < window[1] == game_time
+                 and _finite(rate) and rate >= 0)
+        if lane is not None:
+            key = 'observed_recent_damage' if observed else 'recent_effective_damage'
+            certified = (valid and lane.get(key + '_complete', lane.get('complete')) is True
+                         and (not observed or lane.get('observed_damage') is not None))
+        else:
+            # Explicit native per-row coverage is required, independent of any
+            # whole-result defaults used for other panel display modes.
+            certified = (valid and row.inspector_evidence.get('counter_snapshot_complete') is True
+                         and _finite(row.recent_damage) and row.recent_damage >= 0)
+            if effective:
+                certified = (certified and row.overkill_complete and not row.damage_scope_reason
+                             and not row.partial_damage.get('recent_damage_scope_reason')
+                             and _finite(row.recent_overkill) and row.recent_overkill >= 0)
+        operators.append(dict(owner_id=row.owner_id, name=row.name,
                               recent_dps=rate if certified else None))
         if certified:
             windows.append(tuple(window))
@@ -969,24 +967,23 @@ def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool 
     return None, operators
 
 
-def settled_boss_damage_rates(statistics: Mapping, game_time: float, *, effective: bool):
-    """Return scoped rates for charting, with a separate observed subset."""
-    rows = sorted((statistics.get('rows') or {}).items())
-    if not any(_settled_damage(row) is not None for _, row in rows):
+def settled_boss_damage_rates(statistics: Mapping, game_time: float, *, effective: bool, prepared_rows=None):
+    """Project the same canonical row rate, retaining a named incomplete subset."""
+    rows = sorted(rows_from_statistics(statistics) if prepared_rows is None else prepared_rows,
+                  key=lambda row: row.owner_id)
+    if not any(row.settled_damage is not None for row in rows):
         return None
-    rate_key, window_key, complete_key = (
-        ('recent_effective_damage', 'recent_effective_damage_window', 'recent_effective_damage_complete')
-        if effective else ('observed_boss_recent_damage', 'observed_boss_recent_window',
-                           'observed_boss_recent_damage_complete'))
+    complete_key = 'recent_effective_damage_complete' if effective else 'observed_boss_recent_damage_complete'
     operators, windows = [], set()
-    for owner, row in rows:
-        lane = _settled_damage(row) or {}
-        rate, window = lane.get(rate_key), lane.get(window_key)
+    for row in rows:
+        lane = row.settled_damage or {}
+        rate = row.rate(Category.DAMAGE, RateBasis.RECENT_5S, effective=effective)
+        window = row.effective_recent_window() if effective else row.recent_window(Category.DAMAGE)
         valid = _valid_window(window) and 0 <= window[0] < window[1] == game_time and _finite(rate) and rate >= 0
         complete = valid and lane.get(complete_key) is True
         if valid:
             windows.add(tuple(window))
-        operators.append(dict(owner_id=owner, name=row.get('name') or owner,
+        operators.append(dict(owner_id=row.owner_id, name=row.name,
                               recent_dps=rate if complete else None,
                               observed_recent_dps=rate if valid and not complete else None))
     team = sum(row['recent_dps'] for row in operators) if (
@@ -1145,9 +1142,7 @@ def detail_rates(rows: Iterable[PanelSourceRow],
     for row in rows:
         kinds = {}
         for kind, category in (('damage', Category.DAMAGE), ('healing', Category.HEALING)):
-            raw = (row.effective_observed()
-                   if effective and category is Category.DAMAGE
-                   else row.engagement(category))
+            raw = row.rate(category, RateBasis.ENGAGEMENT, effective=effective)
             state, text, note = _rate_display(
                 row, category, raw if _finite(raw) else None, available,
                 number_units=number_units)
