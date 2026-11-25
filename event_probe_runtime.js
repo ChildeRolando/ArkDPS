@@ -619,7 +619,7 @@ const shieldByFrame=new Map();
 // Modifier& is borrowed only during the same-thread ApplyModifier invocation.
 // The pointer may be reused later, so retain no target evidence after return.
 const activeModifiers=new Map();
-const applyModifierDepth=new Map();
+const activeApplyScopes=new Map();
 let tracedModifierSequence=0,scopedTraceCount=0,scopedTraceDropped=0;
 let nestedParentTraceCount=0,nestedParentTraceDropped=0;
 const SCOPED_TRACE_LIMIT=4096;
@@ -775,15 +775,56 @@ function numericFullBlockSettlement(scope,hit,when,amount){
 }
 function observeNestedTargetSettlement(invocation){
  traceNestedParents(invocation,'child_entry');
- const scopes=activeModifiers.get(invocation.tid);
- if(!scopes?.length)return;
  try{
-  if(!invocation.target||invocation.target.isNull()||
-     ![1,2,3,4,5].includes(invocation.mod.add(0x68).readS32()))return;
+  const target=invocation.target,hasTarget=target&&!target.isNull();
+  const raw=activeApplyScopes.get(invocation.tid);
+  if(activeApplyScopes.size>1||raw?.length>1){
+   // The money stack excludes foreign/unknown sources. Borrowed modifier
+   // aliases and concurrent target writers must still be visible here.
+   for(const [thread,other] of activeApplyScopes){
+    for(const concurrent of other){
+     if(concurrent===invocation)continue;
+     if(concurrent.mod?.equals(invocation.mod)){
+      concurrent.nestedModifierConflict=true;invocation.nestedModifierConflict=true;
+     }
+     if(thread!==invocation.tid&&hasTarget&&concurrent.target?.equals(target)){
+      concurrent.nestedCrossThreadActivity=true;invocation.nestedCrossThreadActivity=true;
+     }
+    }
+   }
+  }
+  const scopes=activeModifiers.get(invocation.tid);
+  if(!hasTarget||!scopes?.length)return;
+  const type=invocation.mod.add(0x68).readS32();
+  if(![1,2,3,4,5].includes(type))return;
   for(const previous of scopes){
    if(previous.target?.equals(invocation.target)&&sameMitigationTime(previous.when,invocation.when)){
-    previous.nestedTargetCheckpoint=previous.targetSettlementNested?null:
-      captureParentBeforeNestedSettlement(previous,invocation);
+    if(previous.targetSettlementNested){
+     previous.nestedTargetCheckpoint=null;
+     const chain=previous.nestedElementalChain,last=chain&&chain.steps[chain.steps.length-1];
+     if(chain){
+      const pending=type===5&&!chain.pending&&last&&chain.steps.length<NESTED_ELEMENTAL_CHAIN_LIMIT?
+       captureNestedElementalStep(previous,invocation,chain.checkpoint,last.hpAfter):null;
+      if(pending)chain.pending=pending;
+      else{
+       noteNestedSettlementFailure(previous,'child_entry',chain.pending?'overlapping_child':
+        chain.steps.length>=NESTED_ELEMENTAL_CHAIN_LIMIT?'chain_limit':'discontinuous_or_unsupported_child',
+        type,invocation.settlementDomainEntry?.targetType);
+       previous.nestedElementalChain=null;
+      }
+     }
+    }else{
+     const checkpoint=captureParentBeforeNestedSettlement(previous,invocation);
+     previous.nestedTargetCheckpoint=checkpoint;
+     if(checkpoint&&!checkpoint.ordinary){
+      const pending=captureNestedElementalStep(previous,invocation,checkpoint,checkpoint.hpAfter);
+      if(pending)previous.nestedElementalChain={checkpoint,pending,steps:[]};
+      else noteNestedSettlementFailure(previous,'child_entry','unverified_elemental_child_entry',
+       type,invocation.settlementDomainEntry?.targetType);
+     }
+     if(!checkpoint)noteNestedSettlementFailure(previous,'child_entry','missing_parent_checkpoint',
+      type,invocation.settlementDomainEntry?.targetType);
+    }
     previous.targetSettlementNested=true;
    }
   }
@@ -846,6 +887,7 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
   if(scope.targetSettlementNested){
    const nested=verifiedParentBeforeNestedSettlement(scope,target,when,amount,type);
    if(nested){scope.targetSettlementEvidence=nested;return nested;}
+   noteNestedSettlementFailure(scope,'parent_close','unverified_parent_or_incomplete_chain');
    return reject('nested modifier changed target settlement scope');
   }
   // A fully witnessed block can zero m_value during the target callback.
@@ -989,16 +1031,23 @@ function damageTargetUid(target){
 function captureParentBeforeNestedSettlement(parent,child){
  try{
   const hit=parent.targetHit,commit=hit?.commit;
-  if(!commit?.returned||!sameMitigationTime(commit.returnWhen,child.when)||
+  if(!commit||commit.returned&&!sameMitigationTime(commit.returnWhen,child.when)||
      !targetSettlementIdentity(parent,hit,child.when))return null;
   const childType=child.mod.add(0x68).readS32();
   const ordinary=[1,2,3].includes(childType);
-  if((!ordinary&&(childType!==5||!child.mod.readPointer().isNull()))||
+  if((!ordinary&&childType!==5)||
      child.mod.add(0x60).readS32()!==0||child.mod.add(0x70).readS32()!==0||
      damageTargetUid(child.target)!==hit.uid||!child.mod.add(0x10).readPointer().equals(hit.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
      shieldContextUnknown(child.when.frame,hit.target)||shieldTotal(child.when.frame,hit.target)!==0)return null;
   const real=fp(parent.mod.add(0x48)),hp=targetHp(hit.target),amount=fp(parent.mod.add(0x30));
+  // A same-target element can settle inside the parent's active Unit
+  // callback before the parent commits any HP. Capture that separate zero
+  // point and later require the parent's own signed delta after all children.
+  if(!commit.returned&&childType===5&&real===0&&hp>0&&hp===hit.hpBefore&&hp===child.hpBefore)
+   return {child,ordinary:false,ordering:'children_before_parent',when:child.when,uid:hit.uid,
+    real,hpBefore:hp,hpAfter:hp};
+  if(!commit.returned)return null;
   if(!Number.isFinite(real)||!(real<0)||!Number.isFinite(hp)||!(hp>0)||
      hp!==child.hpBefore||!Number.isFinite(hit.hpBefore)||
      Math.abs(hit.hpBefore-hp+real)>Math.max(0.01,Math.abs(real)*1e-6)||
@@ -1028,76 +1077,140 @@ function rememberNestedOrdinarySettlement(child,when,evidence,event){
      hpAfter:evidence.hp_after,real:evidence.real_delta}:null;
  }
 }
-function rememberNestedElementalNonlethalSettlement(child,when,evidence,burstRecord){
- // A source-null type5 child can leave the target alive. Its own completed
- // settlement and burst must witness HP; neither nominal damage nor the
- // parent's final (already combined) HP may supply the child's contribution.
- const uid=child.elementalTargetUid,settlement=child.settlementRecord;
- if(!uid||!child.nativeSourceNull||!child.nativeModifierSource?.isNull()||child.sourceReadFailed||
-    child.targetSettlementNested||child.mitigationModifierReused||!sameMitigationTime(child.when,when)||
-    evidence?.killed!==false||evidence.cancel_reason!==0||evidence.shield_absorbed!==0||
-    !(evidence.real_delta<0)||!(evidence.hp_before>evidence.hp_after)||!(evidence.hp_after>0)||
-    evidence.hp_before!==child.hpBefore||targetHp(child.target)!==evidence.hp_after||
-    Math.abs(evidence.hp_before-evidence.hp_after+evidence.real_delta)>Math.max(0.01,Math.abs(evidence.real_delta)*1e-6)||
-    damageTargetUid(child.target)!==uid||!child.target.equals(child.mod.add(0x10).readPointer())||
-    !child.nativeModifierSource.equals(child.mod.readPointer())||child.mod.add(0x60).readS32()!==0||
-    child.mod.add(0x68).readS32()!==5||child.mod.add(0x70).readS32()!==0||
-    fp(child.mod.add(0x48))!==evidence.real_delta||
-    !child.settlementRecordEmitted||!settlement||settlement.kind!=='damage_settlement'||
-    settlement.source!==null||settlement.damage_type!==5||settlement.settlement_complete!==true||
-    settlement.shield_absorbed!==0||settlement.killed!==false||settlement.amount!==-evidence.real_delta||
-    settlement.target_uid!==String(uid)||settlement.target_instance!==child.target.toString()||
-    settlement.frame!==when.frame||settlement.game_time!==when.game_time||
-    !burstRecord||burstRecord.kind!=='elemental_burst'||burstRecord.source!==null||burstRecord.damage_type!==5||
-    burstRecord.target_instance!==settlement.target_instance||burstRecord.target!==settlement.target||
-    burstRecord.hp_before!==evidence.hp_before||burstRecord.hp_after!==evidence.hp_after||
-    burstRecord.real_delta!==evidence.real_delta||burstRecord.killed!==false||
-    burstRecord.frame!==when.frame||burstRecord.game_time!==when.game_time||
-    shieldContextUnknown(when.frame,child.target)||shieldTotal(when.frame,child.target)!==0)return;
+const NESTED_ELEMENTAL_CHAIN_LIMIT=16;
+function noteNestedSettlementFailure(scope,stage,reason,childType,childTargetType){
+ const commit=scope.targetHit?.commit;
+ scope.nestedSettlementFailure??={stage,reason,verified_children:scope.nestedElementalChain?.steps.length??0,
+  parent_target_stage:commit?(commit.returned?'returned':'in_progress'):'unavailable',
+  ...(Number.isInteger(childType)?{child_type:childType}:{}),
+  ...(Number.isInteger(childTargetType)?{child_target_type:childTargetType}:{})};
+}
+function captureNestedElementalStep(parent,child,checkpoint,hpBefore){
+ try{
+  const commit=parent.targetHit.commit;
+  if(parent.nestedCrossThreadActivity||child.nestedCrossThreadActivity||
+     parent.nestedModifierConflict||child.nestedModifierConflict||
+     !(hpBefore>0)||child.hpBefore!==hpBefore||targetHp(child.target)!==hpBefore||
+     !sameMitigationTime(checkpoint.when,child.when)||
+     !targetSettlementIdentity(parent,parent.targetHit,child.when)||fp(parent.mod.add(0x48))!==checkpoint.real||
+     child.mod.add(0x60).readS32()!==0||child.mod.add(0x70).readS32()!==0||
+     damageTargetUid(child.target)!==checkpoint.uid||!child.mod.add(0x10).readPointer().equals(child.target)||
+     parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
+     shieldContextUnknown(child.when.frame,child.target)||shieldTotal(child.when.frame,child.target)!==0)return null;
+  const opening=stampEventScope({...child.when}),stamp=opening.native_autochess_scope;
+  if(parent.nativeScopeKey===undefined?stamp!==undefined:
+     !parent.nativeScopeKey||stamp?.status!=='available'||stamp.scope_key!==parent.nativeScopeKey)return null;
+  const targetId=commit.targetKey,targetClass=commit.targetClass;
+  const source=child.mod.readPointer();
+  if(source.isNull())return {child,source,cid:null,hpBefore,opening,targetId,targetClass};
+  const cid=entityId(source),uid=sourceCharacterUid(source,cid),instance=source.add(0x18).readU32();
+  if(!own(cid)||!uid||!instance)return null;
+  return {child,source,cid,uid,instance,klass:source.readPointer(),data:source.add(0x538).readPointer(),
+   hpBefore,opening,targetId,targetClass};
+ }catch(e){return null;}
+}
+function matchesNestedElementalRecords(step,uid,target,when){
+ const {child,cid,settlement,burst,hpBefore,hpAfter,real}=step,killed=hpAfter===0;
+ return child.settlementRecordEmitted&&settlement===child.settlementRecord&&
+  settlement?.kind==='damage_settlement'&&settlement.source===cid&&settlement.source_character_uid===step.uid&&
+  settlement.damage_type===5&&settlement.settlement_complete===true&&settlement.shield_absorbed===0&&
+  settlement.killed===killed&&settlement.amount===-real&&settlement.target_uid===String(uid)&&
+  settlement.target===step.targetId&&settlement.target_instance===target.toString()&&
+  settlement.frame===when.frame&&settlement.game_time===when.game_time&&
+  burst?.kind==='elemental_burst'&&burst.source===cid&&burst.source_character_uid===step.uid&&burst.damage_type===5&&
+  burst.target_instance===settlement.target_instance&&burst.target===settlement.target&&
+  burst.hp_before===hpBefore&&burst.hp_after===hpAfter&&burst.real_delta===real&&burst.killed===killed&&
+  burst.frame===when.frame&&burst.game_time===when.game_time&&burst.cancel_reason===0&&burst.shield_absorbed===0&&
+  Number.isSafeInteger(settlement.sequence)&&Number.isSafeInteger(burst.sequence)&&settlement.sequence<burst.sequence&&
+  sameNativeEventScope(settlement,when)&&sameNativeEventScope(burst,when);
+}
+function closeNestedElementalStep(step,uid,when,evidence,burst){
+ const {child,source,cid,hpBefore}=step,target=child.target;
+ try{
+  if(child.sourceReadFailed||child.targetSettlementNested||child.mitigationModifierReused||
+     child.nestedCrossThreadActivity||child.nestedModifierConflict||
+     !sameMitigationTime(child.when,when)||!sameNativeEventScope(step.opening,when)||child.elementalTargetUid!==uid||
+     !child.nativeModifierSource?.equals(source)||!child.mod.readPointer().equals(source)||
+     child.source!==cid||child.sourceCharacterUid!==step.uid||
+     (cid===null?!child.nativeSourceNull:source.add(0x18).readU32()!==step.instance||
+      !source.readPointer().equals(step.klass)||!source.add(0x538).readPointer().equals(step.data)||
+      entityId(source)!==cid||sourceCharacterUid(source,cid)!==step.uid)||
+     damageModifier(child.tid,child.mod)!==child||damageTargetUid(target)!==uid||
+     targetKey(target)!==step.targetId||!target.readPointer().equals(step.targetClass)||
+     !target.equals(child.mod.add(0x10).readPointer())||child.mod.add(0x60).readS32()!==0||
+     child.mod.add(0x68).readS32()!==5||child.mod.add(0x70).readS32()!==0||
+     evidence?.cancel_reason!==0||evidence.shield_absorbed!==0||evidence.hp_before!==hpBefore||
+     !(evidence.real_delta<0)||!(evidence.hp_after>=0)||!(hpBefore>evidence.hp_after)||
+     evidence.killed!==(evidence.hp_after===0)||targetHp(target)!==evidence.hp_after||
+     Math.abs(hpBefore-evidence.hp_after+evidence.real_delta)>Math.max(0.01,Math.abs(evidence.real_delta)*1e-6)||
+     fp(child.mod.add(0x48))!==evidence.real_delta||
+     shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
+  const closed={...step,settlement:child.settlementRecord,burst,hpAfter:evidence.hp_after,real:evidence.real_delta};
+  return matchesNestedElementalRecords(closed,uid,target,when)?closed:null;
+ }catch(e){return null;}
+}
+function rememberNestedElementalSettlement(child,when,evidence,burstRecord){
  const scopes=activeModifiers.get(child.tid);
- if(!scopes||scopes[scopes.length-1]!==child)return;
- const parents=scopes.slice(0,-1).filter(parent=>{
-  const checkpoint=parent.nestedTargetCheckpoint;
-  return checkpoint?.ordinary===false&&checkpoint.child===child&&checkpoint.uid===uid;
- });
+ if(!scopes||scopes.length<2||scopes[scopes.length-1]!==child)return;
+ const parents=scopes.slice(0,-1).filter(parent=>parent.nestedElementalChain?.pending?.child===child);
  for(const parent of parents){
-  const checkpoint=parent.nestedTargetCheckpoint;
-  parent.nestedElementalNonlethalSettlement=parents.length===1&&parent.nestedElementalNonlethalSettlement===undefined&&
-   checkpoint.hpAfter===evidence.hp_before&&sameMitigationTime(checkpoint.when,when)?
-   {child,when,uid,hpBefore:evidence.hp_before,hpAfter:evidence.hp_after,real:evidence.real_delta,
-    settlementRecord:settlement,burstRecord}:null;
+  const chain=parent.nestedElementalChain;
+  const closed=parents.length===1?closeNestedElementalStep(chain.pending,chain.checkpoint.uid,when,evidence,burstRecord):null;
+  if(!closed){
+   noteNestedSettlementFailure(parent,'child_close','unverified_child_return',5,child.settlementDomainEntry?.targetType);
+   parent.nestedElementalChain=null;continue;
+  }
+  chain.steps.push(closed);chain.pending=null;
  }
 }
 function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
  try{
-  const checkpoint=scope.nestedTargetCheckpoint,hit=scope.targetHit;
-  const elemental=checkpoint?.ordinary===false?scope.nestedElementalNonlethalSettlement:null;
-  const kill=checkpoint?.ordinary?scope.nestedOrdinarySettlement:elemental||scope.nestedElementalKill;
-  const childAfter=checkpoint?.ordinary||elemental?kill?.hpAfter:0;
-  // Retain the exact emitted child pair until the parent closes. Never read
-  // its borrowed Modifier& again after the child's callback has returned.
-  if(elemental){
-   const event=elemental.settlementRecord,burst=elemental.burstRecord;
-   if(!(childAfter>0)||event!==elemental.child.settlementRecord||event?.settlement_complete!==true||
-      event.source!==null||event.damage_type!==5||event.amount!==-elemental.real||event.shield_absorbed!==0||
-      event.target_uid!==String(elemental.uid)||event.target_instance!==target?.toString()||
-      burst?.source!==null||burst.hp_before!==elemental.hpBefore||burst.hp_after!==childAfter||
-      burst.real_delta!==elemental.real||burst.killed!==false)return null;
-  }
-  if(!checkpoint||!kill||kill.child!==checkpoint.child||!kill.child.settlementRecordEmitted||
-     checkpoint.uid!==kill.uid||kill.hpBefore!==checkpoint.hpAfter||
-     !sameMitigationTime(checkpoint.when,when)||!sameMitigationTime(kill.when,when)||
+  const chain=scope.nestedElementalChain,checkpoint=chain?.checkpoint??scope.nestedTargetCheckpoint,hit=scope.targetHit;
+  const childrenFirst=checkpoint?.ordering==='children_before_parent';
+  const parentReal=fp(scope.mod.add(0x48));
+  if(!checkpoint||!sameMitigationTime(checkpoint.when,when)||
      !hit?.commit?.returned||hit.commit.type!==type||!sameMitigationTime(hit.commit.returnWhen,when)||
      !target?.equals(hit.target)||!targetSettlementIdentity(scope,hit,when)||
-     fp(scope.mod.add(0x48))!==checkpoint.real||fp(scope.mod.add(0x30))!==amount||
-     !Number.isFinite(amount)||amount+0.01<-checkpoint.real||
-     targetHp(target)!==childAfter||scope.numericShieldUnknown||scope.unmatchedShield||scope.numericShield>0||
+     (childrenFirst?!(parentReal<0):parentReal!==checkpoint.real)||fp(scope.mod.add(0x30))!==amount||
+     !Number.isFinite(amount)||amount+0.01<-parentReal||
+     scope.numericShieldUnknown||scope.unmatchedShield||scope.numericShield>0||
      shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
-  scope.nestedParentSettlementProof={target_uid:String(kill.uid),parent_real_delta:checkpoint.real,
-   parent_hp_before:checkpoint.hpBefore,parent_hp_after:checkpoint.hpAfter,
-   child_hp_before:kill.hpBefore,child_hp_after:childAfter,child_real_delta:kill.real};
-  return {target:hit.commit.targetKey,real_delta:checkpoint.real,
-   hp_before:checkpoint.hpBefore,hp_after:checkpoint.hpAfter,killed:false,
+  let parentBefore=checkpoint.hpBefore,parentAfter=checkpoint.hpAfter;
+  const proof={target_uid:String(checkpoint.uid),parent_real_delta:parentReal,
+   parent_hp_before:checkpoint.hpBefore,parent_hp_after:checkpoint.hpAfter};
+  if(checkpoint.ordinary){
+   const kill=scope.nestedOrdinarySettlement;
+   if(!kill||kill.child!==checkpoint.child||!kill.child.settlementRecordEmitted||
+      checkpoint.uid!==kill.uid||kill.hpBefore!==checkpoint.hpAfter||
+      !sameMitigationTime(kill.when,when)||targetHp(target)!==kill.hpAfter)return null;
+   scope.nestedParentSettlementProof={...proof,child_hp_before:kill.hpBefore,child_hp_after:kill.hpAfter,
+    child_real_delta:kill.real};
+  }else{
+   if(!chain||chain.pending||!chain.steps.length||scope.nestedCrossThreadActivity||scope.nestedModifierConflict)return null;
+   let hp=checkpoint.hpAfter,sequence=0;
+   for(const step of chain.steps){
+    if(step.hpBefore!==hp||step.settlement.sequence<=sequence||
+       !matchesNestedElementalRecords(step,checkpoint.uid,target,when))return null;
+    hp=step.hpAfter;sequence=step.burst.sequence;
+   }
+   const finalHp=targetHp(target);
+   if(childrenFirst){
+    if(finalHp===null||!(hp>finalHp)||Math.abs(hp-finalHp+parentReal)>Math.max(0.01,Math.abs(parentReal)*1e-6))return null;
+    parentBefore=proof.parent_hp_before=hp;parentAfter=proof.parent_hp_after=finalHp;
+   }else if(finalHp!==hp)return null;
+   if(chain.steps.length===1&&!childrenFirst){
+    const [step]=chain.steps;
+    scope.nestedParentSettlementProof={...proof,child_hp_before:step.hpBefore,
+     child_hp_after:step.hpAfter,child_real_delta:step.real};
+   }else{
+    scope.nestedElementalChainProof={version:1,ordering:childrenFirst?'children_before_parent':'parent_before_children',
+     ...proof,children:chain.steps.map(step=>({
+     source:step.cid,source_character_uid:step.uid,settlement_sequence:step.settlement.sequence,
+     burst_sequence:step.burst.sequence,hp_before:step.hpBefore,hp_after:step.hpAfter,real_delta:step.real}))};
+   }
+  }
+  return {target:hit.commit.targetKey,real_delta:parentReal,
+   hp_before:parentBefore,hp_after:parentAfter,killed:parentAfter===0,
    target_type:0,damage_type:type,cancel_reason:0,shield_absorbed:0};
  }catch(e){return null;}
 }
@@ -1532,6 +1645,8 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   const characterForm=autoCharacterFormEvidence(scope,when);
   if(characterForm)proof.native_autochess_character_form=characterForm;
   if(scope.nestedParentSettlementProof)proof.nested_settlement=scope.nestedParentSettlementProof;
+  if(scope.nestedElementalChainProof)proof.nested_elemental_chain=scope.nestedElementalChainProof;
+  if(!complete&&scope.nestedSettlementFailure)proof.nested_settlement_detail=scope.nestedSettlementFailure;
   if(!complete&&scope.settlementFailureReason)proof.settlement_unknown_reason=scope.settlementFailureReason;
   const event=record(scope.source,'damage_settlement',real===0?0:-real,when,proof,
          {...evidence,...reduction},scope.sourceCharacterUid);
@@ -1636,12 +1751,14 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  // HP may be capped after the formula even while the target is alive. Use
  // measured HP endpoints and the numeric shield callbacks for this hit.
  const hit=scope.targetHit;
+ const chainBefore=targetCommit&&scope.nestedElementalChainProof?.ordering==='children_before_parent'?
+  scope.nestedElementalChainProof.parent_hp_before:hit?.hpBefore;
  const capturedHp=exact&&Number.isFinite(real)&&real<=0&&cancel===0&&exactEvidence?.real_delta===real&&
     Number.isFinite(exactEvidence.hp_before)&&Number.isFinite(exactEvidence.hp_after)&&
     Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,Math.abs(real)*1e-6)&&
     (type===5&&exactEvidence.hp_before===scope.hpBefore||
      (targetCommit||output)&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
-     !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===hit.hpBefore);
+     !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===chainBefore);
  let killed;
  if(capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0&&real<0)killed=true;
  if(capturedHp&&exactEvidence.killed===false&&exactEvidence.hp_after>0)killed=false;
@@ -1668,6 +1785,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  const recipient=targetCommit?scope:output||scope;
  if(scope.nestedParentSettlementProof)recipient.nestedParentSettlementProof=scope.nestedParentSettlementProof;
  if(scope.settlementFailureReason)recipient.settlementFailureReason=scope.settlementFailureReason;
+ if(scope.nestedSettlementFailure)recipient.nestedSettlementFailure=scope.nestedSettlementFailure;
  const event=damageSettlement(recipient,target,settledReal,when,{nominal,shield:absorbed,type,nested,unverified,killed,
                    identity:output?.settlementIdentity,reduction:pair,
                    evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
@@ -2503,13 +2621,13 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
    active++;epoch++;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);
    if(this.name==='Entity.ApplyModifier'){
-    const depth=applyModifierDepth.get(this.tid)||0;
-    applyModifierDepth.set(this.tid,depth+1);
-    if(depth){
+    let raw=activeApplyScopes.get(this.tid);
+    if(raw){
      this.settlementDomainNested=true;
      for(const parent of activeModifiers.get(this.tid)||[])
       if(parent.settlementDomainEntry?.nonEnemyCharacter)parent.settlementDomainNested=true;
-    }
+    }else{raw=[];activeApplyScopes.set(this.tid,raw);}
+    raw.push(this);
    }
    try{
     if(this.name==='BattleController.OnCharacterFinished'){
@@ -2600,6 +2718,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      return;
     }
     if(this.name==='Entity.ApplyModifier'){
+     this.nativeScopeKey=nativeAutoStage?.enabled?(nativeAutoEffective?.scope_key??null):undefined;
      this.mod=args[1];
      try{this.target=this.mod.add(0x10).readPointer();this.hpBefore=targetHp(this.target);}catch(e){this.target=null;this.hpBefore=null;}
      captureSettlementDomain(this);
@@ -2764,7 +2883,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
         else settleSourcelessBurst(this,evidence,end,amount,reduction);
         const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
         if(event)try{
-         rememberNestedElementalNonlethalSettlement(this,end,evidence,event);
+         rememberNestedElementalSettlement(this,end,evidence,event);
          rememberNestedElementalKill(this,end,evidence,event);
         }catch(e){/* Independently verified burst remains queued. */}
         noteUnpairedDamage(this,event,type);
@@ -2826,6 +2945,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        proof.evidence_method='Unit.OnTakeDamage+Entity.ApplyModifier';
       }
       if(this.nestedParentSettlementProof)proof.nested_settlement=this.nestedParentSettlementProof;
+      if(this.nestedElementalChainProof)proof.nested_elemental_chain=this.nestedElementalChainProof;
       settleDamage(this,damageTarget,end,amount,type,reduction,targetEvidence||
                    (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
      }
@@ -2854,9 +2974,10 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
     else{shieldUnknown=true;markShieldUnknown(this.when.frame,this.damageTarget);if(this.shieldScope)this.shieldScope.numericShieldUnknown=true;}
    }finally{
     if(this.name==='Entity.ApplyModifier'){
-     const depth=applyModifierDepth.get(this.tid);
-     if(depth>1)applyModifierDepth.set(this.tid,depth-1);
-     else applyModifierDepth.delete(this.tid);
+     const raw=activeApplyScopes.get(this.tid);
+     const index=raw?.lastIndexOf(this)??-1;
+     if(index>=0)raw.splice(index,1);
+     if(raw?.length===0)activeApplyScopes.delete(this.tid);
     }
     if(this.tracksModifier){
      if(this.outputSettlement){

@@ -474,6 +474,27 @@ def pc_mechanism_evidence(events):
                 and type(event.get('target_type')) is int and event['target_type'] == 0
                 and number(event.get('shield_absorbed'), nonnegative=True))
 
+    def same_scope(left, right):
+        key = 'native_autochess_scope'
+        if key not in left and key not in right:
+            return True
+        names = ('scope_key', 'phase', 'round', 'collection_mode')
+        for event in (left, right):
+            stamp = event.get(key)
+            if (not isinstance(stamp, dict) or type(stamp.get('protocol_version')) is not int
+                    or stamp['protocol_version'] != 1 or stamp.get('status') != 'available'
+                    or stamp.get('verified_same_frame') is not True
+                    or type(stamp.get('frame')) is not int or stamp['frame'] < 0
+                    or type(event.get('frame')) is not int or not number(event.get('game_time'), nonnegative=True)
+                    or not number(stamp.get('game_time'), nonnegative=True)
+                    or not clock_equal(stamp, event)
+                    or not isinstance(stamp.get('scope_key'), str) or not stamp['scope_key']
+                    or type(stamp.get('phase')) is not int or stamp['phase'] not in (4, 5, 6)
+                    or type(stamp.get('round')) is not int or stamp['round'] < 0
+                    or stamp.get('collection_mode') not in ('all', 'local')):
+                return False
+        return all(left[key][name] == right[key][name] for name in names)
+
     shield_ok, shield_bad = [], []
     for event in events:
         if event.get('kind') != 'shield_absorbed' or not number(event.get('amount')) or event['amount'] <= 0:
@@ -603,9 +624,8 @@ def pc_mechanism_evidence(events):
             nested_bad.append(parent['sequence'])
     # Older producer certificates have seven fields and no ordering tag. The
     # parent was independently committed before the child entered, so its HP
-    # endpoints must NOT be replaced with the child's final HP. A source-null
-    # elemental child may now be nonlethal, but still needs its own unique,
-    # complete settlement/burst pair; it is not the after-kill zero-parent path.
+    # endpoints remain independent of the child's final HP. An elemental child
+    # still needs its own unique, complete settlement/burst pair.
     legacy_fields = {'target_uid', 'parent_real_delta', 'parent_hp_before', 'parent_hp_after',
                      'child_hp_before', 'child_hp_after', 'child_real_delta'}
     legacy_parents = [event for event in events if event.get('kind') == 'damage'
@@ -646,9 +666,11 @@ def pc_mechanism_evidence(events):
             and number(child.get('real_delta')) and child['amount'] + .01 >= -child['real_delta']
             and (child['kind'] == 'elemental_burst' and child_type == 5
                  and child['sequence'] in verified_burst_pairs
-                 and (child.get('hp_after') == 0 and child.get('killed') is True
-                      or child.get('source') is None and child.get('source_character_uid') is None
-                      and child.get('hp_after', -1) > 0 and child.get('killed') is False)
+                 and child.get('killed') is (child['hp_after'] == 0)
+                 and (child.get('source') is None or owned_actor(child)
+                      and same_scope(parent, child)
+                      and same_scope(child, verified_burst_pairs[child['sequence']])
+                      and verified_burst_pairs[child['sequence']].get('killed') is child['killed'])
                  or child['kind'] == 'damage' and child_type in (1, 2, 3) and owned_actor(child)
                  and child.get('hp_after', -1) > 0 and child.get('killed') is False))
         valid = (set(proof) == legacy_fields and numeric and owned_actor(parent)
@@ -664,6 +686,9 @@ def pc_mechanism_evidence(events):
                 ('real_delta', 'parent_real_delta'), ('hp_before', 'parent_hp_before'), ('hp_after', 'parent_hp_after')))
             and parent['amount'] + .01 >= -parent['real_delta']
             and len(parent_settlements) == len(children) == len(child_settlements) == 1 and child_valid
+            and (child_type != 5 or child.get('source') is None
+                 or verified_burst_pairs[child['sequence']] is child_settlements[0]
+                 and same_scope(parent, parent_settlements[0]))
             and child['sequence'] < parent_settlements[0]['sequence']
             and parent_settlements[0]['sequence'] not in used_parent_settlements
             and child['sequence'] not in used_child_bursts)
@@ -677,6 +702,115 @@ def pc_mechanism_evidence(events):
                 child_settlement_sequence=child_settlements[0]['sequence']))
         else:
             nested_bad.append(parent['sequence'])
+
+    chain_key = 'nested_elemental_chain'
+    chain_records = [event for event in events if chain_key in proof_of(event)]
+    if chain_records:
+        by_sequence = {}
+        for event in events:
+            sequence = event.get('sequence')
+            if type(sequence) is int and sequence > 0:
+                by_sequence[sequence] = None if sequence in by_sequence else event
+        chain_settlements = [event for event in chain_records if event.get('kind') == 'damage_settlement']
+        chain_fields = {'version', 'ordering', 'target_uid', 'parent_real_delta',
+                        'parent_hp_before', 'parent_hp_after', 'children'}
+        step_fields = {'source', 'settlement_sequence', 'burst_sequence', 'hp_before', 'hp_after', 'real_delta'}
+
+        def chain_witness(parent):
+            proof = proof_of(parent)
+            chain = proof[chain_key]
+            sequence = parent['sequence']
+            if (type(sequence) is not int or by_sequence.get(sequence) is not parent
+                    or not isinstance(chain, dict) or set(chain) != chain_fields
+                    or type(chain['version']) is not int or chain['version'] != 1 or 'nested_settlement' in proof
+                    or chain['ordering'] not in ('parent_before_children', 'children_before_parent')
+                    or type(chain['children']) is not list or not 1 <= len(chain['children']) <= 16
+                    or not owned_actor(parent) or not hp_evidence(parent)
+                    or type(parent.get('frame')) is not int or parent['frame'] < 0
+                    or not number(parent.get('game_time'), nonnegative=True)
+                    or parent.get('settled_after_nested_kill') is True or parent['shield_absorbed'] != 0
+                    or type(parent.get('damage_type')) is not int or parent['damage_type'] not in (1, 2, 3)
+                    or proof.get('method') != 'Entity.ApplyModifier' or type(proof.get('type')) is not int
+                    or proof['type'] != parent['damage_type'] or type(proof.get('target')) is not int
+                    or proof['target'] != 0 or parent.get('killed') is not (parent['hp_after'] == 0)
+                    or parent['real_delta'] >= 0 or not number(parent.get('amount'), nonnegative=True)
+                    or parent['amount'] + .01 < -parent['real_delta']
+                    or any(not number(chain['parent_' + key]) or chain['parent_' + key] != parent[key]
+                           for key in ('real_delta', 'hp_before', 'hp_after'))):
+                return None
+            parent_first = chain['ordering'] == 'parent_before_children'
+            if parent_first and parent['killed']:
+                return None
+            child_sequences = []
+            previous_sequence = 0
+            hp = parent['hp_after'] if parent_first else None
+            for step in chain['children']:
+                if (not isinstance(step, dict) or not step_fields <= set(step) <= step_fields | {'source_character_uid'}
+                        or any(not number(step[key]) for key in ('hp_before', 'hp_after', 'real_delta'))
+                        or not step['hp_before'] > step['hp_after'] >= 0 or step['real_delta'] >= 0
+                        or hp is not None and step['hp_before'] != hp):
+                    return None
+                start, end = step['settlement_sequence'], step['burst_sequence']
+                if (type(start) is not int or type(end) is not int or not previous_sequence < start < end < sequence
+                        or end in used_child_bursts):
+                    return None
+                settlement, burst = by_sequence.get(start), by_sequence.get(end)
+                if (settlement is None or burst is None or verified_burst_pairs.get(end) is not settlement
+                        or settlement.get('target_uid') != chain['target_uid']
+                        or not target_equal(parent, settlement) or not target_equal(parent, burst)
+                        or not clock_equal(parent, burst) or not clock_equal(parent, settlement)
+                        or not same_scope(parent, burst) or not same_scope(parent, settlement)
+                        or not actor_equal(step, burst) or not actor_equal(step, settlement)
+                        or (step['source'] is not None and not owned_actor(step))
+                        or burst['shield_absorbed'] != 0 or settlement['shield_absorbed'] != 0
+                        or any(burst[key] != step[key] for key in ('hp_before', 'hp_after', 'real_delta'))
+                        or settlement['amount'] != -step['real_delta']
+                        or burst.get('killed') is not (step['hp_after'] == 0)
+                        or settlement.get('killed') is not burst['killed']
+                        or chain_key in proof_of(settlement) or chain_key in proof_of(burst)
+                        or 'nested_settlement' in proof_of(settlement) or 'nested_settlement' in proof_of(burst)):
+                    return None
+                child_sequences.append(dict(settlement_sequence=start, burst_sequence=end))
+                hp, previous_sequence = step['hp_after'], end
+            if not parent_first and parent['hp_before'] != hp:
+                return None
+            chain_json = json.dumps(chain, sort_keys=True)
+            candidates = [event for event in chain_settlements if type(event['sequence']) is int
+                and previous_sequence < event['sequence'] < sequence
+                and event['sequence'] not in used_parent_settlements and by_sequence.get(event['sequence']) is event
+                and settled(event) and event.get('settled_after_nested_kill') is not True
+                and type(event.get('damage_type')) is int and event['damage_type'] == parent['damage_type']
+                and clock_equal(parent, event) and same_scope(parent, event)
+                and target_equal(parent, event) and actor_equal(parent, event) and owned_actor(event)
+                and event.get('target_uid') == chain['target_uid'] and event['shield_absorbed'] == 0
+                and event['amount'] == -parent['real_delta'] and event.get('killed') is parent['killed']
+                and number(event.get('nominal_amount'), nonnegative=True) and event['nominal_amount'] == parent['amount']
+                and 'nested_settlement' not in proof_of(event)
+                and proof_of(event).get('evidence_method') == 'Unit.OnTakeDamage+Entity.ApplyModifier'
+                and json.dumps(proof_of(event)[chain_key], sort_keys=True) == chain_json]
+            if len(candidates) != 1:
+                return None
+            return dict(ordering=chain['ordering'], parent_sequence=sequence,
+                        parent_settlement_sequence=candidates[0]['sequence'], children=child_sequences)
+
+        chain_accepted = set()
+        for parent in chain_records:
+            if parent.get('kind') != 'damage':
+                continue
+            witness = chain_witness(parent)
+            if witness is None:
+                nested_bad.append(parent['sequence'])
+                continue
+            nested_ok.append(witness)
+            parent_settlement = witness['parent_settlement_sequence']
+            chain_accepted.update((parent['sequence'], parent_settlement))
+            used_parent_settlements.add(parent_settlement)
+            used_child_bursts.update(child['burst_sequence'] for child in witness['children'])
+        for event in chain_records:
+            sequence = event['sequence']
+            if sequence not in chain_accepted and sequence not in nested_bad:
+                nested_bad.append(sequence)
+
     result = {name: dict(passed=bool(valid) and not invalid, positive_witnesses=valid,
                        invalid_sequences=invalid,
                        reason=None if valid and not invalid else ('invalid_witness' if invalid else 'no_positive_witness'))

@@ -120,8 +120,8 @@ function scenario(platform,[name,kind,uid,global,mode]){
   apply.onLeave.call(parent);
  }
  if(mode==='bad_clock_leave')f.clock(raw.frame,bits(raw.game_time));
- assert.equal(f.vm.runInContext('applyModifierDepth.size',f.context),0,
-  'every started ApplyModifier releases the per-thread depth');
+ assert.equal(f.vm.runInContext('activeApplyScopes.size',f.context),0,
+  'every started ApplyModifier releases its per-thread activity');
  const afterUnrelated=f.context.rpc.exports.mark();
  assert.equal(afterUnrelated.active,0,'failed end-clock must still release its hook barrier');
  // Same-frame real enemy hit from another known actor must remain independently complete.

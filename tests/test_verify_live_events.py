@@ -932,17 +932,17 @@ def test_nonlethal_nested_hp_certificate_alone_does_not_fabricate_fresh_bar_burs
     assert gates['elemental']['source_null_bar_burst_witnesses'] == []
 
 
-@pytest.mark.parametrize('fault', ['explicit_source', 'child_uid', 'child_hp', 'child_delta', 'child_cancel',
+@pytest.mark.parametrize('fault', ['explicit_source_uid_mismatch', 'child_uid', 'child_hp', 'child_delta', 'child_cancel',
                                   'child_shield', 'child_killed_true', 'zero_hp_false_killed', 'missing_child_burst',
                                   'missing_child_settlement', 'child_incomplete', 'wrong_target_uid', 'wrong_instance',
                                   'cross_clock', 'parent_delta', 'parent_uses_child_final_hp', 'reused_parent',
                                   'duplicate_child', 'nested_child', 'afterkill_flag_misuse'])
-def test_nonlethal_elemental_parent_requires_complete_unique_source_null_same_hit_evidence(fault):
+def test_nonlethal_elemental_parent_requires_complete_unique_same_hit_evidence(fault):
     events = parent_before_elemental_nonlethal_events()
     settlement, child, parent_settlement, parent = events[2:]
-    if fault == 'explicit_source':
-        for event in (settlement, child):
-            event.update(source='char_a', source_character_uid=1)
+    if fault == 'explicit_source_uid_mismatch':
+        settlement.update(source='char_a', source_character_uid=1)
+        child.update(source='char_a', source_character_uid=2)
     elif fault == 'child_uid':
         child['source_character_uid'] = 2
     elif fault == 'child_hp':
