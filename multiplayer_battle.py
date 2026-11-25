@@ -74,6 +74,9 @@ class MultiplayerBattleStatistics:
         self._epoch = -1
         self._players = {}
         self._pending_lifecycles = []
+        self._lifecycle_unknown_all = False
+        self._lifecycle_unknown_players = set()
+        self._lifecycle_unknown_uids = set()
         self._roster = {}
         self._operators = {}
         self._received = {}
@@ -241,6 +244,9 @@ class MultiplayerBattleStatistics:
         self._native_session = sample.get('native_session')
         self._players = {}
         self._pending_lifecycles = []
+        self._lifecycle_unknown_all = False
+        self._lifecycle_unknown_players = set()
+        self._lifecycle_unknown_uids = set()
         slots = ([(row['uid'], row['index'], row['nick_name']) for row in context['players']]
                  if self._native_mode else [(side, None, None) for side in range(1, 5)])
         for key, slot, name in slots:
@@ -387,6 +393,8 @@ class MultiplayerBattleStatistics:
             host_key = entry.host_key if entry.is_token else entry.cid
             host_uid = entry.host_uid if entry.is_token else entry.unique_id
             self._native_source_claims.setdefault((entry.cid, entry.unique_id), set()).add((uid, host_key, host_uid))
+            if len(self._native_source_claims[(entry.cid, entry.unique_id)]) != 1:
+                self._lifecycle_unknown_uids.add(entry.unique_id)
             if not entry.is_token and uid in self._players:
                 player = self._players[uid]
                 owner = self._source_key(entry, uid)
@@ -432,14 +440,19 @@ class MultiplayerBattleStatistics:
             data_uid = unknown.get('data_uid')
             if type(data_uid) is int and 0 < data_uid <= 0xffffffff:
                 self._native_unverified_source_uids.add(data_uid)
+                self._lifecycle_unknown_uids.add(data_uid)
             if classify_unmapped_source(unknown.get('cid')) is not None:
                 continue
             index = unknown.get('player_index', unknown.get('candidate_player_index'))
             uid = table.get(index)
             if uid in self._player_reasons:
                 self._player_reasons[uid].add('该玩家存在未核实的角色归属')
+                if type(data_uid) is not int or data_uid <= 0:
+                    self._lifecycle_unknown_players.add(uid)
             else:
                 self._reasons.add('存在无法按玩家隔离的角色归属缺证')
+                if type(data_uid) is not int or data_uid <= 0:
+                    self._lifecycle_unknown_all = True
 
     @staticmethod
     def _scope_stamp_identity(event):
@@ -656,6 +669,19 @@ class MultiplayerBattleStatistics:
             for player in self._players.values():
                 player.statistics.mark_skill_unknown()
 
+    def _observe_lifecycle_uncertainty(self, event):
+        """A rejected body callback affects lifetime evidence, not all metrics."""
+        data_uid, cid = event.get('source_character_uid'), event.get('source')
+        matched = False
+        for player in self._players.values():
+            for owner, actor in player.actors.items():
+                if (actor.cid == cid and (type(data_uid) is not int or data_uid <= 0
+                                         or actor.unique_id == data_uid)):
+                    player.statistics.deployment_lifecycle.unknown.add(owner)
+                    matched = True
+        if not matched:
+            self._lifecycle_unknown_all = True
+
     def _confirm_scope_bar(self, event, player_key, actor):
         target = self._scope_target(event)
         if target is None:
@@ -742,6 +768,7 @@ class MultiplayerBattleStatistics:
             self._roster.setdefault(entry.unique_id, set()).add(entry)
         if any(len(entries) > 1 for entries in self._roster.values()):
             self._reasons.add('编队UID存在身份冲突')
+            self._lifecycle_unknown_all = True
             for player in self._players.values():
                 player.statistics.settlement_stream_incomplete = True
         current = self._operator_map(roster)
@@ -1132,11 +1159,19 @@ class MultiplayerBattleStatistics:
             self._bind_pending_lifecycles()
             for event in events:
                 state, side, actor, entry = self._identity(event)
-                if (event.get('actor_lifecycle') and state not in ('owned', 'foreign_scope', 'non_team', 'not_collected')):
+                method = (event.get('proof') or {}).get('method') if isinstance(event.get('proof'), dict) else None
+                body_event = (event.get('actor_lifecycle') is not None or event.get('kind') == 'character_born'
+                    or event.get('kind') == 'skill_end' and
+                        (method == 'BattleController.OnCharacterFinished'
+                         or event.get('skill_method') == 'BattleController.OnCharacterFinished'))
+                if (body_event and state in ('event_scope_unverified', 'event_scope_mismatch')):
+                    self._observe_lifecycle_uncertainty(event)
+                elif (body_event and state not in ('owned', 'foreign_scope', 'non_team', 'not_collected')):
                     if len(self._pending_lifecycles) < 1024:
                         self._pending_lifecycles.append(event)
                     else:
                         self._reasons.add('部署生命周期待归属前缀超限')
+                        self._lifecycle_unknown_all = True
                 skip_scope = state in ('foreign_scope', 'event_scope_unverified',
                                        'event_scope_mismatch', 'elemental_scope_unverified')
                 if state == 'foreign_scope':
@@ -1273,7 +1308,10 @@ class MultiplayerBattleStatistics:
             row['observed_damage'] = lane.get('observed_damage')
             row.update(player.statistics.deployment_lifecycle.result(owner,
                 player.stream.game_time if player.stream is not None else player.statistics.now,
-                continuous=self._from_start and not self._reasons and not self._player_reasons.get(side)
+                continuous=self._from_start and not self._lifecycle_unknown_all
+                    and side not in self._lifecycle_unknown_players
+                    and player.actors[owner].unique_id not in self._lifecycle_unknown_uids
+                    and not self._pending_lifecycles
                     and player.statistics.event_coverage and not player.statistics.event_coverage_broken,
                 archived=self._ended, start_time=player.statistics.event_coverage_start))
             if self._native_mode and (owner in player.unknown_skill_prefix
