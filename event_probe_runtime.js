@@ -1202,10 +1202,13 @@ function captureParentBeforeNestedSettlement(parent,child){
 function rememberNestedOrdinarySettlement(child,when,evidence,event){
  // The child supplies its own checked target callback and signed result.
  // Never recover either hit by subtracting nominal values or final HP totals.
+ // A fully certified child kill is also a closed HP interval: its zero
+ // endpoint cannot erase the parent's independently captured prior debit.
  if(event?.settlement_complete!==true||!child.targetSettlementEvidence||
     child.targetSettlementEvidence!==evidence||child.targetSettlementNested||
     evidence.shield_absorbed!==0||!(evidence.real_delta<0)||
-    !(evidence.hp_before>evidence.hp_after)||!(evidence.hp_after>0)||
+    !(evidence.hp_before>evidence.hp_after)||!(evidence.hp_after>=0)||
+    evidence.killed!==(evidence.hp_after===0)||
     event.amount!==-evidence.real_delta)return;
  const scopes=activeModifiers.get(child.tid);
  if(!scopes||scopes.length<2||scopes[scopes.length-1]!==child)return;
