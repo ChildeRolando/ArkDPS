@@ -1421,6 +1421,7 @@ class BattleSessions:
             event_observation = observation
             if observation.generation > self.generation:
                 self._archive('new_battle', successor=observation)
+                previous_multiplayer = self.multiplayer
                 bootstrap = None
                 bootstrap_error = None
                 if observation.events and isinstance(observation.events.get('drain'), dict):
@@ -1450,6 +1451,10 @@ class BattleSessions:
                 self._terminal_seen = False
                 self._last_event_mark = None
                 self.multiplayer = None
+                if previous_multiplayer is not None:
+                    from multiplayer_battle import MultiplayerBattleStatistics
+                    self.multiplayer = MultiplayerBattleStatistics()
+                    self.multiplayer.inherit_settlement_scopes(previous_multiplayer, observation.sample)
                 self.multiplayer_error = None
                 self.metadata = self._metadata(observation.sample)
                 self.snapshot_intervals = []

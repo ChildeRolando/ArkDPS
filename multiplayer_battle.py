@@ -107,6 +107,7 @@ class MultiplayerBattleStatistics:
         self._context_fingerprint = None
         self._retired_contexts = set()
         self._retired_event_scopes = set()
+        self._retired_settlement_scopes = {}
         self._presence_point = None
         self._presence_deployments = {}
         self._presence_skill_replaced = set()
@@ -150,8 +151,39 @@ class MultiplayerBattleStatistics:
     def _source_key(self, entry, player_key):
         return f'{player_key}:{entry.cid}#{entry.unique_id}' if self._native_mode else _key(entry)
 
+    def _retain_settlement_scope(self):
+        if self._native_mode and self._context_fingerprint is not None:
+            self._retired_settlement_scopes[self._context_fingerprint[:3]] = dict(
+                mode=self._collection_mode, frame=self._frame, game_time=self._now,
+                native_session=self._native_session,
+                claims=deepcopy(self._native_source_claims),
+                unverified_uids=set(self._native_unverified_source_uids))
+            if len(self._retired_settlement_scopes) > MAX_PREVIOUS_ROUNDS:
+                del self._retired_settlement_scopes[next(iter(self._retired_settlement_scopes))]
+
+    def inherit_settlement_scopes(self, previous, sample):
+        """Carry numeric witnesses across lifecycle receiver replacement only.
+
+        No counters, stream coverage, event receipts or actor state are carried.
+        """
+        if (not self._enabled and isinstance(previous, MultiplayerBattleStatistics)
+                and previous._native_mode and previous._native_session
+                and previous._native_session == sample.get('native_session')):
+            self._retired_settlement_scopes = deepcopy(previous._retired_settlement_scopes)
+            identity = previous._context_fingerprint[:3]
+            self._retired_settlement_scopes[identity] = dict(
+                mode=previous._collection_mode, frame=previous._frame, game_time=previous._now,
+                native_session=previous._native_session,
+                claims=deepcopy(previous._native_source_claims),
+                unverified_uids=set(previous._native_unverified_source_uids))
+            if len(self._retired_settlement_scopes) > MAX_PREVIOUS_ROUNDS:
+                del self._retired_settlement_scopes[next(iter(self._retired_settlement_scopes))]
+
     def _begin(self, sample, round_id, reason, *, context=None):
         new_context = self._native_fingerprint(context, sample) if context is not None else None
+        if any(witness['native_session'] != sample.get('native_session')
+               for witness in self._retired_settlement_scopes.values()):
+            self._retired_settlement_scopes.clear()
         if self._enabled:
             old_identity = (self._base_round, self._sample_session, self._native_session)
             new_identity = (round_id, sample.get('session'), sample.get('native_session'))
@@ -176,6 +208,10 @@ class MultiplayerBattleStatistics:
             if self._context_fingerprint is not None and self._context_fingerprint != new_context:
                 self._retired_contexts.add(self._context_fingerprint)
                 self._retired_event_scopes.add(self._context_fingerprint[:3])
+                if self._native_session == sample.get('native_session'):
+                    self._retain_settlement_scope()
+            if self._native_session != sample.get('native_session'):
+                self._retired_settlement_scopes.clear()
         self._enabled = True
         self._base_round = round_id
         self._epoch += 1
@@ -848,10 +884,24 @@ class MultiplayerBattleStatistics:
             return
         reason = '结算事件质量未完整确认'
         if self._native_mode and ready is True and unknown is True:
-            issues = verified_autochess_settlement_source_issues(sample, payload)
+            issues = verified_autochess_settlement_source_issues(
+                sample, payload, retired_scopes=self._retired_settlement_scopes)
             if issues is not None:
                 owners = []
                 for issue in issues:
+                    identity = native_autochess_event_identity(issue)
+                    retired = self._retired_settlement_scopes.get(identity)
+                    if identity != self._context_fingerprint[:3] and retired is not None:
+                        # Never resolve a retired CID/UID through today's owner.
+                        # Ambiguous or unproved historical ownership stays global.
+                        claims = retired['claims'].get((issue['source'], issue['source_character_uid']))
+                        if (issue['source_character_uid'] in retired['unverified_uids']
+                                or not claims or len(claims) != 1):
+                            break
+                        _, host, host_uid = next(iter(claims))
+                        if not isinstance(host, str) or not host or type(host_uid) is not int or host_uid <= 0:
+                            break
+                        continue
                     if issue['source_character_uid'] in self._native_unverified_source_uids:
                         break
                     state, uid, actor, _ = self._native_identity(issue)

@@ -640,8 +640,12 @@ def settlement_source_quality_clear(payload):
     return type(version) is int and version == 1 and unlocalized is False and type(issues) is list and not issues
 
 
-def verified_autochess_settlement_source_issues(sample, payload):
-    """Return only fully localized source issues from the current combat scope."""
+def verified_autochess_settlement_source_issues(sample, payload, *, retired_scopes=None):
+    """Validate localized issues against current or receiver-retired scope clocks.
+
+    Retired witnesses are supplied only by the receiver that accepted that
+    scope. This does not infer historical identity from a later roster.
+    """
     from autochess_context import native_autochess_event_identity
 
     version, unlocalized, issues = (payload.get(key) for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS)
@@ -660,13 +664,16 @@ def verified_autochess_settlement_source_issues(sample, payload):
         if not isinstance(issue, dict) or issue.keys() != fields:
             return None
         cid, uid, frame, when = (issue[key] for key in ('source', 'source_character_uid', 'frame', 'game_time'))
-        if (not isinstance(cid, str) or len(cid) > 128 or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
+        identity = native_autochess_event_identity(issue)
+        witness = (dict(mode=mode, frame=sample['frame'], game_time=sample['game_time'])
+                   if identity == current else (retired_scopes or {}).get(identity))
+        if (witness is None
+                or not isinstance(cid, str) or len(cid) > 128 or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
                 or type(uid) is not int or not 0 < uid <= 0xffffffff
-                or type(frame) is not int or not 0 <= frame <= sample['frame']
-                or not _round_start_time(when) or when > sample['game_time']
-                or frame == sample['frame'] and when != sample['game_time']
-                or native_autochess_event_identity(issue) != current
-                or issue['native_autochess_scope'].get('collection_mode') != mode):
+                or type(frame) is not int or not 0 <= frame <= witness['frame']
+                or not _round_start_time(when) or when > witness['game_time']
+                or frame == witness['frame'] and when != witness['game_time']
+                or issue['native_autochess_scope'].get('collection_mode') != witness['mode']):
             return None
     return issues
 

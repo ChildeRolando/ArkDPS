@@ -208,6 +208,45 @@ def test_retained_prior_phase_numeric_issue_does_not_break_no_tail_transport_end
 
 
 @pytest.mark.parametrize('platform', ['native_pc', 'android'])
+def test_lifecycle_receiver_replacement_carries_only_retired_numeric_witnesses(platform):
+    case = OwnedScopeEnd(platform, phase=4)
+    old = case.fixture.runtime.sessions.latest_sample
+    event = case.records[-1].events['drain']['events'][0]
+    scope = dict(protocol_version=1, status='available', verified_same_frame=True,
+                 **old['autochess_context']['identity'], frame=old['frame'],
+                 game_time=old['game_time'], collection_mode='local')
+    issue = dict(source=event['source'], source_character_uid=event['source_character_uid'],
+                 frame=old['frame'], game_time=old['game_time'], native_autochess_scope=scope)
+    original_mark = case.fixture.observer.mark
+
+    def mark():
+        value = original_mark()
+        value.update(enemy_damage_unknown=True, damage_settlement_unknown=True,
+                     damage_settlement_source_issues=[issue],
+                     damage_settlement_first_issue=dict(frame=old['frame'], game_time=old['game_time'],
+                                                        sequence=event['sequence'], reason='unverified settlement'))
+        return value
+
+    case.fixture.observer.mark = mark
+    previous_receiver = case.fixture.runtime.sessions.multiplayer
+    case.advance(1.5, phase=6)
+    case.fixture.poll()
+    receiver = case.fixture.runtime.sessions.multiplayer
+    assert receiver is not previous_receiver
+    assert previous_receiver._context_fingerprint[:3] in receiver._retired_settlement_scopes
+    case.advance(2, amount=45)
+    case.fixture.poll()
+    assert all(not p.statistics.settlement_stream_incomplete for p in receiver._players.values())
+    assert all(not p.statistics.settlement_source_incomplete for p in receiver._players.values())
+    assert '结算事件质量未完整确认' not in receiver.result()['reasons']
+    assert case.records[-1].events['after']['damage_settlement_source_issues'] == [issue]
+    replay = BattleSessions(case.records[-1].feed)
+    for record in case.records:
+        assert replay.consume(observation_from_json(asdict(record)))
+    assert replay.multiplayer.result() == receiver.result()
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
 @pytest.mark.parametrize('phase', [3, 5, 102])
 def test_same_round_prepare_help_or_restart_do_not_prove_the_old_scope_ended(platform, phase):
     case = OwnedScopeEnd(platform, phase=4)
