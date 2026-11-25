@@ -264,6 +264,7 @@ class LiveEventCapture:
         self.last_sample = None
         self.baseline_sequence = None
         self.initial_drain = True
+        self._enemy_damage_ready = None
         self.closed = False
 
     def close(self):
@@ -417,10 +418,17 @@ class LiveEventCapture:
                     'enemy_damage_ready': mark.get('enemy_damage_ready') is True,
                     'enemy_damage_unknown': mark.get('enemy_damage_unknown') is not False,
                 }
-            if (not self.initial_drain and getattr(self.adapter.statistics, 'legacy_observation_mode', False)
-                    and (drained.get('enemy_damage_ready') is True
-                         or mark is not None and mark.get('enemy_damage_ready') is True)):
-                raise StreamGap('enemy certificate capability changed within a legacy observation stream')
+            ready_declaration = drained.get('enemy_damage_ready')
+            mark_declaration = mark.get('enemy_damage_ready') if mark is not None else None
+            if (type(ready_declaration) is bool and type(mark_declaration) is bool
+                    and ready_declaration != mark_declaration):
+                raise StreamGap('enemy certificate capability differs between mark and drain')
+            if self.initial_drain:
+                self._enemy_damage_ready = ready_declaration if type(ready_declaration) is bool else None
+            elif self._enemy_damage_ready is not None and any(
+                    type(value) is bool and value != self._enemy_damage_ready
+                    for value in (ready_declaration, mark_declaration)):
+                raise StreamGap('enemy certificate capability changed within an observation stream')
             version = drained.get('partial_damage_version')
             if type(version) is int and version in (1, 2, 3, 4, 5, 6, 7):
                 self.adapter.statistics.partial_damage_enabled = True
