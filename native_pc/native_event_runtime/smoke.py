@@ -466,20 +466,29 @@ rpc.exports.readEvents=(after,through)=>{
             pipe.request('initialize', token=fixture.token)
             assert fixture.command('snapshot')['code'] != original
             assert pipe.request('read', after=0, through=1) == {'events': [dict(event, sequence=1)]}
+            native_io = pipe._io
+            read_after_stop = False
+
+            def delay_read_until_stopped(operation, buffer, size, deadline):
+                nonlocal read_after_stop
+                if operation == 'ReadFile' and not read_after_stop:
+                    while fixture.command('snapshot')['code'] != original:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError('oversized response did not release the native hooks')
+                        time.sleep(.01)
+                    read_after_stop = True
+                return native_io(operation, buffer, size, deadline)
+
+            pipe._io = delay_read_until_stopped
             try:
                 pipe.request('read', after=0, through=event_count)
                 raise AssertionError('oversized reply was accepted')
             except RuntimeError as exc:
                 assert str(exc) == (f'response_too_large; bytes={bytes_}; limit={wire_limit}; '
                                     f'requested_event_count={event_count}'), str(exc)
-            deadline = time.monotonic() + 5
-            while fixture.command('snapshot')['code'] != original:
-                if time.monotonic() >= deadline:
-                    raise AssertionError('oversized response did not release the native hooks')
-                time.sleep(.01)
-            assert pipe.handle is not None and fixture.command('call')['integer'] == 650
+            assert read_after_stop and pipe.handle is not None and fixture.command('call')['integer'] == 650
             return dict(bytes=bytes_, wire_limit=wire_limit, requested_event_count=event_count,
-                        error='response_too_large', hooks_disabled=True)
+                        error='response_too_large', hooks_disabled=True, delayed_read_delivered=True)
         finally:
             if pipe is not None:
                 pipe.close()

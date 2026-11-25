@@ -394,7 +394,9 @@ DWORD WINAPI worker(void* argument) {
                 break;
             }
         }
-        DisconnectNamedPipe(pipe.value);
+        // This instance is never reused. Closing the server handle keeps
+        // buffered replies available for the client. DisconnectNamedPipe
+        // would discard a final diagnostic or stop reply still in the pipe.
     } catch (...) {
         // Pre-authentication failures have no trusted recipient and produce no diagnostic file.
     }

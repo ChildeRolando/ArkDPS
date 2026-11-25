@@ -2,6 +2,7 @@
 from hashlib import sha256
 import json
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,23 @@ from native_pc import event_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize('response', [b'\xff\n', b'{private invalid JSON}\n', b'{"id":1,"id":1}\n'])
+def test_invalid_response_is_first_transport_failure_without_reusing_pipe(response):
+    pipe = module.NativePipe.__new__(module.NativePipe)
+    pipe._lock, pipe._id, pipe._poisoned = Lock(), 0, False
+    pipe.handle, pipe._buffer = 1, bytearray(response)
+    pipe._io = lambda operation, buffer, size, deadline: size
+    probe = module.NativeHookEventProbe(collector())
+    probe._pipe, probe.status = pipe, ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError, match='native observer returned invalid JSON'):
+        probe.mark()
+    assert pipe._poisoned and probe.status == ObserverStatus.FAILED
+    assert records[0][0] == 'native_hook_request_failed'
+    assert records[0][1]['error_type'] == 'RuntimeError'
 
 
 @pytest.mark.parametrize('response,expected', [

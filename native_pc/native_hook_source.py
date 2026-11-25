@@ -349,8 +349,11 @@ class NativePipe:
                 self._buffer = bytearray(tail)
                 if len(line) > self.max_response_bytes or tail:
                     raise RuntimeError('native observer returned oversized or unsolicited data')
-                reply = json.loads(line.decode('utf-8'), object_pairs_hook=_unique_fields,
-                                   parse_float=_finite_number, parse_constant=_reject_constant)
+                try:
+                    reply = json.loads(line.decode('utf-8'), object_pairs_hook=_unique_fields,
+                                       parse_float=_finite_number, parse_constant=_reject_constant)
+                except ValueError as exc:
+                    raise RuntimeError('native observer returned invalid JSON') from exc
                 if (not isinstance(reply, dict) or type(reply.get('id')) is not int
                         or reply['id'] != self._id or set(reply) - {'id', 'result', 'error'}):
                     raise RuntimeError('native observer response ID or envelope mismatch')
