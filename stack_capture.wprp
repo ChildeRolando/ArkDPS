@@ -23,5 +23,18 @@
         <EventCollectorId Value="Frames"><EventProviders><EventProviderId Value="DXGI"/></EventProviders></EventCollectorId>
       </Collectors>
     </Profile>
+    <Profile Id="ArkDPS.Verbose.File" Name="ArkDPS" Description="Game frame submissions and thread stacks" LoggingMode="File" DetailLevel="Verbose">
+      <Collectors>
+        <!-- Sequential limits preserve the start of a dense recording. -->
+        <SystemCollectorId Value="Kernel">
+          <MaximumFileSize Value="3072" FileMode="Sequential"/>
+          <SystemProviderId Value="Threads"/>
+        </SystemCollectorId>
+        <EventCollectorId Value="Frames">
+          <MaximumFileSize Value="128" FileMode="Sequential"/>
+          <EventProviders><EventProviderId Value="DXGI"/></EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
   </Profiles>
 </WindowsPerformanceRecorder>

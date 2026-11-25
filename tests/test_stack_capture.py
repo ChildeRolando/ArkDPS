@@ -1,9 +1,10 @@
 from pathlib import Path
 import subprocess
+from xml.etree import ElementTree
 
 import pytest
 
-from stack_capture import capture, DURATION
+from stack_capture import capture, DURATION, PROFILE
 
 
 @pytest.mark.parametrize('stop_early', [True, False])
@@ -23,8 +24,25 @@ def test_stop_and_timeout_both_save_owned_session(tmp_path, stop_early):
 
     capture(output, Stop(), run=run, notify=lambda state: calls.append((state,)))
     assert [c[0] for c in calls] == ['-start', 'ready', 'saving', '-stop']
+    assert calls[0][1:-2] == (str(PROFILE) + '!ArkDPS', '-filemode', '-recordtempto', output.parent)
     assert calls[0][-2:] == calls[3][-2:]
     assert calls[0][-2] == '-instancename'
+
+
+def test_file_profile_keeps_frame_and_stack_sources_in_sequential_files():
+    definitions = ElementTree.parse(PROFILE).getroot().find('Profiles')
+    profile = definitions.find("Profile[@Id='ArkDPS.Verbose.File']")
+    assert profile.attrib['LoggingMode'] == 'File'
+    kernel = profile.find("Collectors/SystemCollectorId[@Value='Kernel']")
+    frames = profile.find("Collectors/EventCollectorId[@Value='Frames']")
+    for collector in (kernel, frames):
+        limit = collector.find('MaximumFileSize')
+        assert limit.attrib['FileMode'] == 'Sequential'
+        assert int(limit.attrib['Value']) > 0
+    assert kernel.find("SystemProviderId[@Value='Threads']") is not None
+    assert frames.find("EventProviders/EventProviderId[@Value='DXGI']") is not None
+    stacks = definitions.findall("SystemProvider[@Id='Threads']/Stacks/Stack")
+    assert {stack.attrib['Value'] for stack in stacks} == {'SampledProfile', 'CSwitch'}
 
 
 @pytest.mark.parametrize('failure,commands', [

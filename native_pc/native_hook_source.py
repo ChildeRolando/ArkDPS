@@ -8,6 +8,7 @@ import ctypes
 from copy import deepcopy
 from ctypes import wintypes
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
@@ -809,6 +810,24 @@ class NativeHookEventProbe:
         except (OSError, RuntimeError) as exc:
             self.error = str(exc)
             self.status = ObserverStatus.FAILED
+            if self._timing_sink is not None:
+                try:
+                    diagnostic = dict(
+                        op=operation if operation in ('mark', 'read', 'ack', 'terminal_read', 'stop') else 'other',
+                        error_type=type(exc).__name__,
+                        win32_error=getattr(exc, 'winerror', None) or getattr(exc, 'errno', None),
+                        utc=datetime.now(timezone.utc).isoformat())
+                    oversized = re.fullmatch(
+                        r'response_too_large; bytes=([0-9]{1,12}); limit=([0-9]{1,12})'
+                        r'(?:; requested_event_count=([0-9]{1,16}))?', str(exc))
+                    if oversized:
+                        diagnostic.update(code='response_too_large', response_bytes=int(oversized[1]),
+                                          response_limit=int(oversized[2]))
+                        if oversized[3] is not None:
+                            diagnostic['requested_event_count'] = int(oversized[3])
+                    self._timing_sink('native_hook_request_failed', diagnostic)
+                except Exception:
+                    pass  # Failure reporting cannot replace the transport error.
             raise
         return result
 

@@ -32,7 +32,7 @@ def capture(output, stop, *, run=wpr, notify=lambda state: None):
     # Each invocation owns exactly one named session, including its failure cleanup.
     started = False
     try:
-        run('-start', str(PROFILE) + '!ArkDPS', *instance)
+        run('-start', str(PROFILE) + '!ArkDPS', '-filemode', '-recordtempto', output.parent, *instance)
         started = True
         notify('ready')
         stop.wait(DURATION)

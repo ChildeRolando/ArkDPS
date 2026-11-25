@@ -44,6 +44,55 @@ def collector(*, build=module.BUILD_ID, initialized=True):
         observer_binding=lambda **_: dict(native_session='bound-session', source_build=build))
 
 
+@pytest.mark.parametrize('sink_fails', [False, True])
+def test_first_pipe_failure_is_recorded_without_debug_and_rethrows_original(sink_fails):
+    probe = module.NativeHookEventProbe(collector())
+    failure = OSError(233, 'private pipe details')
+    calls, records = [], []
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise failure
+
+    def sink(kind, data):
+        records.append((kind, data))
+        if sink_fails:
+            raise OSError('log unavailable')
+
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    probe.set_request_timing_audit(sink, enabled=lambda: False)
+    with pytest.raises(OSError) as caught:
+        probe.mark()
+    assert caught.value is failure
+    assert probe.status == ObserverStatus.FAILED
+    assert records == [('native_hook_request_failed', dict(op='mark', error_type='OSError', win32_error=233,
+                                                          utc=records[0][1]['utc']))]
+    with pytest.raises(RuntimeError, match='private pipe details'):
+        probe.mark()
+    assert len(calls) == len(records) == 1
+
+
+def test_oversized_response_logs_bounded_evidence_before_later_cleanup():
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('response_too_large; bytes=11008924; limit=8388608; requested_event_count=20000')
+    records = []
+
+    def request(*args, **kwargs):
+        raise failure
+
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.read_through(20000)
+    assert caught.value is failure
+    assert records == [('native_hook_request_failed', dict(
+        op='read', error_type='RuntimeError', win32_error=None, code='response_too_large',
+        response_bytes=11008924, response_limit=8388608, requested_event_count=20000,
+        utc=records[0][1]['utc']))]
+
+
 class Loader:
     def __init__(self, pid):
         assert pid == 42

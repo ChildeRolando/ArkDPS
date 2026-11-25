@@ -42,6 +42,18 @@ def test_capture_selects_key_events_until_debug_enabled_and_respects_live_toggle
     assert stopped['data']['cleanup_ok'] is False and 'cleanup_errors' not in stopped['data']
 
 
+def test_first_native_pipe_failure_keeps_operation_and_error_code_without_debug(tmp_path):
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header) as journal:
+        journal.write('native_hook_request_failed', dict(
+            op='read', error_type='OSError', win32_error=233, reason='private pipe details'))
+    log, = tmp_path.glob('wpf-*.jsonl')
+    _, failure = _records(log)
+    assert failure['kind'] == 'native_hook_request_failed'
+    assert failure['data'] == dict(op='read', error_type='OSError', win32_error=233,
+                                   utc=failure['data']['utc'])
+
+
 def test_desktop_enemy_state_delta_restores_prefix_across_records_and_resets():
     records = []
     writer = DesktopAuditWriter(records.append)

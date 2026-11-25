@@ -8,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 #include "json.hpp"
 #include "engine.h"
@@ -178,8 +179,7 @@ bool read_line(HANDLE pipe, std::string& pending, std::string& line) {
     }
 }
 
-bool write_line(HANDLE pipe, const Json& value) {
-    std::string data = value.dump();
+bool write_payload(HANDLE pipe, std::string data) {
     if (data.size() > wire_limit) return false;
     data.push_back('\n');
     const ULONGLONG deadline = GetTickCount64() + io_timeout;
@@ -198,6 +198,22 @@ bool write_line(HANDLE pipe, const Json& value) {
         offset += bytes;
     }
     return true;
+}
+
+bool write_line(HANDLE pipe, const Json& value) {
+    return write_payload(pipe, value.dump());
+}
+
+std::string response_limit_error(std::size_t bytes, const std::string& operation, const Json& request) {
+    auto message = "response_too_large; bytes=" + std::to_string(bytes) + "; limit=" + std::to_string(wire_limit);
+    if ((operation == "read" || operation == "terminal_read") && request.contains("after")
+            && request["after"].is_number_unsigned() && request.contains("through")
+            && request["through"].is_number_unsigned()) {
+        const auto after = request["after"].get<std::uint64_t>();
+        const auto through = request["through"].get<std::uint64_t>();
+        if (through >= after) message += "; requested_event_count=" + std::to_string(through - after);
+    }
+    return message;
 }
 
 bool equal_token(const std::string& left, const std::string& right) {
@@ -348,9 +364,18 @@ DWORD WINAPI worker(void* argument) {
                 } else {
                     for (const char* known : {"mark", "read", "ack", "stop"}) if (operation == known) phase = known;
                     request.erase("id");
-                    result = parse(arkdps::request(request.dump()));
+                    const auto response = arkdps::request(request.dump());
+                    // Do not parse and encode an already oversized QuickJS reply again.
+                    const auto reply_bytes = response.size() + sizeof("{\"id\":,\"result\":}") - 1
+                        + std::to_string(expected).size();
+                    if (reply_bytes > wire_limit)
+                        throw SafeError(response_limit_error(reply_bytes, operation, request));
+                    result = parse(response);
                 }
-                if (!write_line(pipe.value, Json{{"id", id}, {"result", result}})) break;
+                auto wire_response = Json{{"id", id}, {"result", std::move(result)}}.dump();
+                if (wire_response.size() > wire_limit)
+                    throw SafeError(response_limit_error(wire_response.size(), operation, request));
+                if (!write_payload(pipe.value, std::move(wire_response))) break;
                 ++expected;
                 if (operation == "stop") break;
             } catch (const SafeError& error) {

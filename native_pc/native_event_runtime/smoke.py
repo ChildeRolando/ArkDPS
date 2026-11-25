@@ -434,6 +434,58 @@ def check_smoke(binary=DEFAULT_OUTPUT):
     return receipt
 
 
+def check_oversized_response(binary=DEFAULT_OUTPUT):
+    """Send one oversized battle-like reply through the real authenticated pipe."""
+    from native_pc.native_hook_source import NativePipe
+    binary = Path(binary).resolve()
+    event_count = 20_000
+    event = dict(frame=420, game_time=14, source=None, kind='enemy_hp', amount=0,
+                 proof={'method': 'Entity.SetHpInternal'}, target='enemy_fixture_guard', target_instance='12345',
+                 enemy_max_hp=38_818, hp_before=30_000, hp_after=30_001,
+                 native_autochess_scope=dict(protocol_version=1, status='available', verified_same_frame=True,
+                     frame=420, game_time=14, scope_key='0x12341234:0x23452345:0x34563456:0x45674567:0x56785678:autochess:1',
+                     phase=4, round=8, collection_mode='all'))
+    wire_limit = 8 * 1024 ** 2
+    bytes_ = len(json.dumps(dict(id=3, result={'events': [dict(event, sequence=sequence)
+                            for sequence in range(1, event_count + 1)]}), separators=(',', ':')).encode())
+    assert bytes_ > wire_limit
+    source = fixture_source(binary) + '\nconst event=' + json.dumps(event) + ''';
+rpc.exports.readEvents=(after,through)=>{
+ const events=[];
+ for(let sequence=after+1;sequence<=through;sequence++)events.push({...event,sequence});
+ return {events};
+};
+'''
+    with TemporaryDirectory(prefix='native-oversized-response-', dir=binary.parent) as temporary:
+        fixture = Fixture(Path(temporary), binary)
+        pipe = None
+        try:
+            fixture.configure(source=source)
+            original = fixture.command('load')['code']
+            pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
+            pipe.request('initialize', token=fixture.token)
+            assert fixture.command('snapshot')['code'] != original
+            assert pipe.request('read', after=0, through=1) == {'events': [dict(event, sequence=1)]}
+            try:
+                pipe.request('read', after=0, through=event_count)
+                raise AssertionError('oversized reply was accepted')
+            except RuntimeError as exc:
+                assert str(exc) == (f'response_too_large; bytes={bytes_}; limit={wire_limit}; '
+                                    f'requested_event_count={event_count}'), str(exc)
+            deadline = time.monotonic() + 5
+            while fixture.command('snapshot')['code'] != original:
+                if time.monotonic() >= deadline:
+                    raise AssertionError('oversized response did not release the native hooks')
+                time.sleep(.01)
+            assert pipe.handle is not None and fixture.command('call')['integer'] == 650
+            return dict(bytes=bytes_, wire_limit=wire_limit, requested_event_count=event_count,
+                        error='response_too_large', hooks_disabled=True)
+        finally:
+            if pipe is not None:
+                pipe.close()
+            fixture.close()
+
+
 def check_diagnostics(binary=DEFAULT_OUTPUT):
     """Only fixed diagnostic vocabulary may survive an authenticated failure."""
     from native_pc.native_hook_source import NativePipe
@@ -574,6 +626,7 @@ def main():
         return
     result = check_smoke(args.binary)
     result['authenticated_diagnostics'] = check_diagnostics(args.binary)
+    result['oversized_response'] = check_oversized_response(args.binary)
     if args.dual_hook:
         result['dual_hook_comparator'] = check_dual_hook(args.binary)
     if args.output:
