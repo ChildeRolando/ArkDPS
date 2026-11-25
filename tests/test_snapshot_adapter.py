@@ -1062,3 +1062,17 @@ def test_registered_character_finish_closes_skill_without_hiding_a_missing_count
     assert result['rows']['char_b']['skill_window_count'] == 1
     assert result['rows']['char_b']['skill_active_seconds'] == 1
     assert adapter.statistics.skill_windows['char_b'][0]['reason'] == 7
+
+
+@pytest.mark.parametrize('next_session,next_time', [('other', 3), ('battle-1', 1)])
+def test_lifecycle_managed_adapter_rejects_implicit_retirement(next_session, next_time):
+    adapter = BattleStatisticsAdapter(lifecycle_managed=True)
+    adapter.update(sample([row('char_a', 100)], 2, 10), roster([CHAR_A], frame=10))
+    before = adapter.result()
+    stats = adapter.statistics
+    with pytest.raises(FrameMismatch):
+        adapter.update(sample([row('char_a', 200)], next_time, 11, next_session),
+                       roster([CHAR_A], frame=11))
+    assert adapter.statistics is stats
+    assert stats.end_time is None
+    assert adapter.result() == before

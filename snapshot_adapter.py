@@ -144,7 +144,8 @@ class AdapterUpdate:
 class BattleStatisticsAdapter:
     """One live battle at a time; callers create a new adapter per process."""
 
-    def __init__(self):
+    def __init__(self, *, lifecycle_managed=False):
+        self.lifecycle_managed = lifecycle_managed
         self._events_only = False
         self._character_counters = False
         self._pending_terminal_clock = None
@@ -708,6 +709,9 @@ class BattleStatisticsAdapter:
                          (self.statistics.end_time is not None and
                           sample['game_time'] != self.statistics.end_time)):
             raise FrameMismatch('结算修订不能改变冻结的游戏时间')
+        if (self.lifecycle_managed and self.statistics is not None
+                and sample['session'] != self.session):
+            raise FrameMismatch('lifecycle owner must retire the previous session explicitly')
         if self.statistics is None or sample['session'] != self.session:
             if self.statistics is not None:
                 self._freeze()
@@ -722,6 +726,8 @@ class BattleStatisticsAdapter:
             raise FrameMismatch('结算修订必须属于同局、同帧、同时间的结束快照')
         if not settling and self.last_game_time is not None and not terminal:
             if game_time < self.last_game_time:
+                if self.lifecycle_managed:
+                    raise FrameMismatch('lifecycle owner must establish a new generation for a clock reset')
                 # A battle clock cannot move backwards in one session. Treat it
                 # as a new observation session rather than mixing samples.
                 self._freeze()
