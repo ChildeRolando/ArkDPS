@@ -349,6 +349,7 @@ class PanelSourceRow:
     # Display-only opt-in for a verified player's event ledger. Native
     # cumulative counters stay absent in the stored Statistics result.
     event_only_projection: bool = False
+    inspector_evidence: Mapping = field(default_factory=dict)
 
     @property
     def event_damage_unknown(self) -> bool:
@@ -758,6 +759,12 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             damage_scope_reason=scope_reason,
             mitigation_unknown_reason=row.get('mitigation_unknown_reason'),
             observed_mitigation_rate=row.get('observed_mitigation_rate'),
+            inspector_evidence={key: row[key] for key in (
+                'damage', 'counter_snapshot_complete', 'event_coverage_complete',
+                'overkill_damage', 'overkill_coverage_complete', 'overkill_unknown_reason',
+                'mitigation_rate', 'observed_mitigation_rate', 'mitigation_matched_hits',
+                'mitigation_before', 'mitigation_after', 'observed_mitigation_before',
+                'observed_mitigation_after', 'mitigation_unknown_reason') if key in row},
         ))
     return rows
 
@@ -1400,7 +1407,138 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                     or row.damage_scope_reason or row.skill_split_reason)
                 if reason or lane.get('observed_hits'):
                     detail['skill_split' + suffix + '_reason'] = reason or '部分命中缺少技能窗口证据'
+    evidence = dict(row.inspector_evidence)
+    evidence.setdefault('damage', detail['damage'])
+    evidence.setdefault('event_coverage_complete', row.event_complete)
+    evidence.setdefault('overkill_coverage_complete', row.overkill_complete)
+    evidence.setdefault('overkill_damage', row.overkill)
+    evidence.setdefault('overkill_unknown_reason', row.overkill_unknown_reason)
+    detail['readings'] = inspector_readings(evidence, detail, rate_reason=rate_reason)
     return detail
+
+
+
+def inspector_readings(row: Mapping, detail: Mapping, *, boss_scope=False, rate_reason='') -> dict:
+    """Resolve detail evidence once in Python; the desktop only renders these readings.
+
+    Fractions are unitless. Missing evidence stays None, including complete zero hits.
+    This projection never changes the underlying ledgers or their completeness.
+    """
+    from math import floor, ceil
+    def n(obj, key, default=None):
+        value = obj.get(key, default)
+        return value if _finite(value) else default
+    def number(value):
+        if not _finite(value): return '—'
+        return f'{floor(value + .5) if value >= 0 else ceil(value - .5):,}'
+    def percentage(value):
+        return number(value * 100) + '%' if _finite(value) else '—'
+    scope = detail.get('damage_scope_reason') or ''
+    lane = detail.get('settled_damage')
+    verified = isinstance(lane, Mapping)
+    label = '伤害溢出率'
+    legacy_reason = ('过量伤害按已对账的原生总伤计算。' if detail.get('overkill_coverage_complete') else
+                     '过量未知：' + (detail.get('overkill_unknown_reason') or '缺少与原生总伤同口径的过量证据。')) if verified else (
+        '有效伤害 = 总伤害 − 过量伤害' if row.get('overkill_coverage_complete') else
+        '过量未知：' + ((rate_reason or '事件观察未建立覆盖或已中断') if not row.get('event_coverage_complete') else
+                    (row.get('overkill_unknown_reason') or '目标或实际扣血证据不足')))
+    if 'overkill_base_damage' in detail:
+        complete = detail.get('overkill_coverage_complete') is True
+        amount = n(detail, 'overkill_damage' if complete else 'observed_overkill_damage')
+        base = n(detail, 'overkill_base_damage')
+        fraction = amount / base if base is not None and base > 0 and amount is not None and 0 <= amount <= base else None
+        observed = not complete and amount is not None
+        explanation = '过量伤害 ÷ 同一批已核实命中的（有效伤害 ＋ 过量伤害）。'
+        hits = n(detail, 'overkill_matched_hits', 0)
+        if hits > 0: explanation += '\n已核实 ' + number(hits) + ' 击。'
+        missed = n(detail, 'overkill_unverified_share')
+        if not complete and missed is not None and 0 <= missed <= 1:
+            explanation += '\n未核实命中占比 ' + percentage(missed) + '。'
+        reason = detail.get('overkill_unknown_reason') or ''
+        if reason: explanation += '\n' + reason
+        if fraction is None:
+            if base == 0: explanation += '\n同口径伤害为零，无法计算占比。'
+            elif not reason: explanation += '\n尚缺少用于计算溢出率的命中证据。'
+    else:
+        evidence = detail if verified else row
+        base = n(detail, 'damage', n(row, 'damage'))
+        amount = n(detail, 'overkill_damage')
+        legacy_amount = n(evidence, 'overkill_damage')
+        fraction = legacy_amount / base if not scope and base is not None and base > 0 and legacy_amount is not None else None
+        observed = False
+        reason = scope or ('累计总伤为零，无法计算占比。' if base == 0 else legacy_reason)
+        explanation = '过量伤害 ÷ ' + ('首领总伤' if boss_scope else '原生累计总伤') + '（含过量）。\n' + reason
+    overkill = dict(amount=amount, numerator=amount, denominator=base, fraction=fraction, observed=observed,
+                    label=('已观察' if observed else '') + label, explanation=explanation,
+                    basis='matched_hits' if 'overkill_base_damage' in detail else 'native_total')
+    splits = {}
+    for effective in (False, True):
+        suffix = '_effective' if effective else ''
+        label = '技能期有效伤害占比' if effective else '技能期伤害占比'
+        formula = ('技能期有效伤害 ÷ 已拆分的总有效伤害。' if effective else '技能期伤害 ÷ 已拆分的总伤害。') + '被动技能的伤害归入非技能期。'
+        skill = non_skill = fraction = total = None
+        complete = observed = False
+        reason = ''
+        if scope:
+            reason = scope; explanation = formula + '\n' + reason
+        elif verified and lane.get('complete') is True and n(lane, 'observed_hits') == 0:
+            complete = True; explanation = formula + '\n本次未造成伤害，无法计算占比。'
+        else:
+            skill, non_skill = n(detail, 'skill_damage' + suffix), n(detail, 'non_skill_damage' + suffix)
+            valid = skill is not None and non_skill is not None and skill >= 0 and non_skill >= 0 and _finite(skill + non_skill)
+            if detail.get('skill_split' + suffix + '_complete') is True and valid:
+                complete = True; total = skill + non_skill
+                fraction = skill / total if total > 0 else None
+                explanation = formula if total > 0 else formula + '\n已拆分的伤害为零，无法计算占比。'
+            else:
+                reason = (detail.get('skill_split_effective_reason') if effective else '') or detail.get('skill_split_reason') or (
+                    '过量伤害证据不足。' if effective and detail.get('skill_split_complete') else '事件观察或技能窗口未覆盖。')
+                skill, non_skill = n(detail, 'observed_skill_damage' + suffix), n(detail, 'observed_non_skill_damage' + suffix)
+                valid = skill is not None and non_skill is not None and skill >= 0 and non_skill >= 0 and _finite(skill + non_skill)
+                if valid and skill + non_skill > 0:
+                    total = skill + non_skill; fraction = skill / total; observed = True; label = '已观察' + label
+                    explanation = formula + '\n按已观察且可归入技能期或非技能期的伤害计算。\n整局统计缺口：' + reason
+                else:
+                    skill = non_skill = None; explanation = formula + '\n' + reason
+        splits['effective' if effective else 'nominal'] = dict(skill=skill, non_skill=non_skill, numerator=skill,
+            denominator=total, fraction=fraction, complete=complete, observed=observed, label=label, reason=reason, explanation=explanation)
+    formula = '1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。'
+    damage = lane if verified else row
+    hits = n(damage, 'mitigation_matched_hits', 0)
+    counted = hits > 0
+    observed_percent = n(damage, 'observed_mitigation_rate')
+    percent = None; prefix = ''; label = '被减伤率'; reason = ''; observed = False
+    if scope: explanation = formula + '\n' + scope
+    else:
+        if verified and damage.get('mitigation_complete') is True and observed_percent is not None and counted:
+            percent = observed_percent; prefix = 'observed_'; tail = '\n已配对的 ' + number(hits) + ' 击。'
+        elif not verified and n(row, 'mitigation_rate') is not None:
+            percent = n(row, 'mitigation_rate'); tail = '\n已配对的 ' + number(hits) + ' 击。' if counted else ''
+        else:
+            reason = ((damage.get('mitigation_reason') or damage.get('reason')) if verified else row.get('mitigation_unknown_reason')) or ''
+            if verified and damage.get('complete') is True and n(damage, 'observed_hits') == 0:
+                reason = '本次未造成伤害，没有可配对的命中。'
+            if observed_percent is not None and counted:
+                percent = observed_percent; prefix = 'observed_'; observed = True; label = '已观察减伤率'
+                tail = '\n仅统计已配对的 ' + number(hits) + ' 击。'
+                after, total = n(damage, 'observed_mitigation_after'), n(row, 'damage')
+                if not verified and row.get('counter_snapshot_complete') and after is not None and total is not None and total > 0 and 0 <= after <= total:
+                    tail += '这些命中的结算伤害占当前累计总伤的 ' + percentage(after / total) + '。'
+                if reason: tail += '\n整局统计缺口：' + reason
+            else: tail = '\n' + (reason or '尚无同一击的公式前伤害与结算伤害。')
+        explanation = formula
+        if percent is not None:
+            if percent < -.00001: explanation += '\n结算伤害高于公式前伤害时，比例为负。当前观察记录两端数值，无法确定差额来自哪项修正。'
+            before, after = n(damage, prefix + 'mitigation_before'), n(damage, prefix + 'mitigation_after')
+            if before is not None and before > 0 and after is not None and after >= 0:
+                explanation += '\n配对命中合计：公式前 ' + number(before) + '，结算 ' + number(after) + '。'
+            if abs(percent) <= .00001: explanation += '\n配对命中的公式前后伤害在测量精度内相同。'
+            elif abs(percent) < .5: explanation += '\n舍入前比例 ' + f'{percent:.5f}'.rstrip('0').rstrip('.') + '%。'
+        explanation += tail
+    mitigation = dict(fraction=None if percent is None else 0 if abs(percent) <= .00001 else percent / 100,
+        numerator=n(damage, prefix + 'mitigation_after'), denominator=n(damage, prefix + 'mitigation_before'),
+        observed=observed, label=label, reason=scope or reason, explanation=explanation)
+    return dict(overkill=overkill, skill_split=splits, mitigation=mitigation, legacy_overkill_note=legacy_reason)
 
 
 def render_panel(config: PanelConfig,
@@ -1665,6 +1803,11 @@ def render_panel(config: PanelConfig,
 
     details = {owner: _owner_detail(row, rate_reason=rate_reason)
                for owner, row in row_by_owner.items()}
+    if config.boss_scope:
+        for detail in details.values():
+            reading = detail['readings']['overkill']
+            if reading['basis'] == 'native_total':
+                reading['explanation'] = reading['explanation'].replace('原生累计总伤', '首领总伤')
     entries: list[PanelEntry] = []
     for owner, value in displayed.items():
         row = row_by_owner[owner]

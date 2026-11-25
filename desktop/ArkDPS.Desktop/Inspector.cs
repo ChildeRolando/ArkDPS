@@ -911,159 +911,29 @@ public sealed class Inspector : Border
         if(text.Length>0) return text;
         return effective ? detail.UiInt(detailExact) : row.UiInt(exact);
     }
+    // Evidence selection and ratios belong to Python's panel_model projection.
     private static (double Amount,double Fraction,bool Observed,string Label,string Explanation)
         OverkillReading(JsonElement row,JsonElement detail,JsonElement view)
     {
-        const string label="伤害溢出率";
-        var matchedBase=detail.Get("overkill_base_damage");
-        if(matchedBase.ValueKind!=JsonValueKind.Undefined)
-        {
-            const string formula="过量伤害 ÷ 同一批已核实命中的（有效伤害 ＋ 过量伤害）。";
-            bool complete=detail.Bool("overkill_coverage_complete");
-            double amount=detail.Number(complete ? "overkill_damage" : "observed_overkill_damage",double.NaN);
-            double total=matchedBase.TryNumber(double.NaN);
-            double fraction=total>0 && amount>=0 && amount<=total ? amount/total : double.NaN;
-            bool observed=!complete && double.IsFinite(amount);
-            string explanation=formula;
-            double hits=detail.Number("overkill_matched_hits",0);
-            if(hits>0)
-                explanation+=$"\n已核实 {Number(hits)} 击。";
-            double missed=detail.Number("overkill_unverified_share",double.NaN);
-            if(!complete && missed is >=0 and <=1)
-                explanation+=$"\n未核实命中占比 {Percentage(missed)}。";
-            string reason=detail.Text("overkill_unknown_reason");
-            if(reason.Length>0)
-                explanation+="\n"+reason;
-            if(!double.IsFinite(fraction))
-            {
-                if(total==0)
-                    explanation+="\n同口径伤害为零，无法计算占比。";
-                else if(reason.Length==0)
-                    explanation+="\n尚缺少用于计算溢出率的命中证据。";
-            }
-            return (amount,fraction,observed,observed ? "已观察"+label : label,explanation);
-        }
-
-        var evidence=detail.Get("settled_damage").ValueKind==JsonValueKind.Object ? detail : row;
-        double legacyTotal=detail.Number("damage",row.Number("damage",double.NaN));
-        double legacyAmount=evidence.Number("overkill_damage",double.NaN);
-        string scopeReason=detail.Text("damage_scope_reason");
-        double legacyFraction=scopeReason.Length==0 && legacyTotal>0 ? legacyAmount/legacyTotal : double.NaN;
-        string legacyNote=scopeReason.Length>0 ? scopeReason
-            : legacyTotal==0 ? "累计总伤为零，无法计算占比。" : LegacyOverkillNote(row,detail,view);
-        string basis=StatisticPanel.IsBossScope(view.Get("config")) ? "首领总伤" : "原生累计总伤";
-        return (detail.Number("overkill_damage",double.NaN),legacyFraction,false,label,
-            $"过量伤害 ÷ {basis}（含过量）。\n{legacyNote}");
+        var reading=detail.Get("readings").Get("overkill");
+        return (reading.Number("amount",double.NaN),reading.Number("fraction",double.NaN),
+            reading.Bool("observed"),reading.Text("label"),reading.Text("explanation"));
     }
-
     private static (double Skill,double NonSkill,double Fraction,bool Complete,bool Observed,
         string Label,string Reason,string Explanation) SkillSplitReading(JsonElement detail,bool effective)
     {
-        string suffix=effective ? "_effective" : "";
-        string skillKey="skill_damage"+suffix, nonSkillKey="non_skill_damage"+suffix;
-        string label=effective ? "技能期有效伤害占比" : "技能期伤害占比";
-        string formula=(effective ? "技能期有效伤害 ÷ 已拆分的总有效伤害。" : "技能期伤害 ÷ 已拆分的总伤害。")
-            +"被动技能的伤害归入非技能期。";
-        string scopeReason=detail.Text("damage_scope_reason");
-        if(scopeReason.Length>0)
-            return (double.NaN,double.NaN,double.NaN,false,false,label,scopeReason,formula+"\n"+scopeReason);
-        var settled=detail.Get("settled_damage");
-        if(settled.ValueKind==JsonValueKind.Object && settled.Bool("complete") && settled.Get("observed_hits").TryNumber(double.NaN)==0)
-            return (double.NaN,double.NaN,double.NaN,true,false,label,"",formula+"\n本次未造成伤害，无法计算占比。");
-        static bool Valid(double skill,double nonSkill) =>
-            skill>=0 && nonSkill>=0 && double.IsFinite(skill+nonSkill);
-
-        double skill=detail.Number(skillKey,double.NaN), nonSkill=detail.Number(nonSkillKey,double.NaN);
-        if(detail.Bool("skill_split"+suffix+"_complete") && Valid(skill,nonSkill))
-        {
-            double total=skill+nonSkill;
-            return (skill,nonSkill,total>0 ? skill/total : double.NaN,true,false,label,"",
-                total>0 ? formula : formula+"\n已拆分的伤害为零，无法计算占比。");
-        }
-
-        string reason=effective ? detail.Text("skill_split_effective_reason") : "";
-        if(reason.Length==0) reason=detail.Text("skill_split_reason");
-        if(reason.Length==0) reason=effective && detail.Bool("skill_split_complete")
-            ? "过量伤害证据不足。" : "事件观察或技能窗口未覆盖。";
-        skill=detail.Number("observed_"+skillKey,double.NaN);
-        nonSkill=detail.Number("observed_"+nonSkillKey,double.NaN);
-        if(Valid(skill,nonSkill) && skill+nonSkill>0)
-            return (skill,nonSkill,skill/(skill+nonSkill),false,true,"已观察"+label,reason,
-                formula+"\n按已观察且可归入技能期或非技能期的伤害计算。\n整局统计缺口："+reason);
-        return (double.NaN,double.NaN,double.NaN,false,false,label,reason,formula+"\n"+reason);
+        var reading=detail.Get("readings").Get("skill_split").Get(effective ? "effective" : "nominal");
+        return (reading.Number("skill",double.NaN),reading.Number("non_skill",double.NaN),
+            reading.Number("fraction",double.NaN),reading.Bool("complete"),reading.Bool("observed"),
+            reading.Text("label"),reading.Text("reason"),reading.Text("explanation"));
     }
-
     private static (double Fraction,string Label,string Explanation) MitigationReading(JsonElement row,JsonElement detail)
     {
-        const string formula="1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。";
-        string scopeReason=detail.Text("damage_scope_reason");
-        if(scopeReason.Length>0) return (double.NaN,"被减伤率",formula+"\n"+scopeReason);
-        var settled=detail.Get("settled_damage");
-        bool verifiedPerHit=settled.ValueKind==JsonValueKind.Object;
-        var damage=verifiedPerHit ? settled : row;
-        const string negativeNote="\n结算伤害高于公式前伤害时，比例为负。当前观察记录两端数值，无法确定差额来自哪项修正。";
-        // The native fixed-point unity multiplier can differ from 1 by ~2e-8.
-        const double zeroTolerance=0.00001; // percentage points
-        double hits=damage.Get("mitigation_matched_hits").TryNumber();
-        bool counted=double.IsFinite(hits) && hits>0;
-        static double Fraction(double percent) => Math.Abs(percent)<=zeroTolerance ? 0 : percent/100;
-
-        string Explain(double percent,string prefix)
-        {
-            string explanation=formula;
-            if(percent < -zeroTolerance) explanation+=negativeNote;
-            double before=damage.Get(prefix+"mitigation_before").TryNumber(double.NaN);
-            double after=damage.Get(prefix+"mitigation_after").TryNumber(double.NaN);
-            if(double.IsFinite(before) && before>0 && double.IsFinite(after) && after>=0)
-                explanation+=$"\n配对命中合计：公式前 {Number(before)}，结算 {Number(after)}。";
-            if(Math.Abs(percent)<=zeroTolerance)
-                explanation+="\n配对命中的公式前后伤害在测量精度内相同。";
-            else if(Math.Abs(percent)<0.5)
-                explanation+=$"\n舍入前比例 {percent.ToString("0.#####",CultureInfo.InvariantCulture)}%。";
-            return explanation;
-        }
-
-        double observed=damage.Get("observed_mitigation_rate").TryNumber(double.NaN);
-        if(verifiedPerHit && damage.Bool("mitigation_complete") && double.IsFinite(observed) && counted)
-            return (Fraction(observed),"被减伤率",Explain(observed,"observed_")+$"\n已配对的 {Number(hits)} 击。");
-        double full=verifiedPerHit ? double.NaN : row.Get("mitigation_rate").TryNumber(double.NaN);
-        if(double.IsFinite(full))
-            return (Fraction(full),"被减伤率",Explain(full,"")+(counted ? $"\n已配对的 {Number(hits)} 击。" : ""));
-
-        string reason=verifiedPerHit ? damage.Text("mitigation_reason") : row.Text("mitigation_unknown_reason");
-        if(verifiedPerHit && reason.Length==0) reason=damage.Text("reason");
-        if(verifiedPerHit && damage.Bool("complete") && damage.Get("observed_hits").TryNumber(double.NaN)==0)
-            reason="本次未造成伤害，没有可配对的命中。";
-        if(double.IsFinite(observed) && counted)
-        {
-            string coverage=$"仅统计已配对的 {Number(hits)} 击。";
-            double after=damage.Get("observed_mitigation_after").TryNumber(double.NaN);
-            double total=row.Get("damage").TryNumber(double.NaN);
-            if(!verifiedPerHit && row.Bool("counter_snapshot_complete") && after>=0 && total>0 && after<=total)
-                coverage+=$"这些命中的结算伤害占当前累计总伤的 {Percentage(after/total)}。";
-            if(reason.Length>0) coverage+="\n整局统计缺口："+reason;
-            return (Fraction(observed),"已观察减伤率",Explain(observed,"observed_")+"\n"+coverage);
-        }
-        return (double.NaN,"被减伤率",formula+"\n"+(reason.Length>0 ? reason : "尚无同一击的公式前伤害与结算伤害。"));
+        var reading=detail.Get("readings").Get("mitigation");
+        return (reading.Number("fraction",double.NaN),reading.Text("label"),reading.Text("explanation"));
     }
     private static string LegacyOverkillNote(JsonElement row,JsonElement detail,JsonElement view)
-    {
-        if(detail.Get("settled_damage").ValueKind==JsonValueKind.Object)
-        {
-            string reason=detail.Text("overkill_unknown_reason");
-            return detail.Bool("overkill_coverage_complete") ? "过量伤害按已对账的原生总伤计算。" :
-                "过量未知："+(reason.Length>0 ? reason : "缺少与原生总伤同口径的过量证据。");
-        }
-        if(row.Bool("overkill_coverage_complete")) return "有效伤害 = 总伤害 − 过量伤害";
-        if(!row.Bool("event_coverage_complete"))
-        {
-            string reason=view.Text("rate_reason");
-            if(reason.Length==0) reason="事件观察未建立覆盖或已中断";
-            return "过量未知："+reason;
-        }
-        var overkillReason=row.Text("overkill_unknown_reason");
-        return "过量未知："+(overkillReason.Length>0 ? overkillReason : "目标或实际扣血证据不足");
-    }
+        =>detail.Get("readings").Text("legacy_overkill_note");
     private void AddStat(Panel host,string label,string value,bool showZero=false)
     {
         if(!showZero && value=="0") return;
