@@ -48,7 +48,7 @@ TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', '
 BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py', 'boss_catalog.py',
            'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py', 'damage_settlement.py',
            'connection.py', 'desktop_audit.py', 'log_context.py', 'event_capture.py', 'event_observer.py', 'event_probe.py', 'event_stream.py',
-           'frida_provision.py', 'stack_capture.py', 'stack_capture.wprp',
+           'frida_provision.py', 'stack_capture.py', 'stack_capture.wprp', 'game_fps.py', 'game_fps_android.py',
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
            'stage_names.py', 'stats_core.py', 'native_pc_collector.py',

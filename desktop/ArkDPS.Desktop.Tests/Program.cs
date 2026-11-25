@@ -133,6 +133,7 @@ internal static class Program
         NativePcReadinessTests.Run();
         NativeBackendSettingsTests.Run();
         SamplingRejectionTests.Run();
+        GameFpsSidebarTests.Run();
         RefreshBudgetTests.Run();
         DesktopLogTests.Run();
         using var recovery = JsonDocument.Parse("""

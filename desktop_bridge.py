@@ -350,6 +350,9 @@ class DesktopState:
         self.error = ''
         self.connection_text = '等待定位本局'
         self.diagnostic = None
+        self.game_fps_monitor = None
+        self.game_fps_journal = None
+        self.game_fps_log_error = ''
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
         self.native_pc_bootstrap = None
@@ -359,6 +362,50 @@ class DesktopState:
         self.scanning = False
         self.history_notice = ''
         self.refresh_history()
+
+    def start_game_fps(self):
+        """Independent render observation must survive a blocked battle reader."""
+        if self.game_fps_monitor is not None:
+            return
+        from game_fps import GameFpsMonitor
+        context = LogContext(self.directory)
+
+        def warn(message):
+            self.game_fps_log_error = message
+            _write_diagnostic_event('game-fps', {'code': 'log_write_failed', 'message': message})
+
+        journal = DesktopCaptureJournal(self.directory / 'performance' / 'fps',
+            encoder=str, warn=warn, segment_bytes=4 * 1024 ** 2, total_bytes=32 * 1024 ** 2,
+            header=lambda _source, **_kwargs: context.header('game_fps', debug_mode=False),
+            debug_mode=True)
+        journal.__enter__()
+        self.game_fps_journal = journal
+
+        def emit(sample):
+            journal.write('game_fps', sample)
+            if not journal.retry_at:
+                self.game_fps_log_error = ''
+
+        self.game_fps_monitor = GameFpsMonitor(emit=emit)
+
+    def close_game_fps(self):
+        # Retain ownership when stop fails so final cleanup can retry. The
+        # journal cannot be closed while the observer can still publish to it.
+        if self.game_fps_monitor is not None:
+            self.game_fps_monitor.close()
+            self.game_fps_monitor = None
+        if self.game_fps_journal is not None:
+            self.game_fps_journal.__exit__(None, None, None)
+            self.game_fps_journal = None
+
+    def game_fps_snapshot(self):
+        if self.game_fps_monitor is None:
+            return dict(status='unavailable', source=None, fps=None, error_code='not_running')
+        self.game_fps_monitor.configure(self.effective_connection.to_dict(), self.diagnostic)
+        result = self.game_fps_monitor.snapshot()
+        if self.game_fps_log_error:
+            result['log_error'] = self.game_fps_log_error
+        return result
 
     def refresh_history(self):
         result = self.history.list_recent()
@@ -1006,6 +1053,7 @@ class DesktopState:
                     status=status, status_text=label, error=self.error,
                     battle_waiting=self.battle_waiting,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
+                    game_fps=self.game_fps_snapshot(),
                     observer_status=self.observer_status, event_status=self.event_status,
                     native_pc_bootstrap=self.native_pc_bootstrap,
                     sampling_rejection=self.sampling_rejection,
@@ -1993,6 +2041,7 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                 require_history_saved = cmd.get('require_history_saved', False)
                 if type(require_history_saved) is not bool:
                     raise ValueError('require_history_saved 必须是布尔值')
+                state.close_game_fps()
                 if worker and require_history_saved:
                     worker.close(require_history_saved=True)
                 elif worker:
@@ -2180,17 +2229,24 @@ def main(*, native_pc_observer_factory=None):
         revision = worker.request(effective_config,
             False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))
         state.expect_connection_request(effective_config, revision)
-        worker.thread.start()
     try:
+        if worker:
+            state.start_game_fps()
+            worker.thread.start()
         if args.internal_capture is not None:
             serve(sys.stdin, output, state, internal_capture=True)
         else:
             serve(sys.stdin, output, state, worker)
     finally:
-        if worker:
-            worker.close()
-        if instance:
-            instance.close()
+        try:
+            state.close_game_fps()
+        finally:
+            try:
+                if worker:
+                    worker.close()
+            finally:
+                if instance:
+                    instance.close()
 
 
 if __name__ == '__main__':

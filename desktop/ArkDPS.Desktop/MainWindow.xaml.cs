@@ -381,6 +381,7 @@ public partial class MainWindow : Window
     private void ApplySnapshot(JsonElement state)
     {
         applying=true;State=state;
+        UpdateGameFpsStatus(state);
         var layout=state.Get("layout");string theme=Theme.Normalize(layout.Text("theme"));
         UpdateDebugMode(layout.Bool("debug_mode"));
         string units = layout.Text("number_units") == "chinese" ? "chinese" : "western";
@@ -1625,6 +1626,7 @@ public partial class MainWindow : Window
     {
         if(quitting || closingRequested || (updateShutdownPreparing && !forUpdate))return;closingRequested=true;
         RequestStackCaptureStop();
+        StopGameFpsStatus();
         recoveryCancellation.Cancel();
         updateDownloadCancellation?.Cancel();
         poll.Stop();save.Stop();SideAttachmentTimer.Stop();
