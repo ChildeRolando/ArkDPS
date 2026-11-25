@@ -430,7 +430,7 @@ class Statistics:
             self.observed_skill_splits[owner].hit(owner in self.skill_active, amount, overkill)
 
     def _partial_hit(self, owner, when, amount, overkill, damage_type, *, supplement=False):
-        if self.partial_damage_enabled and amount > 0:
+        if self.partial_damage_enabled and not self.settlement_enabled and amount > 0:
             if owner not in self.partial_damage:
                 self.partial_damage[owner] = PartialDamage()
             key = NATIVE_DAMAGE_TYPES.get(damage_type) if type(damage_type) is int else None
@@ -1763,7 +1763,7 @@ class Statistics:
                 self._partial_hit(owner, game_time, amount, overkill if known else None, damage_type)
         if kind == 'shield_absorbed':
             self.shields[owner] = self.shields.get(owner, 0) + amount
-        elif kind in ('damage', 'healing') and amount > 0:
+        elif (kind == 'healing' or kind == 'damage' and not self.settlement_enabled) and amount > 0:
             # Damage dealt to a friendly/self target (e.g. a skill's HP cost)
             # is not outgoing DPS. Only enemy-directed damage defines the
             # damage engagement numerator and active interval. Healing keeps
@@ -1928,6 +1928,19 @@ class Statistics:
         return scoped, reason
 
     def _partial_row(self, owner, row, observed, burst, sources):
+        if self.settlement_enabled:
+            partial = dict(row['settled_damage'])
+            absorbed = self.shields.get(owner)
+            end = self.partial_watermark if self.partial_watermark is not None else self.event_coverage_start
+            partial.update(observed_shield_absorbed=absorbed,
+                shield_observation_window=(self.event_coverage_start, end) if absorbed is not None else None)
+            healing = self.engagement.get((owner, 'healing'))
+            if healing:
+                active = sum(max(0.0, min(end, right) - left) for left, right in healing['intervals'])
+                partial.update(engagement_healing=healing['total'] / active if active > 0 else None,
+                    active_healing=active,
+                    engagement_healing_unverified_share=_unverified_share(healing['total'], row['healing'] if row['counter_snapshot_complete'] else None))
+            return partial
         end = max(self.last_event_time, self.partial_watermark or self.event_coverage_start)
         start = max(self.event_coverage_start, self.now - 5)
         comparable_damage = (row['counter_snapshot_complete'] and not self.partial_unattributed_damage
@@ -2078,7 +2091,13 @@ class Statistics:
                         and row['recent_damage_window'] is not None
                         else None)
                 state = self.engagement.get((owner, kind))
-                if state:
+                if kind == 'damage' and self.settlement_enabled:
+                    lane = self._settlement_row(owner)
+                    row['settled_damage'] = lane
+                    row['engagement_damage'] = lane['engagement_damage']
+                    row['active_damage'] = lane['active_damage']
+                    row['observed_damage'] = lane['observed_damage']
+                elif state:
                     covered_until = self.event_coverage_end if self.event_coverage_end is not None else self.now
                     active = sum(max(0, min(covered_until, end) - start) for start, end in state['intervals'])
                     row['engagement_' + kind] = (state['total'] / active
@@ -2197,7 +2216,8 @@ class Statistics:
                 if boss_reason:
                     boss_reasons.add(boss_reason)
             if self.settlement_enabled:
-                row['settled_damage'] = self._settlement_row(owner)
+                if 'settled_damage' not in row:
+                    row['settled_damage'] = self._settlement_row(owner)
                 boss = row.setdefault('boss_damage', {})
                 if 'settled_damage' not in boss:
                     boss['settled_damage'] = self._settlement_row(owner, boss=True)

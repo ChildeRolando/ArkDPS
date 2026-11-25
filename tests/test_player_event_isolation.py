@@ -112,7 +112,8 @@ def test_frozen_foreign_cast_keeps_all_72_local_skill_classifications():
     assert lane.get('skill_split_reason') is None
     assert SOURCE not in adapter.statistics.skill_incomplete
     assert SOURCE not in adapter.statistics.settlement_skill_unassigned
-    assert row['observed_damage'] == 0, 'the only legacy damage record belongs to the other player'
+    assert row['observed_damage'] == pytest.approx(checkpoint['local_nominal_damage'])
+    assert row['observed_damage'] == lane['observed_damage'], 'modern observations come only from local certificates'
     assert not adapter.statistics.incoming_damage_sources, 'foreign HP evidence cannot mark a local gap'
     assert adapter.source_observed_uids[SOURCE] == {LOCAL_UID}
     assert not adapter.event_stream.closed
@@ -138,7 +139,8 @@ def test_same_cid_foreign_legacy_records_never_enter_local_accounts(kind):
     result = finish(adapter)
     row = result['rows'][SOURCE]
     assert adapter.statistics.events == before
-    assert row['observed_damage'] == (10 if kind == 'damage' else 0)
+    assert row['observed_damage'] is None, 'legacy output cannot fabricate a complete modern settlement'
+    assert row['settled_damage']['observed_hits'] == 0
     assert row['observed_healing'] == (10 if kind == 'healing' else 0)
     assert row['burst_count'] == (1 if kind == 'elemental_burst' else 0)
     assert row['shield_absorbed'] == (10 if kind == 'shield_absorbed' else 0)
