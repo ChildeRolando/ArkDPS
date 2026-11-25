@@ -420,3 +420,28 @@ def test_real_frozen_generation12_keeps_two_grey_throats_and_unobserved_slot_unk
         assert grey['ledger']['observed_hits'] == hits
         assert grey['ledger']['observed_damage'] == pytest.approx(nominal)
     assert value['identity_epoch'] == 0
+
+
+@pytest.mark.parametrize('problem', ['missing', 'different_side', 'different_cid', 'token_host', 'ambiguous'])
+def test_schema_one_token_host_rejects_unverified_candidates_without_cross_side_credit(problem):
+    host = actor(2, cid='char_4016_kazema')
+    token = actor(2, uid=299, cid='token_10022_kazema_shadow', is_token=True,
+                  host_key=host.cid, host_uid=host.unique_id)
+    hosts = [host]
+    if problem == 'missing':
+        hosts = []
+    elif problem == 'different_side':
+        hosts = [actor(3, uid=host.unique_id, cid=host.cid)]
+    elif problem == 'different_cid':
+        hosts = [actor(2, uid=host.unique_id, cid='char_other')]
+    elif problem == 'token_host':
+        hosts = [actor(2, uid=host.unique_id, cid=host.cid, is_token=True)]
+    else:
+        hosts.append(actor(3, uid=host.unique_id, cid=host.cid))
+    entries = hosts + [token]
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0, entries)
+    value = consume(meter, 2, entries, [hit(1, 2, 1, 500, uid=token.unique_id, cid=token.cid)])
+    assert value['schema_version'] == 1
+    assert all(item['observed_damage'] is None for item in value['players'])
+    assert any(item['reason'] == 'token_host_unverified' for item in value['unknown_attribution'])

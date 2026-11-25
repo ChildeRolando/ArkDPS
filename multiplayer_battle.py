@@ -815,12 +815,8 @@ class MultiplayerBattleStatistics:
             return 'source_uid_cid_mismatch', None, None, None
         actor = entry
         if entry.is_token:
-            hosts = self._roster.get(entry.host_uid, ())
-            if len(hosts) != 1:
-                return 'token_host_unverified', None, None, None
-            actor, = hosts
-            if (actor.is_token or actor.cid != entry.host_key
-                    or actor.player_side != entry.player_side):
+            actor = verified_roster_token_host(entry, self._roster.get(entry.host_uid, ()))
+            if actor is None:
                 return 'token_host_unverified', None, None, None
         if actor.player_side not in self._players:
             return 'player_side_unverified', None, None, None
