@@ -12,6 +12,8 @@ from capture_battles import observation_from_json
 from test_autochess_scope_end import OwnedScopeEnd, old_local
 from test_native_pc_autochess_acquisition import ROOTS
 from native_pc.probe_native_pc_battle import NativePcBattleProbe
+from native_pc_collector import NativePcCollector
+from test_pc_autochess_cross_frame_admission import CrossingPcBattle
 
 
 def reset_native_clock(case, *, serial_step=1, generation_step=1):
@@ -29,6 +31,89 @@ def reset_native_clock(case, *, serial_step=1, generation_step=1):
         *[int(value, 16) for value in ROOTS.values()], source.serial)).hexdigest()
     source.session = f'{source.birth[0]}:{source.birth[1]}:{source.digest}'
     case.advance(0)
+
+
+class CollectorClockBattle(CrossingPcBattle):
+    """Real collector methods over owned reports, without a process handle."""
+    def __init__(self):
+        super().__init__()
+        self.identity_roots = deepcopy(ROOTS)
+        self.changed_account = False
+        collector = NativePcCollector(None, collect_actions=False)
+        process = object.__new__(NativePcBattleProbe)
+        process.pid, process.process_instance = self.birth[0], self.birth
+        process._identity = process._last_clock = process._stage_id = None
+        process._serial = 0
+        process.process_alive = lambda: True
+        process.build = dict(known_build=True, source_build=self.build)
+        collector.process = process
+        collector.diagnostics.version_actual = self.build
+        collector.event_capability = dict(status='ready', error=None)
+        self.collector = collector
+
+        def sample(*, extra_reader):
+            roots = tuple(int(value, 16) for value in self.identity_roots.values())
+            fixed = int(self.when * (1 << 32))
+            process._serial = process.battle_serial_for(roots, self.frame, fixed, self.stage)
+            process._identity, process._last_clock, process._stage_id = roots, (self.frame, fixed), self.stage
+            point = dict(native_identity=deepcopy(self.identity_roots), frame=self.frame,
+                         native_fixed_time=str(fixed), stage_id=self.stage)
+            return dict(status='sample_available', sample=dict(
+                battle_serial=process._serial, frame=self.frame, game_time=self.when,
+                battle_state=2, stage_status='available', stage_id=self.stage,
+                actor_rows_status='unavailable', actor_rows=None,
+                roster_status='unavailable', roster=None, total_damage=0, total_heal=0,
+                native_window_guard=dict(version=1, source='native_pc_guarded_read',
+                    process_instance_before=list(self.birth), process_instance_after=list(self.birth),
+                    before=deepcopy(point), after=deepcopy(point), source_build=self.build,
+                    battle_serial=process._serial)))
+
+        process.sample = sample
+
+    @property
+    def native_scope(self):
+        return ':'.join(self.identity_roots.values()) + f':autochess:{self.autochess_epoch}'
+
+    def binding(self):
+        value = super().binding()
+        value['native_identity'] = deepcopy(self.identity_roots)
+        if self.changed_account:
+            value['native_autochess_context']['players'][0]['uid'] += '-other'
+        value.update(self.collector.observer_binding(frame=self.frame, game_time=self.when,
+            native_identity=value['native_identity'], native_stage_id=self.stage,
+            native_process_pid=self.birth[0], native_fixed_time=value['native_fixed_time']))
+        return value
+
+
+@pytest.mark.parametrize('fault', [None, 'unread_tail', 'roots', 'account', 'serial_skip'])
+def test_actual_native_pc_collector_binding_pair_and_serial_reset_reach_lifecycle(monkeypatch, fault):
+    import test_autochess_scope_end
+    monkeypatch.setattr(test_autochess_scope_end, 'CrossingPcBattle', CollectorClockBattle)
+    case = OwnedScopeEnd('native_pc', phase=4, mode='all')
+    source, collector = case.fixture, case.fixture.collector
+    old = deepcopy(source.runtime.sessions.latest_sample)
+    if fault == 'unread_tail':
+        case.advance(1.25, amount=75)
+    elif fault == 'roots':
+        source.identity_roots['stats'] = '0x60000'
+    elif fault == 'account':
+        source.changed_account = True
+    elif fault == 'serial_skip':
+        collector.process._serial += 1
+    # The actual collector predicts the new serial in observer_binding, then
+    # commits it in read_lifecycle before returning its guarded pair.
+    source.native_generation += 1
+    source.autochess_epoch += 1
+    case.advance(0)
+    successor = source.poll()
+    assert collector.process._serial == (3 if fault == 'serial_skip' else 2)
+    assert successor.sample['native_session'] != old['native_session']
+    assert (successor.round_reset is not None) is (fault in (None, 'unread_tail'))
+    archive, = source.runtime.sessions.pop_archives()
+    assert archive['event_status'] == ('finished' if fault is None else 'gap')
+    assert archive['last_sample']['native_window_guard'] == old['native_window_guard']
+    assert archive['statistics']['game_time'] == archive['last_sample']['game_time'] == 1
+    assert old_local(archive)['observed_damage'] == 300
 
 
 @pytest.mark.parametrize('phase', [4, 5, 6])
