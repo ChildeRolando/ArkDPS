@@ -185,13 +185,6 @@ class EventStream:
                 for uid, bar in tuple(self.statistics.settlement_bars.items()):
                     if uid == target_uid or bar[1] == target_instance:
                         self.statistics.discard_settlement_bar(uid)
-            if kind == 'elemental_bar' or elemental_burst:
-                # Keep foreign target witnesses from leaving earlier local
-                # buildup available to an eventual source-null explosion.
-                if isinstance(target_instance, str) and target_instance:
-                    self.statistics.last_elemental.pop(target_instance, None)
-                else:
-                    self.statistics.last_elemental.clear()
             self._record_receipt(sequence, frame, game_time, payload, replay_record)
             return
         ignore_unmatched_native_cast = False

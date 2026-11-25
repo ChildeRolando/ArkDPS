@@ -305,7 +305,6 @@ class Statistics:
         self.mitigation_probe_incomplete = False
         self.mitigation_unattributed_burst = False
         # Elemental bar damage is not HP damage; only its source matters.
-        self.last_elemental = {}
         self.burst = {}
         self.burst_unknown = False
         self.burst_unknown_reason = None
@@ -523,6 +522,21 @@ class Statistics:
             self.enemy_damage_incomplete = True
             return
         existing['amount'] += amount
+
+    @property
+    def last_elemental(self):
+        """Legacy observation projection of the sole target witness store."""
+        return {bar[1]: bar[3] for bar in self.settlement_bars.values()
+                if bar[2] == 'local' and bar[3] is not None}
+
+    def _discard_elemental_instance(self, instance, *, legacy=False):
+        # A legacy output callback previews the same hit before its complete
+        # settlement arrives. Only that settlement consumes modern witnesses.
+        if legacy and self.settlement_enabled:
+            return
+        for uid, bar in tuple(self.settlement_bars.items()):
+            if instance is None or bar[1] == instance:
+                self.discard_settlement_bar(uid)
 
     def record_settlement_bar(self, target_uid, target, instance, state, owner, actor, *, sequence=None, frame=None, game_time=None, birth=None):
         if (not self._enemy_identity(target if target is not None else 'elemental_bar', target_uid)
@@ -892,7 +906,7 @@ class Statistics:
                 self._mark_skill_owner_unresolved(owner)
         if (kind in ('elemental_bar', 'elemental_burst')
                 or kind == 'enemy_damage' and damage_type == 5) and target_instance:
-            self.last_elemental.pop(target_instance, None)
+            self._discard_elemental_instance(target_instance, legacy=True)
 
     def invalidate_source_total(self, source):
         state = self.sources.get(source)
@@ -1608,12 +1622,13 @@ class Statistics:
                 if self.partial_damage_enabled:
                     # The next source-null burst could belong to this bar.
                     # Without the target identity no previous bar is reliable.
-                    self.last_elemental.clear()
+                    self._discard_elemental_instance(None, legacy=True)
                     self.burst_unknown = True
                     self.burst_unknown_reason = '元素损伤缺少可靠的目标身份'
                     return
                 raise ValueError('elemental bar needs a source and target instance')
-            self.last_elemental[target_instance] = owner
+            if not self.settlement_enabled:
+                self.settlement_bars[('legacy', target_instance)] = (target, target_instance, 'local', owner, None)
             return
         if kind == 'elemental_burst':
             friendly = isinstance(target, str) and target.startswith(('char_', 'token_'))
@@ -1633,13 +1648,13 @@ class Statistics:
                         or type(killed) is not bool or killed != (hp_after <= 1e-6)))):
                 self._reject_burst_evidence('invalid elemental burst evidence', attributed, target, amount,
                                             sourceless=source is None)
-                self.last_elemental.pop(target_instance, None)
+                self._discard_elemental_instance(target_instance, legacy=True)
                 return
             actual = -real_delta
             if actual > amount + tolerance:
                 self._reject_burst_evidence('elemental burst actual exceeds settlement', attributed, target, amount,
                                             sourceless=source is None)
-                self.last_elemental.pop(target_instance, None)
+                self._discard_elemental_instance(target_instance, legacy=True)
                 return
             if attributed is None:
                 self.burst_unknown = True
@@ -1655,7 +1670,6 @@ class Statistics:
                 self._record_mitigation(source, attributed, amount, mitigation_before, mitigation_after)
             entry = self.burst.setdefault(attributed, {
                 'actual': 0.0, 'overkill': 0.0, 'settlement': 0.0, 'count': 0,
-                'added_settlement': 0.0,
             })
             burst_overkill = max(0.0, amount - actual)
             self._record_boss_damage(source, attributed, game_time, target, amount, 5, burst_overkill,
@@ -1667,8 +1681,10 @@ class Statistics:
             # The client already includes explicitly sourced burst settlement
             # in that source's native counter. Only attributed sourceless
             # settlement needs adding to native totals.
-            if source is None:
-                entry['added_settlement'] += amount
+            if not self.settlement_enabled:
+                self.settlement_supplements.setdefault(attributed, 0.0)
+                if source is None:
+                    self.settlement_supplements[attributed] += amount
             bucket = (self.skill_observed if attributed in self.skill_active
                       else self.non_skill_observed)
             bucket[attributed] = bucket.get(attributed, 0.0) + amount
@@ -1681,7 +1697,7 @@ class Statistics:
                                    else self.non_skill_overkill)
                 overkill_bucket[attributed] = (
                     overkill_bucket.get(attributed, 0.0) + burst_overkill)
-            self.last_elemental.pop(target_instance, None)
+            self._discard_elemental_instance(target_instance, legacy=True)
             return
         if kind in ('skill_start', 'skill_end'):
             self._record_skill_transition(
@@ -1723,7 +1739,7 @@ class Statistics:
                 overkill if known else None, reason, mitigation_before, mitigation_after)
             if known:
                 if killed and target_instance and settled_after_nested_kill is False:
-                    self.last_elemental.pop(target_instance, None)
+                    self._discard_elemental_instance(target_instance, legacy=True)
                 self.overkill[owner] = self.overkill.get(owner, 0.0) + overkill
                 if overkill > 0:
                     self.overkill_events.append((game_time, owner, overkill))
@@ -2000,8 +2016,7 @@ class Statistics:
                 row['damage_scope_reason'] = DAMAGE_SCOPE_MISMATCH
                 row['mitigation_unknown_reason'] = DAMAGE_SCOPE_MISMATCH
             burst = self.burst.get(owner)
-            added_settlement = (self.settlement_supplements.get(owner) if self.settlement_enabled
-                                else burst['added_settlement'] if burst else None)
+            added_settlement = self.settlement_supplements.get(owner)
             burst_complete = not self.burst_unknown
             row['burst_damage'] = (burst['actual'] if burst and burst_complete else None)
             row['burst_overkill'] = (burst['overkill'] if burst and burst_complete else None)
