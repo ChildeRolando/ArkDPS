@@ -4,11 +4,17 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {fixture} = require('./native_pc_frida_probe_fixture.js');
 
-function scenario(platform, order, fault = null) {
+function scenario(platform, order, fault = null, withoutLegacyWire = false) {
   const f = fixture({platform, settlement: true, traceHpContext: true,
     sourcePath: path.join(__dirname, '..', platform === 'native_pc' ?
       'event_probe_native_pc.js' : 'event_probe_android2791.js')});
   f.clock(30, 4294967296n);
+  if(withoutLegacyWire)f.vm.runInContext(`{
+    const original=record;record=function(source,kind,...args){
+      if(['damage','hp_damage','elemental_burst'].includes(kind))return undefined;
+      return original(source,kind,...args);
+    };
+  }`,f.context);
   const source = f.unit('char_147_shining', 10), target = f.unit('enemy_test', 12);
   const modifier = f.modifier(source, target, 40, 0, 1);
   f.write(target.add(0x40), 50n * 4294967296n);
@@ -75,10 +81,10 @@ function scenario(platform, order, fault = null) {
     return {mark, batch, raw_damage: damage, settlement: settlement ?? null, synthetic: 'owned contradictory proof: ' + fault};
   }
   assert(settlement);
-  assert.equal(damage.amount, 40);
-  assert.equal(damage.real_delta, -40);
-  assert.equal(damage.hp_before, 50);
-  assert.equal(damage.hp_after, 10);
+  assert.equal(damage,undefined);
+  assert.equal(settlement.real_delta,-40);
+  assert.equal(settlement.hp_before,50);
+  assert.equal(settlement.hp_after,10);
   assert.equal(settlement.amount, 40);
   assert.equal(settlement.settlement_complete, true);
   assert.equal(settlement.shield_absorbed, 0);
@@ -92,6 +98,7 @@ for (const platform of ['android', 'native_pc']) {
   report[platform] = {};
   for (const order of ['output_enter_zero_leave_committed', 'early_output_before_target',
     'no_output_callback', 'late_output_after_target', 'target_return_before_apply_commit']) report[platform][order] = scenario(platform, order);
+  report[platform].without_legacy_wire = scenario(platform, 'target_return_before_apply_commit', null, true);
   report[platform].rejected = {};
   for (const fault of ['target_uid', 'source_uid', 'source_id', 'target_id', 'source_pointer',
     'target_pointer', 'hp_difference', 'nominal_less_than_hp', 'damage_type', 'cancel_reason',

@@ -389,8 +389,8 @@ def test_standard_package_admits_native_component_alongside_frida_and_updates(po
 
 
 @pytest.mark.parametrize('field,value', [
-    ('experimental', True), ('experimental', 0), ('performance_verified', False),
-    ('performance_verified', 1), ('autochess_handoff_verified', False),
+    ('experimental', True), ('experimental', 0), ('performance_verified', None),
+    ('performance_verified', 1), ('autochess_handoff_verified', 'false'),
     ('scope', 'production'), ('sha256', '0' * 64),
 ])
 def test_standard_package_still_requires_exact_release_component(portable, field, value):
@@ -406,3 +406,11 @@ def test_standard_package_keeps_full_source_integrity_checks(portable):
     (portable['root'] / 'event_probe_runtime.js').write_bytes(b'changed')
     with pytest.raises(RuntimeError):
         module.native_hook_binary(portable['root'])
+
+
+@pytest.mark.parametrize('performance,handoff', [(False, False), (False, True), (True, False), (True, True)])
+def test_standard_package_live_acceptance_flags_are_facts_not_loading_capabilities(portable, performance, handoff):
+    release_profile(portable)
+    portable['component'].update(performance_verified=performance, autochess_handoff_verified=handoff)
+    portable['save_release']()
+    assert module.native_hook_binary(portable['root']) == portable['binary']

@@ -543,13 +543,15 @@ def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
     leave = js[js.index('let endStamp;'):js.index('\ninstallEnemyEntryHooks();')]
     cleanup = leave[leave.index('}finally{'):]
     assert cleanup.index('if(this.tracksModifier)') < cleanup.index('leaveModifier(this)')
-    assert cleanup.index('flushOutputSettlement(this,endStamp)') < cleanup.index('leaveModifier(this)')
+    assert cleanup.index('finalizeModifierSettlement(this,endStamp)') < cleanup.index('leaveModifier(this)')
+    finalizer = js[js.index('function finalizeModifierSettlement('):js.index('function ', js.index('function finalizeModifierSettlement(') + 9)]
+    assert 'flushOutputSettlement(scope,when)' in finalizer
     assert 'lastBarTarget' not in js
     assert "record(this.source,'hp_damage'" in js
     # Target-side HP evidence only describes our own outgoing damage. Enemy
     # attacks on operators are not stream events; emitting them closed the
     # whole authoritative stream before this guard existed.
-    hp_guard = js[js.index("if(this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)"):]
+    hp_guard = js[js.index("if((!enemyDamageReady||this.modifierScope?.settlementDomainEntry?.kind!=='potential')&&this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)"):]
     assert hp_guard.index("record(this.source,'hp_damage'") < hp_guard.index('const hpAfter=targetHp(this.target)')
 
 

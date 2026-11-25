@@ -233,6 +233,75 @@ def test_clear_settlement_quality_requires_coherent_optional_source_contract(qua
     assert ledger['unverified_share'] == (0 if complete else None)
 
 
+@pytest.mark.parametrize('phase', [5, 6])
+@pytest.mark.parametrize('fault', [None, 'mixed', 'unlocalized', 'foreign', 'malformed', 'old_conflict'])
+def test_retired_localized_quality_does_not_poison_new_scope_or_reassign_old_owner(phase, fault):
+    meter = MultiplayerBattleStatistics()
+    metadata = dict(platform='native_pc', stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m12')
+    old_native = lambda t, slot=1: dict(context(t, members=[member(slot, uid=101), member(3)]),
+                                        collection_mode='local')
+    consume(meter, 0, native=old_native(0), battle_metadata=metadata)
+    consume(meter, 10, native=old_native(10), battle_metadata=metadata)
+    if fault == 'old_conflict':
+        consume(meter, 11, native=old_native(11, 2), battle_metadata=metadata)
+    old_issue = dict(source=CID, source_character_uid=101, frame=270, game_time=9,
+                     native_autochess_scope=stamp(when=9, collection_mode='local'))
+    if fault == 'foreign':
+        old_issue['native_autochess_scope']['scope_key'] += '-foreign'
+    elif fault == 'malformed':
+        old_issue['native_autochess_scope']['frame'] = 269
+    # CID/UID 101 now belongs to another account. The old issue must never
+    # degrade that current actor merely because the textual key was reused.
+    new_native = lambda t: dict(context(t, phase=phase, native_round=5,
+        root=ROOT + ':new', members=[member(2, uid=101), member(3)]), collection_mode='all')
+    new_stamp = lambda t: stamp(when=t, phase=phase, native_round=5,
+                                root=ROOT + ':new', collection_mode='all')
+    consume(meter, 0, native=new_native(0), battle_metadata=metadata)
+    issues = [old_issue]
+    if fault == 'mixed':
+        issues.append(dict(source=CID, source_character_uid=101, frame=30, game_time=1,
+                           native_autochess_scope=new_stamp(1)))
+    quality = dict(enemy_damage_unknown=True, damage_settlement_unknown=True,
+        damage_settlement_source_quality_version=1,
+        damage_settlement_unlocalized_unknown=fault == 'unlocalized',
+        damage_settlement_source_issues=issues)
+    frozen = deepcopy(quality)
+    events = [hit(1, 2, 1, 11, uid=101, event_scope=new_stamp(1)),
+              hit(2, 3, 1, 23, event_scope=new_stamp(1)),
+              hit(3, 3, 1, 0, event_scope=new_stamp(1), nominal_amount=None,
+                  settlement_complete=False, shield_absorbed=None)]
+    result = consume(meter, 2, events, native=new_native(2), quality=quality, battle_metadata=metadata)
+    assert quality == frozen
+    global_gap = fault in ('unlocalized', 'foreign', 'malformed', 'old_conflict')
+    assert ('结算事件质量未完整确认' in result['reasons']) is global_gap
+    peer, = player(result, 2)['actor_ledgers']
+    assert peer['ledger']['effective_damage'] == 11
+    assert peer['ledger']['complete'] is (not global_gap and fault != 'mixed')
+    local, = player(result, 3)['actor_ledgers']
+    assert local['ledger']['effective_damage'] == 23
+    assert local['ledger']['observed_hits'] == 2 and local['ledger']['unverified_hits'] == 1
+    assert meter._sequence == 3 and not meter._closed
+
+
+def test_changed_account_graph_with_reused_event_stamp_cannot_reassign_numeric_issue():
+    meter = MultiplayerBattleStatistics()
+    metadata = dict(platform='native_pc', stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m12')
+    native = lambda t, players=PLAYERS: dict(context(t, members=[member(3)], players=players),
+                                            collection_mode='all')
+    consume(meter, 0, native=native(0), battle_metadata=metadata)
+    consume(meter, 1, native=native(1), battle_metadata=metadata)
+    changed_players = deepcopy(PLAYERS)
+    changed_players[2]['uid'] = 'new-account'
+    consume(meter, 1, native=native(1, changed_players), battle_metadata=metadata)
+    issue = dict(source=CID, source_character_uid=301, frame=30, game_time=1,
+                 native_autochess_scope=stamp(when=1, collection_mode='all'))
+    result = consume(meter, 2, native=native(2, changed_players), battle_metadata=metadata,
+        quality=dict(enemy_damage_unknown=True, damage_settlement_unknown=True,
+            damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=False,
+            damage_settlement_source_issues=[issue]))
+    assert '结算事件质量未完整确认' in result['reasons']
+
+
 @pytest.mark.parametrize('legacy_name', [False, True])
 def test_native_strategy_operator_uses_its_catalog_name_and_own_portrait_id(tmp_path, legacy_name):
     from desktop_bridge import DesktopState, _event_only_statistics

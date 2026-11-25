@@ -12,10 +12,14 @@ from acceptance.verify_live_events import pc_mechanism_evidence
 
 @pytest.fixture(scope='module')
 def producer():
-    fixture = Path(__file__).with_name('event_probe_nested_elemental_chain_fixture.js')
-    data = subprocess.run(['node', str(fixture)], check=True, capture_output=True,
-                          encoding='utf-8', timeout=30)
-    return json.loads(data.stdout)
+    # Immutable pre-single-wire owned input. Modern producer output has its
+    # own gate below; never reconstruct legacy records from certificates.
+    import hashlib
+    fixture = Path(__file__).with_name('fixtures') / 'event_probe_business' / 'owned-nested-v1-producer-output.json'
+    raw = fixture.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == '47e28e1c38ae314a9ec2e4aac4552e48f8d02d228c78f857f480c311c7525af7'
+    return json.loads(raw)
+
 
 
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
@@ -199,6 +203,77 @@ def test_children_kill_zero_parent_requires_original_target_entry_and_exact_zero
         burst.update(hp_before=step['hp_before'], real_delta=step['real_delta'])
         by_sequence[step['settlement_sequence']]['amount'] = -step['real_delta']
     settlement['proof']['nested_elemental_chain'] = deepcopy(chain)
+    result = pc_mechanism_evidence(events)['nested']
+    assert result['passed'] is False and result['positive_witnesses'] == []
+    assert parent['sequence'] in result['invalid_sequences']
+
+
+@pytest.fixture(scope='module')
+def modern_producer():
+    fixture = Path(__file__).with_name('event_probe_nested_elemental_chain_fixture.js')
+    result = subprocess.run(['node', str(fixture)], check=True, capture_output=True,
+                            encoding='utf-8', timeout=30)
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('platform', ['android', 'native_pc'])
+def test_single_wire_nested_certificates_pass_without_legacy_events(modern_producer, platform):
+    for report in [*modern_producer[platform]['valid'], modern_producer[platform]['legacy_zero']]:
+        events = report['batch']['events']
+        assert not any(event['kind'] in ('damage', 'hp_damage', 'elemental_burst') for event in events)
+        result = pc_mechanism_evidence(events)
+        assert result['nested']['passed'] is True, report['name']
+        parent_sequence = result['nested']['positive_witnesses'][0]['parent_sequence']
+        parent = next(event for event in events if event['sequence'] == parent_sequence)
+        assert parent['kind'] == 'damage_settlement'
+        assert parent['proof']['target_callback_checkpoint']['returned'] is True
+        chain = parent['proof'].get('nested_elemental_chain')
+        if chain:
+            assert chain['version'] == 2
+            assert all('burst_sequence' not in child for child in chain['children'])
+
+
+@pytest.mark.parametrize('fault', ['missing_child', 'duplicate_sequence', 'parent_reference',
+    'bool_reference', 'unknown_key', 'child_hp', 'child_real', 'child_uid', 'child_scope',
+    'child_partial', 'child_shield', 'parent_actual', 'parent_hp', 'parent_partial',
+    'checkpoint_missing', 'checkpoint_hp', 'checkpoint_uid', 'checkpoint_clock',
+    'entry_rewrite', 'truncated_chain', 'bool_hp', 'version_bool', 'parent_nominal', 'native_observation'])
+def test_single_wire_chain_keeps_strict_references_hp_and_independent_entry(modern_producer, fault):
+    report = next(report for report in modern_producer['native_pc']['valid']
+                  if report['name'] == 'r15_qiubai_f1096_children_kill_zero_parent')
+    events = deepcopy(report['batch']['events'])
+    parent = next(event for event in events if event['kind'] == 'damage_settlement'
+                  and 'nested_elemental_chain' in event['proof'])
+    chain = parent['proof']['nested_elemental_chain']
+    step = chain['children'][-1]
+    child = next(event for event in events if event['sequence'] == step['settlement_sequence'])
+    checkpoint = parent['proof']['target_callback_checkpoint']
+    if fault == 'missing_child': events.remove(child)
+    elif fault == 'duplicate_sequence': events.append(deepcopy(child))
+    elif fault == 'parent_reference': step['settlement_sequence'] = parent['sequence']
+    elif fault == 'bool_reference': step['settlement_sequence'] = True
+    elif fault == 'unknown_key': step['burst_sequence'] = child['sequence']
+    elif fault == 'child_hp': child['hp_after'] += 1
+    elif fault == 'child_real': child['real_delta'] += 1
+    elif fault == 'child_uid': child['source_character_uid'] += 1
+    elif fault == 'child_scope': child['native_autochess_scope']['round'] += 1
+    elif fault == 'child_partial': child['settlement_complete'] = False
+    elif fault == 'child_shield': child['shield_absorbed'] = 1
+    elif fault == 'parent_actual': parent['amount'] += 1
+    elif fault == 'parent_hp': parent['hp_before'] += 1
+    elif fault == 'parent_partial': parent['settlement_complete'] = False
+    elif fault == 'parent_nominal': parent['nominal_amount'] += 1
+    elif fault == 'native_observation': parent['proof']['native_modifier_observation']['amount'] += 1
+    elif fault == 'checkpoint_missing': parent['proof'].pop('target_callback_checkpoint')
+    elif fault == 'checkpoint_hp': checkpoint['hp_before'] -= 1
+    elif fault == 'checkpoint_uid': checkpoint['source_character_uid'] += 1
+    elif fault == 'checkpoint_clock': checkpoint['frame'] += 1
+    elif fault == 'entry_rewrite': chain['parent_entry_hp_before'] -= 1
+    elif fault == 'truncated_chain':
+        chain['children'].pop(0)
+        chain['parent_entry_hp_before'] = chain['children'][0]['hp_before']
+    elif fault == 'bool_hp': step['hp_after'] = False
+    elif fault == 'version_bool': chain['version'] = True
     result = pc_mechanism_evidence(events)['nested']
     assert result['passed'] is False and result['positive_witnesses'] == []
     assert parent['sequence'] in result['invalid_sequences']

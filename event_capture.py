@@ -4,12 +4,12 @@ The observer must serialize marks with callback entry/exit and retain numbered
 records until the host has committed the corresponding watermark.
 """
 from collections import deque
+from copy import deepcopy
 
-from autochess_context import normalize_native_autochess
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
 from event_probe import (NativePcBinding, NativePcProbeContract, _ROUND_START_BINDING, _ROUND_START_PREFIX_LIMIT,
-                         _autochess_scope_key, _round_start_integer, _valid_round_start_point,
+                         autochess_raw_read_scope, _round_start_integer, _valid_round_start_point,
                          bind_native_autochess_pair, contract_for, event_processing_payload)
 from roster import RosterUnavailable
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
@@ -70,21 +70,8 @@ _ROUND_START_READ_SIZE = 2048
 
 
 def _round_start_read_scope(payload):
-    scope_key = _autochess_scope_key(payload)
-    fixed = payload.get('native_fixed_time')
-    if (scope_key is None or not isinstance(fixed, str) or not 0 < len(fixed) <= 19
-            or not fixed.isascii() or not fixed.isdecimal() or int(fixed) > 0x7fffffffffffffff):
-        raise StreamGap('invalid AutoChess round-start read clock or roots')
-    context = normalize_native_autochess(payload.get('native_autochess_context'),
-        expected_frame=payload.get('native_frame', payload.get('frame')),
-        expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope_key)
-    if (context.get('status') not in ('available', 'partial') or not context.get('match_key')
-            or context.get('phase') not in (4, 5, 6) or context.get('self_player_uid') is None
-            or context.get('collection_mode') not in ('all', 'local')):
-        raise StreamGap('invalid AutoChess round-start read scope or account table')
-    accounts = tuple(sorted((row['index'], row['uid']) for row in context['players']))
-    return (context['identity'], context['match_key'], context['self_player_index'],
-            context['self_player_uid'], context['collection_mode'], accounts)
+    # Historical zero-origin frame fallback stays in the canonical parser.
+    return autochess_raw_read_scope(payload)[1]
 
 
 def _read_long_round_start_prefix(observer, sequence, batch, contract):
@@ -159,6 +146,65 @@ def read_event_batch(observer, sequence, *, baseline=False):
         raise CaptureRetry(str(exc)) from exc
 
 
+def read_pending_scope_prefix(observer, anchor, evidence, sample, *, cursor_lifetime):
+    """Acquire retained pages once; Sessions and multiplayer never read them."""
+    from event_probe import (_verified_pending_scope_anchor, _PENDING_SCOPE_PAGE_SIZE,
+                             verified_pending_scope_start, _ROUND_START_PREFIX_LIMIT, _PENDING_SCOPE_BYTES,
+                             check_cursor_lifetime)
+    check_cursor_lifetime(observer, cursor_lifetime)
+    point, _, contract = _verified_pending_scope_anchor(anchor)
+    after, through = anchor['sequence'], evidence['sequence']
+    if (type(through) is not int or not after <= through <= after + _ROUND_START_PREFIX_LIMIT):
+        raise StreamGap('pending scope prefix cursor is outside its budget')
+    read_range = getattr(observer, 'read_round_start_range', None)
+    if not callable(read_range):
+        raise StreamGap('event probe cannot read retained pending scope prefixes')
+    import json
+    size = len(json.dumps(anchor, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+    pages, records = [], []
+    while after < through:
+        end = min(after + _PENDING_SCOPE_PAGE_SIZE, through)
+        try:
+            check_cursor_lifetime(observer, cursor_lifetime)
+            batch = read_range(after, end)
+            check_cursor_lifetime(observer, cursor_lifetime)
+        except ObserverReadRetry as exc:
+            raise CaptureRetry(str(exc)) from exc
+        if isinstance(batch, dict) and batch.get('retry'):
+            raise CaptureRetry('pending scope prefix read requires retry')
+        if not isinstance(batch, dict) or not isinstance(batch.get('events'), list):
+            raise StreamGap('invalid pending scope prefix reply')
+        if len(batch['events']) != end - after:
+            raise StreamGap('incomplete pending scope prefix reply')
+        page = dict(after=after, through=end, batch=batch)
+        try:
+            size += len(json.dumps(page, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise StreamGap('invalid pending scope raw JSON') from exc
+        if size > _PENDING_SCOPE_BYTES:
+            raise StreamGap('pending scope prefix exceeds byte budget')
+        pages.append(deepcopy(page))
+        records.extend(batch['events'])
+        after = end
+    # Empty ranges still use a real raw read at the current endpoint, not a
+    # new baseline that could exclude the first later hit.
+    try:
+        check_cursor_lifetime(observer, cursor_lifetime)
+        batch = pages[-1]['batch'] if pages else read_range(after, through)
+        check_cursor_lifetime(observer, cursor_lifetime)
+    except ObserverReadRetry as exc:
+        raise CaptureRetry(str(exc)) from exc
+    if not isinstance(batch, dict) or batch.get('retry'):
+        raise CaptureRetry('pending scope empty range requires retry')
+    if not pages and batch.get('events') != []:
+        raise StreamGap('pending scope empty range returned an unexpected prefix')
+    result = dict(evidence, drain=dict(batch, events=records, probe_contract=contract.describe()),
+                  pending_scope_start=dict(version=1, anchor=deepcopy(anchor), pages=pages))
+    checked = dict(sample, native_session=sample.get('native_session', sample.get('session')))
+    verified_pending_scope_start(checked, result, previous_sequence=anchor['sequence'])
+    return result
+
+
 def acknowledge_event_batch(observer, sequence):
     """Confirm a host-owned prefix, returning False for an uncertain response.
 
@@ -210,6 +256,7 @@ class LiveEventCapture:
         self.last_sample = None
         self.baseline_sequence = None
         self.initial_drain = True
+        self._enemy_damage_ready = None
         self.closed = False
 
     def close(self):
@@ -363,6 +410,17 @@ class LiveEventCapture:
                     'enemy_damage_ready': mark.get('enemy_damage_ready') is True,
                     'enemy_damage_unknown': mark.get('enemy_damage_unknown') is not False,
                 }
+            ready_declaration = drained.get('enemy_damage_ready')
+            mark_declaration = mark.get('enemy_damage_ready') if mark is not None else None
+            if (type(ready_declaration) is bool and type(mark_declaration) is bool
+                    and ready_declaration != mark_declaration):
+                raise StreamGap('enemy certificate capability differs between mark and drain')
+            if self.initial_drain:
+                self._enemy_damage_ready = ready_declaration if type(ready_declaration) is bool else None
+            elif self._enemy_damage_ready is not None and any(
+                    type(value) is bool and value != self._enemy_damage_ready
+                    for value in (ready_declaration, mark_declaration)):
+                raise StreamGap('enemy certificate capability changed within an observation stream')
             version = drained.get('partial_damage_version')
             if type(version) is int and version in (1, 2, 3, 4, 5, 6, 7):
                 self.adapter.statistics.partial_damage_enabled = True
@@ -371,10 +429,26 @@ class LiveEventCapture:
                 if version >= 3:
                     self.adapter.statistics.settlement_enabled = True
                     self.adapter.statistics.damage_settlement_version = version
+                    # Capability fallback is an explicit initial producer declaration,
+                    # never a missing flag normalized to False or a later family change.
+                    if self.initial_drain:
+                        self.adapter.statistics.legacy_observation_mode = (
+                            drained.get('enemy_damage_ready') is False
+                            and drained.get('enemy_damage_unknown') is False
+                            and (mark is None or mark.get('enemy_damage_ready') is False
+                                 and mark.get('enemy_damage_unknown') is False))
                     ready = damage_quality.get('damage_settlement_ready', damage_quality.get('enemy_damage_ready'))
                     unknown = damage_quality.get('damage_settlement_unknown',
                                                  damage_quality.get('enemy_damage_unknown'))
-                    self.adapter.statistics.settlement_stream_incomplete |= (ready is not True or bool(unknown))
+                    deliberate_legacy = (
+                        getattr(self.adapter.statistics, 'legacy_observation_mode', False)
+                        and drained.get('enemy_damage_ready') is False
+                        and drained.get('enemy_damage_unknown') is False
+                        and (mark is None or mark.get('enemy_damage_ready') is False
+                             and mark.get('enemy_damage_unknown') is False)
+                        and not bool(unknown))
+                    self.adapter.statistics.settlement_stream_incomplete |= (
+                        ready is not True and not deliberate_legacy or bool(unknown))
             self._apply_quality(contract.normalize_quality(drained), damage_quality)
             self.pending.extend(drained['events'])
             while self.pending:

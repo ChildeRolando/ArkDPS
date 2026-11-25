@@ -18,6 +18,8 @@ MuMu 的 `guard` 仍属于原快照。PC 的 `native_window_guard` 来自原生�
 
 ## 进程与所有权
 
+战绩保留扫描仍逐个读取文件并计算完整字节SHA-256；完全相同的文件可复用上次成功的格式与内容校验，避免每次归档同步重做全目录JSON归一化和数值验证。每个BattleHistory实例最多缓存128条、64MiB规范化JSON字节，不缓存调用者可修改的对象，不依赖mtime或长度。每次读取仍生成独立副本；任何字节变化都重新验证，坏文件继续报告，修复后可重新读取。原有原子写入、fsync、落盘回读、ID冲突及100份可靠战绩保留规则不变。首次扫描仍完整验证，重复扫描的耗时改善不代表整个采集周期或游戏FPS。
+
 - `desktop/ArkDPS.Desktop` 是 .NET 10 / C# / WPF 原生 UI：主窗、统计面板、历史页、连接表单、固定干员报告、HUD、托盘与 PNG 均由 WPF 绘制；不是 Tk 换皮，也没有 WebView。
 - WPF 启动一个 `desktop_bridge.py` 子进程。只有 Python 可以调用 `ConnectionConfig` / `CollectionSession` / `BattleRuntime` / `BattleHistory`；C# 不读游戏内存，不执行 ADB，不重新计算统计或占比。`DesktopState.view` 只调用既有 `render_panel`。
 - GUI 隐藏时两个进程仍运行，HUD 跟随当前局。显式退出发送 `quit`，worker 停止并 join 采集线程、释放自己拥有的观察器及转发，再发 `bye`；UI 等待进程实际退出。stdin EOF 也触发同一清理路径。最终清理在审计流关闭前最多重试一次。若重试仍未能释放资源，则保留所有权并令退出失败。没有按进程名称杀进程，也不因协议错误静默切换到模拟数据。

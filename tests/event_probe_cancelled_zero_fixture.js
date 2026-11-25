@@ -24,6 +24,11 @@ function observe(platform, scenario) {
 
   function unreadableShieldClock() {
     f.clock(30, undefined);
+    const nativeClock = f.vm.runInContext('clock', f.context);
+    // The same deliberate field fault must remain unreadable through scalar
+    // and bulk APIs; it must never become a genuine zero-time regression.
+    assert.throws(() => nativeClock.add(4).readS64(), /undefined/);
+    assert.throws(() => nativeClock.readByteArray(12), /Unreadable fixture address/);
     const call = {threadId: 1};
     block.onEnter.call(call, [f.alloc(), f.alloc(), modifier, f.ptr(0), f.ptr(FIXED)]);
     block.onLeave.call(call);
@@ -110,7 +115,7 @@ for (const platform of ['native_pc', 'android']) {
     const batch = observe(platform, scenario);
     assert.equal(batch.enemy_damage_unknown, false, platform + ':' + scenario);
     assert.deepEqual(Array.from(batch.events, event => [event.kind, event.amount]),
-      [['hp_damage', 40]], platform + ':' + scenario);
+      [], platform + ':' + scenario);
     assert.equal(batch.shield_unknown, scenario === 'previous_shield_fault');
   }
   for (const scenario of ['other_cancellation', 'nonzero_amount', 'changed_hp', 'nonzero_delta',

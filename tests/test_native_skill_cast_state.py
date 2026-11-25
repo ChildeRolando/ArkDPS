@@ -180,7 +180,7 @@ def test_empty_skill_keys_cannot_match_conflicting_nonempty_skill_ids(platform, 
 
 
 @pytest.mark.parametrize('start_actor,actor,key,frame,stays_open', [
-    (77, 78, KEY, 60, False), (77, 77, 'other-skill', 60, True),
+    (77, 78, KEY, 60, True), (77, 77, 'other-skill', 60, True),
     (None, None, KEY, 60, False), (77, 77, KEY, None, False),
 ])
 def test_normal_cast_return_requires_matching_verified_actor_and_frame(

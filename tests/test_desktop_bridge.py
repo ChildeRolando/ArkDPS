@@ -663,8 +663,8 @@ def test_boss_only_uses_scoped_rates_and_details_without_changing_global_stats(t
     assert (a['owner_id'], a['value'], a['rate'], a['share']) == (
         'a', expected if ranking == 'dps' else 160., expected, 1.)
     assert view['footer_total'] == 160. and view['share_scope'] == 'team'
-    assert view['source']['a']['damage'] == 180.
-    assert view['source']['a']['mitigation_rate'] == 10.
+    assert view['details_by_owner']['a']['damage'] == 180.
+    assert view['details_by_owner']['a']['readings']['mitigation']['fraction'] == .1
     assert view['details_by_owner']['a']['effective_damage_by_type'] == {'arts': 160.}
     assert view['details_by_owner']['a']['skill_damage_effective'] == 100.
     assert view['rates']['a']['damage']['text'] == '40/s'

@@ -49,6 +49,7 @@ def test_short_observation_starts_at_event_baseline_and_explicit_recent_cutoff()
     stats, stream = setup(observed_from=2)
     unobserved_actor = watermark(stats, stream, 2)
     assert unobserved_actor['observed_healing_total'] is None
+    assert unobserved_actor['observed_healing_window'] is None
     assert_recent(unobserved_actor, None, None)
     heal(stats, stream, 2, 10)
     heal(stats, stream, 2.5, 30)
@@ -56,6 +57,7 @@ def test_short_observation_starts_at_event_baseline_and_explicit_recent_cutoff()
     assert first['healing'] is first['recent_healing'] is None
     assert first['observed_healing_total'] == first['observed_healing'] == 40
     assert first['observed_healing_complete'] is True
+    assert first['observed_healing_window'] == (2, 3)
     assert first['counter_snapshot_complete'] is False and stats.result()['totals_complete'] is False
     assert_recent(first, 40, (2, 3))
     assert_recent(watermark(stats, stream, 7), 8, (2, 7))

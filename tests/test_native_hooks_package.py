@@ -357,7 +357,7 @@ def test_standard_release_ships_both_backends_and_update_protocol(tmp_path, monk
     release = json.loads((bundle / 'metadata/release.json').read_text())
     component = release['native_pc_native_hooks']
     assert component['scope'] == 'official-pc' and component['experimental'] is False
-    assert component['performance_verified'] is True and component['autochess_handoff_verified'] is True
+    assert component['performance_verified'] is False and component['autochess_handoff_verified'] is False
     assert release['update_protocol'] == 1 and release['frida'] == package.FRIDA_VERSION
     for name in ('frida_runtime.py', 'native_hook_runtime.py', 'native_hook_source.py', 'internal_event_source.py'):
         assert 'collector/native_pc/' + name in release['files']
@@ -366,3 +366,12 @@ def test_standard_release_ships_both_backends_and_update_protocol(tmp_path, monk
     readme = (bundle / 'README.txt').read_text('utf-8-sig')
     assert '检测到环境存在异常' in readme
     assert '启动测试包' not in readme and '性能尚未验收' not in readme
+
+
+@pytest.mark.parametrize('released', [True, False])
+def test_distribution_profile_never_implies_live_acceptance(released):
+    from native_pc.native_hook_source import NATIVE_HOOK_PACKAGE_PATH, NATIVE_HOOK_BUILD_MANIFEST_PATH
+    component = package.native_hook_component({NATIVE_HOOK_PACKAGE_PATH: 'a' * 64,
+        NATIVE_HOOK_BUILD_MANIFEST_PATH: 'b' * 64}, released=released)
+    assert component['performance_verified'] is False
+    assert component['autochess_handoff_verified'] is False

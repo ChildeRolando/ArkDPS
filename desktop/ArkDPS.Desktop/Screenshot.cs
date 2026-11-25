@@ -21,9 +21,9 @@ internal static class Screenshot
         using var stream=new MemoryStream();encoder.Save(stream);return stream.ToArray();
     }
     public static void Window(Window window,string path,double dpi=96)=>File.WriteAllBytes(path,Capture((FrameworkElement)window.Content,dpi));
-    private static string OverkillText(JsonElement entry)
+    private static string OverkillText(JsonElement detail)
     {
-        var detail=entry.Get("detail");var value=detail.Get("overkill_damage");
+        var value=detail.Get("overkill_damage");
         if(value.ValueKind==JsonValueKind.Number) return "过量 "+Json.UiText(value.GetRawText());
         var observed=detail.Get("observed_overkill_damage");
         if(observed.ValueKind==JsonValueKind.Number) return "已观察过量 "+Json.UiText(observed.GetRawText());
@@ -93,7 +93,7 @@ internal static class Screenshot
             BorderBrush = Theme.Resource(babel ? "BabelPaperRule" : "Accent")
         });
         var entries=view.Get("entries").Items().ToArray();
-        bool settled=entries.Any(entry=>entry.Get("detail").Get("settled_damage").ValueKind==JsonValueKind.Object);
+        bool settled=view.Get("details_by_owner").EnumerateObject().Any(owner=>owner.Value.Get("settled_damage").ValueKind==JsonValueKind.Object);
         bool stripes=entries.Any(entry=>entry.Get("segments").Items().Any(segment=>segment.Number("overkill_ratio")>0));
         string damageNote=settled ? "有效伤害按实际扣血与扣盾统计 · 过量按结算证据统计"
             : "有效伤害 = 总伤害 − 过量伤害 · 过量来自事件派生";
@@ -142,7 +142,7 @@ internal static class Screenshot
             values.Children.Add(exact);values.Children.Add(secondary);
             if(damage)
             {
-                var overkill=Inspector.Text(OverkillText(entry),11,false,"ConsoleMuted");overkill.TextAlignment=TextAlignment.Right;
+                var overkill=Inspector.Text(OverkillText(view.Get("details_by_owner").Get(entry.Text("owner_id"))),11,false,"ConsoleMuted");overkill.TextAlignment=TextAlignment.Right;
                 values.Children.Add(overkill);
             }
             Grid.SetColumn(values,2);row.Children.Add(values);

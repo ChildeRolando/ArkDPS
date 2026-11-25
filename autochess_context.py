@@ -523,3 +523,15 @@ def resolve_native_event_member(context, event, previous=None, *, lookup=None, p
     return dict(cid=cid, data_uid=data_uid, is_token=True, is_predefined=False,
                 host_key=key, host_uid=uid, player_uid=host['player_uid'],
                 player_index=host['player_index'], player_side=side)
+
+
+def verified_roster_token_host(token, candidates):
+    """Resolve only an exact, unique roster host; account filtering is the caller's boundary."""
+    candidates = tuple(candidates)
+    if len(candidates) != 1:
+        return None
+    host = candidates[0]
+    if (host.unique_id != token.host_uid or host.is_token or host.cid != token.host_key
+            or host.player_side != token.player_side):
+        return None
+    return host

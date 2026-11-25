@@ -21,8 +21,11 @@ import time
 from connection import VersionStatus
 from event_observer import ObserverStatus
 from event_probe import (NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry, AssembledProbeSource,
-                         assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail)
-from native_pc.internal_event_source import _finite_number, _reject_constant, _unique_fields
+                         assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail,
+                         reset_probe_cursor, commit_probe_prefix, check_round_start_range, read_probe_range,
+                         finite_message_number as _finite_number,
+                         reject_message_constant as _reject_constant,
+                         unique_message_fields as _unique_fields)
 from native_pc.probe_native_pc import BUILD_ID
 from native_pc import probe_native_pc as access
 from native_pc.windows_dll_loader import WindowsDllLoader
@@ -157,6 +160,7 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
         component = release.get('native_pc_native_hooks')
         if not isinstance(component, dict):
             raise RuntimeError('此便携包未包含 ArkPie PC 事件组件。')
+        # These flags record acceptance facts, not ABI or distribution support.
         released = component.get('scope') == 'official-pc'
         if (type(component.get('protocol')) is not int or component['protocol'] != PROTOCOL
                 or component.get('provider') != PROVIDER
@@ -166,8 +170,9 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
                 or component.get('experimental') is not (not released)
                 or component.get('default_platform') != 'native_pc' or component.get('default_backend') != 'native'
                 or component.get('supported_source_builds') != list(access.KNOWN_BUILDS)
-                or component.get('performance_verified') is not released
-                or component.get('autochess_handoff_verified') is not released):
+                or type(component.get('performance_verified')) is not bool
+                or type(component.get('autochess_handoff_verified')) is not bool
+                or not released and (component['performance_verified'] or component['autochess_handoff_verified'])):
             raise ValueError('invalid native component')
         if not released and (any(release.get(key) is not None for key in ('frida', 'frida_wheel_sha256', 'native_pc_gadget'))
                 or any(key in release for key in ('frida_server', 'update_protocol',
@@ -693,8 +698,7 @@ class NativeHookEventProbe:
         # A chained outer observer may only detach after this native layer
         # has explicitly disabled and drained its hooks (or never submitted).
         self.hook_disable_confirmed = True
-        self._committed_sequence = self._acknowledged_sequence = 0
-        self._ack_error = None
+        reset_probe_cursor(self)
         self._autochess_enabled = None
         self._timing_sink = self._timing_enabled = None
 
@@ -787,7 +791,7 @@ class NativeHookEventProbe:
             self.probe_modes['probe_source'] = dict(assembled.audit(), provider=PROVIDER, protocol=PROTOCOL,
                 submitted_sha256=sha256(source.encode('utf-8')).hexdigest(),
                 dll_sha256=image_sha256, frida_required=False,
-                experimental=False, live_acceptance='accepted')
+                experimental=False, live_acceptance='not_verified_for_this_run')
             self.binding.reset()
             self._started = True
             self.status = ObserverStatus.READY
@@ -890,34 +894,14 @@ class NativeHookEventProbe:
         return self._read_range(sequence, sequence)
 
     def read_round_start_range(self, after, through):
-        if after < max(self._committed_sequence, self._acknowledged_sequence):
-            raise RuntimeError('round-start event range has already been committed')
+        check_round_start_range(self, after)
         return self._read_range(after, through)
 
     def _read_range(self, after, through):
-        if self._ack_error:
-            raise RuntimeError(self._ack_error)
-        return self._request('read', after=after, through=through)
+        return read_probe_range(self, after, through)
 
     def commit_events(self, sequence):
-        self._committed_sequence = max(sequence, self._committed_sequence)
-        if self._committed_sequence <= self._acknowledged_sequence:
-            return True
-        if self._ack_error:
-            return False
-        try:
-            reply = self._request('ack', sequence=self._committed_sequence)
-        except ObserverReadRetry:
-            return False
-        except RuntimeError as exc:
-            self._ack_error = str(exc)
-            return False
-        acknowledged = reply.get('acknowledged')
-        if reply.get('error') or type(acknowledged) is not int or acknowledged != self._committed_sequence:
-            self._ack_error = reply.get('error') or 'native observer acknowledgement mismatch'
-            return False
-        self._acknowledged_sequence = acknowledged
-        return True
+        return commit_probe_prefix(self, sequence, mismatch='native observer acknowledgement mismatch')
 
     def _release(self):
         errors = {}

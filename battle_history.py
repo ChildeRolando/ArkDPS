@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import OrderedDict
 from dataclasses import dataclass
+from functools import cache
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -13,7 +15,12 @@ import re
 import tempfile
 from threading import RLock
 
-from autochess_context import MAX_MEMBERSHIPS, PHASE_NAMES, native_autochess_scope_id, valid_player_uid
+from autochess_context import (MAX_MEMBERSHIPS, PHASE_NAMES, NATIVE_AUTOCHESS_CHARACTER_COUNTERS,
+                               native_autochess_scope_id, valid_player_uid)
+from event_probe import settlement_failure_samples
+from character_catalog import load_character_names
+from source_classification import classify_unmapped_source, DIAGNOSTIC_LABELS
+from stats_core import DAMAGE_TYPE_KEYS
 
 
 POLICIES = {
@@ -43,6 +50,8 @@ ACCEPTED_POLICIES = (
     {**POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY},
     {**PRE_BY_TYPE_POLICIES, 'overkill': _PREVIOUS_OVERKILL_POLICY})
 _LOCK = RLock()
+VALIDATED_HISTORY_CACHE_LIMIT = 128
+VALIDATED_HISTORY_CACHE_BYTES = 64 * 1024 * 1024
 
 
 class HistoryError(ValueError):
@@ -214,6 +223,7 @@ def _validate_multiplayer(payload, battle_id, duration):
 
     def scope(value, *, compact):
         _require(isinstance(value, dict), 'invalid multiplayer scope')
+        settlement_failure_samples(value)
         _require(type(value.get('schema_version')) is int and value['schema_version'] in (1, 2),
                  'unsupported multiplayer schema_version')
         native = value['schema_version'] == 2
@@ -406,11 +416,171 @@ def _validate_multiplayer(payload, battle_id, duration):
     _require(type(pruned) is int and pruned >= 0, 'invalid retired multiplayer pruned count')
 
 
+AUTOCHESS_SNAPSHOT_LABEL = '卫戍快照 · 玩家归属未知'
+AUTOCHESS_SNAPSHOT_NOTE = '按角色键记录客户端累计伤害和治疗。玩家归属、回合及整场结果未知。'
+_CHARACTER_KEY = re.compile(r'[A-Za-z0-9_#.-]{1,110}')
+_history_character_names = cache(load_character_names)
+_STATISTICS_READ_DEFAULTS = (
+    ('overkill_damage', None), ('overkill_coverage_complete', False),
+    ('overkill_coverage_start', None), ('overkill_coverage_end', None),
+)
+_ROW_READ_DEFAULTS = (
+    ('overkill_damage', None), ('overkill_damage_by_type', None),
+    ('overkill_type_complete', False), ('shield_unknown', False),
+    ('burst_damage', None), ('burst_overkill', None), ('burst_settlement', None),
+    ('burst_count', 0), ('burst_complete', False), ('burst_unknown_reason', None),
+    ('effective_damage', None), ('overkill_coverage_complete', False),
+    ('overkill_coverage_start', None), ('overkill_coverage_end', None),
+    ('presence_seconds', None), ('presence_complete', False), ('recent_overkill_damage', None),
+)
+_PRESENTATION_STATISTICS_FIELDS = (
+    'rows', 'ended', 'totals_complete', 'non_team_sources', 'non_team_output',
+    'boss_damage_available', 'boss_damage_reason', 'settlement_unassigned',
+    *(key for key, _ in DIAGNOSTIC_LABELS),
+)
+
+
+def _record_read_view(raw, *, authenticated=False):
+    """Copy only containers receiving defaults; preserve original JSON presence.
+
+    Nested facts are privately shared and never mutated by validation or the
+    projections. All public accessors return detached copies. The authenticated
+    path is used only for an exact-byte validation-cache hit.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    view = dict(raw)
+    if authenticated:
+        view['policies'] = dict(POLICIES)
+    original = raw.get('statistics')
+    if isinstance(original, dict):
+        statistics = view['statistics'] = dict(original)
+        for key, default in _STATISTICS_READ_DEFAULTS:
+            statistics.setdefault(key, default)
+        rows = original.get('rows')
+        if isinstance(rows, dict):
+            statistics['rows'] = {}
+            for owner, original_row in rows.items():
+                row = dict(original_row) if isinstance(original_row, dict) else original_row
+                if isinstance(row, dict):
+                    for key, default in _ROW_READ_DEFAULTS:
+                        row.setdefault(key, default)
+                statistics['rows'][owner] = row
+    return view
+
+
+def _legacy_totals_complete(stats, sample):
+    """Infer cumulative-totals completeness for pre-ARK-24 records.
+
+    Earlier builds cleared every source's ``counter_snapshot_complete`` at the
+    battle boundary, so a False flag on an ended record does not by itself mean
+    a collection gap. Fall back only on positive evidence: the frozen result is
+    ended, no diagnostic reports an unknown/incomplete source, the final native
+    sample is a complete FINISHED (state 3) frame, and every row's sources were
+    present in that sample with both cumulative counters.
+    """
+    if stats.get('ended') is not True:
+        return False
+    if any(stats.get(key) for key, _ in DIAGNOSTIC_LABELS):
+        return False
+    guard = sample.get('guard')
+    guard = guard if isinstance(guard, dict) else {}
+    native_rows = sample.get('rows')
+    if (sample.get('state') != 3 or guard.get('complete') is not True
+            or not isinstance(native_rows, list)):
+        return False
+    native_ids = {item.get('id') for item in native_rows if isinstance(item, dict)}
+    for row in stats['rows'].values():
+        if row.get('damage') is None or row.get('healing') is None:
+            return False
+        if not set(row.get('sources') or ()) <= native_ids:
+            return False
+    return True
+
+
+def _native_output(sample):
+    """Last native cumulative rows, used only to label unmapped sources."""
+    rows = sample.get('rows')
+    if not isinstance(rows, list):
+        return {}
+    return {item.get('id'): item for item in rows if isinstance(item, dict)}
+
+
+def _legacy_autochess_rows(sample):
+    """Project only the last native CID counters from archives predating scoped snapshots."""
+    raw = sample.get('rows')
+    if not isinstance(raw, list) or not raw:
+        return {}
+    names = _history_character_names()
+    rows, seen = {}, set()
+
+    def amount(value):
+        # Native rows are floats with each typed component at most 1e15.
+        return value if type(value) in (int, float) and 0 <= value <= 4e15 else None
+
+    for item in raw:
+        cid = item.get('id') if isinstance(item, dict) else None
+        if not isinstance(cid, str) or not _CHARACTER_KEY.fullmatch(cid):
+            continue
+        if cid in seen:
+            rows.pop(cid, None)
+            continue
+        seen.add(cid)
+        damage, healing = amount(item.get('damage')), amount(item.get('healing'))
+        if damage is None and healing is None:
+            continue
+        by_type = {key: value for key in DAMAGE_TYPE_KEYS if (value := amount(item.get(key))) is not None}
+        rows[cid] = dict(name=names.get(cid, cid), damage=damage, healing=healing, damage_by_type=by_type,
+                         sources=[cid], counter_snapshot_complete=damage is not None and healing is not None)
+    return rows
+
+
+def _legacy_non_team(stats, native):
+    """Move recognised non-team keys out of a pre-ARK-24 unknown list.
+
+    Old records classified nothing, so a known map-device key was written as
+    unknown and blocked shares forever. The classification rule is pure over
+    the statistic key; output amounts come from the record's final native rows.
+    """
+    unknown = stats.get('unknown_sources') or []
+    if not isinstance(unknown, list):
+        return
+    blocked = set()
+    for key in ('unmapped_tokens', 'ambiguous_sources', 'mapping_conflicts'):
+        blocked.update(item for item in stats.get(key) or () if isinstance(item, str))
+    remaining, moved, output = [], [], {}
+    for cid in unknown:
+        if (isinstance(cid, str) and cid not in blocked
+                and classify_unmapped_source(cid) is not None):
+            moved.append(cid)
+            row = native.get(cid) or {}
+            damage, healing = row.get('damage'), row.get('healing')
+            valid = (isinstance(damage, (int, float)) and damage >= 0
+                     and isinstance(healing, (int, float)) and healing >= 0)
+            output[cid] = {'damage': damage if valid else None,
+                           'healing': healing if valid else None}
+        else:
+            remaining.append(cid)
+    stats['unknown_sources'] = remaining
+    stats['non_team_sources'] = sorted(moved)
+    stats['non_team_output'] = output
+
+
 class BattleRecord:
     """Validated JSON summary; null and numeric zero retain their meanings."""
 
-    def __init__(self, data):
-        self._data = data
+    def __init__(self, data, *, _validated_view=None):
+        # Factories pass owned, already-validated JSON. Cache hits authenticate
+        # exact file bytes before reconstructing this deterministic read view.
+        self._raw_data = data
+        self._data = _validated_view if _validated_view is not None else _record_read_view(data, authenticated=True)
+        self._statistics_views = None
+        self._statistics_lock = RLock()
+
+    def __deepcopy__(self, memo):
+        result = type(self)(deepcopy(self._raw_data, memo))
+        memo[id(self)] = result
+        return result
 
     @classmethod
     def from_archive(cls, archive):
@@ -434,7 +604,8 @@ class BattleRecord:
     def from_dict(cls, data):
         try:
             # Normalize tuples, reject NaN/infinity and non-JSON source objects.
-            data = json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False))
+            raw_data = json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False))
+            data = _record_read_view(raw_data)
             _require(isinstance(data, dict), 'record must be an object')
             _require(type(data.get('schema_version')) is int and data['schema_version'] == 1,
                      'unsupported BattleRecord schema_version')
@@ -475,11 +646,6 @@ class BattleRecord:
             _number(stats['coverage_start'], 'coverage_start')
             _require(stats['coverage_start'] <= data['duration'], 'coverage starts after end')
             _require(isinstance(stats['rows'], dict), 'invalid statistics rows')
-            for key, default in (('overkill_damage', None),
-                                 ('overkill_coverage_complete', False),
-                                 ('overkill_coverage_start', None),
-                                 ('overkill_coverage_end', None)):
-                stats.setdefault(key, default)
             _number(stats['overkill_damage'], 'overkill_damage', nullable=True)
             _require(type(stats['overkill_coverage_complete']) is bool,
                      'invalid overkill_coverage_complete')
@@ -492,24 +658,6 @@ class BattleRecord:
                          'invalid overkill coverage interval')
             for owner, row in stats['rows'].items():
                 _require(bool(owner) and isinstance(row, dict), 'invalid owner row')
-                for key, default in (('overkill_damage', None),
-                                     ('overkill_damage_by_type', None),
-                                     ('overkill_type_complete', False),
-                                     ('shield_unknown', False),
-                                     ('burst_damage', None),
-                                     ('burst_overkill', None),
-                                     ('burst_settlement', None),
-                                     ('burst_count', 0),
-                                     ('burst_complete', False),
-                                     ('burst_unknown_reason', None),
-                                     ('effective_damage', None),
-                                     ('overkill_coverage_complete', False),
-                                     ('overkill_coverage_start', None),
-                                     ('overkill_coverage_end', None),
-                                     ('presence_seconds', None),
-                                     ('presence_complete', False),
-                                     ('recent_overkill_damage', None)):
-                    row.setdefault(key, default)
                 for metric in ('damage', 'healing', 'shield_absorbed', 'recent_damage',
                                'recent_healing', 'engagement_damage', 'engagement_healing',
                                'active_damage', 'active_healing', 'observed_damage', 'observed_healing',
@@ -600,18 +748,55 @@ class BattleRecord:
                 _intervals(data['snapshot_intervals'], data['duration'])
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise HistoryError(f'invalid BattleRecord: {exc}') from exc
-        return cls(data)
+        return cls(raw_data, _validated_view=data)
 
     @property
     def battle_id(self):
         return self._data['battle_id']
 
+    def _normalize_statistics(self):
+        """Interpret a validated archive once, without mutating its raw facts."""
+        stats = dict(self._data['statistics'])
+        sample = self._data['last_sample']
+        if 'non_team_sources' not in stats:
+            _legacy_non_team(stats, _native_output(sample))
+        if 'totals_complete' not in stats:
+            complete = _legacy_totals_complete(stats, sample)
+            stats['totals_complete'] = complete
+            if complete:
+                stats['rows'] = {owner: dict(row, counter_snapshot_complete=True)
+                                 for owner, row in stats['rows'].items()}
+        if self.unverified_autochess_scope and sample.get('native_counter_scope') != NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
+            panel = dict(rows=_legacy_autochess_rows(sample), ended=True, totals_complete=False,
+                         display_scope_label=AUTOCHESS_SNAPSHOT_LABEL)
+        else:
+            # Unverified native-character snapshots retain their original counter
+            # evidence; a legacy full-result inference cannot upgrade this scope.
+            source = self._data['statistics'] if self.unverified_autochess_scope else stats
+            panel = {key: source[key] for key in _PRESENTATION_STATISTICS_FIELDS if key in source}
+            if self.unverified_autochess_scope:
+                panel.update(totals_complete=False, display_scope_label=AUTOCHESS_SNAPSHOT_LABEL)
+        return stats, panel
+
+    def _interpreted_statistics(self):
+        with self._statistics_lock:
+            if self._statistics_views is None:
+                self._statistics_views = self._normalize_statistics()
+            return self._statistics_views
+
+    def normalized_statistics(self, *, for_panel=False):
+        """Return one caller-owned view; missing raw fields remain absent in to_dict."""
+        return deepcopy(self._interpreted_statistics()[1 if for_panel else 0])
+
+    def presentation_statistics(self):
+        return self.normalized_statistics(for_panel=True)
+
     @property
     def statistics(self):
-        return deepcopy(self._data['statistics'])
+        return self.normalized_statistics()
 
     def statistics_fields(self, fields):
-        statistics = self._data['statistics']
+        statistics = self._interpreted_statistics()[0]
         return deepcopy({key: statistics[key] for key in fields if key in statistics})
 
     @property
@@ -660,7 +845,7 @@ class BattleRecord:
         return tuple(row.get('name', '') for row in self._data['statistics']['rows'].values())
 
     def to_dict(self):
-        return deepcopy(self._data)
+        return deepcopy(self._raw_data)
 
 
 @dataclass(frozen=True)
@@ -698,15 +883,36 @@ class BattleHistory:
 
     def __init__(self, directory):
         self.directory = Path(directory)
+        # Cache validation of exact bytes, never file mtimes or caller-owned
+        # mutable records. Retention still reads every file before pruning.
+        self._validated_reads = OrderedDict()
+        self._validated_read_bytes = 0
 
     def path_for(self, battle_id):
         _require(isinstance(battle_id, str) and bool(battle_id.strip()), 'invalid battle_id')
         return self.directory / (hashlib.sha256(battle_id.encode('utf-8')).hexdigest() + '.json')
 
     def _read(self, path):
-        with path.open(encoding='utf-8') as stream:
-            record = BattleRecord.from_dict(json.load(stream, object_pairs_hook=_unique_keys))
+        raw = path.read_bytes()
+        digest = hashlib.sha256(raw).digest()
+        cached = self._validated_reads.get(path)
+        if cached is not None and cached[0] == digest:
+            self._validated_reads.move_to_end(path)
+            # Every reader receives independent data, including private leaves.
+            return BattleRecord(json.loads(cached[1]))
+        if cached is not None:
+            self._validated_read_bytes -= len(self._validated_reads.pop(path)[1])
+        record = BattleRecord.from_dict(json.loads(raw.decode('utf-8'), object_pairs_hook=_unique_keys))
         _require(self.path_for(record.battle_id) == path, 'filename battle_id mismatch')
+        encoded = json.dumps(record._raw_data, ensure_ascii=True, allow_nan=False,
+                             separators=(',', ':')).encode('utf-8')
+        if len(encoded) <= VALIDATED_HISTORY_CACHE_BYTES and VALIDATED_HISTORY_CACHE_LIMIT > 0:
+            self._validated_reads[path] = digest, encoded
+            self._validated_read_bytes += len(encoded)
+            while (len(self._validated_reads) > VALIDATED_HISTORY_CACHE_LIMIT
+                   or self._validated_read_bytes > VALIDATED_HISTORY_CACHE_BYTES):
+                _, (_, expired) = self._validated_reads.popitem(last=False)
+                self._validated_read_bytes -= len(expired)
         return record
 
     def _scan(self):

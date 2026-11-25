@@ -2,6 +2,16 @@
 
 `stats_core.Statistics` 是单局、由调用方提供可靠游戏时钟和数据的计算器，不读取游戏。窗口与命令行通过 `CollectionSession` 的生命周期模式共用 `BattleRuntime`。生命周期签发的 `feed:generation` 同时用于快照适配器、事件流、冻结结果和归档交接，每局只持有一个统计实例。认证后默认尝试临时事件观察，失败继续原生累计。ARK-5 已完成独立验收并合入；本次 ARK-6 集成候选的跨局实机验收仍未完成，不能借用 ARK-5 日志替代。入口与证据说明见[实时事件采集](event-capture.md)。
 
+## 单一运行时归约
+
+`Statistics`以一个按角色身份分区的技能效果窗口存储归约回调，部署UID保留在窗口并接受生命周期约束；owner窗口和质量仅作只读聚合。真实effect end、施放返回、永久退场与暂移分别处理，无当前窗口的真实end仍可证明其后的未激活状态，不能回填历史时长。
+
+逐击金额统一由`DamageSettlement.hit`写入；boss只筛选同一事实的目标子集。旧`PartialDamage`、`BossDamage`、`ObservedSkillDamage`独立聚合器已删除，旧API的partial/boss输出只投影同一个命中队列和已证分量。旧输入只能提供其实际携带的名义值或已证明过量后可计算的有效值；后者名为`legacy_effective`，不会冒充HP/盾分解、UID或完整现代证书。旧raw在入口转换时保留原record作为重放收据，不补齐原始字段或制造序号。
+
+元素来源只有一个按目标UID与native instance约束的witness存储。旧输出回调不再次消费现代witness或写入金额；source-null完整结算先消费归属，再写一次逐击金额及独立的原生累计外补充，显式来源不补累计。元素爆条展示来自同一逐击账本的元素子集。
+
+原生累计（含过量）、观察期名义金额、有效HP/打盾、治疗及施盾者吸收贡献仍是不同事实。名义、有效与治疗各自维护接敌触发集合，只共用`extend_activity`的1.5秒区间并集操作。v7结果在构造时直接选择已证逐击分量，不先计算旧effective/overkill再在发布末尾覆盖。
+
 ## 权威来源和顺序
 
 卫戍协议的多人观察由 `multiplayer_battle.py` 编排。新 PC 接口通过 `ChessInst.battleCharacterData.uniqueId → ChessInst.playerIndex → ScenePlayerData.uid` 关联角色与真实玩家；每个已确认的玩家 UID 持有独立的 `Statistics` 和 `EventStream`，来源身份同时包含玩家 UID 和角色 data UID。召唤物只通过同 scope 中已确认的宿主 CID、data UID 与临时阵营归属。各家复用相同的逐次结算、技能窗口、护盾、减伤和事件质量处理，不另写统计公式。原生累计字典以 CID 为键，不能证明跨玩家同名角色的独立累计，因此四家视图的 `damage` / `dps` / `recent_dps` 保持 `None`。`observed_damage` 和观察时段平均 DPS 来自已有 `DamageSettlement` 的名义结算账本，包含过量伤害；干员排行沿用已有的已观察有效伤害与接敌 DPS 投影。
@@ -150,3 +160,27 @@ row = meter.result()['rows']['host']
 受修订影响的来源只保留结束时刻的累计点，其近期速率未知，避免把晚到累计伪装成零时长爆发。未变化的来源保留历史；完全相同的修订是无操作。适配器以 `snapshot_revision` 对外标识累计或可见归属变化，并在同一次发布中同步原生与统计值。`tests/test_settlement_snapshot.py` 和会话发布回归固定该约束。
 
 生命周期终局入口 `correct_final_totals()` 复用 `settle_snapshot()` 的事务校验，并将所有来源的近期速率置为未知；重复的相同终局值不增加修订号。首个终局样本先处理可靠事件水位，再结束统计；后来的同帧修订不能改变事件序号、结束时刻和已观察事件。确认离场/新代次后才交接归档，归档仍携带覆盖状态及最后可靠样本。
+
+## 真实本体分母与永久退场
+
+`Statistics.deployment_lifecycle` 只拥有已验证本体区间，不另记金额或公式。隐式状态为：
+
+| 原状态 | 已验证输入 | 结果 |
+| --- | --- | --- |
+| 无边界 | 同 scope 的真实 Born 返回 | 开放部署区间 |
+| 开放 | 同 actor、同部署的永久 Finish | 关闭并累计真实区间 |
+| 开放 | 当前可靠事件水位 | 仅实时发布到该水位 |
+| 开放 | quiet successor / 归档 | 没有本体终点，完整分母未知 |
+| 任意 | 缺前缀、身份冲突或采集 gap | 保留证据，完整分母未知 |
+| 新部署 | 已记录旧部署的晚回调 | 隔离旧实例，不修改新技能窗 |
+
+行输出 `lifecycle_presence_seconds`、`lifecycle_presence_complete`、`lifecycle_presence_window:[event_start,event_watermark]`、`lifecycle_terminal_complete`。从零完整前缀、真实 Born 与连续事件水位支持实时开放区间；归档必须每个已观察本体有永久终点。零帧已经在场的 actor 只允许由独立完整活体集合证书截入本小局时刻0；旧UID集合或未观察真实出生且无活体证书时继续未知。晚绑定名单只重放已保留且重新核实的生命周期证书，不重放旧金额或技能转换。此分母与1Hz `observed_presence_seconds` 独立，不能互相补证；金额、有效伤害、治疗和 scope/window 匹配仍由原有账本及展示层分别认证。宿主离场后的已归属召唤/DoT输出不延长本体分母。
+
+同部署 `OnAfterSkill(Ability.OWNER_DEAD)` 可先记录待确认的结束而保留技能窗，之后同原始时刻的 typed 永久 Finish 关闭两套既有技能窗口。反顺序同样支持。缺实体证书、跨实例或跨时刻不能把待确认窗口追认为完整；11/12 不能作为永久终点。已有实录没有新证书时沿原保守语义，受控回归不代表新候选实机验收。
+
+
+生命周期按 native body 分别保存区间。同 data UID 的同刻替换允许 Born-new 先于 Finish-old，只在真实旧终点到达、两区间零重叠后恢复完整；正时间重叠、退休 instance UID 被当新部署复用或损坏的预期终点保持未知。零帧 seed 与同体同刻 Born 幂等。Q32 证书须为规范非负 S64 十进制并与游戏时钟精确相等。已证本体输出的最早身份/时钟可暴露漏掉的出生前缀；不记另一份金额，也不因已知旧 body 的退场后 DoT 或 token 输出而延长/废弃分母。
+
+生命周期覆盖不使用数值或技能诊断原因集合认证。单个角色的HP/盾缺证不能废弃同队其他角色已证明的在场分母；分子仍按自己的证书决定能否显示速率。真实事件缺口、UID冲突、未知scope的出生/终点和未解的生命周期前缀独立降低相应覆盖；可定位时按body隔离，无法定位或有界前缀溢出时保持全局未知。历史scope数值缺证只在已认证的退休scope与唯一旧owner下隔离，同stamp换账号、来源冲突和未定位失败仍不得借当前名单认证。
+
+待归属生命周期前缀有明确data UID时，只阻止该UID的完整在场分母，不能使其余已验证本体一并失效。UID缺失、非法或前缀超限仍保留全局未知；后续名单建立只重放该前缀的生命周期证书，不认领未知金额，不把陌生角色的结束事件当成已知角色的终点。

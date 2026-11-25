@@ -3,7 +3,7 @@
 import pytest
 
 from battle_history import BattleRecord
-from battle_share import record_view
+from test_battle_share import history_panel
 from event_stream import EventStream
 from panel_model import PanelConfig, panel_statistics, render_panel, rows_from_statistics
 from stats_core import Statistics
@@ -158,9 +158,9 @@ def test_observed_skill_share_keeps_only_verifiable_effective_hits_after_a_gap()
         observed_skill_damage_effective=20, observed_non_skill_damage_effective=100,
         skill_split_effective_complete=False, skill_split_reason=row['skill_split_reason'])
     restored = BattleRecord.from_dict(archive)
-    history_view = record_view(restored, config)
-    assert history_view.details_by_owner['a']['observed_skill_damage_effective'] == 20
-    assert history_view.details_by_owner['a']['observed_non_skill_damage_effective'] == 100
+    history_view = history_panel(restored, config)
+    assert history_view['details_by_owner']['a']['observed_skill_damage_effective'] == 20
+    assert history_view['details_by_owner']['a']['observed_non_skill_damage_effective'] == 100
 
 
 def test_observed_skill_share_is_labelled_partial_when_native_totals_include_missing_damage():

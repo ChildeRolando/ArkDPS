@@ -19,7 +19,7 @@ function loadProbeSource(sourcePath) {
 }
 
 function fixture({platform = 'native_pc', sourcePath = process.argv[2],
-  settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false,
+  settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false, characterLifecycle = false, failLifecycleBornHook = false,
   loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, roundResetMethod = false, nullClassIndex = null,
   unreadableClassIndex = null, extraNullRow = false, lazySkillFields = false,
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
@@ -75,6 +75,10 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
         // Scalar fixture cells omit struct padding; real allocated bytes exist.
         if (!memory.has(key)) { offset += 4; continue; }
         const value = memory.get(key);
+        // An explicit undefined cell models an unreadable native field. It is
+        // not omitted padding: DataView's NaN-to-zero conversion would invent
+        // a valid clock and hide faults after production switched to bulk reads.
+        if (value === undefined) throw Error('Unreadable fixture address ' + key);
         if (value instanceof Pointer || typeof value === 'bigint') {
           assert(offset + 8 <= size, 'owned pointer exceeds byte-read range');
           view.setBigUint64(offset, BigInt.asUintN(64, value instanceof Pointer ? value.value : value), true);
@@ -138,7 +142,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     m_levelData: physicalLayout?.level??0x160, m_state: stateMetadataOffset??physicalState,
   }, controllerMethods);
   const character = klass('Character', 'Torappu.Battle', {'<data>k__BackingField': 0x538, m_skill: 0x3c8},
-    {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2,
+    {OnSkillStart: 0, OnSkillFinish: 0, OnAfterSkill: 2, ...(characterLifecycle?{Born:0}:{}),
       ...(skillCastState?{SwitchToSkillState:0,OnSkillCastSucceed:0}:{})});
   const basicSkill = klass('BasicSkill', 'Torappu.Battle', {m_owner: 0xa8, m_data: 0xb0,
     ...(skillCastState?{m_waitForSkillEnd:0x98}:{})}, {Tick:0,...(skillCastState?{OnCastFinish:3}:{})});
@@ -159,7 +163,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   }
   const skillData = klass('SkillData', 'Torappu', {prefabKey: 0x50, skillId: 0x18, name: 0x10});
   const characterData = klass('BattleCharacterData', 'Torappu.Battle', {uniqueId: 0x6c});
-  const skillCastFieldTypes=new Map(),skillCastMethodTypes=new Map(),skillCastTypeInfo=new Map();
+  const skillCastFieldTypes=new Map(),skillCastMethodTypes=new Map(),skillCastTypeInfo=new Map(),skillCastDeclaring=new Map();
   function type(name,namespace,{valueType=false,size=0,byRef=false,isEnum=false,klassPointer=null}={}){
     const k=klassPointer||klass(name,namespace,{}),t=alloc();
     skillCastTypeInfo.set(t.toString(),{klass:k,valueType,size,byRef,isEnum});
@@ -176,6 +180,11 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     const voidType=type('Void','System',{valueType:true});
     const ability=type('Ability','Torappu.Battle',{klassPointer:abilityClass,byRef:!!options.abilityByRef});
     const reason=type('FinishReason','',{valueType:true,size:options.reasonSize||4,isEnum:!options.reasonNotEnum,byRef:!!options.reasonByRef});
+    const reasonClass=skillCastTypeInfo.get(reason.toString()).klass;
+    skillCastDeclaring.set(reasonClass.toString(),options.reasonWrongOwner?entity:abilityClass);
+    for(const m of methodTables.get(character.toString()).records)
+      if(m.add(0x18).readPointer().readCString()==='OnAfterSkill')
+        skillCastMethodTypes.set(m.toString(),{parameters:[type('BasicSkill','Torappu.Battle',{klassPointer:basicSkill}),reason],result:voidType,flags:0});
     const last=options.lastInt?integer:options.lastByRef?type('Boolean','System',{valueType:true,size:1,byRef:true}):boolean;
     const fields=fieldTables.get(basicSkill.toString());
     for(let i=0;i<fields.count;i++){
@@ -186,6 +195,32 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       if(m.add(0x18).readPointer().readCString()==='OnCastFinish')skillCastMethodTypes.set(m.toString(),
         {parameters:[ability,reason,last],result:voidType,flags:options.staticMethod?452|0x10:452});
     }
+  }
+  const lifecycleEnumValues=new Map(),lifecycleDeclaring=new Map();
+  if(characterLifecycle){
+    const options=typeof characterLifecycle==='object'?characterLifecycle:{};
+    const values={NONE:0,REACH_EXIT:1,HP_ZERO:2,FALLDOWN:3,WITHDRAW:4,DEADLIKE_WITHDRAW:5,SILENT_WITHDRAW:6,OTHER:7,HP_ZERO_WITH_NO_SOURCE:8,REPLACED:9,RESPAWN_SELF:10,MOVE_LIKE_RESPAWN_SELF:11,MOVE_LIKE_RESPAWN_EXTERNAL:12};
+    const reason=type('FinishReason','',{valueType:true,size:4,isEnum:true});
+    const reasonClass=skillCastTypeInfo.get(reason.toString()).klass;
+    lifecycleDeclaring.set(reasonClass.toString(),options.wrongEnumOwner?abilityClass:entity);
+    const table=alloc();write(reasonClass.add(0x80),table);write(reasonClass.add(0x124),Object.keys(values).length);
+    Object.entries(values).forEach(([name,value],i)=>{
+      const field=table.add(i*32);write(field,text(name));write(field.add(16),reasonClass);
+      lifecycleEnumValues.set(field.toString(),options.wrongEnumValue&&name==='HP_ZERO'?99:value);
+    });
+    const voidType=type('Void','System',{valueType:true});
+    const actor=type('Character','Torappu.Battle',{klassPointer:options.wrongActor?entity:character});
+    for(const m of methodTables.get(controllerClass.toString()).records)
+      if(m.add(0x18).readPointer().readCString()==='OnCharacterFinished')
+        skillCastMethodTypes.set(m.toString(),{parameters:[actor,reason],result:voidType,flags:0});
+    for(const owner of [character,bObject])for(const m of methodTables.get(owner.toString()).records)
+      if(m.add(0x18).readPointer().readCString()==='Born')
+        skillCastMethodTypes.set(m.toString(),{parameters:[],result:voidType,flags:0});
+  }
+  if(characterLifecycle&&typeof characterLifecycle==='object'&&characterLifecycle.aliasBorn){
+    const base=callbacks.get('Born@'+bObject);
+    for(const m of methodTables.get(character.toString()).records)if(m.add(0x18).readPointer().readCString()==='Born')write(m,base);
+    callbacks.set('Born@'+character,base);
   }
   if(roundResetMethod){
     const reset=methodTables.get(controllerClass.toString()).records[Object.keys(controllerMethods).indexOf('ClearRunTimeData')];
@@ -250,7 +285,9 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     il2cpp_type_is_byref:t=>!!skillCastTypeInfo.get(t.toString()).byRef,
     il2cpp_class_get_namespace:k=>k.add(0x18).readPointer(),
     il2cpp_field_get_type:f=>skillCastFieldTypes.get(f.toString()),
-    il2cpp_field_get_flags:()=>typeof skillCastState==='object'&&skillCastState.waitStatic?0x10:1,
+    il2cpp_field_get_flags:f=>lifecycleEnumValues.has(f.toString())?0x40:typeof skillCastState==='object'&&skillCastState.waitStatic?0x10:1,
+    il2cpp_class_get_declaring_type:k=>lifecycleDeclaring.get(k.toString())||skillCastDeclaring.get(k.toString())||ptr(0),
+    il2cpp_field_static_get_value:(f,out)=>write(out,lifecycleEnumValues.get(f.toString())),
     il2cpp_class_is_valuetype:k=>!!skillCastTypeInfo.get(k.toString())?.valueType,
     il2cpp_class_is_enum:k=>!!skillCastTypeInfo.get(k.toString())?.isEnum,
     il2cpp_class_value_size:k=>skillCastTypeInfo.get(k.toString())?.size??0,
@@ -273,6 +310,8 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     },
     Memory: {alloc}, Interceptor: {attach: (address, callback) => {
       if (address.toString() === rejectedHook) throw Error('synthetic mitigation hook installation failure');
+      if(failLifecycleBornHook&&address.equals(callbacks.get('Born@'+character)))throw Error('synthetic lifecycle Born installation failure');
+      if(hooks.has(address.toString()))throw Error('duplicate fixture Interceptor address '+address);
       hookTrace.push({operation: 'attach', address: address.toString()});
       hooks.set(address.toString(), callback);
       return {detach: () => {hookTrace.push({operation: 'detach', address: address.toString()}); hooks.delete(address.toString());}};

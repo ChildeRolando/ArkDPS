@@ -63,12 +63,12 @@ internal static class ScreenshotCategoryTests
             // Synthetic category boundary controls retain the same rendering path.
             var damage = JsonNode.Parse(healing.GetRawText())!;
             damage["view"]!["config"]!["category"] = "damage";
-            damage["view"]!["entries"]![0]!["detail"]!["overkill_damage"] = 120;
+            damage["view"]!["details_by_owner"]![healer.GetProperty("owner_id").GetString()!]!["overkill_damage"] = 120;
             text = Text(Screenshot.StatisticsDocument(JsonSerializer.SerializeToElement(damage), theme));
             Check(theme + " damage footnote and overkill preserved", text.Contains("有效伤害 = 总伤害 − 过量伤害") &&
                 text.Contains("过量 120"));
             Check(theme + " damage attribute legend preserved", text.Contains("分型：物理红 / 法术") && text.Contains("真实"));
-            damage["view"]!["entries"]![0]!["detail"]!["settled_damage"] = new JsonObject();
+            damage["view"]!["details_by_owner"]![healer.GetProperty("owner_id").GetString()!]!["settled_damage"] = new JsonObject();
             text = Text(Screenshot.StatisticsDocument(JsonSerializer.SerializeToElement(damage), theme));
             Check(theme + " settled damage footnote preserved", text.Contains("有效伤害按实际扣血与扣盾统计"));
 

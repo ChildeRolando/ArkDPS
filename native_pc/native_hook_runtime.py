@@ -17,6 +17,7 @@ from native_pc import probe_native_pc as access
 from event_observer import ObserverStatus
 from native_pc.native_hook_source import NativeHookEventProbe, PreparedNativeHooks
 from native_pc.windows_dll_loader import RuntimeFailure
+from native_pc.event_source import commit_startup_operation, start_runtime_watcher, cancel_startup_owner
 
 
 FILETIME_EPOCH = 116444736000000000
@@ -357,17 +358,17 @@ class NativeHookRuntime:
                 self.api.close(handle)
 
     def _commit(self, operation):
-        with self._condition:
-            self._check_cancelled()
-            if (self._lease is None or not self._alive(self._lease)
-                    or self._instances() != [(self._lease['pid'], self._lease['created'])]):
-                raise RuntimeFailure('process_changed', '原生组件提交前进程实例、路径或唯一性已变化')
-            if self._files() != self._build_signature:
-                raise RuntimeFailure('native_build_changed', '原生组件提交前客户端文件已变化')
-            if (self._prepared is None
-                    or getattr(self._prepared, 'source_build', None) != self._lease['source_build']):
-                raise RuntimeFailure('native_build_changed', '原生组件核实的客户端构建与启动租约不一致')
-            return operation()
+        return commit_startup_operation(self, operation, verify=self._verify_commit_target)
+
+    def _verify_commit_target(self):
+        if (self._lease is None or not self._alive(self._lease)
+                or self._instances() != [(self._lease['pid'], self._lease['created'])]):
+            raise RuntimeFailure('process_changed', '原生组件提交前进程实例、路径或唯一性已变化')
+        if self._files() != self._build_signature:
+            raise RuntimeFailure('native_build_changed', '原生组件提交前客户端文件已变化')
+        if (self._prepared is None
+                or getattr(self._prepared, 'source_build', None) != self._lease['source_build']):
+            raise RuntimeFailure('native_build_changed', '原生组件核实的客户端构建与启动租约不一致')
 
     def start(self):
         with self._condition:
@@ -380,13 +381,9 @@ class NativeHookRuntime:
                 raise RuntimeError('启动监视器已结束，请显式重试')
             self._armed = None
             self._state(RuntimeState.STARTING)
-            self._thread = Thread(target=self._run, name='ArkDPS native PC startup', daemon=False)
-            try:
-                self._thread.start()
-            except Exception:
-                self._thread = None
-                self._state(RuntimeState.FAILED, 'watcher_start_failed', 'ArkPie PC 监视器未能启动')
-                raise
+            start_runtime_watcher(self, Thread, name='ArkDPS native PC startup',
+                failed=lambda: self._state(RuntimeState.FAILED, 'watcher_start_failed',
+                                           'ArkPie PC 监视器未能启动'))
         return self
 
     def retry(self):
@@ -403,11 +400,8 @@ class NativeHookRuntime:
             return not self._observers
 
     def cancel(self):
-        with self._condition:
-            if self.status == RuntimeState.CLOSED:
-                return
-            self._cancel.set()
-            self._state(RuntimeState.STOPPING)
+        cancel_startup_owner(self, closed=RuntimeState.CLOSED,
+            stopping=RuntimeState.STOPPING, cleanup_pending=RuntimeState.CLEANUP_PENDING)
 
     def wait_ready(self, timeout, cancelled=None):
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 0:

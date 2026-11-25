@@ -579,6 +579,7 @@ def test_product_capture_emits_replayable_archives_and_cleans_up(tmp_path, monke
     c = FakeCollector()
     c.closed = False
     c.connect = lambda **kwargs: None
+    c.locate_lifecycle = lambda: None
     c.close = lambda: setattr(c, 'closed', True)
     c.diagnostics = SimpleNamespace(version_actual='fixture')
     clock = SimpleNamespace(now=0.)

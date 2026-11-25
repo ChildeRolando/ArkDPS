@@ -228,10 +228,24 @@ check('wrong_runtime_owner_backreference_class_or_state_never_borrow_metadata_ro
   const f=owned();assert.equal(packet(f).status,'available');
   const target=guard==='native_owner_mismatch'?f.controller.add(0x10).readPointer().add(0x28):
    f.controller.add(0xd8).readPointer().add(0x18);
-  const previous=target.readPointer(),prototype=f.ptr(0).constructor.prototype,read=prototype.readPointer;let calls=0;
-  prototype.readPointer=function(){if(this.equals(target)&&++calls===2)f.write(target,f.ptr(0));return read.call(this);};
-  let envelope;try{envelope=f.adapter.readEnvelope();}finally{prototype.readPointer=read;}
-  assert.equal(calls,2);assert.equal(envelope.ready,false);assert.equal(envelope.fields.native_identity,undefined);
+  const previous=target.readPointer(),prototype=f.ptr(0).constructor.prototype,
+   read=prototype.readPointer,readBytes=prototype.readByteArray;let calls=0,bulkDepth=0,scalarCalls=0,bulkCalls=0;
+  const witness=()=>{if(++calls===2)f.write(target,f.ptr(0));};
+  prototype.readPointer=function(){if(!bulkDepth&&this.equals(target)){scalarCalls++;witness();}return read.call(this);};
+  prototype.readByteArray=function(size){
+   // Observe the actual field even when its live read is inside a same-object
+   // copy. Mutate before the second copy so the closing proof sees the fault.
+   const start=BigInt(this.toString()),point=BigInt(target.toString());
+   if(!bulkDepth&&start<=point&&point+8n<=start+BigInt(size)){bulkCalls++;witness();}
+   bulkDepth++;try{return readBytes.call(this,size);}finally{bulkDepth--;}
+  };
+  let envelope;try{envelope=f.adapter.readEnvelope();}finally{
+   prototype.readPointer=read;prototype.readByteArray=readBytes;
+  }
+  assert.equal(calls,2);
+  assert.deepEqual([scalarCalls,bulkCalls],guard==='native_owner_mismatch'?[2,0]:[0,2],
+   'each live opening/closing owner field must be observed through its production read API');
+  assert.equal(envelope.ready,false);assert.equal(envelope.fields.native_identity,undefined);
   assert.equal(envelope.fields.native_autochess_context,undefined);
   assert.equal(envelope.fields.autochess_binding_diagnostic.step,'closing_guard');
   assert.equal(envelope.fields.autochess_binding_diagnostic.guard,guard);
@@ -367,6 +381,7 @@ check('body_clock_root_and_closing_owner_guards_remain_mandatory',()=>{
  let changed=false;
  proto.readU32=function(){if(!changed&&this.equals(crossing.roleData[0].add(0x6c))){changed=true;crossing.clock(1,143165576n);}return readU32.call(this);};
  let result;try{result=crossing.mark();}finally{proto.readU32=readU32;}
+ assert.equal(changed,true,'the UID scalar read must still trigger the real crossing-clock mutation');
  assert.equal(result.retry,true);assert.equal(result.native_autochess_context,undefined);
  for(const offset of [0x18,0x110]){
   const f=owned();if(offset!==0x18)move(f,f.players.map(([,value])=>value),'uid',offset);
@@ -374,7 +389,9 @@ check('body_clock_root_and_closing_owner_guards_remain_mandatory',()=>{
   let reads=0;
   p.readPointer=function(){if(this.equals(uid)&&++reads===2)f.write(uid,f.text('009999999'));return read.call(this);};
   let stamp;try{stamp=f.stamp();}finally{p.readPointer=read;}
-  assert.equal(reads,2);assert.equal(stamp.native_autochess_scope.status,'unknown');
+  // Opening and closing guards detect the change; the bounded recovery
+  // probe performs one additional read but cannot certify the changed account.
+  assert.equal(reads,3);assert.equal(stamp.native_autochess_scope.status,'unknown');
  }
  const bad=owned();packet(bad);bad.write(bad.controller.add(0x158),bad.ptr(0));
  assert.equal(bad.stamp().native_autochess_scope.status,'unknown');

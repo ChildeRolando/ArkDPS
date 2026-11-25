@@ -75,6 +75,97 @@ class ObserverReadRetry(RuntimeError):
     """An available probe needs another guarded read without advancing a cursor."""
 
 
+def reset_probe_cursor(probe):
+    """Begin a new observer stream lifetime, never a new battle mark.
+
+    A delayed ACK from the previous script must not mutate these cursors.
+    Battle resets keep the producer sequence and do not call this function.
+    """
+    probe._committed_sequence = probe._acknowledged_sequence = 0
+    probe._ack_error = None
+    probe._cursor_lifetime = object()
+
+
+def probe_cursor_lifetime(probe):
+    return getattr(probe, '_cursor_lifetime', None)
+
+
+def check_cursor_lifetime(probe, lifetime):
+    if probe_cursor_lifetime(probe) is not lifetime:
+        raise StreamGap('event probe cursor lifetime changed during acquisition')
+
+
+def acknowledgement_matches(reply, sequence, *, exact_fields=False):
+    """Interpret the common ACK value without weakening a transport envelope."""
+    return (isinstance(reply, dict) and not reply.get('error')
+            and type(reply.get('acknowledged')) is int
+            and reply['acknowledged'] == sequence
+            and (not exact_fields or set(reply) == {'acknowledged'}))
+
+
+def reject_message_constant(value):
+    raise ValueError(f'non-JSON numeric constant {value}')
+
+
+def finite_message_number(value):
+    number = float(value)
+    if not isfinite(number):
+        raise ValueError('non-finite JSON number')
+    return number
+
+
+def unique_message_fields(pairs):
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError('duplicate JSON field')
+    return result
+
+
+def commit_probe_prefix(probe, sequence, *, mismatch):
+    """Consume once locally; retry cumulative ACKs on this same stream owner.
+
+    This deliberately retains the observer's existing cursor attributes: the
+    bounded-prefix reader and diagnostics inspect the actual committed cursor.
+    Transport I/O, binding and locking remain with that observer.
+    """
+    if type(sequence) is not int or sequence < 0:
+        raise ValueError('event acknowledgement sequence must be a nonnegative integer')
+    probe._committed_sequence = max(sequence, probe._committed_sequence)
+    if probe._committed_sequence <= probe._acknowledged_sequence:
+        return True
+    if probe._ack_error:
+        return False
+    lifetime = probe._cursor_lifetime
+    committed = probe._committed_sequence
+    try:
+        reply = probe._request('ack', sequence=committed)
+    except ObserverReadRetry:
+        # The producer may have applied a request whose response was lost.
+        return False
+    except RuntimeError as exc:
+        if probe._cursor_lifetime is lifetime:
+            probe._ack_error = str(exc)
+        return False
+    if probe._cursor_lifetime is not lifetime:
+        return False
+    if not acknowledgement_matches(reply, committed):
+        probe._ack_error = (reply.get('error') if isinstance(reply, dict) else None) or mismatch
+        return False
+    probe._acknowledged_sequence = committed
+    return True
+
+
+def check_round_start_range(probe, after):
+    if after < max(probe._committed_sequence, probe._acknowledged_sequence):
+        raise RuntimeError('round-start event range has already been committed')
+
+
+def read_probe_range(probe, after, through):
+    if probe._ack_error:
+        raise RuntimeError(probe._ack_error)
+    return probe._request('read', after=after, through=through)
+
+
 class CallbackBusyMark(ObserverReadRetry):
     """A decoded live mark found an in-flight callback before it could commit."""
 
@@ -119,10 +210,75 @@ def event_processing_payload(record):
     payload = dict(record)
     proof = payload.pop('proof', None)
     payload.pop('native_autochess_scope', None)
+    payload.pop('enemy_birth_proof', None)
+    payload.pop('elemental_bar_birth', None)
     if (payload.get('kind') in ('skill_start', 'skill_end')
             and isinstance(proof, dict) and isinstance(proof.get('method'), str)):
         payload['skill_method'] = proof['method']
+    if payload.get('kind') == 'elemental_bar':
+        marker = proof.get('native_enemy_bar_birth') if isinstance(proof, dict) else None
+        if (isinstance(marker, dict) and marker.keys() == {'version', 'sequence_after_born', 'epoch_after_born', 'modifier_enter_epoch'}
+                and type(marker['version']) is int and marker['version'] == 1
+                and all(type(marker[k]) is int and 0 <= marker[k] <= 9007199254740991
+                        for k in ('sequence_after_born', 'epoch_after_born', 'modifier_enter_epoch'))
+                and marker['modifier_enter_epoch'] > marker['epoch_after_born']
+                and type(record.get('sequence')) is int and marker['sequence_after_born'] < record['sequence']):
+            payload['elemental_bar_birth'] = dict(marker)
+    if payload.get('kind') == 'enemy_enter':
+        payload['enemy_birth_proof'] = validated_enemy_birth_proof(record)
     return payload
+
+
+def validated_enemy_birth_proof(record):
+    """Optional original Born boundary; never manufacture one from admission."""
+    raw = record.get('proof')
+    birth = raw.get('native_enemy_birth') if isinstance(raw, dict) else None
+    if not isinstance(birth, dict):
+        return None
+    if (type(record.get('frame')) is not int or not 0 <= record['frame'] <= 0xffffffff
+            or type(record.get('sequence')) is not int or not 0 < record['sequence'] <= 9007199254740991
+            or type(record.get('game_time')) not in (int, float) or not 0 <= record['game_time'] <= 2147483648):
+        return None
+    required = {'version', 'source_method', 'target', 'target_uid', 'target_instance', 'frame',
+                'game_time', 'fixed', 'sequence_before_born', 'sequence_after_born', 'epoch_after_born'}
+    if birth.keys() not in (required, required | {'native_autochess_scope'}):
+        return None
+    if (type(birth['version']) is not int or birth['version'] != 1 or birth['source_method'] != 'BObject.Born'
+            or not isinstance(birth['target'], str) or not birth['target'].startswith('enemy_')
+            or birth['target'] != record.get('target') or birth['target_uid'] != record.get('target_instance')
+            or not isinstance(birth['target_uid'], str) or not re.fullmatch(r'[1-9][0-9]{0,9}', birth['target_uid'])
+            or int(birth['target_uid']) > 0xffffffff
+            or not isinstance(birth['target_instance'], str)
+            or not re.fullmatch(r'0x[1-9a-f][0-9a-f]{0,15}', birth['target_instance'])
+            or not 0x10000 <= int(birth['target_instance'], 16) <= 0x7fffffffffff
+            or int(birth['target_instance'], 16) % 8
+            or type(birth['frame']) is not int or not 0 <= birth['frame'] <= record.get('frame', -1)
+            or type(birth['game_time']) not in (int, float) or not 0 <= birth['game_time'] <= record.get('game_time', -1)
+            or not isinstance(birth['fixed'], str) or not re.fullmatch(r'0|[1-9][0-9]{0,18}', birth['fixed'])
+            or int(birth['fixed']) > (1 << 63) - 1 or int(birth['fixed']) / 4294967296 != birth['game_time']
+            or birth['frame'] == record['frame'] and birth['game_time'] != record['game_time']
+            or type(birth['sequence_before_born']) is not int
+            or type(birth['sequence_after_born']) is not int or type(birth['epoch_after_born']) is not int
+            or not 0 <= birth['epoch_after_born'] <= 9007199254740991
+            or not 0 <= birth['sequence_before_born'] <= birth['sequence_after_born'] < record.get('sequence', -1)):
+        return None
+    opening, closing = birth.get('native_autochess_scope'), record.get('native_autochess_scope')
+    if ('native_autochess_scope' in birth) != ('native_autochess_scope' in record):
+        return None
+    if opening is not None or closing is not None:
+        if (not isinstance(opening, dict) or not isinstance(closing, dict)
+                or type(opening.get('protocol_version')) is not int or opening['protocol_version'] != 1
+                or type(closing.get('protocol_version')) is not int or closing['protocol_version'] != 1
+                or not isinstance(opening.get('scope_key'), str) or not opening['scope_key']
+                or type(opening.get('phase')) is not int or opening['phase'] not in (4, 5, 6)
+                or type(opening.get('round')) is not int or opening['round'] < 0
+                or opening.get('collection_mode') not in ('all', 'local')
+                or opening.get('status') != 'available' or opening.get('verified_same_frame') is not True
+                or opening.get('frame') != birth['frame'] or opening.get('game_time') != birth['game_time']
+                or closing.get('status') != 'available' or closing.get('verified_same_frame') is not True
+                or any(opening.get(key) != closing.get(key) for key in ('scope_key', 'phase', 'round', 'collection_mode'))):
+            return None
+    return {**{key: birth[key] for key in required}, 'entry_sequence': record['sequence']}
 
 
 def _autochess_scope_key(payload):
@@ -436,10 +592,11 @@ _SETTLEMENT_SOURCE_QUALITY_FIELDS = ('damage_settlement_source_quality_version',
     'damage_settlement_unlocalized_unknown', 'damage_settlement_source_issues')
 _ROUND_START_QUALITY_OPTIONAL = ('boss_damage_ready', 'boss_damage_unknown', 'damage_settlement_ready',
     'damage_settlement_unknown', 'damage_settlement_first_issue', *_SETTLEMENT_SOURCE_QUALITY_FIELDS,
+    'damage_settlement_failure_samples_version', 'damage_settlement_failure_samples',
     'mitigation_error',
     'mitigation_diagnostics', 'enemy_entry_ready', 'enemy_entry_unknown', 'enemy_phase_ready',
     'enemy_phase_unknown', 'enemy_state_ready', 'enemy_state_unknown', 'enemy_state_error',
-    'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error')
+    'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error', 'character_lifecycle_ready')
 
 
 def _round_start_integer(value):
@@ -462,7 +619,7 @@ def _valid_round_start_point(point):
         if point.keys() != _ROUND_START_POINT_KEYS:
             return False
     elif point['version'] == 2:
-        if point.keys() != _ROUND_START_POINT_V2_KEYS:
+        if point.keys() not in (_ROUND_START_POINT_V2_KEYS, _ROUND_START_POINT_V2_KEYS | {'lifecycle_baseline'}):
             return False
         live = point['live_character_data_uids']
         if live is not None and (not isinstance(live, list) or len(live) > 128
@@ -580,12 +737,257 @@ def verified_autochess_round_start(sample, drained, mark):
         'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
     zero_sample.update(frame=0, game_time=point['game_time'], state=2, rows=[], global_total=None,
         global_heal=None, sum_damage=None, native_counter_scope='events_only', autochess_context=origin,
-        autochess_round_start=point, autochess_round_start_sequence=point['sequence'])
+        autochess_round_start=point, autochess_round_start_sequence=point['sequence'],
+        autochess_lifecycle_baseline_ready=point['quality'].get('character_lifecycle_ready') is True
+            and mark.get('character_lifecycle_ready') is True and drained.get('character_lifecycle_ready') is True)
     zero_drain = dict(zero_mark, events=[], hp_context=[], hp_context_dropped=0,
                       baseline_discarded_skill_events=[], baseline_discarded_skill_events_complete=True)
     replay_drain = {key: value for key, value in drained.items() if key not in _ROUND_START_FIELDS}
     replay_drain['events'] = events
     return deepcopy(zero_sample), deepcopy(zero_mark), deepcopy(zero_drain), deepcopy(replay_drain)
+
+
+
+# A positive-time witness is deliberately separate from the producer zero origin.
+_PENDING_SCOPE_SAMPLE_FIELDS = frozenset({
+    'session', 'native_session', 'battle_identity', 'observer_logger', 'native_window_guard',
+    'guard', 'autochess_snapshot_anchor', 'battle_metadata', 'frame', 'game_time', 'state',
+    'native_counter_scope', 'autochess_context', 'rows', 'global_total', 'global_heal', 'sum_damage',
+})
+_PENDING_SCOPE_PAGE_SIZE = 2048
+_PENDING_SCOPE_BYTES = 32 * 1024 * 1024
+
+
+def pending_scope_anchor(sample, evidence, roster_frame):
+    """Freeze an independently guarded empty positive-time window, never zero."""
+    native = sample.get('native_session', sample.get('session'))
+    point = {key: deepcopy(value) for key, value in sample.items() if key in _PENDING_SCOPE_SAMPLE_FIELDS}
+    point.update(session=native, native_session=native)
+    point['battle_metadata'] = {key: sample['battle_metadata'][key] for key in (
+        'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
+    anchor = dict(sample=point, roster_frame=roster_frame,
+                  **{key: deepcopy(evidence[key]) for key in ('before', 'after', 'sequence', 'drain')})
+    _verified_pending_scope_anchor(anchor)
+    return anchor
+
+
+
+def pending_scope_successor(sample, evidence):
+    """Record raw successor fences without granting a start/zero interpretation."""
+    native = sample.get('native_session', sample.get('session'))
+    point = {key: deepcopy(value) for key, value in sample.items() if key in _PENDING_SCOPE_SAMPLE_FIELDS}
+    point.update(session=native, native_session=native)
+    point['battle_metadata'] = {key: sample['battle_metadata'][key] for key in (
+        'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
+    result = dict(sample=point, **{key: deepcopy(evidence[key]) for key in ('before', 'after', 'sequence')})
+    verified_pending_scope_successor(result)
+    return result
+
+
+def verified_pending_scope_successor(raw):
+    if not isinstance(raw, dict) or set(raw) != {'sample', 'before', 'after', 'sequence'}:
+        raise StreamGap('invalid pending scope successor shape')
+    point = raw['sample']
+    if (not isinstance(point, dict) or not set(point) <= _PENDING_SCOPE_SAMPLE_FIELDS
+            or point.get('session') != point.get('native_session') or point.get('state') != 2):
+        raise StreamGap('invalid pending scope successor raw sample')
+    context, sequence = verified_autochess_event_window(point, raw['before'], raw['after'],
+        anchor=point.get('autochess_snapshot_anchor', point))
+    if context != point.get('autochess_context') or sequence != raw['sequence']:
+        raise StreamGap('pending scope successor disagrees with its independent raw window')
+    return point, context
+
+
+def _autochess_scope_accounts(context):
+    """Identity of a normalized combat scope, without borrowing live membership."""
+    if (context is None or context.get('status') not in ('available', 'partial')
+            or context.get('phase') not in (4, 5, 6) or not context.get('match_key')
+            or context.get('self_player_uid') is None or context.get('collection_mode') not in ('all', 'local')):
+        raise StreamGap('invalid AutoChess read scope or account table')
+    return (context['identity'], context['match_key'], context['self_player_index'],
+            context['self_player_uid'], context['collection_mode'],
+            tuple(sorted((row['index'], row['uid']) for row in context['players'])))
+
+
+def autochess_raw_read_scope(payload, *, require_native_frame=False):
+    """Interpret the one raw read envelope used by zero and late-start origins.
+
+    Existing zero-origin reads permit their historical frame fallback. The new
+    pending contract requires native_frame explicitly; neither origin gains the
+    other's start/quality/completeness rights from this shared identity parser.
+    """
+    from autochess_context import normalize_native_autochess
+    scope = _autochess_scope_key(payload)
+    fixed = payload.get('native_fixed_time')
+    if (scope is None or not isinstance(fixed, str) or not 0 < len(fixed) <= 19
+            or not fixed.isascii() or not fixed.isdecimal() or int(fixed) > 0x7fffffffffffffff):
+        raise StreamGap('invalid AutoChess read clock or roots')
+    frame = payload.get('native_frame', payload.get('frame'))
+    if require_native_frame and (type(payload.get('native_frame')) is not int or frame < 0):
+        raise StreamGap('pending scope read requires a raw native frame')
+    context = normalize_native_autochess(payload.get('native_autochess_context'), expected_frame=frame,
+        expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope)
+    return context, _autochess_scope_accounts(context)
+
+
+def _pending_scope_identity(sample, mark, *, read=False):
+    if read:
+        return autochess_raw_read_scope(mark, require_native_frame=True)
+    context = autochess_event_mark_context(sample, mark)
+    return context, _autochess_scope_accounts(context)
+
+
+def _verified_pending_scope_anchor(anchor):
+    if not isinstance(anchor, dict) or set(anchor) != {'sample', 'roster_frame', 'before', 'after', 'sequence', 'drain'}:
+        raise StreamGap('invalid pending scope anchor shape')
+    point, before, after, drained = (anchor[key] for key in ('sample', 'before', 'after', 'drain'))
+    if (not isinstance(point, dict) or not set(point) <= _PENDING_SCOPE_SAMPLE_FIELDS
+            or point.get('state') != 2 or type(point.get('frame')) is not int or point['frame'] <= 0
+            or not _round_start_time(point.get('game_time')) or point['game_time'] <= 0
+            or point.get('native_counter_scope') != 'events_only' or point.get('rows') != []
+            or point.get('session') != point.get('native_session')
+            or type(anchor['roster_frame']) is not int or anchor['roster_frame'] != point['frame']
+            or not isinstance(before, dict) or not isinstance(after, dict) or not isinstance(drained, dict)
+            or not _round_start_integer(anchor['sequence'])
+            or any(mark.get('sequence') != anchor['sequence'] for mark in (before, after))
+            or before.get('epoch') != after.get('epoch')
+            or drained.get('events') != [] or drained.get('error') or drained.get('stopped') or drained.get('retry')):
+        raise StreamGap('invalid positive-time empty scope witness')
+    raw_anchor = point.get('autochess_snapshot_anchor', point)
+    context, sequence = verified_autochess_event_window(point, before, after, anchor=raw_anchor)
+    if context != point.get('autochess_context') or sequence != anchor['sequence']:
+        raise StreamGap('pending scope anchor consumer fields disagree with raw source')
+    contract = contract_for(sample=point, descriptor=drained.get('probe_contract'))
+    contract.validate_binding(point, before, after, drained)
+    _, identity = _pending_scope_identity(point, after)
+    _, read_identity = _pending_scope_identity(point, drained, read=True)
+    if identity != read_identity:
+        raise StreamGap('pending scope baseline source/accounts changed')
+    contract.normalize_quality(drained)
+    return point, identity, contract
+
+
+def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):
+    """Validate a recorded positive-time anchor and every retained prefix page.
+
+    Raw source and independent snapshot fences are rechecked during replay; no
+    consumer-only start/complete/initial-skill field is accepted as evidence.
+    """
+    transaction = evidence.get('pending_scope_start') if isinstance(evidence, dict) else None
+    if transaction is None:
+        return None
+    if (not isinstance(transaction, dict) or set(transaction) != {'version', 'anchor', 'pages'}
+            or type(transaction.get('version')) is not int or transaction['version'] != 1
+            or not isinstance(transaction['pages'], list)):
+        raise StreamGap('invalid pending scope transaction')
+    point, identity, contract = _verified_pending_scope_anchor(transaction['anchor'])
+    anchor = transaction['anchor']
+    expected = 0 if previous_sequence is None else previous_sequence
+    if type(expected) is not int or anchor['sequence'] != expected:
+        raise StreamGap('pending scope anchor does not match the accepted source cursor')
+    if (not isinstance(sample, dict) or sample.get('state') != 2
+            or sample.get('native_counter_scope') != 'events_only'):
+        raise StreamGap('pending scope release lacks an event-only sample')
+    current, through = verified_autochess_event_window(sample, evidence['before'], evidence['after'],
+        anchor=sample.get('autochess_snapshot_anchor', sample))
+    _, end_identity = _pending_scope_identity(sample, evidence['after'])
+    if current != sample.get('autochess_context') or identity != end_identity or through != evidence['sequence']:
+        raise StreamGap('pending scope release changed its scope/accounts')
+    binding = (*_ROUND_START_BINDING, 'native_session', 'native_process_created_filetime',
+               'source_build', 'damage_settlement_scope')
+    origin = anchor['after']
+    for mark in (evidence['before'], evidence['after']):
+        if any((key in origin) != (key in mark) or not NativePcBinding._same(origin.get(key), mark.get(key)) for key in binding):
+            raise StreamGap('pending scope release changed its source/generation')
+    if (not anchor['sequence'] <= through <= anchor['sequence'] + _ROUND_START_PREFIX_LIMIT
+            or evidence['after']['epoch'] < origin['epoch']
+            or through > anchor['sequence'] and evidence['after']['epoch'] <= origin['epoch']
+            or evidence['before']['epoch'] < origin['epoch']
+            or evidence['before']['sequence'] > anchor['sequence'] and evidence['before']['epoch'] <= origin['epoch']
+            or sample['frame'] < point['frame'] or sample['game_time'] < point['game_time']):
+        raise StreamGap('pending scope release clock or cursor regressed')
+    pages, records, cursor, size = transaction['pages'], [], anchor['sequence'], 0
+    import json
+    try:
+        size = len(json.dumps(anchor, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise StreamGap('invalid pending scope raw JSON') from exc
+    if len(pages) > (_ROUND_START_PREFIX_LIMIT + _PENDING_SCOPE_PAGE_SIZE - 1) // _PENDING_SCOPE_PAGE_SIZE:
+        raise StreamGap('pending scope prefix exceeds page budget')
+    page_epoch = origin['epoch']
+    for page in pages:
+        if (not isinstance(page, dict) or set(page) != {'after', 'through', 'batch'}
+                or type(page['after']) is not int or type(page['through']) is not int
+                or page['after'] != cursor or not cursor < page['through'] <= min(cursor + _PENDING_SCOPE_PAGE_SIZE, through)):
+            raise StreamGap('pending scope prefix page range is invalid')
+        batch = page['batch']
+        if (not isinstance(batch, dict) or batch.get('error') or batch.get('stopped') or batch.get('retry')
+                or 'active' in batch and (type(batch['active']) is not int or batch['active'] != 0)
+                or 'active_hooks' in batch and batch['active_hooks'] != []):
+            raise StreamGap('pending scope prefix page is unavailable or busy')
+        contract.validate_binding(sample, batch)
+        _, page_identity = _pending_scope_identity(sample, batch, read=True)
+        if (page_identity != identity or any((key in batch) != (key in origin)
+                or not NativePcBinding._same(batch.get(key), origin.get(key)) for key in binding)):
+            raise StreamGap('pending scope prefix page changed source/scope/accounts')
+        if 'epoch' in batch:
+            epoch = batch['epoch']
+            if (not _round_start_integer(epoch) or not page_epoch <= epoch <= evidence['after']['epoch']
+                    or epoch <= origin['epoch']):
+                raise StreamGap('pending scope page epoch regressed or lacks callback entry')
+            page_epoch = epoch
+        events = batch.get('events')
+        if not isinstance(events, list) or len(events) != page['through'] - cursor:
+            raise StreamGap('incomplete pending scope event prefix')
+        try:
+            size += len(json.dumps(page, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise StreamGap('invalid pending scope raw JSON') from exc
+        if size > _PENDING_SCOPE_BYTES:
+            raise StreamGap('pending scope prefix exceeds byte budget')
+        records.extend(events)
+        cursor = page['through']
+    if cursor != through or size > _PENDING_SCOPE_BYTES:
+        raise StreamGap('pending scope prefix does not reach release watermark')
+    try:
+        wire_size = len(json.dumps(dict(sample=sample, evidence=evidence),
+                                   ensure_ascii=True, allow_nan=False).encode('utf-8'))
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise StreamGap('invalid pending scope transaction JSON') from exc
+    if wire_size > _PENDING_SCOPE_BYTES:
+        raise StreamGap('pending scope recorded transaction exceeds byte budget')
+    from autochess_context import native_autochess_event_identity
+    scope = tuple(identity[0][key] for key in ('scope_key', 'phase', 'round'))
+    frame, when = point['frame'], point['game_time']
+    for number, record in enumerate(records, anchor['sequence'] + 1):
+        if (not isinstance(record, dict) or type(record.get('sequence')) is not int or record['sequence'] != number
+                or type(record.get('frame')) is not int or not frame <= record['frame'] <= sample['frame']
+                or not _round_start_time(record.get('game_time')) or not when <= record['game_time'] <= sample['game_time']
+                or record['frame'] == frame and record['game_time'] != when
+                or record['frame'] == sample['frame'] and record['game_time'] != sample['game_time']
+                or native_autochess_event_identity(record) != scope
+                or record['native_autochess_scope'].get('collection_mode') != identity[4]):
+            raise StreamGap('pending scope event has a different sequence/scope/capture clock')
+        frame, when = record['frame'], record['game_time']
+    start_sample = deepcopy(point)
+    start_sample['session'] = sample['session']
+    start_mark = deepcopy(anchor['after'])
+    baseline = deepcopy(anchor['drain'])
+    replay = dict(evidence['drain'], events=deepcopy(records))
+    if replay.get('events') != evidence['drain'].get('events'):
+        raise StreamGap('pending scope published drain differs from its raw pages')
+    if replay.get('error') or replay.get('stopped') or replay.get('retry'):
+        raise StreamGap('pending scope release drain is unavailable')
+    if 'epoch' in replay and (not _round_start_integer(replay['epoch'])
+            or not page_epoch <= replay['epoch'] <= evidence['after']['epoch']
+            or through > anchor['sequence'] and replay['epoch'] <= origin['epoch']):
+        raise StreamGap('pending scope release drain has an invalid callback epoch')
+    contract.validate_binding(sample, replay)
+    _, read_identity = _pending_scope_identity(sample, replay, read=True)
+    if read_identity != identity or any((key in replay) != (key in origin)
+            or not NativePcBinding._same(replay.get(key), origin.get(key)) for key in binding):
+        raise StreamGap('pending scope release drain changed its source/scope')
+    return start_sample, start_mark, baseline, replay
 
 
 def autochess_round_start_origin(sample):
@@ -627,6 +1029,43 @@ def autochess_round_start_live_skill_uids(sample):
     return frozenset(live) if live is not None else None
 
 
+def autochess_round_start_lifecycle_instances(sample):
+    """Independent full live-body witness at the original zero boundary."""
+    if not autochess_round_start_origin(sample):
+        return None
+    point = sample['autochess_round_start']
+    if sample.get('autochess_lifecycle_baseline_ready') is not True:
+        return None
+    raw = point.get('lifecycle_baseline')
+    if (not isinstance(raw, dict) or raw.keys() != {'version', 'complete', 'frame', 'game_time', 'fixed', 'units', 'character_lifecycle_ready'}
+            or type(raw['version']) is not int or raw['version'] != 1 or raw['complete'] is not True
+            or raw['character_lifecycle_ready'] is not True or point['quality'].get('character_lifecycle_ready') is not True
+            or type(raw['frame']) is not int or raw['frame'] != 0
+            or type(raw['game_time']) not in (int, float) or raw['game_time'] != 0 or raw['fixed'] != '0'
+            or not isinstance(raw['units'], list) or len(raw['units']) > 128):
+        return None
+    context = point['native_autochess_context']
+    members = {m['data_uid']: m for m in context['memberships']}
+    accounts = {p['index']: p['uid'] for p in context['players']}
+    uids, instances, result = set(), set(), []
+    for row in raw['units']:
+        if (not isinstance(row, dict) or row.keys() != {'cid', 'data_uid', 'instance_uid', 'player_index',
+                'player_uid', 'player_side', 'inited', 'borned', 'disappeared'}
+                or row['inited'] is not True or row['borned'] is not True or row['disappeared'] is not False
+                or type(row['data_uid']) is not int or not 0 < row['data_uid'] <= 0xffffffff
+                or type(row['instance_uid']) is not int or not 0 < row['instance_uid'] <= 0xffffffff
+                or type(row['player_index']) is not int or type(row['player_side']) is not int
+                or row['data_uid'] in uids or row['instance_uid'] in instances):
+            return None
+        member = members.get(row['data_uid'])
+        if (not member or member.get('is_token') is not False or member.get('cid') != row['cid']
+                or member.get('player_index') != row['player_index'] or member.get('player_side') != row['player_side']
+                or accounts.get(row['player_index']) != row['player_uid']):
+            return None
+        uids.add(row['data_uid']); instances.add(row['instance_uid']); result.append(dict(row))
+    return tuple(result)
+
+
 def autochess_round_start_skill_known(sample):
     """Whether every actor was absent at the independently witnessed zero clock."""
     return autochess_round_start_live_skill_uids(sample) == frozenset()
@@ -640,8 +1079,53 @@ def settlement_source_quality_clear(payload):
     return type(version) is int and version == 1 and unlocalized is False and type(issues) is list and not issues
 
 
-def verified_autochess_settlement_source_issues(sample, payload):
-    """Return only fully localized source issues from the current combat scope."""
+def settlement_failure_samples(payload):
+    """Validate optional bounded diagnostics without interpreting numeric proof."""
+    from autochess_context import native_autochess_event_identity
+    version_key, samples_key = 'damage_settlement_failure_samples_version', 'damage_settlement_failure_samples'
+    if version_key not in payload and samples_key not in payload:
+        return None
+    samples = payload.get(samples_key)
+    integers = {'sequence', 'frame', 'damage_settlement_scope'}
+    numbers = {'game_time', 'hp_before', 'hp_after', 'native_signed_delta', 'native_amount', 'shield_absorbed'}
+    strings = {'reason', 'method', 'source', 'target', 'target_uid', 'target_instance', 'nested_detail'}
+    booleans = {'shield_unknown', 'nested', 'settlement_ambiguous', 'target_commit_rejected', 'output_ambiguous'}
+    fields = integers | numbers | strings | booleans | {'source_character_uid', 'cancel_reason', 'native_autochess_scope'}
+    if type(payload.get(version_key)) is not int or payload[version_key] != 1 or type(samples) is not list or len(samples) > 16:
+        raise StreamGap('invalid settlement failure samples declaration')
+    for point in samples:
+        if (not isinstance(point, dict) or point.keys() != fields
+                or any(type(point[key]) is not int or point[key] < 0 for key in integers)
+                or any(point[key] is not None and (type(point[key]) not in (int, float)
+                        or not isfinite(point[key])) for key in numbers)
+                or type(point['game_time']) not in (int, float) or point['game_time'] < 0
+                or any(point[key] is not None and (not isinstance(point[key], str) or len(point[key]) > 200)
+                       for key in strings)
+                or not point['reason'] or any(type(point[key]) is not bool for key in booleans)
+                or any(point[key] is not None and (type(point[key]) is not int or point[key] < 0)
+                       for key in ('source_character_uid', 'cancel_reason'))):
+            raise StreamGap('invalid settlement failure sample')
+        scope = point['native_autochess_scope']
+        if scope is not None:
+            if (not isinstance(scope, dict) or type(scope.get('protocol_version')) is not int
+                    or scope['protocol_version'] != 1 or scope.get('status') not in ('available', 'unknown')
+                    or type(scope.get('verified_same_frame')) is not bool
+                    or type(scope.get('frame')) is not int or type(scope.get('game_time')) not in (int, float)
+                    or scope.get('frame') != point['frame'] or scope.get('game_time') != point['game_time']):
+                raise StreamGap('invalid settlement failure sample scope')
+            if (scope['status'] == 'available' and native_autochess_event_identity(point) is None
+                    or scope['status'] == 'unknown' and (scope['verified_same_frame'] is not False
+                       or not isinstance(scope.get('reason'), str) or not scope['reason'])):
+                raise StreamGap('invalid settlement failure sample scope proof')
+    return samples
+
+
+def verified_autochess_settlement_source_issues(sample, payload, *, retired_scopes=None):
+    """Validate localized issues against current or receiver-retired scope clocks.
+
+    Retired witnesses are supplied only by the receiver that accepted that
+    scope. This does not infer historical identity from a later roster.
+    """
     from autochess_context import native_autochess_event_identity
 
     version, unlocalized, issues = (payload.get(key) for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS)
@@ -660,13 +1144,16 @@ def verified_autochess_settlement_source_issues(sample, payload):
         if not isinstance(issue, dict) or issue.keys() != fields:
             return None
         cid, uid, frame, when = (issue[key] for key in ('source', 'source_character_uid', 'frame', 'game_time'))
-        if (not isinstance(cid, str) or len(cid) > 128 or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
+        identity = native_autochess_event_identity(issue)
+        witness = (dict(mode=mode, frame=sample['frame'], game_time=sample['game_time'])
+                   if identity == current else (retired_scopes or {}).get(identity))
+        if (witness is None
+                or not isinstance(cid, str) or len(cid) > 128 or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
                 or type(uid) is not int or not 0 < uid <= 0xffffffff
-                or type(frame) is not int or not 0 <= frame <= sample['frame']
-                or not _round_start_time(when) or when > sample['game_time']
-                or frame == sample['frame'] and when != sample['game_time']
-                or native_autochess_event_identity(issue) != current
-                or issue['native_autochess_scope'].get('collection_mode') != mode):
+                or type(frame) is not int or not 0 <= frame <= witness['frame']
+                or not _round_start_time(when) or when > witness['game_time']
+                or frame == witness['frame'] and when != witness['game_time']
+                or issue['native_autochess_scope'].get('collection_mode') != witness['mode']):
             return None
     return issues
 
@@ -784,6 +1271,7 @@ class ProbeContract:
     def normalize_quality(self, payload):
         """Normalize declarations only; event records and measured values are untouched."""
         result = dict(payload)
+        settlement_failure_samples(payload)
         declared = 'quality_contract_version' in payload
         supported = type(payload.get('quality_contract_version')) is int and payload['quality_contract_version'] == 1
         if declared and not supported:

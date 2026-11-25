@@ -21,7 +21,7 @@ FAULTS = ['parent_callback_not_returned', 'missing_parent_real', 'parent_hp_mism
     'changed_parent_type', 'parent_cancelled', 'cross_frame', 'cross_time', 'cross_scope', 'second_child_hp_discontinuous',
     'child_delta_mismatch', 'child_hp_mismatch', 'child_cancelled', 'child_shield_unknown',
     'child_incomplete', 'child_settlement_amount', 'child_settlement_uid', 'child_settlement_instance',
-    'child_settlement_clock', 'child_burst_delta', 'changed_child_source', 'reused_modifier']
+    'child_settlement_clock', 'child_certificate_delta', 'changed_child_source', 'reused_modifier']
 
 
 @pytest.fixture(scope='module')
@@ -58,9 +58,9 @@ def test_ten_actual_nonlethal_elemental_hp_chains_have_one_shared_certificate(pr
     group = fields['elemental_nonlethal_groups'][index]
     a, b = group['raw_child_entry']['record'], group['raw_child_return']['record']
     events = report['batch']['events']
-    parent = next(e for e in events if e['kind'] == 'damage' and e['source'] == a['parent_source'])
+    parent = next(e for e in events if e['kind'] == 'damage_settlement' and e['source'] == a['parent_source'])
     parent_settlement = next(e for e in events if e['kind'] == 'damage_settlement' and e['source'] == a['parent_source'])
-    child = next(e for e in events if e['kind'] == 'elemental_burst')
+    child = next(e for e in events if e['kind'] == 'damage_settlement' and e['damage_type'] == 5)
     child_settlement = next(e for e in events if e['kind'] == 'damage_settlement' and e['source'] is None)
     proof = parent['proof']['nested_settlement']
     assert proof == dict(target_uid=str(a['target_uid']), parent_real_delta=a['parent_real_delta'],

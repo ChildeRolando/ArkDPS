@@ -17,9 +17,9 @@ def test_actual_callback_order_and_identity_failures_keep_source_certificates_ho
         hit = actual_order["settlement"]
         assert hit["amount"] == 40 and hit["settlement_complete"] is True
         assert hit["proof"]["evidence_method"] == "Unit.OnTakeDamage+Entity.ApplyModifier"
-        assert actual_order["raw_damage"]["amount"] == 40
-        assert actual_order["raw_damage"]["hp_before"] == 50
-        assert actual_order["raw_damage"]["hp_after"] == 10
+        assert hit["amount"] == 40
+        assert hit["hp_before"] == 50
+        assert hit["hp_after"] == 10
         rejected = report[backend]["rejected"]
         assert len(rejected) == 16
         for reason, evidence in rejected.items():
@@ -32,3 +32,19 @@ def test_actual_callback_order_and_identity_failures_keep_source_certificates_ho
                 assert unknown and all(hit["source_character_uid"] == 1010 for hit in unknown)
                 assert all(hit["proof"]["settlement_unknown_reason"] for hit in unknown)
             assert evidence["settlement"] is None or evidence["settlement"]["settlement_complete"] is False
+
+
+def test_source_formula_diagnostics_do_not_depend_on_a_legacy_wire_record():
+    result = subprocess.run(['node', str(ROOT / 'tests/native_pc_settlement_order_fixture.js')],
+                            cwd=ROOT, text=True, capture_output=True, timeout=30, check=True)
+    report = json.loads(result.stdout)
+    for platform in ('android', 'native_pc'):
+        legacy = report[platform]['target_return_before_apply_commit']
+        modern = report[platform]['without_legacy_wire']
+        assert [event['kind'] for event in modern['batch']['events']] == ['damage_settlement']
+        assert modern['settlement']['settlement_complete'] is True
+        assert modern['settlement']['hp_before'] == 50
+        assert modern['settlement']['hp_after'] == 10
+        assert modern['mark']['mitigation_diagnostics'] == legacy['mark']['mitigation_diagnostics']
+        assert modern['mark']['mitigation_diagnostics']['unpaired_damage'] == 1
+        assert modern['settlement']['sequence'] == 1

@@ -95,3 +95,31 @@ def test_elemental_burst_credits_same_boss_once_and_missing_overkill_keeps_raw()
     assert boss['damage_by_type']['elemental'] == 120
     assert boss['effective_damage'] is None
     assert boss['mitigation_rate'] is None
+
+
+def test_modern_boss_uses_only_certificate_ledger_not_legacy_output_amount():
+    stats = setup()
+    stats.settlement_enabled = True
+    stats.partial_damage_enabled = True
+    stats.damage_settlement_version = 7
+    stats.settlement_sides_known = True
+    stats.snapshot(2, counters(999, 0, 0))
+    stats.event('old-output', 1, 'host', 'damage', 999, target=BOSS,
+                hp_before=80, hp_after=0, real_delta=-80, killed=True,
+                shield_absorbed=0, damage_type=1)
+    assert stats.boss_damage == {}
+    assert stats.partial_damage == {}
+    assert ('operator', 'damage') not in stats.engagement
+    stats.record_damage_settlement(1, 'local', 'operator', 1, 'host', BOSS,
+        '7', 'native', 80, 0, True, 1, 100, None, None, killed=True)
+    stats.partial_watermark = 2
+    boss = stats.result()['rows']['operator']['boss_damage']
+    assert boss['damage'] == 100
+    assert boss['effective_damage'] == 80
+    assert boss['overkill_damage'] == 20
+    assert boss['settled_damage']['observed_hits'] == 1
+    assert boss['counter_snapshot_complete'] is False
+    row = stats.result()['rows']['operator']
+    assert row['observed_damage'] == 100
+    assert row['partial_damage']['effective_damage'] == 80
+    assert row['partial_damage']['observed_hits'] == 1

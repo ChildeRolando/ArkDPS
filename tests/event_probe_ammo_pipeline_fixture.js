@@ -51,9 +51,13 @@ function scenario(platform){
   f.write(mod.add(0x30),bits(event.amount));f.write(mod.add(0x48),bits(event.real_delta));f.write(target.add(0x40),bits(event.hp_after));apply.onLeave.call(applyCall);
   counterDamage+=event.amount;
   const mark=f.context.rpc.exports.mark(),batch=f.context.rpc.exports.readEvents(0,mark.sequence);
-  const produced=batch.events.filter(x=>x.kind==='damage').at(-1),producedSettlement=batch.events.filter(x=>x.kind==='damage_settlement').at(-1);
-  for(const key of ['amount','hp_before','hp_after','real_delta','mitigation_before','mitigation_after'])assert.equal(produced[key],event[key],name+':'+key);
-  assert.equal(producedSettlement.settlement_complete,true);
+  const produced=batch.events.filter(x=>x.kind==='damage_settlement').at(-1);
+  assert(!batch.events.some(x=>['damage','hp_damage','elemental_burst'].includes(x.kind)));
+  for(const key of ['hp_before','hp_after','real_delta','mitigation_before','mitigation_after'])assert.equal(produced[key],event[key],name+':'+key);
+  assert.equal(produced.amount,settlement.amount);
+  assert.equal(produced.nominal_amount,event.amount);
+  assert.equal(produced.proof.native_modifier_observation.amount,event.amount);
+  assert.equal(produced.settlement_complete,true);
  }
  stage('baseline');marker(129);marker(131);marker(132);cast(314,[133,134]);hit('first_live');stage('first_live');
  marker(832);f.write(skill.add(0x98),0);hit('outside_after_true_finish');stage('outside_after_true_finish');

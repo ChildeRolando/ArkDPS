@@ -63,7 +63,7 @@ def test_native_legacy_burst_preserves_two_target_owners_and_never_adds_a_second
     assert player(result, 1)['observed_damage'] == (70 if mode == 'all' else None)
     assert all(player(result, i)['observed_damage'] is None for i in (2, 4))
     assert result['unknown_attribution'] == []
-    assert all(not p.statistics.burst for p in meter._players.values())
+    assert sum(b['count'] for p in meter._players.values() for b in p.statistics.burst.values()) == (2 if mode == 'all' else 1)
     assert all(p.stream.received[3] == old and p.stream.sequence == 5 for p in meter._players.values())
     assert meter._received[3] == old and old == original and records == before
     # Re-delivery of the same original global sequence never credits either
@@ -98,7 +98,7 @@ def test_legacy_duplicate_after_first_target_settled_does_not_erase_the_second_t
     assert player(result, 3)['observed_damage'] == 40
     assert player(result, 1)['observed_damage'] == (70 if mode == 'all' else None)
     assert result['unknown_attribution'] == []
-    assert all(not p.statistics.burst for p in meter._players.values())
+    assert sum(b['count'] for p in meter._players.values() for b in p.statistics.burst.values()) == (2 if mode == 'all' else 1)
     assert all(p.stream.received[4] == duplicate for p in meter._players.values())
 
 

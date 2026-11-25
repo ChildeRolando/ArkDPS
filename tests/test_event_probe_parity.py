@@ -216,7 +216,7 @@ def test_versioned_missing_quality_never_certifies_zero_or_hides_other_families(
     # damage-family declaration must not erase separately proven settlements.
     assert row["overkill_damage"] == 12
     assert row["skill_split_effective_complete"] is (
-        flag not in ("damage_unknown", "engagement_unknown", "skill_unknown"))
+        flag != "skill_unknown")
     assert row["shield_absorbed"] == (None if flag == "shield_unknown" else 3)
     assert row["skill_damage"] == (None if flag == "skill_unknown" else 20)
     assert row["observed_healing"] == (None if flag == "engagement_unknown" else 80)
@@ -229,6 +229,51 @@ def production_pipeline():
                             cwd=ROOT, text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
+def test_default_failure_checkpoint_retains_actual_rejection_inputs_and_archives(production_pipeline, platform):
+    from battle_history import BattleRecord
+    from event_probe import settlement_failure_samples
+    from test_autochess_scope_end import OwnedScopeEnd
+
+    report = production_pipeline[platform]['bad_hp_difference']
+    samples = settlement_failure_samples(report['mark'])
+    assert report['batch']['hp_context'] == []  # detailed tracing remains off
+    point, = samples
+    assert point['hp_before'] == 50 and point['hp_after'] == 11
+    assert point['native_signed_delta'] == -40
+    assert point['native_amount'] == 40 and point['cancel_reason'] == 0
+    assert point['target_commit_rejected']
+    assert point['reason'] == 'target settlement final HP proof unavailable'
+    assert samples == settlement_failure_samples(report['batch'])
+    assert settlement_failure_samples(production_pipeline[platform]['nonlethal_cap']['mark']) == []
+
+    case = OwnedScopeEnd(platform)
+    original = case.fixture.observer.mark
+
+    def mark():
+        value = original()
+        value.update(damage_settlement_failure_samples_version=1,
+                     damage_settlement_failure_samples=deepcopy(samples))
+        return value
+
+    case.fixture.observer.mark = mark
+    case.advance(1.25)
+    case.fixture.poll()
+    _, archive = case.finish(phase=7)
+    saved = archive['last_sample']['multiplayer']
+    assert saved['damage_settlement_failure_samples'] == samples
+    BattleRecord.from_archive(archive)
+    # Existing logs omit this additive family; emitted fields remain strict.
+    broken = deepcopy(archive)
+    broken['last_sample']['multiplayer']['damage_settlement_failure_samples'][0]['frame'] = True
+    with pytest.raises(ValueError):
+        BattleRecord.from_archive(broken)
+    old = deepcopy(archive)
+    old['last_sample']['multiplayer'].pop('damage_settlement_failure_samples_version')
+    old['last_sample']['multiplayer'].pop('damage_settlement_failure_samples')
+    BattleRecord.from_archive(old)
 
 
 @pytest.mark.parametrize("platform,contract", BACKENDS)
@@ -288,8 +333,10 @@ def test_real_final_apply_settlement_reaches_existing_v7_owner_detail(
         assert detail["skill_damage_effective"] == pytest.approx(actual)
         assert detail["non_skill_damage"] == detail["non_skill_damage_effective"] == 0
         assert detail["skill_split_complete"] and detail["skill_split_effective_complete"]
-        damage, = [record for record in batch["events"] if record["kind"] == "damage"]
-        assert damage["amount"] == pytest.approx(inputs["final_nominal"])
+        damage, = [record for record in batch["events"] if record["kind"] == "damage_settlement"]
+        assert damage['proof']['native_modifier_observation']['amount'] == pytest.approx(inputs["final_nominal"])
+        assert damage['nominal_amount'] == pytest.approx(inputs['counter_damage'])
+        assert not any(record['kind'] in ('damage', 'hp_damage', 'elemental_burst') for record in batch['events'])
         if inputs["entry_nominal"] != inputs["final_nominal"] and not inputs["shield_damage"]:
             assert batch["mitigation_diagnostics"]["emitted_after_adjustment"] == 1
     else:
@@ -490,8 +537,12 @@ def test_real_producer_quality_drives_both_canonical_combat_pipelines(production
         rows.append(row)
         assert row["damage"] == 30 and row["observed_damage"] == 30
         assert row["healing"] == 80 and row["observed_healing"] == 80
-        assert row["shield_absorbed"] == 3 and row["skill_damage"] == 20
-        assert row["mitigation_rate"] == pytest.approx(40)
+        assert row["shield_absorbed"] == 3 and row["skill_damage"] is None
+        assert row['observed_skill_damage'] == 20
+        assert row['settled_damage']['complete'] is False
+        assert 'damage_settlement_ready' not in quality and quality['enemy_damage_ready'] is False
+        assert row["mitigation_rate"] is None
+        assert row['observed_mitigation_rate'] == pytest.approx(40)
         assert row["mitigation_matched_hits"] == 2
     for key in ("damage", "healing", "observed_damage", "observed_healing", "shield_absorbed",
                 "skill_damage", "non_skill_damage", "skill_split_complete", "mitigation_rate"):
@@ -553,15 +604,14 @@ def test_real_formula_callbacks_preserve_same_hit_pair_or_explicit_missing_evide
     observer.records = deepcopy(batch["events"])
     observer.sequence = mark["sequence"]
     row = capture.sample()["rows"][collector.cid]
-    assert row["damage"] == row["observed_damage"] == 40
-    if paired:
-        assert row["mitigation_before"] == row["observed_mitigation_before"] == 80
-        assert row["mitigation_after"] == row["observed_mitigation_after"] == 40
-        assert row["mitigation_rate"] == row["observed_mitigation_rate"] == 50
-        assert row["mitigation_matched_hits"] == 1 and row["mitigation_unknown_reason"] is None
-    else:
-        assert row["mitigation_rate"] is None and row["observed_mitigation_rate"] is None
-        assert row["mitigation_matched_hits"] == 0 and row["mitigation_unknown_reason"]
+    assert row['damage'] == 40
+    assert row['observed_damage'] is None
+    assert row['settled_damage']['observed_hits'] == 0
+    assert row['mitigation_rate'] is None and row['observed_mitigation_rate'] is None
+    assert row['mitigation_matched_hits'] == 0
+    # This fixture installs formula observation only: its legacy record keeps
+    # the original pair, but cannot certify a modern settlement or its totals.
+    assert 'damage_settlement_ready' not in batch and batch['enemy_damage_ready'] is False
     if contract.raw_replay:
         assert capture.adapter.event_stream.received[damage["sequence"]] == damage
     assert row["event_coverage_complete"] is True

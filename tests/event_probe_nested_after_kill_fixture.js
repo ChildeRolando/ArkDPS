@@ -30,7 +30,7 @@ for(const platform of ['android','native_pc']){
  result[platform]={valid:run(platform),invalid:Object.fromEntries(
   ['child_incomplete','child_delta_mismatch','parent_nonzero_delta','target_uid_changed'].map(fault=>[fault,run(platform,fault)]))};
  const records=result[platform].valid.batch.events;
- const parent=records.find(e=>e.kind==='damage'&&e.source==='char_owned_parent');
+ const parent=records.find(e=>e.kind==='damage_settlement'&&e.source==='char_owned_parent');
  assert.equal(parent?.settled_after_nested_kill,true);
  assert(parent.proof.nested_settlement);
 }

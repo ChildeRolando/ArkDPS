@@ -4,6 +4,45 @@ from contextlib import nullcontext
 from pathlib import Path
 
 
+def commit_startup_operation(owner, operation, *, verify=None):
+    """Serialize cancellation with a backend's actual Windows commit.
+
+    Native build/birth/prepared-material checks remain inside the same lock;
+    a transport-specific verifier is never replaced by readiness alone.
+    """
+    with owner._condition:
+        owner._check_cancelled()
+        if verify is not None:
+            verify()
+        return operation()
+
+
+def start_runtime_watcher(owner, thread_factory, *, name, failed):
+    """Retain a watcher that may have started even when start() raises."""
+    thread = None
+    try:
+        thread = thread_factory(target=owner._run, name=name, daemon=False)
+        owner._thread = thread
+        thread.start()
+    except Exception:
+        if thread is None or not thread.is_alive():
+            owner._thread = None
+            failed()
+        raise
+
+
+def cancel_startup_owner(owner, *, closed, stopping, cleanup_pending):
+    """One cancellation transition; resource-specific interruption stays outside."""
+    with owner._condition:
+        if owner.status == closed:
+            return False
+        owner._cancel.set()
+        if owner.status not in (stopping, cleanup_pending):
+            owner._state(stopping)
+        owner._condition.notify_all()
+        return True
+
+
 def _native_pc_frida_runtime(game_root, runtime_dir, *, startup_trace=None):
     from native_pc.frida_runtime import NativePcFridaRuntime
     return NativePcFridaRuntime(game_root, runtime_dir=runtime_dir, startup_trace=startup_trace)

@@ -6,6 +6,8 @@ MuMu 与官服 PC 的探针负责采集和证明事件；它们将相同口径�
 
 `event_probe.py` 中的探针契约集中处理批次身份、序号与重放验证、质量声明、确认范围和终局身份。`event_observer.py` 保持 Frida 传输与资源清理所有权；`event_capture.py` 与生命周期入口消费同一个契约。探针不计算面板统计，WPF 不重新计算事件指标。
 
+实时Frida与ArkPie共用宿主前缀游标及ACK判定；本地已消费与生产者已确认分别保存。丢失ACK回复时保留已消费水位并累计重试，不重新读取/归约该前缀。游标绑定observer的实际stream寿命：重新加载脚本建立新寿命，旧回复不得确认或污染新游标；普通战局reset不借mark重建ACK身份。cooperative host继续保留自己的锁、单字段回复及重放边界，只复用相同ACK值校验。JSON有限数及唯一字段校验属于公共探针契约，不依赖测试host模块。
+
 | 接口 | 职责 |
 | --- | --- |
 | `EventProbe.start / mark / read_through / commit_events / stop` | 建立观察、同帧标记、有界读取、宿主确认和清理；保留既有资源所有权。 |
@@ -38,6 +40,25 @@ PC 的当次 `native_window_guard` 与 MuMu 原 `guard` 不互相冒充；验证
 该证明必须来自同一原生 Character 和其经过元数据验证的 BattleCharacterData，开合复核实体 CID、prefabKey、data UID、实例、对象/数据指针及精确时钟、scope。普通来源不增加形态读取；失败省略证明而不猜角色。消费者只在 `damage_settlement` / `elemental_bar` 中接受严格的完整字段，要求原事件来源和 UID、事件 stamp 的帧/时钟/scope/mode 全部一致，再由当前同 scope 名单精确核实 data CID 与 UID 的普通干员。不能缓存别名、仅凭 UID 覆盖 CID 冲突、从旧样本补写证据，或把同名另一个实例当作该来源。原始 source、proof 和重放收据保留；只在已验证的归约入口使用限定后的来源键。
 
 普通扣血证书可由唯一目标受击回调的 HP 前值，与同一 `ApplyModifier` 结束时的真实有符号扣血和最终 HP 联合证明；不能假定目标回调返回时已经扣血。来源、目标、UID、借用的 Modifier、类型和游戏时钟必须持续匹配，HP 差必须与实际扣血一致。嵌套元素击杀另需子进入前已发生的父原生 `realDelta` 与 HP 检查点、同目标的独立子击杀证书，以及父返回时的数值/身份复核；父、子各计自己的实际分量。缺少这些独立证据的嵌套、引用复用、歧义和身份变化不能认证。拒绝证明时必须留下未验证记录或明确质量失败，不能静默漏掉后再认证空的完整零值。
+
+## 单证书输出与独立原生观察
+
+2026-11-26重构后，共同生产者对有结算证书的敌方命中只发一笔`damage_settlement`，其`proof.settlement_wire_version`为字面整数`2`。不再为同一事实追加`damage`、`hp_damage`、`elemental_burst`。原生受击、输出、HP和护盾hook仍是独立证据输入，不随输出记录删减。
+
+自伤、友方、token等证书域外的原生观察、明确未提供敌方证书能力的生产者，以及确实无法形成证书但已有独立名义量/公式观察的情形，保留其可证事实和质量失败。这些记录不是第二份敌方金额账本，不能与同笔证书双计。当前接收方均归约到`DamageSettlement`；缺HP证据不得通过兼容入口补成完整命中。
+
+新证书的附加事实均绑定同一外层来源、类型、实例、原始时钟和scope：
+
+| 字段 | 来源与含义 | 严格边界 |
+| --- | --- | --- |
+| `hp_before/hp_after/real_delta/cancel_reason/target_type` | 仅来自已闭合的同次HP证据；实际HP差与有符号增量一致 | 不用名义量反推；缺证省略，不填零；`returned`本身不是扣血证明 |
+| `proof.native_modifier_observation` | `{version:1, method:'Entity.ApplyModifier', amount:...}`；外层结束时已经实读的Modifier最终值 | 与`nominal_amount`是不同事实；全吸盾时最终值可为0、已证名义量为40；输出回调入口量不能代替该最终值 |
+| `proof.target_callback_checkpoint` | 原受击入口的`version:1/method/returned/source/source_character_uid/target_uid/hp_before/frame/game_time` | 继承外层target实例绑定；子先结算的零父量仍需这个原始正HP起点，不能用结束时0HP补造 |
+| `proof.nested_elemental_chain.version:2` | 每段只引用真实`settlement_sequence`及该段来源、HP端点和实际增量 | 不制造替代burst记录或序号；v1旧录制仍按原双记录配对严格读取 |
+
+数值、类型、UID、时钟、来源、scope或版本不一致仍失败。原生累计精确浮点对账读取有名的`native_modifier_observation.amount`，不拿证书名义量或实际HP替代；该算术对账不宣称已经反汇编证明客户端计数器更新指令。`native_modifier_observation`缺席时保留验收缺证。
+
+旧录制没有v2标记，继续按原记录解释；验收器按每个证书的字面格式区分。一个现代证书可以与独立域外观察同处一段有序前缀，不能因为看到旧形状的域外记录，就忽略其余现代证书；同producer的证书格式缺失、混合或未知版本不得静默降级。原始输入保持不变，既有未知量不因重构升级。
 
 入口和目标回调返回时的量值只是阶段观测，不能要求它们与最终结算量相等。游戏监听器可在目标回调之前、期间或之后修改来伤；证书核对实际读取的最终 `m_value`、最终 `realDelta`、HP 差和同次已证吸收量，最终名义量必须覆盖实际扣血与吸收。允许证据一致的增幅、衰减、非致死封顶和致死过量，不按某个倍率推算或补字段。
 
@@ -93,7 +114,7 @@ PC 的当次 `native_window_guard` 与 MuMu 原 `guard` 不互相冒充；验证
 
 上述基线记录没有输出回调的入口顺序，自身不能区分未匹配输出和过早捕获零 `realDelta` 等原因。后续同一已验证 PC 构建的实机时序诊断确认，所测普通命中的目标回调返回时 HP/`realDelta` 尚未更新，真正扣血发生在外层 `ApplyModifier` 结束前；这提供了生产端联合证书的时序依据，不能仅靠补质量声明修复。
 
-连续元素子结算也属于同一生产端证明。普通命中的目标回调内或扣血后，可以继续产生无来源和具名来源的元素伤害；不能用一个子结算槽覆盖更早的证书，再把父命中判为缺证。共享运行时按同线程、同目标及原始时钟/作用域保存至多 16 段连续证书，逐段核对原生实际扣血、HP 端点及已发出的 `damage_settlement` 和 `elemental_burst`。具名子结算还需复核来源指针、类、实例及角色 data UID。父命中的金额始终来自它自己的原生有符号结果，不能由名义伤害或整段 HP 差反推。原有父先单段保留 `nested_settlement` 证明；子先或多段附加 `nested_elemental_chain`。已确认子结算的金额和归属不变，父命中只有闭环才能从未知恢复；确认协议不变。缺少子证书、跨线程同目标重叠、身份/作用域变化、盾证据不明或超过上限时继续保留未知。归档终点的完整覆盖须另有最终水位，不能由逐笔证明代替。
+连续元素子结算也属于同一生产端证明。普通命中的目标回调内或扣血后，可以继续产生无来源和具名来源的元素伤害；不能用一个子结算槽覆盖更早的证书，再把父命中判为缺证。共享运行时按同线程、同目标及原始时钟/作用域保存至多16段连续证书，逐段核对原生实际扣血、HP端点及已发出的`damage_settlement`；v1历史录制还配对原`elemental_burst`，当前v2不再依赖它。具名子结算还需复核来源指针、类、实例及角色data UID。父命中的金额始终来自它自己的原生有符号结果，不能由名义伤害或整段HP差反推。原有父先单段保留`nested_settlement`证明；子先或多段附加`nested_elemental_chain`。已确认子结算的金额和归属不变，父命中只有闭环才能从未知恢复；确认协议不变。缺少子证书、跨线程同目标重叠、身份/作用域变化、盾证据不明或超过上限时继续保留未知。归档终点的完整覆盖须另有最终水位，不能由逐笔证明代替。
 
 父命中首次受击回调取得的 HP-before 是其观察区间起点。此前已完全结束的子回调不再污染该区间；只有真实的首次目标证书、已排除在途同目标或未知目标活动、没有跨区间 Modifier 复用时才能重新定界。缺少/重复目标回调、区间内仍有嵌套或跨线程写入继续保守处理，不能在最终返回时单凭 HP 差抹除嵌套状态。
 
@@ -108,3 +129,49 @@ PC 继续通过原有独立低频 `capture_presence` 读活角色，点的时钟
 MuMu 可选读取限制为 4096 个引用、128 个角色、12000 次计费操作、256 KiB 和 12ms 墙钟预算；超限立即保留未知，不连续重试。敌人只做类型判别，不读取 Character 数据。只缓存不可变元数据布局，活值、根、时钟、角色生命周期、单位引用及作用域仍双次现场校验。预算和受控夹具证明有界行为，不代表模拟器实机 FPS。
 
 宿主先接受原有事件窗口，再严格校验可选字段与 closing mark、当前账号成员和阵营，发布 `{version:1, binding:'event_mark', sample_seq, frame, game_time, units}`。它绑定 closing mark 的真实时间，不能拿更早的独立累计快照时间拒收或替换。可选失败发布 `units: null`，未调度不发布字段。每次真实尝试先递增序号，即使整个窗口后来被拒绝；消费者只连接相邻尝试，不能越过未发布的失败。PC 新点沿用自己的物理时钟与相邻尝试约束，旧无序号记录保留原有兼容读取。两种时钟依据不得混用。
+
+## 真实部署生命周期（可选 version 1）
+
+两端共享生产者在元数据验证 `Character.Born(): Void`（真实 override，与敌人使用的 BObject.Born 地址必须不同）及 `BattleController.OnCharacterFinished(Character, Entity.FinishReason): Void` 后发布真实本体边界。验证包括枚举 declaring type、Int32 布局及每个 literal；`Entity.FinishReason` 与 `Ability.FinishReason` 绝不通用。能力不可验证时不发布证书，完整分母保持未知。没有读取 `m_createdTime` / `m_deadTime` 作为出生或死亡时间。
+
+`character_born` 是独立事件，amount=0，不开启技能。它只在同 Character、data UID、部署 instance UID、原始 frame/Q32 时钟及 scope 保持一致，且 Character.Born 调用使 borned 从 false 变为 true、isDisappeared 为 false 时发布。`skill_end` 的 CharacterFinished 记录可携带同样的 body 证书，不要求当前有技能键或窗口。
+
+两种记录的显式字段为 `source_instance_uid: uint32>0` 和 `actor_lifecycle: {version:1,state:'born'|'finish',instance_uid,data_uid,frame,game_time,fixed}`；fixed 是原始非负 Q32 Int64 十进制字符串。finish 另含 `reason_type:'Torappu.Battle.Entity.FinishReason'`、`reason:Int32`。scope 沿用该回调的原始 `native_autochess_scope`，不能借后继快照补写。`event_processing_payload` 保留这些字段；EventStream 完成顺序、时间、scope 与本家 actor 归属校验后，才把证书交给 Statistics 的部署归约器。
+
+永久终点只接受已验证 literal `REACH_EXIT / HP_ZERO / FALLDOWN / WITHDRAW / DEADLIKE_WITHDRAW / SILENT_WITHDRAW / HP_ZERO_WITH_NO_SOURCE / REPLACED`。NONE、OTHER、RESPAWN_SELF 与 MOVE_LIKE_RESPAWN_SELF/EXTERNAL 不认证永久终点。11/12 仍保留移动语义，不能终止本体生命周期。
+
+技能回调和 typed native cast 返回在已证身份下透传 `source_instance_uid`；实际 Modifier 来源在入口和返回保持同身份时也透传该字段，不能拿召唤实例 UID 冒充宿主本体。无匹配激活窗的 wait=true cast 保留 `(owner,dataUID,instanceUID)` 的未知状态，不升级为 owner-wide 归属缺证，也不假造生效开始。真实未来激活只恢复未来分类；已记录的未知命中保留。
+
+零帧 point v2 可独立附带 `lifecycle_baseline:{version:1,complete:true,frame:0,game_time:0,fixed:'0',units:[...]}`。每个 unit 含 `cid,data_uid,instance_uid,player_index,player_uid,player_side,inited:true,borned:true,disappeared:false`。生产者从原始零帧完整 UnitManager 集合读取，经既有类型/布局验证、完整引用读取、账号匹配和双次现场 guard；非本体 token 不进入集合。缺字段、短读、重复 data/native UID、非法flags或名单冲突使该独立证书不可用，不改旧技能初态语义。消费者只按同 point 的玩家/member、原始scope与零时钟归约，从0截入当前小局分母，不声称该本体在备战时的出生时间。旧 point v1/v2 无证书时保守兼容。
+
+
+完整生命周期能力必须实际安装 Character.Born 与 typed CharacterFinished 两个钩子，零帧证书和其质量声明均须 `character_lifecycle_ready:true`，宿主还核对当前 mark/read 两端同能力；缺任一、安装失败或地址 alias 均不能认证完整分母。该可选失败不改旧统计。PC v29 的选取事实冻结于测试 fixture（metadata SHA e58fb854…），验证 Entity/Ability 的两个不同 declaring type，以及真实 Character.Born override、OnAfterSkill(BasicSkill,Ability.FinishReason) 与 OnCastFinish(Ability,Ability.FinishReason,Boolean) 原始签名。
+
+`skill_cast_invocation` 是生产者每次 typed BasicSkill.OnCastFinish enter 的唯一正整数 ID。只有同一线程嵌套调用、同 owner/skill 指针、data/native UID、帧/Q32/scope 的 Character.OnAfterSkill 与最终 native leave 才共用；真实效果端点在同调用内也可带此证书。正常 AfterSkill 先于 native leave 时，已真实生效的窗口暂存 pending 状态，必须同 ID、同本体、同技能、同刻最终 wait 状态才能继续；原始回调/序号/重放顺序保持。缺真实生效起点、不同 invocation/body、失败返回或真实效果已终止均不能用 wait=true 开窗。旧记录没有此证书时保留旧规则。
+
+## 高频回血与失败现场
+
+HP setter 的入口与返回仍逐次校验。时钟入口使用同一块原始帧/Q32读取，并独立重读关闭帧；终点身份只缓存不可变类名，活指针仍现场核验。最多128个目标保存尚未分配序号的回血尾段，首笔真实恢复保留，之后只合并同目标、同帧、同scope的连续单调恢复。任何非HP事件、mark/read/ACK发布边界都会先处理相应尾段；已发布前缀不可回写。压缩记录数不等于原生回调数，`enemy_regen_ticks` 保留被覆盖的恢复次数。
+
+scope缓存失败后仅允许一次有界scope-only恢复：根、完整账号双射、slot/profile/UID引用和唯一manager必须与原图一致，并通过双次现场guard。容器计数或版本变化本身不再使后续回调一直缓存不可用；真实身份图变化继续拒收，不恢复旧角色归属缓存。
+
+可选 `damage_settlement_failure_samples_version` / `damage_settlement_failure_samples` 保存最多16条首次失败现场，按scope、来源、目标和拒证原因去重。使用回调已经读到的HP前后值、原生有符号增量、盾/取消/嵌套信息，不增加原生读取和逐回调IPC。该字段默认进入战绩，旧档缺字段仍兼容；它不把不一致的HP差反推成回血或有效伤害。性能夹具的桥读和有界队列对照、独立自有进程原语耗时与实际游戏FPS分别记录。
+
+
+普通嵌套子结算的真实零 HP 终点不再被当作缺证：父回调已返回、父原生 realDelta 与父 HP 检查点在子入口独立闭环，子有自己的完整原生结算证书、killed 与 HP=0 一致，且父结束时身份/时钟/原始 realDelta 未变、目标仍等于子真实终点时，可保留父独立扣血。父不承担子击杀，子的名义伤害和过量不变；不从整段 HP 差或名义量反算任一击。UID 归零、子缺证、重复/额外子回调、盾未知、父字段变化或终点不连续仍拒绝。此分支由 PC/MuMu 真实生产回调的拥有内存夹具验证，不代表测10 R9/R10 溯光星源未核实命中的原始原因已经确认；那些历史归档未保存逐笔 guard。
+
+
+敌人首次地图层入场可能晚于真实 Born。既有 BObject.Born 回调在同指针/类/CID/native UID、borned 从0到1、原始 frame/Q32/scope 不变时，可保存只读出生证书；延后的 enemy_enter 附 `proof.native_enemy_birth`（version1、source_method、target/native UID/native pointer、原始时钟、Born-enter前及成功return后的原始sequence、return epoch）。无额外钩子或RPC。回收、假死/重生、换scope或读取失败清除此可选证书。宿主严格校验后，仅当元素条同UID与同native pointer、其原始序号严格位于Born成功return与首次entry之间，且bar进入时的原始epoch严格晚于Born-return epoch（仅pending delayed body的bar附此小型标记）、原时钟顺序及连续覆盖成立时，保留这条本周期证据。无证书仍按原规则清条，不从“首次看到entry”猜出生；Born前或Born内部旧条、同UID回收新周期、不同pointer/UID、坏entry/坏重生、观测gap不能借此恢复。真实reborn仍清旧条，新bar只恢复未来归属。该边界已由PC/MuMu拥有内存原生产回调验证，不声称解释缺原始guard的测10第14回合11笔元素归属未知。
+
+
+## 正时间空 scope 锚点（pending_scope_start v1）
+
+这是宿主采集事务，不是 producer 零帧证书。仅在同一 observer 寿命内，旧零起点 combat 前缀通过既有严格 successor watermark 封口、并观察到 phase/round 先行的正时间新 scope 时，Feed 保存独立 playing 读、原始前后静默 mark、与已接受 cursor 一致的空 baseline、真实正 frame/game_time 及原 observer；fresh late-attach 或旧前缀不能严格封口时仍立即建立原有晚基线，不额外等待首事件。pending 不推进 ACK，也不发布新的金额基线。无此原始锚点的旧录制保留原合同，不能事后补造。
+
+首次后续事件必须由采集层调用 `read_round_start_range(anchor.sequence, closing.sequence]`，按2048条分页、总100000条及32MiB原始JSON预算读取。`events.pending_scope_start` 恰有 `version/anchor/pages`；anchor 恰有真实 `sample/roster_frame/before/after/sequence/drain`，每页恰有 `after/through/batch`。页与合并 drain 的事件字节语义必须一致，序号完整连续，capture clock 位于锚点与当前端点之间，同帧时间相同；每页重新验证 source/session/build/generation、五根、scope 和唯一账号表。序号跨锚点增长时 callback epoch 必须严格增长；若原始页声明 epoch，还须在锚点与closing epoch之间单调且不伪零。重试、换 observer、同对象重启导致 `_cursor_lifetime` 改变、缺页、冲突或超预算均不 ACK，不改读当前 baseline 兜底。寿命令牌在read前后、consumer交接与ACK前分别重验；令牌是现场owner边界，不接受回放payload自报令牌来授权新source。
+
+Sessions 只消费已取得的事务，不调用 observer。初始化用 anchor 的真实 frame/time 与该帧空 roster，随后回放全部前缀，再交 Runtime 确认。新typed字段不接受consumer提供的zero/技能初态/生命周期完整声明；PC重验原native_window_guard、serial/PID birth的canonical绑定，Android重验独立guard/roots/session。正时间仍是晚覆盖；观察窗口内已证金额可以完整，但不能升级为完整整scope、已知技能初态或完整body在场。
+
+无reset的合法零输出scope不能丢弃：`pending_scope_exit` 保存原始独立successor，并物化anchor和最后同scope空窗口后归档，沿用严格终局/body门禁，缺证仍未知。明确absence/finished/process-change通过 `pending_scope_end` 保留原lifecycle及原terminal诊断并归档已知观察窗口，不证明未读尾部、不推进更高ACK。原队列不因零伤害或timeout被释放。
+
+只有 `pending_scope_superseded` 的原始独立PC serial严格+1、原生generation严格+1、PID birth/build/五根/manager/账号相同、两时钟确实回退、整个空片段没有进入callback且source无未定位失败时，才允许用真实reset替代pre-start空片段。它和正时间初始化是不同事务；不把旧锚点重标成零，不以新scope标志自证reset。未知版本、冲突事务、已建立generation上的重初始化一律拒绝。

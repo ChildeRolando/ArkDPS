@@ -1,0 +1,200 @@
+{
+  "metadata_version": 29,
+  "metadata_sha256": "e58fb854ae519bc22f7d8bc7ac83502425a51b896a907a3374f5215202f9caa5",
+  "metadata_bytes": 46669332,
+  "source": "Disk metadata only; field offsets remain runtime-verified",
+  "types": {
+    "Torappu.Battle.Ability.FinishReason": {
+      "type_definition_index": 10008,
+      "byval_type_index": 87551,
+      "declaring_type": "Torappu.Battle.Ability",
+      "methods": [],
+      "enum_literals": {
+        "NORMAL_EXIT": 0,
+        "INTERRUPTED": 1,
+        "OWNER_DEAD": 2,
+        "TARGET_DEAD": 3,
+        "PALSY": 4
+      }
+    },
+    "Torappu.Battle.BattleController": {
+      "type_definition_index": 10185,
+      "byval_type_index": 45458,
+      "declaring_type": "type-index:-1",
+      "methods": [
+        {
+          "method_definition_index": 65741,
+          "name": "OnCharacterFinished",
+          "return_type": "System.Void",
+          "parameters": [
+            {
+              "name": "character",
+              "type": "Torappu.Battle.Character",
+              "type_index": 48460
+            },
+            {
+              "name": "reason",
+              "type": "Torappu.Battle.Entity.FinishReason",
+              "type_index": 98014
+            }
+          ],
+          "flags": 134,
+          "static": false
+        }
+      ],
+      "enum_literals": {}
+    },
+    "Torappu.Battle.BObject": {
+      "type_definition_index": 10200,
+      "byval_type_index": 45192,
+      "declaring_type": "type-index:-1",
+      "methods": [
+        {
+          "method_definition_index": 66006,
+          "name": "Born",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 454,
+          "static": false
+        }
+      ],
+      "enum_literals": {}
+    },
+    "Torappu.Battle.Entity.FinishReason": {
+      "type_definition_index": 10311,
+      "byval_type_index": 98014,
+      "declaring_type": "Torappu.Battle.Entity",
+      "methods": [],
+      "enum_literals": {
+        "NONE": 0,
+        "REACH_EXIT": 1,
+        "HP_ZERO": 2,
+        "FALLDOWN": 3,
+        "WITHDRAW": 4,
+        "DEADLIKE_WITHDRAW": 5,
+        "SILENT_WITHDRAW": 6,
+        "OTHER": 7,
+        "HP_ZERO_WITH_NO_SOURCE": 8,
+        "REPLACED": 9,
+        "RESPAWN_SELF": 10,
+        "MOVE_LIKE_RESPAWN_SELF": 11,
+        "MOVE_LIKE_RESPAWN_EXTERNAL": 12
+      }
+    },
+    "Torappu.Battle.BasicSkill": {
+      "type_definition_index": 11055,
+      "byval_type_index": 45408,
+      "declaring_type": "type-index:-1",
+      "methods": [
+        {
+          "method_definition_index": 73864,
+          "name": "OnSkillStart",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 132,
+          "static": false
+        },
+        {
+          "method_definition_index": 73902,
+          "name": "OnCastFinish",
+          "return_type": "System.Void",
+          "parameters": [
+            {
+              "name": "ability",
+              "type": "Torappu.Battle.Ability",
+              "type_index": 35758
+            },
+            {
+              "name": "reason",
+              "type": "Torappu.Battle.Ability.FinishReason",
+              "type_index": 87551
+            },
+            {
+              "name": "resetCd",
+              "type": "System.Boolean",
+              "type_index": 46024
+            }
+          ],
+          "flags": 452,
+          "static": false
+        }
+      ],
+      "enum_literals": {}
+    },
+    "Torappu.Battle.Character": {
+      "type_definition_index": 11491,
+      "byval_type_index": 48460,
+      "declaring_type": "type-index:-1",
+      "methods": [
+        {
+          "method_definition_index": 77242,
+          "name": "Born",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 198,
+          "static": false
+        },
+        {
+          "method_definition_index": 77248,
+          "name": "SwitchToSkillState",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 134,
+          "static": false
+        },
+        {
+          "method_definition_index": 77249,
+          "name": "SwitchOutFromSkillState",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 134,
+          "static": false
+        },
+        {
+          "method_definition_index": 77348,
+          "name": "OnAfterSkill",
+          "return_type": "System.Void",
+          "parameters": [
+            {
+              "name": "skill",
+              "type": "Torappu.Battle.BasicSkill",
+              "type_index": 45408
+            },
+            {
+              "name": "reason",
+              "type": "Torappu.Battle.Ability.FinishReason",
+              "type_index": 87551
+            }
+          ],
+          "flags": 132,
+          "static": false
+        },
+        {
+          "method_definition_index": 77349,
+          "name": "OnSkillStart",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 134,
+          "static": false
+        },
+        {
+          "method_definition_index": 77352,
+          "name": "OnSkillCastSucceed",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 134,
+          "static": false
+        },
+        {
+          "method_definition_index": 77353,
+          "name": "OnSkillFinish",
+          "return_type": "System.Void",
+          "parameters": [],
+          "flags": 134,
+          "static": false
+        }
+      ],
+      "enum_literals": {}
+    }
+  }
+}

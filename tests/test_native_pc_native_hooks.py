@@ -249,7 +249,7 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert not loaders[0].path.with_suffix('.json').exists()
     source = probe.probe_modes['probe_source']
     assert source['provider'] == 'arkdps-native-hooks' and source['frida_required'] is False
-    assert source['live_acceptance'] == 'accepted'
+    assert source['live_acceptance'] == 'not_verified_for_this_run'
     assert config['token'] not in json.dumps(probe.probe_modes)
     assert probe.mark()['native_session'] == 'bound-session'
     assert probe.mark()['source_build'] == source_build

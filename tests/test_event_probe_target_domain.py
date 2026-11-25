@@ -134,8 +134,9 @@ def disabled_family_quality():
 
 @pytest.mark.parametrize("platform", ["mumu", "native_pc"])
 @pytest.mark.parametrize("scenario", ("paired_hit", "per_hit_missing", "per_hit_mismatch"))
+@pytest.mark.parametrize('mark_capability', [True, False], ids=['literal_mark_proof', 'missing_mark_proof'])
 def test_disabled_enemy_certificate_family_does_not_degrade_legacy_damage_or_formula(
-        disabled_family_quality, platform, scenario):
+        disabled_family_quality, platform, scenario, mark_capability):
     backend = "native_pc" if platform == "native_pc" else "android"
     report = disabled_family_quality[backend]["scenarios"][scenario]
     batch, mark = report["batch"], report["mark"]
@@ -150,13 +151,28 @@ def test_disabled_enemy_certificate_family_does_not_degrade_legacy_damage_or_for
     collector = CanonicalCollector(platform)
     collector.cid, collector.uid = damage["source"], damage["source_character_uid"]
     contract = NATIVE_PC_CONTRACT if platform == "native_pc" else MUMU_CONTRACT
-    observer = BoundedObserver(collector, contract, batch)
+    class DeclaredCapabilityObserver(BoundedObserver):
+        def mark(self):
+            value = super().mark()
+            # Forward literal declarations from the actual producer mark. The
+            # generic harness intentionally has no capability declarations.
+            if mark_capability:
+                for field in ('enemy_damage_ready', 'enemy_damage_unknown'):
+                    value[field] = mark[field]
+            return value
+
+    observer = DeclaredCapabilityObserver(collector, contract, batch)
     capture = LiveEventCapture(collector, observer)
     capture.sample()
     collector.frame, collector.game_time, collector.damage = mark["frame"], mark["game_time"], 40
     observer.records, observer.sequence = deepcopy(batch["events"]), mark["sequence"]
     result = capture.sample()
     row = result["rows"][collector.cid]
+    assert capture.adapter.statistics.legacy_observation_mode is mark_capability
+    if not mark_capability:
+        assert row['damage'] == 40 and row['observed_damage'] is None
+        assert row['mitigation_rate'] is None and row['mitigation_matched_hits'] == 0
+        return
     assert row["damage"] == row["observed_damage"] == 40
     if scenario == "paired_hit":
         assert damage["mitigation_before"] == 80 and damage["mitigation_after"] == 40

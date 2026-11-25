@@ -27,6 +27,46 @@ def outgoing_counter_event(event):
                 and target.startswith(('char_', 'token_')))
 
 
+def native_counter_observations(events):
+    """Yield original counter witnesses; never synthesize old wire records."""
+    _single_settlement_wire(events)  # Validate one producer certificate format.
+    for event in events:
+        kind = event.get('kind')
+        amount = event.get('amount')
+        if kind == 'damage_settlement' and _single_settlement_event(event) and event.get('source') is not None:
+            target = event.get('target')
+            if isinstance(target, str) and target.startswith(('char_', 'token_')):
+                continue
+            witness = (event.get('proof') or {}).get('native_modifier_observation')
+            if (not isinstance(witness, dict) or set(witness) != {'version', 'method', 'amount'}
+                    or type(witness.get('version')) is not int or witness['version'] != 1
+                    or witness.get('method') != 'Entity.ApplyModifier'):
+                raise ValueError('native counter certificate lacks a verified modifier observation')
+            amount = witness['amount']
+            dtype = event.get('damage_type')
+            if type(dtype) is not int or dtype not in (1, 2, 3, 5):
+                raise ValueError('native counter certificate has no known native type')
+            field = PC_F32_TYPES[dtype]
+        elif kind == 'healing':
+            if 'damage_type' in event and event['damage_type'] != 4:
+                raise ValueError('PC f32 healing event has a conflicting native type')
+            field = 'healing'
+        elif kind == 'elemental_burst' and event.get('source') is not None:
+            if type(event.get('damage_type')) is not int or event['damage_type'] != 5:
+                raise ValueError('explicitly sourced PC burst has no elemental native counter type')
+            field = 'elemental'
+        elif kind == 'damage' and outgoing_counter_event(event):
+            dtype = event.get('damage_type')
+            if type(dtype) is not int or dtype not in (1, 2, 3, 5):
+                raise ValueError('PC f32 damage event has no known native type')
+            field = PC_F32_TYPES[dtype]
+        else:
+            continue
+        if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0:
+            raise ValueError('native counter observation amount must be finite and nonnegative')
+        yield event, field, amount
+
+
 def near(left, right):
     if (type(left) not in (int, float) or type(right) not in (int, float)
             or not math.isfinite(left) or not math.isfinite(right)
@@ -97,34 +137,17 @@ def check_native_f32_counters(events, publications, *, source_domain='all', read
                 or clock[1] < previous_event_clock[1]):
             raise failure('PC f32 model event clock is missing or out of order')
         previous_event_clock = clock
-        if event['kind'] == 'healing':
-            if 'damage_type' in event and event['damage_type'] != 4:
-                raise failure('PC f32 healing event has a conflicting native type')
-            field = 'healing'
-        elif event['kind'] == 'elemental_burst' and event.get('source') is not None:
-            if type(event.get('damage_type')) is not int or event['damage_type'] != 5:
-                raise failure('explicitly sourced PC burst has no elemental native counter type')
-            field = 'elemental'
-        elif event['kind'] == 'damage' and outgoing_counter_event(event):
-            dtype = event.get('damage_type')
-            if type(dtype) is not int or dtype not in (1, 2, 3, 5):
-                raise failure('PC f32 damage event has no known native type')
-            field = PC_F32_TYPES[dtype]
-        else:
-            continue
-        amount = event.get('amount')
-        if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0:
-            raise failure('PC f32 model has an invalid nominal event amount')
+    for event, field, amount in native_counter_observations(events):
         if not isinstance(event.get('source'), str) or not event['source']:
             raise failure('PC f32 counter event has no source identity')
         if source_domain == 'owned' and not owned(event['source']):
             raise failure('PC f32 counter event source is outside the declared owned domain')
-        relevant.append((event, field))
+        relevant.append((event, field, amount))
     if previous != final:
         raise failure('PC f32 model event prefix does not reach the published watermark')
     by_source = defaultdict(list)
-    for event, field in relevant:
-        by_source[event['source']].append((event, field))
+    for event, field, amount in relevant:
+        by_source[event['source']].append((event, field, amount))
     seeds, values, cursors, checks = {}, {}, {}, Counter()
     excluded, all_native_sources, validated_rows = {}, set(), 0
     applied = changed_updates = 0
@@ -180,7 +203,7 @@ def check_native_f32_counters(events, publications, *, source_domain='all', read
                     continue
             modeled_present.add(source)
             if source not in seeds:
-                before_seed = [event['sequence'] for event, _field in by_source[source]
+                before_seed = [event['sequence'] for event, _field, _amount in by_source[source]
                                if event['sequence'] <= through]
                 if (source_domain == 'owned' and through > baseline
                         and any(row[field] > 0 for field in PC_F32_TYPES.values()) and not before_seed):
@@ -192,10 +215,10 @@ def check_native_f32_counters(events, publications, *, source_domain='all', read
                         counter_event_sequences=before_seed,
                         reason='first_independently_observed_source_row_is_a_seed_not_a_modelled_zero_origin'))
             else:
-                for event, field in by_source[source]:
+                for event, field, amount in by_source[source]:
                     if cursors[source] < event['sequence'] <= through:
                         prior = values[source][field]
-                        values[source][field] = f32(prior + f32(event['amount']))
+                        values[source][field] = f32(prior + f32(amount))
                         changed_updates += values[source][field] != prior
                         applied += 1
                 cursors[source] = through
@@ -278,6 +301,54 @@ def _complete_elemental_settlement_emitter(event):
             and type(event.get('killed')) is bool)
 
 
+def _single_settlement_event(event):
+    """Recognize the literal producer format, independently of other domains.
+
+    A modern enemy certificate can coexist with a non-enemy observation. The
+    presence of that independent legacy-shaped record must not change how the
+    certificate is interpreted. Old paired recordings have no v2 marker.
+    """
+    proof = event.get('proof')
+    if event.get('kind') != 'damage_settlement' or not isinstance(proof, dict) or 'settlement_wire_version' not in proof:
+        return False
+    if type(proof['settlement_wire_version']) is not int or proof['settlement_wire_version'] != 2:
+        raise ValueError('unsupported raw settlement wire version')
+    return True
+
+
+def _single_settlement_wire(events):
+    formats = [_single_settlement_event(event) for event in events if event.get('kind') == 'damage_settlement']
+    modern = any(formats)
+    if modern and not all(formats):
+        raise ValueError('mixed raw settlement wire versions in one producer prefix')
+    return modern
+
+
+def _complete_single_elemental_witness(event):
+    if not _complete_elemental_settlement_emitter(event) or event.get('damage_type') != 5:
+        return False
+    def finite(value):
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    actual, uid = event.get('real_delta'), event.get('target_uid')
+    source = event.get('source')
+    return (type(event.get('damage_type')) is int
+            and ('target_type' not in event or type(event['target_type']) is int and event['target_type'] == 0)
+            and type(event.get('cancel_reason')) is int and event['cancel_reason'] == 0
+            and isinstance(event.get('target'), str) and bool(event['target'])
+            and isinstance(event.get('target_instance'), str) and bool(event['target_instance'])
+            and isinstance(uid, str) and uid.isascii() and uid.isdecimal()
+            and 0 < int(uid) <= 0xffffffff and str(int(uid)) == uid
+            and (source is None or _explicit_owned_actor_identity(event) is not None)
+            and finite(event.get('amount')) and finite(event.get('nominal_amount'))
+            and finite(event.get('hp_before')) and finite(event.get('hp_after'))
+            and finite(event.get('shield_absorbed'))
+            and type(actual) in (int, float) and math.isfinite(actual) and actual <= 0
+            and math.isclose(event['amount'], -actual, rel_tol=1e-7, abs_tol=.01)
+            and math.isclose(event['hp_before'] - event['hp_after'], -actual, rel_tol=1e-7, abs_tol=.01)
+            and event['nominal_amount'] + .01 >= event['amount'] + event['shield_absorbed']
+            and type(event.get('killed')) is bool and event['killed'] == (event['hp_after'] == 0))
+
+
 def check_pc_owner_counter_supplements(events, publications, ownership):
     """Replay the existing source-null burst supplement, at each watermark.
 
@@ -290,9 +361,12 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
         return type(value) in (int, float) and math.isfinite(value) and value >= 0
 
     bursts = [event for event in events if event['kind'] == 'elemental_burst']
+    single_wire = _single_settlement_wire(events)
+    standalone = [event for event in events if _single_settlement_event(event)
+                  and event.get('damage_type') == 5]
     stage = (publications[0].get('battle_metadata') or {}).get('stage_id')
     session = publications[0].get('native_session')
-    if bursts and (not isinstance(stage, str) or not stage or not isinstance(session, str)
+    if (bursts or standalone) and (not isinstance(stage, str) or not stage or not isinstance(session, str)
             or any(pub.get('native_session') != session
                    or (pub.get('battle_metadata') or {}).get('stage_id') != stage for pub in publications)):
         raise ValueError('elemental supplement has no single independently bound stage/session window')
@@ -334,10 +408,15 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
         if 'target_uid' in burst and burst['target_uid'] != settlement['target_uid']:
             raise ValueError('elemental burst UID conflicts with its same-hit settlement')
         used.add(settlement['sequence'])
-        pairs[burst['sequence']] = settlement
+        pairs[burst['sequence']] = (settlement, burst['amount'], -actual, burst['sequence'])
+    for settlement in standalone:
+        if not _complete_single_elemental_witness(settlement):
+            raise ValueError('elemental supplement has no complete raw single-settlement nominal/actual witness')
+        pairs[settlement['sequence']] = (settlement, settlement['nominal_amount'], settlement['amount'], None)
     bars, supplements, witnesses, consumed = {}, Counter(), [], {}
     cursor = publications[0]['event_watermark']['sequence']
     index, checks = 0, 0
+    supplement_watermarks = []
     for publication in publications:
         through = publication['event_watermark']['sequence']
         while index < len(events) and events[index]['sequence'] <= through:
@@ -352,6 +431,9 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                 uid = event.get('target_instance')
                 bars = {key: value for key, value in bars.items() if key[0] != uid}
             elif kind == 'damage' and event.get('killed') is True and event.get('settled_after_nested_kill', False) is False:
+                bars = {key: value for key, value in bars.items() if key[1] != event.get('target_instance')}
+            elif (single_wire and kind == 'damage_settlement' and event.get('damage_type') != 5
+                  and event.get('killed') is True and event.get('settled_after_nested_kill', False) is False):
                 bars = {key: value for key, value in bars.items() if key[1] != event.get('target_instance')}
             elif kind == 'elemental_bar':
                 uid, instance, source = event.get('target_uid'), event.get('target_instance'), event.get('source')
@@ -368,8 +450,8 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                 if previous is not None and (event['frame'] < previous[0] or event['game_time'] < previous[1]):
                     raise ValueError('elemental bar reuses context from before an already consumed burst')
                 bars[uid, instance] = event
-            elif kind == 'elemental_burst':
-                settlement = pairs[event['sequence']]
+            elif event['sequence'] in pairs:
+                settlement, nominal, actual, burst_sequence = pairs[event['sequence']]
                 key = settlement['target_uid'], event.get('target_instance')
                 source = event.get('source')
                 if source is None:
@@ -378,15 +460,19 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                             or bar['frame'] > event['frame'] or bar['game_time'] > event['game_time']):
                         raise ValueError('source-null burst has no preceding unconsumed same-target owned elemental bar')
                     owner = ownership[bar['source']]
-                    supplements[owner] += event['amount']
-                    witnesses.append(dict(owner=owner, nominal_supplement=event['amount'],
-                        actual_hp_damage=-event['real_delta'], target_uid=key[0], target_instance=key[1],
-                        bar_sequence=bar['sequence'], settlement_sequence=settlement['sequence'], burst_sequence=event['sequence']))
+                    supplements[owner] += nominal
+                    witness = dict(owner=owner, nominal_supplement=nominal,
+                        actual_hp_damage=actual, target_uid=key[0], target_instance=key[1],
+                        bar_sequence=bar['sequence'], settlement_sequence=settlement['sequence'])
+                    if burst_sequence is not None:
+                        witness['burst_sequence'] = burst_sequence
+                    witnesses.append(witness)
                 elif source not in ownership:
                     raise ValueError('explicitly sourced burst has no declared owner')
                 bars.pop(key, None)  # Explicit source bursts consume context but add no supplement.
                 consumed[key] = event['frame'], event['game_time']
         cursor = through
+        supplement_watermarks.append(dict(sequence=through, by_owner=dict(supplements)))
         native = {row['id']: row for row in publication['native_rows']}
         for owner, row in publication['statistics']['rows'].items():
             observed = row.get('burst_added_settlement')
@@ -412,6 +498,7 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                     checks += 1
     return dict(scope='each_published_native_counter_watermark', exact=True, checks=checks,
                 final_nominal_supplements=dict(supplements), source_null_burst_witnesses=witnesses,
+                nominal_supplements_by_watermark=supplement_watermarks,
                 explicit_source_bursts_supplemented=False, future_events_used=False,
                 owning_sources={str(path): sha256(path.read_bytes()).hexdigest() for path in (
                     Path(__file__).resolve().parents[1] / 'stats_core.py',
@@ -507,10 +594,19 @@ def pc_mechanism_evidence(events):
                  and equal(min(before, incoming), event['amount']))
         (shield_ok if valid else shield_bad).append(event.get('sequence'))
 
+    _single_settlement_wire(events)  # Reject malformed/mixed declared producer formats.
     bars = [event for event in events if event.get('kind') == 'elemental_bar'
             and number(event.get('amount')) and event['amount'] > 0]
     bursts = [event for event in events if event.get('kind') == 'elemental_burst'
               and number(event.get('amount')) and event['amount'] > 0]
+    # A modern producer emits the elemental callback once, as its checked
+    # settlement certificate. Old paired wire remains independently validated.
+    legacy_bursts = list(bursts)
+    bursts += [event for event in events if event.get('kind') == 'damage_settlement'
+        and event.get('damage_type') == 5 and number(event.get('amount')) and event['amount'] > 0
+        and _single_settlement_event(event)
+        and not any(clock_equal(event, old) and target_equal(old, event) and actor_equal(event, old)
+                    and event.get('real_delta') == old.get('real_delta') for old in legacy_bursts)]
     elemental_ok, elemental_bad, burst_settlements = [], [], {}
     verified_burst_pairs = {}
     used_settlements = set()
@@ -530,6 +626,8 @@ def pc_mechanism_evidence(events):
                            and event.get('nominal_amount') == burst.get('amount')
                            and event.get('killed') == burst.get('killed'))
                       and event['sequence'] not in used_settlements]
+        if burst.get('kind') == 'damage_settlement':
+            candidates = [burst] if settled(burst, elemental=True) else []
         matching_bars = [bar for bar in bars if proof_of(bar).get('method') == 'Entity.ApplyModifier'
                          and type(proof_of(bar).get('type')) is int and proof_of(bar)['type'] == 0
                          and type(proof_of(bar).get('target')) is int and proof_of(bar)['target'] == 5
@@ -704,7 +802,9 @@ def pc_mechanism_evidence(events):
         else:
             nested_bad.append(parent['sequence'])
 
-    chain_records = [event for event in events if chain_key in proof_of(event)]
+    chain_records = [event for event in events if chain_key in proof_of(event)
+                     and not (_single_settlement_event(event) and isinstance(proof_of(event)[chain_key], dict)
+                              and proof_of(event)[chain_key].get('version') == 2)]
     if chain_records:
         by_sequence = {}
         for event in events:
@@ -838,6 +938,142 @@ def pc_mechanism_evidence(events):
             sequence = event['sequence']
             if sequence not in chain_accepted and sequence not in nested_bad:
                 nested_bad.append(sequence)
+
+    # Modern certificates retain checked HP endpoints and reference only real
+    # settlement sequences. This is the v2 proof format; no synthetic legacy
+    # event, duplicate sequence or second copy of the same callback is needed.
+    modern_parents = [event for event in events if _single_settlement_event(event)
+        and (proof_of(event).get(chain_key) is not None or proof_of(event).get('nested_settlement') is not None)]
+    by_sequence = {}
+    for event in events:
+        seq = event.get('sequence')
+        if type(seq) is int and seq > 0:
+            by_sequence[seq] = None if seq in by_sequence else event
+
+    def modern_child(parent, child):
+        return (isinstance(child, dict) and settled(child) and hp_evidence(child)
+            and type(child.get('sequence')) is int and by_sequence.get(child['sequence']) is child
+            and child['sequence'] < parent['sequence'] and child['sequence'] not in used_child_bursts
+            and clock_equal(parent, child) and same_scope(parent, child) and target_equal(parent, child)
+            and child['shield_absorbed'] == 0 and child['real_delta'] < 0
+            and child['amount'] == -child['real_delta'] and child.get('killed') is (child['hp_after'] == 0)
+            and (owned_actor(child) or child.get('source') is None and child.get('source_character_uid') is None
+                 and child.get('damage_type') == 5)
+            and not proof_of(child).get(chain_key) and not proof_of(child).get('nested_settlement'))
+
+    def modern_witness(parent):
+        sequence = parent.get('sequence')
+        proof = proof_of(parent)
+        if (type(sequence) is not int or by_sequence.get(sequence) is not parent
+                or not settled(parent) or not hp_evidence(parent) or not owned_actor(parent)
+                or parent.get('damage_type') not in (1, 2, 3) or parent['shield_absorbed'] != 0
+                or parent['amount'] != -parent['real_delta']
+                or not number(parent.get('nominal_amount'), nonnegative=True)
+                or parent['nominal_amount'] + .01 < parent['amount']):
+            return None
+        observation = proof.get('native_modifier_observation')
+        if (not isinstance(observation, dict) or set(observation) != {'version', 'method', 'amount'}
+                or type(observation['version']) is not int or observation['version'] != 1
+                or observation['method'] != 'Entity.ApplyModifier'
+                or not number(observation['amount'], nonnegative=True)
+                or observation['amount'] != parent['nominal_amount']):
+            return None
+        checkpoint = proof.get('target_callback_checkpoint')
+        if (not isinstance(checkpoint, dict) or set(checkpoint) != {'version', 'method', 'returned', 'source',
+                'source_character_uid', 'target_uid', 'hp_before', 'frame', 'game_time'}
+                or type(checkpoint['version']) is not int or checkpoint['version'] != 1
+                or checkpoint['method'] != 'Unit.OnTakeDamage' or checkpoint['returned'] is not True
+                or not actor_equal(parent, checkpoint) or checkpoint['target_uid'] != parent['target_uid']
+                or not clock_equal(parent, checkpoint) or not number(checkpoint['hp_before'], nonnegative=True)):
+            return None
+        chain = proof.get(chain_key)
+        scalar = proof.get('nested_settlement')
+        if chain is not None:
+            fields = {'version', 'ordering', 'target_uid', 'parent_real_delta', 'parent_hp_before',
+                      'parent_hp_after', 'children'}
+            zero = parent.get('settled_after_nested_kill') is True
+            if zero:
+                fields.add('parent_entry_hp_before')
+            if (not isinstance(chain, dict) or set(chain) != fields or type(chain['version']) is not int
+                    or chain['version'] != 2 or scalar is not None or chain['target_uid'] != parent['target_uid']
+                    or chain['ordering'] not in ('parent_before_children', 'children_before_parent')
+                    or type(chain['children']) is not list or not 1 <= len(chain['children']) <= 16
+                    or any(not number(chain['parent_' + key]) or chain['parent_' + key] != parent[key]
+                           for key in ('hp_before', 'hp_after', 'real_delta'))):
+                return None
+            parent_first = chain['ordering'] == 'parent_before_children'
+            hp = parent['hp_after'] if parent_first else chain.get('parent_entry_hp_before') if zero else None
+            children = []
+            for step in chain['children']:
+                fields = {'source', 'settlement_sequence', 'hp_before', 'hp_after', 'real_delta'}
+                if (not isinstance(step, dict) or not fields <= set(step) <= fields | {'source_character_uid'}
+                        or type(step['settlement_sequence']) is not int
+                        or any(not number(step[key]) for key in ('hp_before', 'hp_after', 'real_delta'))
+                        or (not owned_actor(step) if step.get('source') is not None else step.get('source_character_uid') is not None)):
+                    return None
+                child = by_sequence.get(step['settlement_sequence'])
+                if (not modern_child(parent, child) or not actor_equal(step, child)
+                        or any(step[key] != child[key] for key in ('hp_before', 'hp_after', 'real_delta'))
+                        or hp is not None and hp != step['hp_before']
+                        or children and children[-1]['sequence'] >= child['sequence']):
+                    return None
+                children.append(child)
+                hp = step['hp_after']
+            if not parent_first and parent['hp_before'] != hp:
+                return None
+            if zero:
+                if (parent_first or parent['real_delta'] != 0 or parent['hp_before'] != 0
+                        or parent['hp_after'] != 0 or parent['nominal_amount'] <= 0 or parent.get('killed') is not True
+                        or not number(chain['parent_entry_hp_before']) or chain['parent_entry_hp_before'] <= 0
+                        or checkpoint['hp_before'] != chain['parent_entry_hp_before']):
+                    return None
+            elif parent['real_delta'] >= 0 or parent_first and parent.get('killed') is not False:
+                return None
+            ordering = chain['ordering']
+        else:
+            fields = {'target_uid', 'parent_real_delta', 'parent_hp_before', 'parent_hp_after',
+                      'child_hp_before', 'child_hp_after', 'child_real_delta'}
+            zero = parent.get('settled_after_nested_kill') is True
+            if zero:
+                fields |= {'ordering', 'parent_entry_hp_before'}
+            if (not isinstance(scalar, dict) or set(scalar) != fields
+                    or scalar['target_uid'] != parent['target_uid']
+                    or any(not number(scalar['child_' + key]) for key in ('hp_before', 'hp_after', 'real_delta'))
+                    or any(not number(scalar['parent_' + key]) or scalar['parent_' + key] != parent[key]
+                           for key in ('hp_before', 'hp_after', 'real_delta'))):
+                return None
+            children = [child for child in events if modern_child(parent, child)
+                and all(child[key] == scalar['child_' + key] for key in ('hp_before', 'hp_after', 'real_delta'))]
+            if len(children) != 1:
+                return None
+            child = children[0]
+            if zero:
+                if (scalar['ordering'] != 'child_before_parent_zero' or parent['real_delta'] != 0
+                        or parent['hp_before'] != 0 or parent['hp_after'] != 0 or parent['nominal_amount'] <= 0
+                        or parent.get('killed') is False or child['hp_after'] != 0 or scalar['parent_entry_hp_before'] != child['hp_before']
+                        or checkpoint['hp_before'] != scalar['parent_entry_hp_before']):
+                    return None
+                ordering = 'child_before_parent_zero'
+            else:
+                if (not parent['real_delta'] < 0 or not parent['hp_after'] > 0
+                        or parent.get('killed') is not False or child['hp_before'] != parent['hp_after']):
+                    return None
+                ordering = 'parent_before_child'
+        witness = dict(ordering=ordering, parent_sequence=sequence, parent_settlement_sequence=sequence,
+                    child_kind='damage_settlement',
+                    children=[dict(settlement_sequence=child['sequence']) for child in children])
+        if len(children) == 1:
+            witness.update(child_sequence=children[0]['sequence'], child_settlement_sequence=children[0]['sequence'])
+        return witness
+
+    for parent in modern_parents:
+        witness = modern_witness(parent)
+        if witness is None:
+            nested_bad.append(parent['sequence'])
+        else:
+            nested_ok.append(witness)
+            used_parent_settlements.add(parent['sequence'])
+            used_child_bursts.update(child['settlement_sequence'] for child in witness['children'])
 
     result = {name: dict(passed=bool(valid) and not invalid, positive_witnesses=valid,
                        invalid_sequences=invalid,
@@ -974,7 +1210,7 @@ def pc_records(records, summary, publications):
     return stream.received
 
 
-def check_pc_families(accepted, rows, ownership, deltas):
+def check_pc_families(accepted, rows, ownership, deltas, *, elemental_owners=None):
     """Reconcile a window with attributed hits and directly observed skill endings."""
     from stats_core import NATIVE_DAMAGE_TYPES, Statistics
 
@@ -983,18 +1219,21 @@ def check_pc_families(accepted, rows, ownership, deltas):
             raise ValueError(f'no positive native PC {family} delta to reconcile')
     if not any(e['kind'] == 'shield_absorbed' and e['amount'] > 0 for e in accepted):
         raise ValueError('no positive PC shield absorption')
+    counter_witnesses = {event['sequence']: amount for event, _, amount in native_counter_observations(accepted)}
     hp, shield, absorbed_by_source = Counter(), Counter(), Counter()
     active, durations, windows = {}, Counter(), Counter()
     for event in accepted:
         source, kind = event['source'], event['kind']
         if kind == 'shield_absorbed':
             absorbed_by_source[source] += event['amount']
-        if kind in ('damage', 'healing') and event['amount'] > 0 and (
+        if event['sequence'] in counter_witnesses and counter_witnesses[event['sequence']] > 0 and (
                 source not in deltas or event['sequence'] <= deltas[source]['start_sequence']):
             raise ValueError('PC event has no preceding native counter baseline')
         if kind not in ('damage_settlement', 'skill_start', 'skill_end'):
             continue
         owner = ownership.get(source)
+        if source is None and kind == 'damage_settlement' and event.get('damage_type') == 5:
+            owner = (elemental_owners or {}).get(event['sequence'])
         if not owner:
             raise ValueError('unattributed PC settlement or skill')
         if kind == 'damage_settlement':
@@ -1171,6 +1410,10 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
     partial, zeros = [], []
     sources_with_absorption = set()
     excluded_friendly_damage = []
+    single_wire = _single_settlement_wire(accepted)
+    counter_witnesses = (list(native_counter_observations(accepted)) if single_wire or pc_f32_counters else
+        [(event, event['kind'], event['amount']) for event in accepted
+         if event['kind'] in ('damage', 'healing') and outgoing_counter_event(event)])
     previous_time = first['game_time']
     previous_frame = first['frame']
     for event in accepted:
@@ -1239,6 +1482,15 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 eid=eid, frame=event['frame'], game_time=event['game_time'],
                 phase_total_hp=total, phase_count=count, phase_from_birth=from_birth)
             continue
+        if kind == 'damage_settlement' and _single_settlement_event(event) and source is not None:
+            nominal = event.get('nominal_amount')
+            if type(nominal) not in (int, float) or not math.isfinite(nominal) or nominal < 0:
+                raise ValueError('single-wire nominal observation is missing')
+            if source not in ownership:
+                raise ValueError('unowned single-wire nominal observation')
+            target = event.get('target')
+            if not (isinstance(target, str) and target.startswith(('char_', 'token_'))):
+                totals[ownership[source], 'damage'] += nominal
         if kind in ('damage_settlement', 'hp_damage', 'elemental_bar', 'elemental_burst', 'skill_start', 'skill_end'):
             continue
         if source not in ownership or kind not in ('damage', 'healing', 'shield_absorbed'):
@@ -1285,29 +1537,38 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
     counter_deltas = {}
     f32_evidence = check_pc_f32_counters(accepted, publications,
         source_domain=pc_f32_source_domain or 'all') if pc_f32_counters else None
-    supplement_evidence = check_pc_owner_counter_supplements(accepted, publications, ownership) if pc_f32_counters else None
+    need_supplements = pc_f32_counters or single_wire and any(event['kind'] == 'damage_settlement'
+        and event.get('damage_type') == 5 and event.get('source') is None for event in accepted)
+    supplement_evidence = check_pc_owner_counter_supplements(accepted, publications, ownership) if need_supplements else None
+    if single_wire and supplement_evidence is not None:
+        for owner, amount in supplement_evidence['final_nominal_supplements'].items():
+            totals[owner, 'damage'] += amount
     for source, (baseline, sequence, game_time) in references.items():
         if source not in ownership or source not in native:
             continue
         check = {'start': game_time, 'end': last['game_time'], 'start_sequence': sequence}
         for kind in ('damage', 'healing'):
             delta = native[source][kind] - baseline[kind]
-            observed = sum(event['amount'] for event in accepted if event['source'] == source
-                           and (event['kind'] == kind or pc_f32_counters and kind == 'damage'
-                                and event['kind'] == 'elemental_burst' and event['source'] is not None)
-                           and event['sequence'] > sequence
-                           and outgoing_counter_event(event))
+            observed = sum(amount for event, field, amount in counter_witnesses
+                           if event['source'] == source and event['sequence'] > sequence
+                           and (field == 'healing' if kind == 'healing' else field != 'healing'))
             if not pc_f32_counters:
                 near(delta, observed)
             check[kind] = {'native_delta': delta, 'observed_events': observed}
         counter_deltas[source] = check
+    elemental_owners = {item['settlement_sequence']: item['owner'] for item in
+        supplement_evidence['source_null_burst_witnesses']} if supplement_evidence else {}
+    pc_family_evidence = check_pc_families(accepted, rows, ownership, counter_deltas,
+        elemental_owners=elemental_owners) if pc_settlements else None
     for owner, row in rows.items():
         for kind, field in (('damage', 'observed_damage'), ('healing', 'observed_healing'),
                             ('shield_absorbed', 'shield_absorbed')):
             near(totals[owner, kind], row[field])
         if row['counter_snapshot_complete'] and not pc_f32_counters:
             for kind in ('damage', 'healing'):
-                near(sum(native[source][kind] for source in row['sources'] if source in native), row[kind])
+                near(sum(native[source][kind] for source in row['sources'] if source in native)
+                     + (supplement_evidence['final_nominal_supplements'].get(owner, 0)
+                        if kind == 'damage' and supplement_evidence else 0), row[kind])
     for item in source_owners:
         source, owner = item.split('=', 1)
         if ownership.get(source) != owner or source not in sources_with_absorption:
@@ -1363,7 +1624,7 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
         result['enemy_state_complete'] = published_enemy_state['complete']
         result['enemy_state_events'] = len(enemy_state_events)
     if pc_settlements:
-        result['native_pc_settlements'] = check_pc_families(accepted, rows, ownership, counter_deltas)
+        result['native_pc_settlements'] = pc_family_evidence
     return result
 
 

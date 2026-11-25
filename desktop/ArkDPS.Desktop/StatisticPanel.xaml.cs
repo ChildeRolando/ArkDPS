@@ -51,6 +51,7 @@ public sealed class RowItem : INotifyPropertyChanged
     public double ValueSize=>Compact ? 18 : 21;
     private JsonElement entry;
     public JsonElement Entry { get => entry; set { entry=value; PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(null)); } }
+    internal JsonElement Detail { get; set; }
     private int rank;
     public int Rank => rank;
     internal void SetRank(int value) { if(rank!=value){rank=value;PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(Rank)));} }
@@ -76,7 +77,7 @@ public sealed class RowItem : INotifyPropertyChanged
     {
         get
         {
-            var detail=Entry.Get("detail");var types=detail.Get("damage_by_type");
+            var detail=Detail;var types=detail.Get("damage_by_type");
             string Value(string key) => types.ValueKind==JsonValueKind.Object ? types.UiInt(key) : "—";
             string over=detail.UiInt("overkill_damage");
             string compositionGap=MetricCoverage.Detail(detail.Get("coverage"),"damage_by_type");
@@ -116,7 +117,7 @@ public sealed class RowItem : INotifyPropertyChanged
         + (Entry.Text("rate_note").Length > 0 ? "（" + Entry.Text("rate_note") + "）" : "")
         + Environment.NewLine + ShareInfo.Label + " " + Share
         + (ShareInfo.Details.Length>0 ? Environment.NewLine + ShareInfo.Details : "")
-        + Environment.NewLine + "过量伤害 " + Entry.Get("detail").Ui("overkill_damage") + CoverageSuffix;
+        + Environment.NewLine + "过量伤害 " + Detail.Ui("overkill_damage") + CoverageSuffix;
     public ImageSource? Portrait => Portraits.Get(Entry.Text("portrait_id") is { Length: > 0 } portraitId ? portraitId : Id, Entry.Bool("portrait_muted"));
     public double PortraitOpacity => Entry.Bool("portrait_muted") ? .65 : 1;
 }
@@ -702,9 +703,10 @@ public partial class StatisticPanel : UserControl
             {
                 item.ShareInfo=share;
                 item.MetricCategory=category;
+                item.Detail=view.Get("details_by_owner").Get(entry.Text("owner_id"));
                 item.Entry=entry;
             }
-            else items.Add(new RowItem{Entry=entry,Compact=IsHud,ShareInfo=share,MetricCategory=category});
+            else items.Add(new RowItem{Detail=view.Get("details_by_owner").Get(entry.Text("owner_id")),Entry=entry,Compact=IsHud,ShareInfo=share,MetricCategory=category});
         }
         if(!hold)
             for(int i=0;i<incoming.Length;i++)

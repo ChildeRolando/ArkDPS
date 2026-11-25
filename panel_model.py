@@ -13,12 +13,12 @@ numbers from the previous battle.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping
 
-from source_classification import classify_unmapped_source
-from stats_core import DAMAGE_SCOPE_MISMATCH, exceeds_native_damage
+from source_classification import classify_unmapped_source, DIAGNOSTIC_LABELS
+from stats_core import DAMAGE_SCOPE_MISMATCH, DAMAGE_TYPE_KEYS, exceeds_native_damage
 
 DAMAGE_COLORS = {
     'physical': '#e5484d',   # red
@@ -26,7 +26,7 @@ DAMAGE_COLORS = {
     'elemental': '#9b5cf6',  # purple
     'true': '#ffffff',       # white
 }
-DAMAGE_ORDER = ('physical', 'arts', 'elemental', 'true')
+DAMAGE_ORDER = DAMAGE_TYPE_KEYS
 SCHEMA_VERSION = 1
 
 
@@ -288,6 +288,9 @@ class PanelSourceRow:
     # the engagement interval and is None when presence was never certified.
     presence_seconds: float | None = None
     presence_complete: bool = False
+    # Only exact lifecycle evidence uses this window. Sampled lower bounds
+    # never populate it and cannot certify a full-cycle denominator.
+    lifecycle_presence_window: tuple[float, float] | None = None
     damage_by_type: Mapping[str, float] = field(default_factory=dict)
     # Event-derived overkill is a subset of damage, never part of the ranking
     # denominator. It stays None unless the whole event stream proved it.
@@ -333,6 +336,7 @@ class PanelSourceRow:
     observed_healing: float | None = None
     observed_healing_total: float | None = None
     observed_healing_complete: bool = False
+    observed_healing_window: tuple[float, float] | None = None
     observed_recent_healing: float | None = None
     observed_recent_healing_window: tuple[float, float] | None = None
     observed_recent_healing_complete: bool = False
@@ -345,6 +349,7 @@ class PanelSourceRow:
     # Display-only opt-in for a verified player's event ledger. Native
     # cumulative counters stay absent in the stored Statistics result.
     event_only_projection: bool = False
+    inspector_evidence: Mapping = field(default_factory=dict)
 
     @property
     def event_damage_unknown(self) -> bool:
@@ -474,6 +479,26 @@ class PanelSourceRow:
         if (not _finite(total) or not _finite(self.presence_seconds)
                 or self.presence_seconds <= 0 or not self.presence_complete):
             return None
+        if self.event_only_projection and self.lifecycle_presence_window is not None:
+            if not self.source_complete or not self.event_complete:
+                return None
+            if category is Category.DAMAGE and self.settled_damage is not None:
+                certificate = 'complete' if effective else 'observed_damage_complete'
+                window = self.settled_damage.get('observed_damage_window')
+                if (self.settled_damage.get(certificate) is not True
+                        or not isinstance(window, (tuple, list))
+                        or tuple(window) != self.lifecycle_presence_window):
+                    return None
+            elif category is Category.HEALING:
+                if (not self.observed_healing_complete
+                        or self.observed_healing_window != self.lifecycle_presence_window):
+                    return None
+            else:
+                return None
+            # The denominator is the body's verified on-field duration.
+            # Attributed summons and damage over time can continue after it
+            # leaves; their engagement interval is not additional body time.
+            return total / self.presence_seconds
         if category is Category.DAMAGE and self.settled_damage is not None and (effective or self.damage is None):
             certificate = ('complete' if effective else 'observed_damage_complete'
                            if self.event_only_projection else 'observed_boss_damage_complete')
@@ -521,6 +546,8 @@ class PanelSourceRow:
         if (category is Category.DAMAGE and self.event_only_projection
                 and self.recent_damage is None and self.settled_damage is not None):
             return self.settled_damage.get('observed_recent_damage_window')
+        if category is Category.DAMAGE and self.recent_damage is None and self.settled_damage is not None:
+            return self.settled_damage.get('observed_boss_recent_window')
         return {Category.DAMAGE: self.recent_damage_window,
                 Category.HEALING: self.recent_healing_window,
                 Category.SHIELD: self.recent_shield_window}[category]
@@ -591,7 +618,9 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
             'name', 'present', 'sources', 'presence_seconds', 'presence_complete',
             'skill_active_seconds', 'skill_coverage_complete', 'skill_window_count',
             'observed_presence_seconds', 'observed_skill_active_seconds',
-            'observed_skill_coverage', 'skill_timed_presence_seconds', 'skill_seen') if key in row}
+            'observed_skill_coverage', 'skill_timed_presence_seconds', 'skill_seen',
+            'lifecycle_presence_seconds', 'lifecycle_presence_complete',
+            'lifecycle_presence_window', 'lifecycle_terminal_complete') if key in row}
         rows[owner] = {
             **scoped, **identity,
             'counter_snapshot_complete': scoped.get('counter_snapshot_complete') is True,
@@ -620,9 +649,25 @@ def panel_statistics(config: PanelConfig, result: Mapping, *, history: bool = Fa
     }
 
 
+def _lifecycle_presence(row: Mapping, result: Mapping):
+    window = row.get('lifecycle_presence_window')
+    seconds = row.get('lifecycle_presence_seconds')
+    start = row.get('coverage_start', result.get('coverage_start'))
+    if (row.get('lifecycle_presence_complete') is not True
+            or not isinstance(window, (tuple, list)) or len(window) != 2
+            or not all(_finite(value) for value in (*window, seconds, start))
+            or window[0] != start or not 0 <= window[0] <= window[1] == result.get('game_time')
+            or not 0 <= seconds <= window[1] - window[0]
+            or result.get('ended') is True and row.get('lifecycle_terminal_complete') is not True):
+        return None
+    return seconds, tuple(window)
+
+
 def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
     """Convert an adapter/Statistics result into panel rows without inventing data."""
     rows: list[PanelSourceRow] = []
+    event_only = (result.get('event_only_projection') is True
+                  and result.get('native_counter_scope') == 'unavailable')
     unresolved = {source for key, _ in DIAGNOSTIC_LABELS if key != 'missing_fields'
                   for source in _name_list(result.get(key))}
     for owner, row in (result.get('rows') or {}).items():
@@ -642,6 +687,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
         healing_window_complete = (row.get('observed_recent_healing_complete') is True
                                    and _valid_window(healing_window)
                                    and 0 <= healing_window[0] < healing_window[1] == result.get('game_time'))
+        life = _lifecycle_presence(row, result) if event_only else None
+        healing_total_window = row.get('observed_healing_window')
         rows.append(PanelSourceRow(
             owner_id=owner,
             name=row.get('name') or owner,
@@ -657,12 +704,16 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             active_damage=row.get('active_damage'),
             active_healing=row.get('active_healing'),
             recent_overkill=row.get('recent_overkill_damage'),
-            presence_seconds=row.get('presence_seconds'),
-            presence_complete=bool(row.get('presence_complete', False)),
+            presence_seconds=life[0] if life is not None else row.get('presence_seconds'),
+            presence_complete=life is not None or bool(row.get('presence_complete', False)),
+            lifecycle_presence_window=life[1] if life is not None else None,
             observed_damage=row.get('observed_damage'),
             observed_healing=row.get('observed_healing'),
             observed_healing_total=row.get('observed_healing_total', row.get('observed_healing')),
             observed_healing_complete=row.get('observed_healing_complete') is True,
+            observed_healing_window=(tuple(healing_total_window)
+                if isinstance(healing_total_window, (tuple, list)) and len(healing_total_window) == 2
+                and all(_finite(value) for value in healing_total_window) else None),
             observed_recent_healing=row.get('observed_recent_healing'),
             observed_recent_healing_window=healing_window,
             observed_recent_healing_complete=healing_window_complete,
@@ -706,11 +757,16 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             source_complete=owner not in unresolved and unresolved.isdisjoint(sources),
             partial_damage=partial,
             settled_damage=settled,
-            event_only_projection=(result.get('event_only_projection') is True
-                                   and result.get('native_counter_scope') == 'unavailable'),
+            event_only_projection=event_only,
             damage_scope_reason=scope_reason,
             mitigation_unknown_reason=row.get('mitigation_unknown_reason'),
             observed_mitigation_rate=row.get('observed_mitigation_rate'),
+            inspector_evidence={key: row[key] for key in (
+                'damage', 'counter_snapshot_complete', 'event_coverage_complete',
+                'overkill_damage', 'overkill_coverage_complete', 'overkill_unknown_reason',
+                'mitigation_rate', 'observed_mitigation_rate', 'mitigation_matched_hits',
+                'mitigation_before', 'mitigation_after', 'observed_mitigation_before',
+                'observed_mitigation_after', 'mitigation_unknown_reason') if key in row},
         ))
     return rows
 
@@ -733,7 +789,7 @@ class PanelEntry:
     incomplete: bool
     segments: tuple[dict, ...]
     segments_complete: bool
-    detail: dict
+    detail: InitVar[dict]
     # value | no_engagement | unknown | unavailable | unsupported
     rate_state: str = 'value'
     # Complete display text for the rate column: '123/s', '无接敌' or '—'.
@@ -741,6 +797,10 @@ class PanelEntry:
     rate_note: str = ''
     cumulative_display_value: str = '—'
     coverage: dict = field(default_factory=dict)
+
+    def __post_init__(self, detail):
+        # Python compatibility alias to the one owner detail, never a wire field.
+        self.detail = detail
 
 
 @dataclass
@@ -778,14 +838,6 @@ class PanelView:
 def _finite(value: float | None) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
-
-DIAGNOSTIC_LABELS = (
-    ('unknown_sources', '未归属统计来源'),
-    ('unmapped_tokens', '未确认归属的召唤物'),
-    ('ambiguous_sources', '归属歧义统计来源'),
-    ('mapping_conflicts', '归属冲突统计来源'),
-    ('missing_fields', '字段缺失统计来源'),
-)
 
 
 def _name_list(value) -> list[str]:
@@ -868,40 +920,36 @@ def _valid_window(window) -> bool:
             and 0 < window[1] - window[0] <= 5)
 
 
-def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool = False
-                      ) -> tuple[float | None, list[dict]]:
-    """Publish certified damage rates independently of the active panel."""
-    operators = []
-    windows = []
-    for owner, row in sorted((statistics.get('rows') or {}).items()):
-        settled = _settled_damage(row) if effective else None
-        observed = (statistics.get('event_only_projection') is True
-                    and statistics.get('native_counter_scope') == 'unavailable'
-                    and row.get('recent_damage') is None and not effective)
-        if observed:
-            settled = _settled_damage(row)
-        rate = row.get('recent_damage')
-        window = row.get('recent_damage_window')
-        certified = (row.get('counter_snapshot_complete') is True
-                     and _valid_window(window) and 0 <= window[0] < window[1] == game_time
-                     and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
-        if settled is not None:
-            rate_key = 'observed_recent_damage' if observed else 'recent_effective_damage'
-            rate = settled.get(rate_key)
-            window = settled.get(rate_key + '_window')
-            certified = (settled.get(rate_key + '_complete', settled.get('complete')) is True
-                         and (not observed or settled.get('observed_damage') is not None)
-                         and _valid_window(window) and 0 <= window[0] < window[1] == game_time
-                         and _finite(rate) and not isinstance(rate, bool) and rate >= 0)
-        elif certified and effective:
-            excess = row.get('recent_overkill_damage')
-            certified = (row.get('overkill_coverage_complete') is True
-                         and not damage_scope_reason(row)
-                         and not (row.get('partial_damage') or {}).get('recent_damage_scope_reason')
-                         and _finite(excess) and not isinstance(excess, bool) and excess >= 0)
-            if certified:
-                rate = max(0.0, rate - excess / (window[1] - window[0]))
-        operators.append(dict(owner_id=owner, name=row.get('name') or owner,
+def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool = False,
+                      prepared_rows=None) -> tuple[float | None, list[dict]]:
+    """Chart the canonical row rate, admitting only a certified current window.
+
+    The panel may show a named observed subset. A chart's full-team series needs
+    the separate complete-window certificate; this never changes its numerator.
+    """
+    operators, windows = [], []
+    for row in sorted(rows_from_statistics(statistics) if prepared_rows is None else prepared_rows,
+                      key=lambda value: value.owner_id):
+        rate = row.rate(Category.DAMAGE, RateBasis.RECENT_5S, effective=effective)
+        observed = row.event_only_projection and row.recent_damage is None and not effective
+        lane = row.settled_damage if effective or observed else None
+        window = row.effective_recent_window() if effective else row.recent_window(Category.DAMAGE)
+        valid = (_valid_window(window) and 0 <= window[0] < window[1] == game_time
+                 and _finite(rate) and rate >= 0)
+        if lane is not None:
+            key = 'observed_recent_damage' if observed else 'recent_effective_damage'
+            certified = (valid and lane.get(key + '_complete', lane.get('complete')) is True
+                         and (not observed or lane.get('observed_damage') is not None))
+        else:
+            # Explicit native per-row coverage is required, independent of any
+            # whole-result defaults used for other panel display modes.
+            certified = (valid and row.inspector_evidence.get('counter_snapshot_complete') is True
+                         and _finite(row.recent_damage) and row.recent_damage >= 0)
+            if effective:
+                certified = (certified and row.overkill_complete and not row.damage_scope_reason
+                             and not row.partial_damage.get('recent_damage_scope_reason')
+                             and _finite(row.recent_overkill) and row.recent_overkill >= 0)
+        operators.append(dict(owner_id=row.owner_id, name=row.name,
                               recent_dps=rate if certified else None))
         if certified:
             windows.append(tuple(window))
@@ -911,24 +959,23 @@ def live_damage_rates(statistics: Mapping, game_time: float, *, effective: bool 
     return None, operators
 
 
-def settled_boss_damage_rates(statistics: Mapping, game_time: float, *, effective: bool):
-    """Return scoped rates for charting, with a separate observed subset."""
-    rows = sorted((statistics.get('rows') or {}).items())
-    if not any(_settled_damage(row) is not None for _, row in rows):
+def settled_boss_damage_rates(statistics: Mapping, game_time: float, *, effective: bool, prepared_rows=None):
+    """Project the same canonical row rate, retaining a named incomplete subset."""
+    rows = sorted(rows_from_statistics(statistics) if prepared_rows is None else prepared_rows,
+                  key=lambda row: row.owner_id)
+    if not any(row.settled_damage is not None for row in rows):
         return None
-    rate_key, window_key, complete_key = (
-        ('recent_effective_damage', 'recent_effective_damage_window', 'recent_effective_damage_complete')
-        if effective else ('observed_boss_recent_damage', 'observed_boss_recent_window',
-                           'observed_boss_recent_damage_complete'))
+    complete_key = 'recent_effective_damage_complete' if effective else 'observed_boss_recent_damage_complete'
     operators, windows = [], set()
-    for owner, row in rows:
-        lane = _settled_damage(row) or {}
-        rate, window = lane.get(rate_key), lane.get(window_key)
+    for row in rows:
+        lane = row.settled_damage or {}
+        rate = row.rate(Category.DAMAGE, RateBasis.RECENT_5S, effective=effective)
+        window = row.effective_recent_window() if effective else row.recent_window(Category.DAMAGE)
         valid = _valid_window(window) and 0 <= window[0] < window[1] == game_time and _finite(rate) and rate >= 0
         complete = valid and lane.get(complete_key) is True
         if valid:
             windows.add(tuple(window))
-        operators.append(dict(owner_id=owner, name=row.get('name') or owner,
+        operators.append(dict(owner_id=row.owner_id, name=row.name,
                               recent_dps=rate if complete else None,
                               observed_recent_dps=rate if valid and not complete else None))
     team = sum(row['recent_dps'] for row in operators) if (
@@ -1087,9 +1134,7 @@ def detail_rates(rows: Iterable[PanelSourceRow],
     for row in rows:
         kinds = {}
         for kind, category in (('damage', Category.DAMAGE), ('healing', Category.HEALING)):
-            raw = (row.effective_observed()
-                   if effective and category is Category.DAMAGE
-                   else row.engagement(category))
+            raw = row.rate(category, RateBasis.ENGAGEMENT, effective=effective)
             state, text, note = _rate_display(
                 row, category, raw if _finite(raw) else None, available,
                 number_units=number_units)
@@ -1353,7 +1398,138 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                     or row.damage_scope_reason or row.skill_split_reason)
                 if reason or lane.get('observed_hits'):
                     detail['skill_split' + suffix + '_reason'] = reason or '部分命中缺少技能窗口证据'
+    evidence = dict(row.inspector_evidence)
+    evidence.setdefault('damage', detail['damage'])
+    evidence.setdefault('event_coverage_complete', row.event_complete)
+    evidence.setdefault('overkill_coverage_complete', row.overkill_complete)
+    evidence.setdefault('overkill_damage', row.overkill)
+    evidence.setdefault('overkill_unknown_reason', row.overkill_unknown_reason)
+    detail['readings'] = inspector_readings(evidence, detail, rate_reason=rate_reason)
     return detail
+
+
+
+def inspector_readings(row: Mapping, detail: Mapping, *, boss_scope=False, rate_reason='') -> dict:
+    """Resolve detail evidence once in Python; the desktop only renders these readings.
+
+    Fractions are unitless. Missing evidence stays None, including complete zero hits.
+    This projection never changes the underlying ledgers or their completeness.
+    """
+    from math import floor, ceil
+    def n(obj, key, default=None):
+        value = obj.get(key, default)
+        return value if _finite(value) else default
+    def number(value):
+        if not _finite(value): return '—'
+        return f'{floor(value + .5) if value >= 0 else ceil(value - .5):,}'
+    def percentage(value):
+        return number(value * 100) + '%' if _finite(value) else '—'
+    scope = detail.get('damage_scope_reason') or ''
+    lane = detail.get('settled_damage')
+    verified = isinstance(lane, Mapping)
+    label = '伤害溢出率'
+    legacy_reason = ('过量伤害按已对账的原生总伤计算。' if detail.get('overkill_coverage_complete') else
+                     '过量未知：' + (detail.get('overkill_unknown_reason') or '缺少与原生总伤同口径的过量证据。')) if verified else (
+        '有效伤害 = 总伤害 − 过量伤害' if row.get('overkill_coverage_complete') else
+        '过量未知：' + ((rate_reason or '事件观察未建立覆盖或已中断') if not row.get('event_coverage_complete') else
+                    (row.get('overkill_unknown_reason') or '目标或实际扣血证据不足')))
+    if 'overkill_base_damage' in detail:
+        complete = detail.get('overkill_coverage_complete') is True
+        amount = n(detail, 'overkill_damage' if complete else 'observed_overkill_damage')
+        base = n(detail, 'overkill_base_damage')
+        fraction = amount / base if base is not None and base > 0 and amount is not None and 0 <= amount <= base else None
+        observed = not complete and amount is not None
+        explanation = '过量伤害 ÷ 同一批已核实命中的（有效伤害 ＋ 过量伤害）。'
+        hits = n(detail, 'overkill_matched_hits', 0)
+        if hits > 0: explanation += '\n已核实 ' + number(hits) + ' 击。'
+        missed = n(detail, 'overkill_unverified_share')
+        if not complete and missed is not None and 0 <= missed <= 1:
+            explanation += '\n未核实命中占比 ' + percentage(missed) + '。'
+        reason = detail.get('overkill_unknown_reason') or ''
+        if reason: explanation += '\n' + reason
+        if fraction is None:
+            if base == 0: explanation += '\n同口径伤害为零，无法计算占比。'
+            elif not reason: explanation += '\n尚缺少用于计算溢出率的命中证据。'
+    else:
+        evidence = detail if verified else row
+        base = n(detail, 'damage', n(row, 'damage'))
+        amount = n(detail, 'overkill_damage')
+        legacy_amount = n(evidence, 'overkill_damage')
+        fraction = legacy_amount / base if not scope and base is not None and base > 0 and legacy_amount is not None else None
+        observed = False
+        reason = scope or ('累计总伤为零，无法计算占比。' if base == 0 else legacy_reason)
+        explanation = '过量伤害 ÷ ' + ('首领总伤' if boss_scope else '原生累计总伤') + '（含过量）。\n' + reason
+    overkill = dict(amount=amount, numerator=amount, denominator=base, fraction=fraction, observed=observed,
+                    label=('已观察' if observed else '') + label, explanation=explanation,
+                    basis='matched_hits' if 'overkill_base_damage' in detail else 'native_total')
+    splits = {}
+    for effective in (False, True):
+        suffix = '_effective' if effective else ''
+        label = '技能期有效伤害占比' if effective else '技能期伤害占比'
+        formula = ('技能期有效伤害 ÷ 已拆分的总有效伤害。' if effective else '技能期伤害 ÷ 已拆分的总伤害。') + '被动技能的伤害归入非技能期。'
+        skill = non_skill = fraction = total = None
+        complete = observed = False
+        reason = ''
+        if scope:
+            reason = scope; explanation = formula + '\n' + reason
+        elif verified and lane.get('complete') is True and n(lane, 'observed_hits') == 0:
+            complete = True; explanation = formula + '\n本次未造成伤害，无法计算占比。'
+        else:
+            skill, non_skill = n(detail, 'skill_damage' + suffix), n(detail, 'non_skill_damage' + suffix)
+            valid = skill is not None and non_skill is not None and skill >= 0 and non_skill >= 0 and _finite(skill + non_skill)
+            if detail.get('skill_split' + suffix + '_complete') is True and valid:
+                complete = True; total = skill + non_skill
+                fraction = skill / total if total > 0 else None
+                explanation = formula if total > 0 else formula + '\n已拆分的伤害为零，无法计算占比。'
+            else:
+                reason = (detail.get('skill_split_effective_reason') if effective else '') or detail.get('skill_split_reason') or (
+                    '过量伤害证据不足。' if effective and detail.get('skill_split_complete') else '事件观察或技能窗口未覆盖。')
+                skill, non_skill = n(detail, 'observed_skill_damage' + suffix), n(detail, 'observed_non_skill_damage' + suffix)
+                valid = skill is not None and non_skill is not None and skill >= 0 and non_skill >= 0 and _finite(skill + non_skill)
+                if valid and skill + non_skill > 0:
+                    total = skill + non_skill; fraction = skill / total; observed = True; label = '已观察' + label
+                    explanation = formula + '\n按已观察且可归入技能期或非技能期的伤害计算。\n整局统计缺口：' + reason
+                else:
+                    skill = non_skill = None; explanation = formula + '\n' + reason
+        splits['effective' if effective else 'nominal'] = dict(skill=skill, non_skill=non_skill, numerator=skill,
+            denominator=total, fraction=fraction, complete=complete, observed=observed, label=label, reason=reason, explanation=explanation)
+    formula = '1 − 护甲/魔抗、物法减伤、脆弱增伤和造成伤害增加类藏品综合作用后的伤害 ÷ 原始伤害。\n观察值使用同一击的原始伤害与护盾吸收前的结算伤害。'
+    damage = lane if verified else row
+    hits = n(damage, 'mitigation_matched_hits', 0)
+    counted = hits > 0
+    observed_percent = n(damage, 'observed_mitigation_rate')
+    percent = None; prefix = ''; label = '被减伤率'; reason = ''; observed = False
+    if scope: explanation = formula + '\n' + scope
+    else:
+        if verified and damage.get('mitigation_complete') is True and observed_percent is not None and counted:
+            percent = observed_percent; prefix = 'observed_'; tail = '\n已配对的 ' + number(hits) + ' 击。'
+        elif not verified and n(row, 'mitigation_rate') is not None:
+            percent = n(row, 'mitigation_rate'); tail = '\n已配对的 ' + number(hits) + ' 击。' if counted else ''
+        else:
+            reason = ((damage.get('mitigation_reason') or damage.get('reason')) if verified else row.get('mitigation_unknown_reason')) or ''
+            if verified and damage.get('complete') is True and n(damage, 'observed_hits') == 0:
+                reason = '本次未造成伤害，没有可配对的命中。'
+            if observed_percent is not None and counted:
+                percent = observed_percent; prefix = 'observed_'; observed = True; label = '已观察减伤率'
+                tail = '\n仅统计已配对的 ' + number(hits) + ' 击。'
+                after, total = n(damage, 'observed_mitigation_after'), n(row, 'damage')
+                if not verified and row.get('counter_snapshot_complete') and after is not None and total is not None and total > 0 and 0 <= after <= total:
+                    tail += '这些命中的结算伤害占当前累计总伤的 ' + percentage(after / total) + '。'
+                if reason: tail += '\n整局统计缺口：' + reason
+            else: tail = '\n' + (reason or '尚无同一击的公式前伤害与结算伤害。')
+        explanation = formula
+        if percent is not None:
+            if percent < -.00001: explanation += '\n结算伤害高于公式前伤害时，比例为负。当前观察记录两端数值，无法确定差额来自哪项修正。'
+            before, after = n(damage, prefix + 'mitigation_before'), n(damage, prefix + 'mitigation_after')
+            if before is not None and before > 0 and after is not None and after >= 0:
+                explanation += '\n配对命中合计：公式前 ' + number(before) + '，结算 ' + number(after) + '。'
+            if abs(percent) <= .00001: explanation += '\n配对命中的公式前后伤害在测量精度内相同。'
+            elif abs(percent) < .5: explanation += '\n舍入前比例 ' + f'{percent:.5f}'.rstrip('0').rstrip('.') + '%。'
+        explanation += tail
+    mitigation = dict(fraction=None if percent is None else 0 if abs(percent) <= .00001 else percent / 100,
+        numerator=n(damage, prefix + 'mitigation_after'), denominator=n(damage, prefix + 'mitigation_before'),
+        observed=observed, label=label, reason=scope or reason, explanation=explanation)
+    return dict(overkill=overkill, skill_split=splits, mitigation=mitigation, legacy_overkill_note=legacy_reason)
 
 
 def render_panel(config: PanelConfig,
@@ -1421,6 +1597,8 @@ def render_panel(config: PanelConfig,
 
     def metric_complete(row: PanelSourceRow, basis: RateBasis | None = None,
                         *, recent: bool = False) -> bool:
+        if basis is RateBasis.FULL_CYCLE and row.lifecycle_presence_window is not None:
+            return row.full_cycle(category, effective=effective) is not None
         if observed_healing and row.event_only_projection and row.source_complete:
             if (recent or basis is RateBasis.RECENT_5S) and row.recent_healing is None:
                 return row.recent(category) is not None
@@ -1616,6 +1794,11 @@ def render_panel(config: PanelConfig,
 
     details = {owner: _owner_detail(row, rate_reason=rate_reason)
                for owner, row in row_by_owner.items()}
+    if config.boss_scope:
+        for detail in details.values():
+            reading = detail['readings']['overkill']
+            if reading['basis'] == 'native_total':
+                reading['explanation'] = reading['explanation'].replace('原生累计总伤', '首领总伤')
     entries: list[PanelEntry] = []
     for owner, value in displayed.items():
         row = row_by_owner[owner]
@@ -1664,16 +1847,3 @@ def render_panel(config: PanelConfig,
                                             and certified_totals == len(rows)),
                      footer_rate_complete=(footer_rate is not None and team_complete and team_rate_complete
                                            and certified_rates == len(rows)))
-
-
-def render_board(configs: Iterable[PanelConfig],
-                 rows: Iterable[PanelSourceRow], *,
-                 team_complete: bool = True,
-                 team_reason: str = '',
-                 team_note: str = '',
-                 number_units: str = DEFAULT_NUMBER_UNITS) -> list[PanelView]:
-    rows = list(rows)
-    return [render_panel(config, rows, team_complete=team_complete,
-                         team_reason=team_reason, team_note=team_note,
-                         number_units=number_units)
-            for config in configs]

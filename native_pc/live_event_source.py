@@ -8,7 +8,10 @@ from time import monotonic
 
 from event_observer import ObserverStatus
 from event_probe import NATIVE_PC_LIVE_CONTRACT, NativePcBinding, ObserverReadRetry
-from native_pc.internal_event_source import InternalEventProbe, _finite_number, _reject_constant, _unique_fields
+from native_pc.internal_event_source import InternalEventProbe
+from event_probe import (finite_message_number as _finite_number,
+                         reject_message_constant as _reject_constant,
+                         unique_message_fields as _unique_fields)
 
 
 FEED_FORMAT = 'arkdps-pc-events'

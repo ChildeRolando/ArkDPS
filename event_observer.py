@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 from connection import VersionStatus
 from event_probe import (MUMU_CONTRACT, NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry,
-                         ready_probe_modes, assemble_probe_source, acquire_native_terminal_tail)
+                         ready_probe_modes, assemble_probe_source, acquire_native_terminal_tail,
+                         reset_probe_cursor, commit_probe_prefix, check_round_start_range, read_probe_range)
 
 
 class ObserverStatus(str, Enum):
@@ -53,9 +54,7 @@ class FridaEventObserver:
         self._request_lock = Lock()
         self._request_id = 0
         self._pending_request = None
-        self._committed_sequence = 0
-        self._acknowledged_sequence = 0
-        self._ack_error = None
+        reset_probe_cursor(self)
         self._autochess_enabled = None
 
     def set_autochess_setting(self, enabled):
@@ -138,8 +137,7 @@ class FridaEventObserver:
         self.ready.clear()
         self.probe_modes = {}
         self._probe_source_manifest = {}
-        self._committed_sequence = self._acknowledged_sequence = 0
-        self._ack_error = None
+        reset_probe_cursor(self)
         try:
             import frida
             if frida.__version__ != '17.26.1':
@@ -218,37 +216,16 @@ class FridaEventObserver:
         return self._read_event_range(sequence, sequence)
 
     def read_round_start_range(self, after, through):
-        if after < max(self._committed_sequence, self._acknowledged_sequence):
-            raise RuntimeError('round-start event range has already been committed')
+        check_round_start_range(self, after)
         return self._read_event_range(after, through)
 
     def _read_event_range(self, after, through):
-        if self._ack_error:
-            raise RuntimeError(self._ack_error)
-        return self._request('read', after=after, through=through)
+        return read_probe_range(self, after, through)
 
     def commit_events(self, sequence):
         """Advance the host cursor and report whether the producer confirmed it."""
-        self._committed_sequence = max(sequence, self._committed_sequence)
-        if self._committed_sequence <= self._acknowledged_sequence:
-            return True
-        if self._ack_error:
-            return False
-        try:
-            reply = self._request('ack', sequence=self._committed_sequence)
-        except ObserverReadRetry:
-            # A lost response can mean the producer already released this
-            # prefix. A future acknowledgement is cumulative and idempotent.
-            return False
-        except RuntimeError as exc:
-            self._ack_error = str(exc)
-            return False
-        acknowledged = reply.get('acknowledged')
-        if reply.get('error') or type(acknowledged) is not int or acknowledged != self._committed_sequence:
-            self._ack_error = reply.get('error') or 'observer acknowledgement did not match the committed watermark'
-            return False
-        self._acknowledged_sequence = acknowledged
-        return True
+        return commit_probe_prefix(self, sequence,
+            mismatch='observer acknowledgement did not match the committed watermark')
 
     def _release(self):
         # Both releases must be attempted. Keep failed handles available for a

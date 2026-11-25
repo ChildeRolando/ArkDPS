@@ -27,7 +27,7 @@ from native_pc.internal_entry import HOST_NAME, HOST_PATH
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
 from windows_manifest import verify_executable_manifest
-DEFAULT_VERSION = '1.0.0-rc.41'
+DEFAULT_VERSION = '1.0.0-rc.42'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
@@ -47,6 +47,7 @@ FRIDA_SERVER_LICENSE_SHA256 = '5ea1544b51a28bc823b03159190d4108f9fb4f4ef912389f5
 TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', 'tcl86t')
 BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py', 'boss_catalog.py',
            'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py', 'damage_settlement.py',
+           'deployment_lifecycle.py',
            'connection.py', 'desktop_audit.py', 'log_context.py', 'event_capture.py', 'event_observer.py', 'event_probe.py', 'event_stream.py',
            'frida_provision.py', 'stack_capture.py', 'stack_capture.wprp', 'game_fps.py', 'game_fps_android.py',
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
@@ -142,6 +143,7 @@ def stage_native_hook_payload(binary, collector, notices):
 
 
 def native_hook_component(files, *, released=False):
+    """Distribution shape is independent of candidate-specific live acceptance."""
     from native_pc.native_hook_source import NATIVE_HOOK_PACKAGE_PATH, NATIVE_HOOK_BUILD_MANIFEST_PATH
     from native_pc.probe_native_pc import KNOWN_BUILDS
     return dict(provider='arkdps-native-hooks', protocol=1, scope='official-pc' if released else 'official-pc-startup-test',
@@ -149,7 +151,7 @@ def native_hook_component(files, *, released=False):
                 sha256=files[NATIVE_HOOK_PACKAGE_PATH],
                 build_manifest_sha256=files[NATIVE_HOOK_BUILD_MANIFEST_PATH],
                 default_platform='native_pc', default_backend='native', supported_source_builds=list(KNOWN_BUILDS),
-                experimental=not released, performance_verified=released, autochess_handoff_verified=released)
+                experimental=not released, performance_verified=False, autochess_handoff_verified=False)
 
 
 def native_hooks_readme(version):

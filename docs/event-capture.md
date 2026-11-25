@@ -2,6 +2,8 @@
 
 当前 WPF 桌面由 `desktop_bridge.py` 子进程消费同一 `CollectionSession`，不修改本页采集语义；UI/worker 协议与分发见 [桌面运行时](desktop-runtime.md)。旧 Tk 入口已随 `archive/legacy-tk` 封存（[ADR 0005](adr/0005-seal-legacy-tk.md)），不再可运行；旧候选实机记录为历史证据，不自动认证新的 WPF。
 
+2026-11-26起，产品事件和快照诊断统一由`CollectionSession → BattleRuntime`执行；旧`capture_battles.py --seconds`仅保留证据文件格式适配，回放入口继续可读旧日志。敌方命中采用[单证书输出](event-probe-interface.md#单证书输出与独立原生观察)，原生累计、逐击名义量、实际扣血、盾贡献分别保留。静态/回放/自有进程检查不等于实机FPS验收。
+
 ## 官服 PC 观察者接入
 
 ### PC 事件后端
@@ -121,6 +123,8 @@ ArkDPS 通过原有只读句柄采集游戏的手动操作日志，覆盖部署�
 已验证来源可以通过 `CollectionSession` 的 `observer_factory` 注入观察者，启用战局生命周期并传入 `frida_remote=None`。无界面采集入口 `app.main` 和桌面桥接入口 `desktop_bridge.main` 都接受可信调用方显式传入的 `native_pc_observer_factory`，只在选择 PC 且启用事件观察时传入会话。无界面采集沿用 `--require-events` 验收。观察者启动失败时不写就绪文件，事件流失效时保留失败证据。工厂、启动、失败后的资源释放、下一局重试及状态仍由会话管理。当前 PC 发行入口已默认配置自有 Frida 逐次事件来源；原生累计快照与其共用会话和归档。
 
 PC 的原生累计和编队在 `read_lifecycle()` 的一次事务中采集。`BattleFeed` 在这次事务前后分别取观察者水位。两次水位必须同帧、同游戏时间、同序号和同回调世代，且没有正在执行的事件。两个水位、批次以及可选的终局水位必须携带相同的 `native_session` 与 `source_build`，也必须与快照一致。原生战局身份作为不透明值比较，统计与归档继续使用 `feed:generation`。
+
+同轮防御 `4` 切到协防 `5` 可以构成旧观察范围的结束候选；只有同一观察者的序号、回调入口 epoch、原生身份与静默屏障都证明没有旧尾部时，才在旧的已接收水位收尾。PC 时钟重置会使自有采样器的 battle serial 增一，并改变散列后的 `native_session`。这条专用收尾路径独立核验两次原生读取的进程出生、五根、关卡、构建、原始时钟、serial 恰增一及会话散列，同时要求观察器 native generation 恰增一、事件序号和 epoch 不变。缺少原生 guard、跨来源、未读尾部或额外回调仍保留缺口；新阶段时钟不能成为旧范围终点，也不能补出干员本体离场时间。
 
 PC 观察者须实现 `read_through(sequence)` 和 `commit_events(sequence)`，前者只提供该水位和之前的事件，后者在统计接收成功后才确认可释放的前缀。跨帧或回调未结束时重试。批次有断号、乱序、同批冲突的重复记录，或有记录超出水位的序号、逻辑帧或游戏时间时，整批都不能用于来源归属或入账，也不确认该水位。批次身份不符或事件证据失效时，保留之前已验证的事件并继续发布该局原生累计。伤害、接敌、护盾和技能分别以 `damage_unknown`、`engagement_unknown`、`shield_unknown`、`skill_unknown` 的明确布尔 `false` 表示该项覆盖可用。减伤须同时声明 `mitigation_ready=true` 和 `mitigation_unknown=false`。缺声明的指标保持未知，已验证的部分观测值仍可保留。
 

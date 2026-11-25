@@ -153,7 +153,10 @@ def test_cooperative_candidate_archive_is_distinct_from_all_existing_variants():
 
 def test_inspector_uses_mitigation_rate_not_penetration_efficiency():
     inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
-    assert '"被减伤率"' in inspector and 'mitigation_rate' in inspector
+    projection = (ROOT/'panel_model.py').read_text('utf-8')
+    assert '"被减伤率"' in inspector and 'mitigation_rate' in projection
+    assert 'detail.Get("readings").Get("mitigation")' in inspector
+    assert 'observed_mitigation_rate' not in inspector
     assert '穿透效能' not in inspector and '穿透保留率' not in inspector
 
 
@@ -216,7 +219,9 @@ def test_wpf_surfaces_effective_and_overkill_without_inclusive_total_language():
     inspector = (ROOT/'desktop/ArkDPS.Desktop/Inspector.cs').read_text('utf-8')
     screenshot = (ROOT/'desktop/ArkDPS.Desktop/Screenshot.cs').read_text('utf-8')
     assert '"有效伤害"' in inspector and '"过量伤害"' in inspector
-    assert 'effective_damage' in inspector and 'overkill_damage' in inspector
+    assert 'effective_damage' in inspector and 'overflow.Amount' in inspector
+    assert 'detail.Get("readings").Get("overkill")' in inspector
+    assert 'observed_overkill_damage' not in inspector
     assert '总伤害含过量' not in inspector and '总伤害含过量' not in screenshot
 
 

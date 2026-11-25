@@ -341,11 +341,27 @@ def empty_text(config, source, complete, view):
     return '暂无输出（已知为零）'
 
 
+# Inspector identity/presence, legacy composition and exact rate denominators only.
+# Amount evidence and ratios are in details_by_owner; raw replay remains untouched.
+from contextvars import ContextVar
+_VIEW_MATERIALIZATION = ContextVar('arkdps_view_materialization', default=None)
+
+INSPECTOR_SOURCE_FIELDS = frozenset({
+    'name', 'portrait_id', 'present', 'healing', 'shield_absorbed', 'sources',
+    'burst_unknown_reason', 'damage_by_type', 'types_available', 'types_stale',
+    'observed_skill_coverage', 'observed_skill_active_seconds', 'skill_timed_presence_seconds',
+    'presence_complete', 'presence_seconds', 'observed_presence_seconds',
+    'active_damage', 'active_healing', 'engagement_damage', 'engagement_healing',
+    'event_coverage_complete', 'actor_uid', 'player_uid', 'player_side',
+})
+
 class DesktopState:
     """Single-threaded command owner; collector input is queued by its worker."""
     def __init__(self, directory=None):
         directory = Path(directory) if directory else ROOT / 'runtime'
         self.directory = directory
+        self._presentation_revision = 0
+        self._materialized_views = dict(owner=self, scopes={}, views={})
         self.store = LayoutStore(directory / 'layout.json')
         loaded = self.store.load()
         self.layout = loaded.layout
@@ -487,7 +503,14 @@ class DesktopState:
         recent = sorted(records.values(), key=order, reverse=True)[:100]
         self._install_history(recent, result.diagnostics)
 
+    def _invalidate_presentation(self):
+        self._presentation_revision += 1
+        self._materialized_views = dict(owner=self, scopes={}, views={})
+
     def accept(self, kind, value):
+        # Every admitted source/quality event is a revision, even at the same frame.
+        # FPS is an independent overlay and is read directly from its monitor.
+        self._invalidate_presentation()
         if kind == 'worker_error':
             # Setup/loop failure can precede a source marker. It is global to
             # the worker, rather than stale data from a retired session.
@@ -577,6 +600,7 @@ class DesktopState:
                 self.analysis_interrupted = True
 
     def expect_connection_request(self, config, revision):
+        self._invalidate_presentation()
         prior = self._requested_connection
         changed = (config.platform != prior.platform or
                    ((config.native_game_root, config.native_pc_event_backend, config.native_pc_event_feed) !=
@@ -717,7 +741,8 @@ class DesktopState:
             return
 
         terminal = statistics.get('ended') is True or self.lifecycle in ('ended', 'frozen', 'finalizing')
-        team_recent, operators = live_damage_rates(statistics, game_time)
+        _, analysis_rows, _ = self._scope_rows(PanelConfig(), statistics, context=self._materialized_views)
+        team_recent, operators = live_damage_rates(statistics, game_time, prepared_rows=analysis_rows)
         scope_label = statistics.get('display_scope_label')
         character_counters = sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
         if scope_label and not character_counters:
@@ -774,17 +799,17 @@ class DesktopState:
         boss_coverage = sample.get('event_status') in (None, 'ready', 'recording', 'finished')
         for effective, state_field in ((False, 'boss_live_analysis'), (True, 'boss_effective_live_analysis')):
             config = PanelConfig(boss_only=True, effective_only=effective)
-            boss_statistics = panel_statistics(config, statistics)
+            boss_statistics, boss_rows, _ = self._scope_rows(config, statistics, context=self._materialized_views)
             previous_boss = getattr(self, state_field)
             if boss_statistics['boss_damage_available'] or previous_boss is not None:
                 setattr(self, state_field, self.boss_trend_point(
                     boss_statistics, battle_id, game_time, previous_boss,
-                    terminal=terminal, covered=boss_coverage, effective=effective))
+                    terminal=terminal, covered=boss_coverage, effective=effective, prepared_rows=boss_rows))
         self.analysis_interrupted = False
 
     def boss_trend_point(self, statistics, battle_id, game_time, previous, *,
-                         terminal, covered, effective=False):
-        settled = settled_boss_damage_rates(statistics, game_time, effective=effective)
+                         terminal, covered, effective=False, prepared_rows=None):
+        settled = settled_boss_damage_rates(statistics, game_time, effective=effective, prepared_rows=prepared_rows)
         if settled is None:
             team_recent, operators = live_damage_rates(statistics, game_time, effective=effective)
             complete, _, _ = team_status(statistics)
@@ -854,8 +879,30 @@ class DesktopState:
             return 'degraded', '正在统计 · 事件降级'
         return 'live', '正在统计'
 
+    def _scope_rows(self, config, statistics, *, history=False, context=None):
+        # Projection wrappers are shallow; the raw rows identify the accepted scope.
+        # Revision binds same-frame money/quality changes; retain rows to prevent id reuse.
+        scope_key = (self._presentation_revision, id(statistics.get('rows')), statistics.get('session'),
+                     statistics.get('game_time'), statistics.get('native_counter_scope'),
+                     statistics.get('event_only_projection'), statistics.get('display_scope_label'),
+                     config.boss_scope, config.effective_only if config.boss_scope else False, history)
+        if context is not None and scope_key in context['scopes']:
+            _, scoped, rows = context['scopes'][scope_key]
+        else:
+            scoped = panel_statistics(config, statistics, history=history)
+            rows = rows_from_statistics(scoped)
+            if context is not None:
+                context['scopes'][scope_key] = statistics, scoped, rows
+        return scoped, rows, scope_key
+
     def view(self, config, statistics, complete=None, event=None):
-        statistics = panel_statistics(config, statistics, history=event is not None and not event.live)
+        context = _VIEW_MATERIALIZATION.get()
+        context = context if context is not None and context['owner'] is self else None
+        statistics, rows, scope_key = self._scope_rows(config, statistics,
+            history=event is not None and not event.live, context=context)
+        view_key = (scope_key, config, complete, event, self.layout.number_units)
+        if context is not None and view_key in context['views']:
+            return deepcopy(context['views'][view_key])
         source = statistics.get('rows') or {}
         number_units = self.layout.number_units
         if complete is None or config.boss_scope:
@@ -889,7 +936,6 @@ class DesktopState:
                     pending = ('次伤害命中未归属' if 'unscoped_hits' in settlement
                                else '次命中的归属或目标待确认')
                     coverage_note = f'全队{scope}覆盖不完整 · {unassigned} {pending}'
-        rows = rows_from_statistics(statistics)
         view = asdict(render_panel(config, rows,
                                    team_complete=complete, team_reason=reason,
                                    team_note=note, team_coverage_note=coverage_note,
@@ -906,10 +952,13 @@ class DesktopState:
             number_units=number_units)
         for entry in view['entries']:
             entry['bar_color'] = {'damage': '#F2AC7A', 'healing': '#73B78A', 'shield': '#9ABFCE'}[config.category.value]
-        view['source'] = source
+        view['source'] = {owner: {key: deepcopy(value) for key, value in row.items() if key in INSPECTOR_SOURCE_FIELDS}
+                          for owner, row in source.items()}
         if scope_label := statistics.get('display_scope_label'):
             view['scope_label'] = scope_label
             view['title'] = f"{scope_label} · {view['title']}"
+        if context is not None:
+            context['views'][view_key] = deepcopy(view)
         return view
 
     def _actor_view(self, config, statistics, actors, *, side=None, player_uid=None, event=None):
@@ -1040,6 +1089,18 @@ class DesktopState:
         return result
 
     def snapshot(self):
+        # Bound the cache independently of layout editing or a long paused scope.
+        # Ordinary polls share immutable projection work; age/FPS/IPC overlays below
+        # remain live. Each accept/config/source transition invalidates the revision.
+        if len(self._materialized_views['views']) >= 128 or len(self._materialized_views['scopes']) >= 128:
+            self._materialized_views = dict(owner=self, scopes={}, views={})
+        token = _VIEW_MATERIALIZATION.set(self._materialized_views)
+        try:
+            return self._snapshot()
+        finally:
+            _VIEW_MATERIALIZATION.reset(token)
+
+    def _snapshot(self):
         sample, multiplayer, analysis, presentation_note = self._presented_battle()
         desired = self.layout.multiplayer_enabled
         supported = self.effective_connection.platform == 'native_pc'
@@ -1125,6 +1186,7 @@ class DesktopState:
                     history_notice=self.history_notice)
 
     def persist(self, layout):
+        self._invalidate_presentation()
         self.store.save(layout)
         self.layout = layout
 

@@ -47,10 +47,7 @@ def test_elemental_children_and_parent_each_settle_their_own_measured_hp(produce
             original_hp = report['expected']['children'][0]['hp_before']
             assert proof['parent_entry_hp_before'] == pytest.approx(original_hp)
             assert parent['amount'] == parent['shield_absorbed'] == 0
-            damage, = [event for event in records if event['kind'] == 'damage'
-                       and event.get('settled_after_nested_kill') is True]
-            assert damage['killed'] is True and damage['real_delta'] == 0
-            assert damage['proof']['nested_elemental_chain'] == proof
+            assert parent['killed'] is True and parent['real_delta'] == 0
         children = [event for event in records if event['kind'] == 'damage_settlement' and event['damage_type'] == 5]
         assert len(children) == len(report['expected']['children'])
         for child, wanted in zip(children, report['expected']['children']):
@@ -66,15 +63,14 @@ def test_elemental_children_and_parent_each_settle_their_own_measured_hp(produce
             assert set(proof) == {'target_uid', 'parent_real_delta', 'parent_hp_before', 'parent_hp_after',
                                   'child_hp_before', 'child_hp_after', 'child_real_delta'}
         else:
-            assert proof['version'] == 1 and proof['ordering'] == report['order']
+            assert proof['version'] == 2 and proof['ordering'] == report['order']
             assert [step['settlement_sequence'] for step in proof['children']] == [
                 child['sequence'] for child in children]
-            entries = {event['sequence']: event for event in records}
             for step, child in zip(proof['children'], children):
-                burst = entries[step['burst_sequence']]
-                assert child['sequence'] < burst['sequence'] < parent['sequence']
-                assert burst['kind'] == 'elemental_burst' and burst['source'] == child['source']
-                assert burst['hp_before'] == step['hp_before'] and burst['hp_after'] == step['hp_after']
+                assert child['sequence'] < parent['sequence']
+                assert 'burst_sequence' not in step
+                assert child['hp_before'] == step['hp_before'] and child['hp_after'] == step['hp_after']
+        assert not any(event['kind'] in ('damage', 'hp_damage', 'elemental_burst') for event in records)
         assert report['mark']['enemy_damage_unknown'] is False
 
 
@@ -82,19 +78,16 @@ def test_elemental_children_and_parent_each_settle_their_own_measured_hp(produce
 def test_single_lethal_elemental_child_preserves_legacy_zero_parent_proof(producer, platform):
     report = producer[platform]['legacy_zero']
     parent = parent_record(report)
-    damage, = [event for event in report['batch']['events']
-               if event['kind'] == 'damage' and event['source'] == parent['source']]
     child, = [event for event in report['batch']['events']
               if event['kind'] == 'damage_settlement' and event['damage_type'] == 5]
-    assert parent['settled_after_nested_kill'] is damage['settled_after_nested_kill'] is True
+    assert parent['settled_after_nested_kill'] is True
     assert parent['settlement_complete'] is True
     assert parent['amount'] == parent['shield_absorbed'] == 0
-    assert parent['nominal_amount'] == damage['amount'] == 10
-    assert damage['killed'] is True and 'killed' not in parent
+    assert parent['nominal_amount'] == 10
+    assert parent['hp_before'] == parent['hp_after'] == parent['real_delta'] == 0
     assert child['settlement_complete'] is True and child['killed'] is True and child['amount'] == 100
     proof = parent['proof']['nested_settlement']
-    assert proof == damage['proof']['nested_settlement']
-    assert 'nested_elemental_chain' not in parent['proof'] and 'nested_elemental_chain' not in damage['proof']
+    assert 'nested_elemental_chain' not in parent['proof']
     assert proof['ordering'] == 'child_before_parent_zero' and proof['parent_entry_hp_before'] == 100
     assert report['mark']['enemy_damage_unknown'] is False
 
@@ -109,3 +102,19 @@ def test_inconsistent_or_unbounded_chain_never_supplies_parent_evidence(producer
         assert proof['settlement_unknown_reason'] == 'nested modifier changed target settlement scope', fault
         assert proof['nested_settlement_detail']['stage'] in ('target_entry', 'child_entry', 'child_close', 'parent_close')
         assert 0 <= proof['nested_settlement_detail']['verified_children'] <= 16
+
+
+@pytest.mark.parametrize('platform', ['android', 'native_pc'])
+def test_nested_hp_chain_is_bound_to_checked_settlement_not_legacy_burst(producer, platform):
+    report = producer[platform]['legacy_burst_changed']
+    parent = parent_record(report)
+    assert parent['settlement_complete'] is True
+    children = [e for e in report['batch']['events'] if e['kind'] == 'damage_settlement' and e['damage_type'] == 5]
+    assert not any(e['kind'] == 'elemental_burst' for e in report['batch']['events'])
+    for child, expected in zip(children, report['expected']['children']):
+        assert child['hp_before'] == expected['hp_before']
+        assert child['hp_after'] == expected['hp_after']
+        assert child['real_delta'] == -child['amount']
+        assert child['cancel_reason'] == 0
+    assert parent['hp_before'] == report['expected']['parent']['hp_before']
+    assert parent['hp_after'] == report['expected']['parent']['hp_after']

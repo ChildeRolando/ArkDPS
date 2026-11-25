@@ -9,13 +9,18 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, replace
 import math
+import re
+import hashlib
+import struct
 import time
 import uuid
 
-from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autochess_scope_id
+from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autochess_scope_id,
+                               native_autochess_event_identity)
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
-                           acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
+                           acknowledge_event_batch, read_terminal_mark, source_attribution_batch,
+                           read_pending_scope_prefix)
 from event_observer import ObserverReadRetry
 from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
@@ -24,7 +29,11 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
                          native_identity_sampling_mark, TerminalReadRetry,
                          verified_autochess_round_start, autochess_round_start_origin,
-                         settlement_source_quality_clear, verified_autochess_settlement_source_issues)
+                         pending_scope_anchor, verified_pending_scope_start,
+                         pending_scope_successor, verified_pending_scope_successor,
+                         _verified_pending_scope_anchor,
+                         settlement_source_quality_clear, settlement_failure_samples,
+                         probe_cursor_lifetime, check_cursor_lifetime)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
@@ -115,11 +124,148 @@ def _autochess_successor_ends_round(previous, successor):
             or previous.collection_mode not in ('local', 'all')
             or previous.collection_mode != successor.collection_mode):
         return False
+    # Defense can hand off to assistance before the shared round clock resets.
+    # This only identifies a candidate scope boundary; the consumer still
+    # requires the unchanged observer sequence/epoch and all native fences.
     return (successor.phase == 7 and previous.round == successor.round
+            or previous.phase == 4 and successor.phase == 5 and previous.round == successor.round
             or successor.phase in (3, previous.phase) and successor.round == previous.round + 1)
 
 
+def _native_pc_guarded_clock_reset(previous, successor):
+    """Recognize the collector's serial change using both independent reads.
+
+    PC sessions include the sampler serial, which increments on clock reset.
+    Equal Unity roots alone are insufficient: verify the exact two guarded
+    serials, process birth, stage/build and their canonical session digests.
+    This identifies a candidate only; source epoch/sequence fences still own
+    whether that candidate can finish any event prefix.
+    """
+    try:
+        scenes = [autochess_scene(sample) for sample in (previous, successor)]
+        if (None in scenes or scenes[0].match != scenes[1].match
+                or scenes[0].phase not in (4, 5, 6) or scenes[1].phase != scenes[0].phase
+                or scenes[1].round not in (scenes[0].round, scenes[0].round + 1)
+                or scenes[0].scope == scenes[1].scope
+                or scenes[0].collection_mode != scenes[1].collection_mode
+                or successor['frame'] >= previous['frame']
+                or successor['game_time'] >= previous['game_time']):
+            return False
+        guards = []
+        roots = ('controller', 'native', 'logger', 'stats', 'level')
+        for sample in (previous, successor):
+            meta, guard = sample['battle_metadata'], sample['native_window_guard']
+            if (type(sample.get('state')) is not int or sample['state'] != 2
+                    or meta['platform'] != 'native_pc' or guard.get('version') != 1
+                    or type(guard['version']) is not int or guard.get('source') != 'native_pc_guarded_read'
+                    or guard['source_build'] != meta['source_build']
+                    or not isinstance(meta['source_build'], str) or not meta['source_build']
+                    or type(guard['battle_serial']) is not int or guard['battle_serial'] < 1
+                    or guard['process_instance_before'] != guard['process_instance_after']
+                    or type(guard['process_instance_before']) not in (list, tuple)
+                    or len(guard['process_instance_before']) != 2
+                    or any(type(word) is not int or word <= 0 for word in guard['process_instance_before'])
+                    or guard['before'] != guard['after']):
+                return False
+            point = guard['after']
+            identity, frame, fixed = point['native_identity'], point['frame'], point['native_fixed_time']
+            anchor = sample.get('autochess_snapshot_anchor', sample)
+            if (type(identity) is not dict or set(identity) != set(roots)
+                    or any(not isinstance(identity[key], str)
+                           or re.fullmatch(r'0x[0-9a-fA-F]{1,16}', identity[key]) is None
+                           or not 0x10000 <= int(identity[key], 16) <= 0x7fffffffffff
+                           or int(identity[key], 16) % 8 for key in roots)
+                    or type(frame) is not int or not 0 <= frame <= sample['frame']
+                    or not isinstance(fixed, str) or not re.fullmatch(r'[0-9]{1,19}', fixed)
+                    or int(fixed) > 0x7fffffffffffffff
+                    or int(fixed) / (1 << 32) > sample['game_time']
+                    or anchor['frame'] != frame or type(anchor['frame']) is not int
+                    or type(anchor['game_time']) not in (int, float)
+                    or anchor['game_time'] != int(fixed) / (1 << 32)
+                    or point['stage_id'] != meta['stage_id']):
+                return False
+            digest = hashlib.sha256(struct.pack('<6Q', *[int(identity[key], 16) for key in roots],
+                                                guard['battle_serial'])).hexdigest()
+            expected_session = ':'.join(map(str, (*guard['process_instance_before'], digest)))
+            if (sample.get('native_session', sample['session']) != expected_session
+                    or tuple(sample['battle_identity']) != (digest,)):
+                return False
+            guards.append(guard)
+        old, new = guards
+        return (new['battle_serial'] == old['battle_serial'] + 1
+                and new['process_instance_before'] == old['process_instance_before']
+                and new['source_build'] == old['source_build']
+                and new['after']['native_identity'] == old['after']['native_identity']
+                and new['after']['frame'] < old['after']['frame']
+                and int(new['after']['native_fixed_time']) < int(old['after']['native_fixed_time']))
+    except (KeyError, ValueError, TypeError, AttributeError, struct.error):
+        return False
+
+
+
+def _verified_pending_empty_handoff(anchor, latest, successor):
+    """Distinguish a real empty serial reset from a legal late zero-output exit."""
+    origin, _, _ = _verified_pending_scope_anchor(anchor)
+    previous, _, _ = _verified_pending_scope_anchor(latest)
+    evidence = {key: latest[key] for key in ('before', 'after', 'sequence', 'drain')}
+    evidence['pending_scope_start'] = dict(version=1, anchor=anchor, pages=[])
+    verified_pending_scope_start(previous, evidence, previous_sequence=anchor['sequence'])
+    current, _ = verified_pending_scope_successor(successor)
+    old_scene, new_scene = autochess_scene(previous), autochess_scene(current)
+    if (old_scene is None or new_scene is None or old_scene.match != new_scene.match
+            or old_scene.collection_mode != new_scene.collection_mode
+            or old_scene.scope == new_scene.scope):
+        raise StreamGap('pending empty scope handoff changed its process/match/accounts')
+    mark, before, after = latest['after'], successor['before'], successor['after']
+    for fence in (mark, before, after):
+        if (type(fence.get('sequence')) is not int or fence['sequence'] != anchor['sequence']
+                or type(fence.get('epoch')) is not int or fence['epoch'] != mark['epoch']
+                or type(fence.get('active')) is not int or fence['active'] != 0
+                or fence.get('active_hooks') != [] or fence.get('stopped') is not False
+                or fence.get('error') is not None or fence.get('retry', False) is not False
+                or fence.get('terminal_boundary') is not None
+                or type(fence.get('native_battle_state')) is not int or fence['native_battle_state'] != 2
+                or 'native_quiet_boundary_version' in fence or 'native_deferred_callbacks' in fence):
+            raise StreamGap('pending empty scope handoff has an unread tail or nonquiet source')
+    if (before['frame'] != after['frame'] or before['game_time'] != after['game_time']
+            or type(mark.get('native_generation')) is not int):
+        raise StreamGap('pending empty scope handoff crossed a source clock')
+    reset = _native_pc_guarded_clock_reset(previous, current)
+    if reset:
+        if (anchor['after']['epoch'] != mark['epoch']
+                or any(type(fence.get('native_generation')) is not int
+                       or fence['native_generation'] != mark['native_generation'] + 1
+                       or fence.get('native_identity') != mark.get('native_identity')
+                       or fence.get('native_process_pid') != mark.get('native_process_pid')
+                       for fence in (before, after))):
+            raise StreamGap('pending empty reset lacks a strict source-generation fence')
+        # No callback was entered during the entire witnessed pre-start fragment.
+        # Retained uncertainty must not be silently discarded with that fragment.
+        for fence in (anchor['after'], mark, before, after):
+            if (fence.get('enemy_damage_unknown') is not False
+                    or fence.get('damage_unknown') is not False
+                    or fence.get('damage_settlement_unlocalized_unknown') is not False
+                    or fence.get('damage_settlement_source_issues') != []):
+                raise StreamGap('pending empty reset contains unresolved source evidence')
+        return 'reset'
+    if (not _autochess_successor_ends_round(old_scene, new_scene)
+            or current['native_session'] != previous['native_session']
+            or tuple(current['battle_identity']) != tuple(previous['battle_identity'])
+            or current['frame'] <= previous['frame'] or current['game_time'] <= previous['game_time']):
+        raise StreamGap('pending zero-output scope exit is not an independently proved successor')
+    for fence in (before, after):
+        if (fence.get('native_generation') != mark.get('native_generation')
+                or fence.get('native_identity') != mark.get('native_identity')
+                or type(fence.get('damage_settlement_scope')) is not int
+                or fence['damage_settlement_scope'] != mark.get('damage_settlement_scope')
+                or not _same_autochess_boundary_quality(previous, mark, fence)):
+            raise StreamGap('pending zero-output scope exit changed raw source quality/roots')
+    return 'scope_end'
+
+
 def _same_autochess_boundary_quality(sample, reference, fence):
+    if settlement_failure_samples(fence) != settlement_failure_samples(reference):
+        return False
     for key in ('quality_contract_version', 'damage_settlement_quality_version',
                 'damage_settlement_source_quality_version'):
         if type(fence.get(key)) is not int or fence[key] != 1:
@@ -140,16 +286,46 @@ def _same_autochess_boundary_quality(sample, reference, fence):
         return False
     if not fence['enemy_damage_unknown']:
         return first is None and settlement_source_quality_clear(fence)
+    # The first-issue summary has no scope stamp; its clock can precede a
+    # logical-round reset. Its sequence remains bound to this observer prefix.
     if (not isinstance(first, dict) or type(first.get('frame')) is not int
-            or not 0 <= first['frame'] <= sample['frame']
-            or type(first.get('game_time')) not in (int, float) or not 0 <= first['game_time'] <= sample['game_time']
+            or first['frame'] < 0
+            or type(first.get('game_time')) not in (int, float)
+            or not math.isfinite(first['game_time']) or first['game_time'] < 0
             or type(first.get('sequence')) is not int or not 0 <= first['sequence'] <= reference['sequence']
             or not isinstance(first.get('reason'), str) or not first['reason']):
         return False
     if not issues:
         return fence['damage_settlement_unlocalized_unknown']
-    localized = dict(fence, damage_settlement_unlocalized_unknown=False)
-    return verified_autochess_settlement_source_issues(sample, localized) is not None
+    # These are retained numeric certificates, not a transport cursor. The
+    # producer may retain a prior combat phase's issues on the same controller.
+    # Require unchanged, well-formed evidence without reassigning those issues
+    # to this scope (or making their numeric metrics complete).
+    if len(issues) > 128:
+        return False
+    fields = {'source', 'source_character_uid', 'frame', 'game_time', 'native_autochess_scope'}
+    current = sample['autochess_context']['identity']
+    current_scope = tuple(current[key] for key in ('scope_key', 'phase', 'round'))
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.keys() != fields:
+            return False
+        cid, uid, frame, when = (issue[key] for key in ('source', 'source_character_uid', 'frame', 'game_time'))
+        if (not isinstance(cid, str) or len(cid) > 128
+                or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
+                or type(uid) is not int or not 0 < uid <= 0xffffffff
+                or type(frame) is not int or frame < 0
+                or type(when) not in (int, float) or not math.isfinite(when)
+                or when < 0):
+            return False
+        scope = native_autochess_event_identity(issue)
+        if (scope is None or scope[1] not in (4, 5, 6) or scope[2] < 0
+                or issue['native_autochess_scope'].get('collection_mode') not in ('all', 'local')):
+            return False
+        if (scope == current_scope and
+                (frame > sample['frame'] or when > sample['game_time']
+                 or frame == sample['frame'] and when != sample['game_time'])):
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -352,6 +528,57 @@ def _event_barrier(before, sample, after, *, contract=None, capture=None):
         return closing
 
 
+def _verified_autochess_successor_cursor(previous, mark, successor, evidence, stream, last_game_time, contract):
+    """The existing raw successor fence, shared by retirement and pending admission."""
+    try:
+        build = previous['battle_metadata']['source_build']
+        if (not _autochess_successor_ends_round(autochess_scene(previous), autochess_scene(successor))
+                or previous['state'] != 2 or successor['state'] != 2
+                or previous['native_session'] != successor['native_session']
+                or tuple(previous['battle_identity']) != tuple(successor['battle_identity'])
+                or previous['battle_metadata']['platform'] != successor['battle_metadata']['platform']
+                or not isinstance(build, str) or not build or build != successor['battle_metadata']['source_build']
+                or successor['frame'] <= previous['frame']
+                or successor['game_time'] <= previous['game_time']):
+            return False
+        before, after = evidence['before'], evidence['after']
+        # Sequence excludes a queued tail, epoch excludes even an entered
+        # callback without output. A quiet source mark flushes staged HP.
+        if (type(mark.get('damage_settlement_scope')) is not int or mark['damage_settlement_scope'] < 0
+                or type(mark.get('native_generation')) is not int or mark['native_generation'] < 0
+                or type(evidence['sequence']) is not int or evidence['sequence'] != stream.sequence):
+            return False
+        for fence in (mark, before, after):
+            if (type(fence.get('active')) is not int or fence['active'] != 0
+                    or fence.get('active_hooks') != [] or fence.get('stopped') is not False
+                    or fence['error'] is not None or fence.get('retry', False) is not False
+                    or fence['terminal_boundary'] is not None
+                    or type(fence.get('native_battle_state')) is not int or fence['native_battle_state'] != 2
+                    or 'native_quiet_boundary_version' in fence or 'native_deferred_callbacks' in fence
+                    or not _same_autochess_boundary_quality(previous, mark, fence)
+                    or type(fence.get('damage_settlement_scope')) is not int
+                    or fence['damage_settlement_scope'] != mark['damage_settlement_scope']
+                    or type(fence.get('native_generation')) is not int
+                    or fence['native_generation'] != mark['native_generation']
+                    or fence.get('native_identity') != mark['native_identity']
+                    or fence.get('sequence') != stream.sequence or fence.get('epoch') != mark['epoch']):
+                return False
+        if (stream.frame != previous['frame'] or stream.game_time != previous['game_time']
+                or last_game_time != stream.game_time
+                or before['frame'] < stream.frame or before['game_time'] < stream.game_time
+                or before['frame'] == stream.frame and before['game_time'] != stream.game_time
+                or autochess_event_mark_context(previous, mark) != previous['autochess_context']
+                or baseline_barrier(mark, previous, mark, contract=contract) != stream.sequence):
+            return False
+        context, sequence = verified_autochess_event_window(successor, before, after,
+            anchor=successor.get('autochess_snapshot_anchor'))
+        old_scope = previous['autochess_context']['identity']['scope_key']
+        return (context == successor['autochess_context'] and sequence == stream.sequence
+                and int(context['identity']['scope_key'].rsplit(':', 1)[1]) > int(old_scope.rsplit(':', 1)[1]))
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return False
+
+
 class BattleFeed:
     """Issue generations at acquisition, before any asynchronous UI queue."""
 
@@ -377,10 +604,18 @@ class BattleFeed:
         self.autochess_identity = None
         self._next_android_presence = float('-inf')
         self._android_presence_seq = 0
+        self._pending_scope = None
+        self._acquiring_cursor = None
+        self._emitted_cursor = None
 
     def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None,
               read_error=None, observer=None, autochess_successor=None):
         self.sequence += 1
+        lifetime = (self._acquiring_cursor[1] if self._acquiring_cursor is not None
+                    and self._acquiring_cursor[0] is observer else probe_cursor_lifetime(observer))
+        if observer is not None:
+            check_cursor_lifetime(observer, lifetime)
+        self._emitted_cursor = self.sequence, observer, lifetime
         memo = None
         if events and getattr(observer, 'transfers_event_records', False):
             records = (events.get('drain') or {}).get('events')
@@ -410,6 +645,28 @@ class BattleFeed:
         return self._emit('gap', reason=reason, read_error=detail)
 
     def _end(self, reason, sample=None, roster=None, *, observer=None, capture=None):
+        if self._pending_scope is not None:
+            pending = self._pending_scope
+            if observer is not None:
+                if observer is not pending['observer']:
+                    raise CaptureRetry('pending scope observer changed before its departure')
+                check_cursor_lifetime(observer, pending['cursor_lifetime'])
+            latest = pending_scope_anchor(pending['latest']['sample'], pending['latest']['evidence'],
+                                          pending['latest']['roster_frame'])
+            held = deepcopy(latest['sample'])
+            held['session'] = f'{self.id}:{pending["generation"]}'
+            evidence = {key: deepcopy(latest[key]) for key in ('before', 'after', 'sequence', 'drain')}
+            evidence.update(pending_scope_start=dict(version=1, anchor=deepcopy(pending['anchor']), pages=[]),
+                pending_scope_end=dict(version=1, reason=reason, lifecycle=deepcopy(self.current_lifecycle),
+                                       terminal_evidence=_terminal_boundary(observer, capture=None)))
+            self.retired, self.retired_clock, self.retired_session = self.identity, self.clock, self.native_session
+            self.retired_stage = self.stage
+            self.identity = self.clock = self.frame = self.native_session = self.stage = None
+            self.autochess_identity = None
+            self.terminal = False
+            observation = self._emit('sample', held, RosterSnapshot(latest['roster_frame']),
+                                     reason=reason, events=evidence, observer=observer)
+            return replace(observation, generation=pending['generation'])
         if self.identity is None:
             return self._emit('waiting', reason=reason)
         # FINISHED can precede OnDestroy. Even after the final cumulative pair
@@ -648,14 +905,62 @@ class BattleFeed:
                 return {'error': str(exc)}
         return evidence
 
+    def _pending_scope_drain(self, observer, evidence, sample, roster, *, generation,
+                             published_generation, published_capture, published_observer, published_event_mark,
+                             cursor_lifetime, capture):
+        """Retain an empty late anchor until its first explicitly acquired prefix."""
+        check_cursor_lifetime(observer, cursor_lifetime)
+        pending = self._pending_scope
+        if pending is not None:
+            check_cursor_lifetime(observer, pending['cursor_lifetime'])
+            if observer is not pending['observer']:
+                raise CaptureRetry('pending scope observer changed before its prefix committed')
+            anchor = pending['anchor']
+            if ((sample.get('autochess_context') or {}).get('identity') !=
+                    anchor['sample']['autochess_context']['identity']):
+                raise CaptureRetry('pending scope exit awaits its retained empty-scope handoff')
+            result = read_pending_scope_prefix(observer, anchor, evidence, sample,
+                                               cursor_lifetime=pending['cursor_lifetime'])
+            pending['latest'] = deepcopy(dict(sample=sample, evidence=result, roster_frame=roster.frame))
+            return result, evidence['sequence'] == anchor['sequence']
+        result = self._drain(observer, evidence, sample, capture=capture)
+        check_cursor_lifetime(observer, cursor_lifetime)
+        stream = published_capture.adapter.event_stream if published_capture is not None else None
+        previous = stream.sequence if stream is not None and observer is published_observer else 0
+        if (generation == published_generation + 1 and observer is not None
+                and callable(getattr(observer, 'read_round_start_range', None))
+                and sample.get('native_counter_scope') == 'events_only'
+                and sample.get('state') == 2 and type(sample.get('frame')) is int and sample['frame'] > 0
+                and type(sample.get('game_time')) in (int, float) and sample['game_time'] > 0
+                and not roster.entries and isinstance(result, dict) and not result.get('error')
+                and stream is not None and observer is published_observer
+                and not published_capture.closed and not published_capture.pending
+                and stream.baseline_frame == 0 and published_capture.adapter.statistics.event_coverage_start == 0
+                and _verified_autochess_successor_cursor(published_capture.last_sample, published_event_mark,
+                    dict(sample, native_session=sample.get('native_session', sample['session'])),
+                    evidence, stream, published_capture.adapter.last_game_time, published_capture.contract)
+                and result.get('sequence') == previous and isinstance(result.get('drain'), dict)
+                and result['drain'].get('events') == [] and 'autochess_round_start' not in result['drain']):
+            try:
+                anchor = pending_scope_anchor(sample, result, roster.frame)
+            except (StreamGap, BarrierBusy):
+                # Legacy snapshots without the new raw independent proof retain
+                # their existing explicit late-baseline behavior; never retag zero.
+                return result, False
+            self._pending_scope = dict(observer=observer, cursor_lifetime=cursor_lifetime, generation=generation, anchor=anchor,
+                latest=deepcopy(dict(sample=sample, evidence=result, roster_frame=roster.frame)))
+            return result, True
+        return result, False
+
     def acquire(self, collector, observer=None, *, published_generation=0,
-                preparing_generation=None, published_capture=None, published_observer=None):
+                preparing_generation=None, published_capture=None, published_observer=None, published_event_mark=None):
         """Bracket cumulative/roster reads with the live singleton and flow.
 
         Failed reads are unknown. Only an observed null/destroyed singleton,
         FINISHED state, finish transition, or a new guarded identity ends a
         battle. No polling timeout, empty unit list or transport error does.
         """
+        self._acquiring_cursor = observer, probe_cursor_lifetime(observer)
         self.current_lifecycle = None
         self.autochess_scene = None
         self.autochess_exited = False
@@ -771,6 +1076,10 @@ class BattleFeed:
         frame_reset = (metadata.get('platform') == 'native_pc' and self.frame is not None
                        and sample['frame'] < self.frame)
         clock_reset = same_native and self.clock is not None and (now < self.clock or frame_reset)
+        if (not clock_reset and published_capture is not None
+                and self.generation == published_generation and observer is not None
+                and observer is published_observer):
+            clock_reset = _native_pc_guarded_clock_reset(published_capture.last_sample or {}, sample)
         context = sample.get('autochess_context') or {}
         native_context_known = context.get('status') in ('available', 'partial')
         context_identity = context.get('identity') if native_context_known else None
@@ -800,8 +1109,31 @@ class BattleFeed:
         # A same-controller round reset can still prove the old stream ended
         # at its last accepted watermark, without draining preparation events.
         capture = published_capture if generation == published_generation else None
-        if not preparing and not scope_unavailable:
-            events = self._drain(observer, events, sample, capture=capture)
+        pending_handoff = None
+        pending = self._pending_scope
+        if (pending is not None and not scope_unavailable and context_identity is not None
+                and context_identity != pending['anchor']['sample']['autochess_context']['identity']):
+            if observer is not pending['observer']:
+                raise CaptureRetry('pending scope observer changed before its empty handoff')
+            check_cursor_lifetime(observer, pending['cursor_lifetime'])
+            check_cursor_lifetime(observer, self._acquiring_cursor[1])
+            latest = pending_scope_anchor(pending['latest']['sample'], pending['latest']['evidence'],
+                                          pending['latest']['roster_frame'])
+            successor = pending_scope_successor(sample, events)
+            mode = _verified_pending_empty_handoff(pending['anchor'], latest, successor)
+            pending_handoff = dict(version=1, anchor=deepcopy(pending['anchor']),
+                                   latest=latest, successor=successor, mode=mode)
+        if pending_handoff is not None and pending_handoff['mode'] == 'reset':
+            # Only a strict serial/generation reset with no entered callbacks can
+            # supersede the witnessed pre-start fragment. The new zero is real.
+            events = self._drain(observer, events, sample, capture=None)
+            events['pending_scope_superseded'] = pending_handoff
+        elif pending_handoff is None and not preparing and not scope_unavailable:
+            events, pending_empty = self._pending_scope_drain(observer, events, sample, roster,
+                generation=generation, published_generation=published_generation,
+                published_capture=published_capture, published_observer=published_observer,
+                published_event_mark=published_event_mark, cursor_lifetime=self._acquiring_cursor[1], capture=capture)
+            preparing = preparing or pending_empty
         round_reset = None
         if (clock_reset and not scope_unavailable and observer is not None and observer is published_observer
                 and self.generation == published_generation and events is not None and 'sequence' in events):
@@ -837,6 +1169,17 @@ class BattleFeed:
             self.autochess_identity = None
         sample['native_session'] = sample['session']
         sample['session'] = f'{self.id}:{self.generation}'
+        if pending_handoff is not None and pending_handoff['mode'] == 'scope_end':
+            pending = self._pending_scope
+            latest = pending_handoff['latest']
+            held_sample = deepcopy(latest['sample'])
+            held_sample['session'] = f'{self.id}:{pending["generation"]}'
+            held_events = {key: deepcopy(latest[key]) for key in ('before', 'after', 'sequence', 'drain')}
+            held_events.update(pending_scope_start=dict(version=1, anchor=deepcopy(pending['anchor']), pages=[]),
+                pending_scope_exit=dict(version=1, successor=pending_handoff['successor'], next_generation=generation))
+            observation = self._emit('sample', held_sample, RosterSnapshot(latest['roster_frame']),
+                                     events=held_events, observer=observer)
+            return replace(observation, generation=pending['generation'])
         if scope_unavailable:
             return self._emit('scope_unavailable', sample, roster,
                               reason=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED, events=events)
@@ -1029,14 +1372,40 @@ class BattleSessions:
         if not isinstance(evidence, dict) or observation.generation != self.generation + 1 or not next_sample:
             return False
         try:
+            native_serial_reset = _native_pc_guarded_clock_reset(previous, next_sample)
             if (not previous['native_session']
-                    or next_sample['native_session'] != previous['native_session']
-                    or tuple(next_sample['battle_identity']) != tuple(previous['battle_identity'])
+                    or not native_serial_reset and (next_sample['native_session'] != previous['native_session']
+                        or tuple(next_sample['battle_identity']) != tuple(previous['battle_identity']))
                     or next_sample['frame'] >= previous['frame']
                     or next_sample['game_time'] >= previous['game_time']):
                 return False
             mark = self._last_event_mark
             after = evidence['after']
+            if native_serial_reset:
+                before = evidence['before']
+                if (not isinstance(self.capture.contract, NativePcProbeContract)
+                        or type(mark.get('native_generation')) is not int
+                        or mark['native_generation'] < 0
+                        or any(type(fence.get('native_battle_state')) is not int
+                               or fence['native_battle_state'] != 2
+                               or fence.get('stopped') is not False or fence.get('error') is not None
+                               or fence.get('terminal_boundary') is not None
+                               or fence.get('active_hooks') != [] or fence.get('retry', False) is not False
+                               or 'native_quiet_boundary_version' in fence
+                               or 'native_deferred_callbacks' in fence
+                               for fence in (mark, before, after))
+                        or any(type(fence.get('native_generation')) is not int
+                               or fence['native_generation'] != mark['native_generation'] + 1
+                               or fence.get('native_identity') != mark.get('native_identity')
+                               or fence.get('native_process_pid') != mark.get('native_process_pid')
+                               for fence in (before, after))):
+                    return False
+                if autochess_event_mark_context(previous, mark) != previous['autochess_context']:
+                    return False
+                context, through = verified_autochess_event_window(next_sample, before, after,
+                    anchor=next_sample.get('autochess_snapshot_anchor'))
+                if context != next_sample['autochess_context'] or through != stream.sequence:
+                    return False
             return (baseline_barrier(mark, previous, mark) == stream.sequence
                     and stream.frame == mark['frame'] and stream.game_time == mark['game_time']
                     and baseline_barrier(evidence['before'], next_sample, after) == stream.sequence
@@ -1053,53 +1422,8 @@ class BattleSessions:
                 or observation.generation != self.generation + 1 or self.capture.closed or self.capture.pending
                 or stream.baseline_frame != 0 or self.adapter.statistics.event_coverage_start != 0):
             return False
-        try:
-            build = previous['battle_metadata']['source_build']
-            if (not _autochess_successor_ends_round(autochess_scene(previous), autochess_scene(successor))
-                    or previous['state'] != 2 or successor['state'] != 2
-                    or previous['native_session'] != successor['native_session']
-                    or tuple(previous['battle_identity']) != tuple(successor['battle_identity'])
-                    or previous['battle_metadata']['platform'] != successor['battle_metadata']['platform']
-                    or not isinstance(build, str) or not build or build != successor['battle_metadata']['source_build']
-                    or successor['frame'] <= previous['frame']
-                    or successor['game_time'] <= previous['game_time']):
-                return False
-            mark, before, after = self._last_event_mark, evidence['before'], evidence['after']
-            # Sequence excludes a queued tail, epoch excludes even an entered
-            # callback without output. A quiet source mark flushes staged HP.
-            if (type(mark.get('damage_settlement_scope')) is not int or mark['damage_settlement_scope'] < 0
-                    or type(mark.get('native_generation')) is not int or mark['native_generation'] < 0
-                    or type(evidence['sequence']) is not int or evidence['sequence'] != stream.sequence):
-                return False
-            for fence in (mark, before, after):
-                if (type(fence.get('active')) is not int or fence['active'] != 0
-                        or fence.get('active_hooks') != [] or fence.get('stopped') is not False
-                        or fence['error'] is not None or fence.get('retry', False) is not False
-                        or fence['terminal_boundary'] is not None
-                        or type(fence.get('native_battle_state')) is not int or fence['native_battle_state'] != 2
-                        or 'native_quiet_boundary_version' in fence or 'native_deferred_callbacks' in fence
-                        or not _same_autochess_boundary_quality(previous, mark, fence)
-                        or type(fence.get('damage_settlement_scope')) is not int
-                        or fence['damage_settlement_scope'] != mark['damage_settlement_scope']
-                        or type(fence.get('native_generation')) is not int
-                        or fence['native_generation'] != mark['native_generation']
-                        or fence.get('native_identity') != mark['native_identity']
-                        or fence.get('sequence') != stream.sequence or fence.get('epoch') != mark['epoch']):
-                    return False
-            if (stream.frame != previous['frame'] or stream.game_time != previous['game_time']
-                    or self.adapter.last_game_time != stream.game_time
-                    or before['frame'] < stream.frame or before['game_time'] < stream.game_time
-                    or before['frame'] == stream.frame and before['game_time'] != stream.game_time
-                    or autochess_event_mark_context(previous, mark) != previous['autochess_context']
-                    or baseline_barrier(mark, previous, mark, contract=contract) != stream.sequence):
-                return False
-            context, sequence = verified_autochess_event_window(successor, before, after,
-                anchor=successor.get('autochess_snapshot_anchor'))
-            old_scope = previous['autochess_context']['identity']['scope_key']
-            return (context == successor['autochess_context'] and sequence == stream.sequence
-                    and int(context['identity']['scope_key'].rsplit(':', 1)[1]) > int(old_scope.rsplit(':', 1)[1]))
-        except (KeyError, ValueError, TypeError, AttributeError):
-            return False
+        return _verified_autochess_successor_cursor(previous, self._last_event_mark, successor,
+            evidence, stream, self.adapter.last_game_time, contract)
 
     def _finish_at_verified_watermark(self, observation):
         if (self.event_status != 'recording' or self._last_event_mark is None or
@@ -1377,6 +1701,60 @@ class BattleSessions:
             self.connection = 'connected'
             self.reason = observation.reason
         elif observation.kind == 'sample':
+            pending_fields = {'pending_scope_start', 'pending_scope_exit', 'pending_scope_end',
+                              'pending_scope_superseded'} & (observation.events or {}).keys()
+            if pending_fields and observation.generation <= self.generation:
+                raise StreamGap('pending scope transaction cannot reinitialize an established generation')
+            if (len(pending_fields & {'pending_scope_exit', 'pending_scope_end', 'pending_scope_superseded'}) > 1
+                    or 'pending_scope_superseded' in pending_fields and 'pending_scope_start' in pending_fields):
+                raise StreamGap('conflicting pending scope handoff transactions')
+            pending_exit = (observation.events or {}).get('pending_scope_exit')
+            pending_end = (observation.events or {}).get('pending_scope_end')
+            if pending_end is not None:
+                if (not isinstance(pending_end, dict)
+                        or set(pending_end) != {'version', 'reason', 'lifecycle', 'terminal_evidence'}
+                        or type(pending_end.get('version')) is not int or pending_end['version'] != 1
+                        or pending_end['reason'] != observation.reason
+                        or pending_end['lifecycle'] != observation.lifecycle
+                        or not isinstance(pending_end['terminal_evidence'], dict)):
+                    raise StreamGap('invalid pending scope interrupted-end transaction')
+                life = observation.lifecycle
+                reason = pending_end['reason']
+                valid_end = (
+                    reason == 'process_changed' and life is None
+                    or isinstance(life, dict) and (
+                        reason == 'battle_absent' and life.get('battle') is None
+                        or reason == 'battle_initializing' and type(life.get('state')) is int and life['state'] in (0, 1)
+                        or reason in ('finished', 'replaced') and (life.get('state') == 3
+                            or life.get('transiting') is True and life.get('target') == 'battle_finish')))
+                start = (observation.events or {}).get('pending_scope_start')
+                if not valid_end or not isinstance(start, dict) or start.get('pages') != []:
+                    raise StreamGap('pending scope end lacks its original lifecycle departure')
+            superseded = (observation.events or {}).get('pending_scope_superseded')
+            if superseded is not None:
+                if (not isinstance(superseded, dict)
+                        or set(superseded) != {'version', 'anchor', 'latest', 'successor', 'mode'}
+                        or type(superseded.get('version')) is not int or superseded['version'] != 1
+                        or superseded['mode'] != 'reset'
+                        or _verified_pending_empty_handoff(superseded['anchor'], superseded['latest'], superseded['successor']) != 'reset'
+                        or pending_scope_successor(observation.sample, observation.events) != superseded['successor']):
+                    raise StreamGap('invalid pending scope supersession transaction')
+                previous_stream = self.adapter.event_stream if self.adapter is not None else None
+                expected = previous_stream.sequence if previous_stream is not None else 0
+                if superseded['anchor']['sequence'] != expected:
+                    raise StreamGap('pending scope supersession changed its accepted cursor')
+            if pending_exit is not None:
+                if (not isinstance(pending_exit, dict) or set(pending_exit) != {'version', 'successor', 'next_generation'}
+                        or type(pending_exit.get('version')) is not int or pending_exit['version'] != 1
+                        or type(pending_exit['next_generation']) is not int
+                        or pending_exit['next_generation'] != observation.generation + 1):
+                    raise StreamGap('invalid pending zero-output scope exit transaction')
+                start = (observation.events or {}).get('pending_scope_start')
+                if not isinstance(start, dict) or start.get('pages') != []:
+                    raise StreamGap('pending empty scope exit contains an unexpected event prefix')
+                latest = pending_scope_anchor(observation.sample, observation.events, observation.roster.frame)
+                if _verified_pending_empty_handoff(start['anchor'], latest, pending_exit['successor']) != 'scope_end':
+                    raise StreamGap('pending scope exit cannot discard a reset fragment')
             if observation.generation <= 0 or observation.sample['session'] != f'{self.feed_id}:{observation.generation}':
                 raise ValueError('sample does not match its observation generation')
             if observation.generation == self.generation and (
@@ -1388,10 +1766,14 @@ class BattleSessions:
             # its independent archive copy cannot be lost with the new sample.
             event_observation = observation
             if observation.generation > self.generation:
+                previous_stream = self.adapter.event_stream if self.adapter is not None else None
+                pending_bootstrap = verified_pending_scope_start(observation.sample, observation.events,
+                    previous_sequence=previous_stream.sequence if previous_stream is not None else None)
                 self._archive('new_battle', successor=observation)
-                bootstrap = None
+                previous_multiplayer = self.multiplayer
+                bootstrap = pending_bootstrap
                 bootstrap_error = None
-                if observation.events and isinstance(observation.events.get('drain'), dict):
+                if bootstrap is None and observation.events and isinstance(observation.events.get('drain'), dict):
                     try:
                         bootstrap = verified_autochess_round_start(observation.sample,
                             observation.events['drain'], observation.events.get('after'))
@@ -1399,10 +1781,13 @@ class BattleSessions:
                         # Keep the independent current snapshot, but never ACK
                         # an advertised historical prefix whose proof failed.
                         bootstrap_error = str(exc)
-                adapter = BattleStatisticsAdapter()
+                # Sessions alone selects generation retirement. The reducer
+                # must not silently finish/restart on a malformed same-generation
+                # sample or an unannounced clock reset.
+                adapter = BattleStatisticsAdapter(lifecycle_managed=True)
                 if bootstrap is not None:
                     zero_sample, zero_mark, zero_drain, replay_drain = bootstrap
-                    zero_roster = RosterSnapshot(0)
+                    zero_roster = RosterSnapshot(zero_sample['frame'])
                     adapter.update(zero_sample, zero_roster)
                 else:
                     adapter.update(observation.sample, observation.roster,
@@ -1418,6 +1803,11 @@ class BattleSessions:
                 self._terminal_seen = False
                 self._last_event_mark = None
                 self.multiplayer = None
+                if (previous_multiplayer is not None and observation.events
+                        and isinstance(observation.events.get('drain'), dict)):
+                    from multiplayer_battle import MultiplayerBattleStatistics
+                    self.multiplayer = MultiplayerBattleStatistics()
+                    self.multiplayer.inherit_settlement_scopes(previous_multiplayer, observation.sample)
                 self.multiplayer_error = None
                 self.metadata = self._metadata(observation.sample)
                 self.snapshot_intervals = []
@@ -1444,6 +1834,19 @@ class BattleSessions:
             self.state = 'playing'
             self.connection = 'connected'
             self.reason = ''
+            if pending_exit is not None:
+                # Preserve the real late zero-output scope. The existing strict
+                # zero-origin/terminal-body rules still decide completeness.
+                self._archive('pending_scope_exit')
+                self.preparing_generation = pending_exit['next_generation']
+                self.state, self.reason = 'preparing', 'pending_scope_exit'
+            elif pending_end is not None:
+                # This endpoint proves the observed empty interval only. An absent
+                # or changed source cannot certify an unread terminal prefix.
+                self._archive(pending_end['reason'])
+                self.preparing_generation = None
+                self.state, self.reason = 'ended', pending_end['reason']
+                self.connection = 'disconnected' if pending_end['reason'] == 'process_changed' else 'connected'
         elif observation.kind == 'terminal':
             if (observation.generation != self.generation or self.adapter is None
                     or self._archived):
@@ -1533,9 +1936,24 @@ class BattleRuntime:
         self._accepted_event_observer = None
 
     def _consume(self, observation):
+        # Reject an invalid live handoff before journaling it as a consumable
+        # observation; replay must not accept a prefix the live owner rejected.
+        receipt = self.feed._emitted_cursor
+        if receipt is not None and receipt[0] == observation.sequence and receipt[1] is not None:
+            check_cursor_lifetime(receipt[1], receipt[2])
         self.record(observation)
         try:
-            return self.sessions.consume(observation)
+            consumed = self.sessions.consume(observation)
+            pending = self.feed._pending_scope
+            evidence = observation.events or {}
+            if consumed and pending is not None and ('pending_scope_start' in evidence or 'pending_scope_superseded' in evidence):
+                stream = self.sessions.adapter.event_stream if self.sessions.adapter is not None else None
+                if (stream is not None and stream.sequence == evidence['sequence']
+                        and stream.frame == observation.sample['frame']
+                        and (not self.sessions.capture.closed or 'pending_scope_exit' in evidence
+                             or 'pending_scope_end' in evidence)):
+                    self.feed._pending_scope = None
+            return consumed
         except MappingUnavailable as exc:
             # The native battle and event attachment remain valid while
             # ownership settles. Preserve the queue and the last good view.
@@ -1544,17 +1962,31 @@ class BattleRuntime:
     def _acquire(self, collector, observer):
         published_observer = None
         accepted = self._accepted_event_observer
-        if accepted is not None and accepted[1] == self.sessions.generation:
+        if (accepted is not None and accepted[1] == self.sessions.generation
+                and accepted[0] is observer and len(accepted) > 2
+                and probe_cursor_lifetime(observer) is not accepted[2]):
+            raise StreamGap('accepted observer cursor lifetime changed before acquisition')
+        if (accepted is not None and accepted[1] == self.sessions.generation
+                and (len(accepted) < 3 or probe_cursor_lifetime(accepted[0]) is accepted[2])):
             published_observer = accepted[0]
         return self.feed.acquire(collector, observer,
                                  published_generation=self.sessions.generation,
                                  preparing_generation=self.sessions.preparing_generation,
                                  published_capture=self.sessions.capture,
-                                 published_observer=published_observer)
+                                 published_observer=published_observer,
+                                 published_event_mark=self.sessions._last_event_mark)
 
     def _acknowledge_observation(self, observation, observer, consumed):
         """Release accepted data without turning a lost ack response into a gap."""
+        receipt = self.feed._emitted_cursor
+        if (receipt is not None and receipt[0] == observation.sequence and receipt[1] is observer
+                and probe_cursor_lifetime(observer) is not receipt[2]):
+            self._pending_event_ack = self._accepted_event_observer = None
+            return
         pending_ack = self._pending_event_ack
+        if (pending_ack is not None and len(pending_ack) > 4
+                and probe_cursor_lifetime(pending_ack[0]) is not pending_ack[4]):
+            pending_ack = None
         identity_sample = observation.sample or self.sessions.latest_sample or {}
         evidence = observation.events or {}
         contract = contract_for(observer, identity_sample, evidence.get('probe_contract'))
@@ -1576,8 +2008,8 @@ class BattleRuntime:
                 if callable(remember) and not is_terminal_tail:
                     remember(identity_sample, evidence['after'])
                 pending_ack = (observer, stream.sequence, ack_binding,
-                               deepcopy(evidence['after']) if is_terminal_tail else None)
-                self._accepted_event_observer = (observer, observation.generation)
+                               deepcopy(evidence['after']) if is_terminal_tail else None, probe_cursor_lifetime(observer))
+                self._accepted_event_observer = (observer, observation.generation, probe_cursor_lifetime(observer))
                 current_ack = True
         retry_ack = pending_ack is not None
         if retry_ack and not current_ack and contract.ack_mark_required:

@@ -24,6 +24,7 @@ import time
 from types import SimpleNamespace
 
 from event_observer import NativePcFridaObserver, ObserverStatus
+from .event_source import commit_startup_operation, start_runtime_watcher, cancel_startup_owner
 from . import probe_native_pc as access
 
 
@@ -311,20 +312,12 @@ class NativePcFridaRuntime:
             raise InterruptedError('PC Frida startup cancelled')
 
     def _commit(self, operation):
-        # Cancellation and the beginning of a Windows operation share this lock.
-        with self._condition:
-            self._check_cancelled()
-            return operation()
+        return commit_startup_operation(self, operation)
 
     def _new_thread(self):
-        self._thread = Thread(target=self._run, name='ArkDPS PC Frida startup', daemon=False)
-        try:
-            self._thread.start()
-        except Exception:
-            if not self._thread.is_alive():
-                self._thread = None
-                self._state(RuntimeState.FAILED, 'watcher_start_failed', 'PC Frida watcher could not start; retry')
-            raise
+        start_runtime_watcher(self, Thread, name='ArkDPS PC Frida startup',
+            failed=lambda: self._state(RuntimeState.FAILED, 'watcher_start_failed',
+                                       'PC Frida watcher could not start; retry'))
 
     def start(self):
         with self._condition:
@@ -357,14 +350,11 @@ class NativePcFridaRuntime:
 
     def cancel(self):
         with self._condition:
-            if self.status == RuntimeState.CLOSED:
+            if not cancel_startup_owner(self, closed=RuntimeState.CLOSED,
+                    stopping=RuntimeState.STOPPING, cleanup_pending=RuntimeState.CLEANUP_PENDING):
                 return
-            self._cancel.set()
-            if self.status not in (RuntimeState.STOPPING, RuntimeState.CLEANUP_PENDING):
-                self._state(RuntimeState.STOPPING)
             cancellations = tuple(self._rpc_cancellations)
             observers = tuple(self._observers)
-            self._condition.notify_all()
         for cancellation in cancellations:
             cancellation.cancel()
         for observer in observers:

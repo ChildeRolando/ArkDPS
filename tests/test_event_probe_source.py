@@ -185,7 +185,7 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     if args == ["tests/native_pc_settlement_order_fixture.js"]:
-        payload = {backend: {name: value for name, value in cases.items() if name != 'rejected'}
+        payload = {backend: {name: value for name, value in cases.items() if name not in ('rejected', 'without_legacy_wire')}
                    for backend, cases in payload.items()}
     elif args == ["tests/event_probe_pipeline_fixture.js"]:
         normal = ('target_return_before_apply_commit', 'nonlethal_cap', 'lethal_hit',
@@ -223,6 +223,11 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
     def before_source_local_quality(value):
         if isinstance(value, dict):
             additions = set()
+            failure_fields = {'damage_settlement_failure_samples_version', 'damage_settlement_failure_samples'}
+            if failure_fields & value.keys():
+                from event_probe import settlement_failure_samples
+                assert settlement_failure_samples(value) == []
+                additions |= failure_fields
             source_fields = {'damage_settlement_source_quality_version',
                              'damage_settlement_unlocalized_unknown', 'damage_settlement_source_issues'}
             if source_fields & value.keys():
@@ -243,6 +248,40 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
                 assert value.get('quality_contract_version') == 1 or value.get('ready') is True
                 assert type(value['autochess_round_start_ready']) is bool
                 additions.add('autochess_round_start_ready')
+            if 'character_lifecycle_ready' in value:
+                assert value.get('quality_contract_version') == 1 or value.get('ready') is True
+                # These frozen scenarios do not install the optional typed
+                # lifecycle methods. New producer fixtures prove the enabled path.
+                assert value['character_lifecycle_ready'] is False
+                additions.add('character_lifecycle_ready')
+            if 'character_lifecycle_error' in value:
+                assert value.get('ready') is True and value.get('character_lifecycle_ready') is False
+                assert value['character_lifecycle_error'] is None or isinstance(value['character_lifecycle_error'], str)
+                additions.add('character_lifecycle_error')
+            if value.get('kind') == 'damage_settlement' and 'hp_before' in value:
+                hp_fields = {'hp_before', 'hp_after', 'real_delta', 'cancel_reason'}
+                assert hp_fields <= set(value)
+                assert all(type(value[key]) in (int, float) for key in hp_fields)
+                assert value['hp_before'] >= value['hp_after'] >= 0
+                assert value['real_delta'] == -value['amount']
+                assert abs(value['hp_before'] - value['hp_after'] + value['real_delta']) <= max(.01, value['amount'] * 1e-6)
+                assert value['cancel_reason'] == 0
+                additions |= hp_fields
+            if 'source_instance_uid' in value:
+                assert value.get('kind') in ('damage', 'healing', 'damage_settlement', 'skill_start', 'skill_end')
+                assert type(value['source_instance_uid']) is int and 0 < value['source_instance_uid'] <= 0xffffffff
+                assert isinstance(value.get('source'), str) and value['source'].startswith(('char_', 'token_'))
+                additions.add('source_instance_uid')
+            if 'skill_cast_invocation' in value:
+                assert value.get('kind') == 'skill_end'
+                assert (value.get('proof') or {}).get('method') in ('BasicSkill.OnCastFinish',
+                    'Character.OnAfterSkill', 'Character.OnSkillFinish', 'Character.SwitchOutFromSkillState')
+                assert type(value['skill_cast_invocation']) is int and 0 < value['skill_cast_invocation'] <= 9007199254740991
+                assert 'source_instance_uid' in value
+                additions.add('skill_cast_invocation')
+            # No lifecycle capability exists in these old normal scenarios;
+            # never erase a newly invented birth/terminal event to match a hash.
+            assert 'actor_lifecycle' not in value and 'lifecycle_baseline' not in value
             if 'native_battle_state' in value:
                 assert isinstance(value.get('native_identity'), dict)
                 assert type(value['native_battle_state']) is int and value['native_battle_state'] in (2, 3)
@@ -255,8 +294,21 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
     # Validate only the additive, typed contract above, then compare every
     # original event/number/quality field against its unchanged frozen hash.
     prior_payload = before_source_local_quality(payload)
-    assert digest(prior_payload) == terminal_read_hashes.get(args[0], extended_hashes.get(args[0], expected))
-    assert digest(before_terminal_read(prior_payload)) == extended_hashes.get(args[0], expected)
+    modern_hashes = {
+        # Deliberate v7 single-certificate wire. The pre-migration hashes above
+        # remain historical evidence, not a demand to recreate deleted events.
+        'tests/native_pc_settlement_order_fixture.js': '0d954c7302d8f446eb521993b2a8161f6522013f9c4ebc322d39be8e74b13733',
+        'tests/event_probe_pipeline_fixture.js': '3d5ad51722d9f3532c41162693ab1e2ed57a8b94281391f0631149905105a153',
+    }
+    if args[0] in modern_hashes:
+        assert digest(payload) == modern_hashes[args[0]]
+        for cases in payload.values():
+            for report in cases.values():
+                assert not any(event['kind'] in ('damage', 'hp_damage', 'elemental_burst')
+                               for event in report['batch']['events'])
+    else:
+        assert digest(prior_payload) == terminal_read_hashes.get(args[0], extended_hashes.get(args[0], expected))
+        assert digest(before_terminal_read(prior_payload)) == extended_hashes.get(args[0], expected)
     additions = {'initial_boundary', 'initial_boundary_diagnostics', 'terminal_boundary_diagnostics'}
     observed_additions = set()
 
@@ -300,4 +352,5 @@ def test_shared_runtime_preserves_complete_frozen_normal_wire_objects(args, expe
             return [original_contract(item) for item in value]
         return value
 
-    assert digest(original_contract(before_terminal_read(prior_payload))) == expected
+    if args[0] not in modern_hashes:
+        assert digest(original_contract(before_terminal_read(prior_payload))) == expected

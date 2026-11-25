@@ -82,9 +82,10 @@ function positive(platform){
  assert.deepEqual(settlements.map(event=>[event.amount,event.nominal_amount,event.shield_absorbed,event.settlement_complete]),
   [[40,40,0,true],[10,10,0,true]]);
  assert(settlements.every(event=>event.source===identities.token_cid&&event.target==='enemy_owned_target'));
- const actual=batch.events.filter(event=>event.kind==='damage'&&event.target==='enemy_owned_target');
- assert.deepEqual(actual.map(event=>[event.amount,event.real_delta,event.hp_before,event.hp_after]),
-  platform==='native_pc'?[[40,-40,50,10],[10,-10,80,70]]:[[40,-40,50,10]]);
+ assert(!batch.events.some(event=>['damage','hp_damage','elemental_burst'].includes(event.kind)&&
+  event.target==='enemy_owned_target'));
+ assert.deepEqual(settlements.map(event=>[event.amount,event.real_delta,event.hp_before,event.hp_after]),
+  [[40,-40,50,10],[10,-10,80,70]]);
  const self=batch.events.filter(event=>event.kind==='damage'&&event.target===identities.token_cid);
  assert.equal(self.length,1);assert.equal(self[0].amount,40);assert.equal(self[0].source_character_uid,70027);
  const skillEvents=batch.events.filter(event=>event.kind==='skill_start'||event.kind==='skill_end');

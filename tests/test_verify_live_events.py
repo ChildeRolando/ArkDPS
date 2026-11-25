@@ -760,6 +760,91 @@ def test_explicitly_sourced_burst_updates_native_elemental_counter_but_is_never_
         module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
 
 
+def single_settlement_supplement_window(*, explicit_source=False):
+    """A new synthetic one-record wire; leave all old recording fixtures intact."""
+    events, publications = supplement_window(explicit_source=explicit_source)
+    ordinary, bar, settlement, burst = events
+    ordinary = dict(ordinary, kind='damage_settlement', damage_type=1,
+                    nominal_amount=ordinary['amount'], source_character_uid=1,
+                    proof={'method': 'Entity.ApplyModifier', 'settlement_wire_version': 2, 'native_modifier_observation':
+                           {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': ordinary['amount']}})
+    settlement.update({key: burst[key] for key in
+                       ('hp_before', 'hp_after', 'real_delta', 'cancel_reason', 'killed')})
+    settlement['proof']['native_modifier_observation'] = {
+        'version': 1, 'method': 'Entity.ApplyModifier', 'amount': burst['amount']}
+    settlement['proof']['settlement_wire_version'] = 2
+    publications[-1]['event_watermark']['sequence'] = settlement['sequence']
+    return [ordinary, bar, settlement], publications
+
+
+@pytest.mark.parametrize('explicit_source', (False, True))
+def test_single_settlement_supplement_preserves_nominal_and_real_sequence_without_synthetic_burst(explicit_source):
+    events, publications = single_settlement_supplement_window(explicit_source=explicit_source)
+    original = deepcopy(events)
+    result = module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+    assert events == original
+    assert module._single_settlement_wire(events)
+    if explicit_source:
+        assert result['source_null_burst_witnesses'] == []
+        assert not any(result['final_nominal_supplements'].values())
+    else:
+        witness, = result['source_null_burst_witnesses']
+        assert witness['nominal_supplement'] == 30 and witness['actual_hp_damage'] == 20
+        assert witness['bar_sequence'] == 2 and witness['settlement_sequence'] == 3
+        assert 'burst_sequence' not in witness
+        assert result['final_nominal_supplements'] == {'char_a': 30}
+    assert result['nominal_supplements_by_watermark'][:2] == [
+        {'sequence': 0, 'by_owner': {}}, {'sequence': 2, 'by_owner': {}}]
+
+
+@pytest.mark.parametrize('fault', ('hp', 'actual', 'nominal', 'uid', 'source', 'clock', 'stage',
+                                  'cancel', 'shield', 'missing_endpoint', 'incomplete', 'output_source_null',
+                                  'reused_certificate', 'future_supplement', 'missing_format'))
+def test_single_settlement_supplement_rejects_bad_raw_evidence_without_legacy_fallback(fault):
+    events, publications = single_settlement_supplement_window()
+    certificate = events[-1]
+    if fault == 'hp': certificate['hp_before'] += 1
+    elif fault == 'actual': certificate['amount'] += 1
+    elif fault == 'nominal': certificate['nominal_amount'] = 1
+    elif fault == 'uid': certificate['target_uid'] = '00021'
+    elif fault == 'source': certificate.update(source='char_other', source_character_uid=1)
+    elif fault == 'clock': events[1].update(frame=3, game_time=3)
+    elif fault == 'stage': certificate['native_stage_id'] = 'other_stage'
+    elif fault == 'cancel': certificate['cancel_reason'] = True
+    elif fault == 'shield': certificate['shield_absorbed'] = None
+    elif fault == 'missing_endpoint': certificate.pop('hp_after')
+    elif fault == 'incomplete': certificate['settlement_complete'] = False
+    elif fault == 'output_source_null': certificate['proof']['method'] = 'Entity.OnAfterOutputDamage'
+    elif fault == 'reused_certificate':
+        events.append(dict(deepcopy(certificate), sequence=4, frame=3, game_time=3))
+        publications.append(dict(deepcopy(publications[-1]), frame=3, game_time=3,
+                                 event_watermark={'sequence': 4}))
+        publications[-1]['statistics']['rows']['char_a']['burst_added_settlement'] = 60
+    elif fault == 'future_supplement':
+        publications[1]['statistics']['rows']['char_a']['burst_added_settlement'] = 30
+    elif fault == 'missing_format': certificate['proof'].pop('settlement_wire_version')
+    with pytest.raises(ValueError):
+        module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+
+
+def test_non_enemy_observation_cannot_disable_same_prefix_single_certificate_supplement():
+    events, publications = single_settlement_supplement_window()
+    events.append(dict(sequence=4, frame=2, game_time=2, kind='damage', source='char_a',
+                       amount=99, damage_type=1, target='char_ally', target_type=1))
+    publications[-1]['event_watermark']['sequence'] = 4
+    result = module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+    assert result['final_nominal_supplements'] == {'char_a': 30}
+    assert result['source_null_burst_witnesses'][0]['settlement_sequence'] == 3
+
+
+@pytest.mark.parametrize('version', (True, '2', 1, 3, None))
+def test_unknown_single_certificate_format_cannot_fall_back_to_empty_legacy_observations(version):
+    events, publications = single_settlement_supplement_window()
+    events[-1]['proof']['settlement_wire_version'] = version
+    with pytest.raises(ValueError, match='wire version'):
+        module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+
+
 @pytest.mark.parametrize('fault', ['wrong_uid', 'wrong_instance', 'missing_owner', 'wrong_stage', 'future_bar',
                                   'nominal_not_settlement', 'actual_hp_as_nominal', 'fake_published_supplement',
                                   'future_supplement', 'reused_burst', 'stale_duplicate_bar', 'explicit_double_credit'])
@@ -1025,7 +1110,7 @@ def test_nonlethal_gate_accepts_the_shared_producers_ten_frozen_field_callback_r
     nested = module.pc_mechanism_evidence(events)['nested']
     assert nested['passed'] is True and len(nested['positive_witnesses']) == 1
     witness = nested['positive_witnesses'][0]
-    assert witness['ordering'] == 'parent_before_child' and witness['child_kind'] == 'elemental_burst'
+    assert witness['ordering'] == 'parent_before_child' and witness['child_kind'] == 'damage_settlement'
     child = next(event for event in events if event['sequence'] == witness['child_sequence'])
     assert child['source'] is None and child['hp_after'] > 0 and child['killed'] is False
     # A valid HP parent certificate alone is not evidence of fresh bar coverage.
@@ -1418,3 +1503,84 @@ def test_generic_native_f32_rejects_unknown_reader_profiles_without_guessing(pro
     events, publications = f32_model_window()
     with pytest.raises(ValueError, match='unknown native f32 reader profile'):
         module.check_native_f32_counters(events, publications, reader_profile=profile)
+
+
+@pytest.mark.parametrize('profile', ['native_pc', 'android'])
+def test_single_certificate_f32_uses_native_modifier_observation_and_preserves_raw(profile):
+    from copy import deepcopy
+    events, publications = f32_model_window()
+    for event in events:
+        observed = event['amount']
+        event.update(kind='damage_settlement', amount=0, nominal_amount=400,
+            proof={'settlement_wire_version': 2, 'native_modifier_observation': {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': observed}})
+    frozen = deepcopy(events)
+    result = module.check_native_f32_counters(events, publications, reader_profile=profile)
+    assert result['exact'] and result['applied_event_count'] == 2
+    assert events == frozen
+    observations = list(module.native_counter_observations(events))
+    assert observations[0][0] is events[0]
+    assert observations[0][2] == .1
+
+
+@pytest.mark.parametrize('fault', ['absent', 'amount_absent', 'nan', 'negative', 'wrong_method', 'wrong_version', 'extra'])
+def test_single_certificate_f32_refuses_missing_or_malformed_native_modifier_observation(fault):
+    events, publications = f32_model_window()
+    for event in events:
+        event.update(kind='damage_settlement', nominal_amount=event['amount'],
+            proof={'settlement_wire_version': 2, 'native_modifier_observation': {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': event['amount']}})
+    witness = events[0]['proof']['native_modifier_observation']
+    if fault == 'absent':
+        events[0]['proof'].pop('native_modifier_observation')
+    elif fault == 'amount_absent':
+        witness.pop('amount')
+    elif fault in ('nan', 'negative'):
+        witness['amount'] = float('nan') if fault == 'nan' else -1
+    elif fault == 'wrong_method':
+        witness['method'] = 'Entity.OnAfterOutputDamage'
+    elif fault == 'wrong_version':
+        witness['version'] = True
+    else:
+        witness['guessed'] = True
+    with pytest.raises(ValueError, match='modifier observation|observation amount'):
+        module.check_native_f32_counters(events, publications)
+
+
+def test_single_certificate_full_shield_keeps_zero_native_observation_distinct_from_nominal():
+    events, publications = f32_model_window()
+    for index, event in enumerate(events):
+        amount = 0 if index == 0 else 10
+        event.update(kind='damage_settlement', amount=0, nominal_amount=40,
+            shield_absorbed=40, proof={'settlement_wire_version': 2, 'native_modifier_observation': {
+                'version': 1, 'method': 'Entity.ApplyModifier', 'amount': amount}})
+    publications[1]['native_rows'][0].update(physical=0, damage=0)
+    publications[2]['native_rows'][0].update(physical=10, damage=10)
+    result = module.check_native_f32_counters(events, publications)
+    assert result['applied_event_count'] == 2 and result['changed_typed_update_count'] == 1
+    assert result['final_typed_values']['char_a']['physical'] == 10
+
+
+def test_dual_wire_f32_prefers_legacy_counter_record_without_double_counting_certificate():
+    events, publications = f32_model_window()
+    certificate = dict(events[0], kind='damage_settlement', sequence=2,
+                       amount=99, nominal_amount=99, proof={})
+    events[1].update(sequence=3, frame=3, game_time=3)
+    events.insert(1, certificate)
+    publications[-1].update(frame=3, game_time=3, event_watermark={'sequence': 3})
+    result = module.check_native_f32_counters(events, publications)
+    assert result['applied_event_count'] == 2 and result['final_sequence'] == 3
+
+
+def test_f32_mixed_v2_enemy_certificate_and_outside_legacy_observation_keep_distinct_counter_events():
+    events, publications = f32_model_window()
+    events[0].update(kind='damage_settlement', amount=0, nominal_amount=40,
+        proof={'settlement_wire_version': 2, 'native_modifier_observation': {
+            'version': 1, 'method': 'Entity.ApplyModifier', 'amount': .1}})
+    events[1].update(damage_type=2, target='trap_outside')
+    publications[-1]['native_rows'][0].update(physical=publications[1]['native_rows'][0]['physical'],
+        arts=module.struct.unpack('<f', module.struct.pack('<f', .2))[0])
+    row = publications[-1]['native_rows'][0]
+    row['damage'] = row['physical'] + row['arts']
+    result = module.check_native_f32_counters(events, publications)
+    assert result['exact'] and result['applied_event_count'] == 2
+    assert result['final_typed_values']['char_a']['physical'] == row['physical']
+    assert result['final_typed_values']['char_a']['arts'] == row['arts']

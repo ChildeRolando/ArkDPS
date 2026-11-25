@@ -81,7 +81,7 @@ def test_shared_entry_attaches_before_locating_and_publishes_core_result():
     assert ('observer_ready', {'remote': 'remote', 'coalesce_enemy_hp': False,
                                'trace_hp_context': False}) in records
     current.locate()
-    assert calls == ['transport', 'attach', 'locate']
+    assert calls == ['transport', 'attach', 'lifecycle']
     current.read()
     current.observer.sequence = current.observer.epoch = 1
     current.observer.events = [event(1)]
@@ -152,7 +152,7 @@ def test_default_entry_observes_after_certification_before_locating():
     try:
         current.connect()
         current.locate()
-        assert calls == ['transport', 'attach', 'locate']
+        assert calls == ['transport', 'attach', 'lifecycle']
         assert current.observer.remote == '127.0.0.1:27043'
         assert current.read()['event_status'] == 'recording'
     finally:
@@ -286,7 +286,7 @@ def test_automatic_server_preparation_failure_preserves_snapshots_and_reason():
         current.connect()
         current.locate()
         sample = current.read()
-        assert calls == ['transport', 'locate']
+        assert calls == ['transport', 'lifecycle']
         assert current.observer is None and sample['event_status'] == 'failed'
         assert sample['event_error'] == detail
         assert sample['statistics']['rows']['char_a']['damage'] == 100
@@ -379,7 +379,7 @@ def test_observer_start_failure_preserves_native_snapshots(failure, cleanup_fail
         assert row['damage'] == 120 and row['healing'] == 0
         assert row['shield_absorbed'] is None and row['active_damage'] is None
         assert sample['event_watermark'] is None
-        assert calls == ['transport', 'attach', 'detach', 'locate']
+        assert calls == ['transport', 'attach', 'detach', 'lifecycle']
         assert ('observer_error', {'reason': str(failure), 'error_type': type(failure).__name__}) in audit
         assert any(kind == 'observer_cleanup_error' for kind, _ in audit) == cleanup_fails
     finally:
@@ -530,8 +530,7 @@ def test_final_watermark_clips_intervals_without_creating_a_gap(monkeypatch):
     current.observer.sequence = current.observer.epoch = 1
     current.observer.events = [event(1)]
     collector.frame, collector.game_time, collector.damage = 2, 1, 120
-    original = collector.read
-    monkeypatch.setattr(collector, 'read', lambda: dict(original(), state=3))
+    collector.state = 3
     sample = current.read()
     row = sample['statistics']['rows']['char_a']
     assert sample['event_status'] == 'finished'
@@ -549,8 +548,7 @@ def test_late_settlement_publishes_matching_native_and_statistics_revision(monke
     current.read()
     collector.frame, collector.game_time = 2964, 98.8
     collector.damage = 28985.8828125
-    original = collector.read
-    monkeypatch.setattr(collector, 'read', lambda: dict(original(), state=3))
+    collector.state = 3
     initial = current.read()
     assert initial['statistics']['rows']['char_a']['damage'] == initial['rows'][0]['damage']
     collector.damage = 31899.103515625
@@ -563,7 +561,8 @@ def test_late_settlement_publishes_matching_native_and_statistics_revision(monke
     assert revised['statistics']['rows']['char_a']['recent_damage'] is None
     assert current.read()['snapshot_revision'] == revised['snapshot_revision']
     collector.session = 'new battle'
-    with pytest.raises(BattleChanged):
+    with pytest.raises(CaptureRetry, match='lifecycle: end/finished'):
         current.read()
+    assert current.runtime.sessions.state == 'ended'
     assert current.capture.adapter.result()['rows']['char_a']['damage'] == 31899.103515625
     current.close()

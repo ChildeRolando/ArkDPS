@@ -176,8 +176,9 @@ def test_actual_source_markers_and_quality_cross_the_consumer_without_repairs(pr
         assert methods.count('Character.OnSkillCastSucceed') == 2
         assert methods.count('Character.OnSkillFinish') == 1
         assert [event['skill_wait_for_end'] for event in events if event['proof']['method'] == 'BasicSkill.OnCastFinish'] == [True, True]
-        assert len([event for event in events if event['kind'] == 'damage']) == 2
-        assert all(event['frame'] < 3765 for event in events if event['kind'] == 'damage')
+        assert not any(event['kind'] in ('damage', 'hp_damage', 'elemental_burst') for event in events)
+        assert len([event for event in events if event['kind'] == 'damage_settlement']) == 2
+        assert all(event['frame'] < 3765 for event in events if event['kind'] == 'damage_settlement')
         assert last['batch']['mitigation_ready'] is True
         assert last['batch']['mitigation_unknown'] is False
         assert last['batch']['enemy_damage_unknown'] is False

@@ -29,12 +29,16 @@
 
 ## 发布
 
+- [rc.42 重构版发布说明](release-rc42.md) — 共用采集与统计链路收敛、小局交接、历史兼容及测13手动迁移说明。
 - [rc.14 发布说明与实机覆盖](release-rc14.md) — PC/MuMu 整合、始终管理员启动、一次迁移与实机验证边界。
 - [Windows WPF 便携包构建与发布验收](windows-release.md) — 当前唯一分发入口：构建、验收、CI 与许可边界。
 - [旧 ARK-14 Tk 候选归档](archive/legacy-tk/windows-release-ark14.md) — 已封存的 PyInstaller/Tk 候选记录，只作历史追溯。
 - [变更日志](../CHANGELOG.md) — 候选版本的变化与交付状态。
 
 ## 实现契约
+
+- [从采集钩子到展示的重构规划](collection-refactor-plan.md) — 基于测12源码冻结的并行实现清单、状态机、唯一归属与删除次序。
+- [采集链重构实施记录](collection-refactor-implementation.md) — D01–D26 的代码收敛、阶段回归、私测交付与仍未完成的实机性能验收。
 
 - [WPF 桌面运行时与同包分发](desktop-runtime.md) — C#/Python 所有权、唯一 stdio v1 协议、运行时与可选依赖打包、离线验收边界。
 
