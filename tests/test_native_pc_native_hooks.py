@@ -2,6 +2,8 @@
 from hashlib import sha256
 import json
 from pathlib import Path
+import subprocess
+from threading import Lock
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,52 @@ from native_pc import event_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_native_quiet_mark_checks_real_adapter_and_invalid_fences():
+    completed = subprocess.run(
+        ['node', str(ROOT / 'tests/native_pc_autochess_quiet_boundary_fixture.js')],
+        cwd=ROOT, capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
+    assert completed.stdout.strip() == 'PASS_OWNED_QUIET_BOUNDARY'
+
+
+def test_only_ordinary_native_mark_opts_into_the_versioned_boundary(monkeypatch):
+    probe = module.NativeHookEventProbe(collector())
+    requests = []
+
+    def raw_request(operation, **arguments):
+        requests.append((operation, arguments))
+        return {'native_quiet_boundary_version': 1, 'native_deferred_callbacks': 2}
+
+    monkeypatch.setattr(probe, '_raw_request', raw_request)
+    monkeypatch.setattr(probe.binding, 'bind', lambda operation, response: response)
+    monkeypatch.setattr(probe.binding, 'bind_terminal_mark', lambda response: response)
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)))
+    probe.mark()
+    probe.read_terminal_mark()
+    assert requests == [('mark', {'timeout': None, 'native_quiet_boundary_version': 1}),
+                        ('mark', {'timeout': probe.terminal_mark_timeout})]
+    kind, timing = records[0]
+    assert kind == 'native_hook_request_timing'
+    assert timing['native_quiet_boundary_version'] == 1 and timing['native_deferred_callbacks'] == 2
+
+
+@pytest.mark.parametrize('response', [b'\xff\n', b'{private invalid JSON}\n', b'{"id":1,"id":1}\n'])
+def test_invalid_response_is_first_transport_failure_without_reusing_pipe(response):
+    pipe = module.NativePipe.__new__(module.NativePipe)
+    pipe._lock, pipe._id, pipe._poisoned = Lock(), 0, False
+    pipe.handle, pipe._buffer = 1, bytearray(response)
+    pipe._io = lambda operation, buffer, size, deadline: size
+    probe = module.NativeHookEventProbe(collector())
+    probe._pipe, probe.status = pipe, ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError, match='native observer returned invalid JSON'):
+        probe.mark()
+    assert pipe._poisoned and probe.status == ObserverStatus.FAILED
+    assert records[0][0] == 'native_hook_request_failed'
+    assert records[0][1]['error_type'] == 'RuntimeError'
 
 
 @pytest.mark.parametrize('response,expected', [
@@ -42,6 +90,55 @@ def collector(*, build=module.BUILD_ID, initialized=True):
     return SimpleNamespace(process=process, diagnostics=SimpleNamespace(
         connection_ok=True, version_status=VersionStatus.COMPATIBLE, version_actual=build),
         observer_binding=lambda **_: dict(native_session='bound-session', source_build=build))
+
+
+@pytest.mark.parametrize('sink_fails', [False, True])
+def test_first_pipe_failure_is_recorded_without_debug_and_rethrows_original(sink_fails):
+    probe = module.NativeHookEventProbe(collector())
+    failure = OSError(233, 'private pipe details')
+    calls, records = [], []
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise failure
+
+    def sink(kind, data):
+        records.append((kind, data))
+        if sink_fails:
+            raise OSError('log unavailable')
+
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    probe.set_request_timing_audit(sink, enabled=lambda: False)
+    with pytest.raises(OSError) as caught:
+        probe.mark()
+    assert caught.value is failure
+    assert probe.status == ObserverStatus.FAILED
+    assert records == [('native_hook_request_failed', dict(op='mark', error_type='OSError', win32_error=233,
+                                                          utc=records[0][1]['utc']))]
+    with pytest.raises(RuntimeError, match='private pipe details'):
+        probe.mark()
+    assert len(calls) == len(records) == 1
+
+
+def test_oversized_response_logs_bounded_evidence_before_later_cleanup():
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('response_too_large; bytes=11008924; limit=8388608; requested_event_count=20000')
+    records = []
+
+    def request(*args, **kwargs):
+        raise failure
+
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.read_through(20000)
+    assert caught.value is failure
+    assert records == [('native_hook_request_failed', dict(
+        op='read', error_type='RuntimeError', win32_error=None, code='response_too_large',
+        response_bytes=11008924, response_limit=8388608, requested_event_count=20000,
+        utc=records[0][1]['utc']))]
 
 
 class Loader:
@@ -156,7 +253,8 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert config['token'] not in json.dumps(probe.probe_modes)
     assert probe.mark()['native_session'] == 'bound-session'
     assert probe.mark()['source_build'] == source_build
-    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False))
+    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False,
+                                             native_quiet_boundary_version=1))
     probe.stop()
     assert loaders[0].closed and pipes[0].closed
     assert probe.hook_disable_confirmed
@@ -775,7 +873,8 @@ def test_prepared_ui_preference_uses_initial_then_dynamic_mark_without_rewriting
     assert len(loaders) == 1 and loaders[0].config['source'] == source
     selected[0] = not enabled
     result = probe.mark()
-    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=not enabled))
+    assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=not enabled,
+                                             native_quiet_boundary_version=1))
     assert result['native_autochess_context']['collection_mode'] == 'all'
     assert not any(operation in ('read', 'ack') for operation, _ in pipes[0].calls)
     probe.stop()

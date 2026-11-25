@@ -128,11 +128,13 @@ internal static class Program
         HudStatusNoticeTests.Run();
         ScreenshotCategoryTests.Run();
         HistorySourceLabelTests.Run();
+        MetricCoverageTests.Run();
         MultiplayerViewTests.Run();
         MultiplayerSettingsTests.Run();
         NativePcReadinessTests.Run();
         NativeBackendSettingsTests.Run();
         SamplingRejectionTests.Run();
+        GameFpsSidebarTests.Run();
         RefreshBudgetTests.Run();
         DesktopLogTests.Run();
         using var recovery = JsonDocument.Parse("""

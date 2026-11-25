@@ -6,6 +6,7 @@ Python alone owns collection, ADB, metrics and archives. No Tk imports.
 from __future__ import annotations
 import argparse
 import base64
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
@@ -28,14 +29,14 @@ from battle_lifecycle import (BattleRuntime, MappingRetry, NATIVE_PC_AUTOCHESS_S
 from battle_share import (AUTOCHESS_SNAPSHOT_NOTE, json_bytes, record_display, record_statistics,
                          write_export)
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
-from collector import BattleChanged, NativeClockBusy, ProcessChanged, SnapshotGap, ROOT
+from collector import BattleChanged, NativeClockBusy, ProcessChanged, SampleUnavailable, SnapshotGap, ROOT
 from connection import (PC_EVENT_BACKENDS, ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
                         DetectionStatus, detect_instances, native_event_feed_path, resolve_configured)
 from desktop_audit import (DesktopCaptureJournal, NATIVE_HOOK_STARTUP_EVENTS,
                             NATIVE_HOOK_STARTUP_OVERFLOW, sanitize_native_hook_startup)
 from event_capture import CaptureRetry
 from event_observer import ObserverReadRetry, ObserverStatus
-from event_probe import BarrierBusy, NATIVE_PC_CONTRACT
+from event_probe import BarrierBusy, CallbackBusyMark, NATIVE_PC_CONTRACT
 from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from log_context import LogContext
@@ -45,6 +46,7 @@ from panel_model import (Category, EventAvailability, PanelConfig, Ranking, Rate
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
                          settled_boss_damage_rates, team_status, format_compact)
 import stage_names
+from snapshot_adapter import FrameMismatch
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE = 32 * 1024 * 1024
@@ -53,6 +55,8 @@ BRIDGE_EVENT_LIMIT = 32
 BRIDGE_EVENT_BUDGET = .025
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
+CAPTURE_STALE_SECONDS = 2.
+CAPTURE_STALE_REPORT_PERIOD = 30.
 NATIVE_BUSY_ATTEMPTS = 3
 NATIVE_BUSY_BUDGET = .04
 NATIVE_BUSY_REST = .005
@@ -103,7 +107,9 @@ def _native_clock_busy(error):
             return False
         if not isinstance(error, (CaptureRetry, ObserverReadRetry, BarrierBusy, NativeClockBusy)):
             return False
-        leaf_busy = isinstance(error, (BarrierBusy, NativeClockBusy))
+        # A native mark with active callbacks is a typed fence rejection.
+        # Generic ObserverReadRetry still has no such acquisition proof.
+        leaf_busy = isinstance(error, (BarrierBusy, CallbackBusyMark, NativeClockBusy))
         error = error.__cause__
     return leaf_busy and error is None
 
@@ -144,6 +150,28 @@ def _defense_has_settlement(sample):
                 if (type(lane.get(hits)) is int and lane[hits] > 0
                         and type(value) in (int, float) and math.isfinite(value) and value >= 0):
                     return True
+    local = _native_local_player(sample)
+    if local is not None:
+        uid, statistics = local['player_uid'], local['statistics']
+        if (statistics.get('session') != f"{payload['scope']}:{uid}"
+                or statistics.get('game_time') != sample.get('game_time')):
+            return False
+        rows = statistics.get('rows')
+        if not isinstance(rows, dict):
+            return False
+        for actor in local.get('actor_ledgers') or ():
+            owner, actor_uid, cid = actor.get('owner_id'), actor.get('actor_uid'), actor.get('cid')
+            if (actor.get('player_uid') != uid or type(actor_uid) is not int or not 0 < actor_uid <= 0xffffffff
+                    or not isinstance(cid, str) or not cid or owner != f'{uid}:{cid}#{actor_uid}'):
+                continue
+            row = rows.get(owner)
+            if (not isinstance(row, dict) or row.get('id') != owner or row.get('cid') != cid
+                    or type(row.get('unique_id')) is not int or row['unique_id'] != actor_uid
+                    or row.get('player_uid') != uid):
+                continue
+            value = row.get('observed_healing_total', row.get('observed_healing'))
+            if type(value) in (int, float) and math.isfinite(value) and value > 0:
+                return True
     return False
 
 
@@ -279,6 +307,16 @@ def empty_text(config, source, complete, view):
         return '暂无首领伤害（已知为零）'
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
+    if view.get('observed_healing_only'):
+        if (config.ranking is Ranking.RECENT or
+                config.ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S):
+            observed = view.get('footer_rate' if config.ranking is Ranking.DPS else 'footer_total')
+            if observed is None:
+                return '近 5 秒治疗尚无可靠观察窗口'
+            if observed == 0:
+                return '当前观察窗口内暂无治疗'
+        if config.ranking is Ranking.TOTAL:
+            return '暂无已观察到的治疗'
     if config.ranking is Ranking.DPS:
         # A known cumulative counter cannot certify a missing rate denominator
         # or event stream. Recent/full-cycle rates do not require events.
@@ -350,6 +388,9 @@ class DesktopState:
         self.error = ''
         self.connection_text = '等待定位本局'
         self.diagnostic = None
+        self.game_fps_monitor = None
+        self.game_fps_journal = None
+        self.game_fps_log_error = ''
         self.event_status = self.event_error = self.lifecycle = None
         self.observer_status = self.observer_error = None
         self.native_pc_bootstrap = None
@@ -359,6 +400,50 @@ class DesktopState:
         self.scanning = False
         self.history_notice = ''
         self.refresh_history()
+
+    def start_game_fps(self):
+        """Independent render observation must survive a blocked battle reader."""
+        if self.game_fps_monitor is not None:
+            return
+        from game_fps import GameFpsMonitor
+        context = LogContext(self.directory)
+
+        def warn(message):
+            self.game_fps_log_error = message
+            _write_diagnostic_event('game-fps', {'code': 'log_write_failed', 'message': message})
+
+        journal = DesktopCaptureJournal(self.directory / 'performance' / 'fps',
+            encoder=str, warn=warn, segment_bytes=4 * 1024 ** 2, total_bytes=32 * 1024 ** 2,
+            header=lambda _source, **_kwargs: context.header('game_fps', debug_mode=False),
+            debug_mode=True)
+        journal.__enter__()
+        self.game_fps_journal = journal
+
+        def emit(sample):
+            journal.write('game_fps', sample)
+            if not journal.retry_at:
+                self.game_fps_log_error = ''
+
+        self.game_fps_monitor = GameFpsMonitor(emit=emit)
+
+    def close_game_fps(self):
+        # Retain ownership when stop fails so final cleanup can retry. The
+        # journal cannot be closed while the observer can still publish to it.
+        if self.game_fps_monitor is not None:
+            self.game_fps_monitor.close()
+            self.game_fps_monitor = None
+        if self.game_fps_journal is not None:
+            self.game_fps_journal.__exit__(None, None, None)
+            self.game_fps_journal = None
+
+    def game_fps_snapshot(self):
+        if self.game_fps_monitor is None:
+            return dict(status='unavailable', source=None, fps=None, error_code='not_running')
+        self.game_fps_monitor.configure(self.effective_connection.to_dict(), self.diagnostic)
+        result = self.game_fps_monitor.snapshot()
+        if self.game_fps_log_error:
+            result['log_error'] = self.game_fps_log_error
+        return result
 
     def refresh_history(self):
         result = self.history.list_recent()
@@ -427,14 +512,15 @@ class DesktopState:
             self._set_autochess_scene(value)
         elif kind == 'sample':
             scene = autochess_scene(value) if self._autochess_scene_announced else None
-            if scene != self._autochess_scene and value.get('native_counter_scope') != NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
+            character_counters = value.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+            if scene != self._autochess_scene and not character_counters:
                 # A late terminal DTO may finish the cached defense. It cannot
                 # take over the live assist or reset the current presentation.
                 self._remember_defense(value, scene, late=True)
                 return
             self.sampling_rejection = None
             self._waiting_for_connection_sample = False
-            if self.last is not None and observation_age(self.last) > 2:
+            if self.last is not None and observation_age(self.last) > CAPTURE_STALE_SECONDS:
                 self.analysis_interrupted = True
             self.error = ''
             frame = (value.get('session'), value.get('frame'))
@@ -442,7 +528,8 @@ class DesktopState:
                 self.last_progress = time.monotonic()
                 self.last_frame = frame
             self.last = value
-            self._sample_scene = scene
+            # Newly read unscoped counters remain displayable until the next scene announcement.
+            self._sample_scene = self._autochess_scene if character_counters and scene is None else scene
             self.event_status, self.event_error = value.get('event_status'), value.get('event_error')
             self.update_live_analysis(value)
             self._remember_defense(value, scene)
@@ -571,51 +658,44 @@ class DesktopState:
         if not current and not (same_scope and sample.get('state') == 3):
             return
         if old is not None and _defense_has_settlement(old) and not _defense_has_settlement(sample):
-            # The next native phase can precede its actual combat. Retain the
-            # useful prior result through empty baselines, including reconnects.
+            # Preparation can still show the last defense with observed output.
             return
-        # The worker transfers an owned DTO. Retain only the presentation
-        # fields, since the shared world statistics can contain a large journal.
-        self._defense_sample = {key: sample[key] for key in (
+        # Keep the review data independent of the live sample, excluding the
+        # shared world statistics journal.
+        self._defense_sample = deepcopy({key: sample[key] for key in (
             'native_counter_scope', 'multiplayer', 'battle_id', 'session', 'game_time',
             'battle_metadata', 'event_status', 'event_error', 'frame', 'state', 'enemy'
-        ) if key in sample}
+        ) if key in sample})
         if not late:
-            self._defense_analysis = (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis)
+            self._defense_analysis = deepcopy(
+                (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis))
         else:
             self._defense_analysis = (None, None, None)
 
     def _presented_battle(self):
         sample = self.last or {}
         analysis = (self.live_analysis, self.boss_live_analysis, self.boss_effective_live_analysis)
-        if sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS:
-            return sample, None, analysis, None
         scene, defense = self._autochess_scene, self._defense_sample
+        if (sample.get('native_counter_scope') == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
+                and self._sample_scene == scene):
+            return sample, None, analysis, None
         if scene is None:
             multiplayer = _preparing_multiplayer() if self.lifecycle == 'preparing' else sample.get('multiplayer')
             return sample, multiplayer, analysis, None
-        if scene.phase in (5, 6):
+        if scene.phase in (4, 5, 6):
             multiplayer = sample.get('multiplayer') or {}
-            kind = 'assist' if scene.phase == 5 else 'boss'
+            kind = {4: 'defense', 5: 'assist', 6: 'boss'}[scene.phase]
             if (self._sample_scene == scene and multiplayer.get('scope') == scene.scope
                     and multiplayer.get('scope_kind') == kind and multiplayer.get('available') is True):
                 return sample, multiplayer, analysis, None
+            if scene.phase == 4:
+                return {}, None, (None,) * 3, '等待本轮防御数据'
             label = '当前协防战场' if scene.phase == 5 else '当前首领战场'
             return dict(statistics=dict(rows={}, display_scope_label=label)), None, (None,) * 3, label + ' · 等待数据'
         if defense is not None:
             multiplayer = defense['multiplayer']
-            if (scene.phase == 4 and scene.scope == multiplayer['scope']
-                    and self._sample_scene == scene and sample.get('frame') == defense.get('frame')
-                    and sample.get('multiplayer') is multiplayer
-                    and sample.get('event_status') in ('recording', 'finished')
-                    and defense.get('state') != 3 and self.lifecycle not in ('preparing', 'ended', 'finalizing')):
-                return defense, multiplayer, self._defense_analysis, None
             note = f"上一场防御 · 第 {multiplayer['native_round']} 回合"
-            waiting = scene.phase == 4 and scene.scope != multiplayer['scope']
-            return (defense, dict(multiplayer, previous_defense=True, note=note),
-                    self._defense_analysis, ('等待本轮防御数据 · ' if waiting else '') + note)
-        if scene.phase == 4:
-            return {}, None, (None,) * 3, '等待本轮防御数据'
+            return defense, dict(multiplayer, previous_defense=True, note=note), self._defense_analysis, note
         return {}, _preparing_multiplayer(), (None,) * 3, None
 
     def update_live_analysis(self, sample):
@@ -753,7 +833,7 @@ class DesktopState:
             label = self._sampling_rejection_label()
             if self.last:
                 label += ' · 保留最后有效记录'
-                if observation_age(self.last) > 2:
+                if observation_age(self.last) > CAPTURE_STALE_SECONDS:
                     return 'stale', '数据已过期 · ' + label
             return 'sampling_rejected', label
         if self._waiting_for_connection_sample:
@@ -765,7 +845,7 @@ class DesktopState:
             return 'waiting', '等待战斗数据'
         if self.lifecycle in ('ended', 'finalizing', 'frozen'):
             return self.lifecycle, {'ended': '战斗结束', 'finalizing': '等待结算确认', 'frozen': '战局冻结'}[self.lifecycle]
-        if observation_age(self.last) > 2:
+        if observation_age(self.last) > CAPTURE_STALE_SECONDS:
             return 'stale', '数据已过期 · 等待下一次可靠采样 · 保留最后有效记录'
         if time.monotonic() - self.last_progress > .8:
             return 'paused', '暂停 / 等待战斗推进'
@@ -786,6 +866,9 @@ class DesktopState:
             scope_label = statistics.get('display_scope_label') or '当前玩家'
             reason = f'原生累计未知，以下仅含{scope_label}的已观察结算'
             note = '已观察结算口径；未覆盖区间保持未知'
+            if config.category is Category.HEALING:
+                reason = f'仅统计{scope_label}已观察到的治疗'
+                note = '仅统计归属已确认的治疗事件'
         if config.boss_scope:
             reason = statistics['boss_damage_reason'] or reason
             complete = complete and statistics['boss_damage_available']
@@ -963,10 +1046,15 @@ class DesktopState:
         counter_scope = sample.get('native_counter_scope')
         character_counters = counter_scope == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
         scene = None if character_counters else self._autochess_scene
-        active = desired
-        if scene is not None and scene.phase in (4, 5, 6, 7, 8) and scene.collection_mode in ('all', 'local'):
-            active = scene.collection_mode == 'all'
-        active = supported and active
+        detail_mode = None
+        if scene is not None and scene.phase in (4, 6):
+            detail_mode = scene.collection_mode
+        elif (scene is not None and scene.phase in (7, 8)
+              and (multiplayer or {}).get('previous_defense') is True):
+            detail_mode = multiplayer.get('collection_mode')
+        # Assist acquires its whole verified battlefield even when the
+        # separate teammate detail is disabled in settings.
+        active = supported and (detail_mode == 'all' if detail_mode in ('all', 'local') else desired)
         scope_unverified = (supported and scene is None and counter_scope != 'events_only'
                             and 'AUTOCHESS' in str((sample.get('battle_metadata') or {}).get('stage_id', '')).upper())
         local_player = _native_display_source(sample)
@@ -1006,6 +1094,7 @@ class DesktopState:
                     status=status, status_text=label, error=self.error,
                     battle_waiting=self.battle_waiting,
                     connection_text=self.connection_text, diagnostic=self.diagnostic,
+                    game_fps=self.game_fps_snapshot(),
                     observer_status=self.observer_status, event_status=self.event_status,
                     native_pc_bootstrap=self.native_pc_bootstrap,
                     sampling_rejection=self.sampling_rejection,
@@ -1156,6 +1245,97 @@ class DesktopState:
         else:
             raise ValueError('未知命令：' + str(op))
         return None
+
+
+def _capture_retry_code(error, observation_kind, observation_reason):
+    if observation_kind == 'scope_unavailable' and observation_reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED:
+        return 'autochess_scope_unverified'
+    if isinstance(error, MappingRetry):
+        return 'mapping_unavailable'
+    code = ('lifecycle_transition' if observation_kind in ('waiting', 'preparing', 'terminal', 'end', 'gap')
+            else 'capture_retry')
+    # A busy wrapper can conceal a deeper read or transport failure.
+    for _ in range(16):
+        if error.__cause__ is None:
+            break
+        error = error.__cause__
+    else:
+        return code
+    if isinstance(error, CallbackBusyMark):
+        return 'callback_busy'
+    if isinstance(error, NativeClockBusy):
+        return 'native_clock_busy'
+    if isinstance(error, BarrierBusy):
+        return 'event_barrier_busy'
+    if isinstance(error, (SnapshotGap, FrameMismatch, OSError)):
+        return 'read_failed'
+    if isinstance(error, ObserverReadRetry):
+        return 'observer_retry'
+    if isinstance(error, SampleUnavailable):
+        return 'sample_unavailable'
+    return code
+
+
+class _CaptureHealth:
+    """Report gaps in the worker's accepted acquisition clock."""
+
+    def __init__(self, emit):
+        self.emit = emit
+        self.reset()
+
+    def reset(self):
+        self.generation = None
+        self.captured = None
+        self._clear_episode()
+
+    def _clear_episode(self):
+        self.gap_since = self.last_notice = self.reason = None
+        self.retries = 0
+
+    def observe(self, *, now, started, generation, active, captured=None, code=None):
+        if not active:
+            self.reset()
+            return
+        if generation != self.generation:
+            self.reset()
+            self.generation = generation
+        if code is not None and self.captured is not None:
+            self.reason = code
+            self.retries += 1
+        if type(captured) not in (int, float) or not math.isfinite(captured):
+            captured = None
+        previous = self.captured
+        # One slow successful read can leave a visible gap between samples.
+        oldest = min(previous, captured) if previous is not None and captured is not None else (
+            previous if previous is not None else captured)
+        if oldest is None:
+            return
+        if now - oldest > CAPTURE_STALE_SECONDS:
+            if self.gap_since is None:
+                self.gap_since = oldest
+                if self.reason is None:
+                    self.reason = ('publication_delay' if captured is not None and now - captured > CAPTURE_STALE_SECONDS
+                                   else 'sample_gap')
+            if self.last_notice is None or now - self.last_notice >= CAPTURE_STALE_REPORT_PERIOD:
+                self._report('stale' if self.last_notice is None else 'still_stale', now, oldest, started)
+                self.last_notice = now
+        if captured is not None:
+            self.captured = captured
+            if now - captured <= CAPTURE_STALE_SECONDS:
+                if self.gap_since is not None:
+                    self._report('recovered', now, captured, started)
+                self._clear_episode()
+
+    def _report(self, phase, now, captured, started):
+        values = dict(phase=phase, code=self.reason, age_ms=round(max(0, now - captured) * 1000),
+                      attempt_ms=round(max(0, now - started) * 1000), retry_count=self.retries,
+                      generation=self.generation)
+        if phase == 'recovered':
+            values['gap_ms'] = round((now - self.gap_since) * 1000)
+        try:
+            self.emit(values)
+        except Exception:
+            pass  # Health diagnostics cannot invalidate a sample or change retry behavior.
 
 
 class CollectionWorker:
@@ -1463,6 +1643,28 @@ class CollectionWorker:
                                     last_transient_transition[transition] = now
                             last_lifecycle = value.kind
                     journal.write(kind, value)
+
+                pending_capture_health = []
+
+                def enqueue_capture_health(value):
+                    backend = 'disabled'
+                    if current_enabled:
+                        backend = 'frida'
+                        if current_config.platform == 'native_pc':
+                            backend = ('cooperative' if current_config.native_pc_event_feed else
+                                       current_config.native_pc_event_backend)
+                    pending_capture_health.append(dict(value, platform=current_config.platform,
+                        event_backend=backend, observer_status=observer_state[0], lifecycle=sessions.state))
+
+                def flush_capture_health():
+                    for value in pending_capture_health:
+                        try:
+                            audit('capture_health', value)
+                        except Exception:
+                            pass  # Health diagnostics cannot stop collection or shutdown.
+                    pending_capture_health.clear()
+
+                capture_health = _CaptureHealth(enqueue_capture_health)
                 self._bootstrap_audit = audit
                 regeneration = None
                 try:
@@ -1535,6 +1737,7 @@ class CollectionWorker:
                             endpoint_bound = False
                             retries = 0
                             last_retry_audit = float('-inf')
+                            capture_health.reset()
                             last_live_frame = None
                             last_battle_waiting = None
                             session_bootstrap_generation = None
@@ -1700,6 +1903,7 @@ class CollectionWorker:
                             sampling_observation = None
                             try:
                                 sample = self.session.read()
+                                finished = time.monotonic()
                                 publish_autochess_scene(runtime)
                                 self.events.put(('lifecycle', runtime.sessions.state))
                                 if sample:
@@ -1710,7 +1914,12 @@ class CollectionWorker:
                                         if frame != last_live_frame:
                                             next_live_read = started + COLLECTION_PERIOD
                                         last_live_frame = frame
+                                capture_health.observe(now=finished, started=started,
+                                    generation=sessions.generation,
+                                    active=current_revision == self._request_revision and sessions.state == 'playing',
+                                    captured=sample.get('captured_monotonic') if sample else None)
                             except CaptureRetry as exc:
+                                finished = time.monotonic()
                                 publish_autochess_scene(runtime)
                                 lifecycle = runtime.sessions.state
                                 self.events.put(('lifecycle', lifecycle))
@@ -1747,6 +1956,12 @@ class CollectionWorker:
                                     # _read_lifecycle reports successfully consumed non-sample
                                     # observations as retries. A gap or an old state is not proof.
                                     publish_sampling_rejection(None)
+                                code = _capture_retry_code(exc, observed_kind if current_observation else None,
+                                                           observed_reason if current_observation else None)
+                                active = (current_revision == self._request_revision and (lifecycle == 'playing' or
+                                          code in ('mapping_unavailable', 'autochess_scope_unverified')))
+                                capture_health.observe(now=finished, started=started,
+                                    generation=sessions.generation, active=active, code=code)
                                 if lifecycle == 'playing' or isinstance(exc, MappingRetry):
                                     retries += 1
                                     now = time.monotonic()
@@ -1762,6 +1977,7 @@ class CollectionWorker:
                                         retries = 0
                                         last_retry_audit = now
                             except BattleChanged as exc:
+                                capture_health.reset()
                                 if isinstance(exc, ProcessChanged):
                                     publish_autochess_scene(runtime, exited=True)
                                 self.events.put(('error', str(exc)))
@@ -1769,6 +1985,7 @@ class CollectionWorker:
                                 self.last_connect_attempt = time.monotonic()
                                 self._retry_connection(current_revision)
                             except Exception as exc:
+                                capture_health.reset()
                                 audit('capture_error', {'error_type': type(exc).__name__,
                                       'reason': str(exc).partition('\n')[0][:200],
                                       'monotonic': time.monotonic()})
@@ -1823,6 +2040,8 @@ class CollectionWorker:
                         # Pace successful live reads start-to-start, with a short
                         # rest even if capture took longer than the whole period.
                         # Idle, paused and retry paths keep their existing backoff.
+                        if pending_capture_health and clock_retry_delay is None:
+                            flush_capture_health()  # Keep disk I/O out of a pending native burst.
                         delay = (clock_retry_delay if clock_retry_delay is not None else
                                  COLLECTION_PERIOD if next_live_read is None else
                                  max(COLLECTION_MIN_REST, next_live_read - time.monotonic()))
@@ -1830,6 +2049,7 @@ class CollectionWorker:
                 finally:
                     # Session shutdown writes final audit records; keep its sink open.
                     # A transient cleanup failure gets one retry before the sink closes.
+                    flush_capture_health()
                     if not self.release():
                         self.release()
                     if not self._close_pc_runtime():
@@ -1993,6 +2213,7 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                 require_history_saved = cmd.get('require_history_saved', False)
                 if type(require_history_saved) is not bool:
                     raise ValueError('require_history_saved 必须是布尔值')
+                state.close_game_fps()
                 if worker and require_history_saved:
                     worker.close(require_history_saved=True)
                 elif worker:
@@ -2180,17 +2401,24 @@ def main(*, native_pc_observer_factory=None):
         revision = worker.request(effective_config,
             False if args.no_events else (True if args.frida_remote is not None else state.layout.event_observation))
         state.expect_connection_request(effective_config, revision)
-        worker.thread.start()
     try:
+        if worker:
+            state.start_game_fps()
+            worker.thread.start()
         if args.internal_capture is not None:
             serve(sys.stdin, output, state, internal_capture=True)
         else:
             serve(sys.stdin, output, state, worker)
     finally:
-        if worker:
-            worker.close()
-        if instance:
-            instance.close()
+        try:
+            state.close_game_fps()
+        finally:
+            try:
+                if worker:
+                    worker.close()
+            finally:
+                if instance:
+                    instance.close()
 
 
 if __name__ == '__main__':

@@ -75,6 +75,44 @@ def test_available_empty_native_counter_rows_still_certify_fresh_initial_skill_s
     assert lane(result, 3)['observed_non_skill_damage'] == 100
 
 
+def test_initial_rejection_explains_carried_counters_without_certifying_missing_state():
+    meter = MultiplayerBattleStatistics()
+    baseline = consume(meter, 0, sequence=50, global_total=460823.96875,
+        global_heal=13942.337890625, native_snapshot_witnesses={
+            'actor_rows': {'status': 'available', 'reason': None}})
+    certificate = player(baseline, 3)['skill_initialization']
+    assert certificate['reason_codes'] == ['native_counters_not_zero_or_unavailable']
+    assert certificate['frame'] == certificate['game_time'] == 0
+    assert certificate['sequence'] == 50 and certificate['prefix_complete'] is True
+    result = consume(meter, 1, [hit(51, 3, 1, 100)])
+    observed = lane(result, 3)
+    assert observed['unverified_hits'] == 0 and observed['observed_damage'] == 100
+    assert observed['skill_initial_unknown_hits'] == observed['skill_unclassified_hits'] == 1
+    assert observed['skill_initial_unknown_reason_codes'] == certificate['reason_codes']
+    assert observed['skill_split_reason'] == '部分命中的采集起点技能状态未确认'
+    result['players'][2]['skill_initialization']['reason_codes'].clear()
+    assert player(meter.result(), 3)['skill_initialization'] == certificate
+
+
+def test_initial_rejection_separates_late_clock_counter_witness_and_prefix():
+    meter = MultiplayerBattleStatistics()
+    baseline = consume(meter, .2666664123535156, native_snapshot_witnesses={
+        'actor_rows': {'status': 'not_requested'}}, quality={
+            'baseline_discarded_skill_events_complete': False})
+    assert player(baseline, 3)['skill_initialization']['reason_codes'] == [
+        'native_actor_rows_unavailable', 'baseline_not_zero_tick', 'skill_prefix_incomplete']
+
+
+def test_initial_diagnostics_survive_future_recovery_but_never_reclassify_past_hits():
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 1, sequence=50)
+    consume(meter, 2, [hit(51, 3, 2, 20)])
+    observed = lane(consume(meter, 4, [activation(52, 3), hit(53, 3, 4, 30)]), 3)
+    assert observed['observed_damage'] == 50 and observed['observed_skill_damage'] == 30
+    assert observed['skill_initial_unknown_hits'] == observed['skill_unclassified_hits'] == 1
+    assert observed['skill_initial_unknown_reason_codes'] == ['baseline_not_zero_tick']
+
+
 @pytest.mark.parametrize('baseline_time,changes,peer_non_skill', [
     (2, {}, None),
     (0, {'global_total': 700000, 'global_heal': 20000, 'native_snapshot_witnesses': {
@@ -241,6 +279,22 @@ def test_missing_uid_prefix_is_diagnostic_without_guessing_all_same_cid_actors()
     result = consume(meter, 5, [hit(i + 1, i, i) for i in range(1, 5)])
     assert all(lane(result, i)['skill_split_complete'] is True for i in range(1, 5))
     assert result['reasons']
+
+
+@pytest.mark.parametrize('unmapped_uid,expected', [(999, 50), (None, None)])
+def test_unmapped_skill_end_does_not_poison_a_different_positive_data_uid(unmapped_uid, expected):
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0)
+    missing = dict(activation(2, 2), kind='skill_end', source_character_uid=unmapped_uid,
+                   proof={'method': 'Character.OnSkillFinish'})
+    result = consume(meter, 3, [activation(1, 1), missing, hit(3, 3, 3, 50)])
+    row = lane(result, 3)
+    assert row['observed_damage'] == 50
+    assert row['observed_skill_damage'] == expected
+    assert row['skill_initial_unknown_hits'] == 0
+    assert row['skill_unclassified_hits'] == (1 if expected is None else 0)
+    assert result['unknown_attribution'][0]['source_character_uid'] == unmapped_uid
+    assert result['unknown_attribution'][0]['kind'] == 'skill_end'
 
 
 def test_late_new_actor_without_a_verified_start_only_makes_its_own_skill_split_unknown():

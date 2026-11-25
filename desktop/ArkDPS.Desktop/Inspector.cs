@@ -167,7 +167,9 @@ public sealed class Inspector : Border
         AddStat(stats,overflow.Label,Percentage(overflow.Fraction));
         if(!bossScope)
         {
-            AddStat(stats,"治疗",row.UiInt("healing"));
+            bool observedHealing=detail.Bool("healing_is_observed");
+            AddStat(stats,observedHealing ? "已观察治疗" : "治疗",
+                observedHealing ? Number(detail.Get("healing")) : row.UiInt("healing"));
             bool partialShield=MetricCoverage.IsPartial(coverage,"shield");
             AddStat(stats,partialShield ? "已观察有效护盾" : "有效护盾",
                 partialShield ? Number(detail.Get("shield_absorbed")) : row.UiInt("shield_absorbed"),showZero:partialShield);
@@ -639,7 +641,8 @@ public sealed class Inspector : Border
                 ? FormatTime(seconds) : observedSeconds>0 && observedSeconds<TimeSpan.MaxValue.TotalSeconds
                     ? "已观察 "+FormatTime(observedSeconds) : "—";
             bool side=sideHeading!=null;
-            metricLabels[0].Text=side && category=="healing" ? "总治疗"
+            bool observedHealing=detail.Bool("healing_is_observed") || view.Bool("observed_healing_only");
+            metricLabels[0].Text=category=="healing" ? (observedHealing ? "已观察治疗" : "总治疗")
                 : (partialEffective || partialBoss ? "已观察" : "")+(bossScope ? "首领" : "")+(effective ? "有效伤害" : "总伤");
             string unit=category=="healing" ? "HPS" : "DPS";
             metricLabels[1].Text=category=="shield" ? "有效护盾"
@@ -656,8 +659,9 @@ public sealed class Inspector : Border
                 ("recent",_) => "近期伤害占比",
                 _ => "伤害占比",
             };
-            if(side && category=="healing")
-                SetMetric(0,Number(row.Get("healing")),"累计归属于该干员的治疗量。");
+            if(category=="healing")
+                SetMetric(0,Number(detail.Bool("healing_is_observed") ? detail.Get("healing") : row.Get("healing")),
+                    observedHealing ? "累计已确认为该干员的治疗事件。" : "累计归属于该干员的治疗量。");
             else
             {
                 string effectiveReason=detail.Text("effective_damage_reason");

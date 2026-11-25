@@ -421,6 +421,256 @@ def native_autochess_event_baseline(sample):
             and sample['autochess_context']['phase'] in (4, 5, 6))
 
 
+_ROUND_START_PREFIX_LIMIT = 100000  # Full retained source queue, including paged reads.
+_ROUND_START_FIELDS = ('autochess_round_start', 'autochess_round_start_events',
+                       'autochess_round_start_events_complete')
+_ROUND_START_BINDING = ('native_process_pid', 'native_generation', 'native_stage_id', 'native_identity')
+_ROUND_START_POINT_KEYS = {*_ROUND_START_BINDING, 'version', 'source_method', 'frame', 'game_time',
+    'native_fixed_time', 'sequence', 'epoch', 'active', 'native_autochess_context', 'quality',
+    'live_character_collection_empty'}
+_ROUND_START_POINT_V2_KEYS = {*_ROUND_START_POINT_KEYS, 'live_character_data_uids'}
+_ROUND_START_QUALITY_FLAGS = ('damage_unknown', 'engagement_unknown', 'shield_unknown',
+    'skill_unknown', 'skill_ready', 'mitigation_unknown', 'mitigation_ready',
+    'enemy_damage_ready', 'enemy_damage_unknown', 'source_character_uid_ready')
+_SETTLEMENT_SOURCE_QUALITY_FIELDS = ('damage_settlement_source_quality_version',
+    'damage_settlement_unlocalized_unknown', 'damage_settlement_source_issues')
+_ROUND_START_QUALITY_OPTIONAL = ('boss_damage_ready', 'boss_damage_unknown', 'damage_settlement_ready',
+    'damage_settlement_unknown', 'damage_settlement_first_issue', *_SETTLEMENT_SOURCE_QUALITY_FIELDS,
+    'mitigation_error',
+    'mitigation_diagnostics', 'enemy_entry_ready', 'enemy_entry_unknown', 'enemy_phase_ready',
+    'enemy_phase_unknown', 'enemy_state_ready', 'enemy_state_unknown', 'enemy_state_error',
+    'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error')
+
+
+def _round_start_integer(value):
+    return type(value) is int and 0 <= value <= 9007199254740991
+
+
+def _round_start_time(value):
+    if type(value) not in (int, float) or value < 0:
+        return False
+    try:
+        return isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _valid_round_start_point(point):
+    if not isinstance(point, dict) or type(point.get('version')) is not int:
+        return False
+    if point['version'] == 1:
+        if point.keys() != _ROUND_START_POINT_KEYS:
+            return False
+    elif point['version'] == 2:
+        if point.keys() != _ROUND_START_POINT_V2_KEYS:
+            return False
+        live = point['live_character_data_uids']
+        if live is not None and (not isinstance(live, list) or len(live) > 128
+                or any(type(uid) is not int or not 0 < uid <= 0xffffffff for uid in live)
+                or live != sorted(set(live))
+                or point['live_character_collection_empty'] is not (not live)):
+            return False
+    else:
+        return False
+    return (point['source_method'] == 'BattleController.ClearRunTimeData'
+            and type(point['frame']) is int and point['frame'] == 0
+            and _round_start_time(point['game_time']) and point['game_time'] == 0
+            and point['native_fixed_time'] == '0'
+            and _round_start_integer(point['sequence']) and _round_start_integer(point['epoch'])
+            and type(point['active']) is int and point['active'] == 0
+            and _round_start_integer(point['native_process_pid']) and point['native_process_pid'] > 0
+            and _round_start_integer(point['native_generation'])
+            and (point['live_character_collection_empty'] is None
+                 or type(point['live_character_collection_empty']) is bool))
+
+
+def _round_start_mark(sample, point):
+    binding = {key: point[key] for key in _ROUND_START_BINDING}
+    native_session = sample.get('native_session', sample.get('session'))
+    return dict(binding, native_session=native_session,
+                source_build=sample['battle_metadata'].get('source_build'),
+                native_frame=0, native_fixed_time='0', frame=0, game_time=point['game_time'],
+                sequence=point['sequence'], epoch=point['epoch'], active=0, active_hooks=[],
+                native_autochess_context=point['native_autochess_context'], error=None, stopped=False)
+
+
+def _round_start_quality(quality, current_mark):
+    versions = {'quality_contract_version': 1, 'source_attribution_version': 1,
+                'partial_damage_version': 7, 'damage_settlement_quality_version': 1}
+    if (not isinstance(quality, dict)
+            or any(type(quality.get(key)) is not int or quality[key] != value for key, value in versions.items())
+            or any(type(quality.get(key)) is not bool for key in _ROUND_START_QUALITY_FLAGS)
+            or not _round_start_integer(quality.get('damage_settlement_scope'))
+            or not _round_start_integer(current_mark.get('damage_settlement_scope'))
+            or quality['damage_settlement_scope'] != current_mark.get('damage_settlement_scope')):
+        raise StreamGap('invalid AutoChess round-start quality declaration')
+    lists = ('unknown_sources', 'engagement_unknown_sources')
+    for key in lists:
+        values = quality.get(key)
+        if (not isinstance(values, list) or len(values) > 2048
+                or any(not isinstance(value, str) or not 0 < len(value) <= 200 for value in values)):
+            raise StreamGap('invalid AutoChess round-start source quality')
+    fields = (*versions, 'damage_settlement_scope', *_ROUND_START_QUALITY_FLAGS,
+              *lists, *_ROUND_START_QUALITY_OPTIONAL)
+    return {key: deepcopy(quality[key]) for key in fields if key in quality}
+
+
+def verified_autochess_round_start(sample, drained, mark):
+    """Verify a retained zero origin and construct the two internal read fences."""
+    if not isinstance(drained, dict) or not any(key in drained for key in _ROUND_START_FIELDS):
+        return None
+    from autochess_context import native_autochess_event_identity
+
+    point, events, complete = (drained.get(key) for key in _ROUND_START_FIELDS)
+    if (not isinstance(sample, dict) or not isinstance(mark, dict)
+            or not isinstance(sample.get('autochess_context'), dict)
+            or not isinstance(sample.get('battle_metadata'), dict)
+            or not native_autochess_event_baseline(sample) or sample.get('state') != 2
+            or drained.get('events') != [] or drained.get('error') or drained.get('stopped') or drained.get('retry')
+            or not _valid_round_start_point(point)
+            or type(mark.get('active')) is not int or mark['active'] != 0 or mark.get('active_hooks') != []
+            or not _round_start_integer(mark.get('sequence')) or not _round_start_integer(mark.get('epoch'))
+            or point['sequence'] > mark['sequence'] or point['epoch'] > mark['epoch']
+            or any(not NativePcBinding._same(point[key], mark.get(key)) for key in _ROUND_START_BINDING)):
+        raise StreamGap('invalid AutoChess round-start producer fence')
+    current = autochess_event_mark_context(sample, mark)
+    if current is None or current != sample['autochess_context']:
+        raise StreamGap('AutoChess round start lacks the current independently bound battle')
+    contract = contract_for(sample=sample, descriptor=drained.get('probe_contract'))
+    contract.validate_binding(sample, mark, drained)
+    zero_mark = _round_start_mark(sample, point)
+    origin = autochess_event_mark_context(sample, zero_mark)
+    if (origin is None or any(origin.get(key) != current.get(key) for key in (
+            'identity', 'match_key', 'self_player_index', 'self_player_uid', 'collection_mode'))
+            or origin.get('collection_mode') not in ('all', 'local')
+            or origin.get('self_player_uid') is None
+            or sorted((row['index'], row['uid']) for row in origin['players'])
+               != sorted((row['index'], row['uid']) for row in current['players'])):
+        raise StreamGap('AutoChess round-start scope or account table changed')
+
+    end = mark['sequence']
+    count = end - point['sequence']
+    if (complete is not True or not isinstance(events, list) or len(events) != count
+            or count > _ROUND_START_PREFIX_LIMIT):
+        raise StreamGap('incomplete AutoChess round-start event prefix')
+    start_identity = tuple(origin['identity'][key] for key in ('scope_key', 'phase', 'round'))
+    previous_frame, previous_time = 0, 0
+    for sequence, event in enumerate(events, point['sequence'] + 1):
+        if not isinstance(event, dict) or type(event.get('sequence')) is not int or event['sequence'] != sequence:
+            raise StreamGap('nonconsecutive AutoChess round-start event prefix')
+        frame, when = event.get('frame'), event.get('game_time')
+        if (type(frame) is not int or not previous_frame <= frame <= current['frame']
+                or not _round_start_time(when) or not previous_time <= when <= current['game_time']
+                or (frame == previous_frame and when != previous_time)
+                or (frame == current['frame'] and when != current['game_time'])
+                or native_autochess_event_identity(event) != start_identity
+                or event['native_autochess_scope'].get('collection_mode') != origin['collection_mode']):
+            raise StreamGap('AutoChess round-start event has a different scope or clock')
+        previous_frame, previous_time = frame, when
+
+    quality = contract.normalize_quality(_round_start_quality(point['quality'], mark))
+    zero_mark.update(quality, probe_contract=contract.describe())
+    zero_sample = {key: sample[key] for key in ('session', 'native_session', 'battle_identity',
+        'observer_logger', 'native_window_guard', 'guard') if key in sample}
+    # The counter reader observed the original publication clock. Keep that
+    # independent physical-read witness unchanged when checking zero's roots.
+    zero_sample['autochess_snapshot_anchor'] = sample.get('autochess_snapshot_anchor',
+        {'frame': sample['frame'], 'game_time': sample['game_time']})
+    zero_sample['battle_metadata'] = {key: sample['battle_metadata'][key] for key in (
+        'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
+    zero_sample.update(frame=0, game_time=point['game_time'], state=2, rows=[], global_total=None,
+        global_heal=None, sum_damage=None, native_counter_scope='events_only', autochess_context=origin,
+        autochess_round_start=point, autochess_round_start_sequence=point['sequence'])
+    zero_drain = dict(zero_mark, events=[], hp_context=[], hp_context_dropped=0,
+                      baseline_discarded_skill_events=[], baseline_discarded_skill_events_complete=True)
+    replay_drain = {key: value for key, value in drained.items() if key not in _ROUND_START_FIELDS}
+    replay_drain['events'] = events
+    return deepcopy(zero_sample), deepcopy(zero_mark), deepcopy(zero_drain), deepcopy(replay_drain)
+
+
+def autochess_round_start_origin(sample):
+    """Identify the internal event-only zero clock, regardless of skill proof."""
+    if not isinstance(sample, dict):
+        return False
+    point, context = sample.get('autochess_round_start'), sample.get('autochess_context')
+    if (not _valid_round_start_point(point) or not isinstance(context, dict)
+            or not isinstance(sample.get('battle_metadata'), dict) or sample.get('state') != 2
+            or type(sample.get('frame')) is not int or sample['frame'] != 0
+            or not _round_start_time(sample.get('game_time')) or sample['game_time'] != 0
+            or sample.get('rows') != [] or sample.get('global_total') is not None or sample.get('global_heal') is not None
+            or type(sample.get('autochess_round_start_sequence')) is not int
+            or sample['autochess_round_start_sequence'] != point['sequence']
+            or not native_autochess_event_baseline(sample)):
+        return False
+    zero_mark = _round_start_mark(sample, point)
+    if autochess_event_mark_context(sample, zero_mark) != context:
+        return False
+    try:
+        _round_start_quality(point['quality'], point['quality'])
+        contract_for(sample=sample).validate_binding(sample, zero_mark)
+    except StreamGap:
+        return False
+    return True
+
+
+def autochess_round_start_live_skill_uids(sample):
+    """Return the independently witnessed live data UIDs at zero, or None."""
+    if not autochess_round_start_origin(sample):
+        return None
+    point = sample['autochess_round_start']
+    quality = point['quality']
+    if quality.get('skill_ready') is not True or quality.get('skill_unknown') is not False:
+        return None
+    if point['version'] == 1:
+        return frozenset() if point['live_character_collection_empty'] is True else None
+    live = point['live_character_data_uids']
+    return frozenset(live) if live is not None else None
+
+
+def autochess_round_start_skill_known(sample):
+    """Whether every actor was absent at the independently witnessed zero clock."""
+    return autochess_round_start_live_skill_uids(sample) == frozenset()
+
+
+def settlement_source_quality_clear(payload):
+    """Accept legacy absence or a coherent, explicitly empty source declaration."""
+    if not any(key in payload for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS):
+        return True
+    version, unlocalized, issues = (payload.get(key) for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS)
+    return type(version) is int and version == 1 and unlocalized is False and type(issues) is list and not issues
+
+
+def verified_autochess_settlement_source_issues(sample, payload):
+    """Return only fully localized source issues from the current combat scope."""
+    from autochess_context import native_autochess_event_identity
+
+    version, unlocalized, issues = (payload.get(key) for key in _SETTLEMENT_SOURCE_QUALITY_FIELDS)
+    if (type(version) is not int or version != 1
+            or unlocalized is not False
+            or not isinstance(issues, list) or not 0 < len(issues) <= 128
+            or not native_autochess_event_baseline(sample)):
+        return None
+    context = sample['autochess_context']
+    mode = context.get('collection_mode')
+    if mode not in ('all', 'local'):
+        return None
+    current = tuple(context['identity'][key] for key in ('scope_key', 'phase', 'round'))
+    fields = {'source', 'source_character_uid', 'frame', 'game_time', 'native_autochess_scope'}
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.keys() != fields:
+            return None
+        cid, uid, frame, when = (issue[key] for key in ('source', 'source_character_uid', 'frame', 'game_time'))
+        if (not isinstance(cid, str) or len(cid) > 128 or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
+                or type(uid) is not int or not 0 < uid <= 0xffffffff
+                or type(frame) is not int or not 0 <= frame <= sample['frame']
+                or not _round_start_time(when) or when > sample['game_time']
+                or frame == sample['frame'] and when != sample['game_time']
+                or native_autochess_event_identity(issue) != current
+                or issue['native_autochess_scope'].get('collection_mode') != mode):
+            return None
+    return issues
+
+
 def autochess_root_failure(mark):
     """Preserve the failed native guard when a mark asks the host to retry."""
     diagnostic = mark.get('autochess_binding_diagnostic')
@@ -455,11 +705,11 @@ def ready_probe_modes(payload):
     booleans = ('coalesce_enemy_hp', 'trace_hp_context', 'source_character_uid_ready', 'skill_ready',
                 'mitigation_ready', 'mitigation_no_event_ready', 'mitigation_factory_ready',
                 'enemy_entry_ready', 'enemy_phase_ready', 'enemy_state_ready', 'enemy_max_hp_ready',
-                'skill_cast_state_ready')
+                'skill_cast_state_ready', 'autochess_round_start_ready')
     errors = ('source_character_uid_error', 'skill_finish_error', 'mitigation_error',
               'mitigation_no_event_error', 'mitigation_factory_error', 'terminal_error',
               'enemy_entry_error', 'enemy_phase_error', 'enemy_state_error', 'enemy_max_hp_error',
-              'stage_object_finish_error', 'skill_cast_state_error')
+              'stage_object_finish_error', 'skill_cast_state_error', 'autochess_round_start_error')
     result = {key: payload[key] for key in booleans if type(payload.get(key)) is bool}
     if type(payload.get('terminal_read_version')) is int and payload['terminal_read_version'] == 1:
         result['terminal_read_version'] = 1

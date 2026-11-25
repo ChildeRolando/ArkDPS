@@ -9,6 +9,7 @@ checked real terminal fences on both sides.
 
 import argparse
 from collections import Counter, defaultdict
+from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -45,7 +46,8 @@ SEMANTIC_FIELDS = (
 )
 PROOF_FIELDS = ('method', 'evidence_method', 'type', 'target', 'buff',
                 'before', 'after', 'incoming', 'direct_healing',
-                'nested_settlement', 'settlement_unknown_reason')
+                'nested_settlement', 'nested_elemental_chain', 'nested_settlement_detail',
+                'settlement_unknown_reason')
 # Closed allowlists, not prefix-based filtering: a future domain field must
 # participate in equality even before the named schema above is updated.
 # Binding fields are independently validated within each stream before they
@@ -747,6 +749,25 @@ def semantic_event(event):
     # Includes the complete nested parent/child HP certificate and any future
     # proof fields. Equal amounts alone cannot substitute for equal evidence.
     projected = {key: value for key, value in proof.items() if key not in DIAGNOSTIC_PROOF_FIELDS}
+    chain = projected.get('nested_elemental_chain')
+    if isinstance(chain, dict) and type(chain.get('version')) is int and chain['version'] == 1:
+        # Child references are local to this observer's cursor, like the
+        # top-level sequence. Retain their exact relative order and distance;
+        # raw same-stream replay validation continues to compare original bytes.
+        anchor, children = event.get('sequence'), chain.get('children')
+        if type(anchor) is not int or anchor <= 0 or type(children) is not list or not 1 <= len(children) <= 16:
+            raise ValueError('invalid nested elemental chain sequence references')
+        chain = deepcopy(chain)
+        previous = 0
+        for child in chain['children']:
+            if not isinstance(child, dict):
+                raise ValueError('invalid nested elemental chain child')
+            start, end = child.get('settlement_sequence'), child.get('burst_sequence')
+            if type(start) is not int or type(end) is not int or not previous < start < end < anchor:
+                raise ValueError('invalid nested elemental chain sequence references')
+            child['settlement_sequence'], child['burst_sequence'] = start - anchor, end - anchor
+            previous = end
+        projected['nested_elemental_chain'] = chain
     if projected:
         result['proof'] = projected
     return result

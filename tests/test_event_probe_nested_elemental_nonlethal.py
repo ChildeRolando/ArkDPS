@@ -18,10 +18,10 @@ FIELDS = ROOT / 'tests/fixtures/event_probe_business/20261124-native-elemental-n
 FAULTS = ['parent_callback_not_returned', 'missing_parent_real', 'parent_hp_mismatch',
     'changed_parent_real', 'changed_parent_hp', 'changed_parent_source_uid', 'changed_parent_source_cid',
     'changed_parent_source_data_uid', 'changed_target_uid', 'changed_target_cid', 'changed_target_instance',
-    'changed_parent_type', 'parent_cancelled', 'cross_frame', 'cross_time', 'cross_scope', 'second_child',
+    'changed_parent_type', 'parent_cancelled', 'cross_frame', 'cross_time', 'cross_scope', 'second_child_hp_discontinuous',
     'child_delta_mismatch', 'child_hp_mismatch', 'child_cancelled', 'child_shield_unknown',
     'child_incomplete', 'child_settlement_amount', 'child_settlement_uid', 'child_settlement_instance',
-    'child_settlement_clock', 'child_burst_delta', 'explicit_child_source', 'reused_modifier']
+    'child_settlement_clock', 'child_burst_delta', 'changed_child_source', 'reused_modifier']
 
 
 @pytest.fixture(scope='module')
@@ -86,6 +86,7 @@ def test_ten_actual_nonlethal_elemental_hp_chains_have_one_shared_certificate(pr
 def test_missing_mutated_or_ambiguous_facts_never_certify_elemental_parent(producer, platform, fault):
     records = producer[platform]['invalid'][fault]['batch']['events']
     assert not any((e.get('proof') or {}).get('nested_settlement') for e in records)
+    assert not any((e.get('proof') or {}).get('nested_elemental_chain') for e in records)
     assert not any(e.get('settled_after_nested_kill') for e in records)
 
 

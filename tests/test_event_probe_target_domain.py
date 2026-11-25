@@ -18,10 +18,15 @@ A, B = "char_1041_angel2", "char_2012_typhon"
 UID_A, UID_B = 2147483989, 1011
 NON_ENEMY = ("self_uid0", "self_uid10", "ally_uid0", "ally_uid12", "token_uid0", "token_uid12",
              "self_output_uid0", "ally_output", "self_output_only", "ally_healing",
-             "token_unit_uid0", "token_bobject_uid0")
+             "token_unit_uid0", "token_bobject_uid0", "ally_death_uid_zero", "ally_death_parallel_enemy_source")
 GLOBAL = ("unknown_id", "empty_id", "unreadable_target", "unreadable_class", "char_id_enemy_class",
           "enemy_uid0", "ally_uid0_to12", "enemy_uid_changed", "enemy_to_ally", "ally_to_enemy",
-          "ally_enemy_ally", "enemy_ally_enemy", "token_enemy_class", "self_end_clock_unknown")
+          "ally_enemy_ally", "enemy_ally_enemy", "token_enemy_class", "self_end_clock_unknown",
+          "token_uid12_to0", "enemy_uid12_to0", "trap_uid12_to0", "ally_uid12_to99",
+          "ally_noncharacter_uid12_to0", "ally_death_nested", "ally_death_nested_other_target", "ally_death_retarget",
+          "ally_death_inside_ally_apply", "ally_death_inside_enemy_apply", "ally_death_inside_enemy_source",
+          "ally_death_nested_enemy_source",
+          "ally_death_earlier_enemy", "ally_death_uid_restored")
 
 
 @pytest.fixture(scope="module")

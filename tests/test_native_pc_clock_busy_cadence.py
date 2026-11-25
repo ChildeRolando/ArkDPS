@@ -10,7 +10,8 @@ from collection_session import CollectionSession
 from collector import NativeClockBusy, ProcessChanged, SampleUnavailable, SnapshotGap
 from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
 from event_capture import CaptureRetry, LiveEventCapture
-from event_probe import BarrierBusy, NATIVE_PC_CONTRACT, ObserverReadRetry
+from event_probe import (BarrierBusy, CallbackBusyMark, NativePcBinding, NATIVE_PC_CONTRACT,
+                         ObserverReadRetry)
 from native_pc.frida_runtime import _GadgetObserver
 from sample_data import sample
 from test_multiplayer_native_context import hit
@@ -120,6 +121,8 @@ def run_worker(tmp_path, monkeypatch, actions=(), *, platform='native_pc', enabl
                 retry(BarrierBusy('busy current barrier'))
             if action == 'native':
                 retry(NativeClockBusy('changed native closing bracket'))
+            if action == 'callback':
+                retry(CallbackBusyMark('mark has an active callback'))
             if action == 'ordinary':
                 raise CaptureRetry('baseline crossed an event or game frame')
             if action == 'rpc':
@@ -195,7 +198,7 @@ def test_runtime_preserves_busy_as_retry_without_creating_a_gap(tmp_path, cause)
 
 
 @pytest.mark.parametrize('opening_kind,eligible', [
-    ('none', True), ('barrier', True), ('wrapped_barrier', True),
+    ('none', True), ('barrier', True), ('wrapped_barrier', True), ('callback', True),
     ('observer', False), ('capture', False), ('transport', False),
 ])
 def test_real_dual_acquisition_failures_preserve_opening_cause_before_retry(
@@ -207,6 +210,7 @@ def test_real_dual_acquisition_failures_preserve_opening_cause_before_retry(
     opening = {
         'none': None, 'barrier': BarrierBusy('opening busy'),
         'wrapped_barrier': CaptureRetry('opening wrapper'),
+        'callback': CallbackBusyMark('mark has an active callback'),
         'observer': ObserverReadRetry('generic opening retry'),
         'capture': CaptureRetry('generic opening retry'),
         'transport': OSError('opening transport failed'),
@@ -240,11 +244,60 @@ def test_three_attempts_then_original_wait_bounds_sustained_busy(tmp_path, monke
     assert starts[3:6] == pytest.approx([.213, .219, .225])
 
 
-def test_default_native_owner_uses_the_same_three_attempt_and_perf_budget(tmp_path, monkeypatch):
-    _, starts, waits, _, _ = run_worker(tmp_path, monkeypatch, ['barrier'] * 7, backend='native')
+@pytest.mark.parametrize('action', ['barrier', 'callback'])
+def test_default_native_owner_uses_the_same_three_attempt_and_perf_budget(tmp_path, monkeypatch, action):
+    _, starts, waits, _, _ = run_worker(tmp_path, monkeypatch, [action] * 7, backend='native')
     assert waits == pytest.approx([.005, .005, .2, .005, .005, .2, .005, .2])
     assert starts[:3] == pytest.approx([0., .006, .012])
     assert starts[3:6] == pytest.approx([.213, .219, .225])
+
+
+def test_typed_callback_busy_escapes_repeated_slow_poll_collision(tmp_path, monkeypatch):
+    def run(root):
+        elapsed = 0.0
+
+        def advance(_worker, _sessions, clock, _delay):
+            nonlocal elapsed
+            elapsed = clock.perf
+
+        def read(_session, worker):
+            # A 1 ms read followed by the regular 200 ms rest repeatedly
+            # lands inside the same 2 ms callback segment of a periodic load.
+            phase = (elapsed + 1e-9) % .201
+            if phase < .002:
+                try:
+                    NativePcBinding(None).bind('mark', {
+                        'retry': True, 'active': 1, 'mark_retry_reason': 'callback_pending_at_start',
+                    })
+                except CallbackBusyMark as error:
+                    raise CaptureRetry('guarded acquisition retry') from error
+            worker.stop.set()
+            return sample()
+
+        _, starts, waits, _, events = run_worker(root, monkeypatch, [read] * 12,
+                                                backend='native', on_wait=advance)
+        return starts, waits, [value for kind, value in events if kind == 'sample']
+
+    with monkeypatch.context() as original_cadence:
+        original_cadence.setattr(bridge, '_native_clock_busy', lambda _error: False)
+        slow_starts, slow_waits, slow_samples = run(tmp_path / 'original')
+    assert slow_starts[11] == pytest.approx(2.211)
+    assert slow_waits[:12] == pytest.approx([.2] * 12) and not slow_samples
+
+    fast_starts, fast_waits, fast_samples = run(tmp_path / 'bounded_retry')
+    assert fast_starts == pytest.approx([0.0, .006])
+    assert fast_waits[0] == pytest.approx(.005) and len(fast_samples) == 1
+
+
+def test_consumed_callback_busy_cannot_restart_native_attempt(tmp_path, monkeypatch):
+    def read(session, _worker):
+        observation = session.runtime.feed._emit('waiting')
+        session.runtime._consume(observation)
+        retry(CallbackBusyMark('current mark has an active callback'))
+
+    _, _, waits, _, events = run_worker(tmp_path, monkeypatch, [read], backend='native')
+    assert waits == pytest.approx([.2, .2])
+    assert not any(kind == 'sample' for kind, _ in events)
 
 
 @pytest.mark.parametrize('owner', ['absent', 'unbound', 'foreign', 'wrong_backend'])

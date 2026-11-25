@@ -8,6 +8,7 @@ import ctypes
 from copy import deepcopy
 from ctypes import wintypes
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
@@ -348,8 +349,11 @@ class NativePipe:
                 self._buffer = bytearray(tail)
                 if len(line) > self.max_response_bytes or tail:
                     raise RuntimeError('native observer returned oversized or unsolicited data')
-                reply = json.loads(line.decode('utf-8'), object_pairs_hook=_unique_fields,
-                                   parse_float=_finite_number, parse_constant=_reject_constant)
+                try:
+                    reply = json.loads(line.decode('utf-8'), object_pairs_hook=_unique_fields,
+                                       parse_float=_finite_number, parse_constant=_reject_constant)
+                except ValueError as exc:
+                    raise RuntimeError('native observer returned invalid JSON') from exc
                 if (not isinstance(reply, dict) or type(reply.get('id')) is not int
                         or reply['id'] != self._id or set(reply) - {'id', 'result', 'error'}):
                     raise RuntimeError('native observer response ID or envelope mismatch')
@@ -809,6 +813,24 @@ class NativeHookEventProbe:
         except (OSError, RuntimeError) as exc:
             self.error = str(exc)
             self.status = ObserverStatus.FAILED
+            if self._timing_sink is not None:
+                try:
+                    diagnostic = dict(
+                        op=operation if operation in ('mark', 'read', 'ack', 'terminal_read', 'stop') else 'other',
+                        error_type=type(exc).__name__,
+                        win32_error=getattr(exc, 'winerror', None) or getattr(exc, 'errno', None),
+                        utc=datetime.now(timezone.utc).isoformat())
+                    oversized = re.fullmatch(
+                        r'response_too_large; bytes=([0-9]{1,12}); limit=([0-9]{1,12})'
+                        r'(?:; requested_event_count=([0-9]{1,16}))?', str(exc))
+                    if oversized:
+                        diagnostic.update(code='response_too_large', response_bytes=int(oversized[1]),
+                                          response_limit=int(oversized[2]))
+                        if oversized[3] is not None:
+                            diagnostic['requested_event_count'] = int(oversized[3])
+                    self._timing_sink('native_hook_request_failed', diagnostic)
+                except Exception:
+                    pass  # Failure reporting cannot replace the transport error.
             raise
         return result
 
@@ -837,7 +859,9 @@ class NativeHookEventProbe:
                     binding_ms=None if received is None else (finished-received)*1000,
                     active=raw.get('active') if isinstance(raw, dict) else None,
                     batch_size=len(raw['events']) if isinstance(raw, dict) and isinstance(raw.get('events'), list) else None,
-                    reason=raw.get('mark_retry_reason') if isinstance(raw, dict) else None))
+                    reason=raw.get('mark_retry_reason') if isinstance(raw, dict) else None,
+                    **({key: raw[key] for key in ('native_quiet_boundary_version', 'native_deferred_callbacks')
+                        if type(raw.get(key)) is int} if isinstance(raw, dict) else {})))
             except Exception:
                 pass  # Diagnostics must not change delivery or ACK behavior.
 
@@ -848,7 +872,7 @@ class NativeHookEventProbe:
         return {} if self._autochess_enabled is None else dict(autochess_enabled=self._autochess_enabled())
 
     def mark(self):
-        return self._request('mark', **self._mark_options())
+        return self._request('mark', native_quiet_boundary_version=1, **self._mark_options())
 
     def read_terminal_mark(self):
         self.last_terminal_response = None
@@ -864,6 +888,11 @@ class NativeHookEventProbe:
 
     def read_baseline(self, sequence):
         return self._read_range(sequence, sequence)
+
+    def read_round_start_range(self, after, through):
+        if after < max(self._committed_sequence, self._acknowledged_sequence):
+            raise RuntimeError('round-start event range has already been committed')
+        return self._read_range(after, through)
 
     def _read_range(self, after, through):
         if self._ack_error:

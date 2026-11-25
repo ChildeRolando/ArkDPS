@@ -221,7 +221,7 @@ def test_real_ammo_specific_unknown_reason_survives_selected_panel_measurement(e
 
 
 @pytest.mark.parametrize('effective', [False, True])
-def test_real_ammo_global_gap_reason_precedes_its_specific_skill_reason(effective):
+def test_real_ammo_gap_keeps_both_scope_and_specific_skill_reasons(effective):
     scene = frozen('2206-ammo-uncertain-end.json')
     base = frozen(scene['base_fixture']['name'])
     sessions = replay_observations([*base['observations'], *scene['continuation']])
@@ -233,13 +233,14 @@ def test_real_ammo_global_gap_reason_precedes_its_specific_skill_reason(effectiv
     assert lane['complete'] is False
     detail = owner_detail(result, actor, effective=effective)
     suffix = '_effective' if effective else ''
-    assert detail['skill_split' + suffix + '_reason'] == lane['reason']
+    assert detail['skill_split' + suffix + '_reason'] == (
+        lane['skill_split_reason'] + '；' + lane['reason'])
     assert detail['skill_damage' + suffix] is None and detail['non_skill_damage' + suffix] is None
 
 
 @pytest.mark.parametrize('lane_reason,lane_skill_reason,row_reason,expected', [
     ('结算事件覆盖不完整', '当前命中的技能窗口未确认', '未观察到弹药技能的实际结束',
-     '结算事件覆盖不完整'),
+     '当前命中的技能窗口未确认；结算事件覆盖不完整'),
     (None, '当前命中的技能窗口未确认', '未观察到弹药技能的实际结束', '当前命中的技能窗口未确认'),
     (None, None, '未观察到弹药技能的实际结束', '未观察到弹药技能的实际结束'),
     (None, None, None, '部分命中缺少技能窗口证据'),

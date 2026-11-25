@@ -153,7 +153,10 @@ class DamageSettlement:
             'skill_split_complete': stream_complete and hits > 0 and self.raw_skill_hits == hits,
             'skill_damage_unverified_share': missing_share(self.raw_skill_hits),
             'mitigation_complete': mitigation_complete,
-            'mitigation_reason': None if mitigation_complete else '部分命中缺少同一次结算的公式前后值或归属',
+            'mitigation_reason': (None if mitigation_complete else
+                '已记录命中的公式前后值均已配对，整局事件覆盖未确认'
+                if self.formula_hits == hits and hits > 0 and not stream_complete else
+                '部分命中缺少同一次结算的公式前后值或归属'),
             'mitigation_matched_hits': self.formula_hits,
             'observed_mitigation_before': self.before if self.before else None,
             'observed_mitigation_after': self.after if self.before else None,

@@ -76,7 +76,7 @@ def receive(state, sample, scene):
 
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
 @pytest.mark.parametrize('assist', [False, True])
-def test_shared_defense_cache_with_or_without_assist_replaces_only_on_next_accepted_defense(
+def test_shared_defense_cache_is_used_only_outside_combat(
         tmp_path, monkeypatch, platform, assist):
     state, samples, scenes = state_for(tmp_path, monkeypatch, platform)
     originals = deepcopy(samples)
@@ -94,11 +94,15 @@ def test_shared_defense_cache_with_or_without_assist_replaces_only_on_next_accep
     assert comparison(state)['previous_defense'] is True
     assert comparison(state)['scope'] == samples['defense_hits']['multiplayer']['scope']
     state.accept('autochess_scene', scenes['next_defense'])
-    assert values(state) == [300] and '等待本轮防御数据' in state.snapshot()['status_text']
+    waiting = state.snapshot()
+    assert values(state) == [] and comparison(state) is None
+    assert waiting['battle_id'] is None and waiting['game_time'] is None
+    assert '等待本轮防御数据' in waiting['status_text']
     state.accept('lifecycle', 'playing')
     state.accept('sample', samples['next_defense'])
-    assert values(state) == [300] and comparison(state)['previous_defense'] is True
-    assert comparison(state)['scope'] == samples['defense_hits']['multiplayer']['scope']
+    assert values(state) == [] and not comparison(state).get('previous_defense')
+    assert comparison(state)['scope'] == samples['next_defense']['multiplayer']['scope']
+    assert state.snapshot()['game_time'] == samples['next_defense']['game_time']
     state.accept('sample', samples['next_hits'])
     assert values(state) == [21]
     assert not comparison(state).get('previous_defense')
@@ -106,20 +110,26 @@ def test_shared_defense_cache_with_or_without_assist_replaces_only_on_next_accep
 
 
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
-def test_same_scope_empty_rebaseline_does_not_replace_a_useful_defense_or_look_current(
+def test_same_scope_empty_rebaseline_keeps_current_and_review_data_independent(
         tmp_path, monkeypatch, platform):
     state, samples, scenes = state_for(tmp_path, monkeypatch, platform)
     receive(state, samples['defense_hits'], scenes['defense_hits'])
+    retained = state._defense_sample
+    assert retained is not state.last
+    assert retained['multiplayer'] == state.last['multiplayer']
+    assert retained['multiplayer'] is not state.last['multiplayer']
+    assert retained['multiplayer']['players'] is not state.last['multiplayer']['players']
+    assert state._defense_analysis[0] is not state.live_analysis
+    before = deepcopy(retained)
     empty = dict(samples['defense_hits'], multiplayer=consume(MultiplayerBattleStatistics(), 1, [],
         sequence=0, native=context(1)))
     original = deepcopy(empty)
     assert empty['frame'] == samples['defense_hits']['frame']
     assert empty['multiplayer']['scope'] == samples['defense_hits']['multiplayer']['scope']
     state.accept('sample', empty)
-    snapshot = state.snapshot()
-    assert values(state) == [300]
-    assert comparison(state)['previous_defense'] is True
-    assert '上一场防御' in snapshot['status_text']
+    assert values(state) == []
+    assert not comparison(state).get('previous_defense')
+    assert state._defense_sample is retained and retained == before
     assert state.last is empty and empty == original
     state.accept('autochess_scene', scenes['prepare'])
     assert values(state) == [300] and comparison(state)['previous_defense'] is True
@@ -375,9 +385,10 @@ def test_actual_android_accepted_context_restores_defense_after_small_controller
     assert readings(views['prepare']) == [300]
     assert '上一场防御' in views['prepare']['status_text']
     assert views['prepare']['multiplayer'] is None and views['prepare']['multiplayer_supported'] is False
-    assert readings(views['next_defense']) == [300]
+    assert readings(views['next_defense']) == []
+    assert views['next_defense']['battle_id'] != views['prepare']['battle_id']
+    assert views['next_defense']['totals']['damage'] is None
     assert views['next_defense']['multiplayer'] is None
-    assert '上一场防御' in views['next_defense']['status_text']
     assert readings(views['next_hits']) == [21]
     scenes = [scene for kind, scene in events if kind == 'autochess_scene']
     assert None not in scenes  # A small-round singleton absence is not a match exit.

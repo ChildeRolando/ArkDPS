@@ -11,5 +11,6 @@ def test_native_autochess_collection_preference_and_conservative_source_filter()
         cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
     result = json.loads(completed.stdout)
     assert result['status'] == 'verified'
-    assert len(result['checks']) == 11
+    assert len(result['checks']) == 12
+    assert 'local_defense_keeps_other_accounts_output_on_the_verified_assist_battlefield' in result['checks']
     assert [(row['mode'], row['retained']) for row in result['counts']] == [('all', 8), ('local', 2)]

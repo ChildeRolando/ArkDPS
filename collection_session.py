@@ -278,6 +278,8 @@ class CollectionSession:
     def _retire_observer(self):
         """Remove an unusable observer from capture, not from cleanup ownership."""
         observer, self.observer = self.observer, None
+        if observer is not None and self.runtime is not None:
+            self.runtime.observer_retired(observer)
         if self.capture is not None and self.capture.observer is observer:
             self.capture.observer = None
         if observer is not None and observer not in self._pending_observers:

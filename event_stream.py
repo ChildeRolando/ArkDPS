@@ -267,6 +267,7 @@ class EventStream:
                     skill_reason=skill_reason, skill_method=skill_method,
                     skill_wait_for_end=skill_wait_for_end,
                     skill_actor=skill_actor,
+                    skill_frame=frame if kind in ('skill_start', 'skill_end') else None,
                     verified_skill_end_owner=verified_skill_end_owner,
                     mitigation_before=mitigation_before, mitigation_after=mitigation_after,
                     settled_after_nested_kill=settled_after_nested_kill)
@@ -277,7 +278,7 @@ class EventStream:
                 self.statistics.record_settlement_skill(
                     owner, actor, source, kind, game_time, key=skill_key, skill_id=skill_id,
                     name=skill_name, method=skill_method or target_instance, reason=skill_reason,
-                    wait_for_end=skill_wait_for_end)
+                    wait_for_end=skill_wait_for_end, frame=frame)
         except (ValueError, TypeError, OverflowError) as exc:
             # Supplemental evidence can fail without losing ordered damage.
             if kind == 'enemy_enter':

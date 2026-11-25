@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from acceptance.compare_pc_live_probes import compare, main, read_capture
+from acceptance.compare_pc_live_probes import compare, main, read_capture, semantic_event
 from event_probe import NATIVE_PC_CONTRACT
 from native_pc.probe_native_pc import BUILD_ID, KNOWN_FILES
 
@@ -326,6 +326,49 @@ def test_equal_amounts_do_not_hide_different_nested_parent_child_certificates(tm
     result = compare_controlled(tmp_path / 'left', tmp_path / 'right')
     assert result['status'] == 'mismatch'
     assert 'proof' in result['changed_events'][0]['differing_fields']
+
+
+def chain_event(offset=0):
+    result = event(sequence=offset + 5)
+    result['proof']['nested_elemental_chain'] = dict(version=1, ordering='parent_before_children',
+        target_uid='42', parent_real_delta=-12, parent_hp_before=50, parent_hp_after=38,
+        children=[dict(source=None, settlement_sequence=offset + 1, burst_sequence=offset + 2,
+                       hp_before=38, hp_after=30, real_delta=-8),
+                  dict(source='char_b', source_character_uid=2,
+                       settlement_sequence=offset + 3, burst_sequence=offset + 4,
+                       hp_before=30, hp_after=20, real_delta=-10)])
+    return result
+
+
+def test_nested_chain_cursor_offsets_compare_without_mutating_original_replay_records():
+    left, right = chain_event(), chain_event(100)
+    original = deepcopy((left, right))
+    assert semantic_event(left) == semantic_event(right)
+    assert (left, right) == original
+    refs = semantic_event(left)['proof']['nested_elemental_chain']['children']
+    assert [step['settlement_sequence'] for step in refs] == [-4, -2]
+    assert [step['burst_sequence'] for step in refs] == [-3, -1]
+
+
+@pytest.mark.parametrize('field,value', [('source', 'char_c'), ('hp_after', 21),
+    ('real_delta', -9), ('settlement_sequence', 2), ('future_proof_field', 'different')])
+def test_chain_cursor_normalization_retains_source_hp_and_relative_reference_differences(field, value):
+    left, right = chain_event(), chain_event(100)
+    step = right['proof']['nested_elemental_chain']['children'][0]
+    step[field] = value + 100 if field == 'settlement_sequence' else value
+    if field == 'settlement_sequence':
+        with pytest.raises(ValueError, match='sequence references'):
+            semantic_event(right)
+    else:
+        assert semantic_event(left) != semantic_event(right)
+
+
+@pytest.mark.parametrize('value', [True, None, 0, 5, 9])
+def test_chain_references_must_identify_earlier_ordered_records(value):
+    record = chain_event()
+    record['proof']['nested_elemental_chain']['children'][0]['burst_sequence'] = value
+    with pytest.raises(ValueError, match='sequence references'):
+        semantic_event(record)
 
 
 @pytest.mark.parametrize('location', ['event', 'proof'])

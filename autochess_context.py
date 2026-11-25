@@ -386,8 +386,74 @@ def lookup_native_actor(context, *, cid, data_uid):
     return _readonly(dict(actor, context_identity=context['identity']))
 
 
+def native_actor_lookup(context):
+    """Index one consumer-owned, normalized membership snapshot.
+
+    The binding owner rebuilds this on every accepted context. Evidence stays
+    detached and read-only, and cannot be used with another context object.
+    A copied adapter therefore safely falls back until its next binding.
+    """
+    actors = {}
+    if isinstance(context, dict):
+        members = context.get('memberships')
+        for actor in members if isinstance(members, list) else ():
+            if not isinstance(actor, dict):
+                continue
+            cid, uid = actor.get('cid'), actor.get('data_uid')
+            if _cid(cid) and _integer(uid, 1, (1 << 32) - 1):
+                evidence = lookup_native_actor(context, cid=cid, data_uid=uid)
+                if evidence is not None:
+                    actors[cid, uid] = evidence
+
+    def lookup(current, *, cid, data_uid):
+        if current is not context:
+            return lookup_native_actor(current, cid=cid, data_uid=data_uid)
+        if not _cid(cid) or not _integer(data_uid, 1, (1 << 32) - 1):
+            return None
+        return actors.get((cid, data_uid))
+
+    return lookup
+
+
 _TOKEN_HOST_FIELDS = ('host_key', 'host_uid', 'player_side')
 _INACTIVE_TOKEN = 'token lifecycle unavailable or inactive'
+_FORM_ENTITY_CID = 'char_002_amiya'
+_FORM_FIELDS = {'version', 'entity_cid', 'data_cid', 'data_uid', 'instance_uid',
+                'frame', 'game_time', 'scope_key', 'phase', 'round', 'collection_mode'}
+
+
+def _native_character_form_member(context, event, data_uid, *, lookup=None):
+    """Use the source's separately observed CharacterData key for this event."""
+    if event.get('kind') not in ('damage_settlement', 'elemental_bar') or not isinstance(context, dict):
+        return None
+    proof = event.get('proof')
+    form = proof.get('native_autochess_character_form') if isinstance(proof, dict) else None
+    if not isinstance(form, dict) or form.keys() != _FORM_FIELDS:
+        return None
+    cid = form['data_cid']
+    frame, when = event.get('frame'), event.get('game_time')
+    if (type(form['version']) is not int or form['version'] != 1
+            or form['entity_cid'] != _FORM_ENTITY_CID
+            or not _cid(cid) or not cid.startswith('char_') or cid == _FORM_ENTITY_CID
+            or not _integer(data_uid, 1, (1 << 32) - 1)
+            or not _integer(form['data_uid'], 1, (1 << 32) - 1) or form['data_uid'] != data_uid
+            or not _integer(form['instance_uid'], 1, (1 << 32) - 1)
+            or type(frame) is not int or not _integer(form['frame'], 0, (1 << 32) - 1) or form['frame'] != frame
+            or not _time(when) or not _time(form['game_time']) or form['game_time'] != when
+            or not _scope(form['scope_key']) or not _integer(form['phase'], 4, 6)
+            or not _integer(form['round'], 0, (1 << 31) - 1)):
+        return None
+    scope_fields = ('scope_key', 'phase', 'round')
+    identity = {key: form[key] for key in scope_fields}
+    if (native_autochess_event_identity(event) != tuple(identity.values())
+            or context.get('identity') != identity):
+        return None
+    mode = form['collection_mode']
+    if (mode not in ('local', 'all') or mode != context.get('collection_mode')
+            or mode != event['native_autochess_scope'].get('collection_mode')):
+        return None
+    member = (lookup or lookup_native_actor)(context, cid=cid, data_uid=data_uid)
+    return member if member is not None and not (member['is_token'] or member['is_predefined']) else None
 
 
 def _token_claim_conflicts(context, cid, data_uid):
@@ -399,15 +465,18 @@ def _token_claim_conflicts(context, cid, data_uid):
                 for row in context['unknown_memberships']))
 
 
-def resolve_native_event_member(context, event, previous=None):
-    """Resolve a guarded event against live or event-time token evidence.
+def resolve_native_event_member(context, event, previous=None, *, lookup=None, previous_lookup=None):
+    """Resolve a guarded event against live membership and source evidence.
 
     Callers pass only consecutive accepted contexts from the same source.
     An earlier member can cover the interval immediately following that
     context. A token absent from both contexts needs its own callback proof.
     """
     cid, data_uid = event.get('source'), event.get('source_character_uid')
-    member = lookup_native_actor(context, cid=cid, data_uid=data_uid)
+    find = lookup or lookup_native_actor
+    member = find(context, cid=cid, data_uid=data_uid)
+    if member is None and cid == _FORM_ENTITY_CID:
+        return _native_character_form_member(context, event, data_uid, lookup=find)
     if not isinstance(cid, str) or not cid.startswith('token_'):
         return member
     if (not isinstance(context, dict) or not isinstance(context.get('identity'), dict)
@@ -423,7 +492,7 @@ def resolve_native_event_member(context, event, previous=None):
     if (previous is not None and previous['identity'] == identity
             and previous['frame'] <= event['frame'] and previous['game_time'] <= event['game_time']
             and previous.get('collection_mode') == context.get('collection_mode')):
-        past = lookup_native_actor(previous, cid=cid, data_uid=data_uid)
+        past = (previous_lookup or lookup_native_actor)(previous, cid=cid, data_uid=data_uid)
         if past is None and _token_claim_conflicts(previous, cid, data_uid):
             return None
     if member is None and _token_claim_conflicts(context, cid, data_uid):
@@ -441,7 +510,7 @@ def resolve_native_event_member(context, event, previous=None):
     if (not _cid(key) or not _integer(uid, 1, (1 << 32) - 1) or uid == data_uid
             or not _integer(side, 0, (1 << 31) - 1)):
         return None
-    host = lookup_native_actor(context, cid=key, data_uid=uid)
+    host = find(context, cid=key, data_uid=uid)
     if host is None or host['is_token'] or host['player_side'] != side:
         return None
     for bound in (member, past):

@@ -204,6 +204,9 @@ class FridaEventObserver:
     def mark(self):
         return self._request('mark', **self._mark_options())
 
+    def mark_with_presence(self):
+        return self._request('mark', with_presence=True, **self._mark_options())
+
     def read_terminal_mark(self):
         # The battle already ended. An optional proof must not hold up archiving.
         return self._request('mark', timeout=self.terminal_mark_timeout, **self._mark_options())
@@ -213,6 +216,11 @@ class FridaEventObserver:
 
     def read_baseline(self, sequence):
         return self._read_event_range(sequence, sequence)
+
+    def read_round_start_range(self, after, through):
+        if after < max(self._committed_sequence, self._acknowledged_sequence):
+            raise RuntimeError('round-start event range has already been committed')
+        return self._read_event_range(after, through)
 
     def _read_event_range(self, after, through):
         if self._ack_error:

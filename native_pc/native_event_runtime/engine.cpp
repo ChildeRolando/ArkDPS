@@ -40,6 +40,7 @@ struct Runtime {
     JSRuntime* runtime = nullptr;
     JSContext* context = nullptr;
     JSValue pointer = JS_UNDEFINED;
+    JSValue argument_view = JS_UNDEFINED;
     JSValue dispatch = JS_UNDEFINED;
     std::vector<std::unique_ptr<Hook>> hooks;
     std::vector<Allocation> allocations;
@@ -354,14 +355,23 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
         invocation.receiver = JS_NewObject(c);
         JS_SetPropertyStr(c, invocation.receiver, "threadId", JS_NewUint32(c, GetCurrentThreadId()));
         JS_SetPropertyStr(c, invocation.receiver, "returnAddress", pointer(c, original_return));
-        auto args = JS_NewArray(c);
-        const std::array<std::uint64_t, 4> registers{{frame->rcx,frame->rdx,frame->r8,frame->r9}};
-        for (unsigned i = 0; i < 16; ++i) {
-            std::uint64_t value = 0;
-            if (i < 4) value = registers[i];
-            else read(frame->stack + 40 + (i - 4) * 8, &value, sizeof(value));
-            JS_SetPropertyUint32(c, args, i, pointer(c, value));
+        std::array<std::uint64_t, 16> values{{frame->rcx, frame->rdx, frame->r8, frame->r9}};
+        constexpr std::size_t stack_first = 4;
+        constexpr std::size_t slot_size = sizeof(values[0]);
+        const auto stack_arguments = frame->stack + 40;
+        try {
+            read(stack_arguments, values.data() + stack_first, (values.size() - stack_first) * slot_size);
+        } catch (const std::runtime_error&) {
+            // Keep the original per-slot validation when a bulk read fails.
+            for (std::size_t slot = stack_first; slot < values.size(); ++slot)
+                read(stack_arguments + (slot - stack_first) * slot_size, &values[slot], slot_size);
         }
+        auto bytes = JS_NewArrayBufferCopy(c, reinterpret_cast<const std::uint8_t*>(values.data()),
+                                          values.size() * slot_size);
+        if (JS_IsException(bytes)) throw std::runtime_error(exception(c));
+        auto args = JS_Call(c, runtime.argument_view, JS_UNDEFINED, 1, &bytes);
+        JS_FreeValue(c, bytes);
+        if (JS_IsException(args)) throw std::runtime_error(exception(c));
         try { callback(c, hook, "onEnter", invocation.receiver, 1, &args); }
         catch (...) { JS_FreeValue(c, args); throw; }
         JS_FreeValue(c, args);
@@ -425,6 +435,7 @@ void initialize(const std::string& source) {
     try {
         evaluate(c, arkdps_bridge_source, "native-bridge.js");
         runtime.pointer = JS_GetPropertyStr(c, global, "__arkdpsPointer");
+        runtime.argument_view = JS_GetPropertyStr(c, global, "__arkdpsArguments");
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
         if (runtime.ready.empty()) throw std::runtime_error("probe did not publish readiness");
@@ -536,6 +547,12 @@ extern "C" __declspec(dllexport) __attribute__((noinline)) std::uint64_t ArkDpsT
     std::uint64_t a,std::uint64_t b,std::uint64_t c,std::uint64_t d,std::uint64_t e,std::uint64_t f,
     std::uint64_t g,std::uint64_t h,std::uint64_t i,std::uint64_t j,std::uint64_t k,std::uint64_t l) {
     return a+2*b+3*c+4*d+5*e+6*f+7*g+8*h+9*i+10*j+11*k+12*l;
+}
+extern "C" __declspec(dllexport) __attribute__((noinline)) std::uint64_t ArkDpsTestFullArguments(
+    std::uint64_t a,std::uint64_t b,std::uint64_t c,std::uint64_t d,std::uint64_t e,std::uint64_t f,
+    std::uint64_t g,std::uint64_t h,std::uint64_t i,std::uint64_t j,std::uint64_t k,std::uint64_t l,
+    std::uint64_t m,std::uint64_t n,std::uint64_t o,std::uint64_t p) {
+    return a^b^c^d^e^f^g^h^i^j^k^l^m^n^o^p;
 }
 extern "C" __declspec(dllexport) __attribute__((noinline)) double ArkDpsTestFloat(double a,double b,double c,double d,double e) {
     return a+2*b+3*c+4*d+5*e;

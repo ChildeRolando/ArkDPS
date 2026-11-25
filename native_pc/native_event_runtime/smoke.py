@@ -25,6 +25,9 @@ if str(ROOT) not in sys.path:
 from native_pc.native_event_runtime.build import DEFAULT_OUTPUT
 
 
+FULL_ARGUMENT_VALUES = (0, 2**64 - 1, 2**63, 2**32, *range(5, 15), 2**48 + 15, 2**63 + 16)
+
+
 def export_offsets(binary):
     """Read PE export RVAs without mapping or executing the DLL in this process."""
     data = Path(binary).read_bytes()
@@ -64,11 +67,14 @@ def export_offsets(binary):
 def fixture_source(binary, *, slow=False):
     exports = export_offsets(binary)
     names = ('Integer', 'Float', 'Sret', 'Nested') + (('Slow',) if slow else ())
+    if 'ArkDpsTestFullArguments' in exports:
+        names += ('FullArguments',)
     offsets = {name: exports['ArkDpsTest' + name] for name in names}
     return r'''
 'use strict';
 const base = Process.getModuleByName('ArkDPS.NativeEvents.dll').base;
 const records = [], hooks = [];
+let savedArguments;
 const activity = Memory.alloc(8);
 activity.writeU64(0);
 let serial = 0;
@@ -79,6 +85,7 @@ for (const [name, offset] of Object.entries(OFFSETS)) {
    const values = [];
    if (name === 'Integer') for (let i=0;i<12;i++) values.push(args[i].value.toString());
    if (name === 'Sret') for (let i=1;i<3;i++) values.push(args[i].value.toString());
+   if (name === 'FullArguments') savedArguments=args;
    records.push({phase:'enter',name,serial:this.serial,values});
    if(name==='Slow')activity.writeU64(1);
   },
@@ -91,12 +98,67 @@ for (const [name, offset] of Object.entries(OFFSETS)) {
   }
  }));
 }
-rpc.exports={mark(){return {records:records.slice(),active:0};},
+function retainedArgumentProof(){
+ if(savedArguments===undefined)return null;
+ const args=savedArguments;
+ const last=args[15];
+ const values=Array.from(args,value=>(value.value&0xffffffffffffffffn).toString());
+ const keys=Object.keys(args);
+ const samePointer=last===args[15]&&args[0]===Reflect.getOwnPropertyDescriptor(args,'0').value;
+ const first=args[0];
+ args[0]=undefined;
+ const shadowed=Object.hasOwn(args,'0')&&args[0]===undefined;
+ delete args[0];
+ const deleted=!Object.hasOwn(args,'0')&&!(0 in args)&&args[0]===undefined;
+ args[0]=first;
+ return {array:Array.isArray(args),length:args.length,values,keys,samePointer,shadowed,deleted};
+}
+rpc.exports={mark(){return {records:records.slice(),active:0,retained_arguments:retainedArgumentProof()};},
  readEvents(){return {events:records.slice()};},ackEvents(sequence){return {acknowledged:sequence};},
  stop(){for(const hook of hooks)hook.detach();return {stopped:true};}};
 send(SLOW_FIXTURE?{ready:true,fixture:'self-owned-stop-concurrency',activity:activity.toString()}:
  {ready:true,fixture:'self-owned-abi'});
 '''.replace('OFFSETS', json.dumps(offsets)).replace('SLOW_FIXTURE', json.dumps(slow))
+
+
+def quiet_mark_source(binary, result_buffer, *, autochess):
+    return fixture_source(binary, slow=True) + r'''
+const markWaiting=Memory.alloc(8), sretBuffer=ptr(RESULT_BUFFER);
+markWaiting.writeU64(0);
+let testedArrival=false, readThrough=0, acknowledged=0;
+const completed=()=>records.filter(event=>event.name==='Sret'&&event.phase==='leave')
+    .map((_,index)=>({sequence:index+1,frame:30*(index+1),game_time:index+1}));
+rpc.exports.mark=()=>{
+ const entry=__arkdpsMarkEntryActive(), sequence=completed().length;
+ const frame=sequence*30,game_time=sequence;
+ if(!testedArrival&&entry===0){
+  testedArrival=true;markWaiting.writeU64(1);
+  const deadline=Date.now()+3000;
+  while(__nativeActive()===0&&Date.now()<deadline){}
+  if(__nativeActive()===0)throw new Error('owned callback did not reach mark');
+ }
+ return {active:entry,active_hooks:[],retry:entry>0,error:null,stopped:false,
+  sequence,epoch:1,frame,game_time,native_battle_state:2,
+  result_buffer:[0,8,16,24].map(offset=>sretBuffer.add(offset).readU64().toString()),
+  native_autochess_context:AUTOCHESS?{protocol_version:1,status:'available',
+   verified_same_frame:true,phase:4,round:12,scope_key:'fixture:autochess:1',
+   collection_mode:'all',frame,game_time}:null};
+};
+rpc.exports.readEvents=(after,through)=>{
+ const events=completed();
+ if(after<acknowledged||through>events.length||after>through)return {error:'range unavailable'};
+ readThrough=Math.max(readThrough,through);
+ return {events:events.slice(after,through)};
+};
+rpc.exports.ackEvents=through=>{
+ if(through>readThrough)return {error:'ack beyond read',acknowledged};
+ acknowledged=Math.max(acknowledged,through);
+ return {acknowledged};
+};
+rpc.exports.readTerminalEvents=()=>({events:[1],hp_context:[2]});
+send({ready:true,fixture:'self-owned-quiet-mark-concurrency', markWaiting:markWaiting.toString(),
+ activity:activity.toString()});
+'''.replace('RESULT_BUFFER', json.dumps(result_buffer)).replace('AUTOCHESS', json.dumps(autochess))
 
 
 def child(binary):
@@ -113,6 +175,16 @@ def child(binary):
     libraries = []
     background = []
     background_results = Queue()
+    result_type = ctypes.c_uint64 * 4
+    result_buffer = result_type()
+
+    def owned_sret():
+        # The Windows x64 hidden return buffer is the first native argument.
+        function = libraries[0].ArkDpsTestSret
+        function.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64]
+        function.restype = ctypes.c_void_p
+        function(ctypes.addressof(result_buffer), 17, 29)
+        return list(result_buffer)
 
     def code_digest():
         return {name: sha256(ctypes.string_at(ctypes.cast(getattr(libraries[0], 'ArkDpsTest' + name), ctypes.c_void_p).value, 32)).hexdigest()
@@ -131,6 +203,15 @@ def child(binary):
         elif operation == 'memory':
             address = int(command['address'], 16)
             print(json.dumps(dict(value=ctypes.c_uint64.from_address(address).value)), flush=True)
+        elif operation == 'owned-sret-buffer':
+            result_buffer[:] = (0, 0, 0, 0)
+            print(json.dumps(dict(address=hex(ctypes.addressof(result_buffer)))), flush=True)
+        elif operation == 'call-owned-sret':
+            print(json.dumps(dict(result=owned_sret())), flush=True)
+        elif operation == 'start-owned-sret':
+            background = [Thread(target=lambda: background_results.put(owned_sret()))]
+            background[0].start()
+            print(json.dumps(dict(started=1)), flush=True)
         elif operation == 'start-threads':
             function_name = command.get('function', 'Integer')
             function = getattr(libraries[0], 'ArkDpsTest' + function_name)
@@ -170,6 +251,20 @@ def child(binary):
             nested_result = nested(19)
             print(json.dumps(dict(integer=integer_result, floating=floating_result,
                                   sret=[getattr(large, name) for name in 'abcd'], nested=nested_result)), flush=True)
+        elif operation == 'full-arguments':
+            full = libraries[0].ArkDpsTestFullArguments
+            full.argtypes, full.restype = [ctypes.c_uint64] * len(FULL_ARGUMENT_VALUES), ctypes.c_uint64
+            print(json.dumps(dict(result=full(*FULL_ARGUMENT_VALUES))), flush=True)
+        elif operation == 'benchmark':
+            count = command['count']
+            if type(count) is not int or not 1 <= count <= 50_000:
+                raise ValueError('invalid self-owned benchmark count')
+            function = libraries[0].ArkDpsTestInteger
+            function.argtypes, function.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
+            arguments = tuple(range(1, 13))
+            start = time.perf_counter_ns()
+            total = sum(function(*arguments) for _ in range(count))
+            print(json.dumps(dict(count=count, elapsed_ns=time.perf_counter_ns() - start, total=total)), flush=True)
         elif operation == 'threads':
             integer = libraries[0].ArkDpsTestInteger
             integer.argtypes, integer.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
@@ -246,6 +341,86 @@ class Fixture:
         self.process.stderr.close()
 
 
+def check_quiet_mark_boundaries(binary):
+    from native_pc.native_hook_source import NativePipe
+    binary = Path(binary).resolve()
+    checks = {}
+    with TemporaryDirectory(prefix='arkdps-quiet-mark-') as temporary:
+        for case in ('autochess', 'ordinary', 'terminal-mark'):
+            fixture = Fixture(Path(temporary) / case, binary)
+            pipe = None
+            try:
+                buffer = fixture.command('owned-sret-buffer')['address']
+                fixture.configure(source=quiet_mark_source(binary, buffer, autochess=case != 'ordinary'))
+                fixture.command('load')
+                pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
+                ready = pipe.request('initialize', token=fixture.token)['ready']
+                assert fixture.command('call-owned-sret')['result'] == [17, 29, 46, 12]
+                fixture.command('owned-sret-buffer')
+                results = Queue()
+
+                def request_mark():
+                    try:
+                        options = {} if case == 'terminal-mark' else {'native_quiet_boundary_version': 1}
+                        results.put(pipe.request('mark', **options))
+                    except Exception as exc:
+                        results.put(exc)
+
+                pending = Thread(target=request_mark, daemon=True)
+                pending.start()
+                deadline = time.monotonic() + 5
+                while fixture.command('memory', address=ready['markWaiting'])['value'] != 1:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError('owned slow mark did not start')
+                    time.sleep(.005)
+                assert fixture.command('start-owned-sret')['started'] == 1
+                mark = results.get(timeout=5)
+                pending.join(timeout=5)
+                if isinstance(mark, Exception):
+                    raise mark
+                assert mark['result_buffer'] == ['0'] * 4, mark
+                assert (mark['sequence'], mark['frame'], mark['game_time']) == (1, 30, 1), mark
+                assert fixture.command('join-threads')['results'] == [[17, 29, 46, 12]]
+                if case == 'autochess':
+                    assert mark['active'] == 0 and mark['retry'] is False, mark
+                    assert mark['native_quiet_boundary_version'] == 1 and mark['native_deferred_callbacks'] == 1
+                    assert pipe.request('read', after=0, through=1)['events'] == [
+                        {'sequence': 1, 'frame': 30, 'game_time': 1}]
+                    denied = pipe.request('ack', sequence=2)
+                    assert denied.get('error') == 'ack beyond read' and denied['acknowledged'] == 0
+                    assert pipe.request('ack', sequence=1)['acknowledged'] == 1
+                    following = pipe.request('mark', native_quiet_boundary_version=1)
+                    assert (following['sequence'], following['frame'], following['game_time']) == (2, 60, 2)
+                    assert pipe.request('read', after=1, through=2)['events'] == [
+                        {'sequence': 2, 'frame': 60, 'game_time': 2}]
+                    assert pipe.request('ack', sequence=2)['acknowledged'] == 2
+                    fixture.command('start-threads', function='Slow')
+                    deadline = time.monotonic() + 5
+                    while fixture.command('memory', address=ready['activity'])['value'] != 1:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError('did not enter owned slow originals')
+                        time.sleep(.005)
+                    prior = pipe.request('mark', native_quiet_boundary_version=1)
+                    assert prior['active'] > 0 and prior['retry'] is True, prior
+                    assert 'native_quiet_boundary_version' not in prior
+                    terminal = pipe.request('terminal_read', after=1, through=2)
+                    assert terminal['events'] == [] and terminal['hp_context'] == [] and terminal['retry'] is True
+                    assert fixture.command('join-threads')['results'] == [523] * 4
+                else:
+                    assert mark['active'] == 1 and mark['retry'] is True, mark
+                    assert 'native_quiet_boundary_version' not in mark
+                stopped = pipe.request('stop')
+                assert stopped['active'] == 0 and stopped['native_quiet'] is True, stopped
+                checks[case] = {'mark_sequence': mark['sequence'], 'active': mark['active'],
+                                'retry': mark['retry'], 'original_waited': True,
+                                'deferred_callbacks': mark.get('native_deferred_callbacks', 0)}
+            finally:
+                if pipe is not None:
+                    pipe.close()
+                fixture.close()
+    return checks
+
+
 def check_smoke(binary=DEFAULT_OUTPUT):
     from native_pc.native_hook_source import NativePipe
     binary = Path(binary).resolve()
@@ -284,15 +459,28 @@ def check_smoke(binary=DEFAULT_OUTPUT):
             assert called == dict(integer=650, floating=62.5, sret=[17, 29, 46, 12], nested=687), called
             multithread = fixture.command('threads')
             assert multithread['results'] == [[650] * 5] * 4
+            full_arguments = 'ArkDpsTestFullArguments' in export_offsets(binary)
+            if full_arguments:
+                full_result = 0
+                for value in FULL_ARGUMENT_VALUES:
+                    full_result ^= value
+                assert fixture.command('full-arguments') == {'result': full_result}
             mark = pipe.request('mark')
             assert mark['active'] == 0
             records = mark['records']
-            assert Counter((record['name'], record['phase']) for record in records) == Counter({
+            expected = Counter({
                 ('Integer', 'enter'): 22, ('Integer', 'leave'): 22,
                 ('Float', 'enter'): 1, ('Float', 'leave'): 1,
                 ('Sret', 'enter'): 1, ('Sret', 'leave'): 1,
                 ('Nested', 'enter'): 1, ('Nested', 'leave'): 1,
             })
+            if full_arguments:
+                expected.update({('FullArguments', 'enter'): 1, ('FullArguments', 'leave'): 1})
+                assert mark['retained_arguments'] == dict(
+                    array=True, length=16, values=list(map(str, FULL_ARGUMENT_VALUES)),
+                    keys=list(map(str, range(16))), samePointer=True, shadowed=True, deleted=True)
+                receipt['retained_all_16_arguments_preserve_array_and_uint64'] = True
+            assert Counter((record['name'], record['phase']) for record in records) == expected
             starts = {record['serial']: record for record in records if record['phase'] == 'enter'}
             ends = {record['serial']: record for record in records if record['phase'] == 'leave'}
             assert starts.keys() == ends.keys()
@@ -432,6 +620,67 @@ def check_smoke(binary=DEFAULT_OUTPUT):
                 pipe.close()
             fixture.close()
     return receipt
+
+
+def check_oversized_response(binary=DEFAULT_OUTPUT):
+    """Send one oversized battle-like reply through the real authenticated pipe."""
+    from native_pc.native_hook_source import NativePipe
+    binary = Path(binary).resolve()
+    event_count = 20_000
+    event = dict(frame=420, game_time=14, source=None, kind='enemy_hp', amount=0,
+                 proof={'method': 'Entity.SetHpInternal'}, target='enemy_fixture_guard', target_instance='12345',
+                 enemy_max_hp=38_818, hp_before=30_000, hp_after=30_001,
+                 native_autochess_scope=dict(protocol_version=1, status='available', verified_same_frame=True,
+                     frame=420, game_time=14, scope_key='0x12341234:0x23452345:0x34563456:0x45674567:0x56785678:autochess:1',
+                     phase=4, round=8, collection_mode='all'))
+    wire_limit = 8 * 1024 ** 2
+    bytes_ = len(json.dumps(dict(id=3, result={'events': [dict(event, sequence=sequence)
+                            for sequence in range(1, event_count + 1)]}), separators=(',', ':')).encode())
+    assert bytes_ > wire_limit
+    source = fixture_source(binary) + '\nconst event=' + json.dumps(event) + ''';
+rpc.exports.readEvents=(after,through)=>{
+ const events=[];
+ for(let sequence=after+1;sequence<=through;sequence++)events.push({...event,sequence});
+ return {events};
+};
+'''
+    with TemporaryDirectory(prefix='native-oversized-response-', dir=binary.parent) as temporary:
+        fixture = Fixture(Path(temporary), binary)
+        pipe = None
+        try:
+            fixture.configure(source=source)
+            original = fixture.command('load')['code']
+            pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
+            pipe.request('initialize', token=fixture.token)
+            assert fixture.command('snapshot')['code'] != original
+            assert pipe.request('read', after=0, through=1) == {'events': [dict(event, sequence=1)]}
+            native_io = pipe._io
+            read_after_stop = False
+
+            def delay_read_until_stopped(operation, buffer, size, deadline):
+                nonlocal read_after_stop
+                if operation == 'ReadFile' and not read_after_stop:
+                    while fixture.command('snapshot')['code'] != original:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError('oversized response did not release the native hooks')
+                        time.sleep(.01)
+                    read_after_stop = True
+                return native_io(operation, buffer, size, deadline)
+
+            pipe._io = delay_read_until_stopped
+            try:
+                pipe.request('read', after=0, through=event_count)
+                raise AssertionError('oversized reply was accepted')
+            except RuntimeError as exc:
+                assert str(exc) == (f'response_too_large; bytes={bytes_}; limit={wire_limit}; '
+                                    f'requested_event_count={event_count}'), str(exc)
+            assert read_after_stop and pipe.handle is not None and fixture.command('call')['integer'] == 650
+            return dict(bytes=bytes_, wire_limit=wire_limit, requested_event_count=event_count,
+                        error='response_too_large', hooks_disabled=True, delayed_read_delivered=True)
+        finally:
+            if pipe is not None:
+                pipe.close()
+            fixture.close()
 
 
 def check_diagnostics(binary=DEFAULT_OUTPUT):
@@ -574,6 +823,8 @@ def main():
         return
     result = check_smoke(args.binary)
     result['authenticated_diagnostics'] = check_diagnostics(args.binary)
+    result['oversized_response'] = check_oversized_response(args.binary)
+    result['quiet_mark_boundaries'] = check_quiet_mark_boundaries(args.binary)
     if args.dual_hook:
         result['dual_hook_comparator'] = check_dual_hook(args.binary)
     if args.output:

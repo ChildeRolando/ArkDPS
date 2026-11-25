@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using ArkDPS.Desktop;
 
@@ -229,6 +230,62 @@ internal static class MultiplayerViewTests
         }
     }
 
+    private static void SideDetailsToggle()
+    {
+        var side = new SideFriendlyView();
+        var model = Player(1, "101", 111)["view"]!.AsObject();
+        var full = JsonSerializer.SerializeToElement(model);
+        model["entries"] = new JsonArray();
+        var emptyRanking = JsonSerializer.SerializeToElement(model);
+        var size = new Size(320, 640);
+
+        void Arrange()
+        {
+            side.Measure(size);
+            side.Arrange(new Rect(size));
+            side.UpdateLayout();
+        }
+
+        void Click(FrameworkElement source)
+        {
+            var click = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+            {
+                RoutedEvent = Mouse.PreviewMouseDownEvent
+            };
+            source.RaiseEvent(click);
+        }
+
+        side.Update("battle-a", full);
+        Check("side details start closed", side.DetailViewport.Visibility == Visibility.Collapsed);
+        var rows = side.RankingPanel.Rows;
+        rows.SelectedIndex = 0;
+        Arrange();
+        Check("selecting a sidebar row opens details", side.Details.Owner == "char_same@101" &&
+            side.DetailViewport.Visibility == Visibility.Visible && side.DetailViewport.ActualHeight > 0);
+        double openHeight = side.RankingPanel.ActualHeight;
+        Click(rows);
+        Check("a click outside an operator row does not close details", side.Details.Owner == "char_same@101");
+        side.Update("battle-a", emptyRanking);
+        Check("an operator can leave the recent ranking without losing its open detail",
+            rows.SelectedItem is null && side.Details.Owner == "char_same@101");
+        side.Update("battle-a", full);
+        Arrange();
+        Check("refresh restores the selection for the same open detail", rows.SelectedIndex == 0);
+        Click((ListBoxItem)rows.ItemContainerGenerator.ContainerFromIndex(0));
+        Arrange();
+        Check("clicking the selected row collapses its details and frees ranking space", side.Details.Owner is null &&
+            rows.SelectedItem is null && side.DetailViewport.Visibility == Visibility.Collapsed &&
+            side.RankingPanel.ActualHeight > openHeight);
+        side.Update("battle-a", full);
+        Check("refresh does not reopen collapsed details", rows.SelectedItem is null && side.Details.Owner is null);
+        rows.SelectedIndex = 0;
+        Check("the same row can be selected again to reopen details", side.Details.Owner == "char_same@101" &&
+            side.DetailViewport.Visibility == Visibility.Visible);
+        side.Update("battle-b", full);
+        Check("new battle closes details even when the same actor reappears", rows.SelectedItem is null &&
+            side.Details.Owner is null && side.DetailViewport.Visibility == Visibility.Collapsed);
+    }
+
     private static void SideRankingNameAndSummary()
     {
         var selected = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
@@ -338,6 +395,7 @@ internal static class MultiplayerViewTests
             Portraits.Get("char_618_acrbot", false) is System.Windows.Media.Imaging.CroppedBitmap { PixelWidth: 48, PixelHeight: 48 } &&
             Portraits.Get("char_618_acrbot", true) is System.Windows.Media.Imaging.CroppedBitmap { PixelWidth: 48, PixelHeight: 48 });
         StableActorControls();
+        SideDetailsToggle();
         SideRankingNameAndSummary();
         RetainedDefenseTransitions();
         var surface = new MultiplayerView();

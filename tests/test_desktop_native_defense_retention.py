@@ -15,7 +15,7 @@ from connection import ConnectionConfig
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverReadRetry, ObserverStatus
 from battle_lifecycle import native_autochess_scene
-from panel_model import PanelConfig
+from panel_model import Category, PanelConfig
 from test_multiplayer_integration import CID
 from test_native_autochess_leading_zero_uid import LEADING_UIDS, leading_zero_battle
 
@@ -26,7 +26,7 @@ def digest(value):
 
 
 def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
-              mode_by_epoch=None, settings_by_action=None):
+              mode_by_epoch=None, settings_by_action=None, assist_players=(1, 2, 3, 4)):
     """Run real CollectionSession.read + worker FIFO from one owned PC source."""
     state = bridge.DesktopState(tmp_path / 'desktop')
     state.layout = replace(state.layout, multiplayer_enabled=multiplayer_enabled, panels=(PanelConfig(),
@@ -49,6 +49,9 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
         mode = mode_for(raw)
         if mode is not None:
             raw['collection_mode'] = mode
+        if raw.get('phase') == 5:
+            raw['memberships'] = [member for member in raw['memberships']
+                                  if member['player_index'] in assist_players]
         for event in packet.get('events', ()):
             scope = event.get('native_autochess_scope')
             if scope is not None and (mode := mode_for(scope)) is not None:
@@ -65,8 +68,7 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
         return with_collection_mode(packet)
 
     battle.observer.read_through = batch
-    if mode_by_epoch:
-        battle.observer.mark = lambda: with_collection_mode(original_mark())
+    battle.observer.mark = lambda: with_collection_mode(original_mark())
     battle.observer.status = ObserverStatus.READY
     battle.observer.stop = lambda: None
     steps, accepted, saved, sessions = [], [], {}, []
@@ -120,7 +122,10 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
             elif action == 'assist_hits':
                 battle.advance(2)
                 first = len(battle.records) + 1
-                battle.advance(2, [battle.hit(first + i - 1, i, i * 1000) for i in range(1, 5)])
+                battle.advance(2, [battle.hit(sequence, player, player * 1000)
+                                   for sequence, player in enumerate(assist_players, first)])
+            elif action == 'assist_terminal':
+                battle.advance(3, state=3, phase=8, epoch=4)
             elif action == 'prepare':
                 battle.advance(0, state=2, phase=3, epoch=4)
             elif action == 'late_terminal':
@@ -134,6 +139,17 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
                 first = len(battle.records) + 1
                 amount = 0 if action == 'next_defense_zero_hits' else 7
                 battle.advance(1, [battle.hit(first + i - 1, i, i * amount) for i in range(1, 5)])
+            elif action in ('next_defense_local_heal', 'next_defense_foreign_heal', 'next_defense_zero_heal'):
+                battle.advance(1)
+                actor = 2 if action == 'next_defense_foreign_heal' else 3
+                amount = 0 if action == 'next_defense_zero_heal' else 17
+                settlement = battle.hit(len(battle.records) + 1, actor, amount)
+                event = {key: settlement[key] for key in (
+                    'sequence', 'frame', 'game_time', 'source', 'source_character_uid',
+                    'amount', 'native_autochess_scope')}
+                battle.advance(1, [dict(event, kind='healing', proof={'method': 'Entity.ApplyModifier'})])
+            elif action == 'after_defense_prepare':
+                battle.advance(0, state=2, phase=3, epoch=6, native_round=6)
             elif action == 'absent':
                 battle.active = False
             elif action == 'new_match_prepare':
@@ -217,7 +233,7 @@ def test_multiplayer_setting_latches_at_next_combat_and_preserves_retained_defen
     state, battle, _, _, views, _ = run_chain(tmp_path, monkeypatch,
         ['defense_baseline', 'defense_hits', 'ordinary_retry', 'assist_busy', 'assist_baseline',
          'assist_hits', 'prepare', 'next_defense_baseline', 'next_defense_hits'],
-        multiplayer_enabled=initial, mode_by_epoch={1: old_mode, 3: new_mode, 5: new_mode},
+        multiplayer_enabled=initial, mode_by_epoch={1: old_mode, 3: 'all', 5: new_mode},
         settings_by_action={'ordinary_retry': not initial})
     assert views['defense_hits']['multiplayer_active'] is initial
     assert view_values(views['defense_hits']) == [300]
@@ -228,8 +244,7 @@ def test_multiplayer_setting_latches_at_next_combat_and_preserves_retained_defen
     assert_assist_waiting(views['assist_busy'])
     assert views['assist_busy']['multiplayer_active'] is not initial
     assert views['assist_busy']['multiplayer_mode_pending'] is False
-    expected_assist = [3000] if initial else [4000, 3000, 2000, 1000]
-    assert view_values(views['assist_hits']) == expected_assist
+    assert view_values(views['assist_hits']) == [4000, 3000, 2000, 1000]
     assert view_values(views['prepare']) == [300]
     assert '上一场防御' in views['prepare']['status_text']
     assert views['prepare']['multiplayer'] is None
@@ -237,6 +252,37 @@ def test_multiplayer_setting_latches_at_next_combat_and_preserves_retained_defen
     assert views['next_defense_hits']['multiplayer_active'] is not initial
     assert (views['next_defense_hits']['multiplayer'] is not None) is not initial
     assert state.last is not None and battle.commits[-1] == 12
+
+
+@pytest.mark.parametrize('assist_mode', ['local', 'all'], ids=['historical-local', 'current-all'])
+def test_default_off_assist_projects_only_verified_battlefield_actors(tmp_path, monkeypatch, assist_mode):
+    _, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'assist_busy', 'assist_baseline', 'assist_hits',
+         'assist_terminal', 'prepare', 'next_defense_baseline', 'next_defense_hits'],
+        multiplayer_enabled=False, mode_by_epoch={1: 'local', 3: assist_mode, 4: assist_mode, 5: 'local'},
+        assist_players=(1, 2))
+    assist = next(raw for action, raw, _ in accepted if action == 'assist_hits')
+    assert assist['autochess_context']['self_player_uid'] == LEADING_UIDS[2]
+    assert [member['player_index'] for member in assist['autochess_context']['memberships']] == [1, 2]
+    assert assist['multiplayer']['players'][2]['statistics']['rows'] == {}
+    assert assist['multiplayer']['players'][2]['observed_damage'] is None
+    for panel in views['assist_hits']['panels']:
+        assert panel['scope_label'] == '当前协防战场'
+        entries = {entry['owner_id']: (entry['player_uid'], entry['actor_uid'], entry['value'])
+                   for entry in panel['entries']}
+        expected = {f'{LEADING_UIDS[i - 1]}:{CID}#{i * 100 + 1}': (LEADING_UIDS[i - 1], i * 100 + 1, i * 1000)
+                    for i in (1, 2)}
+        assert entries == (expected if assist_mode == 'all' else {})
+    assert_assist_waiting(views['assist_busy'])
+    assert all(view['multiplayer'] is None and view['multiplayer_active'] is False
+               and view['multiplayer_mode_pending'] is False for view in views.values())
+    for action, amount in (('defense_hits', 300), ('assist_terminal', 300), ('prepare', 300),
+                           ('next_defense_hits', 21)):
+        assert view_values(views[action]) == [amount]
+    for action in ('defense_hits', 'next_defense_hits'):
+        defense = next(raw['multiplayer'] for step, raw, _ in accepted if step == action)
+        assert defense['collection_mode'] == 'local'
+        assert all(player['statistics'] is None for player in defense['players'] if player['is_local'] is False)
 
 
 def test_guarded_assist_without_an_accepted_sample_restores_defense_on_prepare(tmp_path, monkeypatch):
@@ -296,7 +342,24 @@ def test_same_scope_late_terminal_improves_retained_defense_without_switching_sc
     assert_retained(views['late_terminal'], terminal['multiplayer']['scope'], (110, 210, 310, 410))
 
 
-def test_new_defense_keeps_prior_result_until_its_first_settlement(tmp_path, monkeypatch):
+def test_late_terminal_refreshes_review_cache_during_a_new_defense(tmp_path, monkeypatch):
+    state, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'deferred_terminal', 'assist_busy', 'prepare',
+         'next_defense_baseline', 'late_terminal'])
+    terminal = next(raw for action, raw, _ in accepted if action == 'deferred_terminal')
+    current = next(raw for action, raw, _ in accepted if action == 'next_defense_baseline')
+    assert state.last is current
+    assert state._defense_sample['multiplayer'] == terminal['multiplayer']
+    assert state._defense_sample['multiplayer'] is not terminal['multiplayer']
+    after_tail = views['late_terminal']
+    assert after_tail['battle_id'] == current['battle_id']
+    assert after_tail['game_time'] == current['game_time']
+    assert after_tail['panels'] == views['next_defense_baseline']['panels']
+    assert after_tail['multiplayer']['scope'] == current['multiplayer']['scope']
+    assert after_tail['totals']['damage'] is None
+
+
+def test_accepted_new_defense_displays_its_own_baseline_before_first_settlement(tmp_path, monkeypatch):
     _, _, _, events, views, accepted = run_chain(tmp_path, monkeypatch,
         ['defense_baseline', 'defense_hits', 'assist_busy', 'assist_baseline', 'prepare',
          'next_defense_baseline', 'next_defense_hits'])
@@ -305,8 +368,12 @@ def test_new_defense_keeps_prior_result_until_its_first_settlement(tmp_path, mon
     assert_retained(views['prepare'], old['multiplayer']['scope'])
     snapshot = views['next_defense_baseline']
     assert new['multiplayer']['scope'] != old['multiplayer']['scope']
-    assert_retained(snapshot, old['multiplayer']['scope'])
-    assert '等待本轮防御数据' in snapshot['status_text']
+    assert snapshot['battle_id'] == new['battle_id'] != old['battle_id']
+    assert snapshot['game_time'] == new['game_time']
+    assert view_values(snapshot) == [] and four_values(snapshot) == [[], [], [], []]
+    assert snapshot['totals']['damage'] is None
+    assert snapshot['multiplayer']['scope'] == new['multiplayer']['scope']
+    assert not snapshot['multiplayer'].get('previous_defense')
     assert view_values(views['next_defense_hits']) == [21]
     assert four_values(views['next_defense_hits']) == [[7], [14], [21], [28]]
     assert views['next_defense_hits']['multiplayer']['scope'] == new['multiplayer']['scope']
@@ -319,11 +386,14 @@ def test_new_defense_keeps_prior_result_until_its_first_settlement(tmp_path, mon
 
 
 def test_real_zero_settlement_is_useful_and_replaces_prior_defense(tmp_path, monkeypatch):
-    _, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+    state, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
         ['defense_baseline', 'defense_hits', 'prepare', 'next_defense_baseline',
          'next_defense_zero_hits'])
     old = next(raw for action, raw, _ in accepted if action == 'defense_hits')
-    assert_retained(views['next_defense_baseline'], old['multiplayer']['scope'])
+    assert_retained(views['prepare'], old['multiplayer']['scope'])
+    baseline = views['next_defense_baseline']
+    assert baseline['multiplayer']['scope'] != old['multiplayer']['scope']
+    assert [p['observed_damage'] for p in baseline['multiplayer']['players']] == [None] * 4
     current = views['next_defense_zero_hits']['multiplayer']
     assert current['scope'] != old['multiplayer']['scope']
     assert not current.get('previous_defense')
@@ -331,6 +401,25 @@ def test_real_zero_settlement_is_useful_and_replaces_prior_defense(tmp_path, mon
     raw = next(raw for action, raw, _ in accepted if action == 'next_defense_zero_hits')
     assert all(any(a['ledger']['nominal_hits'] > 0 for a in p['actor_ledgers'])
                for p in raw['multiplayer']['players'])
+    assert state._defense_sample['multiplayer'] == raw['multiplayer']
+    assert state._defense_sample['multiplayer'] is not raw['multiplayer']
+
+
+@pytest.mark.parametrize('actor', ('local', 'foreign', 'zero'))
+def test_local_healing_only_defense_replaces_prior_observed_result(tmp_path, monkeypatch, actor):
+    action = f'next_defense_{actor}_heal'
+    state, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'prepare', 'next_defense_baseline', action, 'after_defense_prepare'])
+    old = next(raw for step, raw, _ in accepted if step == 'defense_hits')
+    healed = next(raw for step, raw, _ in accepted if step == action)
+    assert views[action]['battle_id'] == healed['battle_id']
+    assert views[action]['panels'][0]['entries'] == []
+    expected = healed if actor == 'local' else old
+    assert state._defense_sample['battle_id'] == expected['battle_id']
+    state.layout = replace(state.layout, panels=(PanelConfig(category=Category.HEALING),))
+    view = state.snapshot()
+    assert view['battle_id'] == expected['battle_id']
+    assert view_values(view) == ([17] if actor == 'local' else [])
 
 
 def test_guarded_absence_invalidates_defense_retention_instead_of_resurrecting_it(tmp_path, monkeypatch):

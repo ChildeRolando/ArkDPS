@@ -331,6 +331,11 @@ class PanelSourceRow:
     # coverage never covered this row.
     observed_damage: float | None = None
     observed_healing: float | None = None
+    observed_healing_total: float | None = None
+    observed_healing_complete: bool = False
+    observed_recent_healing: float | None = None
+    observed_recent_healing_window: tuple[float, float] | None = None
+    observed_recent_healing_complete: bool = False
     source_complete: bool = True
     partial_damage: Mapping = field(default_factory=dict)
     settled_damage: Mapping | None = None
@@ -352,6 +357,9 @@ class PanelSourceRow:
         return self.settled_damage is not None and 'overkill_coverage_complete' in self.settled_damage
 
     def total(self, category: Category) -> float | None:
+        if category is Category.HEALING and self.event_only_projection and self.healing is None:
+            value = self.observed_healing_total
+            return value if _finite(value) and value > 0 else None
         if category is Category.DAMAGE and self.event_damage_unknown:
             return None
         damage = self.damage
@@ -367,6 +375,10 @@ class PanelSourceRow:
                 Category.SHIELD: shield}[category]
 
     def recent(self, category: Category) -> float | None:
+        if category is Category.HEALING and self.event_only_projection and self.recent_healing is None:
+            value = self.observed_recent_healing
+            return (value if self.observed_recent_healing_complete and _finite(value) and value >= 0
+                    and _valid_window(self.observed_recent_healing_window) else None)
         if category is Category.DAMAGE and self.event_damage_unknown:
             return None
         damage = self.recent_damage
@@ -503,6 +515,9 @@ class PanelSourceRow:
         return None
 
     def recent_window(self, category: Category) -> tuple[float, float] | None:
+        if (category is Category.HEALING and self.event_only_projection and self.recent_healing is None
+                and self.recent(category) is not None):
+            return self.observed_recent_healing_window
         if (category is Category.DAMAGE and self.event_only_projection
                 and self.recent_damage is None and self.settled_damage is not None):
             return self.settled_damage.get('observed_recent_damage_window')
@@ -623,6 +638,10 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
         settled = _settled_damage(row)
         legacy_scope_reason = damage_scope_reason(row)
         scope_reason = None if settled is not None else legacy_scope_reason
+        healing_window = row.get('observed_recent_healing_window')
+        healing_window_complete = (row.get('observed_recent_healing_complete') is True
+                                   and _valid_window(healing_window)
+                                   and 0 <= healing_window[0] < healing_window[1] == result.get('game_time'))
         rows.append(PanelSourceRow(
             owner_id=owner,
             name=row.get('name') or owner,
@@ -642,6 +661,11 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
             presence_complete=bool(row.get('presence_complete', False)),
             observed_damage=row.get('observed_damage'),
             observed_healing=row.get('observed_healing'),
+            observed_healing_total=row.get('observed_healing_total', row.get('observed_healing')),
+            observed_healing_complete=row.get('observed_healing_complete') is True,
+            observed_recent_healing=row.get('observed_recent_healing'),
+            observed_recent_healing_window=healing_window,
+            observed_recent_healing_complete=healing_window_complete,
             damage_by_type=row.get('damage_by_type') or {},
             recent_damage_by_type=row.get('recent_damage_by_type') or {},
             overkill=None if legacy_scope_reason else row.get('overkill_damage'),
@@ -748,6 +772,7 @@ class PanelView:
     footer_rate_complete: bool = False
     footer_total_display: str = '—'
     footer_rate_display: str = '—'
+    observed_healing_only: bool = False
 
 
 def _finite(value: float | None) -> bool:
@@ -1080,6 +1105,13 @@ def detail_rates(rows: Iterable[PanelSourceRow],
 def _coverage(row: PanelSourceRow) -> dict:
     partial = row.partial_damage
     coverage = {}
+    if (row.event_only_projection and row.healing is None and not row.observed_healing_complete
+            and row.total(Category.HEALING) is not None):
+        coverage['observed_healing'] = dict(
+            failed_share=None, basis=None, basis_kind='scope', reason='仅统计已观察到的治疗事件')
+        if _finite(row.engagement_healing):
+            coverage['engagement_healing'] = dict(
+                failed_share=None, basis=None, basis_kind='scope', reason='仅统计已观察到的治疗和活跃时间')
     if row.damage_scope_reason:
         for key in ('effective_damage', 'recent_effective_damage', 'engagement_effective_damage',
                     'engagement', 'mitigation', 'skill_damage', 'skill_effective_damage'):
@@ -1159,31 +1191,39 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
     typed = _effective_by_type(row)
     effective = _effective_damage(row)
     hits = lane.get('observed_hits')
+    has_hits = type(hits) is int and hits > 0
+    unverified = lane.get('unverified_hits')
+    settled_hits_verified = has_hits and type(unverified) is int and unverified == 0
     for key in ('effective_damage', 'recent_effective_damage', 'engagement_effective_damage',
                 'effective_damage_by_type', 'engagement', 'skill_damage', 'skill_effective_damage', 'mitigation'):
         coverage.pop(key, None)
 
-    def mark(key, share_key=None, *, basis=None, reason=reason):
+    def mark(key, share_key=None, *, basis=None, reason=reason, scope_only=False):
         share = lane.get(share_key) if share_key else None
-        if not _finite(share) or not 0 <= share <= 1:
+        if scope_only or not _finite(share) or not 0 <= share <= 1:
             share = basis = None
         item = coverage[key] = dict(failed_share=share, basis=basis, reason=reason)
-        if share_key:
+        if scope_only:
+            item['basis_kind'] = 'scope'
+        elif share_key:
             item['basis_kind'] = 'hits'
-        unverified = lane.get('unverified_hits')
         if (share_key in ('unverified_share', 'engagement_effective_damage_unverified_share')
-                and share is not None and type(hits) is int and type(unverified) is int
-                and 0 <= unverified <= hits and hits > 0 and math.isclose(share, unverified / hits)):
+                and share is not None and has_hits and type(unverified) is int
+                and 0 < unverified <= hits and math.isclose(share, unverified / hits)):
             item.update(unverified_hits=unverified, observed_hits=hits)
 
     if not complete and _finite(effective):
-        mark('effective_damage', 'unverified_share', basis='可对账的伤害命中数')
+        mark('effective_damage', 'unverified_share', basis='可对账的伤害命中数',
+             scope_only=settled_hits_verified)
     if not complete and _finite(row.effective_observed()):
-        mark('engagement_effective_damage', 'engagement_effective_damage_unverified_share', basis='可对账的伤害命中数')
+        mark('engagement_effective_damage', 'engagement_effective_damage_unverified_share',
+             basis='可对账的伤害命中数', scope_only=settled_hits_verified)
     if not row.settled_recent_complete() and _valid_window(row.effective_recent_window()) and _finite(row.effective_recent()):
-        mark('recent_effective_damage', 'recent_effective_damage_unverified_share', basis='近 5 秒可对账的伤害命中数')
+        mark('recent_effective_damage', 'recent_effective_damage_unverified_share',
+             basis='近 5 秒可对账的伤害命中数', scope_only=settled_hits_verified)
     if lane.get('engagement_damage_complete', complete) is not True and _finite(row.engagement(Category.DAMAGE)):
-        mark('engagement', 'engagement_damage_unverified_share', basis='可对账的伤害命中数')
+        mark('engagement', 'engagement_damage_unverified_share', basis='可对账的伤害命中数',
+             scope_only=has_hits and type(lane.get('nominal_hits')) is int and lane['nominal_hits'] == hits)
     if typed and (not complete or exceeds_native_damage(effective, sum(typed.values()))):
         mark('effective_damage_by_type')
     for suffix in ('', '_effective'):
@@ -1191,19 +1231,21 @@ def _settled_coverage(row: PanelSourceRow, coverage: dict) -> dict:
         non_skill = lane.get('observed_non_skill_damage' + suffix)
         key = 'skill_effective_damage' if suffix else 'skill_damage'
         missed = lane.get('skill_effective_unclassified_hits' if suffix else 'skill_unclassified_hits')
-        counted = type(missed) is int and type(hits) is int and 0 <= missed <= hits and hits > 0
+        counted = has_hits and type(missed) is int and 0 <= missed <= hits
         if (lane.get('skill_split' + suffix + '_complete') is not True
                 and (counted and missed > 0 or _finite(skill) and _finite(non_skill) and skill + non_skill > 0)):
             mark(key, key + '_unverified_share', basis='可对账的伤害命中数',
-                 reason=lane.get('skill_split_reason') or reason)
-            if counted:
+                 reason=lane.get('skill_split_reason') or reason, scope_only=counted and missed == 0)
+            if counted and missed > 0:
                 coverage[key].update(unverified_hits=missed, observed_hits=hits)
                 initial = lane.get('skill_initial_unknown_hits')
                 if type(initial) is int and 0 <= initial <= missed:
                     coverage[key]['skill_initial_unknown_hits'] = initial
     if lane.get('mitigation_complete') is not True and _finite(lane.get('observed_mitigation_rate')):
+        matched = lane.get('mitigation_matched_hits')
         mark('mitigation', 'mitigation_unverified_share', basis='可对账的伤害命中数',
-             reason=lane.get('mitigation_reason') or reason)
+             reason=lane.get('mitigation_reason') or reason,
+             scope_only=has_hits and type(matched) is int and matched == hits)
     if row.damage is None and _finite(lane.get('observed_boss_damage')):
         if lane.get('observed_boss_damage_complete') is not True:
             mark('boss_damage')
@@ -1227,8 +1269,10 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                         + ' 游戏秒，之后未知')
     else:
         event_reason = '事件观察未建立覆盖'
+    healing = row.total(Category.HEALING)
     detail = {'damage_by_type': dict(_damage_by_type(row)),
-            'damage': row.total(Category.DAMAGE), 'healing': row.healing,
+            'damage': row.total(Category.DAMAGE), 'healing': healing,
+            'healing_is_observed': row.healing is None and healing is not None,
             'damage_scope_reason': row.damage_scope_reason,
             'shield_absorbed': row.total(Category.SHIELD),
             'overkill_damage': row.overkill,
@@ -1302,8 +1346,11 @@ def _owner_detail(row: PanelSourceRow, *, rate_reason: str) -> dict:
                 observed = detail['observed_' + key] = lane.get('observed_' + key)
                 detail[key] = observed if split else None
             if not split:
-                reason = (lane.get('reason') or lane.get('skill_split_reason')
-                          or row.damage_scope_reason or row.skill_split_reason)
+                # A skill-state failure and a stream gap are independent.
+                # Keep both; a generic gap must not hide the specific failure.
+                reason = ('；'.join(dict.fromkeys(value for value in
+                    (lane.get('skill_split_reason'), lane.get('reason')) if value))
+                    or row.damage_scope_reason or row.skill_split_reason)
                 if reason or lane.get('observed_hits'):
                     detail['skill_split' + suffix + '_reason'] = reason or '部分命中缺少技能窗口证据'
     return detail
@@ -1324,6 +1371,8 @@ def render_panel(config: PanelConfig,
     category, ranking = config.category, config.ranking
     effective = config.effective_only and category is Category.DAMAGE
     observed_only = category is Category.DAMAGE and any(row.event_only_projection for row in rows)
+    observed_healing = category is Category.HEALING and any(row.event_only_projection for row in rows)
+    team_complete = team_complete and not observed_healing
     recent_ranking = ranking is Ranking.RECENT or (
         ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S)
     engagement_ranking = ranking is Ranking.DPS and config.rate_basis is RateBasis.ENGAGEMENT
@@ -1351,6 +1400,7 @@ def render_panel(config: PanelConfig,
         return _effective_damage(row) if effective else row.total(category)
 
     total_gap = ('shield' if category is Category.SHIELD else
+                 'observed_healing' if observed_healing and ranking is not Ranking.RECENT else
                  'recent_effective_damage' if effective and ranking is Ranking.RECENT else
                  'effective_damage' if effective else
                  'observed_recent_damage' if observed_only and ranking is Ranking.RECENT else
@@ -1371,6 +1421,11 @@ def render_panel(config: PanelConfig,
 
     def metric_complete(row: PanelSourceRow, basis: RateBasis | None = None,
                         *, recent: bool = False) -> bool:
+        if observed_healing and row.event_only_projection and row.source_complete:
+            if (recent or basis is RateBasis.RECENT_5S) and row.recent_healing is None:
+                return row.recent(category) is not None
+            if basis is None and not recent and row.healing is None:
+                return row.observed_healing_complete and row.total(category) is not None
         if category is Category.DAMAGE and row.event_damage_unknown:
             return False
         if category is Category.DAMAGE and basis is RateBasis.ENGAGEMENT and row.settled_damage is not None:
@@ -1555,6 +1610,9 @@ def render_panel(config: PanelConfig,
         metric_label = '仅首领 · ' + metric_label
     if observed_only:
         metric_label = '已观察 · ' + metric_label
+    if observed_healing:
+        metric_label = {Ranking.TOTAL: '已观察治疗', Ranking.RECENT: '近 5 秒已观察治疗',
+                        Ranking.DPS: '已观察治疗 · HPS'}[ranking]
 
     details = {owner: _owner_detail(row, rate_reason=rate_reason)
                for owner, row in row_by_owner.items()}
@@ -1587,7 +1645,8 @@ def render_panel(config: PanelConfig,
             coverage={key: gap for key, gap in coverage_by_owner[owner].items()
                       if key in (total_gap, rate_gap)}))
     entries.sort(key=lambda e: (-e.value, e.name, e.owner_id))
-    return PanelView(config=config, title=config.display_title, entries=entries,
+    title = metric_label if observed_healing and config.title is None else config.display_title
+    return PanelView(config=config, title=title, entries=entries,
                      total=sum(displayed.values()), denominator=denominator,
                      share_known=share_known, share_reason=share_reason,
                      rate_supported=rate_supported, rate_label=rate_label,
@@ -1599,6 +1658,7 @@ def render_panel(config: PanelConfig,
                      share_scope=share_scope,
                      footer_total=footer_total, footer_rate=footer_rate,
                      footer_total_display=format_compact(footer_total, number_units),
+                     observed_healing_only=observed_healing,
                      footer_rate_display=f'{format_compact(footer_rate, number_units)}/s' if footer_rate is not None else '—',
                      footer_total_complete=(footer_total is not None and team_complete and team_total_complete
                                             and certified_totals == len(rows)),

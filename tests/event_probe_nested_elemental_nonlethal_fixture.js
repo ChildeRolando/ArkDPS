@@ -8,10 +8,10 @@ const fixed=value=>BigInt(Math.round(value*4294967296));
 const faults=['parent_callback_not_returned','missing_parent_real','parent_hp_mismatch',
  'changed_parent_real','changed_parent_hp','changed_parent_source_uid','changed_parent_source_cid',
  'changed_parent_source_data_uid','changed_target_uid','changed_target_cid','changed_target_instance',
- 'changed_parent_type','parent_cancelled','cross_frame','cross_time','cross_scope','second_child',
+ 'changed_parent_type','parent_cancelled','cross_frame','cross_time','cross_scope','second_child_hp_discontinuous',
  'child_delta_mismatch','child_hp_mismatch','child_cancelled','child_shield_unknown',
  'child_incomplete','child_settlement_amount','child_settlement_uid','child_settlement_instance',
- 'child_settlement_clock','child_burst_delta','explicit_child_source','reused_modifier'];
+ 'child_settlement_clock','child_burst_delta','changed_child_source','reused_modifier'];
 function run(platform,group,index,fault=null){
  const a=group.raw_child_entry.record,b=group.raw_child_return.record;
  const f=fixture({platform,settlement:true,sourcePath:path.join(__dirname,'..',
@@ -21,7 +21,7 @@ function run(platform,group,index,fault=null){
  f.write(source.add(0x538).readPointer().add(0x6c),a.parent_source_character_uid);
  f.write(target,f.enemyClass);f.write(target.add(0x25),1);f.write(target.add(0x26),0);
  const parent=f.modifier(source,target,a.parent_amount,0,group.parent_type);
- const child=f.modifier(fault==='explicit_child_source'?source:f.ptr(0),target,a.child_amount,0,a.child_type);
+ const child=f.modifier(f.ptr(0),target,a.child_amount,0,a.child_type);
  const actualBar=group.raw_elemental_bar.event,bar=f.modifier(source,target,actualBar.amount,0,0);
  f.write(bar.add(0x60),5);
  if(fault?.startsWith('child_settlement')||fault==='child_incomplete'){
@@ -56,13 +56,15 @@ function run(platform,group,index,fault=null){
   f.write(parent,f.ptr(0));f.write(parent.add(0x68),5);f.write(parent.add(0x30),fixed(a.child_amount));
  }
  apply.onEnter.call(inner,[target,actualChild,f.ptr(0)]);
+ if(fault==='changed_child_source')f.write(actualChild,source);
  if(fault==='child_shield_unknown')inner.numericShieldUnknown=true;
  if(fault==='child_cancelled')f.write(actualChild.add(0x70),1);
  f.write(actualChild.add(0x48),fixed(b.child_real_delta+(fault==='child_delta_mismatch'?1:0)));
  f.write(target.add(0x40),fixed(b.target_hp+(fault==='child_hp_mismatch'?1:0)));
  apply.onLeave.call(inner);apply.onLeave.call(elemental);
- if(fault==='second_child'){
+ if(fault==='second_child_hp_discontinuous'){
   const extra=f.modifier(f.ptr(0),target,1,0,5),call={threadId:1};
+  f.write(target.add(0x40),fixed(b.target_hp-1));
   apply.onEnter.call(call,[target,extra,f.ptr(0)]);f.write(extra.add(0x48),fixed(-1));
   f.write(target.add(0x40),fixed(b.target_hp-1));apply.onLeave.call(call);
  }

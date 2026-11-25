@@ -20,7 +20,7 @@ function loadProbeSource(sourcePath) {
 
 function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false,
-  loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, nullClassIndex = null,
+  loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, roundResetMethod = false, nullClassIndex = null,
   unreadableClassIndex = null, extraNullRow = false, lazySkillFields = false,
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
   fieldApiLeavesTableNull = false, fieldApiStalls = false, lazySkillMethods = false,
@@ -132,6 +132,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   });
   const controllerMethods = {OnDestroy: 0, OnCharacterFinished: 2};
   if (stateMethod) controllerMethods.set_state = 1;
+  if (roundResetMethod) controllerMethods.ClearRunTimeData = roundResetMethod.arity ?? 0;
   const controllerClass = klass('BattleController', 'Torappu.Battle', {
     s_fixedFrameCnt: 0x14, s_fixedPlayTime: 0x18, m_logger: loggerMetadataOffset??physicalLogger,
     m_levelData: physicalLayout?.level??0x160, m_state: stateMetadataOffset??physicalState,
@@ -159,17 +160,17 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const skillData = klass('SkillData', 'Torappu', {prefabKey: 0x50, skillId: 0x18, name: 0x10});
   const characterData = klass('BattleCharacterData', 'Torappu.Battle', {uniqueId: 0x6c});
   const skillCastFieldTypes=new Map(),skillCastMethodTypes=new Map(),skillCastTypeInfo=new Map();
+  function type(name,namespace,{valueType=false,size=0,byRef=false,isEnum=false,klassPointer=null}={}){
+    const k=klassPointer||klass(name,namespace,{}),t=alloc();
+    skillCastTypeInfo.set(t.toString(),{klass:k,valueType,size,byRef,isEnum});
+    skillCastTypeInfo.set(k.toString(),{klass:k,valueType,size,byRef,isEnum});
+    return t;
+  }
   let abilityClass=null,castSkillClass=null;
   if(skillCastState){
     const options=typeof skillCastState==='object'?skillCastState:{};
     abilityClass=klass('Ability','Torappu.Battle',{});
     castSkillClass=klass('CastSkillWithLimitTimes','Torappu.Battle',{});
-    function type(name,namespace,{valueType=false,size=0,byRef=false,isEnum=false,klassPointer=null}={}){
-      const k=klassPointer||klass(name,namespace,{}),t=alloc();
-      skillCastTypeInfo.set(t.toString(),{klass:k,valueType,size,byRef,isEnum});
-      skillCastTypeInfo.set(k.toString(),{klass:k,valueType,size,byRef,isEnum});
-      return t;
-    }
     const boolean=type('Boolean','System',{valueType:true,size:1});
     const integer=type('Int32','System',{valueType:true,size:4});
     const voidType=type('Void','System',{valueType:true});
@@ -185,6 +186,11 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       if(m.add(0x18).readPointer().readCString()==='OnCastFinish')skillCastMethodTypes.set(m.toString(),
         {parameters:[ability,reason,last],result:voidType,flags:options.staticMethod?452|0x10:452});
     }
+  }
+  if(roundResetMethod){
+    const reset=methodTables.get(controllerClass.toString()).records[Object.keys(controllerMethods).indexOf('ClearRunTimeData')];
+    skillCastMethodTypes.set(reset.toString(),{parameters:[],flags:roundResetMethod.static?0x10:0,
+      result:type(roundResetMethod.nonVoid?'Int32':'Void','System',{byRef:roundResetMethod.byRef})});
   }
   const parent = alloc(), singletonStatics = alloc(), clockStatics = alloc();
   const controller = alloc(), native = alloc(), logger = alloc(), stats = alloc(), level = alloc();
@@ -239,7 +245,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
       return methodIteratorMismatch&&k.equals(basicSkill)?methodTables.get(entity.toString()).records[0]:metadata.records[index];
     },
   };
-  if(skillCastState)Object.assign(exports,{
+  if(skillCastState||roundResetMethod)Object.assign(exports,{
     il2cpp_class_from_type:t=>skillCastTypeInfo.get(t.toString()).klass,
     il2cpp_type_is_byref:t=>!!skillCastTypeInfo.get(t.toString()).byRef,
     il2cpp_class_get_namespace:k=>k.add(0x18).readPointer(),

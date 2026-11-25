@@ -80,6 +80,159 @@ def player(result, index):
     return next(p for p in result['players'] if p['player_uid'] == PLAYERS[index - 1]['uid'])
 
 
+@pytest.mark.parametrize('mode', ['all', 'local'])
+@pytest.mark.parametrize('fault', [None, 'legacy', 'unlocalized', 'mode', 'missing_mode', 'scope', 'uid', 'future', 'bool'])
+def test_native_settlement_quality_gap_is_local_only_with_exact_source_witness(mode, fault):
+    meter = MultiplayerBattleStatistics()
+    roster = [member(1), member(1, uid=102, cid='char_peer_other'), member(3)]
+    native = lambda t: dict(context(t, members=roster), collection_mode=mode)
+    metadata = dict(platform='native_pc', stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m12')
+    consume(meter, 0, native=native(0), battle_metadata=metadata)
+    issue = dict(source=CID, source_character_uid=101, frame=30, game_time=1,
+                 native_autochess_scope=stamp(when=1, collection_mode=mode))
+    quality = dict(enemy_damage_unknown=True, damage_settlement_unknown=True)
+    if fault != 'legacy':
+        quality.update(damage_settlement_source_quality_version=1,
+                       damage_settlement_unlocalized_unknown=fault == 'unlocalized',
+                       damage_settlement_source_issues=[issue])
+    if fault == 'mode':
+        issue['native_autochess_scope']['collection_mode'] = 'all' if mode == 'local' else 'local'
+    elif fault == 'missing_mode':
+        issue['native_autochess_scope'].pop('collection_mode')
+    elif fault == 'scope':
+        issue['native_autochess_scope']['scope_key'] += '1'
+    elif fault == 'uid':
+        issue['source_character_uid'] = 999
+    elif fault == 'future':
+        issue.update(frame=90, game_time=3, native_autochess_scope=stamp(when=3, collection_mode=mode))
+    elif fault == 'bool':
+        issue['source_character_uid'] = True
+
+    event_scope = stamp(when=1, collection_mode=mode)
+    events = [hit(1, 1, 1, 11, event_scope=event_scope),
+              hit(2, 1, 1, 22, uid=102, cid='char_peer_other', event_scope=event_scope),
+              hit(3, 3, 1, 33, event_scope=event_scope)]
+    result = consume(meter, 2, events, native=native(2), quality=quality, battle_metadata=metadata)
+    local = player(result, 3)['actor_ledgers'][0]['ledger']
+    assert local['effective_damage'] == 33
+    assert local['unverified_hits'] == 0
+    assert local['complete'] is (fault is None)
+    assert local['unverified_share'] == (0 if fault is None else None)
+    assert meter._players[PLAYERS[2]['uid']].stream.sequence == 3
+    if mode == 'all':
+        peer = {r['unique_id']: r['ledger'] for r in player(result, 1)['actor_ledgers']}
+        assert peer[101]['complete'] is False and peer[101]['effective_damage'] == 11
+        assert peer[101]['unverified_hits'] == 0 and peer[101]['unverified_share'] is None
+        assert peer[102]['complete'] is (fault is None) and peer[102]['effective_damage'] == 22
+    else:
+        assert set(meter._players) == {PLAYERS[2]['uid']}
+        assert not player(result, 1)['actor_ledgers']
+
+
+@pytest.mark.parametrize('mode,original_slot', [('all', 1), ('local', 3)])
+@pytest.mark.parametrize('publish_later', [False, True])
+def test_settlement_quality_never_uses_current_owner_after_historical_owner_conflict(
+        mode, original_slot, publish_later):
+    meter = MultiplayerBattleStatistics()
+    native = lambda when, slot: dict(context(when, members=[member(slot, uid=101)]), collection_mode=mode)
+    metadata = dict(platform='native_pc', stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m12')
+    consume(meter, 0, native=native(0, original_slot), battle_metadata=metadata)
+    original = hit(1, original_slot, 1, 11, uid=101, event_scope=stamp(collection_mode=mode))
+    result = consume(meter, 1, [original], native=native(1, original_slot), battle_metadata=metadata)
+    assert player(result, original_slot)['actor_ledgers'][0]['ledger']['complete']
+    if publish_later:
+        consume(meter, 2, native=native(2, 2), battle_metadata=metadata)
+    when = 3 if publish_later else 2
+    source_issue = dict(source=CID, source_character_uid=101, frame=45, game_time=1.5,
+        native_autochess_scope=stamp(when=1.5, collection_mode=mode))
+    quality = dict(enemy_damage_unknown=True, damage_settlement_unknown=True,
+        damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=False,
+        damage_settlement_source_issues=[source_issue])
+    result = consume(meter, when, native=native(when, 2), quality=quality, battle_metadata=metadata)
+    assert '结算事件质量未完整确认' in result['reasons']
+    ledger = player(result, original_slot)['actor_ledgers'][0]['ledger']
+    assert ledger['effective_damage'] == 11 and ledger['unverified_hits'] == 0
+    assert ledger['complete'] is False and ledger['unverified_share'] is None
+    clean = consume(meter, when + 1, native=native(when + 1, 2), battle_metadata=metadata)
+    assert player(clean, original_slot)['actor_ledgers'][0]['ledger']['complete'] is False
+
+    # A different guarded small round can reuse the same actor data UID.
+    new_members = [member(2, uid=101), member(3)]
+    new_native = lambda t: dict(context(t, native_round=5, members=new_members), collection_mode=mode)
+    consume(meter, 0, native=new_native(0), battle_metadata=metadata)
+    new_scope = stamp(native_round=5, when=1, collection_mode=mode)
+    source_issue.update(frame=30, game_time=1, native_autochess_scope=new_scope)
+    local_hit = hit(2, 3, 1, 23, event_scope=new_scope)
+    fresh = consume(meter, 1, [local_hit], native=new_native(1), quality=quality, battle_metadata=metadata)
+    assert '结算事件质量未完整确认' not in fresh['reasons']
+    assert player(fresh, 3)['actor_ledgers'][0]['ledger']['complete']
+
+
+@pytest.mark.parametrize('issue_uid', [101, 102])
+def test_source_quality_remembers_an_explicit_historical_uid_conflict(issue_uid):
+    meter = MultiplayerBattleStatistics()
+    metadata = dict(platform='native_pc', stage_id='Activities/ACT3AUTOCHESS/level_act3autochess_m12')
+    members = [member(1), member(1, uid=102, cid='char_peer_other'), member(3)]
+    native = lambda t, roster=members: dict(context(t, members=roster), collection_mode='all')
+    consume(meter, 0, native=native(0), battle_metadata=metadata)
+    event_scope = stamp(collection_mode='all')
+    events = [hit(1, 1, 1, 11, event_scope=event_scope),
+              hit(2, 1, 1, 22, uid=102, cid='char_peer_other', event_scope=event_scope),
+              hit(3, 3, 1, 33, event_scope=event_scope)]
+    consume(meter, 1, events, native=native(1), battle_metadata=metadata)
+    conflicting = native(2, [*members, member(2, uid=101)])
+    assert conflicting['status'] == 'partial'
+    assert any(row.get('data_uid') == 101 and 'data_uid_conflict' in row['reasons']
+               for row in conflicting['unknown_memberships'])
+    consume(meter, 2, native=conflicting, battle_metadata=metadata)
+
+    issue = dict(source=CID if issue_uid == 101 else 'char_peer_other', source_character_uid=issue_uid,
+        frame=75, game_time=2.5, native_autochess_scope=stamp(when=2.5, collection_mode='all'))
+    quality = dict(enemy_damage_unknown=True, damage_settlement_unknown=True,
+        damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=False,
+        damage_settlement_source_issues=[issue])
+    result = consume(meter, 3, native=native(3), quality=quality, battle_metadata=metadata)
+    global_issue = issue_uid == 101
+    assert ('结算事件质量未完整确认' in result['reasons']) is global_issue
+    local = player(result, 3)['actor_ledgers'][0]['ledger']
+    assert local['complete'] is not global_issue and local['effective_damage'] == 33
+    peer = {actor['unique_id']: actor['ledger'] for actor in player(result, 1)['actor_ledgers']}
+    assert peer[101]['complete'] is not global_issue and peer[101]['effective_damage'] == 11
+    assert peer[102]['complete'] is False and peer[102]['effective_damage'] == 22
+
+    new_native = lambda t: dict(context(t, native_round=5, members=members), collection_mode='all')
+    consume(meter, 0, native=new_native(0), battle_metadata=metadata)
+    new_scope = stamp(native_round=5, when=1, collection_mode='all')
+    issue.update(frame=30, game_time=1, native_autochess_scope=new_scope)
+    fresh = consume(meter, 1, [hit(4, 3, 1, 23, event_scope=new_scope)], native=new_native(1),
+        quality=quality, battle_metadata=metadata)
+    assert '结算事件质量未完整确认' not in fresh['reasons']
+    assert player(fresh, 3)['actor_ledgers'][0]['ledger']['complete']
+
+
+@pytest.mark.parametrize('quality_fields, complete', [
+    ({}, True),
+    (dict(damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=False,
+          damage_settlement_source_issues=[]), True),
+    (dict(damage_settlement_source_quality_version=True, damage_settlement_unlocalized_unknown=False,
+          damage_settlement_source_issues=[]), False),
+    (dict(damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=True,
+          damage_settlement_source_issues=[]), False),
+    (dict(damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=False,
+          damage_settlement_source_issues=[{}]), False),
+    (dict(damage_settlement_source_quality_version=1, damage_settlement_unlocalized_unknown=False), False),
+    (dict(damage_settlement_unlocalized_unknown=False), False),
+])
+def test_clear_settlement_quality_requires_coherent_optional_source_contract(quality_fields, complete):
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0)
+    result = consume(meter, 1, [hit(1, 3, 1, 11)], quality=quality_fields)
+    ledger = player(result, 3)['actor_ledgers'][0]['ledger']
+    assert ledger['effective_damage'] == 11 and ledger['unverified_hits'] == 0
+    assert ledger['complete'] is complete
+    assert ledger['unverified_share'] == (0 if complete else None)
+
+
 @pytest.mark.parametrize('legacy_name', [False, True])
 def test_native_strategy_operator_uses_its_catalog_name_and_own_portrait_id(tmp_path, legacy_name):
     from desktop_bridge import DesktopState, _event_only_statistics

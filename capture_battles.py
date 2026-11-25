@@ -105,7 +105,11 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
     return summary
 
 
-_OPTIONAL_DERIVED_METRICS = frozenset({
+_OBSERVED_HEALING_DERIVED_METRICS = frozenset({
+    'observed_healing_total', 'observed_healing_complete', 'observed_recent_healing',
+    'observed_recent_healing_window', 'observed_recent_healing_complete',
+})
+_OPTIONAL_DERIVED_METRICS = _OBSERVED_HEALING_DERIVED_METRICS | frozenset({
     'mitigation_rate', 'mitigation_before', 'mitigation_after', 'mitigation_unknown_reason',
     'observed_mitigation_rate', 'observed_mitigation_before', 'observed_mitigation_after',
     'mitigation_matched_hits',
@@ -121,17 +125,54 @@ _LEGACY_REASON_TEXT = {
     '未观测到弹药技能的实际结束': '未观察到弹药技能的实际结束',
     '未观测到技能效果的实际结束': '未观察到技能效果的实际结束',
 }
+_INITIAL_SKILL_REASON = '部分命中的采集起点技能状态未确认'
+_OLD_MITIGATION_REASON = '部分命中缺少同一次结算的公式前后值或归属'
+_MATCHED_MITIGATION_REASON = '已记录命中的公式前后值均已配对，整局事件覆盖未确认'
 
 
 def _same_json(actual, recorded):
     return json.dumps(actual, sort_keys=True) == json.dumps(recorded, sort_keys=True)
 
 
-def _recorded_metrics(row, recorded):
+def _recorded_settlement(lane, recorded):
+    if not isinstance(lane, dict) or not isinstance(recorded, dict):
+        return lane
+    out = dict(lane)
+    if 'skill_initial_unknown_reason_codes' not in recorded:
+        out.pop('skill_initial_unknown_reason_codes', None)
+        initial_hits = lane.get('skill_initial_unknown_hits')
+        if (lane.get('skill_split_reason') == _INITIAL_SKILL_REASON
+                and recorded.get('skill_split_reason') is None
+                and lane.get('skill_split_complete') is False
+                and type(initial_hits) is int and initial_hits > 0
+                and recorded.get('skill_initial_unknown_hits') == initial_hits):
+            if 'skill_split_reason' in recorded:
+                out['skill_split_reason'] = None
+            else:
+                out.pop('skill_split_reason')
+    hits = lane.get('observed_hits')
+    matched = lane.get('mitigation_matched_hits')
+    if (lane.get('mitigation_reason') == _MATCHED_MITIGATION_REASON
+            and recorded.get('mitigation_reason') == _OLD_MITIGATION_REASON
+            and type(hits) is int and hits > 0 and type(matched) is int and matched == hits
+            and lane.get('mitigation_complete') is False and lane.get('complete') is False
+            and 'mitigation_unverified_share' in lane and lane['mitigation_unverified_share'] is None):
+        out['mitigation_reason'] = _OLD_MITIGATION_REASON
+    return out
+
+
+def _recorded_metrics(row, recorded, *, optional=True):
+    if not isinstance(row, dict) or not isinstance(recorded, dict):
+        return row
+    # Both ordinary and scoped old journals predate these derived values.
+    # A new journal that supplies any of them still verifies it exactly.
+    optional_metrics = _OPTIONAL_DERIVED_METRICS if optional else _OBSERVED_HEALING_DERIVED_METRICS
     out = {key: value for key, value in row.items()
-           if key not in _OPTIONAL_DERIVED_METRICS or key in recorded}
-    if isinstance(out.get('boss_damage'), dict) and isinstance(recorded.get('boss_damage'), dict):
-        out['boss_damage'] = _recorded_metrics(out['boss_damage'], recorded['boss_damage'])
+           if key not in optional_metrics or key in recorded}
+    if 'settled_damage' in row:
+        out['settled_damage'] = _recorded_settlement(row['settled_damage'], recorded.get('settled_damage'))
+    if 'boss_damage' in row:
+        out['boss_damage'] = _recorded_metrics(row['boss_damage'], recorded.get('boss_damage'), optional=optional)
     return out
 
 
@@ -157,7 +198,56 @@ def _same_statistics(actual, recorded):
     return _same_json(actual, recorded)
 
 
+def _recorded_player(player, recorded):
+    if not isinstance(player, dict) or not isinstance(recorded, dict):
+        return player
+    out = dict(player)
+    if 'skill_initialization' not in recorded:
+        out.pop('skill_initialization', None)
+    stats, old_stats = player.get('statistics'), recorded.get('statistics')
+    if isinstance(stats, dict) and isinstance(old_stats, dict):
+        rows, old_rows = stats.get('rows'), old_stats.get('rows')
+        if isinstance(rows, dict) and isinstance(old_rows, dict):
+            out['statistics'] = dict(stats, rows={owner: _recorded_metrics(row, old_rows.get(owner), optional=False)
+                                                 for owner, row in rows.items()})
+    actors, old_actors = player.get('actor_ledgers'), recorded.get('actor_ledgers')
+    if isinstance(actors, list) and isinstance(old_actors, list) and len(actors) == len(old_actors):
+        out['actor_ledgers'] = [
+            dict(actor, ledger=_recorded_settlement(actor['ledger'], old_actor.get('ledger')))
+            if isinstance(actor, dict) and 'ledger' in actor and isinstance(old_actor, dict) else actor
+            for actor, old_actor in zip(actors, old_actors)
+        ]
+    return out
+
+
+def _recorded_multiplayer_scope(scope, recorded):
+    if not isinstance(scope, dict) or not isinstance(recorded, dict):
+        return scope
+    players, old_players = scope.get('players'), recorded.get('players')
+    if isinstance(players, list) and isinstance(old_players, list) and len(players) == len(old_players):
+        return dict(scope, players=[_recorded_player(player, old_player)
+                                    for player, old_player in zip(players, old_players)])
+    return scope
+
+
+def _recorded_multiplayer(scope, recorded):
+    out = _recorded_multiplayer_scope(scope, recorded)
+    if not isinstance(scope, dict) or not isinstance(recorded, dict):
+        return out
+    previous, old_previous = scope.get('previous_rounds'), recorded.get('previous_rounds')
+    if isinstance(previous, list) and isinstance(old_previous, list) and len(previous) == len(old_previous):
+        out = dict(out, previous_rounds=[_recorded_multiplayer_scope(prior, old_prior)
+                                        for prior, old_prior in zip(previous, old_previous)])
+    return out
+
+
 def _same_lifecycle_state(actual, recorded):
+    if 'multiplayer' in actual:
+        actual = dict(actual, multiplayer=_recorded_multiplayer(actual['multiplayer'], recorded.get('multiplayer')))
+    sample, old_sample = actual.get('last_sample'), recorded.get('last_sample')
+    if isinstance(sample, dict) and isinstance(old_sample, dict) and 'multiplayer' in sample:
+        actual = dict(actual, last_sample=dict(sample, multiplayer=_recorded_multiplayer(
+            sample['multiplayer'], old_sample.get('multiplayer'))))
     if 'statistics' in actual and 'statistics' in recorded:
         return (_same_statistics(actual['statistics'], recorded['statistics'])
                 and _same_json({key: value for key, value in actual.items() if key != 'statistics'},

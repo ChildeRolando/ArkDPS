@@ -1,6 +1,8 @@
 // Execute the actual adapter. The full-read oracle only empties its body cache;
 // it does not contain another adapter, parser, scope rule or damage formula.
 const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
 const vm=require('node:vm');
 const {world}=require('./native_pc_autochess_context_fixture.js');
 const plain=value=>JSON.parse(JSON.stringify(value));
@@ -29,17 +31,41 @@ function readCount(f,call){
  let result;try{result=call();}finally{for(const [name,original]of restore)proto[name]=original;}
  return {reads,result};
 }
-function modifierPairs(f,hostile){
+function modifierPairs(f,hostile,argumentsFor=values=>values){
  const source=f.unit(hostile?'enemy_attacker':'char_shared',10),target=f.unit(hostile?'char_shared':'enemy_test',12);
  if(!hostile)f.write(source.add(0x538),f.roleData[0]);
  const mod=f.modifier(source,target,40,-40,1),apply=f.callback('ApplyModifier',f.entity),take=f.callback('OnTakeDamage',f.unitClass);
  for(let i=0;i<10;i++){
   f.write(target.add(0x40),50n*4294967296n);const a={threadId:1},t={threadId:1};
-  apply.onEnter.call(a,[target,mod,f.ptr(0)]);take.onEnter.call(t,[target,mod,f.ptr(0)]);
+  apply.onEnter.call(a,argumentsFor([target,mod,f.ptr(0)]));
+  take.onEnter.call(t,argumentsFor([target,mod,f.ptr(0)]));
   f.write(target.add(0x40),10n*4294967296n);take.onLeave.call(t);apply.onLeave.call(a);
  }
  const events=vm.runInContext('queue',f.context);assert.equal(events.length,hostile?0:20);return events;
 }
+check('native_lazy_arguments_preserve_production_callback_batches_and_ack',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'..','native_pc','native_event_runtime','bridge.js'),'utf8');
+ const start=source.indexOf('const __deferredArgument=');
+ const end=source.indexOf('const Memory=',start);
+ assert(start>=0&&end>start);
+ const observe=lazy=>{
+  const f=owned({rolesPerPlayer:8});
+  if(lazy){
+   const convert=vm.runInContext('const NativePointer=ptr(0).constructor;\n'+source.slice(start,end)+
+    '\n__arkdpsArguments',f.context);
+   modifierPairs(f,false,values=>{
+    const bytes=new ArrayBuffer(128),view=new DataView(bytes);
+    for(let i=0;i<values.length;i++)view.setBigUint64(i*8,values[i].value,true);
+    return convert(bytes);
+   });
+  }else modifierPairs(f,false);
+  const mark=f.mark(),events=f.context.rpc.exports.readEvents(0,mark.sequence);
+  assert.equal(events.events.length,20);
+  const ack=f.context.rpc.exports.ackEvents(mark.sequence);
+  return plain({mark,events,ack});
+ };
+ assert.deepEqual(observe(true),observe(false));
+});
 check('late_event_does_not_blind_following_defense_or_assist_events',()=>{
  for(const phase of [4,5]){
   const f=world();f.write(f.machine.add(0x5c),phase);f.mark();
@@ -62,8 +88,8 @@ for(const roles of [32,40]){
   return {first,mark,drain,ack};
  },{rolesPerPlayer:roles/4}));
  check('warm_'+roles+'_read_budgets_and_callback_event_equivalence',()=>{
-  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?974:1134,f=>f.mark()],
-   ['10_output_pairs',2190,f=>modifierPairs(f,false)],['10_unlogged_pairs',1840,f=>modifierPairs(f,true)]]){
+  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?973:1133,f=>f.mark()],
+   ['10_output_pairs',2180,f=>modifierPairs(f,false)],['10_unlogged_pairs',1830,f=>modifierPairs(f,true)]]){
    const f=owned({rolesPerPlayer:roles/4}),measured=readCount(f,()=>call(f));
    assert.equal(measured.reads,budget,name+' native-read budget');
    assert.equal(f.fullReads,1,'unchanged warm body must avoid parsing another full roster');
@@ -230,6 +256,75 @@ check('warm_crossed_mark_keeps_independently_verified_event_scope',()=>{
   assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
  }
 });
+check('committed_scope_survives_membership_churn_and_a_rejected_cold_read',()=>{
+ const f=world({rolesPerPlayer:9,unknownToken:true,tokenCount:4,
+  fixtureOptions:{globals:{arkdpsAutoChessMode:'local',__nativeActive:()=>0}}});
+ for(const [index,profile]of f.players)f.write(profile.add(0x18),f.text(String(910000000+index)));
+ f.write(f.roles[3][1].add(0x18),8);
+ const original=f.mark().native_autochess_context;
+ assert.equal(original.memberships.length,35);assert.equal(original.unknown_memberships.length,4);
+ // A body-only revalidation failure must immediately stop local pruning,
+ // even at this exact same event clock. The independently guarded scope can
+ // survive to stamp events while native identity acquisition retries.
+ f.write(f.roleList.add(0x1c),2);
+ assert.equal(f.adapter.prepareEventEnvelope(),null);
+ const preserved=f.stamp().native_autochess_scope;
+ assert.equal(preserved.status,'available');assert.equal(preserved.scope_key,original.scope_key);
+ const unsettled=f.context.record('char_shared','skill_start',1,f.context.time(),{},null,101);
+ assert.equal(unsettled.sequence,1,'no stale actor pruning after a body-only rejection');
+ const parse=f.context.readAutoChess;
+ f.context.readAutoChess=function(...args){const body=parse.apply(this,args);f.clock(30,4294967296n);return body;};
+ const rejected=f.mark();
+ assert.equal(rejected.retry,true);assert.equal(rejected.native_autochess_context,undefined);
+ assert.equal(rejected.autochess_binding_diagnostic.guard,'clock_changed');
+ const next=f.stamp({frame:30,game_time:1}).native_autochess_scope;
+ assert.equal(next.status,'available');assert.equal(next.scope_key,original.scope_key);
+ const hit=f.context.record('char_shared','damage_settlement',1,f.context.time(),{},
+  {settlement_complete:true},101);
+ assert.equal(hit.native_autochess_scope.status,'available');
+ assert.equal(hit.native_autochess_scope.scope_key,original.scope_key);
+ // A changed phase must be reported as such, never retained from the body's
+ // old testimony even though the account and battle roots are identical.
+ f.write(f.machine.add(0x5c),5);
+ const assist=f.stamp({frame:30,game_time:1}).native_autochess_scope;
+ assert.equal(assist.status,'available');assert.equal(assist.phase,5);
+ assert.equal(assist.collection_mode,'all');assert.notEqual(assist.scope_key,original.scope_key);
+});
+check('crossed_cold_read_cannot_keep_an_old_stage_pointer_or_changed_scope',()=>{
+ for(const mutation of ['account','root','stage_pointer']){
+  const f=world({fixtureOptions:{globals:{__nativeActive:()=>0}}});
+  f.mark();f.write(f.roleList.add(0x1c),2);
+  if(mutation==='stage_pointer')f.write(f.level.add(0x18),f.text('Activities/ACT3AUTOCHESS/level_act3autochess_m01'));
+  const parse=f.context.readAutoChess;
+  f.context.readAutoChess=function(...args){const body=parse.apply(this,args);f.clock(30,4294967296n);return body;};
+  assert.equal(f.mark().retry,true);
+  if(mutation==='account'){
+   const field=f.players[2][1].add(0x18),uid=field.readPointer();
+   f.write(field,f.ptr(uid.value+(1n<<48n)));
+  }
+  if(mutation==='root')f.write(f.controller.add(0x160),f.ptr(0));
+  assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
+ }
+});
+check('successfully_read_partial_roster_keeps_only_fully_guarded_unbound_hosts',()=>{
+ const f=owned({rolesPerPlayer:9,unknownToken:true,tokenCount:4});
+ f.write(f.roles[3][1].add(0x18),8);
+ const first=f.mark().native_autochess_context;
+ assert.equal(first.memberships.length,35);assert.equal(first.unknown_memberships.length,4);
+ const reads=f.fullReads;
+ for(let i=1;i<=4;i++){
+  f.clock(30*i,4294967296n*BigInt(i));
+  const mark=f.mark().native_autochess_context;
+  assert.equal(mark.status,'available');assert.equal(mark.unknown_memberships.length,4);
+  assert.equal(mark.memberships.some(row=>row.data_uid===999),false);
+ }
+ assert.equal(f.fullReads,reads,'a successful guarded negative must not trigger repeated rediscovery');
+ f.write(f.tokenData[0].add(0xa0),101);
+ const changed=f.mark().native_autochess_context;
+ assert.equal(changed.memberships.find(row=>row.data_uid===999)?.host_uid,101);
+ assert.equal(changed.unknown_memberships.length,3);
+ assert.equal(f.fullReads,reads+1,'changed host witness must invalidate the candidate');
+});
 check('first_body_guard_mismatch_falls_back_to_full_parse',()=>{
  const f=owned(),previous=vm.runInContext('nativeAutoBodyCache.body',f.context);
  const plan=vm.runInContext('nativeAutoCache.scopeGuards',f.context);
@@ -241,13 +336,13 @@ check('first_body_guard_mismatch_falls_back_to_full_parse',()=>{
  assert.notEqual(vm.runInContext('nativeAutoBodyCache.body',f.context),previous);
  assert.notEqual(vm.runInContext('nativeAutoCache.scopeGuards',f.context),plan);
 });
-check('second_body_guard_failure_clears_both_caches_without_retry',()=>{
+check('second_body_guard_failure_clears_the_body_without_reusing_unverified_roster',()=>{
  const f=owned(),proto=f.ptr(0).constructor.prototype,read=proto.readU32;let seen=0;
  proto.readU32=function(){if(this.equals(f.roleData[0].add(0x6c))&&++seen===2)f.write(this,501);return read.call(this);};
  let mark;try{mark=f.mark();}finally{proto.readU32=read;}
  assert.equal(mark.native_autochess_context.status,'unknown');assert.equal(f.fullReads,1);
- assert.deepEqual(plain(state(f)),{body:false,scope:false});
- assert.equal(f.stamp().native_autochess_scope.status,'unknown');
+ assert.deepEqual(plain(state(f)),{body:false,scope:true});
+ assert.equal(f.stamp().native_autochess_scope.status,'available');
 });
 check('same_frame_late_owner_change_cannot_publish_single_pass_stale_owner',()=>equivalent(f=>{
  const proto=f.ptr(0).constructor.prototype,read=proto.readU32;let seen=0;
@@ -283,8 +378,8 @@ check('closing_root_mutation_retries_without_committing_body',()=>equivalent(f=>
  assert(changed);assert.equal(mark.retry,true);assert.equal(mark.native_autochess_context,undefined);
  assert.equal(state(f).body,false);return mark;
 }));
-check('partial_and_unknown_results_never_leave_a_body_cache',()=>{
- for(const options of [{unknownToken:true},{duplicatePlayer:true},{conflictingUid:true}]){
+check('unproved_partial_and_unknown_results_never_leave_a_body_cache',()=>{
+ for(const options of [{duplicatePlayer:true},{conflictingUid:true}]){
   const f=owned(options);assert.equal(state(f).body,false);f.mark();assert.equal(state(f).body,false);assert.equal(f.fullReads,2);
  }
  const f=owned();f.write(f.roleData[1].add(0x6c),101);

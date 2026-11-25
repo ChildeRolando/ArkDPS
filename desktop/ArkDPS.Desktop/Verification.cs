@@ -1521,7 +1521,7 @@ public partial class MainWindow
 
     private void VerifyShareScope(string id,HudWindow hud)
     {
-        const string knownLabel="已知数据内占比";
+        const string knownLabel="伤害占比";
         const string teamLabel="全队同口径占比";
         const string unknownLabel="占比未知";
         const string reason="部分干员累计快照不完整";

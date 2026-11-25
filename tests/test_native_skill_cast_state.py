@@ -15,6 +15,7 @@ import pytest
 from event_capture import LiveEventCapture
 from event_probe import MUMU_CONTRACT, NATIVE_PC_CONTRACT
 from panel_model import EventAvailability, PanelConfig, render_panel, rows_from_statistics
+from stats_core import Statistics
 from test_event_probe_parity import BoundedObserver, CanonicalCollector
 
 
@@ -105,7 +106,107 @@ def test_native_cast_wait_keeps_ammo_live_then_real_character_end_closes_it(plat
     row = advance(state, 5, hits(5, 10), 50)
     assert_live_split(row, 40, 10)
     assert row['skill_window_count'] == 1 and row['skill_active_seconds'] == 3
+    assert row['skill_coverage_complete'] is True
+
+
+@pytest.mark.parametrize('platform,contract', BACKENDS)
+def test_later_cast_witness_does_not_repair_an_earlier_uncertain_timing_interval(platform, contract):
+    state = connect(platform, contract)
+    advance(state, 1, [marker('Character.SwitchToSkillState', 'skill_start', 1)], 0)
+    stats = state[2].adapter.statistics
+    before = stats.skill_observation_revision(ACTOR, 77)
+    advance(state, 2, [marker('Character.OnAfterSkill', 'skill_end', 2, reason=1)], 0)
+    assert stats.observed_skill_interval(ACTOR, 77, 1, 2) is None
+    row = advance(state, 3, [marker('BasicSkill.OnCastFinish', 'skill_end', 3, reason=1, wait=True)], 0)
+    assert stats.skill_observation_revision(ACTOR, 77) != before
+    assert row['skill_active_seconds'] is None
+    assert row['skill_coverage_complete'] is False
+    advance(state, 4, hits(4), 40)
+    assert stats.observed_skill_interval(ACTOR, 77, 3, 4) == 1
     assert row['skill_split_reason'] is None
+
+
+@pytest.mark.parametrize('platform,contract', BACKENDS)
+def test_same_tick_normal_cast_return_preserves_effect_until_real_finish(platform, contract):
+    state = connect(platform, contract)
+    key = 'skchr_blemsh_3'
+    advance(state, 1, [marker('Character.OnSkillCastSucceed', 'skill_start', 1, key=key)], 0)
+    advance(state, 2, [marker('BasicSkill.OnCastFinish', 'skill_end', 2, key=key, reason=0, wait=True),
+                       marker('Character.OnAfterSkill', 'skill_end', 2, key=key, reason=0)], 0)
+    assert_live_split(advance(state, 3, hits(3), 40), 40)
+    advance(state, 4, [marker('Character.OnSkillFinish', 'skill_end', 4, key=key)], 40)
+    row = advance(state, 5, hits(5, 10), 50)
+    assert_live_split(row, 40, 10)
+    assert row['skill_window_count'] == 1 and row['skill_active_seconds'] == 3
+
+
+@pytest.mark.parametrize('platform,contract', BACKENDS)
+@pytest.mark.parametrize('case', ['wait_false', 'stale', 'other_frame', 'missing_key',
+                                  'other_reason', 'no_effect'])
+def test_normal_cast_return_requires_current_effect_witness(platform, contract, case):
+    state = connect(platform, contract)
+    start = 'Character.OnSkillStart' if case == 'no_effect' else 'Character.OnSkillCastSucceed'
+    advance(state, 1, [marker(start, 'skill_start', 1)], 0)
+    advance(state, 2, [marker('BasicSkill.OnCastFinish', 'skill_end', 2, reason=0,
+                              wait=case != 'wait_false')], 0)
+    when = 3 if case == 'stale' else 2
+    after = marker('Character.OnAfterSkill', 'skill_end', when,
+                   key=None if case == 'missing_key' else KEY,
+                   reason=2 if case == 'other_reason' else 0)
+    if case == 'other_frame':
+        after['frame'] += 1
+    advance(state, when, [after], 0, frame=after['frame'])
+    row = advance(state, 4, hits(4), 40)
+    assert row['skill_split_complete'] is False
+    lane = row['settled_damage']
+    assert lane['observed_damage'] == lane['effective_damage'] == 40
+    assert lane['skill_split_complete'] is False and lane['skill_unclassified_hits'] == 1
+
+
+@pytest.mark.parametrize('platform,contract', BACKENDS)
+@pytest.mark.parametrize('conflicting_callback', ['native_return', 'after_skill'])
+def test_empty_skill_keys_cannot_match_conflicting_nonempty_skill_ids(platform, contract, conflicting_callback):
+    state = connect(platform, contract)
+    start = marker('Character.OnSkillCastSucceed', 'skill_start', 1, key='')
+    advance(state, 1, [dict(start, skill_id=KEY)], 0)
+    cast = marker('BasicSkill.OnCastFinish', 'skill_end', 2, key='', reason=0, wait=True)
+    after = marker('Character.OnAfterSkill', 'skill_end', 2, key='', reason=0)
+    cast['skill_id'] = 'other-skill' if conflicting_callback == 'native_return' else KEY
+    after['skill_id'] = 'other-skill' if conflicting_callback == 'after_skill' else KEY
+    advance(state, 2, [cast, after], 0)
+    row = advance(state, 3, hits(3), 40)
+    assert row['skill_split_complete'] is False
+    assert row['settled_damage']['skill_unclassified_hits'] == 1
+
+
+@pytest.mark.parametrize('start_actor,actor,key,frame,stays_open', [
+    (77, 78, KEY, 60, False), (77, 77, 'other-skill', 60, True),
+    (None, None, KEY, 60, False), (77, 77, KEY, None, False),
+])
+def test_normal_cast_return_requires_matching_verified_actor_and_frame(
+        start_actor, actor, key, frame, stays_open):
+    stats = Statistics('cast', 0)
+    active = dict(owner=ACTOR, source=ACTOR, key=KEY, skill_id=None, name=None, actor=start_actor)
+    stats._record_skill_transition(kind='skill_start', game_time=1,
+                                   method='Character.OnSkillCastSucceed', reason=None, **active)
+    stats._record_skill_transition(kind='skill_end', game_time=2,
+                                   method='BasicSkill.OnCastFinish', reason=0, wait_for_end=True,
+                                   frame=frame, **active)
+    stats._record_skill_transition(kind='skill_end', game_time=2,
+                                   method='Character.OnAfterSkill', reason=0, frame=frame,
+                                   **dict(active, key=key, actor=actor))
+    assert (ACTOR in stats.skill_active) is stays_open
+    assert (ACTOR in stats.skill_incomplete) is not stays_open
+
+
+@pytest.mark.parametrize('frame', [True, -1, 60.0, '60'])
+def test_skill_transition_rejects_supplied_invalid_frame(frame):
+    stats = Statistics('cast', 0)
+    with pytest.raises(ValueError, match='invalid skill frame'):
+        stats._record_skill_transition(ACTOR, ACTOR, 'skill_start', 1, key=KEY, skill_id=None,
+                                       name=None, method='Character.OnSkillCastSucceed', reason=None,
+                                       actor=77, frame=frame)
+    assert not stats.skill_active
 
 
 @pytest.mark.parametrize('platform,contract', BACKENDS)
@@ -271,7 +372,8 @@ def test_missing_real_end_keeps_observed_values_but_never_complete_split(platfor
     selected = detail(result)
     assert selected['skill_damage'] is None and selected['skill_damage_effective'] is None
     assert selected['observed_skill_damage'] == selected['observed_skill_damage_effective'] == 40
-    expected = '结算事件覆盖不完整' if close == 'gap' else '未观察到弹药技能的实际结束'
+    expected = ('未观察到弹药技能的实际结束；结算事件覆盖不完整'
+                if close == 'gap' else '未观察到弹药技能的实际结束')
     assert selected['skill_split_reason'] == selected['skill_split_effective_reason'] == expected
 
 
