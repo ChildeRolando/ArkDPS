@@ -760,6 +760,71 @@ def test_explicitly_sourced_burst_updates_native_elemental_counter_but_is_never_
         module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
 
 
+def single_settlement_supplement_window(*, explicit_source=False):
+    """A new synthetic one-record wire; leave all old recording fixtures intact."""
+    events, publications = supplement_window(explicit_source=explicit_source)
+    ordinary, bar, settlement, burst = events
+    ordinary = dict(ordinary, kind='damage_settlement', damage_type=1,
+                    nominal_amount=ordinary['amount'], source_character_uid=1,
+                    proof={'method': 'Entity.ApplyModifier', 'native_modifier_observation':
+                           {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': ordinary['amount']}})
+    settlement.update({key: burst[key] for key in
+                       ('hp_before', 'hp_after', 'real_delta', 'cancel_reason', 'killed')})
+    settlement['proof']['native_modifier_observation'] = {
+        'version': 1, 'method': 'Entity.ApplyModifier', 'amount': burst['amount']}
+    publications[-1]['event_watermark']['sequence'] = settlement['sequence']
+    return [ordinary, bar, settlement], publications
+
+
+@pytest.mark.parametrize('explicit_source', (False, True))
+def test_single_settlement_supplement_preserves_nominal_and_real_sequence_without_synthetic_burst(explicit_source):
+    events, publications = single_settlement_supplement_window(explicit_source=explicit_source)
+    original = deepcopy(events)
+    result = module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+    assert events == original
+    assert module._single_settlement_wire(events)
+    if explicit_source:
+        assert result['source_null_burst_witnesses'] == []
+        assert not any(result['final_nominal_supplements'].values())
+    else:
+        witness, = result['source_null_burst_witnesses']
+        assert witness['nominal_supplement'] == 30 and witness['actual_hp_damage'] == 20
+        assert witness['bar_sequence'] == 2 and witness['settlement_sequence'] == 3
+        assert 'burst_sequence' not in witness
+        assert result['final_nominal_supplements'] == {'char_a': 30}
+    assert result['nominal_supplements_by_watermark'][:2] == [
+        {'sequence': 0, 'by_owner': {}}, {'sequence': 2, 'by_owner': {}}]
+
+
+@pytest.mark.parametrize('fault', ('hp', 'actual', 'nominal', 'uid', 'source', 'clock', 'stage',
+                                  'cancel', 'shield', 'missing_endpoint', 'incomplete', 'output_source_null',
+                                  'reused_certificate', 'future_supplement'))
+def test_single_settlement_supplement_rejects_bad_raw_evidence_without_legacy_fallback(fault):
+    events, publications = single_settlement_supplement_window()
+    certificate = events[-1]
+    if fault == 'hp': certificate['hp_before'] += 1
+    elif fault == 'actual': certificate['amount'] += 1
+    elif fault == 'nominal': certificate['nominal_amount'] = 1
+    elif fault == 'uid': certificate['target_uid'] = '00021'
+    elif fault == 'source': certificate.update(source='char_other', source_character_uid=1)
+    elif fault == 'clock': events[1].update(frame=3, game_time=3)
+    elif fault == 'stage': certificate['native_stage_id'] = 'other_stage'
+    elif fault == 'cancel': certificate['cancel_reason'] = True
+    elif fault == 'shield': certificate['shield_absorbed'] = None
+    elif fault == 'missing_endpoint': certificate.pop('hp_after')
+    elif fault == 'incomplete': certificate['settlement_complete'] = False
+    elif fault == 'output_source_null': certificate['proof']['method'] = 'Entity.OnAfterOutputDamage'
+    elif fault == 'reused_certificate':
+        events.append(dict(deepcopy(certificate), sequence=4, frame=3, game_time=3))
+        publications.append(dict(deepcopy(publications[-1]), frame=3, game_time=3,
+                                 event_watermark={'sequence': 4}))
+        publications[-1]['statistics']['rows']['char_a']['burst_added_settlement'] = 60
+    elif fault == 'future_supplement':
+        publications[1]['statistics']['rows']['char_a']['burst_added_settlement'] = 30
+    with pytest.raises(ValueError):
+        module.check_pc_owner_counter_supplements(events, publications, {'char_a': 'char_a'})
+
+
 @pytest.mark.parametrize('fault', ['wrong_uid', 'wrong_instance', 'missing_owner', 'wrong_stage', 'future_bar',
                                   'nominal_not_settlement', 'actual_hp_as_nominal', 'fake_published_supplement',
                                   'future_supplement', 'reused_burst', 'stale_duplicate_bar', 'explicit_double_credit'])

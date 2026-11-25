@@ -278,6 +278,42 @@ def _complete_elemental_settlement_emitter(event):
             and type(event.get('killed')) is bool)
 
 
+def _single_settlement_wire(events):
+    """Select one counter input format for an already guarded ordered prefix.
+
+    One loaded shared producer uses one fixed capability set. Old recordings
+    retain their original legacy records; certificates are never counted again
+    alongside them. A missing witness in the selected format remains a failure.
+    """
+    return (any(event.get('kind') == 'damage_settlement' for event in events)
+            and not any(event.get('kind') in ('damage', 'hp_damage', 'elemental_burst') for event in events))
+
+
+def _complete_single_elemental_witness(event):
+    if not _complete_elemental_settlement_emitter(event) or event.get('damage_type') != 5:
+        return False
+    def finite(value):
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    actual, uid = event.get('real_delta'), event.get('target_uid')
+    source = event.get('source')
+    return (type(event.get('damage_type')) is int
+            and ('target_type' not in event or type(event['target_type']) is int and event['target_type'] == 0)
+            and type(event.get('cancel_reason')) is int and event['cancel_reason'] == 0
+            and isinstance(event.get('target'), str) and bool(event['target'])
+            and isinstance(event.get('target_instance'), str) and bool(event['target_instance'])
+            and isinstance(uid, str) and uid.isascii() and uid.isdecimal()
+            and 0 < int(uid) <= 0xffffffff and str(int(uid)) == uid
+            and (source is None or _explicit_owned_actor_identity(event) is not None)
+            and finite(event.get('amount')) and finite(event.get('nominal_amount'))
+            and finite(event.get('hp_before')) and finite(event.get('hp_after'))
+            and finite(event.get('shield_absorbed'))
+            and type(actual) in (int, float) and math.isfinite(actual) and actual <= 0
+            and math.isclose(event['amount'], -actual, rel_tol=1e-7, abs_tol=.01)
+            and math.isclose(event['hp_before'] - event['hp_after'], -actual, rel_tol=1e-7, abs_tol=.01)
+            and event['nominal_amount'] + .01 >= event['amount'] + event['shield_absorbed']
+            and type(event.get('killed')) is bool and event['killed'] == (event['hp_after'] == 0))
+
+
 def check_pc_owner_counter_supplements(events, publications, ownership):
     """Replay the existing source-null burst supplement, at each watermark.
 
@@ -290,9 +326,12 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
         return type(value) in (int, float) and math.isfinite(value) and value >= 0
 
     bursts = [event for event in events if event['kind'] == 'elemental_burst']
+    single_wire = _single_settlement_wire(events)
+    standalone = [event for event in events if single_wire and event.get('kind') == 'damage_settlement'
+                  and event.get('damage_type') == 5]
     stage = (publications[0].get('battle_metadata') or {}).get('stage_id')
     session = publications[0].get('native_session')
-    if bursts and (not isinstance(stage, str) or not stage or not isinstance(session, str)
+    if (bursts or standalone) and (not isinstance(stage, str) or not stage or not isinstance(session, str)
             or any(pub.get('native_session') != session
                    or (pub.get('battle_metadata') or {}).get('stage_id') != stage for pub in publications)):
         raise ValueError('elemental supplement has no single independently bound stage/session window')
@@ -334,10 +373,15 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
         if 'target_uid' in burst and burst['target_uid'] != settlement['target_uid']:
             raise ValueError('elemental burst UID conflicts with its same-hit settlement')
         used.add(settlement['sequence'])
-        pairs[burst['sequence']] = settlement
+        pairs[burst['sequence']] = (settlement, burst['amount'], -actual, burst['sequence'])
+    for settlement in standalone:
+        if not _complete_single_elemental_witness(settlement):
+            raise ValueError('elemental supplement has no complete raw single-settlement nominal/actual witness')
+        pairs[settlement['sequence']] = (settlement, settlement['nominal_amount'], settlement['amount'], None)
     bars, supplements, witnesses, consumed = {}, Counter(), [], {}
     cursor = publications[0]['event_watermark']['sequence']
     index, checks = 0, 0
+    supplement_watermarks = []
     for publication in publications:
         through = publication['event_watermark']['sequence']
         while index < len(events) and events[index]['sequence'] <= through:
@@ -352,6 +396,9 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                 uid = event.get('target_instance')
                 bars = {key: value for key, value in bars.items() if key[0] != uid}
             elif kind == 'damage' and event.get('killed') is True and event.get('settled_after_nested_kill', False) is False:
+                bars = {key: value for key, value in bars.items() if key[1] != event.get('target_instance')}
+            elif (single_wire and kind == 'damage_settlement' and event.get('damage_type') != 5
+                  and event.get('killed') is True and event.get('settled_after_nested_kill', False) is False):
                 bars = {key: value for key, value in bars.items() if key[1] != event.get('target_instance')}
             elif kind == 'elemental_bar':
                 uid, instance, source = event.get('target_uid'), event.get('target_instance'), event.get('source')
@@ -368,8 +415,8 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                 if previous is not None and (event['frame'] < previous[0] or event['game_time'] < previous[1]):
                     raise ValueError('elemental bar reuses context from before an already consumed burst')
                 bars[uid, instance] = event
-            elif kind == 'elemental_burst':
-                settlement = pairs[event['sequence']]
+            elif event['sequence'] in pairs:
+                settlement, nominal, actual, burst_sequence = pairs[event['sequence']]
                 key = settlement['target_uid'], event.get('target_instance')
                 source = event.get('source')
                 if source is None:
@@ -378,15 +425,19 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                             or bar['frame'] > event['frame'] or bar['game_time'] > event['game_time']):
                         raise ValueError('source-null burst has no preceding unconsumed same-target owned elemental bar')
                     owner = ownership[bar['source']]
-                    supplements[owner] += event['amount']
-                    witnesses.append(dict(owner=owner, nominal_supplement=event['amount'],
-                        actual_hp_damage=-event['real_delta'], target_uid=key[0], target_instance=key[1],
-                        bar_sequence=bar['sequence'], settlement_sequence=settlement['sequence'], burst_sequence=event['sequence']))
+                    supplements[owner] += nominal
+                    witness = dict(owner=owner, nominal_supplement=nominal,
+                        actual_hp_damage=actual, target_uid=key[0], target_instance=key[1],
+                        bar_sequence=bar['sequence'], settlement_sequence=settlement['sequence'])
+                    if burst_sequence is not None:
+                        witness['burst_sequence'] = burst_sequence
+                    witnesses.append(witness)
                 elif source not in ownership:
                     raise ValueError('explicitly sourced burst has no declared owner')
                 bars.pop(key, None)  # Explicit source bursts consume context but add no supplement.
                 consumed[key] = event['frame'], event['game_time']
         cursor = through
+        supplement_watermarks.append(dict(sequence=through, by_owner=dict(supplements)))
         native = {row['id']: row for row in publication['native_rows']}
         for owner, row in publication['statistics']['rows'].items():
             observed = row.get('burst_added_settlement')
@@ -412,6 +463,7 @@ def check_pc_owner_counter_supplements(events, publications, ownership):
                     checks += 1
     return dict(scope='each_published_native_counter_watermark', exact=True, checks=checks,
                 final_nominal_supplements=dict(supplements), source_null_burst_witnesses=witnesses,
+                nominal_supplements_by_watermark=supplement_watermarks,
                 explicit_source_bursts_supplemented=False, future_events_used=False,
                 owning_sources={str(path): sha256(path.read_bytes()).hexdigest() for path in (
                     Path(__file__).resolve().parents[1] / 'stats_core.py',
