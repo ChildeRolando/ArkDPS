@@ -25,6 +25,9 @@ if str(ROOT) not in sys.path:
 from native_pc.native_event_runtime.build import DEFAULT_OUTPUT
 
 
+FULL_ARGUMENT_VALUES = (0, 2**64 - 1, 2**63, 2**32, *range(5, 15), 2**48 + 15, 2**63 + 16)
+
+
 def export_offsets(binary):
     """Read PE export RVAs without mapping or executing the DLL in this process."""
     data = Path(binary).read_bytes()
@@ -64,11 +67,14 @@ def export_offsets(binary):
 def fixture_source(binary, *, slow=False):
     exports = export_offsets(binary)
     names = ('Integer', 'Float', 'Sret', 'Nested') + (('Slow',) if slow else ())
+    if 'ArkDpsTestFullArguments' in exports:
+        names += ('FullArguments',)
     offsets = {name: exports['ArkDpsTest' + name] for name in names}
     return r'''
 'use strict';
 const base = Process.getModuleByName('ArkDPS.NativeEvents.dll').base;
 const records = [], hooks = [];
+let savedArguments;
 const activity = Memory.alloc(8);
 activity.writeU64(0);
 let serial = 0;
@@ -79,6 +85,7 @@ for (const [name, offset] of Object.entries(OFFSETS)) {
    const values = [];
    if (name === 'Integer') for (let i=0;i<12;i++) values.push(args[i].value.toString());
    if (name === 'Sret') for (let i=1;i<3;i++) values.push(args[i].value.toString());
+   if (name === 'FullArguments') savedArguments=args;
    records.push({phase:'enter',name,serial:this.serial,values});
    if(name==='Slow')activity.writeU64(1);
   },
@@ -91,7 +98,22 @@ for (const [name, offset] of Object.entries(OFFSETS)) {
   }
  }));
 }
-rpc.exports={mark(){return {records:records.slice(),active:0};},
+function retainedArgumentProof(){
+ if(savedArguments===undefined)return null;
+ const args=savedArguments;
+ const last=args[15];
+ const values=Array.from(args,value=>(value.value&0xffffffffffffffffn).toString());
+ const keys=Object.keys(args);
+ const samePointer=last===args[15]&&args[0]===Reflect.getOwnPropertyDescriptor(args,'0').value;
+ const first=args[0];
+ args[0]=undefined;
+ const shadowed=Object.hasOwn(args,'0')&&args[0]===undefined;
+ delete args[0];
+ const deleted=!Object.hasOwn(args,'0')&&!(0 in args)&&args[0]===undefined;
+ args[0]=first;
+ return {array:Array.isArray(args),length:args.length,values,keys,samePointer,shadowed,deleted};
+}
+rpc.exports={mark(){return {records:records.slice(),active:0,retained_arguments:retainedArgumentProof()};},
  readEvents(){return {events:records.slice()};},ackEvents(sequence){return {acknowledged:sequence};},
  stop(){for(const hook of hooks)hook.detach();return {stopped:true};}};
 send(SLOW_FIXTURE?{ready:true,fixture:'self-owned-stop-concurrency',activity:activity.toString()}:
@@ -170,6 +192,20 @@ def child(binary):
             nested_result = nested(19)
             print(json.dumps(dict(integer=integer_result, floating=floating_result,
                                   sret=[getattr(large, name) for name in 'abcd'], nested=nested_result)), flush=True)
+        elif operation == 'full-arguments':
+            full = libraries[0].ArkDpsTestFullArguments
+            full.argtypes, full.restype = [ctypes.c_uint64] * len(FULL_ARGUMENT_VALUES), ctypes.c_uint64
+            print(json.dumps(dict(result=full(*FULL_ARGUMENT_VALUES))), flush=True)
+        elif operation == 'benchmark':
+            count = command['count']
+            if type(count) is not int or not 1 <= count <= 50_000:
+                raise ValueError('invalid self-owned benchmark count')
+            function = libraries[0].ArkDpsTestInteger
+            function.argtypes, function.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
+            arguments = tuple(range(1, 13))
+            start = time.perf_counter_ns()
+            total = sum(function(*arguments) for _ in range(count))
+            print(json.dumps(dict(count=count, elapsed_ns=time.perf_counter_ns() - start, total=total)), flush=True)
         elif operation == 'threads':
             integer = libraries[0].ArkDpsTestInteger
             integer.argtypes, integer.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
@@ -284,15 +320,28 @@ def check_smoke(binary=DEFAULT_OUTPUT):
             assert called == dict(integer=650, floating=62.5, sret=[17, 29, 46, 12], nested=687), called
             multithread = fixture.command('threads')
             assert multithread['results'] == [[650] * 5] * 4
+            full_arguments = 'ArkDpsTestFullArguments' in export_offsets(binary)
+            if full_arguments:
+                full_result = 0
+                for value in FULL_ARGUMENT_VALUES:
+                    full_result ^= value
+                assert fixture.command('full-arguments') == {'result': full_result}
             mark = pipe.request('mark')
             assert mark['active'] == 0
             records = mark['records']
-            assert Counter((record['name'], record['phase']) for record in records) == Counter({
+            expected = Counter({
                 ('Integer', 'enter'): 22, ('Integer', 'leave'): 22,
                 ('Float', 'enter'): 1, ('Float', 'leave'): 1,
                 ('Sret', 'enter'): 1, ('Sret', 'leave'): 1,
                 ('Nested', 'enter'): 1, ('Nested', 'leave'): 1,
             })
+            if full_arguments:
+                expected.update({('FullArguments', 'enter'): 1, ('FullArguments', 'leave'): 1})
+                assert mark['retained_arguments'] == dict(
+                    array=True, length=16, values=list(map(str, FULL_ARGUMENT_VALUES)),
+                    keys=list(map(str, range(16))), samePointer=True, shadowed=True, deleted=True)
+                receipt['retained_all_16_arguments_preserve_array_and_uint64'] = True
+            assert Counter((record['name'], record['phase']) for record in records) == expected
             starts = {record['serial']: record for record in records if record['phase'] == 'enter'}
             ends = {record['serial']: record for record in records if record['phase'] == 'leave'}
             assert starts.keys() == ends.keys()

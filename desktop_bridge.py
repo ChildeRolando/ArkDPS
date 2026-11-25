@@ -1015,10 +1015,15 @@ class DesktopState:
         counter_scope = sample.get('native_counter_scope')
         character_counters = counter_scope == NATIVE_AUTOCHESS_CHARACTER_COUNTERS
         scene = None if character_counters else self._autochess_scene
-        active = desired
-        if scene is not None and scene.phase in (4, 5, 6, 7, 8) and scene.collection_mode in ('all', 'local'):
-            active = scene.collection_mode == 'all'
-        active = supported and active
+        detail_mode = None
+        if scene is not None and scene.phase in (4, 6):
+            detail_mode = scene.collection_mode
+        elif (scene is not None and scene.phase in (7, 8)
+              and (multiplayer or {}).get('previous_defense') is True):
+            detail_mode = multiplayer.get('collection_mode')
+        # Assist acquires its whole verified battlefield even when the
+        # separate teammate detail is disabled in settings.
+        active = supported and (detail_mode == 'all' if detail_mode in ('all', 'local') else desired)
         scope_unverified = (supported and scene is None and counter_scope != 'events_only'
                             and 'AUTOCHESS' in str((sample.get('battle_metadata') or {}).get('stage_id', '')).upper())
         local_player = _native_display_source(sample)

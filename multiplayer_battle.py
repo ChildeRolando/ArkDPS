@@ -442,7 +442,7 @@ class MultiplayerBattleStatistics:
                 # This uncertainty is about scope, not native-cast semantics.
                 # Ordinary current-scope casts still go through EventStream.
                 self._players[uid].statistics.mark_settlement_skill_unassigned(
-                    source, 'native_autochess_scope_unverified', None)
+                    source, 'native_autochess_scope_unverified', None, actor=entry.unique_id)
             return
         self._reasons.add('存在阶段或轮次身份未核实的事件')
 

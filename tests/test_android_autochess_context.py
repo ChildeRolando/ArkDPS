@@ -14,8 +14,9 @@ def test_android_autochess_typed_metadata_scope_and_mode_contract():
         cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
     result = json.loads(completed.stdout)
     assert result['status'] == 'verified'
-    assert len(result['checks']) == 13
+    assert len(result['checks']) == 14
     assert 'optional_android_view_mode_is_typed_fresh_and_never_identity' in result['checks']
+    assert 'local_preference_keeps_the_assisted_accounts_on_android' in result['checks']
 
 
 def test_android_probe_and_guarded_collector_share_the_installed_layout():

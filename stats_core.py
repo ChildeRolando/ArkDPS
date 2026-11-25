@@ -371,6 +371,7 @@ class Statistics:
         self.settlement_skill_active = {}
         self.settlement_skill_initial_pending = set()
         self.settlement_skill_incomplete = set()
+        self.settlement_skill_scope_unassigned = set()
         self.settlement_skill_past_incomplete = set()
         self.settlement_skill_unassigned = set()
         self.partial_damage = {}
@@ -608,6 +609,7 @@ class Statistics:
         identity = (owner, actor)
         if (actor is None or self.skill_unknown or owner in self.settlement_skill_unassigned
                 or identity in self.settlement_skill_initial_pending
+                or identity in self.settlement_skill_scope_unassigned
                 or identity in self.settlement_skill_incomplete):
             return None
         window = self.settlement_skill_active.get(identity)
@@ -634,7 +636,8 @@ class Statistics:
         skill_reason = self.skill_incomplete.get(owner)
         if skill_reason is None and (self.skill_unknown or owner in self.settlement_skill_past_incomplete
                                      or owner in self.settlement_skill_unassigned
-                                     or any(identity[0] == owner for identity in self.settlement_skill_incomplete)):
+                                     or any(identity[0] == owner for identity in self.settlement_skill_incomplete)
+                                     or any(identity[0] == owner for identity in self.settlement_skill_scope_unassigned)):
             skill_reason = '技能事件覆盖不完整'
         if skill_reason is None:
             live = self.end_time is None and self.event_coverage_end is None
@@ -1009,6 +1012,9 @@ class Statistics:
         if effect_started:
             # Earlier unclassified hits stay in the damage ledger's denominator.
             self.settlement_skill_initial_pending.discard(identity)
+            if identity in self.settlement_skill_scope_unassigned:
+                self.settlement_skill_scope_unassigned.remove(identity)
+                self.settlement_skill_past_incomplete.add(owner)
             if (identity in self.settlement_skill_incomplete
                     and (not was_active or self.settlement_skill_active[identity] is not previous)):
                 # A proved new effect timestamps subsequent hits. Its start cannot
@@ -1016,10 +1022,23 @@ class Statistics:
                 self.settlement_skill_incomplete.remove(identity)
                 self.settlement_skill_past_incomplete.add(owner)
 
+        elif (kind == 'skill_end'
+                and method in ('Character.OnSkillFinish', 'Character.SwitchOutFromSkillState')
+                and type(actor) is int and actor > 0 and self.owners.get(source) == owner
+                and any(isinstance(value, str) and value for value in (key, skill_id))
+                and identity not in self.settlement_skill_active):
+            # A verified effect endpoint proves this actor is inactive from
+            # here onward, even if its activation was outside our observation.
+            # It cannot classify an earlier hit or supply a missing duration.
+            self.settlement_skill_initial_pending.discard(identity)
+            if identity in self.settlement_skill_scope_unassigned:
+                self.settlement_skill_scope_unassigned.remove(identity)
+                self.settlement_skill_past_incomplete.add(owner)
+
     def mark_settlement_skill_initial_unknown(self, owner, actor):
         self.settlement_skill_initial_pending.add((owner, actor))
 
-    def mark_settlement_skill_unassigned(self, source, method, reason):
+    def mark_settlement_skill_unassigned(self, source, method, reason, *, actor=None):
         owner = self.owners.get(source)
         if owner is None:
             return
@@ -1028,6 +1047,12 @@ class Statistics:
                 if (identity[0] == owner and reason == 11
                         and 'skchr_ulpia_3' in (window['key'], window['id'])):
                     self.settlement_skill_incomplete.add(identity)
+            return
+        if type(actor) is int and actor > 0:
+            # The caller proved which actor is uncertain, without claiming
+            # that the uncertain event belongs to its current battle scope.
+            # A later verified activation/endpoint may establish future state.
+            self.settlement_skill_scope_unassigned.add((owner, actor))
             return
         self.settlement_skill_unassigned.add(owner)
 

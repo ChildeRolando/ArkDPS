@@ -36,6 +36,36 @@ class NativePointer {
  writePointer(value){return this.writeU64(value);}
 }
 function ptr(value){return value instanceof NativePointer?value:new NativePointer(value);}
+// The engine passes an owned copy of every integer argument slot. Preserve
+// dense-array behavior, but build a pointer only when its value is inspected.
+const __deferredArgument=Symbol(),__argumentViews=new WeakMap();
+function __materializeArgument(array,key){
+ const pointer=new NativePointer(__argumentViews.get(array).getBigUint64(Number(key)*8,true));
+ array[key]=pointer;
+ return pointer;
+}
+const __argumentHandler={
+ get(array,key,receiver){
+  const value=Reflect.get(array,key,receiver);
+  return value===__deferredArgument?__materializeArgument(array,key):value;
+ },
+ getOwnPropertyDescriptor(array,key){
+  const descriptor=Reflect.getOwnPropertyDescriptor(array,key);
+  if(descriptor?.value===__deferredArgument)descriptor.value=__materializeArgument(array,key);
+  return descriptor;
+ },
+ defineProperty(array,key,descriptor){
+  if(descriptor.writable===false&&!Object.hasOwn(descriptor,'value')&&
+     Reflect.getOwnPropertyDescriptor(array,key)?.value===__deferredArgument)
+   __materializeArgument(array,key);
+  return Reflect.defineProperty(array,key,descriptor);
+ }
+};
+function __arkdpsArguments(bytes){
+ const view=new DataView(bytes),args=Array(view.byteLength/8).fill(__deferredArgument);
+ __argumentViews.set(args,view);
+ return new Proxy(args,__argumentHandler);
+}
 const Memory={alloc(size){return ptr(__alloc(size));}};
 function __module(name){
  const found=__moduleInfo(String(name));

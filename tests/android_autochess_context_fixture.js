@@ -326,6 +326,24 @@ check('help_player_index_and_side_are_distinct_and_modes_latch_only_next_verifie
  assert.equal(packet(f).collection_mode,'local','returning to defense remains local even when the desired preference is all');
 });
 
+check('local_preference_keeps_the_assisted_accounts_on_android',()=>{
+ const f=owned('local');const defense=packet(f);
+ assert.equal(defense.collection_mode,'local');
+ f.write(f.roleList.add(0x18),2);f.write(f.roleList.add(0x1c),2);
+ f.write(address(f,f.machine,'<gameCurrentStateId>k__BackingField'),5);f.clock(30,4294967296n);
+ const assist=request(f,false).native_autochess_context;
+ assert.equal(assist.status,'available');assert.equal(assist.collection_mode,'all');
+ assert.equal(assist.self_player_index,4);assert.notEqual(assist.scope_key,defense.scope_key);
+ assert.deepEqual(Array.from(assist.memberships,row=>row.player_index),[1,2]);
+ emit(f,'skill_start',101);
+ const mark=f.mark(),skill=f.context.rpc.exports.readEvents(0,mark.sequence).events[0];
+ assert.equal(skill.source_character_uid,101);
+ assert.equal(skill.native_autochess_scope.scope_key,assist.scope_key);
+ assert.equal(skill.native_autochess_scope.collection_mode,'all');
+ f.write(address(f,f.machine,'<gameCurrentStateId>k__BackingField'),4);f.clock(60,8589934592n);
+ assert.equal(packet(f).collection_mode,'local');
+});
+
 check('event_original_scope_clock_proof_local_pruning_and_single_ack_retained',()=>{
  const f=owned('local');packet(f);const before=f.stamp();
  emit(f,'skill_start',101);emit(f,'skill_start',104);

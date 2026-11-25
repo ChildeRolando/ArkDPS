@@ -66,6 +66,45 @@ check('initial_mode_strict_mark_transport_scope_latching_and_terminal_retention'
  assert.equal(f.mark().sequence,0);
 });
 
+check('local_defense_keeps_other_accounts_output_on_the_verified_assist_battlefield',()=>{
+ const f=owned();
+ const defense=request(f,false).native_autochess_context;
+ assert.equal(defense.phase,4);assert.equal(defense.collection_mode,'local');
+ assert.equal(emit(f,'skill_start',101).sequence,undefined);
+ emit(f,'skill_start',104);
+
+ // Only the assisted accounts are deployed; the session's self account is
+ // still known from the full account table, but has no role on this field.
+ f.write(f.roleList.add(0x18),2);f.write(f.roleList.add(0x1c),2);
+ f.write(f.machine.add(0x5c),5);f.clock(30,4294967296n);
+ const assist=request(f,false).native_autochess_context;
+ assert.equal(assist.status,'available');assert.equal(assist.phase,5);
+ assert.notEqual(assist.scope_key,defense.scope_key);
+ assert.equal(assist.players.length,4);assert.equal(assist.self_player_index,4);
+ assert.deepEqual(Array.from(assist.memberships,row=>row.player_index),[1,2]);
+ assert.equal(assist.collection_mode,'all');
+ emit(f,'skill_start',101);
+ const settlement=emit(f,'damage_settlement',102,{...enemy,target_uid:'77',settlement_complete:true});
+ assert.deepEqual(plain(settlement.native_autochess_scope),plain(f.stamp({frame:30,game_time:1}).native_autochess_scope));
+ assert.equal(settlement.native_autochess_scope.collection_mode,'all');
+ assert.equal(request(f,true).native_autochess_context.collection_mode,'all');
+ assert.equal(request(f,false).native_autochess_context.collection_mode,'all');
+ f.write(f.machine.add(0x5c),7);
+ assert.equal(request(f).native_autochess_context.collection_mode,'all','completed help retains its mode');
+
+ f.write(f.roleList.add(0x18),4);f.write(f.roleList.add(0x1c),3);
+ f.write(f.machine.add(0x5c),4);f.write(f.center.add(0x3c),2);f.clock(60,8589934592n);
+ assert.equal(request(f).native_autochess_context.collection_mode,'local');
+ assert.equal(emit(f,'skill_end',101).sequence,undefined);
+ emit(f,'skill_end',104);
+ const recorded=batch(f).events;
+ assert.deepEqual(recorded.map(event=>event.sequence),[1,2,3,4]);
+ assert.deepEqual(recorded.map(event=>event.source_character_uid),[104,101,102,104]);
+ assert.deepEqual(recorded.map(event=>event.native_autochess_scope.collection_mode),['local','all','all','local']);
+ assert.deepEqual(recorded.map(event=>event.native_autochess_scope.phase),[4,5,5,4]);
+ assert.equal(f.context.rpc.exports.ackEvents(4).acknowledged,4);
+});
+
 check('default_all_and_invalid_initial_configuration',()=>{
  const f=world();assert.equal(f.mark().native_autochess_context.collection_mode,'all');
  assert.throws(()=>world({fixtureOptions:{globals:{arkdpsAutoChessMode:false}}}),/invalid AutoChess collection mode/);

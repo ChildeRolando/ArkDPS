@@ -26,7 +26,7 @@ def digest(value):
 
 
 def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
-              mode_by_epoch=None, settings_by_action=None):
+              mode_by_epoch=None, settings_by_action=None, assist_players=(1, 2, 3, 4)):
     """Run real CollectionSession.read + worker FIFO from one owned PC source."""
     state = bridge.DesktopState(tmp_path / 'desktop')
     state.layout = replace(state.layout, multiplayer_enabled=multiplayer_enabled, panels=(PanelConfig(),
@@ -49,6 +49,9 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
         mode = mode_for(raw)
         if mode is not None:
             raw['collection_mode'] = mode
+        if raw.get('phase') == 5:
+            raw['memberships'] = [member for member in raw['memberships']
+                                  if member['player_index'] in assist_players]
         for event in packet.get('events', ()):
             scope = event.get('native_autochess_scope')
             if scope is not None and (mode := mode_for(scope)) is not None:
@@ -65,8 +68,7 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
         return with_collection_mode(packet)
 
     battle.observer.read_through = batch
-    if mode_by_epoch:
-        battle.observer.mark = lambda: with_collection_mode(original_mark())
+    battle.observer.mark = lambda: with_collection_mode(original_mark())
     battle.observer.status = ObserverStatus.READY
     battle.observer.stop = lambda: None
     steps, accepted, saved, sessions = [], [], {}, []
@@ -120,7 +122,10 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
             elif action == 'assist_hits':
                 battle.advance(2)
                 first = len(battle.records) + 1
-                battle.advance(2, [battle.hit(first + i - 1, i, i * 1000) for i in range(1, 5)])
+                battle.advance(2, [battle.hit(sequence, player, player * 1000)
+                                   for sequence, player in enumerate(assist_players, first)])
+            elif action == 'assist_terminal':
+                battle.advance(3, state=3, phase=8, epoch=4)
             elif action == 'prepare':
                 battle.advance(0, state=2, phase=3, epoch=4)
             elif action == 'late_terminal':
@@ -217,7 +222,7 @@ def test_multiplayer_setting_latches_at_next_combat_and_preserves_retained_defen
     state, battle, _, _, views, _ = run_chain(tmp_path, monkeypatch,
         ['defense_baseline', 'defense_hits', 'ordinary_retry', 'assist_busy', 'assist_baseline',
          'assist_hits', 'prepare', 'next_defense_baseline', 'next_defense_hits'],
-        multiplayer_enabled=initial, mode_by_epoch={1: old_mode, 3: new_mode, 5: new_mode},
+        multiplayer_enabled=initial, mode_by_epoch={1: old_mode, 3: 'all', 5: new_mode},
         settings_by_action={'ordinary_retry': not initial})
     assert views['defense_hits']['multiplayer_active'] is initial
     assert view_values(views['defense_hits']) == [300]
@@ -228,8 +233,7 @@ def test_multiplayer_setting_latches_at_next_combat_and_preserves_retained_defen
     assert_assist_waiting(views['assist_busy'])
     assert views['assist_busy']['multiplayer_active'] is not initial
     assert views['assist_busy']['multiplayer_mode_pending'] is False
-    expected_assist = [3000] if initial else [4000, 3000, 2000, 1000]
-    assert view_values(views['assist_hits']) == expected_assist
+    assert view_values(views['assist_hits']) == [4000, 3000, 2000, 1000]
     assert view_values(views['prepare']) == [300]
     assert '上一场防御' in views['prepare']['status_text']
     assert views['prepare']['multiplayer'] is None
@@ -237,6 +241,37 @@ def test_multiplayer_setting_latches_at_next_combat_and_preserves_retained_defen
     assert views['next_defense_hits']['multiplayer_active'] is not initial
     assert (views['next_defense_hits']['multiplayer'] is not None) is not initial
     assert state.last is not None and battle.commits[-1] == 12
+
+
+@pytest.mark.parametrize('assist_mode', ['local', 'all'], ids=['historical-local', 'current-all'])
+def test_default_off_assist_projects_only_verified_battlefield_actors(tmp_path, monkeypatch, assist_mode):
+    _, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'assist_busy', 'assist_baseline', 'assist_hits',
+         'assist_terminal', 'prepare', 'next_defense_baseline', 'next_defense_hits'],
+        multiplayer_enabled=False, mode_by_epoch={1: 'local', 3: assist_mode, 4: assist_mode, 5: 'local'},
+        assist_players=(1, 2))
+    assist = next(raw for action, raw, _ in accepted if action == 'assist_hits')
+    assert assist['autochess_context']['self_player_uid'] == LEADING_UIDS[2]
+    assert [member['player_index'] for member in assist['autochess_context']['memberships']] == [1, 2]
+    assert assist['multiplayer']['players'][2]['statistics']['rows'] == {}
+    assert assist['multiplayer']['players'][2]['observed_damage'] is None
+    for panel in views['assist_hits']['panels']:
+        assert panel['scope_label'] == '当前协防战场'
+        entries = {entry['owner_id']: (entry['player_uid'], entry['actor_uid'], entry['value'])
+                   for entry in panel['entries']}
+        expected = {f'{LEADING_UIDS[i - 1]}:{CID}#{i * 100 + 1}': (LEADING_UIDS[i - 1], i * 100 + 1, i * 1000)
+                    for i in (1, 2)}
+        assert entries == (expected if assist_mode == 'all' else {})
+    assert_assist_waiting(views['assist_busy'])
+    assert all(view['multiplayer'] is None and view['multiplayer_active'] is False
+               and view['multiplayer_mode_pending'] is False for view in views.values())
+    for action, amount in (('defense_hits', 300), ('assist_terminal', 300), ('prepare', 300),
+                           ('next_defense_hits', 21)):
+        assert view_values(views[action]) == [amount]
+    for action in ('defense_hits', 'next_defense_hits'):
+        defense = next(raw['multiplayer'] for step, raw, _ in accepted if step == action)
+        assert defense['collection_mode'] == 'local'
+        assert all(player['statistics'] is None for player in defense['players'] if player['is_local'] is False)
 
 
 def test_guarded_assist_without_an_accepted_sample_restores_defense_on_prepare(tmp_path, monkeypatch):

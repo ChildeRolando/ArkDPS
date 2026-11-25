@@ -15,9 +15,13 @@ function setAutoChessMode(enabled){
 function autoCollectionMode(scope_key,phase){
  // Only a proven combat scope can latch a preference. Terminal observations
  // retain the completed combat's effective mode until another combat starts.
- if([4,5,6].includes(phase)&&nativeAutoEffective?.scope_key!==scope_key)
-  nativeAutoEffective={scope_key,mode:phase===4&&probeAdapter.supportsAutoChessAllDefense!==true?
-   'local':nativeAutoDesiredMode};
+ if([4,5,6].includes(phase)&&nativeAutoEffective?.scope_key!==scope_key){
+  let mode=nativeAutoDesiredMode;
+  // The assisted battlefield may have only other accounts' deployed actors.
+  if(phase===5)mode='all';
+  else if(phase===4&&probeAdapter.supportsAutoChessAllDefense!==true)mode='local';
+  nativeAutoEffective={scope_key,mode};
+ }
  return nativeAutoEffective?.mode??nativeAutoDesiredMode;
 }
 function autoEventOwner(event){
@@ -521,7 +525,7 @@ function readAutoChess(identity,frame,fixed){
     count:read.at(playerList,'_size'),version:read.at(playerList,'_version')},
    memberships:[...byUid.values()].filter(row=>!conflicts.has(row.data_uid)),unknown,
    allInputsGuarded:unknown.length===unboundHosts};
- }catch(e){nativeAutoCache=null;return {error:String(e)};}
+ }catch(e){return {error:String(e)};}
 }
 function finishAutoChess(result,identity,frame,fixed){
  if(result.error)return {protocol_version:1,status:'unknown',verified_same_frame:false,frame,
@@ -579,6 +583,12 @@ function stampAutoChessClock(when){
  }catch(e){nativeAutoCache=null;unknown(String(e));}
 }
 let nativeAutoBodyCache=null;
+function discardAutoChessBody(){
+ nativeAutoBodyCache=null;
+ // Only a full body validates the owner map used to omit unrelated events.
+ // Event scope is separate and will run both of its live guards on each hit.
+ nativeAutoOwners=null;
+}
 function prepareAutoChessRetryBody(prepareWarm=false){
  const cached=nativeAutoBodyCache;
  if(!cached||(!cached.prepareBeforeClock&&!prepareWarm)||!nativeAutoStage?.enabled)return null;
@@ -594,7 +604,7 @@ function prepareAutoChessRetryBody(prepareWarm=false){
   cached.body.read.validate();
   return cached;
  }catch(e){
-  nativeAutoBodyCache=null;nativeAutoCache=null;nativeAutoOwners=null;return null;
+  discardAutoChessBody();return null;
  }
 }
 function readAutoChessBody(identity,frame,fixed,key,prepared){
@@ -603,13 +613,13 @@ function readAutoChessBody(identity,frame,fixed,key,prepared){
     &&frame>=cached.frame&&BigInt(fixed)>=BigInt(cached.fixed)){
   if(prepared!==cached){
    try{cached.body.read.validate();}
-   catch(e){nativeAutoBodyCache=null;return readAutoChess(identity,frame,fixed);}
+   catch(e){discardAutoChessBody();return readAutoChess(identity,frame,fixed);}
   }
   try{cached.body.read.validate();}
-  catch(e){nativeAutoCache=null;nativeAutoBodyCache=null;return {error:String(e)};}
+  catch(e){discardAutoChessBody();return {error:String(e)};}
   return cached.body;
  }
- nativeAutoBodyCache=null;return readAutoChess(identity,frame,fixed);
+ discardAutoChessBody();return readAutoChess(identity,frame,fixed);
 }
 const nativeRootFailures={
  controller_class_unavailable:'BattleController class unavailable',
@@ -654,7 +664,7 @@ function nativeBinding(prepared=null){
  // Windows sampler. The host binds this evidence to its battle serial.
  let step='root_identity';nativeAutoBindingDiagnostic=null;
  const unavailable=(reason,guard)=>{
-  nativeAutoBodyCache=null;
+  discardAutoChessBody();
   nativeAutoBindingDiagnostic={status:'unavailable',step,reason:String(reason).slice(0,300)};
   if(guard)nativeAutoBindingDiagnostic.guard=guard;
   return null;
@@ -662,6 +672,7 @@ function nativeBinding(prepared=null){
  const rejectRoot=(guard,actualClass)=>{
   const observed=typeof actualClass==='string'&&/^[A-Za-z0-9_`.<>+]{1,96}$/.test(actualClass)?
    ' (observed '+actualClass+')':'';
+  nativeAutoCache=null;
   return unavailable(nativeRootFailures[guard]+observed,guard);
  };
  try{
@@ -672,7 +683,10 @@ function nativeBinding(prepared=null){
   step='controller_state';
   const stateOffset=probeAdapter.autoChessStateOffset??0x228;
   const stateAddress=ptr(before.controller).add(stateOffset),state=stateAddress.readS32();
-  if(state!==2&&state!==3)return unavailable('BattleController is not PLAYING or FINISHED');
+  if(state!==2&&state!==3){
+   nativeAutoCache=null;
+   return unavailable('BattleController is not PLAYING or FINISHED');
+  }
   if(state!==2)prepared=null;
   step='stage_metadata';
   const level=ptr(before.level),levelClass=probeAdapter.autoChessReflected?level.readPointer():null;
@@ -686,35 +700,41 @@ function nativeBinding(prepared=null){
    if(!autoIdentity(stageClass,'String','System'))return unavailable('AutoChess stage identifier is not System.String');
   }
   const stageKey=[before.controller,before.native,before.logger,before.stats,before.level,stage].join(':');
-  if(nativeAutoStage?.key!==stageKey){nativeAutoCache=null;nativeAutoBodyCache=null;}
-  nativeAutoStage={key:stageKey,enabled,stageAddress,levelClass,stageClass,
-   stagePointer:probeAdapter.autoChessReflected?stagePointer:stageAddress.readPointer()};
+  if(nativeAutoStage?.key!==stageKey||!nativeAutoStage.stagePointer.equals(stagePointer)){
+   nativeAutoCache=null;discardAutoChessBody();
+  }
+  nativeAutoStage={key:stageKey,enabled,stageAddress,levelClass,stageClass,stagePointer};
   const bodyKey=stageKey+'#'+nativeAutoStage.stagePointer.toString();
-  if(!enabled)nativeAutoBodyCache=null;
+  if(!enabled)discardAutoChessBody();
   const auto=enabled?readAutoChessBody(before,frame,fixed,bodyKey,prepared):null;
   const viewMode=probeAdapter.autoChessReflected&&auto?.header?.phase===4?readAutoChessViewMode(auto.header.manager):null;
   step='closing_guard';
   if(probeAdapter.autoChessReflected&&(!level.readPointer().equals(levelClass)||
      !stageAddress.readPointer().equals(stagePointer)||str(stagePointer)!==stage||
-     enabled&&!stagePointer.readPointer().equals(stageClass)))
+     enabled&&!stagePointer.readPointer().equals(stageClass))){
+   nativeAutoCache=null;
    return unavailable('LevelData or stage identity changed during binding');
+  }
   const after=currentNativeIdentity(rejectRoot);
   if(after===null)return null;
   const endFrame=clock.readU32(),endFixed=clock.add(4).readS64().toString();
+  const endStagePointer=probeAdapter.autoChessReflected?stagePointer:stageAddress.readPointer();
   if(Object.keys(before).some(key=>before[key]!==after[key])
-     ||stateAddress.readS32()!==state||!probeAdapter.autoChessReflected&&str(stageAddress.readPointer())!==stage)
+     ||stateAddress.readS32()!==state||!endStagePointer.equals(stagePointer)||
+     !probeAdapter.autoChessReflected&&str(endStagePointer)!==stage){
+   nativeAutoCache=null;
    return unavailable('battle roots, clock, state or stage changed during binding');
+  }
   if(endFrame!==frame||endFixed!==fixed){
    const rejected=unavailable('battle clock changed during binding','clock_changed');
-   if(state===2&&!probeAdapter.autoChessReflected&&auto?.allInputsGuarded
-      &&endFrame>frame&&BigInt(fixed)>=0n&&BigInt(endFixed)>BigInt(fixed)){
+   const advanced=endFrame>frame&&BigInt(fixed)>=0n&&BigInt(endFixed)>BigInt(fixed);
+   if(!advanced)nativeAutoCache=null;
+   if(state===2&&!probeAdapter.autoChessReflected&&auto?.allInputsGuarded&&advanced){
     // Save only a candidate for readAutoChessBody's TWO fresh validation
     // passes. A slow discovery spanning a tick cannot publish members or
     // filter events. Repeating the full discovery would starve every retry.
-    // A crossed tick rejects this sample. If this is the same previously
-    // committed guard plan, later events still perform both live validations.
-    if(!auto.scopeGuards||nativeAutoCache?.scopeGuards!==auto.scopeGuards)nativeAutoCache=null;
-    nativeAutoOwners=null;
+    // A crossed tick rejects this sample. Later events can use only the
+    // previous independently committed plan, with both live scope checks.
     nativeAutoBodyCache={key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,
      frame:endFrame,fixed:endFixed,body:auto,prepareBeforeClock:true};
    }
@@ -752,9 +772,12 @@ function nativeBinding(prepared=null){
    result.native_autochess_context=finishAutoChess(auto,before,frame,fixed);
    if(viewMode)result.autochess_view_mode=viewMode;
    const preparedHere=prepared!==null&&prepared===nativeAutoBodyCache&&prepared.body===auto;
-   nativeAutoBodyCache=auto.allInputsGuarded&&(auto.unknown.length===0||preparedHere)?
+   // A missing host can be a guarded negative result. Keep it only as a
+   // candidate for two fresh passes, just like the forward-clock retry body.
+   const prepareBeforeClock=preparedHere||!probeAdapter.autoChessReflected&&auto.allInputsGuarded&&auto.unknown.length>0;
+   nativeAutoBodyCache=auto.allInputsGuarded&&(auto.unknown.length===0||prepareBeforeClock)?
     {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto,
-     prepareBeforeClock:preparedHere}:null;
+     prepareBeforeClock}:null;
   }
   return result;
  }catch(e){return unavailable(e);}
