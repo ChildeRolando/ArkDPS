@@ -927,7 +927,7 @@ class BattleFeed:
         check_cursor_lifetime(observer, cursor_lifetime)
         stream = published_capture.adapter.event_stream if published_capture is not None else None
         previous = stream.sequence if stream is not None and observer is published_observer else 0
-        if (generation > published_generation and observer is not None
+        if (generation == published_generation + 1 and observer is not None
                 and callable(getattr(observer, 'read_round_start_range', None))
                 and sample.get('native_counter_scope') == 'events_only'
                 and sample.get('state') == 2 and type(sample.get('frame')) is int and sample['frame'] > 0
