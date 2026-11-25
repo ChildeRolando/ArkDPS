@@ -121,7 +121,7 @@ function scenario(platform, fault) {
   assert.equal(batch.enemy_damage_ready, true);
   assert.equal(batch.mitigation_ready, true);
   assert.equal(batch.events.filter(e => e.kind === 'damage').length,
-    fault === 'clock_changed' ? 0 : 1, platform + ':' + fault);
+    0, platform + ':' + fault);
   const valid = ['target_return_before_apply_commit', 'nonlethal_cap', 'lethal_hit',
     'full_block_unit_before_shield', 'full_block_unit_after_shield'].includes(fault) || !!late && !late.invalid;
   return {initial_mark: initialMark, initial_batch: initialBatch,

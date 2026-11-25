@@ -103,9 +103,9 @@ def after_kill_producer():
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
 def test_child_before_parent_zero_has_one_same_scope_raw_certificate(after_kill_producer, platform):
     records = after_kill_producer[platform]['valid']['batch']['events']
-    parent = next(e for e in records if e['kind'] == 'damage' and e['source'] == 'char_owned_parent')
+    parent = next(e for e in records if e['kind'] == 'damage_settlement' and e['source'] == 'char_owned_parent')
     parent_settlement = next(e for e in records if e['kind'] == 'damage_settlement' and e['source'] == parent['source'])
-    child = next(e for e in records if e['kind'] == 'elemental_burst')
+    child = next(e for e in records if e['kind'] == 'damage_settlement' and e['damage_type'] == 5)
     child_settlement = next(e for e in records if e['kind'] == 'damage_settlement' and e['source'] is None)
     proof = parent['proof']['nested_settlement']
     assert parent_settlement['proof']['nested_settlement'] == proof

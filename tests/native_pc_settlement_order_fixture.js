@@ -81,13 +81,10 @@ function scenario(platform, order, fault = null, withoutLegacyWire = false) {
     return {mark, batch, raw_damage: damage, settlement: settlement ?? null, synthetic: 'owned contradictory proof: ' + fault};
   }
   assert(settlement);
-  if(withoutLegacyWire)assert.equal(damage,undefined);
-  else {
-  assert.equal(damage.amount, 40);
-  assert.equal(damage.real_delta, -40);
-  assert.equal(damage.hp_before, 50);
-  assert.equal(damage.hp_after, 10);
-  }
+  assert.equal(damage,undefined);
+  assert.equal(settlement.real_delta,-40);
+  assert.equal(settlement.hp_before,50);
+  assert.equal(settlement.hp_after,10);
   assert.equal(settlement.amount, 40);
   assert.equal(settlement.settlement_complete, true);
   assert.equal(settlement.shield_absorbed, 0);

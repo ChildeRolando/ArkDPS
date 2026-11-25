@@ -58,9 +58,9 @@ def test_ten_actual_nonlethal_elemental_hp_chains_have_one_shared_certificate(pr
     group = fields['elemental_nonlethal_groups'][index]
     a, b = group['raw_child_entry']['record'], group['raw_child_return']['record']
     events = report['batch']['events']
-    parent = next(e for e in events if e['kind'] == 'damage' and e['source'] == a['parent_source'])
+    parent = next(e for e in events if e['kind'] == 'damage_settlement' and e['source'] == a['parent_source'])
     parent_settlement = next(e for e in events if e['kind'] == 'damage_settlement' and e['source'] == a['parent_source'])
-    child = next(e for e in events if e['kind'] == 'elemental_burst')
+    child = next(e for e in events if e['kind'] == 'damage_settlement' and e['damage_type'] == 5)
     child_settlement = next(e for e in events if e['kind'] == 'damage_settlement' and e['source'] is None)
     proof = parent['proof']['nested_settlement']
     assert proof == dict(target_uid=str(a['target_uid']), parent_real_delta=a['parent_real_delta'],

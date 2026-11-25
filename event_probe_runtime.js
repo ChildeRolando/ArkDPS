@@ -666,7 +666,7 @@ function finalizeUnverifiedSettlement(scope,when){
  }
  // Required amount zero is the pre-existing incomplete-record placeholder,
  // never a certificate of zero HP consumption. Actual and nominal stay absent.
- damageSettlement(scope,a.target,0,when,{identity:a.identity,type:a.type,unverified:true});
+ damageSettlement(scope,a.target,0,when,{identity:a.identity,type:a.type,unverified:true,nativeModifierAmount:amount});
 }
 function damageSettlementQuality(){
  return {damage_settlement_quality_version:1,enemy_damage_ready:enemyDamageReady,
@@ -1272,7 +1272,7 @@ function matchesNestedElementalRecords(step,uid,target,when){
   settlement.cancel_reason===0&&Number.isSafeInteger(settlement.sequence)&&
   sameNativeEventScope(settlement,when);
 }
-function closeNestedElementalStep(step,uid,when,evidence,burst){
+function closeNestedElementalStep(step,uid,when,evidence){
  const {child,source,cid,hpBefore}=step,target=child.target;
  try{
   if(child.sourceReadFailed||child.targetSettlementNested||child.mitigationModifierReused||
@@ -1293,17 +1293,17 @@ function closeNestedElementalStep(step,uid,when,evidence,burst){
      Math.abs(hpBefore-evidence.hp_after+evidence.real_delta)>Math.max(0.01,Math.abs(evidence.real_delta)*1e-6)||
      fp(child.mod.add(0x48))!==evidence.real_delta||
      shieldContextUnknown(when.frame,target)||shieldTotal(when.frame,target)!==0)return null;
-  const closed={...step,settlement:child.settlementRecord,burst,hpAfter:evidence.hp_after,real:evidence.real_delta};
+  const closed={...step,settlement:child.settlementRecord,hpAfter:evidence.hp_after,real:evidence.real_delta};
   return matchesNestedElementalRecords(closed,uid,target,when)?closed:null;
  }catch(e){return null;}
 }
-function rememberNestedElementalSettlement(child,when,evidence,burstRecord){
+function rememberNestedElementalSettlement(child,when,evidence){
  const scopes=activeModifiers.get(child.tid);
  if(!scopes||scopes.length<2||scopes[scopes.length-1]!==child)return;
  const parents=scopes.slice(0,-1).filter(parent=>parent.nestedElementalChain?.pending?.child===child);
  for(const parent of parents){
   const chain=parent.nestedElementalChain;
-  const closed=parents.length===1?closeNestedElementalStep(chain.pending,chain.checkpoint.uid,when,evidence,burstRecord):null;
+  const closed=parents.length===1?closeNestedElementalStep(chain.pending,chain.checkpoint.uid,when,evidence):null;
   if(!closed){
    noteNestedSettlementFailure(parent,'child_close','unverified_child_return',5,child.settlementDomainEntry?.targetType);
    parent.nestedElementalChain=null;continue;
@@ -1358,10 +1358,10 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
     scope.nestedParentSettlementProof={...proof,child_hp_before:step.hpBefore,
      child_hp_after:step.hpAfter,child_real_delta:step.real};
    }else{
-    scope.nestedElementalChainProof={version:1,ordering:childrenFirst?'children_before_parent':'parent_before_children',
+    scope.nestedElementalChainProof={version:2,ordering:childrenFirst?'children_before_parent':'parent_before_children',
      ...proof,children:chain.steps.map(step=>({
      source:step.cid,source_character_uid:step.uid,settlement_sequence:step.settlement.sequence,
-     burst_sequence:step.burst.sequence,hp_before:step.hpBefore,hp_after:step.hpAfter,real_delta:step.real}))};
+     hp_before:step.hpBefore,hp_after:step.hpAfter,real_delta:step.real}))};
    }
   }
   return {target:hit.commit.targetKey,real_delta:parentReal,
@@ -1370,7 +1370,7 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
    ...(zeroAfterChildren?{settled_after_nested_kill:true}:{})};
  }catch(e){return null;}
 }
-function rememberNestedElementalKill(child,when,evidence,burstRecord){
+function rememberNestedElementalKill(child,when,evidence){
  const uid=child.elementalTargetUid;
  if(!uid||child.mitigationModifierReused||!evidence?.killed||evidence.cancel_reason!==0||
     evidence.shield_absorbed!==0||!(evidence.real_delta<0)||evidence.hp_after!==0||
@@ -1386,7 +1386,7 @@ function rememberNestedElementalKill(child,when,evidence,burstRecord){
  for(const parent of parents){
   parent.nestedElementalKill=parents.length===1&&parent.nestedElementalKill===undefined?
     {uid,when,child,hpBefore:evidence.hp_before,hpAfter:evidence.hp_after,real:evidence.real_delta,
-     burstRecord,settlementRecord:child.settlementRecord,observedAfterChild:targetHp(child.target)}:null;
+     settlementRecord:child.settlementRecord,observedAfterChild:targetHp(child.target)}:null;
  }
 }
 function damageSettledAfterNestedKill(scope,when,amount){
@@ -1421,6 +1421,9 @@ function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error(
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
 function record(source,kind,amount,when,proof,evidence,sourceUid){
+ // The current v7 settlement capability owns damage facts. Legacy inputs
+ // remain readable on the host; incapable producers keep their existing wire.
+ if(enemyDamageReady&&['damage','hp_damage','elemental_burst'].includes(kind))return;
  if(coalesceEnemyHp)flushCoalescedEnemyHp();
  if(source!==null&&sourceUid!==undefined)evidence={...evidence,source_character_uid:sourceUid};
  const event=enqueueEvent(source,kind,amount,when,proof,evidence);
@@ -1789,7 +1792,7 @@ function knownNonEnemyTarget(target){
  const key=targetKey(target);
  return key&&!key.startsWith('enemy_')&&!key.startsWith('trap_');
 }
-function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed,evidenceMethod,hpEvidence}={}) {
+function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,reduction,identity,type,nested=false,unverified=false,killed,evidenceMethod,hpEvidence,nativeModifierAmount,targetCheckpoint}={}) {
  if(!enemyDamageReady||scope.source&&!own(scope.source))return;
  const qualification=settlementScopeQualification(scope,when,target);
  if(qualification==='outside')return;
@@ -1820,9 +1823,13 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
       Math.abs(hpEvidence.hp_before-hpEvidence.hp_after+real)>Math.max(0.01,Math.abs(real)*1e-6))
     throw new Error('invalid checked settlement HP checkpoint');
    Object.assign(evidence,{hp_before:hpEvidence.hp_before,hp_after:hpEvidence.hp_after,
-    real_delta:real,cancel_reason:0});
+    real_delta:real,cancel_reason:0,target_type:0});
   }
   const proof={method:scope.name};if(evidenceMethod)proof.evidence_method=evidenceMethod;
+  if(hpEvidence)Object.assign(proof,{type:damageType,target:0});
+  if(Number.isFinite(nativeModifierAmount)&&nativeModifierAmount>=0)
+   proof.native_modifier_observation={version:1,method:'Entity.ApplyModifier',amount:nativeModifierAmount};
+  if(targetCheckpoint)proof.target_callback_checkpoint=targetCheckpoint;
   const tokenHost=autoTokenHostEvidence(scope,when);
   if(tokenHost)proof.native_autochess_token_host=tokenHost;
   const characterForm=autoCharacterFormEvidence(scope,when);
@@ -1975,7 +1982,10 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  if(scope.settlementFailureReason)recipient.settlementFailureReason=scope.settlementFailureReason;
  if(scope.nestedSettlementFailure)recipient.nestedSettlementFailure=scope.nestedSettlementFailure;
  const event=damageSettlement(recipient,target,settledReal,when,{nominal,shield:absorbed,type,nested,unverified,killed,
-                   identity:output?.settlementIdentity,reduction:pair,hpEvidence:capturedHp?exactEvidence:undefined,
+                   identity:output?.settlementIdentity,reduction:pair,hpEvidence:capturedHp||nested&&scope.nestedParentSettlementProof?exactEvidence:undefined,nativeModifierAmount:amount,
+                   targetCheckpoint:(targetCommit||nested&&scope.nestedParentSettlementProof)&&hit?.commit?.returned?
+                    {version:1,method:'Unit.OnTakeDamage',returned:true,source:scope.source,source_character_uid:scope.sourceCharacterUid,
+                     target_uid:String(hit.uid),hp_before:hit.hpBefore,frame:hit.commit.when.frame,game_time:hit.commit.when.game_time}:undefined,
                    evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
  if(event){scope.settlementRecordEmitted=true;scope.settlementRecord=event;}
@@ -3146,7 +3156,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
     if(this.name.endsWith('.OnAfterOutputDamage')||this.name==='Entity.OnTakeDamage'||this.name==='Unit.OnTakeDamage'){
      if(this.ignore)return;
      if(!this.target||this.target.isNull())return;
-     if(this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
+     if(!enemyDamageReady&&this.name==='Unit.OnTakeDamage'&&this.source&&own(this.source)&&this.target&&!this.target.isNull()&&Number.isFinite(this.amount)){
       const targetKeyValue=targetKey(this.target)||this.target.toString();
       const shield=shieldContextUnknown(end.frame,this.target)?null:shieldTotal(end.frame,this.target);
       try{record(this.source,'hp_damage',this.amount,end,{method:this.name,type:this.mod.add(0x68).readS32(),target:this.mod.add(0x60).readS32()},{target:targetKeyValue,hp_before:this.hpBefore,shield_absorbed:shield,target_instance:this.target.toString(),target_type:this.mod.add(0x60).readS32(),damage_type:this.mod.add(0x68).readS32()},this.sourceCharacterUid);}catch(e){fatal=String(e);}
@@ -3199,10 +3209,10 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        try{
         if(owned)settleDamage(this,this.target,end,amount,type,reduction,evidence);
         else settleSourcelessBurst(this,evidence,end,amount,reduction);
-        const event=record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
-        if(event)try{
-         rememberNestedElementalSettlement(this,end,evidence,event);
-         rememberNestedElementalKill(this,end,evidence,event);
+        if(!enemyDamageReady)record(owned?this.source:null,'elemental_burst',amount,end,{method:this.name,type,target:targetType},evidence,this.sourceCharacterUid);
+        if(this.settlementRecord)try{
+         rememberNestedElementalSettlement(this,end,evidence);
+         rememberNestedElementalKill(this,end,evidence);
         }catch(e){/* Independently verified burst remains queued. */}
         noteUnpairedSettlement(this,end,type,amount,evidence);
        }catch(e){fatal=String(e);}
@@ -3266,6 +3276,10 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       if(this.nestedElementalChainProof)proof.nested_elemental_chain=this.nestedElementalChainProof;
       settleDamage(this,damageTarget,end,amount,type,reduction,targetEvidence||
                    (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
+     }
+     if(kind==='damage'&&enemyDamageReady){
+      noteUnpairedSettlement(this,end,type,amount,evidence);
+      return;
      }
      try{
       const instance=verifiedSourceInstance(this);if(instance)evidence={...evidence,source_instance_uid:instance};
