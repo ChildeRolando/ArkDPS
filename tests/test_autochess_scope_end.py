@@ -157,6 +157,46 @@ def test_no_tail_close_preserves_a_real_unverified_hit(platform, tmp_path):
 
 
 @pytest.mark.parametrize('platform', ['native_pc', 'android'])
+@pytest.mark.parametrize('unlocalized', [False, True])
+def test_retained_prior_phase_numeric_issue_does_not_break_no_tail_transport_end(platform, unlocalized):
+    case = OwnedScopeEnd(platform)
+    raw_mark = case.fixture.observer.mark
+    sample = case.fixture.runtime.sessions.latest_sample
+    # The native controller retains quality certificates across logical combat
+    # phases. This is deliberately an earlier scope, not current-scope evidence.
+    scope = deepcopy(sample['autochess_context']['identity'])
+    scope.update(protocol_version=1, status='available', verified_same_frame=True,
+                 scope_key=scope['scope_key'].rsplit(':', 1)[0] + ':0',
+                 phase=4, round=0, frame=0, game_time=0, collection_mode=case.mode)
+    issue = dict(source='char_001_amiya', source_character_uid=3,
+                 frame=0, game_time=0, native_autochess_scope=scope)
+
+    def mark():
+        value = raw_mark()
+        value.update(enemy_damage_unknown=True,
+                     damage_settlement_unlocalized_unknown=unlocalized,
+                     damage_settlement_source_issues=[issue],
+                     damage_settlement_first_issue=dict(frame=0, game_time=0, sequence=0,
+                                                        reason='unverified enemy settlement domain'))
+        return value
+
+    case.fixture.observer.mark = mark
+    case.advance(1.25, amount=75)
+    pending = case.fixture.queue if platform == 'native_pc' else case.fixture.events
+    pending[-1].update(amount=0, settlement_complete=False, shield_absorbed=None)
+    pending[-1].pop('nominal_amount')
+    case.fixture.poll()
+    _, archive = case.finish(phase=7)
+    assert archive['event_status'] == 'finished' and archive['event_error'] is None
+    assert archive['statistics']['game_time'] == 1.25
+    assert archive['last_sample']['game_time'] == 1.25
+    assert old_local(archive)['observed_damage'] == 300
+    actor, = old_local(archive)['actor_ledgers']
+    assert actor['ledger']['unverified_hits'] == 1
+    assert actor['ledger']['observed_hits'] == 2
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
 @pytest.mark.parametrize('phase', [3, 5, 102])
 def test_same_round_prepare_help_or_restart_do_not_prove_the_old_scope_ended(platform, phase):
     case = OwnedScopeEnd(platform, phase=4)

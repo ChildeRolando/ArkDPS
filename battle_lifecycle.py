@@ -9,10 +9,12 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, replace
 import math
+import re
 import time
 import uuid
 
-from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autochess_scope_id
+from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autochess_scope_id,
+                               native_autochess_event_identity)
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
@@ -24,7 +26,7 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
                          native_identity_sampling_mark, TerminalReadRetry,
                          verified_autochess_round_start, autochess_round_start_origin,
-                         settlement_source_quality_clear, verified_autochess_settlement_source_issues)
+                         settlement_source_quality_clear)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
 from roster import RosterSnapshot
@@ -148,8 +150,29 @@ def _same_autochess_boundary_quality(sample, reference, fence):
         return False
     if not issues:
         return fence['damage_settlement_unlocalized_unknown']
-    localized = dict(fence, damage_settlement_unlocalized_unknown=False)
-    return verified_autochess_settlement_source_issues(sample, localized) is not None
+    # These are retained numeric certificates, not a transport cursor. The
+    # producer may retain a prior combat phase's issues on the same controller.
+    # Require unchanged, well-formed evidence without reassigning those issues
+    # to this scope (or making their numeric metrics complete).
+    if len(issues) > 128:
+        return False
+    fields = {'source', 'source_character_uid', 'frame', 'game_time', 'native_autochess_scope'}
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.keys() != fields:
+            return False
+        cid, uid, frame, when = (issue[key] for key in ('source', 'source_character_uid', 'frame', 'game_time'))
+        if (not isinstance(cid, str) or len(cid) > 128
+                or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
+                or type(uid) is not int or not 0 < uid <= 0xffffffff
+                or type(frame) is not int or not 0 <= frame <= sample['frame']
+                or type(when) not in (int, float) or not math.isfinite(when)
+                or not 0 <= when <= sample['game_time']
+                or frame == sample['frame'] and when != sample['game_time']
+                or native_autochess_event_identity(issue) is None
+                or issue['native_autochess_scope'].get('collection_mode')
+                    != sample['autochess_context']['collection_mode']):
+            return False
+    return True
 
 
 @dataclass(frozen=True)
