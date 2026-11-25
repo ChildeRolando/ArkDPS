@@ -160,6 +160,7 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
         component = release.get('native_pc_native_hooks')
         if not isinstance(component, dict):
             raise RuntimeError('此便携包未包含 ArkPie PC 事件组件。')
+        # These flags record acceptance facts, not ABI or distribution support.
         released = component.get('scope') == 'official-pc'
         if (type(component.get('protocol')) is not int or component['protocol'] != PROTOCOL
                 or component.get('provider') != PROVIDER
@@ -169,8 +170,9 @@ def _portable_native_hook_binary(root, *, _read_capture=None):
                 or component.get('experimental') is not (not released)
                 or component.get('default_platform') != 'native_pc' or component.get('default_backend') != 'native'
                 or component.get('supported_source_builds') != list(access.KNOWN_BUILDS)
-                or component.get('performance_verified') is not released
-                or component.get('autochess_handoff_verified') is not released):
+                or type(component.get('performance_verified')) is not bool
+                or type(component.get('autochess_handoff_verified')) is not bool
+                or not released and (component['performance_verified'] or component['autochess_handoff_verified'])):
             raise ValueError('invalid native component')
         if not released and (any(release.get(key) is not None for key in ('frida', 'frida_wheel_sha256', 'native_pc_gadget'))
                 or any(key in release for key in ('frida_server', 'update_protocol',
@@ -789,7 +791,7 @@ class NativeHookEventProbe:
             self.probe_modes['probe_source'] = dict(assembled.audit(), provider=PROVIDER, protocol=PROTOCOL,
                 submitted_sha256=sha256(source.encode('utf-8')).hexdigest(),
                 dll_sha256=image_sha256, frida_required=False,
-                experimental=False, live_acceptance='accepted')
+                experimental=False, live_acceptance='not_verified_for_this_run')
             self.binding.reset()
             self._started = True
             self.status = ObserverStatus.READY

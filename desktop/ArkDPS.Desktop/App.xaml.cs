@@ -243,6 +243,16 @@ public partial class App : System.Windows.Application
         }
     }
 
+    internal static bool NativeHookAcceptanceFlagsValid(System.Text.Json.JsonElement profile, bool startupTest)
+    {
+        var performance = profile.Get("performance_verified").ValueKind;
+        var handoff = profile.Get("autochess_handoff_verified").ValueKind;
+        if (startupTest)
+            return performance == System.Text.Json.JsonValueKind.False && handoff == System.Text.Json.JsonValueKind.False;
+        return (performance == System.Text.Json.JsonValueKind.True || performance == System.Text.Json.JsonValueKind.False)
+            && (handoff == System.Text.Json.JsonValueKind.True || handoff == System.Text.Json.JsonValueKind.False);
+    }
+
     internal static void VerifyNativeHookPackage(System.Text.Json.JsonElement manifest)
     {
         var profile = manifest.Get("native_pc_native_hooks");
@@ -252,12 +262,11 @@ public partial class App : System.Windows.Application
             || (NativeHookCandidate
                 ? profile.Text("scope") != "official-pc-startup-test"
                     || profile.Get("experimental").ValueKind != System.Text.Json.JsonValueKind.True
-                    || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.False
-                    || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.False
+
                 : profile.Text("scope") != "official-pc"
                     || profile.Get("experimental").ValueKind != System.Text.Json.JsonValueKind.False
-                    || profile.Get("performance_verified").ValueKind != System.Text.Json.JsonValueKind.True
-                    || profile.Get("autochess_handoff_verified").ValueKind != System.Text.Json.JsonValueKind.True)
+)
+            || !NativeHookAcceptanceFlagsValid(profile, NativeHookCandidate)
             || profile.Text("default_platform") != "native_pc" || profile.Text("default_backend") != "native"
             || manifest.Get("files").ValueKind != System.Text.Json.JsonValueKind.Object)
             throw new IOException("ArkPie 事件组件的适用范围或默认来源清单不匹配。");

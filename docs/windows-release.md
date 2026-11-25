@@ -68,10 +68,12 @@ python tools/package_windows.py --native-hook-dll runtime/native-pc/native-event
 
 DLL 的相邻 `.build.json`、六份运行时源码及 QuickJS、MinHook、nlohmann-json 三份许可均随包分发。
 `metadata/release.json` 的 `native_pc_native_hooks` 记录 provider、协议、路径、摘要及受支持的客户端构建。
+
+发行类型、ABI/载荷支持与实机验收是不同事实。新构建默认 `performance_verified=false`、`autochess_handoff_verified=false`，标准包不会因这两项未验收而拒绝加载；加载仍严格验证字面布尔、组件/构建支持及实际载荷摘要。启动测试包仍必须为 experimental 且两项均为 false。旧发布清单中的 true 可读取，但不替本次候选或当前运行提供实机性能、稳定性或卫戍交接背书；启动成功也不改写验收事实。
 组件在加载前核对发布清单、构建清单和实际文件；客户端构建匹配后才启用观察。
 停止观察会撤下 Hook，DLL 保留映射至游戏正常退出。
 
-ArkPie 后端于 2026-11-24 获得用户实机验收通过，包含卫戍实际输出和流畅度反馈。
+2026-11-24 的用户实机反馈只适用于当时对应构建，包含卫戍实际输出和流畅度反馈；后续源码或载荷候选需要各自的实机证据。
 具体构建、历史对账与实测范围见[PC ArkPie 事件后端](native-pc-native-hooks.md)。
 构建检查继续核对载荷摘要、包内 Python 和 worker 握手；交互式 WPF 检查由隔离 CI 执行。
 

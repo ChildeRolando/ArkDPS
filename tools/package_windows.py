@@ -143,6 +143,7 @@ def stage_native_hook_payload(binary, collector, notices):
 
 
 def native_hook_component(files, *, released=False):
+    """Distribution shape is independent of candidate-specific live acceptance."""
     from native_pc.native_hook_source import NATIVE_HOOK_PACKAGE_PATH, NATIVE_HOOK_BUILD_MANIFEST_PATH
     from native_pc.probe_native_pc import KNOWN_BUILDS
     return dict(provider='arkdps-native-hooks', protocol=1, scope='official-pc' if released else 'official-pc-startup-test',
@@ -150,7 +151,7 @@ def native_hook_component(files, *, released=False):
                 sha256=files[NATIVE_HOOK_PACKAGE_PATH],
                 build_manifest_sha256=files[NATIVE_HOOK_BUILD_MANIFEST_PATH],
                 default_platform='native_pc', default_backend='native', supported_source_builds=list(KNOWN_BUILDS),
-                experimental=not released, performance_verified=released, autochess_handoff_verified=released)
+                experimental=not released, performance_verified=False, autochess_handoff_verified=False)
 
 
 def native_hooks_readme(version):

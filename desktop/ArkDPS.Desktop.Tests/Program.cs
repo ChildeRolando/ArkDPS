@@ -134,6 +134,7 @@ internal static class Program
         MultiplayerSettingsTests.Run();
         NativePcReadinessTests.Run();
         NativeBackendSettingsTests.Run();
+        NativeHookReleaseEvidenceTests.Run();
         SamplingRejectionTests.Run();
         GameFpsSidebarTests.Run();
         RefreshBudgetTests.Run();
