@@ -326,7 +326,6 @@ class Statistics:
         # Active-skill windows and the observed damage split. A skill event is
         # supplemental; an unmapped source or a missing hook makes the split
         # unknown rather than closing the authoritative damage stream.
-        self.skill_active = {}
         self.deployment_lifecycle = DeploymentLifecycle()
         self.settlement_skill_deployment_unknown = set()
         self.completed_skill_cast_invocations = set()
@@ -337,7 +336,7 @@ class Statistics:
         self.observed_skill_splits = {}
         self.skill_seen = set()
         self.skill_unknown = False
-        self.skill_incomplete = {}
+        self.skill_history_issues = {}
         self._skill_observation_uncertainty = {}
         self._pending_skill_observation_uncertainty = {}
         self._skill_unresolved_owners = set()
@@ -474,7 +473,7 @@ class Statistics:
         if owner not in self._skill_unresolved_owners:
             self._skill_unresolved_owners.add(owner)
             self._mark_skill_observation_uncertain(owner)
-        self.skill_incomplete[owner] = '技能事件的角色归属未确认'
+        self.skill_history_issues[(owner, None)] = '技能事件的角色归属未确认'
 
     def skill_observation_revision(self, owner, actor):
         """Detect intervening uncertainty even if an actor's current state recovered."""
@@ -984,23 +983,22 @@ class Statistics:
                 or owner in self._skill_unresolved_owners
                 or self._settlement_skill(owner, actor) is None):
             return None
-        return self._skill_active_seconds(owner, start=start, stop=end)
+        return self._skill_active_seconds(owner, start=start, stop=end, actor=actor)
 
-    def _skill_active_seconds(self, owner, *, start=0.0, stop=None):
-        end = (self.event_coverage_end if self.event_coverage_end is not None
-               else self.now)
+    def _skill_active_seconds(self, owner, *, start=0.0, stop=None, actor=None):
+        end = self.event_coverage_end if self.event_coverage_end is not None else self.now
         if stop is not None:
             end = min(end, stop)
+        windows = list(self.skill_windows.get(owner, ()))
+        windows.extend(window for (candidate, _), window in self.settlement_skill_active.items()
+                       if candidate == owner)
+        intervals = sorted((max(start, window['start']), min(end, window.get('end', end)))
+                           for window in windows if actor is None or window.get('actor') == actor)
         total = 0.0
-        for window in reversed(self.skill_windows.get(owner, ())):
-            left, right = window.get('start'), window.get('end')
-            if self._optional_number(left) and self._optional_number(right):
-                if right <= start:
-                    break
-                total += max(0.0, min(right, end) - max(start, left))
-        active = self.skill_active.get(owner)
-        if active is not None and self._optional_number(active.get('start')):
-            total += max(0.0, end - max(start, active['start']))
+        through = start
+        for left, right in intervals:
+            total += max(0.0, right - max(left, through))
+            through = max(through, right)
         return total
 
     @staticmethod
@@ -1045,43 +1043,46 @@ class Statistics:
             return None
         return '未观察到技能效果的实际结束'
 
-    def _close_skill_window(self, owner, game_time, reason, *, confirmed):
-        window = self.skill_active.pop(owner)
+    @property
+    def skill_incomplete(self):
+        """Historical actor quality projected to the owner, without another writer."""
+        return {owner: reason for (owner, _actor), reason in self.skill_history_issues.items()}
+
+    @property
+    def skill_active(self):
+        """Owner projection of the actor windows; never a second state store."""
+        return {owner: window for (owner, _actor), window in self.settlement_skill_active.items()}
+
+    def _close_skill_window(self, identity, game_time, reason, *, confirmed):
+        owner, actor = identity
+        window = self.settlement_skill_active.pop(identity)
         if not confirmed:
             unconfirmed = self._unconfirmed_skill_reason(window)
             if unconfirmed is not None:
-                self.skill_incomplete[owner] = unconfirmed
-                self._mark_skill_observation_uncertain(owner, window.get('actor'))
+                self.skill_history_issues[identity] = unconfirmed
+                self.settlement_skill_incomplete.add(identity)
+                self._mark_skill_observation_uncertain(owner, actor)
         window['end'] = game_time
         window['reason'] = reason
         self.skill_windows.setdefault(owner, []).append(window)
 
     def _close_skill_windows(self, game_time, *, battle_end):
         reason = 'battle_end' if battle_end else 'coverage_end'
-        for owner, window in tuple(self.skill_active.items()):
-            # A reliable battle end clips any window that was valid while open.
+        for identity, window in tuple(self.settlement_skill_active.items()):
             confirmed = battle_end and self._unconfirmed_skill_reason(window, live=True) is None
-            # A cast-return state witness proves the observed open effect, not
-            # an unobserved effect end. Old ordinary battle clipping is intact.
             if self._is_ammo_window(window):
                 confirmed = False
-            self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
+            self._close_skill_window(identity, game_time, reason, confirmed=confirmed)
 
     def _record_skill_transition(self, owner, source, kind, game_time, *,
                                  key, skill_id, name, method, reason, wait_for_end=None, actor=None, frame=None, deployment=None, terminal=False, invocation=None):
-        self._apply_skill_transition(
-            self.skill_active, owner, source, kind, game_time, key=key, skill_id=skill_id,
-            name=name, method=method, reason=reason, wait_for_end=wait_for_end,
-            close=self._close_skill_window, actor=actor, frame=frame, deployment=deployment, terminal=terminal, invocation=invocation)
+        self.record_settlement_skill(owner, actor, source, kind, game_time,
+            key=key, skill_id=skill_id, name=name, method=method, reason=reason,
+            wait_for_end=wait_for_end, frame=frame, deployment=deployment,
+            terminal=terminal, invocation=invocation)
 
     def record_settlement_skill(self, owner, actor, source, kind, game_time, *,
                                 key, skill_id, name, method, reason, wait_for_end=None, frame=None, deployment=None, terminal=False, invocation=None):
-        def close(identity, _time, _reason, *, confirmed):
-            window = self.settlement_skill_active.pop(identity)
-            if (not confirmed and identity not in self.settlement_skill_initial_pending
-                    and self._unconfirmed_skill_reason(window)):
-                self.settlement_skill_incomplete.add(identity)
-                self._mark_skill_observation_uncertain(*identity)
         identity = (owner, actor)
         was_known = self._settlement_skill(owner, actor) is not None
         previous = self.settlement_skill_active.get(identity)
@@ -1089,7 +1090,7 @@ class Statistics:
         effect_started = self._apply_skill_transition(
             self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
-            wait_for_end=wait_for_end, close=close, actor=actor, frame=frame, deployment=deployment, terminal=terminal, invocation=invocation)
+            wait_for_end=wait_for_end, close=self._close_skill_window, actor=actor, frame=frame, deployment=deployment, terminal=terminal, invocation=invocation)
         if effect_started:
             # Earlier unclassified hits stay in the damage ledger's denominator.
             self.settlement_skill_initial_pending.discard(identity)
@@ -1174,8 +1175,7 @@ class Statistics:
         active_identity = {window['key'], window['id']} - {None} if window is not None else set()
         same_skill = not active_identity or not identity or not active_identity.isdisjoint(identity)
         if kind == 'skill_start':
-            if active is self.skill_active:
-                self.skill_seen.add(identity_key)
+            self.skill_seen.add(identity_key[0])
             if (window is not None and source == window['source']
                     and method != 'Character.OnSkillRetriggered'
                     and self._unconfirmed_skill_reason(window) is not None
@@ -2132,7 +2132,7 @@ class Statistics:
                 if effective_split_known else None)
             row['skill_seen'] = owner in self.skill_seen
             row['skill_window_count'] = (len(self.skill_windows.get(owner, ()))
-                                         + (1 if owner in self.skill_active else 0))
+                                         + sum(candidate == owner for candidate, _ in self.settlement_skill_active))
             timing_incomplete = owner in self._skill_observation_uncertainty
             row['skill_active_seconds'] = (
                 self._skill_active_seconds(owner)

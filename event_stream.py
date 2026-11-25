@@ -214,14 +214,10 @@ class EventStream:
                     state, owner, actor = settlement_identity or ('unknown', None, None)
                     matches = (state == 'local' and actor is not None
                                and self.statistics._native_cast_window_matches(
-                                   self.statistics.skill_active.get(owner), source, skill_key, skill_id, actor)
-                               and self.statistics._native_cast_window_matches(
                                    self.statistics.settlement_skill_active.get((owner, actor)),
                                    source, skill_key, skill_id, actor))
                     if matches and source_instance_uid is not None:
-                        matches = all(window.get('deployment') in (None, source_instance_uid) for window in (
-                            self.statistics.skill_active.get(owner),
-                            self.statistics.settlement_skill_active.get((owner, actor))))
+                        matches = self.statistics.settlement_skill_active[(owner, actor)].get('deployment') in (None, source_instance_uid)
                     effect_ended = (owner, actor, source_instance_uid, skill_cast_invocation, frame, game_time) in self.statistics.completed_skill_cast_invocations
                     if not matches and effect_ended:
                         ignore_unmatched_native_cast = True
@@ -298,7 +294,8 @@ class EventStream:
                     self.statistics.record_enemy_damage(
                         source, enemy_damage_owner, damage_type, amount, target,
                         target_uid, target_instance)
-            elif kind not in ENEMY_STATE_KINDS:
+            elif (kind not in ENEMY_STATE_KINDS and not
+                  (self.statistics.settlement_enabled and kind in ('skill_start', 'skill_end'))):
                 self.statistics.event(
                     f'{self.session}:{sequence}', game_time, source, kind, amount,
                     target=target, real_delta=real_delta, hp_before=hp_before,
