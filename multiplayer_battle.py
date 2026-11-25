@@ -1184,6 +1184,20 @@ class MultiplayerBattleStatistics:
                         p.statistics.settlement_unassigned['hits']) for s, p in self._players.items()}
                 for player_side, player in self._players.items():
                     payload = event_processing_payload(event)
+                    if not self._native_mode and payload.get('kind') == 'elemental_burst':
+                        instance = payload.get('target_instance')
+                        matches = [(uid, bar) for uid, bar in player.statistics.settlement_bars.items()
+                                   if bar[1] == instance]
+                        if len(matches) == 1:
+                            uid, bar = matches[0]
+                            before, after = payload.get('hp_before'), payload.get('hp_after')
+                            delta = payload.get('real_delta')
+                            if (type(before) in (int, float) and type(after) in (int, float)
+                                    and type(delta) in (int, float) and isfinite(before) and isfinite(after)
+                                    and isfinite(delta) and before >= after >= 0 and delta == after - before):
+                                payload.update(kind='damage_settlement', amount=-delta,
+                                    nominal_amount=payload['amount'], settlement_complete=False,
+                                    target_uid=uid, shield_absorbed=None)
                     identity = ('unknown', None, None)
                     unresolved_source_keys = ()
                     if state == 'owned':

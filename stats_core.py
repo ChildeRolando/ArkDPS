@@ -305,7 +305,7 @@ class Statistics:
         self.mitigation_probe_incomplete = False
         self.mitigation_unattributed_burst = False
         # Elemental bar damage is not HP damage; only its source matters.
-        self.burst = {}
+        self._legacy_burst = {}
         self.burst_unknown = False
         self.burst_unknown_reason = None
         # Per-type overkill is a separate subset. It stays unknown if a lethal
@@ -524,6 +524,13 @@ class Statistics:
         existing['amount'] += amount
 
     @property
+    def burst(self):
+        if self.settlement_enabled:
+            return {owner: meter.elemental for owner, meter in self.settled.items()
+                    if meter.elemental is not None}
+        return self._legacy_burst
+
+    @property
     def last_elemental(self):
         """Legacy observation projection of the sole target witness store."""
         return {bar[1]: bar[3] for bar in self.settlement_bars.values()
@@ -653,6 +660,8 @@ class Statistics:
             if source is not None and element:
                 self.discard_settlement_bar(target_uid)
             return
+        if source is not None and nominal is not None:
+            self.settlement_totals[source] = self.settlement_totals.get(source, 0.0) + nominal
         if nominal is None or not self._mitigation_pair(nominal, before, after):
             before = after = None
         if source is None and element and nominal is not None:
@@ -660,6 +669,9 @@ class Statistics:
             if complete and (self.damage_settlement_version < 5 or killed is True):
                 self.settlement_overkill[owner] = (
                     self.settlement_overkill.get(owner, 0.0) + max(0.0, nominal - hp - shield))
+        if element and (not complete or nominal is None or overkill is None):
+            self.burst_unknown = True
+            self.burst_unknown_reason = '元素爆发缺少同一次结算的完整证据'
         skill = self._settlement_skill(owner, actor)
         initial_unknown = skill is None and (owner, actor) in self.settlement_skill_initial_pending
         args = (when, hp, shield, kind_name, complete, skill, nominal, before, after)
@@ -1425,6 +1437,17 @@ class Statistics:
         pairs[key] = (*totals, hits + 1)
 
     def _mitigation_result(self, owner, registered, *, complete):
+        if self.settlement_enabled:
+            lane = self._settlement_row(owner)
+            known = lane['mitigation_complete']
+            return dict(mitigation_rate=lane['observed_mitigation_rate'] if known else None,
+                mitigation_before=lane['observed_mitigation_before'] if known else None,
+                mitigation_after=lane['observed_mitigation_after'] if known else None,
+                mitigation_unknown_reason=lane['mitigation_reason'],
+                observed_mitigation_rate=lane['observed_mitigation_rate'],
+                observed_mitigation_before=lane['observed_mitigation_before'],
+                observed_mitigation_after=lane['observed_mitigation_after'],
+                mitigation_matched_hits=lane['mitigation_matched_hits'])
         totals = [self.mitigation.get(source, (0.0, 0.0, 0)) for source in registered]
         supplement = self.sourceless_burst_mitigation.get(owner, (0.0, 0.0, 0))
         before = sum(pair[0] for pair in totals) + supplement[0]
@@ -1616,6 +1639,12 @@ class Statistics:
             raise ValueError('event outside ordered observation')
         self.events[event_id] = payload
         self.last_event_time = game_time
+        if self.settlement_enabled and kind in ('damage', 'elemental_burst'):
+            # The certificate is the sole amount writer. Legacy outputs remain
+            # ordered receipts, not another damage/skill/formula account.
+            if kind == 'damage':
+                self.settled_damage_sources.add(source)
+            return
         if kind == 'elemental_bar':
             if (not target_instance or owner is None
                     or (self.partial_damage_enabled and not isinstance(target_instance, str))):
@@ -2009,7 +2038,8 @@ class Statistics:
             missing_settlement = any(source in self.incoming_damage_sources
                                      and source not in self.settled_damage_sources
                                      for source in registered)
-            overkill_known = (coverage_complete
+            overkill_known = ((not self.settlement_enabled or self.damage_settlement_version < 7
+                               and owner in self.settlement_overkill) and coverage_complete
                               and not self.all_overkill_unknown
                               and not missing_settlement
                               and not scope_mismatch
@@ -2150,51 +2180,62 @@ class Statistics:
                          and (reason := self._unconfirmed_skill_reason(window, live=True)) is not None), None))
             skill_known = (coverage_complete and not self.skill_unknown
                            and skill_incomplete_reason is None)
-            skill_value = self.skill_observed.get(owner, 0.0)
-            non_skill_value = self.non_skill_observed.get(owner, 0.0)
-            expected = row.get('observed_damage')
-            # Reconcile the credited split against credited damage. An
-            # unowned burst is in neither total, but known bursts are in both.
-            if expected is not None and burst:
-                expected += burst['settlement']
-            covers_total = (expected is not None
-                            and abs(skill_value + non_skill_value - expected)
-                            <= max(0.01, abs(expected) * 1e-6))
-            if complete and row['damage'] is not None:
-                initial = sum(self.initial_damage.get(source, 0.0) for source in sources)
-                # A same-frame event can arrive just after the opening mark.
-                # Its counter appears in the next snapshot. Only a shortfall
-                # against native damage proves missing coverage here.
-                native_damage = row['damage'] - initial
-                covers_total &= (skill_value + non_skill_value
-                                 >= native_damage - max(0.01, abs(native_damage) * 1e-6))
-            if scope_mismatch:
-                reason = DAMAGE_SCOPE_MISMATCH
-            elif not skill_known:
-                reason = ('事件观察未建立' if not self.event_coverage else
-                          '事件覆盖已结束' if not coverage_complete else
-                          skill_incomplete_reason or '技能事件覆盖不完整')
-            elif pre_observer_damage:
-                reason = PRE_OBSERVER_DAMAGE
-            elif not covers_total:
-                reason = '技能窗口未覆盖全部伤害事件'
-            elif not burst_complete:
-                reason = self.burst_unknown_reason
+            observed = self.observed_skill_splits.get(owner)
+            if self.settlement_enabled:
+                lane = row['settled_damage']
+                split_complete = lane['skill_split_complete']
+                effective_split_known = lane['skill_split_effective_complete']
+                reason = lane.get('skill_split_reason')
+                row['skill_damage'] = lane['observed_skill_damage'] if split_complete else None
+                row['non_skill_damage'] = lane['observed_non_skill_damage'] if split_complete else None
+                row['skill_damage_effective'] = lane['observed_skill_damage_effective'] if effective_split_known else None
+                row['non_skill_damage_effective'] = lane['observed_non_skill_damage_effective'] if effective_split_known else None
             else:
-                reason = None
-            split_skill_overkill = self.skill_overkill.get(owner, 0.0)
-            split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
-            split_complete = (skill_known and covers_total and burst_complete
-                              and not scope_mismatch and not pre_observer_damage)
-            effective_split_known = split_complete and overkill_known
-            row['skill_damage'] = skill_value if skill_known and not scope_mismatch else None
-            row['non_skill_damage'] = non_skill_value if skill_known and not scope_mismatch else None
-            row['skill_damage_effective'] = (
-                max(0.0, skill_value - split_skill_overkill)
-                if effective_split_known else None)
-            row['non_skill_damage_effective'] = (
-                max(0.0, non_skill_value - split_non_skill_overkill)
-                if effective_split_known else None)
+                skill_value = self.skill_observed.get(owner, 0.0)
+                non_skill_value = self.non_skill_observed.get(owner, 0.0)
+                expected = row.get('observed_damage')
+                # Reconcile the credited split against credited damage. An
+                # unowned burst is in neither total, but known bursts are in both.
+                if expected is not None and burst:
+                    expected += burst['settlement']
+                covers_total = (expected is not None
+                                and abs(skill_value + non_skill_value - expected)
+                                <= max(0.01, abs(expected) * 1e-6))
+                if complete and row['damage'] is not None:
+                    initial = sum(self.initial_damage.get(source, 0.0) for source in sources)
+                    # A same-frame event can arrive just after the opening mark.
+                    # Its counter appears in the next snapshot. Only a shortfall
+                    # against native damage proves missing coverage here.
+                    native_damage = row['damage'] - initial
+                    covers_total &= (skill_value + non_skill_value
+                                     >= native_damage - max(0.01, abs(native_damage) * 1e-6))
+                if scope_mismatch:
+                    reason = DAMAGE_SCOPE_MISMATCH
+                elif not skill_known:
+                    reason = ('事件观察未建立' if not self.event_coverage else
+                              '事件覆盖已结束' if not coverage_complete else
+                              skill_incomplete_reason or '技能事件覆盖不完整')
+                elif pre_observer_damage:
+                    reason = PRE_OBSERVER_DAMAGE
+                elif not covers_total:
+                    reason = '技能窗口未覆盖全部伤害事件'
+                elif not burst_complete:
+                    reason = self.burst_unknown_reason
+                else:
+                    reason = None
+                split_skill_overkill = self.skill_overkill.get(owner, 0.0)
+                split_non_skill_overkill = self.non_skill_overkill.get(owner, 0.0)
+                split_complete = (skill_known and covers_total and burst_complete
+                                  and not scope_mismatch and not pre_observer_damage)
+                effective_split_known = split_complete and overkill_known
+                row['skill_damage'] = skill_value if skill_known and not scope_mismatch else None
+                row['non_skill_damage'] = non_skill_value if skill_known and not scope_mismatch else None
+                row['skill_damage_effective'] = (
+                    max(0.0, skill_value - split_skill_overkill)
+                    if effective_split_known else None)
+                row['non_skill_damage_effective'] = (
+                    max(0.0, non_skill_value - split_non_skill_overkill)
+                    if effective_split_known else None)
             row['skill_seen'] = owner in self.skill_seen
             row['skill_window_count'] = (len(self.skill_windows.get(owner, ()))
                                          + sum(candidate == owner for candidate, _ in self.settlement_skill_active))
@@ -2207,7 +2248,10 @@ class Statistics:
             row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason
             observed = self.observed_skill_splits.get(owner)
-            if observed is not None:
+            if self.settlement_enabled:
+                for key in ('observed_skill_damage', 'observed_non_skill_damage', 'observed_skill_damage_effective', 'observed_non_skill_damage_effective'):
+                    row[key] = lane[key]
+            elif observed is not None:
                 row.update(observed.result())
             if self.partial_damage_enabled:
                 row['partial_damage'] = self._partial_row(owner, row, observed, burst, sources)

@@ -23,9 +23,17 @@ class DamageSettlement:
         self.formula_hits = 0
         self.active = self.active_end = self.raw_active = self.raw_active_end = 0.0
         self.recent = deque()
+        self.elemental = None
 
     def hit(self, when, hp, shield, kind, complete, skill, nominal, before, after, *, overkill=None, initial_skill_unknown=False):
         effective = hp + (shield or 0.0)
+        if kind == 'elemental':
+            if self.elemental is None:
+                self.elemental = dict(actual=0.0, overkill=0.0, settlement=0.0, count=0)
+            self.elemental['actual'] += hp
+            self.elemental['overkill'] += overkill or 0.0
+            self.elemental['settlement'] += nominal or 0.0
+            self.elemental['count'] += 1
         if complete and effective == 0 and nominal is None:
             return
         self.hits += 1

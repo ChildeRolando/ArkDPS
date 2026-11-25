@@ -122,7 +122,7 @@ def test_hit_settlement_retains_local_hp_and_shield_with_isolated_evidence_gaps(
     a = result['rows']['char_a']
     lane = a['settled_damage']
     assert a['damage'] == 100
-    assert a['damage_scope_reason']
+    assert a.get('damage_scope_reason') is None, 'legacy output amounts cannot override the certificate/native comparison'
     assert lane['effective_damage'] == 75
     assert lane['effective_damage_by_type'] == {'physical': 75}
     assert (lane['known_hp_damage'], lane['known_shield_damage']) == (50, 25)

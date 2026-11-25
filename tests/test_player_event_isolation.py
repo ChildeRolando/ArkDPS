@@ -142,7 +142,7 @@ def test_same_cid_foreign_legacy_records_never_enter_local_accounts(kind):
     assert row['observed_damage'] is None, 'legacy output cannot fabricate a complete modern settlement'
     assert row['settled_damage']['observed_hits'] == 0
     assert row['observed_healing'] == (10 if kind == 'healing' else 0)
-    assert row['burst_count'] == (1 if kind == 'elemental_burst' else 0)
+    assert row['burst_count'] == 0, 'legacy burst output is not a modern amount writer'
     assert row['shield_absorbed'] == (10 if kind == 'shield_absorbed' else 0)
     assert adapter.source_observed_uids[SOURCE] == {LOCAL_UID}
     assert adapter.event_stream.sequence == 2 and not adapter.event_stream.closed
@@ -273,8 +273,14 @@ def test_source_null_elemental_burst_keeps_existing_local_target_binding():
                   hp_before=100, hp_after=90, killed=False, shield_absorbed=0)
     burst.update(source=None, source_character_uid=None)
     deliver(adapter, burst)
+    assert adapter.statistics.burst == {}
+    assert '77' in adapter.statistics.settlement_bars
+    certificate = hit(sequence=3, uid=None)
+    certificate.update(source=None, source_character_uid=None, damage_type=5)
+    deliver(adapter, certificate)
     row = finish(adapter)['rows'][SOURCE]
     assert row['burst_settlement'] == 10 and row['burst_count'] == 1
+    assert '77' not in adapter.statistics.settlement_bars
 
 
 def test_foreign_elemental_bar_replaces_local_target_witness_before_sourceless_burst():
