@@ -2064,6 +2064,7 @@ class Statistics:
             engagement_known = (bool(self.event_coverage)
                                 and not self.all_engagement_unknown
                                 and owner not in self.engagement_incomplete)
+            settled_lane = self._settlement_row(owner) if self.settlement_enabled else None
             row = {'coverage_start': self.start_time,
                    'counter_snapshot_complete': complete,
                    'shield_coverage_start': self.event_coverage_start if self.event_coverage else None,
@@ -2073,6 +2074,16 @@ class Statistics:
                    'shield_absorbed': (self.shields.get(owner, 0)
                                        if self.event_coverage and not self.shield_unknown else None),
                    'shield_unknown': self.shield_unknown,
+                   **({
+                       'settled_damage': settled_lane,
+                       'effective_damage': settled_lane['effective_damage'],
+                       'overkill_damage': settled_lane.get('overkill_damage'),
+                       'overkill_damage_by_type': settled_lane.get('overkill_damage_by_type'),
+                       'overkill_type_complete': settled_lane.get('overkill_coverage_complete', False),
+                       'overkill_unknown_reason': settled_lane.get('overkill_unknown_reason', '旧证书未提供逐击过量'),
+                       'overkill_coverage_complete': settled_lane.get('overkill_coverage_complete', False),
+                       'recent_overkill_damage': None,
+                   } if self.settlement_enabled and self.damage_settlement_version >= 7 else {
                    'overkill_damage': (self.overkill.get(owner, 0.0) if overkill_known else None),
                    'overkill_damage_by_type': ({key: self.overkill_by_type.get(owner, {}).get(key, 0.0)
                                                 for key in DAMAGE_TYPE_KEYS}
@@ -2080,6 +2091,7 @@ class Statistics:
                    'overkill_type_complete': overkill_type_known,
                    'overkill_unknown_reason': overkill_unknown_reason,
                    'overkill_coverage_complete': overkill_known,
+                   }),
                    'overkill_coverage_start': self.event_coverage_start if self.event_coverage else None,
                    'overkill_coverage_end': (self.event_coverage_end if self.event_coverage_end is not None
                                              else self.end_time if self.event_coverage else None)}
@@ -2114,7 +2126,7 @@ class Statistics:
                     (start, self.now) if row['recent_' + kind] is not None
                     and start == expected_start else None)
                 if kind == 'damage':
-                    row['recent_overkill_damage'] = (
+                    row['recent_overkill_damage'] = None if self.settlement_enabled and self.damage_settlement_version >= 7 else (
                         sum(value for when, owner_key, value in self.overkill_events
                             if owner_key == owner and start <= when <= self.now)
                         if overkill_known and start >= self.event_coverage_start
@@ -2122,7 +2134,7 @@ class Statistics:
                         else None)
                 state = self.engagement.get((owner, kind))
                 if kind == 'damage' and self.settlement_enabled:
-                    lane = self._settlement_row(owner)
+                    lane = settled_lane
                     row['settled_damage'] = lane
                     row['engagement_damage'] = lane['engagement_damage']
                     row['active_damage'] = lane['active_damage']
@@ -2155,24 +2167,25 @@ class Statistics:
             # Adjust the native total and overkill with the same attributed evidence.
             if added_settlement is not None and row['damage'] is not None:
                 row['damage'] += added_settlement
-            if row['overkill_damage'] is not None:
+            if (not self.settlement_enabled or self.damage_settlement_version < 7) and row['overkill_damage'] is not None:
                 burst_overkill = (self.settlement_overkill.get(owner, 0.0) if self.settlement_enabled
                                   else burst['overkill'] if burst else 0.0)
                 row['overkill_damage'] += burst_overkill
                 types = row['overkill_damage_by_type']
                 if types is not None:
                     types['elemental'] += burst_overkill
-            if (self.damage_settlement_version >= 5 and row['damage'] is not None
+            if (self.damage_settlement_version in (5, 6) and row['damage'] is not None
                     and row['overkill_damage'] is not None and row['overkill_damage'] > row['damage']):
                 row.update(overkill_damage=None, overkill_damage_by_type=None,
                            overkill_coverage_complete=False, overkill_type_complete=False,
                            recent_overkill_damage=None, overkill_unknown_reason=DAMAGE_SCOPE_MISMATCH,
                            damage_scope_reason=DAMAGE_SCOPE_MISMATCH)
                 overkill_known = False
-            if row['damage'] is not None and row['overkill_damage'] is not None:
-                row['effective_damage'] = row['damage'] - row['overkill_damage']
-            else:
-                row['effective_damage'] = None
+            if not self.settlement_enabled or self.damage_settlement_version < 7:
+                if row['damage'] is not None and row['overkill_damage'] is not None:
+                    row['effective_damage'] = row['damage'] - row['overkill_damage']
+                else:
+                    row['effective_damage'] = None
             skill_incomplete_reason = (
                 self.skill_incomplete.get(owner)
                 or next((reason for (candidate, _), window in self.settlement_skill_active.items()
@@ -2265,18 +2278,6 @@ class Statistics:
                 boss = row.setdefault('boss_damage', {})
                 if 'settled_damage' not in boss:
                     boss['settled_damage'] = self._settlement_row(owner, boss=True)
-                if self.damage_settlement_version >= 7:
-                    for scope in (row,):
-                        lane = scope['settled_damage']
-                        scope.update(
-                            effective_damage=lane['effective_damage'],
-                            overkill_damage=lane['overkill_damage'],
-                            overkill_coverage_complete=lane['overkill_coverage_complete'],
-                            overkill_unknown_reason=lane['overkill_unknown_reason'],
-                            overkill_damage_by_type=lane['overkill_damage_by_type'],
-                            overkill_type_complete=lane['overkill_coverage_complete'],
-                            recent_overkill_damage=None,
-                        )
             if pre_observer_damage:
                 row.update(effective_damage=None, overkill_damage=None, overkill_damage_by_type=None,
                            overkill_coverage_complete=False, overkill_type_complete=False,
