@@ -127,3 +127,11 @@ MuMu 可选读取限制为 4096 个引用、128 个角色、12000 次计费操�
 完整生命周期能力必须实际安装 Character.Born 与 typed CharacterFinished 两个钩子，零帧证书和其质量声明均须 `character_lifecycle_ready:true`，宿主还核对当前 mark/read 两端同能力；缺任一、安装失败或地址 alias 均不能认证完整分母。该可选失败不改旧统计。PC v29 的选取事实冻结于测试 fixture（metadata SHA e58fb854…），验证 Entity/Ability 的两个不同 declaring type，以及真实 Character.Born override、OnAfterSkill(BasicSkill,Ability.FinishReason) 与 OnCastFinish(Ability,Ability.FinishReason,Boolean) 原始签名。
 
 `skill_cast_invocation` 是生产者每次 typed BasicSkill.OnCastFinish enter 的唯一正整数 ID。只有同一线程嵌套调用、同 owner/skill 指针、data/native UID、帧/Q32/scope 的 Character.OnAfterSkill 与最终 native leave 才共用；真实效果端点在同调用内也可带此证书。正常 AfterSkill 先于 native leave 时，已真实生效的窗口暂存 pending 状态，必须同 ID、同本体、同技能、同刻最终 wait 状态才能继续；原始回调/序号/重放顺序保持。缺真实生效起点、不同 invocation/body、失败返回或真实效果已终止均不能用 wait=true 开窗。旧记录没有此证书时保留旧规则。
+
+## 高频回血与失败现场
+
+HP setter 的入口与返回仍逐次校验。时钟入口使用同一块原始帧/Q32读取，并独立重读关闭帧；终点身份只缓存不可变类名，活指针仍现场核验。最多128个目标保存尚未分配序号的回血尾段，首笔真实恢复保留，之后只合并同目标、同帧、同scope的连续单调恢复。任何非HP事件、mark/read/ACK发布边界都会先处理相应尾段；已发布前缀不可回写。压缩记录数不等于原生回调数，`enemy_regen_ticks` 保留被覆盖的恢复次数。
+
+scope缓存失败后仅允许一次有界scope-only恢复：根、完整账号双射、slot/profile/UID引用和唯一manager必须与原图一致，并通过双次现场guard。容器计数或版本变化本身不再使后续回调一直缓存不可用；真实身份图变化继续拒收，不恢复旧角色归属缓存。
+
+可选 `damage_settlement_failure_samples_version` / `damage_settlement_failure_samples` 保存最多16条首次失败现场，按scope、来源、目标和拒证原因去重。使用回调已经读到的HP前后值、原生有符号增量、盾/取消/嵌套信息，不增加原生读取和逐回调IPC。该字段默认进入战绩，旧档缺字段仍兼容；它不把不一致的HP差反推成回血或有效伤害。性能夹具的桥读和有界队列对照、独立自有进程原语耗时与实际游戏FPS分别记录。
