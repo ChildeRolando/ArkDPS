@@ -143,7 +143,6 @@ class Statistics:
         self.settlement_bars = {}
         self.settlement_bar_origins = {}
         self.settlement_supplements = {}
-        self.settlement_overkill = {}
         self.settlement_unassigned = {'hits': 0, 'hp': 0.0, 'shield': 0.0}
         self.settlement_boss_unassigned = 0
         self.settlement_unscoped_hits = 0
@@ -468,9 +467,11 @@ class Statistics:
             before = after = None
         if source is None and element and nominal is not None:
             self.settlement_supplements[owner] = self.settlement_supplements.get(owner, 0.0) + nominal
-            if complete and (self.damage_settlement_version < 5 or killed is True):
-                self.settlement_overkill[owner] = (
-                    self.settlement_overkill.get(owner, 0.0) + max(0.0, nominal - hp - shield))
+            if complete and self.damage_settlement_version < 7:
+                if self.damage_settlement_version < 5 or killed is True:
+                    overkill = max(0.0, nominal - hp - shield)
+                elif killed is False:
+                    overkill = 0.0
         if element and (not complete or nominal is None or overkill is None):
             self.burst_unknown = True
             self.burst_unknown_reason = '元素爆发缺少同一次结算的完整证据'
@@ -1803,7 +1804,7 @@ class Statistics:
                                      and source not in self.settled_damage_sources
                                      for source in registered)
             overkill_known = ((not self.settlement_enabled or self.damage_settlement_version < 7
-                               and owner in self.settlement_overkill) and coverage_complete
+                               and owner in self.settled and self.settled[owner].overkill_hits == self.settled[owner].hits) and coverage_complete
                               and not self.all_overkill_unknown
                               and not missing_settlement
                               and not scope_mismatch
@@ -1931,13 +1932,6 @@ class Statistics:
             # Adjust the native total and overkill with the same attributed evidence.
             if added_settlement is not None and row['damage'] is not None:
                 row['damage'] += added_settlement
-            if self.settlement_enabled and self.damage_settlement_version < 7 and row['overkill_damage'] is not None:
-                burst_overkill = (self.settlement_overkill.get(owner, 0.0) if self.settlement_enabled
-                                  else burst['overkill'] if burst else 0.0)
-                row['overkill_damage'] += burst_overkill
-                types = row['overkill_damage_by_type']
-                if types is not None:
-                    types['elemental'] += burst_overkill
             if (self.damage_settlement_version in (5, 6) and row['damage'] is not None
                     and row['overkill_damage'] is not None and row['overkill_damage'] > row['damage']):
                 row.update(overkill_damage=None, overkill_damage_by_type=None,
