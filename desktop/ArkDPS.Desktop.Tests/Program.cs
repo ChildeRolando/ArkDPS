@@ -130,6 +130,7 @@ internal static class Program
         HistorySourceLabelTests.Run();
         MetricCoverageTests.Run();
         InspectorReadingTests.Run();
+        VerificationSkillSplitTests.Run();
         MultiplayerViewTests.Run();
         MultiplayerSettingsTests.Run();
         NativePcReadinessTests.Run();

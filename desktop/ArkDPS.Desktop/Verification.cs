@@ -684,13 +684,23 @@ public partial class MainWindow
                 "missing per-hit mitigation borrowed legacy data");
     }
 
+    // The trimmed source is ranking input; the inspector receives Python's
+    // selected metric through details_by_owner, without a legacy fallback.
+    private static void VerifySkillSplitContract(JsonElement view,string owner)
+    {
+        var split=view.Get("details_by_owner").Get(owner).Get("readings")
+            .Get("skill_split").Get("nominal");
+        Require(split.Get("skill").ValueKind==JsonValueKind.Number &&
+                split.Get("non_skill").ValueKind==JsonValueKind.Number,
+                "skill / non-skill split missing from canonical operator detail reading");
+    }
+
     private void VerifyPartialMetricCoverage()
     {
         var original=Panels.Values.First().View;
         var fixture=System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
         string owner=original.Get("entries").Items().First().Text("owner_id");
         fixture["config"]!["effective_only"]=true;
-        fixture["source"]![owner]!["effective_damage"]=null;
         fixture["details_by_owner"]![owner]!["effective_damage"]=4321;
         var coverage=System.Text.Json.Nodes.JsonNode.Parse("""
             {
@@ -761,7 +771,6 @@ public partial class MainWindow
 
         var row=fixture["source"]![owner]!;
         var detail=fixture["details_by_owner"]![owner]!;
-        row["damage"]=300;
         row["types_available"]=true;
         row["types_stale"]=false;
         row["damage_by_type"]=System.Text.Json.Nodes.JsonNode.Parse("""{"physical":100,"arts":200,"elemental":0,"true":0}""");
@@ -986,7 +995,6 @@ public partial class MainWindow
         }
         var liveView=fixture["panels"]!.AsArray()[0]!;
         string pinnedOwner=liveView["entries"]!.AsArray()[0]!["owner_id"]!.GetValue<string>();
-        var pinnedRow=liveView["source"]![pinnedOwner]!;
         liveView["details_by_owner"]![pinnedOwner]!["readings"]!["mitigation"]=VerificationReading("verify_layout","mitigation");
         var pinnedDetail=liveView["details_by_owner"]![pinnedOwner]!;
         var savedCoverage=pinnedDetail["skill_coverage"]?.DeepClone();
@@ -2588,11 +2596,8 @@ public partial class MainWindow
             await Command("history_config",new(){["config"]=new{category="damage",ranking="total",rate_basis="recent_5s"}});
         }
         var source=Panels[id].View.Get("source");string owner=source.EnumerateObject().First().Name;
-        var ownerRow=source.Get(owner);
-        Require(ownerRow.Get("skill_damage").ValueKind==JsonValueKind.Number &&
-                ownerRow.Get("non_skill_damage").ValueKind==JsonValueKind.Number,
-                "skill / non-skill split missing from rendered source rows");
-        checks.Add("skill / non-skill split reaches the operator detail source");
+        VerifySkillSplitContract(Panels[id].View,owner);
+        checks.Add("canonical skill / non-skill split reaches the operator detail reading");
         activePanel=id;LiveInspector.Pin(owner,Panels[id].View);
         await Navigate("live");await Settle();
         // The right-hand inspector must consume the same effective/overkill
@@ -2616,12 +2621,6 @@ public partial class MainWindow
         var partialView = System.Text.Json.Nodes.JsonNode.Parse(effectiveView.GetRawText())!;
         var partialSplit = partialView["details_by_owner"]![owner]!;
         partialSplit["readings"]!["skill_split"]=VerificationReading("verify_skill_partial","skill_split");
-        partialSplit["skill_split_effective_complete"] = false;
-        partialSplit["skill_damage_effective"] = null;
-        partialSplit["non_skill_damage_effective"] = null;
-        partialSplit["observed_skill_damage_effective"] = 25;
-        partialSplit["observed_non_skill_damage_effective"] = 75;
-        partialSplit["skill_split_reason"] = "技能窗口未覆盖全部伤害事件";
         LiveInspector.Update(JsonSerializer.SerializeToElement(partialView));
         if (LiveInspector.CompactReference)
         {
