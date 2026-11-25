@@ -158,8 +158,12 @@ def test_no_tail_close_preserves_a_real_unverified_hit(platform, tmp_path):
 
 @pytest.mark.parametrize('platform', ['native_pc', 'android'])
 @pytest.mark.parametrize('unlocalized', [False, True])
-def test_retained_prior_phase_numeric_issue_does_not_break_no_tail_transport_end(platform, unlocalized):
-    case = OwnedScopeEnd(platform)
+@pytest.mark.parametrize('phase', [5, 6])
+@pytest.mark.parametrize('historical_time', [0, 100])
+@pytest.mark.parametrize('new_callback', [False, True])
+def test_retained_prior_phase_numeric_issue_does_not_break_no_tail_transport_end(
+        platform, unlocalized, phase, historical_time, new_callback):
+    case = OwnedScopeEnd(platform, phase=phase)
     raw_mark = case.fixture.observer.mark
     sample = case.fixture.runtime.sessions.latest_sample
     # The native controller retains quality certificates across logical combat
@@ -167,16 +171,18 @@ def test_retained_prior_phase_numeric_issue_does_not_break_no_tail_transport_end
     scope = deepcopy(sample['autochess_context']['identity'])
     scope.update(protocol_version=1, status='available', verified_same_frame=True,
                  scope_key=scope['scope_key'].rsplit(':', 1)[0] + ':0',
-                 phase=4, round=0, frame=0, game_time=0, collection_mode=case.mode)
+                 phase=4, round=0, frame=historical_time * 20, game_time=historical_time,
+                 collection_mode='local' if case.mode == 'all' else 'all')
     issue = dict(source='char_001_amiya', source_character_uid=3,
-                 frame=0, game_time=0, native_autochess_scope=scope)
+                 frame=historical_time * 20, game_time=historical_time, native_autochess_scope=scope)
 
     def mark():
         value = raw_mark()
         value.update(enemy_damage_unknown=True,
                      damage_settlement_unlocalized_unknown=unlocalized,
                      damage_settlement_source_issues=[issue],
-                     damage_settlement_first_issue=dict(frame=0, game_time=0, sequence=0,
+                     damage_settlement_first_issue=dict(frame=historical_time * 20,
+                                                        game_time=historical_time, sequence=0,
                                                         reason='unverified enemy settlement domain'))
         return value
 
@@ -186,8 +192,13 @@ def test_retained_prior_phase_numeric_issue_does_not_break_no_tail_transport_end
     pending[-1].update(amount=0, settlement_complete=False, shield_absorbed=None)
     pending[-1].pop('nominal_amount')
     case.fixture.poll()
+    if new_callback:
+        # Unknown was already sticky: another callback must still invalidate
+        # the quiet-prefix proof even when it emits no additional record.
+        case.extra_epoch += 1
     _, archive = case.finish(phase=7)
-    assert archive['event_status'] == 'finished' and archive['event_error'] is None
+    assert archive['event_status'] == ('gap' if new_callback else 'finished')
+    assert archive['event_error'] == ('未取得最终事件水位' if new_callback else None)
     assert archive['statistics']['game_time'] == 1.25
     assert archive['last_sample']['game_time'] == 1.25
     assert old_local(archive)['observed_damage'] == 300

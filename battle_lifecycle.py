@@ -142,9 +142,12 @@ def _same_autochess_boundary_quality(sample, reference, fence):
         return False
     if not fence['enemy_damage_unknown']:
         return first is None and settlement_source_quality_clear(fence)
+    # The first-issue summary has no scope stamp; its clock can precede a
+    # logical-round reset. Its sequence remains bound to this observer prefix.
     if (not isinstance(first, dict) or type(first.get('frame')) is not int
-            or not 0 <= first['frame'] <= sample['frame']
-            or type(first.get('game_time')) not in (int, float) or not 0 <= first['game_time'] <= sample['game_time']
+            or first['frame'] < 0
+            or type(first.get('game_time')) not in (int, float)
+            or not math.isfinite(first['game_time']) or first['game_time'] < 0
             or type(first.get('sequence')) is not int or not 0 <= first['sequence'] <= reference['sequence']
             or not isinstance(first.get('reason'), str) or not first['reason']):
         return False
@@ -157,6 +160,8 @@ def _same_autochess_boundary_quality(sample, reference, fence):
     if len(issues) > 128:
         return False
     fields = {'source', 'source_character_uid', 'frame', 'game_time', 'native_autochess_scope'}
+    current = sample['autochess_context']['identity']
+    current_scope = tuple(current[key] for key in ('scope_key', 'phase', 'round'))
     for issue in issues:
         if not isinstance(issue, dict) or issue.keys() != fields:
             return False
@@ -164,13 +169,17 @@ def _same_autochess_boundary_quality(sample, reference, fence):
         if (not isinstance(cid, str) or len(cid) > 128
                 or not re.fullmatch(r'(?:char|token)_[A-Za-z0-9_#.-]+', cid)
                 or type(uid) is not int or not 0 < uid <= 0xffffffff
-                or type(frame) is not int or not 0 <= frame <= sample['frame']
+                or type(frame) is not int or frame < 0
                 or type(when) not in (int, float) or not math.isfinite(when)
-                or not 0 <= when <= sample['game_time']
-                or frame == sample['frame'] and when != sample['game_time']
-                or native_autochess_event_identity(issue) is None
-                or issue['native_autochess_scope'].get('collection_mode')
-                    != sample['autochess_context']['collection_mode']):
+                or when < 0):
+            return False
+        scope = native_autochess_event_identity(issue)
+        if (scope is None or scope[1] not in (4, 5, 6) or scope[2] < 0
+                or issue['native_autochess_scope'].get('collection_mode') not in ('all', 'local')):
+            return False
+        if (scope == current_scope and
+                (frame > sample['frame'] or when > sample['game_time']
+                 or frame == sample['frame'] and when != sample['game_time'])):
             return False
     return True
 
