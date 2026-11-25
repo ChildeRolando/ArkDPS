@@ -52,6 +52,34 @@ def test_verified_activation_also_recovers_actor_specific_scope_uncertainty():
     assert observed['skill_unclassified_hits'] == observed['skill_initial_unknown_hits'] == 0
 
 
+def test_skill_timing_revision_keeps_intervening_scope_uncertainty_after_recovery():
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0)
+    core = meter._players[PLAYERS[2]['uid']].statistics
+    owner = next(iter(core.owners))
+    before = core.skill_observation_revision(owner, 301)
+    neighboring_actor = core.skill_observation_revision(owner, 302)
+    assert core.observed_skill_interval(owner, 301, 0, 0) == 0
+
+    result = consume(meter, 2, [
+        skill(1, .5, 'Character.OnSkillStart', kind='skill_start', unknown=True),
+        skill(2, 1.5, 'Character.OnSkillFinish'),
+    ])
+    after = core.skill_observation_revision(owner, 301)
+    assert after != before
+    assert core.skill_observation_revision(owner, 302) == neighboring_actor
+    row = next(iter(player(result, 3)['statistics']['rows'].values()))
+    assert row['skill_active_seconds'] is None
+    assert row['skill_coverage_complete'] is False
+
+    consume(meter, 3)
+    assert core.skill_observation_revision(owner, 301) == after
+    assert core.observed_skill_interval(owner, 301, 2, 3) == 0
+    core.mark_skill_unknown()
+    assert core.skill_observation_revision(owner, 302) != neighboring_actor
+    assert core.observed_skill_interval(owner, 301, 2, 3) is None
+
+
 @pytest.mark.parametrize('changes', [
     dict(method='Character.OnAfterSkill'),
     dict(method='BasicSkill.OnCastFinish'),

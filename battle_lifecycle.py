@@ -31,6 +31,8 @@ from roster import RosterSnapshot
 
 
 NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED = 'native_pc_autochess_scope_unverified'
+ANDROID_PRESENCE_INTERVAL = 1.
+ANDROID_PRESENCE_UNIT_LIMIT = 128
 
 
 def _native_pc_autochess(metadata, stage):
@@ -218,16 +220,17 @@ def _terminal_boundary(observer, capture=None, *, deadline=None):
                                    else {'status': 'candidate', 'reason': 'raw_boundary_received'}}
 
 
-def _observer_mark(observer, *, retry_busy=False):
+def _observer_mark(observer, *, retry_busy=False, with_presence=False):
+    read = observer.mark_with_presence if with_presence else observer.mark
     try:
-        mark = observer.mark()
+        mark = read()
     except CallbackBusyMark:
         if not retry_busy:
             raise
         # Yield the host thread before retrying this same mark. A second busy
         # result leaves the cursor untouched and returns to normal polling.
         time.sleep(.008)
-        mark = observer.mark()
+        mark = read()
     if not isinstance(mark, dict):
         raise StreamGap('invalid observer mark')
     if mark.get('error'):
@@ -237,6 +240,42 @@ def _observer_mark(observer, *, retry_busy=False):
     if mark.get('retry'):
         raise CaptureRetry(autochess_root_failure(mark) or 'observer clock advanced')
     return mark
+
+
+def _android_scoped_presence(sample, closing_mark, sample_seq):
+    """Admit optional units only at the trusted closing mark's own clock."""
+    point = dict(version=1, binding='event_mark', sample_seq=sample_seq, frame=sample['frame'],
+                 game_time=sample['game_time'], units=None)
+    context = sample['autochess_context']
+    identity = context['identity']
+    wire = closing_mark.get('native_autochess_presence')
+    expected = dict(version=1, frame=point['frame'], game_time=point['game_time'],
+        native_fixed_time=closing_mark.get('native_fixed_time'), scope_key=identity['scope_key'],
+        phase=identity['phase'], round=identity['round'], collection_mode=context.get('collection_mode'))
+    if (not isinstance(wire, dict) or set(wire) != {*expected, 'status', 'units'}
+            or wire.get('status') != 'available' or expected['collection_mode'] not in ('local', 'all')
+            or type(closing_mark.get('native_battle_state')) is not int or closing_mark['native_battle_state'] != 2
+            or any(wire[key] != value or type(wire[key]) is not type(value)
+                   for key, value in expected.items())
+            or not isinstance(wire['units'], list) or len(wire['units']) > ANDROID_PRESENCE_UNIT_LIMIT):
+        return point
+    members = {member['data_uid']: member for member in context['memberships'] if not member['is_token']}
+    instances, units = set(), []
+    for unit in wire['units']:
+        if (not isinstance(unit, dict) or set(unit) != {'cid', 'data_uid', 'instance_uid', 'player_side'}
+                or not isinstance(unit['cid'], str) or not unit['cid']
+                or any(type(unit[key]) is not int or not 0 < unit[key] <= 0xffffffff
+                       for key in ('data_uid', 'instance_uid'))
+                or type(unit['player_side']) is not int or not 0 <= unit['player_side'] <= 4
+                or unit['instance_uid'] in instances):
+            return point
+        instances.add(unit['instance_uid'])
+        member = members.get(unit['data_uid'])
+        if (member is not None and member['cid'] == unit['cid'] and member['player_side'] == unit['player_side']
+                and (context.get('collection_mode') != 'local' or member['player_uid'] == context['self_player_uid'])):
+            units.append(dict(unit))
+    point['units'] = units
+    return point
 
 
 def _event_barrier(before, sample, after, *, contract=None, capture=None):
@@ -336,6 +375,8 @@ class BattleFeed:
         self.stage = None
         self.retired_stage = None
         self.autochess_identity = None
+        self._next_android_presence = float('-inf')
+        self._android_presence_seq = 0
 
     def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None,
               read_error=None, observer=None, autochess_successor=None):
@@ -434,16 +475,26 @@ class BattleFeed:
         sample = collector.read()
         if metadata:
             sample['battle_metadata'] = deepcopy(metadata)
-        if (sample.get('state') == 2 and (metadata or {}).get('platform') == 'android'
-                and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
-                and android_autochess_mark_context(sample, mark) is not None):
+        opening_context = (android_autochess_mark_context(sample, mark)
+            if sample.get('state') == 2 and (metadata or {}).get('platform') == 'android'
+            and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper() else None)
+        if opening_context is not None:
             # A separately guarded counter read binds roots; the exact closing
             # producer clock and its event-only prefix supply published time.
+            now = time.monotonic()
+            presence_enabled = (opening_context['phase'] in (4, 5, 6)
+                                and callable(getattr(observer, 'mark_with_presence', None)))
+            with_presence = presence_enabled and now >= self._next_android_presence
+            if with_presence:
+                self._next_android_presence = now + ANDROID_PRESENCE_INTERVAL
+                self._android_presence_seq += 1
             try:
-                end_mark = _observer_mark(observer)
+                end_mark = _observer_mark(observer, with_presence=with_presence)
             except ObserverReadRetry as exc:
                 raise CaptureRetry(str(exc)) from exc
             sequence = self._project_event_window(sample, mark, end_mark)
+            if with_presence:
+                sample['scoped_presence'] = _android_scoped_presence(sample, end_mark, self._android_presence_seq)
             return (sample, RosterSnapshot(sample['frame']),
                     dict(before=mark, after=end_mark, sequence=sequence))
         if mark is not None and events is None:
@@ -1308,6 +1359,7 @@ class BattleSessions:
         if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting', 'preparing', 'scope_unavailable'):
             raise ValueError('unknown observation kind')
         if observation.kind == 'scope_unavailable':
+            self._multiplayer_call('invalidate_presence')
             if observation.generation > self.generation:
                 self._archive('new_battle')
                 self.preparing_generation = observation.generation

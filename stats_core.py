@@ -1,8 +1,9 @@
 """Offline statistics core. Times are game seconds; inputs must be reliable.
 
-Snapshots own damage/healing totals and sampled recent rates. Event callbacks own
-engagement rates, shield absorption, overkill and formula damage pairs; never add
-damage/heal events to totals. Overkill is a subset of the already inclusive
+Snapshots own native damage/healing totals and sampled recent rates. Event callbacks
+own observations, engagement rates, shield absorption, overkill and formula damage
+pairs. Observed healing and its rate do not augment the native counters.
+Overkill is a subset of the already inclusive
 native damage total and is never subtracted from it. Source keys identify
 distinct client statistic entries, not transient entities.
 """
@@ -19,6 +20,8 @@ NATIVE_DAMAGE_TYPES = {1: 'physical', 2: 'arts', 3: 'true', 5: 'elemental'}
 DAMAGE_TYPE_KEYS = ('physical', 'arts', 'elemental', 'true')
 DAMAGE_SCOPE_MISMATCH = '伤害事件与原生累计的统计范围不一致'
 PRE_OBSERVER_DAMAGE = '观察者就绪前已有伤害'
+HEALING_RECENT_SECONDS = 5
+HEALING_RECENT_LIMIT = 1024
 ENEMY_STATE_KINDS = frozenset({
     'enemy_enter', 'enemy_hp', 'enemy_fake_death', 'enemy_reborn', 'enemy_finish',
 })
@@ -270,6 +273,7 @@ class Statistics:
         self.event_coverage_start = start_time
         self.event_coverage_end = None
         self.event_coverage_broken = False
+        self.event_watermark = None
         self.baseline_ready = False
         self.initial_damage = {}
         self.owners = {}
@@ -315,6 +319,7 @@ class Statistics:
         self.engagement_incomplete = set()
         self.unknown_engagement_sources = set()
         self.all_engagement_unknown = False
+        self.healing_observation_gaps = {}
         # Shield-only uncertainty must not close damage/overkill coverage.
         self.shield_unknown = False
         # Active-skill windows and the observed damage split. A skill event is
@@ -328,6 +333,9 @@ class Statistics:
         self.skill_seen = set()
         self.skill_unknown = False
         self.skill_incomplete = {}
+        self._skill_observation_uncertainty = {}
+        self._pending_skill_observation_uncertainty = {}
+        self._skill_unresolved_owners = set()
         self.unresolved_skill_sources = set()
         self.enemy_entry_start_frame = None
         self.enemy_entry_incomplete = False
@@ -447,10 +455,26 @@ class Statistics:
         if source in self.unknown_engagement_sources:
             self.engagement_incomplete.add(owner)
         if source in self.unresolved_skill_sources:
-            self.skill_incomplete[owner] = '技能事件的角色归属未确认'
+            self._mark_skill_owner_unresolved(owner)
 
     def mark_skill_unknown(self):
         self.skill_unknown = True
+
+    def _mark_skill_observation_uncertain(self, owner, actor=None):
+        revisions = self._skill_observation_uncertainty.setdefault(owner, {})
+        revisions[actor] = revisions.get(actor, 0) + 1
+
+    def _mark_skill_owner_unresolved(self, owner):
+        if owner not in self._skill_unresolved_owners:
+            self._skill_unresolved_owners.add(owner)
+            self._mark_skill_observation_uncertain(owner)
+        self.skill_incomplete[owner] = '技能事件的角色归属未确认'
+
+    def skill_observation_revision(self, owner, actor):
+        """Detect intervening uncertainty even if an actor's current state recovered."""
+        revisions = self._skill_observation_uncertainty.get(owner, {})
+        return (self.skill_unknown or self.event_coverage_broken,
+                revisions.get(None, 0), revisions.get(actor, 0))
 
     def observe_enemy_entry(self, start_frame, *, complete):
         if self.enemy_entry_start_frame is None:
@@ -805,6 +829,13 @@ class Statistics:
         """An unattributable damage event could belong to any owner's numerator."""
         self.all_engagement_unknown = True
 
+    def mark_healing_observation_unknown(self, source=None, *, game_time=None):
+        """A possible heal without scope/owner proof cannot certify HPS."""
+        owner = self.owners.get(source)
+        when = (game_time if observed_amount(game_time) and self.event_coverage_start <= game_time <= self.now
+                else float('inf'))
+        self.healing_observation_gaps[owner] = max(self.healing_observation_gaps.get(owner, when), when)
+
     def mark_shields_unknown(self):
         """Shield events were incomplete; keep damage, overkill and engagement."""
         self.shield_unknown = True
@@ -824,7 +855,7 @@ class Statistics:
             self.unresolved_skill_sources.add(source)
             owner = self.owners.get(source)
             if owner is not None:
-                self.skill_incomplete[owner] = '技能事件的角色归属未确认'
+                self._mark_skill_owner_unresolved(owner)
         if (kind in ('elemental_bar', 'elemental_burst')
                 or kind == 'enemy_damage' and damage_type == 5) and target_instance:
             self.last_elemental.pop(target_instance, None)
@@ -884,6 +915,7 @@ class Statistics:
     def start_late_event_coverage(self):
         """Scope the first paired event barrier without resetting native counters."""
         self.event_coverage_start = self.last_event_time = self.now
+        self.event_watermark = None
         self.initial_damage = {source: state['values']['damage'] for source, state in self.sources.items()}
 
     def invalidate_events(self, end_time=None, *, complete=False):
@@ -904,6 +936,7 @@ class Statistics:
             self._close_skill_windows(end_time, battle_end=complete)
 
     def mark_boss_watermark(self, game_time):
+        self.event_watermark = game_time
         if self.partial_damage_enabled:
             self.partial_watermark = game_time
         if self.boss_damage is not None:
@@ -912,7 +945,8 @@ class Statistics:
             self.boss_event_end = game_time
 
     def observed_skill_interval(self, owner, actor, start, end):
-        if (not self.event_coverage or self.event_coverage_broken or owner in self.skill_incomplete
+        if (not self.event_coverage or self.event_coverage_broken
+                or owner in self._skill_unresolved_owners
                 or self._settlement_skill(owner, actor) is None):
             return None
         return self._skill_active_seconds(owner, start=start, stop=end)
@@ -978,6 +1012,7 @@ class Statistics:
             unconfirmed = self._unconfirmed_skill_reason(window)
             if unconfirmed is not None:
                 self.skill_incomplete[owner] = unconfirmed
+                self._mark_skill_observation_uncertain(owner, window.get('actor'))
         window['end'] = game_time
         window['reason'] = reason
         self.skill_windows.setdefault(owner, []).append(window)
@@ -1007,7 +1042,9 @@ class Statistics:
             if (not confirmed and identity not in self.settlement_skill_initial_pending
                     and self._unconfirmed_skill_reason(window)):
                 self.settlement_skill_incomplete.add(identity)
+                self._mark_skill_observation_uncertain(*identity)
         identity = (owner, actor)
+        was_known = self._settlement_skill(owner, actor) is not None
         previous = self.settlement_skill_active.get(identity)
         was_active = previous is not None and previous['effect_started']
         effect_started = self._apply_skill_transition(
@@ -1039,9 +1076,21 @@ class Statistics:
             if identity in self.settlement_skill_scope_unassigned:
                 self.settlement_skill_scope_unassigned.remove(identity)
                 self.settlement_skill_past_incomplete.add(owner)
+        if self._settlement_skill(owner, actor) is not None:
+            uncertain_since = self._pending_skill_observation_uncertainty.pop(identity, None)
+            if uncertain_since is not None and uncertain_since < game_time:
+                self._mark_skill_observation_uncertain(owner, actor)
+        elif was_known:
+            # One callback can report cast completion before a same-clock
+            # callback proves the effect is still open. Only a break across
+            # the native event clock makes a previously timed interval unknown.
+            self._pending_skill_observation_uncertainty[identity] = game_time
 
     def mark_settlement_skill_initial_unknown(self, owner, actor):
-        self.settlement_skill_initial_pending.add((owner, actor))
+        identity = (owner, actor)
+        if identity not in self.settlement_skill_initial_pending:
+            self.settlement_skill_initial_pending.add(identity)
+            self._mark_skill_observation_uncertain(owner, actor)
 
     def mark_settlement_skill_unassigned(self, source, method, reason, *, actor=None):
         owner = self.owners.get(source)
@@ -1052,14 +1101,17 @@ class Statistics:
                 if (identity[0] == owner and reason == 11
                         and 'skchr_ulpia_3' in (window['key'], window['id'])):
                     self.settlement_skill_incomplete.add(identity)
+                    self._mark_skill_observation_uncertain(*identity)
             return
         if type(actor) is int and actor > 0:
             # The caller proved which actor is uncertain, without claiming
             # that the uncertain event belongs to its current battle scope.
             # A later verified activation/endpoint may establish future state.
             self.settlement_skill_scope_unassigned.add((owner, actor))
+            self._mark_skill_observation_uncertain(owner, actor)
             return
         self.settlement_skill_unassigned.add(owner)
+        self._mark_skill_observation_uncertain(owner)
 
     def _apply_skill_transition(self, active, identity_key, source, kind, game_time, *,
                                 key, skill_id, name, method, reason, close,
@@ -1431,6 +1483,8 @@ class Statistics:
                  'hp_damage', 'skill_start', 'skill_end')
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
+        if kind == 'healing' and type(amount) is bool:
+            raise ValueError('invalid healing amount')
         self._validate_skill_cast_state(kind, skill_method or target_instance, skill_reason,
                                         skill_wait_for_end, skill_key, skill_id, skill_frame)
         owner = self.owners.get(source)
@@ -1444,7 +1498,7 @@ class Statistics:
             # A verified stage device has no squad skill window. A source
             # without verified ownership still makes the split uncertain.
             if classify_unmapped_source(source) is None:
-                self.skill_unknown = True
+                self.mark_skill_unknown()
             return
         if kind != 'elemental_burst' and owner is None:
             raise ValueError('invalid event source')
@@ -1627,6 +1681,51 @@ class Statistics:
                     intervals[-1] = (intervals[-1][0], max(intervals[-1][1], game_time + 1.5))
                 else:
                     intervals.append((game_time, game_time + 1.5))
+                if kind == 'healing':
+                    self._record_recent_healing(state, game_time, amount)
+
+    @staticmethod
+    def _record_recent_healing(state, when, amount):
+        recent = state.get('recent')
+        if recent is None:
+            recent = state['recent'] = deque()
+        cutoff = when - HEALING_RECENT_SECONDS
+        while recent and recent[0][0] < cutoff:
+            recent.popleft()
+        if recent and recent[-1][0] == when:
+            recent[-1] = when, recent[-1][1] + amount
+        else:
+            recent.append((when, amount))
+            if len(recent) > HEALING_RECENT_LIMIT:
+                state['recent_discarded_through'] = recent.popleft()[0]
+
+    def _healing_observation(self, state, engagement_known, gap):
+        total = state['total'] if state and observed_amount(state['total']) and state['total'] > 0 else None
+        covered = (self.event_coverage and not self.event_coverage_broken and engagement_known
+                   and self.event_watermark == self.now
+                   and (self.event_coverage_end is None or self.event_coverage_end == self.now))
+        result = dict(observed_healing_total=total,
+                      observed_healing_complete=covered and gap is None and total is not None,
+                      observed_recent_healing=None, observed_recent_healing_window=None,
+                      observed_recent_healing_complete=False)
+        if not covered or total is None:
+            return result
+        end = self.event_watermark
+        start = max(self.event_coverage_start, end - HEALING_RECENT_SECONDS)
+        include_start = start == self.event_coverage_start
+        discarded = state.get('recent_discarded_through')
+        if end <= start or any(when is not None and (when > start or include_start and when == start)
+                               for when in (gap, discarded)):
+            return result
+        recent = state['recent']
+        while recent and (recent[0][0] < start or recent[0][0] == start and not include_start):
+            recent.popleft()
+        amount = sum(amount for when, amount in recent if when <= end)
+        rate = amount / (end - start)
+        if observed_amount(rate):
+            result.update(observed_recent_healing=rate, observed_recent_healing_window=(start, end),
+                          observed_recent_healing_complete=True)
+        return result
 
     def _recent(self, state, kind, start):
         if not state['continuous'] or not state['history']:
@@ -1864,7 +1963,13 @@ class Statistics:
                     row['engagement_' + kind] = None
                     row['active_' + kind] = 0 if self.event_coverage else None
                     row['observed_' + kind] = 0 if self.event_coverage else None
-                if not engagement_known:
+                kind_engagement_known = engagement_known
+                if kind == 'healing':
+                    gap = max(self.healing_observation_gaps.get(None, -1),
+                              self.healing_observation_gaps.get(owner, -1))
+                    row.update(self._healing_observation(state, engagement_known, None if gap < 0 else gap))
+                    kind_engagement_known &= gap < 0
+                if not kind_engagement_known:
                     # A dropped event leaves the numerator and its interval
                     # short; publish unknown instead of a low observed rate.
                     row['engagement_' + kind] = None
@@ -1945,10 +2050,11 @@ class Statistics:
             row['skill_seen'] = owner in self.skill_seen
             row['skill_window_count'] = (len(self.skill_windows.get(owner, ()))
                                          + (1 if owner in self.skill_active else 0))
+            timing_incomplete = owner in self._skill_observation_uncertainty
             row['skill_active_seconds'] = (
                 self._skill_active_seconds(owner)
-                if self.event_coverage and skill_incomplete_reason is None else None)
-            row['skill_coverage_complete'] = skill_known and not late_events
+                if self.event_coverage and skill_incomplete_reason is None and not timing_incomplete else None)
+            row['skill_coverage_complete'] = skill_known and not late_events and not timing_incomplete
             row['skill_split_complete'] = split_complete
             row['skill_split_effective_complete'] = effective_split_known
             row['skill_split_reason'] = reason

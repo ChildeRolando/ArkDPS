@@ -109,3 +109,53 @@ def test_replay_requires_partial_coverage_proof_for_legacy_mitigation_reason(com
     current = {'rows': {'owner': {'boss_damage': {'settled_damage': lane}}}}
     legacy = _recorded_before_diagnostics(current)
     assert _same_statistics(current, legacy) is not complete
+
+
+def _healing_replay_envelopes(row):
+    statistics = {'rows': {'owner': row}}
+    player = {'player_uid': '01', 'statistics': statistics}
+    return (
+        {'statistics': statistics},
+        {'multiplayer': {'players': [player]}},
+        {'last_sample': {'multiplayer': {'players': [player]}}},
+        {'multiplayer': {'previous_rounds': [{'players': [player]}]}},
+    )
+
+
+@pytest.mark.parametrize('field, current, different', [
+    ('observed_healing_total', 40, 41),
+    ('observed_healing_complete', True, False),
+    ('observed_recent_healing', 8, 9),
+    ('observed_recent_healing_window', [7, 12], [8, 12]),
+    ('observed_recent_healing_complete', True, False),
+])
+def test_replay_ignores_only_absent_healing_derivations_in_ordinary_and_scoped_statistics(
+        field, current, different):
+    old_row = {'healing': None, 'observed_healing': 40}
+    new_row = dict(old_row, **{field: current})
+    altered_field = dict(old_row, **{field: different})
+    altered_amount = dict(old_row, observed_healing=41)
+    for actual, legacy, changed, wrong_amount in zip(
+            *map(_healing_replay_envelopes, (new_row, old_row, altered_field, altered_amount))):
+        assert _same_lifecycle_state(actual, legacy)
+        assert _same_lifecycle_state(actual, deepcopy(actual))
+        assert not _same_lifecycle_state(actual, changed)
+        assert not _same_lifecycle_state(actual, wrong_amount)
+
+
+def test_replay_does_not_normalize_healing_events_identity_clock_or_watermark():
+    record = dict(
+        statistics={'rows': {'owner': {'observed_healing': 40, 'observed_healing_total': 40}}},
+        event_watermark={'sequence': 3, 'frame': 360, 'game_time': 12},
+        events=[{'kind': 'healing', 'sequence': 3, 'frame': 360, 'game_time': 12,
+                 'source': 'char_4041_chnut', 'source_character_uid': 301, 'amount': 40}],
+    )
+    for key, value in (('source_character_uid', 302), ('sequence', 4), ('frame', 361),
+                       ('game_time', 13), ('amount', 41), ('observed_healing_total', 40)):
+        different = deepcopy(record)
+        del different['statistics']['rows']['owner']['observed_healing_total']
+        different['events'][0][key] = value
+        assert not _same_lifecycle_state(record, different)
+    different = deepcopy(record)
+    different['event_watermark']['sequence'] = 4
+    assert not _same_lifecycle_state(record, different)

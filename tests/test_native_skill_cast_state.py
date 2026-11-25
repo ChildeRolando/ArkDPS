@@ -106,6 +106,23 @@ def test_native_cast_wait_keeps_ammo_live_then_real_character_end_closes_it(plat
     row = advance(state, 5, hits(5, 10), 50)
     assert_live_split(row, 40, 10)
     assert row['skill_window_count'] == 1 and row['skill_active_seconds'] == 3
+    assert row['skill_coverage_complete'] is True
+
+
+@pytest.mark.parametrize('platform,contract', BACKENDS)
+def test_later_cast_witness_does_not_repair_an_earlier_uncertain_timing_interval(platform, contract):
+    state = connect(platform, contract)
+    advance(state, 1, [marker('Character.SwitchToSkillState', 'skill_start', 1)], 0)
+    stats = state[2].adapter.statistics
+    before = stats.skill_observation_revision(ACTOR, 77)
+    advance(state, 2, [marker('Character.OnAfterSkill', 'skill_end', 2, reason=1)], 0)
+    assert stats.observed_skill_interval(ACTOR, 77, 1, 2) is None
+    row = advance(state, 3, [marker('BasicSkill.OnCastFinish', 'skill_end', 3, reason=1, wait=True)], 0)
+    assert stats.skill_observation_revision(ACTOR, 77) != before
+    assert row['skill_active_seconds'] is None
+    assert row['skill_coverage_complete'] is False
+    advance(state, 4, hits(4), 40)
+    assert stats.observed_skill_interval(ACTOR, 77, 3, 4) == 1
     assert row['skill_split_reason'] is None
 
 

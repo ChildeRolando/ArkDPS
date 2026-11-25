@@ -105,7 +105,11 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
     return summary
 
 
-_OPTIONAL_DERIVED_METRICS = frozenset({
+_OBSERVED_HEALING_DERIVED_METRICS = frozenset({
+    'observed_healing_total', 'observed_healing_complete', 'observed_recent_healing',
+    'observed_recent_healing_window', 'observed_recent_healing_complete',
+})
+_OPTIONAL_DERIVED_METRICS = _OBSERVED_HEALING_DERIVED_METRICS | frozenset({
     'mitigation_rate', 'mitigation_before', 'mitigation_after', 'mitigation_unknown_reason',
     'observed_mitigation_rate', 'observed_mitigation_before', 'observed_mitigation_after',
     'mitigation_matched_hits',
@@ -160,8 +164,11 @@ def _recorded_settlement(lane, recorded):
 def _recorded_metrics(row, recorded, *, optional=True):
     if not isinstance(row, dict) or not isinstance(recorded, dict):
         return row
+    # Both ordinary and scoped old journals predate these derived values.
+    # A new journal that supplies any of them still verifies it exactly.
+    optional_metrics = _OPTIONAL_DERIVED_METRICS if optional else _OBSERVED_HEALING_DERIVED_METRICS
     out = {key: value for key, value in row.items()
-           if not optional or key not in _OPTIONAL_DERIVED_METRICS or key in recorded}
+           if key not in optional_metrics or key in recorded}
     if 'settled_damage' in row:
         out['settled_damage'] = _recorded_settlement(row['settled_damage'], recorded.get('settled_damage'))
     if 'boss_damage' in row:

@@ -150,6 +150,28 @@ def _defense_has_settlement(sample):
                 if (type(lane.get(hits)) is int and lane[hits] > 0
                         and type(value) in (int, float) and math.isfinite(value) and value >= 0):
                     return True
+    local = _native_local_player(sample)
+    if local is not None:
+        uid, statistics = local['player_uid'], local['statistics']
+        if (statistics.get('session') != f"{payload['scope']}:{uid}"
+                or statistics.get('game_time') != sample.get('game_time')):
+            return False
+        rows = statistics.get('rows')
+        if not isinstance(rows, dict):
+            return False
+        for actor in local.get('actor_ledgers') or ():
+            owner, actor_uid, cid = actor.get('owner_id'), actor.get('actor_uid'), actor.get('cid')
+            if (actor.get('player_uid') != uid or type(actor_uid) is not int or not 0 < actor_uid <= 0xffffffff
+                    or not isinstance(cid, str) or not cid or owner != f'{uid}:{cid}#{actor_uid}'):
+                continue
+            row = rows.get(owner)
+            if (not isinstance(row, dict) or row.get('id') != owner or row.get('cid') != cid
+                    or type(row.get('unique_id')) is not int or row['unique_id'] != actor_uid
+                    or row.get('player_uid') != uid):
+                continue
+            value = row.get('observed_healing_total', row.get('observed_healing'))
+            if type(value) in (int, float) and math.isfinite(value) and value > 0:
+                return True
     return False
 
 
@@ -285,6 +307,16 @@ def empty_text(config, source, complete, view):
         return '暂无首领伤害（已知为零）'
     if not source:
         return '等待可靠战斗数据 · 未知不记零'
+    if view.get('observed_healing_only'):
+        if (config.ranking is Ranking.RECENT or
+                config.ranking is Ranking.DPS and config.rate_basis is RateBasis.RECENT_5S):
+            observed = view.get('footer_rate' if config.ranking is Ranking.DPS else 'footer_total')
+            if observed is None:
+                return '近 5 秒治疗尚无可靠观察窗口'
+            if observed == 0:
+                return '当前观察窗口内暂无治疗'
+        if config.ranking is Ranking.TOTAL:
+            return '暂无已观察到的治疗'
     if config.ranking is Ranking.DPS:
         # A known cumulative counter cannot certify a missing rate denominator
         # or event stream. Recent/full-cycle rates do not require events.
@@ -834,6 +866,9 @@ class DesktopState:
             scope_label = statistics.get('display_scope_label') or '当前玩家'
             reason = f'原生累计未知，以下仅含{scope_label}的已观察结算'
             note = '已观察结算口径；未覆盖区间保持未知'
+            if config.category is Category.HEALING:
+                reason = f'仅统计{scope_label}已观察到的治疗'
+                note = '仅统计归属已确认的治疗事件'
         if config.boss_scope:
             reason = statistics['boss_damage_reason'] or reason
             complete = complete and statistics['boss_damage_available']

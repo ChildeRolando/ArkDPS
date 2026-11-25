@@ -108,6 +108,8 @@ class MultiplayerBattleStatistics:
         self._retired_contexts = set()
         self._retired_event_scopes = set()
         self._presence_point = None
+        self._presence_deployments = {}
+        self._presence_skill_replaced = set()
         self._native_entries = {}
         self._native_aliases = {}
         self._player_reasons = {}
@@ -222,6 +224,8 @@ class MultiplayerBattleStatistics:
         self._unknown = {}
         self._settlement_version = None
         self._presence_point = None
+        self._presence_deployments = {}
+        self._presence_skill_replaced = set()
         self._native_entries = {}
         self._native_aliases = {key: {} for key in self._players}
         self._player_reasons = {key: set() for key in (self._native_accounts if self._native_mode else self._players)}
@@ -230,12 +234,40 @@ class MultiplayerBattleStatistics:
         self._scope_unknown_all_targets = False
         self._scope_verified_targets = set()
 
+    def invalidate_presence(self):
+        """Break optional timing adjacency without closing the event stream."""
+        self._presence_point = None
+
     def _observe_presence(self, sample):
         if 'scoped_presence' not in sample:
             return
         previous, self._presence_point = self._presence_point, None
         point = sample['scoped_presence']
         anchor = sample.get('autochess_snapshot_anchor', sample)
+        platform = (sample.get('battle_metadata') or {}).get('platform')
+        sample_seq = None
+        basis = 'snapshot'
+        if isinstance(point, dict) and ('binding' in point or 'version' in point):
+            if (type(point.get('version')) is not int or point['version'] != 1
+                    or point.get('binding') != 'event_mark'
+                    or platform != 'android'
+                    or sample.get('native_counter_scope') != 'events_only'
+                    or not _integer(point.get('sample_seq')) or point['sample_seq'] == 0):
+                return
+            # Android optional units are read at the accepted closing mark,
+            # independently of the earlier physical counter snapshot.
+            anchor = sample
+            sample_seq = point['sample_seq']
+            basis = 'event_mark'
+        elif isinstance(point, dict):
+            if platform == 'android':
+                return
+            if 'sample_seq' in point:
+                if (platform != 'native_pc'
+                        or sample.get('native_counter_scope') != 'events_only'
+                        or not _integer(point['sample_seq']) or point['sample_seq'] == 0):
+                    return
+                sample_seq = point['sample_seq']
         if (not self._native_mode or not self._active_context or self._terminal_tail
                 or not isinstance(point, dict) or not isinstance(point.get('units'), list)
                 or not _integer(point.get('frame')) or not _number(point.get('game_time'))
@@ -259,25 +291,41 @@ class MultiplayerBattleStatistics:
             actors[key] = unit['instance_uid'] if key not in actors else None
         # Only matching deployments on adjacent observed endpoints earn time.
         # A roster member, missing unit or replaced instance earns no interval.
-        known = set()
+        known = {}
         for key, instance in actors.items():
             uid, owner, actor = key
             player = self._players[uid]
-            skill = player.statistics.observed_skill_interval(owner, actor, when, when)
+            if instance is None or self._presence_deployments.get(key, instance) != instance:
+                self._presence_skill_replaced.add(key)
+            if instance is not None:
+                self._presence_deployments.setdefault(key, instance)
+            # Skill callbacks identify data UID, not the native deployment.
+            # A replacement body cannot inherit the old body's open window.
+            # Keep proven earlier intervals; its real presence still counts.
+            skill = (player.statistics.observed_skill_interval(owner, actor, when, when)
+                     if key not in self._presence_skill_replaced else None)
             if skill is not None:
-                known.add(key)
+                known[key] = player.statistics.skill_observation_revision(owner, actor)
             if previous is None or not instance or previous[1].get(key) != instance:
                 continue
-            start, _, prior_known, watermark = previous
+            start, _, prior_known, watermark, prior_seq, prior_basis = previous
+            if basis != prior_basis:
+                continue
+            if sample_seq is not None and (prior_seq is None or sample_seq != prior_seq + 1):
+                continue
+            if sample_seq is None and prior_seq is not None:
+                continue
             delta = when - start
             if not 0 < delta <= 5:
                 continue
             player.observed_presence[owner] = player.observed_presence.get(owner, 0.0) + delta
-            if key in prior_known and skill is not None and watermark < when:
+            if (key in known and key in prior_known and known[key] == prior_known[key]
+                    and watermark < when):
                 overlap = player.statistics.observed_skill_interval(owner, actor, watermark, when)
-                player.observed_skill_time[owner] = player.observed_skill_time.get(owner, 0.0) + overlap
-                player.skill_timed_presence[owner] = player.skill_timed_presence.get(owner, 0.0) + (when - watermark)
-        self._presence_point = when, actors, known, sample['game_time']
+                if _number(overlap) and overlap <= when - watermark:
+                    player.observed_skill_time[owner] = player.observed_skill_time.get(owner, 0.0) + overlap
+                    player.skill_timed_presence[owner] = player.skill_timed_presence.get(owner, 0.0) + (when - watermark)
+        self._presence_point = when, actors, known, sample['game_time'], sample_seq, basis
 
     def _bind_native(self, context):
         self._previous_context = self._active_context
@@ -489,7 +537,34 @@ class MultiplayerBattleStatistics:
             return uid, instance
         return None
 
+    def _observe_healing_uncertainty(self, event):
+        if (event.get('kind') != 'healing' or not _number(event.get('amount')) or event['amount'] <= 0
+                or classify_unmapped_source(event.get('source')) is not None):
+            return
+        identity = self._scope_stamp_identity(event)
+        if (self._active_context is not None and identity is not None
+                and identity != self._context_fingerprint[:3]):
+            return
+        data_uid = event.get('source_character_uid')
+        claims = (self._native_source_claims.get((event.get('source'), data_uid))
+                  if type(data_uid) is int and data_uid not in self._native_unverified_source_uids else None)
+        if claims and len(claims) == 1:
+            uid, host_cid, host_uid = next(iter(claims))
+            if uid not in self._players:
+                return
+            stats = self._players[uid].statistics
+            source = f"{uid}:{event['source']}#{data_uid}"
+            owner = f'{uid}:{host_cid}#{host_uid}'
+            # Claims include historical ownership within this scope. A current
+            # roster alone cannot relabel an earlier rejected callback.
+            stats.mark_healing_observation_unknown(
+                source if stats.owners.get(source) == owner else None, game_time=event['game_time'])
+            return
+        for player in self._players.values():
+            player.statistics.mark_healing_observation_unknown(game_time=event['game_time'])
+
     def _observe_scope_uncertainty(self, event):
+        self._observe_healing_uncertainty(event)
         # Unknown scope can hide an intervening bar. A later source-null hit
         # cannot inherit an older owner until the shared core confirms a new
         # current-scope bar for that exact target. No amount is calculated here.
@@ -503,6 +578,10 @@ class MultiplayerBattleStatistics:
                 self._scope_unknown_targets.add(target)
                 self._scope_verified_targets.discard(target)
         data_uid = event.get('source_character_uid')
+        identity = self._scope_stamp_identity(event)
+        current_possible = (classify_unmapped_source(event.get('source')) is None
+            and (identity is None or self._active_context is None
+                 or identity == self._context_fingerprint[:3]))
         evidence = self._native_entries.get(data_uid) if type(data_uid) is int else None
         if evidence is not None and evidence[1].cid == event.get('source'):
             uid, entry = evidence
@@ -515,6 +594,11 @@ class MultiplayerBattleStatistics:
                     source, 'native_autochess_scope_unverified', None, actor=entry.unique_id)
             return
         self._reasons.add('存在阶段或轮次身份未核实的事件')
+        if event.get('kind') in ('skill_start', 'skill_end') and current_possible:
+            # Without an actor witness any collected actor could have changed
+            # skill state. Do not certify a timed interval across this hole.
+            for player in self._players.values():
+                player.statistics.mark_skill_unknown()
 
     def _confirm_scope_bar(self, event, player_key, actor):
         target = self._scope_target(event)
@@ -676,6 +760,9 @@ class MultiplayerBattleStatistics:
             affected = set()
             if reason.startswith('event_scope_') or reason == 'elemental_scope_unverified':
                 self._observe_scope_uncertainty(event)
+                return
+            if event.get('kind') == 'healing':
+                self._observe_healing_uncertainty(event)
                 return
             if event.get('kind') != 'damage_settlement':
                 # Let the canonical receiver decide passive native casts and
@@ -875,6 +962,7 @@ class MultiplayerBattleStatistics:
             # Never fall back to side-based legacy identity after a native
             # context was declared. Existing streams can receipt this unknown
             # interval without applying its events to the last known actors.
+            self.invalidate_presence()
             if not self._native_mode:
                 if self._players:
                     self.gap('原生卫戍上下文未确认')

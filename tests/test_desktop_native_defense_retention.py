@@ -15,7 +15,7 @@ from connection import ConnectionConfig
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverReadRetry, ObserverStatus
 from battle_lifecycle import native_autochess_scene
-from panel_model import PanelConfig
+from panel_model import Category, PanelConfig
 from test_multiplayer_integration import CID
 from test_native_autochess_leading_zero_uid import LEADING_UIDS, leading_zero_battle
 
@@ -139,6 +139,17 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
                 first = len(battle.records) + 1
                 amount = 0 if action == 'next_defense_zero_hits' else 7
                 battle.advance(1, [battle.hit(first + i - 1, i, i * amount) for i in range(1, 5)])
+            elif action in ('next_defense_local_heal', 'next_defense_foreign_heal', 'next_defense_zero_heal'):
+                battle.advance(1)
+                actor = 2 if action == 'next_defense_foreign_heal' else 3
+                amount = 0 if action == 'next_defense_zero_heal' else 17
+                settlement = battle.hit(len(battle.records) + 1, actor, amount)
+                event = {key: settlement[key] for key in (
+                    'sequence', 'frame', 'game_time', 'source', 'source_character_uid',
+                    'amount', 'native_autochess_scope')}
+                battle.advance(1, [dict(event, kind='healing', proof={'method': 'Entity.ApplyModifier'})])
+            elif action == 'after_defense_prepare':
+                battle.advance(0, state=2, phase=3, epoch=6, native_round=6)
             elif action == 'absent':
                 battle.active = False
             elif action == 'new_match_prepare':
@@ -392,6 +403,23 @@ def test_real_zero_settlement_is_useful_and_replaces_prior_defense(tmp_path, mon
                for p in raw['multiplayer']['players'])
     assert state._defense_sample['multiplayer'] == raw['multiplayer']
     assert state._defense_sample['multiplayer'] is not raw['multiplayer']
+
+
+@pytest.mark.parametrize('actor', ('local', 'foreign', 'zero'))
+def test_local_healing_only_defense_replaces_prior_observed_result(tmp_path, monkeypatch, actor):
+    action = f'next_defense_{actor}_heal'
+    state, _, _, _, views, accepted = run_chain(tmp_path, monkeypatch,
+        ['defense_baseline', 'defense_hits', 'prepare', 'next_defense_baseline', action, 'after_defense_prepare'])
+    old = next(raw for step, raw, _ in accepted if step == 'defense_hits')
+    healed = next(raw for step, raw, _ in accepted if step == action)
+    assert views[action]['battle_id'] == healed['battle_id']
+    assert views[action]['panels'][0]['entries'] == []
+    expected = healed if actor == 'local' else old
+    assert state._defense_sample['battle_id'] == expected['battle_id']
+    state.layout = replace(state.layout, panels=(PanelConfig(category=Category.HEALING),))
+    view = state.snapshot()
+    assert view['battle_id'] == expected['battle_id']
+    assert view_values(view) == ([17] if actor == 'local' else [])
 
 
 def test_guarded_absence_invalidates_defense_retention_instead_of_resurrecting_it(tmp_path, monkeypatch):

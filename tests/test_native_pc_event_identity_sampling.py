@@ -1,10 +1,17 @@
 """The PC event identity path does not reread discarded legacy witnesses."""
+from copy import deepcopy
+from types import SimpleNamespace
+
 import pytest
 
 import native_pc_collector as native
 from battle_lifecycle import BattleRuntime, NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED
+from desktop_bridge import DesktopState, _display_statistics, _native_display_source
+from event_capture import CaptureRetry
+from panel_model import PanelConfig
 from test_native_pc_autochess_collector_gate import fixture, SCOPE, CID, ROOTS
-from test_multiplayer_native_context import hit
+from test_multiplayer_native_context import hit, member, stamp
+from test_multiplayer_native_skill_baseline import activation
 
 
 AUTO = 'Activities/ACT3AUTOCHESS/level_test'
@@ -146,7 +153,10 @@ def test_omitted_witness_candidate_still_needs_independent_event_identity(tmp_pa
         assert commits == [0, 4]
     assert 'roster' not in calls and 'presence' not in calls and 'actions' not in calls
 
-@pytest.mark.parametrize('phase,players,expected', [(4, 4, True), (5, 2, True), (4, 1, False), (3, 4, False)])
+@pytest.mark.parametrize('phase,players,expected', [
+    (4, 4, True), (5, 2, True), (4, 1, True), (5, 1, True), (6, 1, True), (6, 4, True),
+    (4, 0, False), (4, 5, False), (2, 4, False), (3, 4, False), (7, 4, False), (8, 4, False),
+])
 def test_scoped_presence_has_its_own_budget_and_never_starves_enemy(monkeypatch, phase, players, expected):
     calls = readers(monkeypatch)
     collector = native.NativePcCollector(None)
@@ -160,6 +170,7 @@ def test_scoped_presence_has_its_own_budget_and_never_starves_enemy(monkeypatch,
     assert calls.count('presence') == int(expected)
     assert calls.count('enemy') == 1
     assert 'roster' not in calls
+
 
 def test_local_mode_scoped_presence_excludes_other_players_before_publication(monkeypatch):
     readers(monkeypatch)
@@ -176,3 +187,160 @@ def test_local_mode_scoped_presence_excludes_other_players_before_publication(mo
         battle_controller=int(ROOTS['controller'],16), battle_logger=int(ROOTS['logger'],16),
         battle_stats=int(ROOTS['stats'],16), level_data=int(ROOTS['level'],16))
     assert collector._capture(None, scene, event_identity_mark=mark)['presence']['entities'] == [units[1]]
+
+
+@pytest.mark.parametrize('phase,mode,player_indices', [
+    (4, 'local', {3}), (6, 'local', {3}), (5, 'all', {3}), (6, 'all', {2, 3}), (4, 'local', {2, 3}),
+])
+def test_scoped_presence_plan_produces_inspector_values_and_keeps_gaps(
+        tmp_path, monkeypatch, phase, mode, player_indices):
+    calls = readers(monkeypatch)
+    clock = SimpleNamespace(now=0)
+    monkeypatch.setattr(native, 'time', SimpleNamespace(
+        monotonic=lambda: clock.now, time=lambda: 1_700_000_000 + clock.now))
+    collector, probe, observer, _, events = fixture(tmp_path)
+    observer.native_autochess_identity_sampling = True
+    probe.phase = phase
+    raw_mark, raw_batch, raw_sample = observer.mark, observer.read_through, probe.sample
+
+    def identity(packet):
+        context = packet['native_autochess_context']
+        context.update(collection_mode=mode, match_key='0x60000:0x70000')
+        context['players'] = [player for player in context['players'] if player['index'] in player_indices]
+        context['memberships'] = [entry for entry in context['memberships'] if entry['player_index'] in player_indices]
+        context['memberships'].append(member(3, uid=311, cid='token_test', is_token=True,
+                                             host_key=CID, host_uid=301))
+        return packet
+
+    def mark():
+        return identity(raw_mark()) | dict(native_stage_id=probe.stage, native_frame=probe.frame,
+            native_fixed_time=str(int(probe.when * (1 << 32))), native_process_pid=probe.pid,
+            native_generation=1, damage_settlement_scope=1, active_hooks=[])
+
+    observer.mark = mark
+    observer.read_through = lambda through: identity(raw_batch(through))
+    observer.read_baseline = lambda through: dict(observer.read_through(through), events=[])
+
+    def sampled(*, extra_reader):
+        sampled = raw_sample(extra_reader=extra_reader)
+        raw = sampled['sample']
+        stamp = dict(native_identity=ROOTS, frame=probe.frame,
+                     native_fixed_time=str(int(probe.when * (1 << 32))), stage_id=probe.stage)
+        raw['native_window_guard'] = dict(version=1, source='native_pc_guarded_read',
+            process_instance_before=list(probe.process_instance), process_instance_after=list(probe.process_instance),
+            before=deepcopy(stamp), after=deepcopy(stamp), source_build=probe.build['source_build'],
+            battle_serial=raw['battle_serial'])
+        context = dict(stage_id=probe.stage, stage_status='available', frame=probe.frame,
+                       game_time=probe.when, battle_state=probe.state, battle_native=0x20000,
+                       battle_controller=0x10000, battle_logger=0x30000, battle_stats=0x40000, level_data=0x50000)
+        raw.update(extra_reader(None, context))
+        if point.reject_frame and 'presence_status' in raw:
+            return dict(status='sample_retry', reason='frame_or_lifecycle_changed')
+        if probe.frame == 0:
+            raw['total_damage'] = 0
+            raw['actor_rows'] = [dict(id=CID, damage=0, healing=0)]
+        return sampled
+
+    probe.sample = sampled
+    point = SimpleNamespace(instance=701, available=True, reject_frame=False)
+
+    def capture_presence(*_):
+        calls.append('presence')
+        if not point.available:
+            return dict(presence_status='unavailable', presence=None)
+        units = [
+            dict(id=cid, data_uid=uid, instance_uid=instance, player_side=side, inited=True,
+                 borned=True, is_disappeared=False, is_token=is_token)
+            for cid, uid, instance, side, is_token in (
+                (CID, 301, point.instance, 3, False),
+                (CID, 201, 801, 2, False),
+                ('token_test', 311, 901, 3, True),
+            )
+        ]
+        return dict(presence_status='available',
+                    presence=dict(scope='unit_manager_characters_membership', local_side=3, entities=units))
+
+    monkeypatch.setattr(native, 'capture_presence', capture_presence)
+    runtime = BattleRuntime()
+    state = DesktopState(tmp_path / 'desktop')
+
+    def step(host, when):
+        clock.now = host
+        probe.when, probe.frame = when, round(when * 30)
+        observation = runtime.poll(collector, observer)
+        assert observation.kind == 'sample'
+        return observation.sample
+
+    def detail_row():
+        sample = runtime.display_sample()
+        owner = _native_display_source(sample)
+        view = state._actor_view(PanelConfig(effective_only=True), _display_statistics(sample, source=owner),
+                                 owner['actor_ledgers'])
+        return next(row for row in view['source'].values() if row['actor_uid'] == 301)
+
+    def effect_scope(when):
+        return stamp(phase=phase, root=SCOPE, when=when, collection_mode=mode)
+
+    assert 'scoped_presence' not in step(0, 0)
+    events.append(activation(1, .5, event_scope=effect_scope(.5)))
+    first = step(.25, .5)['scoped_presence']
+    expected_uids = {301}
+    if mode == 'all':
+        expected_uids.add(201)
+    assert {unit['data_uid'] for unit in first['units']} == expected_uids
+    events.extend((dict(activation(2, 1, event_scope=effect_scope(1)), kind='skill_end',
+                        proof={'method': 'Character.OnSkillFinish'}),
+                   hit(3, 3, 1, 100, event_scope=effect_scope(1))))
+    assert 'scoped_presence' not in step(.50, 1)
+    assert calls.count('presence') == calls.count('enemy') == 1
+    assert 'scoped_presence' not in step(1.25, 1.5)  # The due enemy read retains priority.
+    assert 'scoped_presence' in step(1.25, 1.5)
+    assert calls.count('presence') == calls.count('enemy') == 2
+    row = detail_row()
+    assert row['observed_presence_seconds'] == 1
+    assert row['observed_skill_active_seconds'] == .5
+    assert row['skill_timed_presence_seconds'] == 1
+    assert row['observed_skill_coverage'] == .5
+    assert row.get('presence_complete') is not True and row.get('presence_seconds') is None
+    payload = runtime.display_sample()['multiplayer']
+    timed_peers = {peer['unique_id'] for player in payload['players']
+                   for peer in (player.get('statistics') or {}).get('rows', {}).values()
+                   if peer['unique_id'] != 301 and 'observed_presence_seconds' in peer}
+    assert timed_peers == ({201} if mode == 'all' and 2 in player_indices else set())
+
+    point.instance = 702
+    step(2.25, 2.5)
+    step(2.25, 2.5)
+    assert detail_row()['observed_presence_seconds'] == 1
+    point.available = False
+    step(3.25, 3.5)
+    assert step(3.25, 3.5)['scoped_presence']['units'] is None
+    assert detail_row()['observed_presence_seconds'] == 1
+    point.available = True
+    step(4.25, 4.5)
+    step(4.25, 4.5)
+    assert detail_row()['observed_presence_seconds'] == 1
+    step(5.25, 5.5)
+    step(5.25, 5.5)
+    assert detail_row()['observed_presence_seconds'] == 2
+    assert calls.count('presence') == calls.count('enemy') == 6
+
+    # The real optional reader ran, but the probe rejected its enclosing
+    # frame. A regular retry must not join the next point to the old one.
+    assert 'scoped_presence' not in step(6.25, 6.5)
+    point.reject_frame = True
+    previous_ack = runtime.sessions.adapter.event_stream.sequence
+    with pytest.raises(CaptureRetry, match='frame_or_lifecycle_changed'):
+        step(6.25, 6.5)
+    assert runtime.sessions.adapter.event_stream.sequence == previous_ack
+    point.reject_frame = False
+    assert 'scoped_presence' not in step(6.25, 6.5)
+    step(7.25, 7.5)
+    recovered = step(7.25, 7.5)['scoped_presence']
+    assert detail_row()['observed_presence_seconds'] == 2
+    assert recovered['sample_seq'] == 8
+    step(8.25, 8.5)
+    step(8.25, 8.5)
+    assert detail_row()['observed_presence_seconds'] == 3
+    assert calls.count('presence') == calls.count('enemy') == 9
+    assert 'roster' not in calls

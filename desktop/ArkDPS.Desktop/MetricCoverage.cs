@@ -10,6 +10,7 @@ internal static class MetricCoverage
     private static readonly (string Key,string Label)[] Metrics=
     {
         ("observed_damage","已观察伤害"), ("observed_recent_damage","近 5 秒已观察伤害"),
+        ("observed_healing","已观察治疗"),
         ("boss_damage","首领伤害"), ("recent_boss_damage","近 5 秒首领伤害"),
         ("effective_damage","有效伤害"), ("recent_effective_damage","近 5 秒有效伤害"),
         ("engagement_effective_damage","接敌有效 DPS"), ("engagement","接敌 DPS"),

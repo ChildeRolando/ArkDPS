@@ -3256,7 +3256,7 @@ function installAutoChessRoundResetHook(){
  }catch(e){cfg.autoChessRoundResetError=String(e);}
 }
 installAutoChessRoundResetHook();
-function markEvents(){
+function markEvents(withPresence=false){
  const pending=probeAdapter.markEntryCallbacks?.()??probeAdapter.pendingMarkCallbacks?.()??0;
  if(pending>0&&!fatal&&!stopped)
   return {sequence,epoch,active:pending,active_hooks:[...activeHooks.keys()],retry:true,error:null,stopped:false,
@@ -3277,7 +3277,14 @@ function markEvents(){
  const fence={sequence,epoch,active,active_hooks:[...activeHooks.keys()]};
  if(!envelope.ready)return {...fence,retry:true,error:fatal,stopped,...quality};
  if(current===null)return {...fence,retry:true,error:fatal,stopped,...quality};
- return {frame:current.frame,game_time:current.game_time,...fence,error:fatal,stopped,...quality};
+ const mark={frame:current.frame,game_time:current.game_time,...fence,error:fatal,stopped,...quality};
+ // The optional Android endpoint has its own bracket. Its failure cannot
+ // change the original mark, which remains authoritative for event admission.
+ if(withPresence===true&&probeAdapter.autoChessReflected&&!fatal&&!stopped){
+  const point=captureAutoChessPresence(mark);
+  if(point)mark.native_autochess_presence=point;
+ }
+ return mark;
 }
 function receiveEventRequest(){
  // Frida recv is one-shot. Rearm before dispatch; a late reply can be safely
@@ -3290,7 +3297,7 @@ function receiveEventRequest(){
     case 'mark':
      if(Object.prototype.hasOwnProperty.call(request,'autochess_enabled')&&typeof probeAdapter.setAutoChessMode==='function')
       probeAdapter.setAutoChessMode(request.autochess_enabled);
-     result=markEvents();break;
+     result=markEvents(request.with_presence===true);break;
     case 'read':result=readEvents(request.after,request.through);break;
     case 'terminal_read':result=readTerminalEvents(request.after,request.through);break;
     case 'ack':result=ackEvents(request.sequence);break;

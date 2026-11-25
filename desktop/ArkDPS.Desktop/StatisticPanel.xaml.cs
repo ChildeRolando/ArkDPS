@@ -24,10 +24,13 @@ internal readonly record struct SharePresentation(string Label, string Details, 
         string scope=view.Text("share_scope");
         if(scope!="team" && scope!="known" && scope!="unavailable")
             scope=view.Bool("share_known") ? "team" : "unavailable";
+        string knownLabel=view.Bool("observed_healing_only")
+            ? (view.Get("config").Text("ranking")=="dps" ? "HPS 占比" : "治疗占比")
+            : "伤害占比";
         string label=scope switch
         {
             "team"=>"全队同口径占比",
-            "known"=>"伤害占比",
+            "known"=>knownLabel,
             _=>"占比未知"
         };
         string reason=scope=="team" ? "" : view.Text("share_reason");
@@ -559,7 +562,9 @@ public partial class StatisticPanel : UserControl
         if(bossUnavailable && bossReason.Length==0) bossReason="首领伤害数据不可用。";
         if(IsHud) ApplyHudSkin();
         string scopeLabel=value.Text("scope_label");
-        Heading.Text=IsHud ? (scopeLabel.Length>0 ? scopeLabel+" · " : "")+HudTitle(config) : value.Text("title");
+        bool observedHealing=value.Bool("observed_healing_only");
+        string healingTotal=observedHealing ? "已观察治疗" : "总治疗";
+        Heading.Text=IsHud ? (scopeLabel.Length>0 ? scopeLabel+" · " : "")+HudTitle(config,observedHealing) : value.Text("title");
         var knownShare=value.Text("share_scope")=="known";
         PanelKind.Text=IsHud ? share.Label : IsHistory ? "HISTORY PANEL" : "LIVE PANEL";
         PanelKind.Visibility=actorRanking||sideRanking||referenceStyle||IsHud&&!knownShare ? Visibility.Collapsed : Visibility.Visible;
@@ -574,7 +579,7 @@ public partial class StatisticPanel : UserControl
         Select(Category,config.Text("category")); Select(Ranking,config.Text("ranking")); Select(Rate,config.Text("rate_basis"));
         var category=config.Text("category");
         if(category=="shield") Select(Ranking,"total");
-        ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? "总治疗" : category=="shield" ? "总护盾" : "总伤";
+        ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? healingTotal : category=="shield" ? "总护盾" : "总伤";
         ((ComboBoxItem)Ranking.Items[1]).Content=category switch{"shield"=>"近期","healing"=>"HPS",_=>"DPS"};
         EffectiveOnly.IsChecked=config.Bool("effective_only");
         EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
@@ -608,10 +613,11 @@ public partial class StatisticPanel : UserControl
             : RateLabel.ToolTip;
         ReferenceRateHeading.Text=RateHeading.Text;
         ReferenceTotalHeading.Text=config.Text("ranking")=="recent" ? "近期"
-            : category switch{"healing"=>"总治疗","shield"=>"总护盾",_=>"总伤"};
+            : category switch{"healing"=>observedHealing ? "治疗量" : healingTotal,"shield"=>"总护盾",_=>"总伤"};
+        ReferenceTotalHeading.ToolTip=observedHealing ? healingTotal : null;
         if(sideRanking)
         {
-            UpdateSideHeadings(config,category,value.Text("title"));
+            UpdateSideHeadings(config,category,value.Text("title"),observedHealing);
             if(scopeLabel.Length>0) Heading.Text=scopeLabel+" · "+Heading.Text;
         }
         Actions.Visibility=actorRanking||IsHistory||IsHud||sideRanking ? Visibility.Collapsed : Visibility.Visible;
@@ -713,7 +719,7 @@ public partial class StatisticPanel : UserControl
         updating=false;
     }
 
-    private void UpdateSideHeadings(JsonElement config,string category,string title)
+    private void UpdateSideHeadings(JsonElement config,string category,string title,bool observedHealing)
     {
         string rate = category == "healing" ? "HPS" : "DPS";
         string basis = config.Text("rate_basis") switch
@@ -722,29 +728,31 @@ public partial class StatisticPanel : UserControl
         };
         string total = category switch
         {
-            "healing" => "总治疗", "shield" => "总护盾", _ when config.Bool("effective_only") => "有效伤害", _ => "总伤",
+            "healing" => observedHealing ? "治疗量" : "总治疗", "shield" => "总护盾", _ when config.Bool("effective_only") => "有效伤害", _ => "总伤",
         };
         string rank = config.Text("ranking") switch
         {
             "dps" => rate, "recent" => "近期量", _ => total,
         };
         string scope = IsBossScope(config) ? "仅首领 · " : "";
-        Heading.Text = title.Length == 0 ? "干员排行" : scope + "按" + rank + "排行" + (category == "shield" ? "" : " · " + basis + " " + rate);
+        Heading.Text = observedHealing ? "已观察治疗 · " + basis + " HPS" :
+            title.Length == 0 ? "干员排行" : scope + "按" + rank + "排行" + (category == "shield" ? "" : " · " + basis + " " + rate);
         Heading.ToolTip = title.Length == 0 ? null : title;
         SideHeader.Visibility = Visibility.Visible;
         SideTotalHeading.Text = total;
+        SideTotalHeading.ToolTip = observedHealing ? "已观察治疗" : null;
         SideRateHeading.Text = category == "shield" ? "—" : rate;
         SideRateHeading.ToolTip = category == "shield" ? "护盾按实际吸收量统计。" : basis + " " + rate;
     }
 
-    private static string HudTitle(JsonElement config)
+    private static string HudTitle(JsonElement config,bool observedHealing)
     {
         string category=config.Text("category"), ranking=config.Text("ranking");
         bool recent=ranking=="recent";
         string metric=category switch
         {
             "shield"=>"有效护盾",
-            "healing"=>recent ? "治疗" : "总治疗",
+            "healing"=>observedHealing ? "已观察治疗" : recent ? "治疗" : "总治疗",
             _ when config.Bool("effective_only")=>"有效伤害",
             _=>"溢出总伤",
         };

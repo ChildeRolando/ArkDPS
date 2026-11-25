@@ -100,7 +100,7 @@ function verifyAutoChessPhaseEnum(field){
 function autoIdentity(k,name,namespace){
  return !k.isNull()&&className(k)===name&&k.add(0x18).readPointer().readCString()===namespace;
 }
-function autoLayout(k,name,namespace,count,specs){
+function autoLayout(k,name,namespace,count,specs,check=null){
  if(!autoIdentity(k,name,namespace))throw new Error('AutoChess class '+name);
  const cacheKey=k.toString()+':'+JSON.stringify(specs);
  if(nativeAutoLayouts.has(cacheKey))return nativeAutoLayouts.get(cacheKey);
@@ -113,6 +113,7 @@ function autoLayout(k,name,namespace,count,specs){
   if(reflected){
    const matches=[];
    for(let i=0;i<actualCount;i++){
+    check?.(24);
     const candidate=table.add(i*32);
     if(candidate.readPointer().readCString()===field)matches.push(candidate);
    }
@@ -217,10 +218,11 @@ function rosterGuardPlan(guards){
  plan.push(...scopeGuardGroup(fields));
  return plan;
 }
-function autoRead(){
+function autoRead(check=null){
  const guards=[],layouts=new Map();
  let previousGuardCount=0,plan=null;
  function value(kind,address){
+  check?.(kind==='b'?1:kind==='i'||kind==='u'?4:8);
   let result;
   if(kind==='p')result=address.readPointer();
   else if(kind==='i')result=address.readS32();
@@ -241,13 +243,14 @@ function autoRead(){
  };
  read.object=(address,name,namespace,count,specs)=>{
   if(!address||address.isNull())throw new Error('AutoChess missing '+name);
-  return read.layout(address,autoLayout(read.p(address),name,namespace,count,specs));
+  return read.layout(address,autoLayout(read.p(address),name,namespace,count,specs,check));
  };
  read.text=address=>{
   if(address.isNull())return null;
   if(!autoIdentity(read.p(address),'String','System'))throw new Error('AutoChess string class');
   const count=read.i(address.add(0x10));
   if(count<0||count>128)throw new Error('AutoChess string length');
+  check?.(count*2);
   const result=address.add(0x14).readUtf16String(count);
   if(typeof result!=='string'||/[\u0000-\u001f\u007f]/.test(result))throw new Error('AutoChess string value');
   guards.push(['text',address,result]);return result;
@@ -260,10 +263,13 @@ function autoRead(){
   else plan=null;
   previousGuardCount=guards.length;
   for(const [kind,address,before,size] of plan??guards){
+   check?.(kind==='text'?4+before.length*2:kind==='block'?size:kind==='b'?1:kind==='u'||kind==='i'?4:8);
    if(kind==='block'){scopeBlock(address,size,before,'AutoChess changed during read');continue;}
+   if(kind==='text'&&address.add(0x10).readS32()!==before.length)
+    throw new Error('AutoChess string length changed during read');
    const after=kind==='p'?address.readPointer():kind==='i'?address.readS32():
     kind==='u'?address.readU32():kind==='b'?address.readU8():kind==='n'?address.readU64().toNumber():
-    address.add(0x14).readUtf16String(address.add(0x10).readS32());
+    address.add(0x14).readUtf16String(before.length);
    if(kind==='p'?!after.equals(before):after!==before)throw new Error('AutoChess changed during read');
   }
  };
@@ -659,6 +665,124 @@ function stampAutoChessClock(when){
   when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,
    frame,game_time:when.game_time,scope_key,phase,round,collection_mode:autoCollectionMode(scope_key,phase)};
  }catch(e){nativeAutoCache=null;unknown(String(e));}
+}
+const AUTO_PRESENCE_SLOT_LIMIT=4096,AUTO_PRESENCE_CHARACTER_LIMIT=128;
+const autoPresenceLineages=new Map();
+function autoPresenceLineage(klass,check){
+ const key=klass.toString();
+ if(autoPresenceLineages.has(key))return autoPresenceLineages.get(key);
+ let character=null,current=klass;
+ for(let depth=0;depth<10&&!current.isNull();depth++){
+  check(24);
+  if(autoIdentity(current,'Character','Torappu.Battle'))character=current;
+  if(autoIdentity(current,'BObject','Torappu.Battle')){
+   const lineage={character,bObject:current};
+   if(autoPresenceLineages.size<128)autoPresenceLineages.set(key,lineage);
+   return lineage;
+  }
+  current=current.add(0x58).readPointer();
+ }
+ throw new Error('AutoChess presence lineage');
+}
+function captureAutoChessPresence(mark){
+ const context=mark.native_autochess_context,cache=nativeAutoCache,stage=nativeAutoStage;
+ if(!cache||!stage?.enabled||context?.status!=='available'||![4,5,6].includes(context.phase)||
+    mark.native_battle_state!==2||mark.active!==0)return;
+ const {frame,game_time,scope_key,phase,round,collection_mode}=context;
+ const point={version:1,status:'unavailable',frame,game_time,native_fixed_time:mark.native_fixed_time,
+  scope_key,phase,round,collection_mode,units:null};
+ const deadline=Date.now()+12;
+ let reads=0,bytes=0;
+ function check(size=0,operations=1){
+  reads+=operations;bytes+=size;
+  if(reads>12000||bytes>256*1024||Date.now()>deadline)throw new Error('AutoChess presence budget');
+ }
+ function verifyBinding(){
+  check(768+cache.scopeGuards.length*32,60+cache.scopeGuards.length);
+  const roots=currentNativeIdentity();
+  if(!roots||Object.keys(roots).some(key=>roots[key]!==mark.native_identity[key])||
+     cache!==nativeAutoCache||stage!==nativeAutoStage||
+     !stage.stageAddress.readPointer().equals(stage.stagePointer)||
+     nativeAutoEffective?.scope_key!==scope_key||nativeAutoEffective.mode!==collection_mode||
+     scope_key!==cache.roots+':autochess:'+nativeAutoEpoch||
+     cache.addresses.phase.readS32()!==phase||cache.addresses.round.readS32()!==round||
+     ptr(roots.controller).add(probeAdapter.autoChessStateOffset).readS32()!==2||
+     clock.readU32()!==frame||clock.add(4).readS64().toString()!==point.native_fixed_time)
+   throw new Error('AutoChess presence binding changed');
+  validateScopeStage(stage,roots.level,stage.stagePointer);
+  validateScopeGuards(cache.scopeGuards);
+  const closing=currentNativeIdentity();
+  if(!closing||Object.keys(roots).some(key=>closing[key]!==roots[key])||
+     cache.addresses.phase.readS32()!==phase||cache.addresses.round.readS32()!==round||
+     !stage.stageAddress.readPointer().equals(stage.stagePointer)||
+     ptr(roots.controller).add(probeAdapter.autoChessStateOffset).readS32()!==2||
+     clock.readU32()!==frame||clock.add(4).readS64().toString()!==point.native_fixed_time)
+   throw new Error('AutoChess presence scope or clock changed');
+ }
+ try{
+  verifyBinding();
+  const read=autoRead(check),controller=ptr(mark.native_identity.controller);
+  read.object(controller,'BattleController','Torappu.Battle',515,[[100,'<unitManager>k__BackingField',0x2c0,[18]]]);
+  const manager=read.p(read.at(controller,'<unitManager>k__BackingField'));
+  read.object(manager,'UnitManager','Torappu.Battle',7,[[1,'<characters>k__BackingField',0x18,[21]]]);
+  const container=read.p(read.at(manager,'<characters>k__BackingField'));
+  read.object(container,'UnorderedArray`1','Torappu',3,[[0,'m_items',0x10,[29]],[2,'<count>k__BackingField',0x20,[8]]]);
+  const items=read.p(read.at(container,'m_items')),count=read.i(read.at(container,'<count>k__BackingField'));
+  if(count<0||count>AUTO_PRESENCE_SLOT_LIMIT||count&&items.isNull())return point;
+  if(!items.isNull()){
+   if(!autoIdentity(read.p(items),'Unit[]','Torappu.Battle'))return point;
+   const capacity=read.n(items.add(0x18));
+   if(capacity<count||capacity>AUTO_PRESENCE_SLOT_LIMIT)return point;
+  }
+  const units=[],chunks=[],objects=new Set(),instances=new Set(),members=new Map();
+  for(const member of context.memberships){
+   if(!member.is_token&&(collection_mode!=='local'||member.player_index===context.self_player_index))
+    members.set(member.data_uid,member);
+  }
+  let characters=0;
+  function readSlots(address,size){
+   check(size);
+   const raw=address.readByteArray(size);
+   if(raw===null||raw.byteLength!==size)throw new Error('AutoChess presence slot read');
+   return new DataView(raw);
+  }
+  for(let index=0;index<count;index+=16){
+   const address=items.add(0x20+8*index),size=Math.min(16,count-index)*8,slots=readSlots(address,size);
+   chunks.push([address,size,slots]);
+   for(let offset=0;offset<size;offset+=8){
+    const object=slots.getBigUint64(offset,true);
+    if(!object||objects.has(object))return point;
+    objects.add(object);
+    const unit=ptr('0x'+object.toString(16)),lineage=autoPresenceLineage(read.p(unit),check);
+    if(!lineage.character)continue;
+    if(++characters>AUTO_PRESENCE_CHARACTER_LIMIT)return point;
+    read.layout(unit,autoLayout(lineage.bObject,'BObject','Torappu.Battle',9,[
+     [1,'<instanceUid>k__BackingField',0x18,[9]],[3,'<playerSide>k__BackingField',0x20,[17]],
+     [4,'<inited>k__BackingField',0x24,[2]],[5,'<borned>k__BackingField',0x25,[2]],
+     [6,'<isDisappeared>k__BackingField',0x26,[2]]],check));
+    const inited=read.b(read.at(unit,'<inited>k__BackingField')),borned=read.b(read.at(unit,'<borned>k__BackingField')),
+     disappeared=read.b(read.at(unit,'<isDisappeared>k__BackingField'));
+    if(inited>1||borned>1||disappeared>1)return point;
+    if(inited!==1||borned!==1||disappeared!==0)continue;
+    const instance_uid=read.u(read.at(unit,'<instanceUid>k__BackingField')),
+     player_side=read.i(read.at(unit,'<playerSide>k__BackingField'));
+    if(!instance_uid||instances.has(instance_uid)||player_side<0||player_side>4)return point;
+    instances.add(instance_uid);
+    read.layout(unit,autoLayout(lineage.character,'Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,[18]]],check));
+    const {cid,data_uid,is_token}=autoData(read.p(read.at(unit,'<data>k__BackingField')),read),member=members.get(data_uid);
+    if(!is_token&&member?.cid===cid&&member.player_side===player_side)
+     units.push({cid,data_uid,instance_uid,player_side});
+   }
+  }
+  read.validate();
+  for(const [address,size,before] of chunks){
+   const after=readSlots(address,size);
+   for(let offset=0;offset<size;offset+=8)
+    if(before.getBigUint64(offset,true)!==after.getBigUint64(offset,true))return point;
+  }
+  verifyBinding();check();
+  return {...point,status:'available',units};
+ }catch(e){return point;}
 }
 let nativeAutoBodyCache=null;
 function discardAutoChessBody(){
