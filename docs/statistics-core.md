@@ -2,6 +2,16 @@
 
 `stats_core.Statistics` 是单局、由调用方提供可靠游戏时钟和数据的计算器，不读取游戏。窗口与命令行通过 `CollectionSession` 的生命周期模式共用 `BattleRuntime`。生命周期签发的 `feed:generation` 同时用于快照适配器、事件流、冻结结果和归档交接，每局只持有一个统计实例。认证后默认尝试临时事件观察，失败继续原生累计。ARK-5 已完成独立验收并合入；本次 ARK-6 集成候选的跨局实机验收仍未完成，不能借用 ARK-5 日志替代。入口与证据说明见[实时事件采集](event-capture.md)。
 
+## 单一运行时归约
+
+`Statistics`以一个按角色身份分区的技能效果窗口存储归约回调，部署UID保留在窗口并接受生命周期约束；owner窗口和质量仅作只读聚合。真实effect end、施放返回、永久退场与暂移分别处理，无当前窗口的真实end仍可证明其后的未激活状态，不能回填历史时长。
+
+逐击金额统一由`DamageSettlement.hit`写入；boss只筛选同一事实的目标子集。旧`PartialDamage`、`BossDamage`、`ObservedSkillDamage`独立聚合器已删除，旧API的partial/boss输出只投影同一个命中队列和已证分量。旧输入只能提供其实际携带的名义值或已证明过量后可计算的有效值；后者名为`legacy_effective`，不会冒充HP/盾分解、UID或完整现代证书。旧raw在入口转换时保留原record作为重放收据，不补齐原始字段或制造序号。
+
+元素来源只有一个按目标UID与native instance约束的witness存储。旧输出回调不再次消费现代witness或写入金额；source-null完整结算先消费归属，再写一次逐击金额及独立的原生累计外补充，显式来源不补累计。元素爆条展示来自同一逐击账本的元素子集。
+
+原生累计（含过量）、观察期名义金额、有效HP/打盾、治疗及施盾者吸收贡献仍是不同事实。名义、有效与治疗各自维护接敌触发集合，只共用`extend_activity`的1.5秒区间并集操作。v7结果在构造时直接选择已证逐击分量，不先计算旧effective/overkill再在发布末尾覆盖。
+
 ## 权威来源和顺序
 
 卫戍协议的多人观察由 `multiplayer_battle.py` 编排。新 PC 接口通过 `ChessInst.battleCharacterData.uniqueId → ChessInst.playerIndex → ScenePlayerData.uid` 关联角色与真实玩家；每个已确认的玩家 UID 持有独立的 `Statistics` 和 `EventStream`，来源身份同时包含玩家 UID 和角色 data UID。召唤物只通过同 scope 中已确认的宿主 CID、data UID 与临时阵营归属。各家复用相同的逐次结算、技能窗口、护盾、减伤和事件质量处理，不另写统计公式。原生累计字典以 CID 为键，不能证明跨玩家同名角色的独立累计，因此四家视图的 `damage` / `dps` / `recent_dps` 保持 `None`。`observed_damage` 和观察时段平均 DPS 来自已有 `DamageSettlement` 的名义结算账本，包含过量伤害；干员排行沿用已有的已观察有效伤害与接敌 DPS 投影。

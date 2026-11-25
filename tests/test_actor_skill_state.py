@@ -63,3 +63,15 @@ def test_legacy_available_effective_amount_does_not_fabricate_hp_certificate():
     row = stats.result()['rows']['owner']
     assert row['damage'] == 100 and row['effective_damage'] == 80
     assert row['partial_damage']['effective_damage'] == 80
+
+
+def test_nominal_and_effective_keep_separate_activity_triggers():
+    from damage_settlement import DamageSettlement
+    meter = DamageSettlement()
+    meter.hit(1, 0, 0, 'physical', True, False, 100, None, None, overkill=100)
+    meter.hit(3, 40, 0, 'physical', True, False, None, None, None)
+    row = meter.result(0, 5, 5, stream_complete=True)
+    assert row['active_damage'] == 1.5
+    assert row['active_effective_damage'] == 1.5
+    assert row['engagement_damage'] == 100 / 1.5
+    assert row['engagement_effective_damage'] == 40 / 1.5

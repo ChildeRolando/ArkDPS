@@ -11,7 +11,7 @@ from collections import deque
 from math import isclose, isfinite
 
 from boss_catalog import classify_boss
-from damage_settlement import DamageSettlement, observed_amount
+from damage_settlement import DamageSettlement, observed_amount, extend_activity
 from deployment_lifecycle import DeploymentLifecycle
 from source_classification import classify_unmapped_source
 
@@ -74,10 +74,8 @@ class Statistics:
         self.overkill_reason = {}
         # Match formula totals per source against its own cumulative counter
         # before aggregating a character and its summons.
-        self.mitigation = {}
         # A sourceless burst is credited to an owner as a supplement to the
         # native source counters. Its formula pair follows the same rule.
-        self.sourceless_burst_mitigation = {}
         self.mitigation_incomplete = set()
         self.mitigation_probe_incomplete = False
         self.mitigation_unattributed_burst = False
@@ -128,7 +126,6 @@ class Statistics:
         self.boss_event_end = None
         self.boss_observed_from = None
         self.boss_target_unknown = set()
-        self.settlement_totals = {}
         self.boss_damage_incomplete = False
         self.partial_damage_enabled = False
         # Legacy captures replay with the policy that produced their recorded
@@ -170,12 +167,10 @@ class Statistics:
                             overkill, reason=None, before=None, after=None, *, actual=None):
         if isinstance(target, str) and target.startswith(('char_', 'token_')):
             return
-        if source is not None and (self.boss_damage is not None or self.partial_damage_enabled):
-            self.settlement_totals[source] = self.settlement_totals.get(source, 0.0) + amount
         if self.settlement_enabled:
             return
         kind = NATIVE_DAMAGE_TYPES.get(damage_type) if type(damage_type) is int else None
-        skill = owner in self.skill_active if self._skill_hit_observable(owner) else None
+        skill = any(candidate == owner for candidate, _ in self.settlement_skill_active) if self._skill_hit_observable(owner) else None
         effective = max(0.0, amount - overkill) if overkill is not None else None
         pair = self._mitigation_pair(amount, before, after)
         args = (when, actual or 0, None, kind, False, skill, amount,
@@ -184,7 +179,7 @@ class Statistics:
         # prove a modern target UID or its HP/shield decomposition.
         self.settled.setdefault(owner, DamageSettlement()).hit(*args,
             overkill=overkill, known_effective=effective, supplement=source is None,
-            evidence_reason=reason)
+            evidence_reason=reason, source=source)
         if self.boss_damage is None:
             return
         is_boss = classify_boss(target)
@@ -193,7 +188,7 @@ class Statistics:
         if is_boss:
             self.settled_boss.setdefault(owner, DamageSettlement()).hit(*args,
                 overkill=overkill, known_effective=effective, supplement=source is None,
-                evidence_reason=reason)
+                evidence_reason=reason, source=source)
 
     def _skill_hit_observable(self, owner):
         windows = [window for (candidate, _), window in self.settlement_skill_active.items() if candidate == owner]
@@ -285,6 +280,21 @@ class Statistics:
             self.enemy_damage_incomplete = True
             return
         existing['amount'] += amount
+
+    @property
+    def settlement_totals(self):
+        return {source: amount for meter in self.settled.values()
+                for source, amount in meter.source_nominal.items()}
+
+    @property
+    def mitigation(self):
+        return {source: values for meter in self.settled.values()
+                for source, values in meter.source_pairs.items() if source is not None}
+
+    @property
+    def sourceless_burst_mitigation(self):
+        return {owner: meter.source_pairs[None] for owner, meter in self.settled.items()
+                if None in meter.source_pairs}
 
     @property
     def partial_damage(self):
@@ -454,8 +464,6 @@ class Statistics:
             if source is not None and element:
                 self.discard_settlement_bar(target_uid)
             return
-        if source is not None and nominal is not None:
-            self.settlement_totals[source] = self.settlement_totals.get(source, 0.0) + nominal
         if nominal is None or not self._mitigation_pair(nominal, before, after):
             before = after = None
         if source is None and element and nominal is not None:
@@ -472,13 +480,13 @@ class Statistics:
         meter = self.settled.get(owner)
         if meter is None:
             meter = self.settled[owner] = DamageSettlement()
-        meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown)
+        meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown, source=source)
         boss = classify_boss(target)
         if boss is True:
             meter = self.settled_boss.get(owner)
             if meter is None:
                 meter = self.settled_boss[owner] = DamageSettlement()
-            meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown)
+            meter.hit(*args, overkill=overkill, initial_skill_unknown=initial_unknown, source=source)
         elif boss is None:
             self.settlement_boss_missing[owner] = self.settlement_boss_missing.get(owner, 0) + 1
         if source is not None and element:
@@ -1222,13 +1230,12 @@ class Statistics:
         if not self._mitigation_pair(amount, before, after):
             self.mitigation_incomplete.add(owner)
             return
-        pairs, key = (self.sourceless_burst_mitigation, owner) if source is None else (self.mitigation, source)
-        before_total, after_total, hits = pairs.get(key, (0.0, 0.0, 0))
+        meter = self.settled.get(owner)
+        before_total, after_total, hits = meter.source_pairs.get(source, (0.0, 0.0, 0)) if meter else (0.0, 0.0, 0)
         totals = before_total + before, after_total + after
         if not all(isfinite(value) for value in totals):
             self.mitigation_incomplete.add(owner)
             return
-        pairs[key] = (*totals, hits + 1)
 
     def _mitigation_result(self, owner, registered, *, complete):
         if self.settlement_enabled:
@@ -1559,10 +1566,11 @@ class Statistics:
                 state = self.engagement.setdefault((owner, kind), {'total': 0, 'intervals': []})
                 state['total'] += amount
                 intervals = state['intervals']
-                if intervals and game_time <= intervals[-1][1]:
-                    intervals[-1] = (intervals[-1][0], max(intervals[-1][1], game_time + 1.5))
+                endpoint, _, joins = extend_activity(intervals[-1][1] if intervals else game_time, game_time)
+                if intervals and joins:
+                    intervals[-1] = (intervals[-1][0], endpoint)
                 else:
-                    intervals.append((game_time, game_time + 1.5))
+                    intervals.append((game_time, endpoint))
                 if kind == 'healing':
                     self._record_recent_healing(state, game_time, amount)
 

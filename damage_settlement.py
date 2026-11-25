@@ -7,6 +7,12 @@ def observed_amount(value):
     return type(value) in (int, float) and isfinite(value) and value >= 0
 
 
+def extend_activity(previous_end, when):
+    """Extend one lane's ordered 1.5-second engagement union."""
+    end = when + 1.5
+    return end, max(0.0, end - max(when, previous_end)), when <= previous_end
+
+
 class DamageSettlement:
     def __init__(self):
         self.hp = self.shield = self.raw = 0.0
@@ -24,13 +30,15 @@ class DamageSettlement:
         self.active = self.active_end = self.raw_active = self.raw_active_end = 0.0
         self.recent = deque()
         self.elemental = None
+        self.source_nominal = {}
+        self.source_pairs = {}
         self.legacy_effective = 0.0
         self.raw_typed_hits = 0
         self.classified_overkill_base = 0.0
         self.raw_skill_overkill = 0.0
         self.legacy_overkill_reason = None
 
-    def hit(self, when, hp, shield, kind, complete, skill, nominal, before, after, *, overkill=None, initial_skill_unknown=False, known_effective=None, supplement=False, evidence_reason=None):
+    def hit(self, when, hp, shield, kind, complete, skill, nominal, before, after, *, overkill=None, initial_skill_unknown=False, known_effective=None, supplement=False, evidence_reason=None, source=None):
         effective = hp + (shield or 0.0)
         if known_effective is not None:
             effective = known_effective
@@ -64,8 +72,8 @@ class DamageSettlement:
             if overkill > 0:
                 self.overkill_by_type[kind] = self.overkill_by_type.get(kind, 0.0) + overkill
         if effective > 0:
-            self.active += when + 1.5 - max(when, self.active_end)
-            self.active_end = when + 1.5
+            self.active_end, added, _ = extend_activity(self.active_end, when)
+            self.active += added
             if skill is not None:
                 if skill:
                     self.skill += effective
@@ -77,12 +85,14 @@ class DamageSettlement:
         if nominal is not None:
             self.raw_hits += 1
             self.raw += nominal
+            if source is not None:
+                self.source_nominal[source] = self.source_nominal.get(source, 0.0) + nominal
             self.raw_typed_hits += kind is not None
             if kind is not None and nominal > 0:
                 self.raw_by_type[kind] = self.raw_by_type.get(kind, 0.0) + nominal
             if nominal > 0:
-                self.raw_active += when + 1.5 - max(when, self.raw_active_end)
-                self.raw_active_end = when + 1.5
+                self.raw_active_end, added, _ = extend_activity(self.raw_active_end, when)
+                self.raw_active += added
             if skill is not None:
                 self.raw_skill_hits += 1
                 if skill:
@@ -90,9 +100,13 @@ class DamageSettlement:
                 else:
                     self.raw_non_skill += nominal
         if before is not None:
-            self.before += before
-            self.after += after
-            self.formula_hits += 1
+            previous = self.source_pairs.get(source, (0.0, 0.0, 0))
+            values = previous[0] + before, previous[1] + after
+            if all(isfinite(value) for value in (*values, self.before + before, self.after + after)):
+                self.before += before
+                self.after += after
+                self.formula_hits += 1
+                self.source_pairs[source] = (*values, previous[2] + 1)
         self.recent.append((when, effective, nominal, complete, kind, overkill, supplement))
         while self.recent[0][0] < when - 5:
             self.recent.popleft()
