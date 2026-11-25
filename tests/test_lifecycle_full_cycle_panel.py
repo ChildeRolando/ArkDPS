@@ -40,7 +40,11 @@ def test_exact_body_time_uses_authoritative_event_amount_without_native_counters
     # The 5-second engagement range can include verified post-retreat damage.
     # It must not extend the body's actual 2-second deployment.
     assert view['source']['a']['presence_seconds'] is None
-    assert view['source']['a']['damage'] is None
+    # Amounts live once in the canonical detail DTO; the trimmed identity/
+    # presence source no longer carries a second, unknown native damage value.
+    assert 'damage' not in view['source']['a']
+    assert view['details_by_owner']['a']['damage'] == 300
+    assert source['rows']['a']['damage'] is None
     assert source == original
 
 

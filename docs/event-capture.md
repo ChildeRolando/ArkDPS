@@ -2,6 +2,8 @@
 
 当前 WPF 桌面由 `desktop_bridge.py` 子进程消费同一 `CollectionSession`，不修改本页采集语义；UI/worker 协议与分发见 [桌面运行时](desktop-runtime.md)。旧 Tk 入口已随 `archive/legacy-tk` 封存（[ADR 0005](adr/0005-seal-legacy-tk.md)），不再可运行；旧候选实机记录为历史证据，不自动认证新的 WPF。
 
+2026-11-26起，产品事件和快照诊断统一由`CollectionSession → BattleRuntime`执行；旧`capture_battles.py --seconds`仅保留证据文件格式适配，回放入口继续可读旧日志。敌方命中采用[单证书输出](event-probe-interface.md#单证书输出与独立原生观察)，原生累计、逐击名义量、实际扣血、盾贡献分别保留。静态/回放/自有进程检查不等于实机FPS验收。
+
 ## 官服 PC 观察者接入
 
 ### PC 事件后端
