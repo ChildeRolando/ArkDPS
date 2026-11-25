@@ -697,6 +697,13 @@ function finishTargetSettlement(invocation,when){
   const amount=fp(scope.mod.add(0x30));
   if(!targetSettlementIdentity(scope,hit,when)&&
      !numericFullBlockSettlement(scope,hit,when,amount)){
+   // Keep this identity witness separate from a normal settlement return.
+   // The enclosing modifier still needs to prove zero consumption.
+   if(scope.mod.add(0x70).readS32()===3&&stableSettlementAnchor(scope,when)&&
+      targetSettlementIdentity(scope,hit,when,true)){
+    hit.commit.cancelReturnWhen=when;
+    return;
+   }
    hit.commit.invalid=true;return;
   }
   // Native listeners may adjust the amount before or after this return.
@@ -704,6 +711,23 @@ function finishTargetSettlement(invocation,when){
   hit.commit.returnAmount=amount;
   hit.commit.returned=true;hit.commit.returnWhen=when;
  }catch(e){hit.commit.invalid=true;}
+}
+function verifiedZeroCancellation(scope,hit,when,amount){
+ try{
+  const commit=hit?.commit;
+  const returned=commit?.returned?commit.returnWhen:commit?.cancelReturnWhen;
+  if(amount!==0||!returned||!sameMitigationTime(returned,when)||
+     scope.targetSettlementNested||scope.outputSeen||scope.outputSettlement||scope.settlementRecordEmitted||
+     scope.settlementFailureReason||scope.numericShieldUnknown||scope.unmatchedShield||
+     scope.unclockedShield||(scope.numericShield??0)!==0||
+     !stableSettlementAnchor(scope,when)||!targetSettlementIdentity(scope,hit,when,true)||
+     settlementScopeQualification(scope,when,hit.target)!=='potential')return false;
+  const evidence=overkillEvidence(scope.mod,hit.target,hit.hpBefore,when.frame);
+  // The target return anchors identity; its amount can still be a proposal.
+  // A late cancellation must prove the final native amount and HP instead.
+  return evidence?.cancel_reason===3&&fp(scope.mod.add(0x30))===0&&evidence.real_delta===0&&
+   evidence.hp_before>0&&evidence.hp_before===evidence.hp_after&&evidence.shield_absorbed===0;
+ }catch(e){return false;}
 }
 function verifiedTargetSettlement(scope,target,when,amount,type){
  if(!enemyDamageReady)return null;
@@ -782,6 +806,8 @@ function recordElementalBar(scope,when,amount){
  if(target.uid&&damageTargetUid(target.pointer)===target.uid)evidence.target_uid=String(target.uid);
  const proof={method:scope.name,type:0,target:5},tokenHost=autoTokenHostEvidence(scope,when);
  if(tokenHost)proof.native_autochess_token_host=tokenHost;
+ const characterForm=autoCharacterFormEvidence(scope,when);
+ if(characterForm)proof.native_autochess_character_form=characterForm;
  record(scope.source,'elemental_bar',amount,when,proof,evidence,scope.sourceCharacterUid);
  scope.elementalBarRecorded=true;
 }
@@ -806,7 +832,12 @@ function recordTriggeringElementalBar(burst,when){
 // that a lethal hit's excess was not absorbed, so its overkill stays unknown.
 const shieldUnknownByFrame=new Map();
 function markShieldUnknown(frame,target){
- if(!Number.isFinite(frame))return; // an unreadable clock emits no damage event either
+ if(!Number.isFinite(frame)){
+  // A shield callback with no clock cannot certify zero for an open modifier.
+  for(const modifiers of activeModifiers.values())
+   for(const scope of modifiers)scope.unclockedShield=true;
+  return;
+ }
  let set=shieldUnknownByFrame.get(frame);
  if(!set){set=new Set();shieldUnknownByFrame.set(frame,set);if(shieldUnknownByFrame.size>300)for(const old of shieldUnknownByFrame.keys())if(old<frame-300)shieldUnknownByFrame.delete(old);}
  set.add(target&&!target.isNull()?target.toString():'*');
@@ -1361,6 +1392,8 @@ function damageSettlement(scope,target,real,when,{nominal,shield,complete=false,
   const proof={method:scope.name};if(evidenceMethod)proof.evidence_method=evidenceMethod;
   const tokenHost=autoTokenHostEvidence(scope,when);
   if(tokenHost)proof.native_autochess_token_host=tokenHost;
+  const characterForm=autoCharacterFormEvidence(scope,when);
+  if(characterForm)proof.native_autochess_character_form=characterForm;
   if(scope.nestedParentSettlementProof)proof.nested_settlement=scope.nestedParentSettlementProof;
   if(!complete&&scope.settlementFailureReason)proof.settlement_unknown_reason=scope.settlementFailureReason;
   const event=record(scope.source,'damage_settlement',real===0?0:-real,when,proof,
@@ -2370,8 +2403,9 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       this.source=source.isNull()?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
      }catch(e){this.source=null;this.sourceReadFailed=true;}
-     // Token ownership needs matching scopes before and after settlement.
-     if(this.source?.startsWith('token_')&&this.sourceCharacterUid)stampEventScope(this.when);
+     // An independently observed source form or token host needs a same-scope return.
+     if(this.sourceCharacterUid&&this.source?.startsWith('token_'))stampEventScope(this.when);
+     if(this.sourceCharacterUid&&this.source==='char_002_amiya')beginAutoCharacterForm(this);
      try{this.amount=fp(this.mod.add(0x30));}catch(e){this.amount=null;}
      try{this.real=fp(this.mod.add(0x48));}catch(e){this.real=null;}
      this.modifierScope=damageModifier(this.tid,this.mod);
@@ -2431,8 +2465,9 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       this.source=this.nativeSourceNull?null:entityId(source);
       this.sourceCharacterUid=sourceCharacterUid(source,this.source);
     }catch(e){this.source=null;this.sourceReadFailed=true;}
-     // Token ownership needs matching scopes before and after settlement.
-     if(this.source?.startsWith('token_')&&this.sourceCharacterUid)stampEventScope(this.when);
+     // An independently observed source form or token host needs a same-scope return.
+     if(this.sourceCharacterUid&&this.source?.startsWith('token_'))stampEventScope(this.when);
+     if(this.sourceCharacterUid&&this.source==='char_002_amiya')beginAutoCharacterForm(this);
     if(enemyDamageReady&&this.sourceReadFailed)
      noteSettlementProofGap(this,this.when,'missing modifier source identity');
     if(enemyDamageReady&&this.nativeSourceNull){
@@ -2630,6 +2665,9 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       if(evidence&&evidence.real_delta===0&&evidence.hp_before===evidence.hp_after
          &&!evidence.settled_after_nested_kill
          &&(evidence.hp_before===0&&evidence.killed||evidence.cancel_reason===1||missed)){this.settlementNoConsumption=true;return;}
+      if(evidence.cancel_reason===3&&verifiedZeroCancellation(this,hit,end,amount)){
+       this.settlementNoConsumption=true;return;
+      }
       let reduction;
       try{
        reduction=mitigationEvidence(this,type,amount);

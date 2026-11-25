@@ -9,6 +9,7 @@ internal static class MetricCoverage
 {
     private static readonly (string Key,string Label)[] Metrics=
     {
+        ("observed_damage","已观察伤害"), ("observed_recent_damage","近 5 秒已观察伤害"),
         ("boss_damage","首领伤害"), ("recent_boss_damage","近 5 秒首领伤害"),
         ("effective_damage","有效伤害"), ("recent_effective_damage","近 5 秒有效伤害"),
         ("engagement_effective_damage","接敌有效 DPS"), ("engagement","接敌 DPS"),
@@ -26,6 +27,8 @@ internal static class MetricCoverage
     {
         var item=coverage.Get(metric);
         if(item.ValueKind!=JsonValueKind.Object) return "";
+        if(IsObservedDamage(metric))
+            return item.Text("reason") is { Length: > 0 } reason ? reason : "覆盖不完整";
         string basis=item.Text("basis");
         return string.Join(" · ",new[]{Share(item),basis.Length>0 ? "分母："+basis : "",item.Text("reason")}
             .Where(value=>value.Length>0));
@@ -34,14 +37,20 @@ internal static class MetricCoverage
     internal static string Summary(JsonElement coverage,bool shortForm=false)
     {
         var lines=Metrics.Where(metric=>IsPartial(coverage,metric.Key))
-            .Select(metric=>metric.Label+" "+(shortForm ? ShortShare(coverage.Get(metric.Key)) : Detail(coverage,metric.Key)));
+            .Select(metric=>metric.Label+" "+(shortForm && !IsObservedDamage(metric.Key)
+                ? ShortShare(coverage.Get(metric.Key)) : Detail(coverage,metric.Key)));
         string summary=string.Join(shortForm ? " · " : "\n",lines);
-        bool hitCoverage=HasHitCoverage(coverage);
-        return summary.Length>0 && shortForm ? (hitCoverage ? "部分统计 · " : "统计失败占比 · ")+summary : summary;
+        bool observationCoverage=HasHitCoverage(coverage) || HasObservedDamageCoverage(coverage);
+        return summary.Length>0 && shortForm ? (observationCoverage ? "部分统计 · " : "统计失败占比 · ")+summary : summary;
     }
 
     internal static bool HasHitCoverage(JsonElement coverage) =>
         Metrics.Any(metric=>coverage.Get(metric.Key).Text("basis_kind")=="hits");
+
+    internal static bool HasObservedDamageCoverage(JsonElement coverage) =>
+        IsPartial(coverage,"observed_damage") || IsPartial(coverage,"observed_recent_damage");
+
+    private static bool IsObservedDamage(string metric) => metric is "observed_damage" or "observed_recent_damage";
 
     private static string ShortShare(JsonElement item)=>item.Text("basis_kind")=="hits" ? Share(item) : Percentage(item);
 

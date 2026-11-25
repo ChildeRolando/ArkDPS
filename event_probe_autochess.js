@@ -380,6 +380,76 @@ function autoData(address,read){
  return {cid,data_uid,is_token:!!token,is_predefined:!!predefined,
   host_key:token&&!host.isNull()?read.text(host):null,host_uid:token?hostUid:null};
 }
+function captureAutoCharacterFormPoint(scope,when,stamp){
+ if(scope.source!=='char_002_amiya'||!scope.sourceCharacterUid)return;
+ const cache=nativeAutoCache,stage=nativeAutoStage;
+ if(!scope.mod||!scope.nativeModifierSource||!sourceCharacterClasses||!enemyEntryConfig||!cache||!stage?.enabled||
+    stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!['all','local'].includes(stamp.collection_mode)||
+    stamp.frame!==when.frame||stamp.game_time!==when.game_time)return;
+ try{
+  const fixed=clock.add(4).readS64().toString();
+  const sameScopeAndClock=()=>{
+   const current=currentNativeIdentity(),observed=nativeAutoScope;
+   return cache===nativeAutoCache&&stage===nativeAutoStage&&
+    observed?.roots===cache.roots&&observed.phase===stamp.phase&&observed.round===stamp.round&&
+    observed.headerKey===cache.headerKey&&observed.fingerprint===cache.fingerprint&&
+    stamp.scope_key===cache.roots+':autochess:'+nativeAutoEpoch&&
+    nativeAutoEffective?.scope_key===stamp.scope_key&&nativeAutoEffective.mode===stamp.collection_mode&&
+    !!current&&Object.keys(current).every(key=>current[key]===cache.identity[key])&&
+    stage.stageAddress.readPointer().equals(stage.stagePointer)&&
+    cache.addresses.phase.readS32()===stamp.phase&&cache.addresses.round.readS32()===stamp.round&&
+    clock.readU32()===when.frame&&clock.add(4).readS64().toString()===fixed;
+  };
+  // These optional reads must not update or invalidate the production scope cache.
+  if(Number(BigInt(fixed))/4294967296!==when.game_time||!sameScopeAndClock())return;
+  validateScopeStage(stage,cache.identity.level,stage.stagePointer);
+  validateScopeGuards(cache.scopeGuards);
+  const read=autoRead(),source=read.p(scope.mod);
+  if(source.isNull()||!scope.nativeModifierSource.equals(source))return;
+  const klass=read.p(source);
+  if(!isCharacterSourceClass(klass)||!enemyEntryConfig.assignable(enemyEntryConfig.bObject,klass))return;
+  const entity_cid=read.text(read.p(source.add(0x148))),instance_uid=read.u(source.add(0x18));
+  if(entity_cid!==scope.source||!instance_uid)return;
+  const data=read.p(source.add(0x538));
+  if(data.isNull())return;
+  const dataClass=read.p(data);
+  if(!dataClass.equals(sourceCharacterClasses.data))return;
+  const {cid:data_cid,data_uid,is_token,is_predefined}=autoData(data,read);
+  if(is_token||is_predefined||data_uid!==scope.sourceCharacterUid||data_cid===entity_cid||
+     !/^char_[A-Za-z0-9_#.-]{1,123}$/.test(data_cid))return;
+  validateScopeGuards(cache.scopeGuards);
+  validateScopeStage(stage,cache.identity.level,stage.stagePointer);
+  if(!sameScopeAndClock())return;
+  read.validate();
+  if(sameScopeAndClock())return {source,klass,data,dataClass,entity_cid,data_cid,data_uid,instance_uid};
+ }catch(e){/* Keep the original identity when a different character form cannot be proved. */}
+}
+function beginAutoCharacterForm(scope){
+ const cached=nativeAutoScope,effective=nativeAutoEffective,when=scope.when;
+ if(!cached||!effective)return;
+ const stamp={protocol_version:1,status:'available',verified_same_frame:true,frame:when.frame,
+  game_time:when.game_time,scope_key:effective.scope_key,phase:cached.phase,round:cached.round,
+  collection_mode:effective.mode};
+ const identity=captureAutoCharacterFormPoint(scope,when,stamp);
+ if(identity)scope.characterFormEntry={identity,stamp};
+}
+function autoCharacterFormEvidence(scope,when){
+ const witness=scope.characterFormEntry,stamp=when.native_autochess_scope;
+ if(!witness||!sameMitigationTime(scope.when,when)||
+    !sameNativeEventScope({native_autochess_scope:witness.stamp},when)||
+    stamp?.collection_mode!==witness.stamp.collection_mode)return;
+ const entry=witness.identity;
+ const owner=scope.tracksModifier?scope:scope.modifierScope??null;
+ if(scope.mitigationModifierReused||owner?.mitigationModifierReused||
+    damageModifier(scope.tid,scope.mod)!==owner)return;
+ const closing=captureAutoCharacterFormPoint(scope,when,stamp);
+ if(!closing||!['source','klass','data','dataClass'].every(key=>entry[key].equals(closing[key]))||
+    !['entity_cid','data_cid','data_uid','instance_uid'].every(key=>entry[key]===closing[key])||
+    damageModifier(scope.tid,scope.mod)!==owner)return;
+ const {entity_cid,data_cid,data_uid,instance_uid}=closing;
+ const {frame,game_time,scope_key,phase,round,collection_mode}=stamp;
+ return {version:1,entity_cid,data_cid,data_uid,instance_uid,frame,game_time,scope_key,phase,round,collection_mode};
+}
 function autoTokenHostEvidence(scope,when){
  // A short-lived token can disappear before the next membership sample.
  const stamp=when.native_autochess_scope,entry=scope.when,cache=nativeAutoCache;

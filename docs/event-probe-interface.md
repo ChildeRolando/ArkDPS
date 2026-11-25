@@ -33,6 +33,10 @@ PC 的当次 `native_window_guard` 与 MuMu 原 `guard` 不互相冒充；验证
 
 `BasicSkill.OnCastFinish` 的 `skill_end` 记录表示原始施放回调，并不宣称效果结束。该补充记录必须带字面的 `skill_wait_for_end: bool`、原生 Int32 `skill_reason`、技能键及已确认角色 UID。布尔值来自经过方法签名、字段类型、receiver/owner/当前技能、身份和 Q32 时钟复核的原生 `m_waitForSkillEnd`；不能由弹药剩余数或安装能力推算。公共技能转换函数只更新该 actor 的施放状态，实际效果结束继续由既有 `Character.OnSkillFinish` 等可靠事件提供。没有新字段的旧记录保留旧保护；false 不是结束证明，true 也不能补出遗漏的开始或结束。此补充状态不承担累计伤害来源注册。
 
+卫戍的部分原生回调里，`Entity.id` 与当前 `Character.data.prefabKey` 可能是不同的角色形态键。普通 CID+data UID 精确匹配保持优先。针对 raw `char_002_amiya` 的权威结算和元素条，生产端可提供可选 `proof.native_autochess_character_form`：`version=1`、`entity_cid`、`data_cid`、`data_uid`、`instance_uid`、`frame`、`game_time`、`scope_key`、`phase`、`round`、`collection_mode`。
+
+该证明必须来自同一原生 Character 和其经过元数据验证的 BattleCharacterData，开合复核实体 CID、prefabKey、data UID、实例、对象/数据指针及精确时钟、scope。普通来源不增加形态读取；失败省略证明而不猜角色。消费者只在 `damage_settlement` / `elemental_bar` 中接受严格的完整字段，要求原事件来源和 UID、事件 stamp 的帧/时钟/scope/mode 全部一致，再由当前同 scope 名单精确核实 data CID 与 UID 的普通干员。不能缓存别名、仅凭 UID 覆盖 CID 冲突、从旧样本补写证据，或把同名另一个实例当作该来源。原始 source、proof 和重放收据保留；只在已验证的归约入口使用限定后的来源键。
+
 普通扣血证书可由唯一目标受击回调的 HP 前值，与同一 `ApplyModifier` 结束时的真实有符号扣血和最终 HP 联合证明；不能假定目标回调返回时已经扣血。来源、目标、UID、借用的 Modifier、类型和游戏时钟必须持续匹配，HP 差必须与实际扣血一致。嵌套元素击杀另需子进入前已发生的父原生 `realDelta` 与 HP 检查点、同目标的独立子击杀证书，以及父返回时的数值/身份复核；父、子各计自己的实际分量。缺少这些独立证据的嵌套、引用复用、歧义和身份变化不能认证。拒绝证明时必须留下未验证记录或明确质量失败，不能静默漏掉后再认证空的完整零值。
 
 入口和目标回调返回时的量值只是阶段观测，不能要求它们与最终结算量相等。游戏监听器可在目标回调之前、期间或之后修改来伤；证书核对实际读取的最终 `m_value`、最终 `realDelta`、HP 差和同次已证吸收量，最终名义量必须覆盖实际扣血与吸收。允许证据一致的增幅、衰减、非致死封顶和致死过量，不按某个倍率推算或补字段。

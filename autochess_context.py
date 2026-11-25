@@ -388,6 +388,43 @@ def lookup_native_actor(context, *, cid, data_uid):
 
 _TOKEN_HOST_FIELDS = ('host_key', 'host_uid', 'player_side')
 _INACTIVE_TOKEN = 'token lifecycle unavailable or inactive'
+_FORM_ENTITY_CID = 'char_002_amiya'
+_FORM_FIELDS = {'version', 'entity_cid', 'data_cid', 'data_uid', 'instance_uid',
+                'frame', 'game_time', 'scope_key', 'phase', 'round', 'collection_mode'}
+
+
+def _native_character_form_member(context, event, data_uid):
+    """Use the source's separately observed CharacterData key for this event."""
+    if event.get('kind') not in ('damage_settlement', 'elemental_bar') or not isinstance(context, dict):
+        return None
+    proof = event.get('proof')
+    form = proof.get('native_autochess_character_form') if isinstance(proof, dict) else None
+    if not isinstance(form, dict) or form.keys() != _FORM_FIELDS:
+        return None
+    cid = form['data_cid']
+    frame, when = event.get('frame'), event.get('game_time')
+    if (type(form['version']) is not int or form['version'] != 1
+            or form['entity_cid'] != _FORM_ENTITY_CID
+            or not _cid(cid) or not cid.startswith('char_') or cid == _FORM_ENTITY_CID
+            or not _integer(data_uid, 1, (1 << 32) - 1)
+            or not _integer(form['data_uid'], 1, (1 << 32) - 1) or form['data_uid'] != data_uid
+            or not _integer(form['instance_uid'], 1, (1 << 32) - 1)
+            or type(frame) is not int or not _integer(form['frame'], 0, (1 << 32) - 1) or form['frame'] != frame
+            or not _time(when) or not _time(form['game_time']) or form['game_time'] != when
+            or not _scope(form['scope_key']) or not _integer(form['phase'], 4, 6)
+            or not _integer(form['round'], 0, (1 << 31) - 1)):
+        return None
+    scope_fields = ('scope_key', 'phase', 'round')
+    identity = {key: form[key] for key in scope_fields}
+    if (native_autochess_event_identity(event) != tuple(identity.values())
+            or context.get('identity') != identity):
+        return None
+    mode = form['collection_mode']
+    if (mode not in ('local', 'all') or mode != context.get('collection_mode')
+            or mode != event['native_autochess_scope'].get('collection_mode')):
+        return None
+    member = lookup_native_actor(context, cid=cid, data_uid=data_uid)
+    return member if member is not None and not (member['is_token'] or member['is_predefined']) else None
 
 
 def _token_claim_conflicts(context, cid, data_uid):
@@ -400,7 +437,7 @@ def _token_claim_conflicts(context, cid, data_uid):
 
 
 def resolve_native_event_member(context, event, previous=None):
-    """Resolve a guarded event against live or event-time token evidence.
+    """Resolve a guarded event against live membership and source evidence.
 
     Callers pass only consecutive accepted contexts from the same source.
     An earlier member can cover the interval immediately following that
@@ -408,6 +445,8 @@ def resolve_native_event_member(context, event, previous=None):
     """
     cid, data_uid = event.get('source'), event.get('source_character_uid')
     member = lookup_native_actor(context, cid=cid, data_uid=data_uid)
+    if member is None and cid == _FORM_ENTITY_CID:
+        return _native_character_form_member(context, event, data_uid)
     if not isinstance(cid, str) or not cid.startswith('token_'):
         return member
     if (not isinstance(context, dict) or not isinstance(context.get('identity'), dict)

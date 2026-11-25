@@ -1020,3 +1020,18 @@ def test_skill_coverage_reports_observed_opening_hits_even_after_archive_gap():
             assert (item['unverified_hits'], item['observed_hits'], item['skill_initial_unknown_hits']) == (1, 4, 1)
             assert item['failed_share'] == (.25 if live else None)
         assert lane['unverified_hits'] == 0 and lane['observed_skill_damage'] == 200
+
+
+def test_missing_terminal_does_not_claim_recorded_paired_hits_lack_formula_evidence():
+    from damage_settlement import DamageSettlement
+    meter = DamageSettlement()
+    meter.hit(1, 100, 0, 'physical', True, False, 100, 200, 100, overkill=0)
+    lane = meter.result(0, 2, 1, stream_complete=False, live=False)
+    assert lane['mitigation_matched_hits'] == lane['observed_hits'] == 1
+    assert lane['unverified_hits'] == 0 and lane['mitigation_complete'] is False
+    assert lane['mitigation_unverified_share'] is None
+    assert lane['mitigation_reason'] == '已记录命中的公式前后值均已配对，整局事件覆盖未确认'
+    meter.hit(2, 100, 0, 'physical', True, False, 100, None, None, overkill=0)
+    lane = meter.result(0, 3, 2, stream_complete=False, live=False)
+    assert lane['mitigation_matched_hits'] == 1 and lane['observed_hits'] == 2
+    assert lane['mitigation_reason'] == '部分命中缺少同一次结算的公式前后值或归属'

@@ -659,7 +659,8 @@ public partial class StatisticPanel : UserControl
         if(partial.Length>0)
         {
             bool hitCoverage=partial.Any(entry=>MetricCoverage.HasHitCoverage(entry.Get("coverage")));
-            string detail=hitCoverage ? "命中核实情况" : "统计失败占比";
+            bool observedCoverage=partial.Any(entry=>MetricCoverage.HasObservedDamageCoverage(entry.Get("coverage")));
+            string detail=hitCoverage ? "命中核实情况" : observedCoverage ? "覆盖范围" : "统计失败占比";
             string marker=IsHud ? "* 部分统计" : "* 部分统计 · 查看"+detail;
             string hint="悬浮在带 * 的排行行上，查看各项的"+detail+"与统计口径。";
             if(IsHud)

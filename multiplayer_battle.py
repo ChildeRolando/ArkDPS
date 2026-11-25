@@ -49,10 +49,11 @@ class _Player:
     observed_presence: dict = field(default_factory=dict)
     observed_skill_time: dict = field(default_factory=dict)
     skill_timed_presence: dict = field(default_factory=dict)
-    unknown_skill_prefix: set = field(default_factory=set)
+    unknown_skill_prefix: dict = field(default_factory=dict)
 
-    def mark_unknown_skill_prefix(self, owner, actor):
-        self.unknown_skill_prefix.add(owner)
+    def mark_unknown_skill_prefix(self, owner, actor, *reasons):
+        # This annotates the existing uncertainty; it never certifies a state.
+        self.unknown_skill_prefix.setdefault(owner, set()).update(reasons)
         self.statistics.mark_settlement_skill_initial_unknown(owner, actor)
 
 
@@ -87,6 +88,7 @@ class MultiplayerBattleStatistics:
         self._retired_identities = set()
         self._scope = None
         self._from_start = False
+        self._skill_initialization = None
         self._sample_session = self._native_session = None
         self._settlement_version = None
         self._native_mode = False
@@ -182,6 +184,7 @@ class MultiplayerBattleStatistics:
         self._start = self._now = sample['game_time']
         self._frame = sample['frame']
         self._from_start = self._start <= 1 and self._frame <= 30
+        self._skill_initialization = None
         self._sample_session = sample.get('session')
         self._native_session = sample.get('native_session')
         self._players = {}
@@ -284,7 +287,7 @@ class MultiplayerBattleStatistics:
                 player = self._players[uid]
                 owner = self._source_key(entry, uid)
                 if owner not in player.actors and self._baseline is not None:
-                    player.mark_unknown_skill_prefix(owner, entry.unique_id)
+                    player.mark_unknown_skill_prefix(owner, entry.unique_id, 'actor_joined_after_baseline')
                 player.actors[owner] = entry
                 player.statistics.register_source(owner, owner)
         self._native_entries = entries
@@ -326,20 +329,28 @@ class MultiplayerBattleStatistics:
         return 'event_scope_mismatch'
 
     @staticmethod
-    def _native_initial_point(sample):
+    def _native_initial_rejections(sample):
+        reasons = []
         if 'native_snapshot_witnesses' in sample:
             witnesses = sample['native_snapshot_witnesses']
             actor_rows = witnesses.get('actor_rows') if isinstance(witnesses, dict) else None
             if not isinstance(actor_rows, dict) or actor_rows.get('status') != 'available':
-                return False
+                reasons.append('native_actor_rows_unavailable')
+        if sample['frame'] != 0 or sample['game_time'] != 0:
+            reasons.append('baseline_not_zero_tick')
         rows = sample.get('rows')
-        return (sample['frame'] == 0 and sample['game_time'] == 0
-                and _number(sample.get('global_total')) and sample['global_total'] == 0
+        if not (_number(sample.get('global_total')) and sample['global_total'] == 0
                 and _number(sample.get('global_heal')) and sample['global_heal'] == 0
                 and isinstance(rows, (list, tuple))
                 and all(isinstance(row, dict) and _number(row.get('damage'))
                         and _number(row.get('healing')) and row['damage'] == row['healing'] == 0
-                        for row in rows))
+                        for row in rows)):
+            reasons.append('native_counters_not_zero_or_unavailable')
+        return reasons
+
+    @staticmethod
+    def _native_initial_point(sample):
+        return not MultiplayerBattleStatistics._native_initial_rejections(sample)
 
     @staticmethod
     def _same_native_roots(left, right):
@@ -357,10 +368,21 @@ class MultiplayerBattleStatistics:
         complete = (drained.get('baseline_discarded_skill_events_complete') is True
                     and isinstance(discarded, list) and len(discarded) <= MAX_BASELINE_SKILL_EVENTS
                     and isinstance(retained, list) and len(retained) <= MAX_BASELINE_SKILL_EVENTS)
-        if not self._native_initial_point(sample) or not complete:
+        rejections = self._native_initial_rejections(sample)
+        if not complete:
+            rejections.append('skill_prefix_incomplete')
+        witnesses = sample.get('native_snapshot_witnesses')
+        actor_rows = witnesses.get('actor_rows') if isinstance(witnesses, dict) else None
+        self._skill_initialization = dict(frame=sample['frame'], game_time=sample['game_time'],
+            sequence=self._baseline, reason_codes=list(rejections), prefix_complete=complete,
+            actor_rows_status=(actor_rows.get('status') if isinstance(actor_rows, dict)
+                and actor_rows.get('status') in ('available', 'unavailable', 'not_requested') else None),
+            native_damage=sample.get('global_total') if _number(sample.get('global_total')) else None,
+            native_healing=sample.get('global_heal') if _number(sample.get('global_heal')) else None)
+        if rejections:
             for player in self._players.values():
                 for owner, entry in player.actors.items():
-                    player.mark_unknown_skill_prefix(owner, entry.unique_id)
+                    player.mark_unknown_skill_prefix(owner, entry.unique_id, *rejections)
             if not complete:
                 self._reasons.add('初始技能事件前缀证据不完整')
         # These records are uncertainty witnesses only. They do not open a
@@ -409,7 +431,7 @@ class MultiplayerBattleStatistics:
                 if uid not in self._players:
                     continue
                 self._players[uid].mark_unknown_skill_prefix(
-                    self._source_key(entry, uid), entry.unique_id)
+                    self._source_key(entry, uid), entry.unique_id, 'discarded_skill_start')
 
     @staticmethod
     def _scope_target(event):
@@ -972,6 +994,14 @@ class MultiplayerBattleStatistics:
             row.update(id=owner, cid=entry.cid, unique_id=entry.unique_id,
                        name=name)
             lane = row.get('settled_damage', {})
+            initial_reasons = player.unknown_skill_prefix.get(owner)
+            if initial_reasons:
+                # Historical unknown hits remain unknown after future state
+                # recovery. Explain the original gate without changing counts.
+                lane['skill_initial_unknown_reason_codes'] = sorted(initial_reasons)
+                if (lane.get('skill_initial_unknown_hits', 0) > 0
+                        and not lane.get('skill_split_reason')):
+                    lane['skill_split_reason'] = '部分命中的采集起点技能状态未确认'
             row['observed_damage'] = lane.get('observed_damage')
             if self._native_mode and (owner in player.unknown_skill_prefix
                     or owner in player.statistics.settlement_skill_unassigned):
@@ -1020,6 +1050,7 @@ class MultiplayerBattleStatistics:
             coverage_complete=bool(complete), reasons=sorted(reasons),
             statistics=stats, actor_ledgers=ledgers)
         if self._native_mode:
+            result['skill_initialization'] = deepcopy(self._skill_initialization)
             sides = {entry.player_side for uid, entry in self._native_entries.values() if uid == side}
             result.update(slot=player.slot, player_uid=side, player_name=player.player_name,
                 player_side=next(iter(sides)) if len(sides) == 1 else None,

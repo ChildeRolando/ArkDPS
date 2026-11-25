@@ -937,7 +937,9 @@ class Statistics:
         return window is not None and 'skchr_angel2_3' in (window['key'], window['id'])
 
     @staticmethod
-    def _validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id):
+    def _validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id, frame=None):
+        if frame is not None and (type(frame) is not int or frame < 0):
+            raise ValueError('invalid skill frame')
         if method == 'BasicSkill.OnCastFinish':
             if (kind != 'skill_end' or type(wait_for_end) is not bool
                     or type(reason) is not int or not -(1 << 31) <= reason < (1 << 31)
@@ -950,9 +952,10 @@ class Statistics:
     def _native_cast_window_matches(window, source, key, skill_id, actor):
         if window is None or source != window['source'] or actor != window.get('actor'):
             return False
-        identity = {key, skill_id} - {None}
-        active_identity = {window['key'], window['id']} - {None}
-        return bool(identity and active_identity and not active_identity.isdisjoint(identity))
+        identity = {value for value in (key, skill_id) if isinstance(value, str) and value}
+        active_identity = {value for value in (window['key'], window['id'])
+                           if isinstance(value, str) and value}
+        return not active_identity.isdisjoint(identity)
 
     @classmethod
     def _unconfirmed_skill_reason(cls, window, *, live=False):
@@ -989,14 +992,14 @@ class Statistics:
             self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
 
     def _record_skill_transition(self, owner, source, kind, game_time, *,
-                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None):
+                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None, frame=None):
         self._apply_skill_transition(
             self.skill_active, owner, source, kind, game_time, key=key, skill_id=skill_id,
             name=name, method=method, reason=reason, wait_for_end=wait_for_end,
-            close=self._close_skill_window, actor=actor)
+            close=self._close_skill_window, actor=actor, frame=frame)
 
     def record_settlement_skill(self, owner, actor, source, kind, game_time, *,
-                                key, skill_id, name, method, reason, wait_for_end=None):
+                                key, skill_id, name, method, reason, wait_for_end=None, frame=None):
         def close(identity, _time, _reason, *, confirmed):
             window = self.settlement_skill_active.pop(identity)
             if (not confirmed and identity not in self.settlement_skill_initial_pending
@@ -1008,7 +1011,7 @@ class Statistics:
         effect_started = self._apply_skill_transition(
             self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
-            wait_for_end=wait_for_end, close=close, actor=actor)
+            wait_for_end=wait_for_end, close=close, actor=actor, frame=frame)
         if effect_started:
             # Earlier unclassified hits stay in the damage ledger's denominator.
             self.settlement_skill_initial_pending.discard(identity)
@@ -1057,8 +1060,9 @@ class Statistics:
         self.settlement_skill_unassigned.add(owner)
 
     def _apply_skill_transition(self, active, identity_key, source, kind, game_time, *,
-                                key, skill_id, name, method, reason, close, wait_for_end=None, actor=None):
-        self._validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id)
+                                key, skill_id, name, method, reason, close,
+                                wait_for_end=None, actor=None, frame=None):
+        self._validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id, frame)
         window = active.get(identity_key)
         identity = {key, skill_id} - {None}
         active_identity = {window['key'], window['id']} - {None} if window is not None else set()
@@ -1097,13 +1101,23 @@ class Statistics:
         if method == 'BasicSkill.OnCastFinish':
             # This native return observes cast state, never an effect endpoint.
             window.setdefault('cast_completed_at', game_time)
+            window['native_cast_return_at'] = game_time
+            window['native_cast_return_frame'] = frame
             window['native_wait_for_skill_end'] = wait_for_end
             return
-        if method == 'Character.OnAfterSkill' and type(reason) is int and reason == 1:
+        if method == 'Character.OnAfterSkill' and type(reason) is int:
             # Ability.FinishReason.INTERRUPTED can end the cast action while
             # the skill's damage effect is still active.
-            window.setdefault('cast_completed_at', game_time)
-            return
+            # A normal return can also report the same cast completion when
+            # the same actor and skill just confirmed that its effect remains.
+            if reason == 1 or (reason == 0 and window['effect_started']
+                    and type(actor) is int and actor > 0
+                    and frame is not None and window.get('native_cast_return_frame') == frame
+                    and window.get('native_cast_return_at') == game_time
+                    and window.get('native_wait_for_skill_end') is True
+                    and self._native_cast_window_matches(window, source, key, skill_id, actor)):
+                window.setdefault('cast_completed_at', game_time)
+                return
         if method == 'BattleController.OnCharacterFinished' and reason == 11:
             # Entity.FinishReason.MOVE_LIKE_RESPAWN_SELF reports both Ulpian
             # S3's outward move on the cast-completion frame and his return.
@@ -1389,7 +1403,8 @@ class Statistics:
               killed=None, target_type=None, damage_type=None,
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
-              verified_skill_end_owner=None, skill_method=None, skill_wait_for_end=None, skill_actor=None,
+              verified_skill_end_owner=None, skill_method=None, skill_wait_for_end=None,
+              skill_actor=None, skill_frame=None,
               mitigation_before=None, mitigation_after=None, settled_after_nested_kill=False):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
@@ -1415,7 +1430,7 @@ class Statistics:
         if not event_id or kind not in kinds:
             raise ValueError('invalid event identity or kind')
         self._validate_skill_cast_state(kind, skill_method or target_instance, skill_reason,
-                                        skill_wait_for_end, skill_key, skill_id)
+                                        skill_wait_for_end, skill_key, skill_id, skill_frame)
         owner = self.owners.get(source)
         if kind == 'skill_end' and owner is None:
             owner = verified_skill_end_owner
@@ -1440,6 +1455,8 @@ class Statistics:
         payload = (game_time, source, kind, amount, evidence, target_instance, owner,
                    skill_key, skill_id, skill_name, skill_reason, skill_method, skill_wait_for_end, skill_actor,
                    mitigation_before, mitigation_after, settled_after_nested_kill)
+        if skill_frame is not None:
+            payload += (skill_frame,)
         if event_id in self.events:
             if self.events[event_id] != payload:
                 raise ValueError('conflicting event ID')
@@ -1534,7 +1551,7 @@ class Statistics:
             self._record_skill_transition(
                 owner, source, kind, game_time, key=skill_key, skill_id=skill_id,
                 name=skill_name, method=skill_method or target_instance, reason=skill_reason,
-                wait_for_end=skill_wait_for_end, actor=skill_actor)
+                wait_for_end=skill_wait_for_end, actor=skill_actor, frame=skill_frame)
             return
         if kind == 'hp_damage':
             friendly = (isinstance(target, str)
