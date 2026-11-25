@@ -2,7 +2,7 @@
 
 日期：2026-11-26。规划基线为 `066bcb9a184d8c9fb3222560973511c620dc44d3`，生产基线为 `667bb2e320c76ad60f64b02a5a5e6a4a4b6b2b86`。实施分支为 `codex/collection-refactor`。本记录对应[重构规划](collection-refactor-plan.md)的 D01–D26；代码、离线验证、实机验收分开登记。
 
-状态：代码收尾中，最终门禁和私测包回执待补齐。没有发布正式版、合并 main 或操作正在运行的游戏。
+状态：D01–D26 代码收敛及本机离线门禁完成。本次交付为私测 `1.0.0-rc.2026112613`；包与桌面副本的源提交、SHA 和实际路径见 `runtime/refactor-evidence/package-delivery.json`。没有发布正式版、合并 main 或操作正在运行的游戏，实机性能验收尚未完成。
 
 ## 已改变的运行路径
 
@@ -39,7 +39,7 @@
 | D21 | `DesktopState` 按发布 revision/scope/配置复用规范化结果；同帧修订使缓存失效。采样、IPC、FPS 年龄每次按原时刻更新，FIFO 趋势中间点保留。 |
 | D22 | wire 只保留 `details_by_owner`；删除 `entries[].detail`。Python 的兼容属性只指向同一个对象，不再序列化第二份。 |
 | D23 | `view.source` 收窄为界面确实使用的字段；导出和历史证据不随 UI DTO 裁剪。 |
-| D24 | 收尾项：旧战绩解释集中到 `BattleRecord`；原始 payload 与经过验证的读取视图分离。最终提交与专项见门禁回执。 |
+| D24 | 旧战绩解释集中到 `BattleRecord.normalized_statistics`，分享仅委派；原始 payload 与经过验证的读取视图分离，同 record 只解释一次。 |
 | D25 | 删除无生产消费者的 `metrics.Meter`；保留独立 `observation_age`。 |
 | D26 | 删除无活动消费者的 `battle_share.record_view`、`panel_model.render_board`，测试转向实际生产入口。 |
 
@@ -59,9 +59,19 @@ pending 与普通提交都绑定 observer 的 `_cursor_lifetime`。同一对象�
 
 旧 raw 输入不补不存在的 HP、UID 或原生实例，不升级完整性。旧证书和旧配对记录仍在读取边界严格校验。历史回放比较只对已经版本化的诊断原因做对应转换；金额、身份、序号、窗口和原字段存在性保持严格检查。旧 fixture 和实际战绩字节不改写。
 
+`BattleRecord.to_dict` 和导出保留原输入的缺失、null、零、旧 policies 及未知字段；默认值只用于验证和解释。五种冻结场景的 full/panel 结果逐字段相同，同 record 五读的解释次数由5降到1。私有读取视图只复制需要添加默认的容器，公开返回值独立深拷贝。History 的128条/64MiB上限指编码 raw 缓存载荷，不包括活跃 record 和调用方副本的额外内存。
+
 ## 验证记录
 
-最终 Python 与包级回执尚待本节补齐。已执行的阶段专项、原失败及修复后的结果均保存于 `runtime/refactor-evidence/`，各子代理的原始结果和复制 SHA 清单在 `agents/` 与 `final-agents/`。
+生产源码与测试在 `06e9a45c557fa32a377b6860fe27f4813191b499` 冻结。其后只有本文档收口；`tested-source.json` 和 `tested-source-verification.json` 核验492份源文件没有改变。阶段专项、原失败及修复后的结果均保存于 `runtime/refactor-evidence/`，各子代理的原始结果和复制 SHA 清单在 `agents/` 与 `final-agents/`。
+
+| 门禁 | 实际结果与回执 |
+| --- | --- |
+| CI 同范围 Python 完整回归 | `python -m pytest tests -q --assert=plain`：6139通过、22跳过，0失败；128.71秒。`ci-scope-final.log/xml`。 |
+| 跳过原因 | 21项可选 controlled/internal C++ host 未构建；1项本地账号无符号链接权限。未提权或伪装通过。`final-regression-summary.json`。 |
+| WPF Debug 与 Release 构建 | 均0警告、0错误；`wpf-*-final.log`。 |
+| WPF Debug 与 Release 无输入检查 | 全部通过，含同份 Python golden 的57项 Inspector 断言、37组验收标记组合；`wpf-*-headless-final.log`。 |
+| 包与交付 | 构建器验证嵌入式 Python、离线 worker 启动及干净解压；独立脚本逐文件核验 ZIP 和桌面副本。实际摘要、源提交与路径记录于 `package-delivery.json`，原始构建日志为 `package-test13.log`。 |
 
 第一轮全量发现4项失败，其中3项对应删除的 UI/source 契约，1项为旧回放的 partial 诊断版本比较；修复后相关152项通过，且增加6个金额/身份等篡改反例。后一次无目录参数的 pytest 额外收集了 runtime 中用于证明旧缺陷的历史脚本，得到6133通过、22跳过、1失败；没有修改该脚本或原证据。正式门禁沿用 CI 的 `python -m pytest tests -q --assert=plain`。
 
@@ -82,4 +92,4 @@ WPF 只执行构建与无输入契约检查，未调用会移动鼠标的 `verif
 
 沿用现有 AGENTS、ADR、Statistics/EventProbe/BattleSessions/panel_model 边界，没有新增服务、第二 worker、通用事件总线或规则注册中心。不同职责的独立校验保留；旧 Tk 封存区没有修改。各阶段独立提交，回滚采用前一个完整匹配包，不通过静默换后端或切回另一套金额路径恢复。
 
-最终包将来自干净的已提交候选，记录源提交、逐文件 SHA、ZIP 摘要、Python/WPF 协议及原生源码清单；提供私测包，不冒充正式发布或实机验收完成。
+私测包来自干净的已提交候选，记录源提交、逐文件 SHA、ZIP 摘要、Python/WPF 协议及原生源码清单；提供私测包，不冒充正式发布或实机验收完成。
