@@ -1512,7 +1512,7 @@ def test_single_certificate_f32_uses_native_modifier_observation_and_preserves_r
     for event in events:
         observed = event['amount']
         event.update(kind='damage_settlement', amount=0, nominal_amount=400,
-            proof={'native_modifier_observation': {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': observed}})
+            proof={'settlement_wire_version': 2, 'native_modifier_observation': {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': observed}})
     frozen = deepcopy(events)
     result = module.check_native_f32_counters(events, publications, reader_profile=profile)
     assert result['exact'] and result['applied_event_count'] == 2
@@ -1527,10 +1527,10 @@ def test_single_certificate_f32_refuses_missing_or_malformed_native_modifier_obs
     events, publications = f32_model_window()
     for event in events:
         event.update(kind='damage_settlement', nominal_amount=event['amount'],
-            proof={'native_modifier_observation': {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': event['amount']}})
+            proof={'settlement_wire_version': 2, 'native_modifier_observation': {'version': 1, 'method': 'Entity.ApplyModifier', 'amount': event['amount']}})
     witness = events[0]['proof']['native_modifier_observation']
     if fault == 'absent':
-        events[0]['proof'].clear()
+        events[0]['proof'].pop('native_modifier_observation')
     elif fault == 'amount_absent':
         witness.pop('amount')
     elif fault in ('nan', 'negative'):
@@ -1550,7 +1550,7 @@ def test_single_certificate_full_shield_keeps_zero_native_observation_distinct_f
     for index, event in enumerate(events):
         amount = 0 if index == 0 else 10
         event.update(kind='damage_settlement', amount=0, nominal_amount=40,
-            shield_absorbed=40, proof={'native_modifier_observation': {
+            shield_absorbed=40, proof={'settlement_wire_version': 2, 'native_modifier_observation': {
                 'version': 1, 'method': 'Entity.ApplyModifier', 'amount': amount}})
     publications[1]['native_rows'][0].update(physical=0, damage=0)
     publications[2]['native_rows'][0].update(physical=10, damage=10)
@@ -1568,3 +1568,19 @@ def test_dual_wire_f32_prefers_legacy_counter_record_without_double_counting_cer
     publications[-1].update(frame=3, game_time=3, event_watermark={'sequence': 3})
     result = module.check_native_f32_counters(events, publications)
     assert result['applied_event_count'] == 2 and result['final_sequence'] == 3
+
+
+def test_f32_mixed_v2_enemy_certificate_and_outside_legacy_observation_keep_distinct_counter_events():
+    events, publications = f32_model_window()
+    events[0].update(kind='damage_settlement', amount=0, nominal_amount=40,
+        proof={'settlement_wire_version': 2, 'native_modifier_observation': {
+            'version': 1, 'method': 'Entity.ApplyModifier', 'amount': .1}})
+    events[1].update(damage_type=2, target='trap_outside')
+    publications[-1]['native_rows'][0].update(physical=publications[1]['native_rows'][0]['physical'],
+        arts=module.struct.unpack('<f', module.struct.pack('<f', .2))[0])
+    row = publications[-1]['native_rows'][0]
+    row['damage'] = row['physical'] + row['arts']
+    result = module.check_native_f32_counters(events, publications)
+    assert result['exact'] and result['applied_event_count'] == 2
+    assert result['final_typed_values']['char_a']['physical'] == row['physical']
+    assert result['final_typed_values']['char_a']['arts'] == row['arts']

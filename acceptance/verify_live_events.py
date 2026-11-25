@@ -29,11 +29,11 @@ def outgoing_counter_event(event):
 
 def native_counter_observations(events):
     """Yield original counter witnesses; never synthesize old wire records."""
-    single = _single_settlement_wire(events)
+    _single_settlement_wire(events)  # Validate one producer certificate format.
     for event in events:
         kind = event.get('kind')
         amount = event.get('amount')
-        if single and kind == 'damage_settlement' and event.get('source') is not None:
+        if kind == 'damage_settlement' and _single_settlement_event(event) and event.get('source') is not None:
             target = event.get('target')
             if isinstance(target, str) and target.startswith(('char_', 'token_')):
                 continue
@@ -51,11 +51,11 @@ def native_counter_observations(events):
             if 'damage_type' in event and event['damage_type'] != 4:
                 raise ValueError('PC f32 healing event has a conflicting native type')
             field = 'healing'
-        elif not single and kind == 'elemental_burst' and event.get('source') is not None:
+        elif kind == 'elemental_burst' and event.get('source') is not None:
             if type(event.get('damage_type')) is not int or event['damage_type'] != 5:
                 raise ValueError('explicitly sourced PC burst has no elemental native counter type')
             field = 'elemental'
-        elif not single and kind == 'damage' and outgoing_counter_event(event):
+        elif kind == 'damage' and outgoing_counter_event(event):
             dtype = event.get('damage_type')
             if type(dtype) is not int or dtype not in (1, 2, 3, 5):
                 raise ValueError('PC f32 damage event has no known native type')
@@ -1486,7 +1486,7 @@ def verify(directory, *, source_owners=(), require_partial=False, require_zero=F
                 eid=eid, frame=event['frame'], game_time=event['game_time'],
                 phase_total_hp=total, phase_count=count, phase_from_birth=from_birth)
             continue
-        if single_wire and kind == 'damage_settlement' and source is not None:
+        if kind == 'damage_settlement' and _single_settlement_event(event) and source is not None:
             nominal = event.get('nominal_amount')
             if type(nominal) not in (int, float) or not math.isfinite(nominal) or nominal < 0:
                 raise ValueError('single-wire nominal observation is missing')
