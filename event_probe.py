@@ -75,6 +75,88 @@ class ObserverReadRetry(RuntimeError):
     """An available probe needs another guarded read without advancing a cursor."""
 
 
+def reset_probe_cursor(probe):
+    """Begin a new observer stream lifetime, never a new battle mark.
+
+    A delayed ACK from the previous script must not mutate these cursors.
+    Battle resets keep the producer sequence and do not call this function.
+    """
+    probe._committed_sequence = probe._acknowledged_sequence = 0
+    probe._ack_error = None
+    probe._cursor_lifetime = object()
+
+
+def acknowledgement_matches(reply, sequence, *, exact_fields=False):
+    """Interpret the common ACK value without weakening a transport envelope."""
+    return (isinstance(reply, dict) and not reply.get('error')
+            and type(reply.get('acknowledged')) is int
+            and reply['acknowledged'] == sequence
+            and (not exact_fields or set(reply) == {'acknowledged'}))
+
+
+def reject_message_constant(value):
+    raise ValueError(f'non-JSON numeric constant {value}')
+
+
+def finite_message_number(value):
+    number = float(value)
+    if not isfinite(number):
+        raise ValueError('non-finite JSON number')
+    return number
+
+
+def unique_message_fields(pairs):
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError('duplicate JSON field')
+    return result
+
+
+def commit_probe_prefix(probe, sequence, *, mismatch):
+    """Consume once locally; retry cumulative ACKs on this same stream owner.
+
+    This deliberately retains the observer's existing cursor attributes: the
+    bounded-prefix reader and diagnostics inspect the actual committed cursor.
+    Transport I/O, binding and locking remain with that observer.
+    """
+    if type(sequence) is not int or sequence < 0:
+        raise ValueError('event acknowledgement sequence must be a nonnegative integer')
+    probe._committed_sequence = max(sequence, probe._committed_sequence)
+    if probe._committed_sequence <= probe._acknowledged_sequence:
+        return True
+    if probe._ack_error:
+        return False
+    lifetime = probe._cursor_lifetime
+    committed = probe._committed_sequence
+    try:
+        reply = probe._request('ack', sequence=committed)
+    except ObserverReadRetry:
+        # The producer may have applied a request whose response was lost.
+        return False
+    except RuntimeError as exc:
+        if probe._cursor_lifetime is lifetime:
+            probe._ack_error = str(exc)
+        return False
+    if probe._cursor_lifetime is not lifetime:
+        return False
+    if not acknowledgement_matches(reply, committed):
+        probe._ack_error = (reply.get('error') if isinstance(reply, dict) else None) or mismatch
+        return False
+    probe._acknowledged_sequence = committed
+    return True
+
+
+def check_round_start_range(probe, after):
+    if after < max(probe._committed_sequence, probe._acknowledged_sequence):
+        raise RuntimeError('round-start event range has already been committed')
+
+
+def read_probe_range(probe, after, through):
+    if probe._ack_error:
+        raise RuntimeError(probe._ack_error)
+    return probe._request('read', after=after, through=through)
+
+
 class CallbackBusyMark(ObserverReadRetry):
     """A decoded live mark found an in-flight callback before it could commit."""
 

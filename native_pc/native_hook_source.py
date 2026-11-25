@@ -21,8 +21,11 @@ import time
 from connection import VersionStatus
 from event_observer import ObserverStatus
 from event_probe import (NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry, AssembledProbeSource,
-                         assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail)
-from native_pc.internal_event_source import _finite_number, _reject_constant, _unique_fields
+                         assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail,
+                         reset_probe_cursor, commit_probe_prefix, check_round_start_range, read_probe_range,
+                         finite_message_number as _finite_number,
+                         reject_message_constant as _reject_constant,
+                         unique_message_fields as _unique_fields)
 from native_pc.probe_native_pc import BUILD_ID
 from native_pc import probe_native_pc as access
 from native_pc.windows_dll_loader import WindowsDllLoader
@@ -693,8 +696,7 @@ class NativeHookEventProbe:
         # A chained outer observer may only detach after this native layer
         # has explicitly disabled and drained its hooks (or never submitted).
         self.hook_disable_confirmed = True
-        self._committed_sequence = self._acknowledged_sequence = 0
-        self._ack_error = None
+        reset_probe_cursor(self)
         self._autochess_enabled = None
         self._timing_sink = self._timing_enabled = None
 
@@ -890,34 +892,14 @@ class NativeHookEventProbe:
         return self._read_range(sequence, sequence)
 
     def read_round_start_range(self, after, through):
-        if after < max(self._committed_sequence, self._acknowledged_sequence):
-            raise RuntimeError('round-start event range has already been committed')
+        check_round_start_range(self, after)
         return self._read_range(after, through)
 
     def _read_range(self, after, through):
-        if self._ack_error:
-            raise RuntimeError(self._ack_error)
-        return self._request('read', after=after, through=through)
+        return read_probe_range(self, after, through)
 
     def commit_events(self, sequence):
-        self._committed_sequence = max(sequence, self._committed_sequence)
-        if self._committed_sequence <= self._acknowledged_sequence:
-            return True
-        if self._ack_error:
-            return False
-        try:
-            reply = self._request('ack', sequence=self._committed_sequence)
-        except ObserverReadRetry:
-            return False
-        except RuntimeError as exc:
-            self._ack_error = str(exc)
-            return False
-        acknowledged = reply.get('acknowledged')
-        if reply.get('error') or type(acknowledged) is not int or acknowledged != self._committed_sequence:
-            self._ack_error = reply.get('error') or 'native observer acknowledgement mismatch'
-            return False
-        self._acknowledged_sequence = acknowledged
-        return True
+        return commit_probe_prefix(self, sequence, mismatch='native observer acknowledgement mismatch')
 
     def _release(self):
         errors = {}

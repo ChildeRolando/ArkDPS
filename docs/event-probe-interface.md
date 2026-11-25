@@ -6,6 +6,8 @@ MuMu 与官服 PC 的探针负责采集和证明事件；它们将相同口径�
 
 `event_probe.py` 中的探针契约集中处理批次身份、序号与重放验证、质量声明、确认范围和终局身份。`event_observer.py` 保持 Frida 传输与资源清理所有权；`event_capture.py` 与生命周期入口消费同一个契约。探针不计算面板统计，WPF 不重新计算事件指标。
 
+实时Frida与ArkPie共用宿主前缀游标及ACK判定；本地已消费与生产者已确认分别保存。丢失ACK回复时保留已消费水位并累计重试，不重新读取/归约该前缀。游标绑定observer的实际stream寿命：重新加载脚本建立新寿命，旧回复不得确认或污染新游标；普通战局reset不借mark重建ACK身份。cooperative host继续保留自己的锁、单字段回复及重放边界，只复用相同ACK值校验。JSON有限数及唯一字段校验属于公共探针契约，不依赖测试host模块。
+
 | 接口 | 职责 |
 | --- | --- |
 | `EventProbe.start / mark / read_through / commit_events / stop` | 建立观察、同帧标记、有界读取、宿主确认和清理；保留既有资源所有权。 |

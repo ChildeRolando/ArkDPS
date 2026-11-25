@@ -2,7 +2,6 @@
 
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 import json
-from math import isfinite
 from pathlib import Path
 from queue import Empty, Full, Queue, SimpleQueue
 import subprocess
@@ -10,7 +9,10 @@ from threading import Lock, Thread
 from time import monotonic
 
 from event_observer import ObserverStatus
-from event_probe import NATIVE_PC_CONTRACT
+from event_probe import (NATIVE_PC_CONTRACT, acknowledgement_matches,
+                         finite_message_number as _finite_number,
+                         reject_message_constant as _reject_constant,
+                         unique_message_fields as _unique_fields)
 
 
 PROTOCOL_VERSION = 1
@@ -28,24 +30,6 @@ class _ReplyTimeout(_TransportError):
 
 class _RequestRejected(RuntimeError):
     pass
-
-
-def _reject_constant(value):
-    raise ValueError(f'non-JSON numeric constant {value}')
-
-
-def _finite_number(value):
-    number = float(value)
-    if not isfinite(number):
-        raise ValueError('non-finite JSON number')
-    return number
-
-
-def _unique_fields(pairs):
-    result = dict(pairs)
-    if len(result) != len(pairs):
-        raise ValueError('duplicate JSON field')
-    return result
 
 
 class InternalEventProbe:
@@ -238,10 +222,9 @@ class InternalEventProbe:
             try:
                 result = self._exchange('commit', dict, sequence=sequence, repeat=True,
                                         timeout=self.acknowledgement_timeout)
-                acknowledged = result.get('acknowledged')
                 if result == {'acknowledged': None}:
                     return False
-                if set(result) != {'acknowledged'} or type(acknowledged) is not int or acknowledged != sequence:
+                if not acknowledgement_matches(result, sequence, exact_fields=True):
                     raise _TransportError('internal event host acknowledgement does not match its watermark')
             except _RequestRejected:
                 return False
