@@ -19,7 +19,8 @@ from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autoc
                                native_autochess_event_identity)
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
-                           acknowledge_event_batch, read_terminal_mark, source_attribution_batch)
+                           acknowledge_event_batch, read_terminal_mark, source_attribution_batch,
+                           read_pending_scope_prefix)
 from event_observer import ObserverReadRetry
 from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
@@ -28,6 +29,7 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
                          native_identity_sampling_mark, TerminalReadRetry,
                          verified_autochess_round_start, autochess_round_start_origin,
+                         pending_scope_anchor, verified_pending_scope_start,
                          settlement_source_quality_clear, settlement_failure_samples)
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
 from panel_model import team_status
@@ -487,6 +489,7 @@ class BattleFeed:
         self.autochess_identity = None
         self._next_android_presence = float('-inf')
         self._android_presence_seq = 0
+        self._pending_scope = None
 
     def _emit(self, kind, sample=None, roster=None, reason='', events=None, *, round_reset=None,
               read_error=None, observer=None, autochess_successor=None):
@@ -758,6 +761,46 @@ class BattleFeed:
                 return {'error': str(exc)}
         return evidence
 
+    def _pending_scope_drain(self, observer, evidence, sample, roster, *, generation,
+                             published_generation, published_capture, published_observer, capture):
+        """Retain an empty late anchor until its first explicitly acquired prefix."""
+        pending = self._pending_scope
+        if (pending is not None and published_generation == pending['generation']
+                and published_capture is not None and published_capture.baseline_sequence is not None):
+            # Consumption committed; ACK retry belongs exclusively to Runtime.
+            self._pending_scope = pending = None
+        if pending is not None:
+            if observer is not pending['observer']:
+                raise CaptureRetry('pending scope observer changed before its prefix committed')
+            anchor = pending['anchor']
+            if ((sample.get('autochess_context') or {}).get('identity') !=
+                    anchor['sample']['autochess_context']['identity']):
+                raise CaptureRetry('pending scope exit awaits its retained empty-scope handoff')
+            result = read_pending_scope_prefix(observer, anchor, evidence, sample)
+            pending['latest'] = deepcopy(dict(sample=sample, evidence=result, roster_frame=roster.frame))
+            return result, evidence['sequence'] == anchor['sequence']
+        result = self._drain(observer, evidence, sample, capture=capture)
+        stream = published_capture.adapter.event_stream if published_capture is not None else None
+        previous = stream.sequence if stream is not None and observer is published_observer else 0
+        if (generation > published_generation and observer is not None
+                and callable(getattr(observer, 'read_round_start_range', None))
+                and sample.get('native_counter_scope') == 'events_only'
+                and sample.get('state') == 2 and type(sample.get('frame')) is int and sample['frame'] > 0
+                and type(sample.get('game_time')) in (int, float) and sample['game_time'] > 0
+                and not roster.entries and isinstance(result, dict) and not result.get('error')
+                and result.get('sequence') == previous and isinstance(result.get('drain'), dict)
+                and result['drain'].get('events') == [] and 'autochess_round_start' not in result['drain']):
+            try:
+                anchor = pending_scope_anchor(sample, result, roster.frame)
+            except (StreamGap, BarrierBusy):
+                # Legacy snapshots without the new raw independent proof retain
+                # their existing explicit late-baseline behavior; never retag zero.
+                return result, False
+            self._pending_scope = dict(observer=observer, generation=generation, anchor=anchor,
+                latest=deepcopy(dict(sample=sample, evidence=result, roster_frame=roster.frame)))
+            return result, True
+        return result, False
+
     def acquire(self, collector, observer=None, *, published_generation=0,
                 preparing_generation=None, published_capture=None, published_observer=None):
         """Bracket cumulative/roster reads with the live singleton and flow.
@@ -915,7 +958,10 @@ class BattleFeed:
         # at its last accepted watermark, without draining preparation events.
         capture = published_capture if generation == published_generation else None
         if not preparing and not scope_unavailable:
-            events = self._drain(observer, events, sample, capture=capture)
+            events, pending_empty = self._pending_scope_drain(observer, events, sample, roster,
+                generation=generation, published_generation=published_generation,
+                published_capture=published_capture, published_observer=published_observer, capture=capture)
+            preparing = preparing or pending_empty
         round_reset = None
         if (clock_reset and not scope_unavailable and observer is not None and observer is published_observer
                 and self.generation == published_generation and events is not None and 'sequence' in events):
@@ -1528,11 +1574,14 @@ class BattleSessions:
             # its independent archive copy cannot be lost with the new sample.
             event_observation = observation
             if observation.generation > self.generation:
+                previous_stream = self.adapter.event_stream if self.adapter is not None else None
+                pending_bootstrap = verified_pending_scope_start(observation.sample, observation.events,
+                    previous_sequence=previous_stream.sequence if previous_stream is not None else None)
                 self._archive('new_battle', successor=observation)
                 previous_multiplayer = self.multiplayer
-                bootstrap = None
+                bootstrap = pending_bootstrap
                 bootstrap_error = None
-                if observation.events and isinstance(observation.events.get('drain'), dict):
+                if bootstrap is None and observation.events and isinstance(observation.events.get('drain'), dict):
                     try:
                         bootstrap = verified_autochess_round_start(observation.sample,
                             observation.events['drain'], observation.events.get('after'))
@@ -1546,7 +1595,7 @@ class BattleSessions:
                 adapter = BattleStatisticsAdapter(lifecycle_managed=True)
                 if bootstrap is not None:
                     zero_sample, zero_mark, zero_drain, replay_drain = bootstrap
-                    zero_roster = RosterSnapshot(0)
+                    zero_roster = RosterSnapshot(zero_sample['frame'])
                     adapter.update(zero_sample, zero_roster)
                 else:
                     adapter.update(observation.sample, observation.roster,

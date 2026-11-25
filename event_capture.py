@@ -4,6 +4,7 @@ The observer must serialize marks with callback entry/exit and retain numbered
 records until the host has committed the corresponding watermark.
 """
 from collections import deque
+from copy import deepcopy
 
 from autochess_context import normalize_native_autochess
 from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
@@ -157,6 +158,59 @@ def read_event_batch(observer, sequence, *, baseline=False):
         return dict(batch, probe_contract=contract.describe())
     except ObserverReadRetry as exc:
         raise CaptureRetry(str(exc)) from exc
+
+
+def read_pending_scope_prefix(observer, anchor, evidence, sample):
+    """Acquire retained pages once; Sessions and multiplayer never read them."""
+    from event_probe import (_verified_pending_scope_anchor, _PENDING_SCOPE_PAGE_SIZE,
+                             verified_pending_scope_start, _ROUND_START_PREFIX_LIMIT, _PENDING_SCOPE_BYTES)
+    point, _, contract = _verified_pending_scope_anchor(anchor)
+    after, through = anchor['sequence'], evidence['sequence']
+    if (type(through) is not int or not after <= through <= after + _ROUND_START_PREFIX_LIMIT):
+        raise StreamGap('pending scope prefix cursor is outside its budget')
+    read_range = getattr(observer, 'read_round_start_range', None)
+    if not callable(read_range):
+        raise StreamGap('event probe cannot read retained pending scope prefixes')
+    import json
+    size = len(json.dumps(anchor, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+    pages, records = [], []
+    while after < through:
+        end = min(after + _PENDING_SCOPE_PAGE_SIZE, through)
+        try:
+            batch = read_range(after, end)
+        except ObserverReadRetry as exc:
+            raise CaptureRetry(str(exc)) from exc
+        if isinstance(batch, dict) and batch.get('retry'):
+            raise CaptureRetry('pending scope prefix read requires retry')
+        if not isinstance(batch, dict) or not isinstance(batch.get('events'), list):
+            raise StreamGap('invalid pending scope prefix reply')
+        if len(batch['events']) != end - after:
+            raise StreamGap('incomplete pending scope prefix reply')
+        page = dict(after=after, through=end, batch=batch)
+        try:
+            size += len(json.dumps(page, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise StreamGap('invalid pending scope raw JSON') from exc
+        if size > _PENDING_SCOPE_BYTES:
+            raise StreamGap('pending scope prefix exceeds byte budget')
+        pages.append(deepcopy(page))
+        records.extend(batch['events'])
+        after = end
+    # Empty ranges still use a real raw read at the current endpoint, not a
+    # new baseline that could exclude the first later hit.
+    try:
+        batch = pages[-1]['batch'] if pages else read_range(after, through)
+    except ObserverReadRetry as exc:
+        raise CaptureRetry(str(exc)) from exc
+    if not isinstance(batch, dict) or batch.get('retry'):
+        raise CaptureRetry('pending scope empty range requires retry')
+    if not pages and batch.get('events') != []:
+        raise StreamGap('pending scope empty range returned an unexpected prefix')
+    result = dict(evidence, drain=dict(batch, events=records, probe_contract=contract.describe()),
+                  pending_scope_start=dict(version=1, anchor=deepcopy(anchor), pages=pages))
+    checked = dict(sample, native_session=sample.get('native_session', sample.get('session')))
+    verified_pending_scope_start(checked, result, previous_sequence=anchor['sequence'])
+    return result
 
 
 def acknowledge_event_batch(observer, sequence):

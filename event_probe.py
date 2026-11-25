@@ -738,6 +738,183 @@ def verified_autochess_round_start(sample, drained, mark):
     return deepcopy(zero_sample), deepcopy(zero_mark), deepcopy(zero_drain), deepcopy(replay_drain)
 
 
+
+# A positive-time witness is deliberately separate from the producer zero origin.
+_PENDING_SCOPE_SAMPLE_FIELDS = frozenset({
+    'session', 'native_session', 'battle_identity', 'observer_logger', 'native_window_guard',
+    'guard', 'autochess_snapshot_anchor', 'battle_metadata', 'frame', 'game_time', 'state',
+    'native_counter_scope', 'autochess_context', 'rows', 'global_total', 'global_heal', 'sum_damage',
+})
+_PENDING_SCOPE_PAGE_SIZE = 2048
+_PENDING_SCOPE_BYTES = 32 * 1024 * 1024
+
+
+def pending_scope_anchor(sample, evidence, roster_frame):
+    """Freeze an independently guarded empty positive-time window, never zero."""
+    native = sample.get('native_session', sample.get('session'))
+    point = {key: deepcopy(value) for key, value in sample.items() if key in _PENDING_SCOPE_SAMPLE_FIELDS}
+    point.update(session=native, native_session=native)
+    point['battle_metadata'] = {key: sample['battle_metadata'][key] for key in (
+        'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
+    anchor = dict(sample=point, roster_frame=roster_frame,
+                  **{key: deepcopy(evidence[key]) for key in ('before', 'after', 'sequence', 'drain')})
+    _verified_pending_scope_anchor(anchor)
+    return anchor
+
+
+def _pending_scope_identity(sample, mark, *, read=False):
+    if read:
+        from autochess_context import normalize_native_autochess
+        fixed, frame = mark.get('native_fixed_time'), mark.get('native_frame')
+        scope = _autochess_scope_key(mark)
+        if (scope is None or not isinstance(fixed, str) or not re.fullmatch(r'[0-9]{1,19}', fixed)
+                or int(fixed) > 0x7fffffffffffffff or type(frame) is not int or frame < 0):
+            raise StreamGap('pending scope read has an invalid raw native clock')
+        context = normalize_native_autochess(mark.get('native_autochess_context'), expected_frame=frame,
+            expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope)
+    else:
+        context = autochess_event_mark_context(sample, mark)
+    if (context is None or context.get('status') not in ('available', 'partial')
+            or context.get('phase') not in (4, 5, 6) or not context.get('match_key')
+            or context.get('self_player_uid') is None or context.get('collection_mode') not in ('all', 'local')):
+        raise StreamGap('pending scope lacks independently bound raw scope/accounts')
+    return context, (context['identity'], context['match_key'], context['self_player_index'],
+                     context['self_player_uid'], context['collection_mode'],
+                     tuple(sorted((row['index'], row['uid']) for row in context['players'])))
+
+
+def _verified_pending_scope_anchor(anchor):
+    if not isinstance(anchor, dict) or set(anchor) != {'sample', 'roster_frame', 'before', 'after', 'sequence', 'drain'}:
+        raise StreamGap('invalid pending scope anchor shape')
+    point, before, after, drained = (anchor[key] for key in ('sample', 'before', 'after', 'drain'))
+    if (not isinstance(point, dict) or not set(point) <= _PENDING_SCOPE_SAMPLE_FIELDS
+            or point.get('state') != 2 or type(point.get('frame')) is not int or point['frame'] <= 0
+            or not _round_start_time(point.get('game_time')) or point['game_time'] <= 0
+            or point.get('native_counter_scope') != 'events_only' or point.get('rows') != []
+            or point.get('session') != point.get('native_session')
+            or type(anchor['roster_frame']) is not int or anchor['roster_frame'] != point['frame']
+            or not isinstance(before, dict) or not isinstance(after, dict) or not isinstance(drained, dict)
+            or not _round_start_integer(anchor['sequence'])
+            or any(mark.get('sequence') != anchor['sequence'] for mark in (before, after))
+            or before.get('epoch') != after.get('epoch')
+            or drained.get('events') != [] or drained.get('error') or drained.get('stopped') or drained.get('retry')):
+        raise StreamGap('invalid positive-time empty scope witness')
+    raw_anchor = point.get('autochess_snapshot_anchor', point)
+    context, sequence = verified_autochess_event_window(point, before, after, anchor=raw_anchor)
+    if context != point.get('autochess_context') or sequence != anchor['sequence']:
+        raise StreamGap('pending scope anchor consumer fields disagree with raw source')
+    contract = contract_for(sample=point, descriptor=drained.get('probe_contract'))
+    contract.validate_binding(point, before, after, drained)
+    _, identity = _pending_scope_identity(point, after)
+    _, read_identity = _pending_scope_identity(point, drained, read=True)
+    if identity != read_identity:
+        raise StreamGap('pending scope baseline source/accounts changed')
+    contract.normalize_quality(drained)
+    return point, identity, contract
+
+
+def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):
+    """Validate a recorded positive-time anchor and every retained prefix page.
+
+    Raw source and independent snapshot fences are rechecked during replay; no
+    consumer-only start/complete/initial-skill field is accepted as evidence.
+    """
+    transaction = evidence.get('pending_scope_start') if isinstance(evidence, dict) else None
+    if transaction is None:
+        return None
+    if (not isinstance(transaction, dict) or set(transaction) != {'version', 'anchor', 'pages'}
+            or type(transaction.get('version')) is not int or transaction['version'] != 1
+            or not isinstance(transaction['pages'], list)):
+        raise StreamGap('invalid pending scope transaction')
+    point, identity, contract = _verified_pending_scope_anchor(transaction['anchor'])
+    anchor = transaction['anchor']
+    expected = 0 if previous_sequence is None else previous_sequence
+    if type(expected) is not int or anchor['sequence'] != expected:
+        raise StreamGap('pending scope anchor does not match the accepted source cursor')
+    if (not isinstance(sample, dict) or sample.get('state') != 2
+            or sample.get('native_counter_scope') != 'events_only'):
+        raise StreamGap('pending scope release lacks an event-only sample')
+    current, through = verified_autochess_event_window(sample, evidence['before'], evidence['after'],
+        anchor=sample.get('autochess_snapshot_anchor', sample))
+    _, end_identity = _pending_scope_identity(sample, evidence['after'])
+    if current != sample.get('autochess_context') or identity != end_identity or through != evidence['sequence']:
+        raise StreamGap('pending scope release changed its scope/accounts')
+    binding = (*_ROUND_START_BINDING, 'native_session', 'native_process_created_filetime',
+               'source_build', 'damage_settlement_scope')
+    origin = anchor['after']
+    for mark in (evidence['before'], evidence['after']):
+        if any((key in origin) != (key in mark) or not NativePcBinding._same(origin.get(key), mark.get(key)) for key in binding):
+            raise StreamGap('pending scope release changed its source/generation')
+    if (not anchor['sequence'] <= through <= anchor['sequence'] + _ROUND_START_PREFIX_LIMIT
+            or evidence['after']['epoch'] < origin['epoch']
+            or sample['frame'] < point['frame'] or sample['game_time'] < point['game_time']):
+        raise StreamGap('pending scope release clock or cursor regressed')
+    pages, records, cursor, size = transaction['pages'], [], anchor['sequence'], 0
+    import json
+    try:
+        size = len(json.dumps(anchor, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise StreamGap('invalid pending scope raw JSON') from exc
+    if len(pages) > (_ROUND_START_PREFIX_LIMIT + _PENDING_SCOPE_PAGE_SIZE - 1) // _PENDING_SCOPE_PAGE_SIZE:
+        raise StreamGap('pending scope prefix exceeds page budget')
+    for page in pages:
+        if (not isinstance(page, dict) or set(page) != {'after', 'through', 'batch'}
+                or type(page['after']) is not int or type(page['through']) is not int
+                or page['after'] != cursor or not cursor < page['through'] <= min(cursor + _PENDING_SCOPE_PAGE_SIZE, through)):
+            raise StreamGap('pending scope prefix page range is invalid')
+        batch = page['batch']
+        if (not isinstance(batch, dict) or batch.get('error') or batch.get('stopped') or batch.get('retry')
+                or 'active' in batch and (type(batch['active']) is not int or batch['active'] != 0)
+                or 'active_hooks' in batch and batch['active_hooks'] != []):
+            raise StreamGap('pending scope prefix page is unavailable or busy')
+        contract.validate_binding(sample, batch)
+        _, page_identity = _pending_scope_identity(sample, batch, read=True)
+        if (page_identity != identity or any((key in batch) != (key in origin)
+                or not NativePcBinding._same(batch.get(key), origin.get(key)) for key in binding)):
+            raise StreamGap('pending scope prefix page changed source/scope/accounts')
+        events = batch.get('events')
+        if not isinstance(events, list) or len(events) != page['through'] - cursor:
+            raise StreamGap('incomplete pending scope event prefix')
+        try:
+            size += len(json.dumps(page, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise StreamGap('invalid pending scope raw JSON') from exc
+        if size > _PENDING_SCOPE_BYTES:
+            raise StreamGap('pending scope prefix exceeds byte budget')
+        records.extend(events)
+        cursor = page['through']
+    if cursor != through or size > _PENDING_SCOPE_BYTES:
+        raise StreamGap('pending scope prefix does not reach release watermark')
+    from autochess_context import native_autochess_event_identity
+    scope = tuple(identity[0][key] for key in ('scope_key', 'phase', 'round'))
+    frame, when = point['frame'], point['game_time']
+    for number, record in enumerate(records, anchor['sequence'] + 1):
+        if (not isinstance(record, dict) or type(record.get('sequence')) is not int or record['sequence'] != number
+                or type(record.get('frame')) is not int or not frame <= record['frame'] <= sample['frame']
+                or not _round_start_time(record.get('game_time')) or not when <= record['game_time'] <= sample['game_time']
+                or record['frame'] == frame and record['game_time'] != when
+                or record['frame'] == sample['frame'] and record['game_time'] != sample['game_time']
+                or native_autochess_event_identity(record) != scope
+                or record['native_autochess_scope'].get('collection_mode') != identity[4]):
+            raise StreamGap('pending scope event has a different sequence/scope/capture clock')
+        frame, when = record['frame'], record['game_time']
+    start_sample = deepcopy(point)
+    start_sample['session'] = sample['session']
+    start_mark = deepcopy(anchor['after'])
+    baseline = deepcopy(anchor['drain'])
+    replay = dict(evidence['drain'], events=deepcopy(records))
+    if replay.get('events') != evidence['drain'].get('events'):
+        raise StreamGap('pending scope published drain differs from its raw pages')
+    if replay.get('error') or replay.get('stopped') or replay.get('retry'):
+        raise StreamGap('pending scope release drain is unavailable')
+    contract.validate_binding(sample, replay)
+    _, read_identity = _pending_scope_identity(sample, replay, read=True)
+    if read_identity != identity or any((key in replay) != (key in origin)
+            or not NativePcBinding._same(replay.get(key), origin.get(key)) for key in binding):
+        raise StreamGap('pending scope release drain changed its source/scope')
+    return start_sample, start_mark, baseline, replay
+
+
 def autochess_round_start_origin(sample):
     """Identify the internal event-only zero clock, regardless of skill proof."""
     if not isinstance(sample, dict):
