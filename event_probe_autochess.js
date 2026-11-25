@@ -1053,7 +1053,8 @@ function nativeBinding(prepared=null,captureRoundStart=false){
    if(captureRoundStart){
     result.live_character_collection_empty=auto.liveCharacterCollectionEmpty??null;
     result.live_character_data_uids=auto.liveCharacterDataUids??null;
-    result.lifecycle_baseline=auto.lifecycleBaseline??null;
+    result.lifecycle_baseline=characterLifecycleReady()&&auto.lifecycleBaseline
+     ?{...auto.lifecycleBaseline,character_lifecycle_ready:true}:null;
    }
    if(viewMode)result.autochess_view_mode=viewMode;
    const preparedHere=prepared!==null&&prepared===nativeAutoBodyCache&&prepared.body===auto;

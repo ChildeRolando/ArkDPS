@@ -167,3 +167,6 @@ row = meter.result()['rows']['host']
 行输出 `lifecycle_presence_seconds`、`lifecycle_presence_complete`、`lifecycle_presence_window:[event_start,event_watermark]`、`lifecycle_terminal_complete`。从零完整前缀、真实 Born 与连续事件水位支持实时开放区间；归档必须每个已观察本体有永久终点。零帧已经在场的 actor 只允许由独立完整活体集合证书截入本小局时刻0；旧UID集合或未观察真实出生且无活体证书时继续未知。晚绑定名单只重放已保留且重新核实的生命周期证书，不重放旧金额或技能转换。此分母与1Hz `observed_presence_seconds` 独立，不能互相补证；金额、有效伤害、治疗和 scope/window 匹配仍由原有账本及展示层分别认证。宿主离场后的已归属召唤/DoT输出不延长本体分母。
 
 同部署 `OnAfterSkill(Ability.OWNER_DEAD)` 可先记录待确认的结束而保留技能窗，之后同原始时刻的 typed 永久 Finish 关闭两套既有技能窗口。反顺序同样支持。缺实体证书、跨实例或跨时刻不能把待确认窗口追认为完整；11/12 不能作为永久终点。已有实录没有新证书时沿原保守语义，受控回归不代表新候选实机验收。
+
+
+生命周期按 native body 分别保存区间。同 data UID 的同刻替换允许 Born-new 先于 Finish-old，只在真实旧终点到达、两区间零重叠后恢复完整；正时间重叠、退休 instance UID 被当新部署复用或损坏的预期终点保持未知。零帧 seed 与同体同刻 Born 幂等。Q32 证书须为规范非负 S64 十进制并与游戏时钟精确相等。已证本体输出的最早身份/时钟可暴露漏掉的出生前缀；不记另一份金额，也不因已知旧 body 的退场后 DoT 或 token 输出而延长/废弃分母。

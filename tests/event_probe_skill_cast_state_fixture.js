@@ -70,7 +70,7 @@ for(const platform of ['android','native_pc']){
   assert.equal(r.mark.skill_unknown,true,fault);assert.equal(r.batch.events.filter(e=>e.proof?.method==='BasicSkill.OnCastFinish').length,0,fault);
   assert(r.batch.events.some(e=>e.proof?.method==='Character.OnAfterSkill'));scenarios[fault]=r;
  }
- for(const [name,metadata] of Object.entries({wait_field_int:{waitInt:true},wait_field_static:{waitStatic:true},static_method:{staticMethod:true},ability_byref:{abilityByRef:true},reason_byref:{reasonByRef:true},reason_not_enum:{reasonNotEnum:true},reason_size8:{reasonSize:8},last_int:{lastInt:true},last_byref:{lastByRef:true}})){
+ for(const [name,metadata] of Object.entries({wait_field_int:{waitInt:true},wait_field_static:{waitStatic:true},static_method:{staticMethod:true},ability_byref:{abilityByRef:true},reason_byref:{reasonByRef:true},reason_not_enum:{reasonNotEnum:true},reason_size8:{reasonSize:8},reason_wrong_owner:{reasonWrongOwner:true},last_int:{lastInt:true},last_byref:{lastByRef:true}})){
   const c=setup(platform,metadata);c.legacy('OnSkillStart');c.legacy('OnAfterSkill',314,[c.source,c.skill,c.f.ptr(1)]);const r=c.report();
   assert.equal(r.ready.skill_cast_state_ready,false,name);assert.equal(typeof r.ready.skill_cast_state_error,'string',name);
   assert.equal(r.batch.events.filter(e=>'skill_wait_for_end' in e).length,0,name);assert(r.batch.events.some(e=>e.proof?.method==='Character.OnAfterSkill'));scenarios[name]=r;

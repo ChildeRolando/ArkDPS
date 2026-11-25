@@ -27,7 +27,9 @@ let terminalMethods=null;
 let autoChessRoundResetMethod=null;
 let sourceCharacterClasses=null,settlementCharacterClass=null;
 let skillCastStateMethods=null,skillCastStateReady=false;
-let characterLifecycleMethods=null;
+let characterLifecycleMethods=null,characterLifecycleBornReady=false,characterLifecycleFinishedReady=false;
+function characterLifecycleReady(){return !!characterLifecycleMethods&&characterLifecycleBornReady&&characterLifecycleFinishedReady;}
+let nativeSkillCastInvocation=0;const nativeSkillCastCalls=new Map();
 function uniqueMethod(klass,name,argCount) {
  const matches=[];
  const parameterCount=api('il2cpp_method_get_param_count','uint',['pointer']);
@@ -66,6 +68,7 @@ function resolveSkillCastState(basicSkill,character,skillData,ability,bObject,en
  const fieldFlags=api('il2cpp_field_get_flags','uint',['pointer']);
  const isValue=api('il2cpp_class_is_valuetype','bool',['pointer']);
  const isEnum=api('il2cpp_class_is_enum','bool',['pointer']);
+ const declaring=api('il2cpp_class_get_declaring_type','pointer',['pointer']);
  const valueSize=api('il2cpp_class_value_size','int',['pointer','pointer']);
  const argc=api('il2cpp_method_get_param_count','uint',['pointer']);
  const param=api('il2cpp_method_get_param','pointer',['pointer','uint']);
@@ -85,11 +88,19 @@ function resolveSkillCastState(basicSkill,character,skillData,ability,bObject,en
  for(const m of classMethods(basicSkill)){
   if(!m.add(0x20).readPointer().equals(basicSkill)||m.add(0x18).readPointer().readCString()!=='OnCastFinish'||argc(m)!==3||flags(m,out)&0x10||!named(result(m),'Void','System'))continue;
   const first=param(m,0),reason=param(m,1),last=param(m,2),reasonClass=classFrom(reason);
-  if(byRef(first)||!classFrom(first).equals(ability)||!named(reason,'FinishReason','')||!isEnum(reasonClass)||valueSize(reasonClass,out)!==4||!boolean(last))continue;
-  const address=m.readPointer();if(!address.isNull()&&Process.findModuleByAddress(address)?.name===il.name)matches.push(address);
+  if(byRef(first)||!classFrom(first).equals(ability)||!named(reason,'FinishReason','')||!isEnum(reasonClass)||!declaring(reasonClass).equals(ability)||valueSize(reasonClass,out)!==4||!boolean(last))continue;
+  const address=m.readPointer();if(!address.isNull()&&Process.findModuleByAddress(address)?.name===il.name)matches.push({address,reasonClass});
  }
  if(matches.length!==1)throw new Error('unsupported BasicSkill.OnCastFinish signature');
- return {address:matches[0],wait:fields.m_waitForSkillEnd,basicSkill,character,skillData,bObject,entity,
+ const afters=[];
+ for(const m of classMethods(character)){
+  if(!m.add(0x20).readPointer().equals(character)||m.add(0x18).readPointer().readCString()!=='OnAfterSkill'||argc(m)!==2||flags(m,out)&0x10||!named(result(m),'Void','System'))continue;
+  const skill=param(m,0),reason=param(m,1);
+  if(byRef(skill)||!classFrom(skill).equals(basicSkill)||byRef(reason)||!classFrom(reason).equals(matches[0].reasonClass))continue;
+  const address=m.readPointer();if(!address.isNull()&&Process.findModuleByAddress(address)?.name===il.name)afters.push(address);
+ }
+ if(afters.length!==1)throw new Error('unsupported Character.OnAfterSkill signature');
+ return {address:matches[0].address,afterSkill:afters[0],wait:fields.m_waitForSkillEnd,basicSkill,character,skillData,bObject,entity,
   characterData:sourceCharacterClasses.data,assignable:api('il2cpp_class_is_assignable_from','bool',['pointer','pointer'])};
 }
 // Optional lifecycle capability: verify the enum owner and literal values in live metadata.
@@ -110,7 +121,7 @@ function resolveCharacterLifecycle(character,entity,bObject,controller){
   const matches=[];
   for(const m of classMethods(owner)){
    if(!m.add(0x20).readPointer().equals(owner)||m.add(0x18).readPointer().readCString()!==name||argc(m)!==parameters.length||(flags(m,scratch)&0x10))continue;
-   const r=result(m);if(byref(r)||className(from(r))!=='Void')continue;
+   const r=result(m),rk=from(r);if(byref(r)||className(rk)!=='Void'||rk.add(0x18).readPointer().readCString()!=='System')continue;
    const types=parameters.map((_,i)=>param(m,i));
    if(types.some((t,i)=>byref(t)||!parameters[i](from(t))))continue;
    const address=m.readPointer();if(!address.isNull()&&Process.findModuleByAddress(address)?.name===il.name)matches.push({address,types});
@@ -133,7 +144,9 @@ function resolveCharacterLifecycle(character,entity,bObject,controller){
  }
  if(seen.size!==Object.keys(expected).length)throw new Error('incomplete finish enum');
  expectFields(bObject,{'<instanceUid>k__BackingField':0x18,'<borned>k__BackingField':0x25,'<isDisappeared>k__BackingField':0x26});
- return {character,bObject,finish:finish.address,born:signature(bObject,'Born',[]).address,
+ const born=signature(character,'Born',[]).address,baseBorn=signature(bObject,'Born',[]).address;
+ if(born.equals(baseBorn))throw new Error('Character.Born aliases the BObject entry hook');
+ return {character,bObject,finish:finish.address,born,
   assignable:api('il2cpp_class_is_assignable_from','bool',['pointer','pointer']),reasons:expected};
 }
 function resolveMitigationMethods(formula,entity,modifier,bObject){
@@ -2735,7 +2748,8 @@ function endCharacterLifecycle(start,end){
 }
 function installCharacterBornHook(){
  if(!characterLifecycleMethods)return;
- const label='BObject.Born.character';
+ const label='Character.Born';
+ try{
  const hook=Interceptor.attach(characterLifecycleMethods.born,{
   onEnter(args){
    if(stopped||fatal)return;
@@ -2751,10 +2765,11 @@ function installCharacterBornHook(){
    if(!identity||!this.uid||identity.uid!==this.uid||identity.source!==this.source||!sameMitigationTime(this.when,end)
       ||identity.fixed!==this.fixed||this.actor.add(0x25).readU8()!==1||this.actor.add(0x26).readU8()!==0)return;
    const proof=endCharacterLifecycle(identity,end);if(!proof)return;
-   record(identity.source,'character_born',0,end,{method:'BObject.Born'},
+   record(identity.source,'character_born',0,end,{method:'Character.Born'},
     {source_instance_uid:identity.instance,actor_lifecycle:{...proof,state:'born'}},identity.uid);
   }finally{endEnemyHook(label);}}
- });hooks.push(hook);
+ });hooks.push(hook);characterLifecycleBornReady=true;
+ }catch(e){cfg.characterLifecycleError=String(e);}
 }
 function nativeSkillCastIdentity(skill,observation=null){
  const config=skillCastStateMethods;
@@ -2786,6 +2801,11 @@ function sameNativeSkillCastIdentity(a,b){
   &&a.skillData.equals(b.skillData)&&a.source===b.source
   &&a.info.skill_key===b.info.skill_key&&a.info.skill_id===b.info.skill_id;
 }
+function nativeSkillCastParent(actor,skill,thread){
+ const stack=nativeSkillCastCalls.get(thread),parent=stack?.[stack.length-1];
+ if(!parent||!parent.identity||!parent.identity.owner.equals(actor)||skill&&!parent.identity.skill.equals(skill))return null;
+ return parent;
+}
 function installSkillCastStateHook(){
  if(!skillCastStateMethods)return;
  const label='BasicSkill.OnCastFinish';
@@ -2798,7 +2818,10 @@ function installSkillCastStateHook(){
      if(!this.identity)return;
      this.fixed=clock.add(4).readS64().toString();this.when=time();
      if(clock.readU32()!==this.when.frame||clock.add(4).readS64().toString()!==this.fixed)throw new Error('unstable native skill entry clock');
-     this.reason=args[2].toInt32();}
+     this.reason=args[2].toInt32();this.invocation=++nativeSkillCastInvocation;this.tid=this.threadId;
+     if(!Number.isSafeInteger(this.invocation))throw new Error('native skill invocation exhausted');
+     let stack=nativeSkillCastCalls.get(this.tid);if(!stack){stack=[];nativeSkillCastCalls.set(this.tid,stack);}stack.push(this);
+    }
     catch(e){this.invalid=true;if(this.confirmedLocal)skillUnknown=true;}
    },
    onLeave(){
@@ -2811,9 +2834,13 @@ function installSkillCastStateHook(){
      if(wait!==0&&wait!==1)throw new Error('invalid native skill wait Boolean');
      if(clock.readU32()!==end.frame||clock.add(4).readS64().toString()!==this.fixed)throw new Error('native skill fixed clock changed');
      record(current.source,'skill_end',1,end,{method:label},
-      {...current.info,skill_reason:this.reason,skill_wait_for_end:wait===1,source_instance_uid:current.ownerUid},current.sourceUid);
+      {...current.info,skill_reason:this.reason,skill_wait_for_end:wait===1,source_instance_uid:current.ownerUid,skill_cast_invocation:this.invocation},current.sourceUid);
     }catch(e){if(this.confirmedLocal)skillUnknown=true;}
-    finally{endEnemyHook(label);}
+    finally{
+     if(this.invocation){const stack=nativeSkillCastCalls.get(this.tid);if(stack?.[stack.length-1]===this)stack.pop();else skillUnknown=true;
+      if(!stack?.length)nativeSkillCastCalls.delete(this.tid);}
+     endEnemyHook(label);
+    }
    }
   });
   hooks.push(hook);skillCastStateReady=true;
@@ -2861,6 +2888,8 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
        this.source=entityId(args[0]);
        this.sourceCharacterUid=sourceCharacterUid(args[0],this.source);
        this.lifecycle=beginCharacterLifecycle(args[0]);
+       this.nativeCastParent=method!=='OnAfterSkill'||skillCastStateMethods&&ptr(m.address).equals(skillCastStateMethods.afterSkill)
+        ?nativeSkillCastParent(args[0],method==='OnAfterSkill'?args[1]:null,this.tid):null;
        this.skill=skillIdentity(args[0],method==='OnAfterSkill'?args[1]:null);
        this.skillReason=(method==='OnAfterSkill'&&args[2])?args[2].toInt32():null;
       }catch(e){skillUnknown=true;this.ignore=true;}
@@ -3032,6 +3061,13 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      const info=this.skill||{};
      const evidence={skill_key:info.skill_key||null,skill_id:info.skill_id||null,skill_name:info.skill_name||null};
      if(this.skillEnd)evidence.skill_reason=this.skillReason;
+     const parent=this.nativeCastParent;
+     if(parent&&parent.identity.source===this.source&&parent.identity.sourceUid===this.sourceCharacterUid
+        &&sameMitigationTime(parent.when,end)&&nativeSkillCastCalls.get(parent.tid)?.includes(parent)){
+      evidence.source_instance_uid=parent.identity.ownerUid;
+      if(['Character.OnAfterSkill','Character.OnSkillFinish','Character.SwitchOutFromSkillState'].includes(this.name))
+       evidence.skill_cast_invocation=parent.invocation;
+     }
      if(this.lifecycle){
       const identity=endCharacterLifecycle(this.lifecycle,end);
       if(identity){
@@ -3218,6 +3254,8 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
    }
   }
  }));
+ if(characterLifecycleMethods&&m.owner==='BattleController'&&m.name==='OnCharacterFinished'
+    &&ptr(m.address).equals(characterLifecycleMethods.finish))characterLifecycleFinishedReady=true;
 }
 installEnemyEntryHooks();
 installCharacterBornHook();
@@ -3353,6 +3391,7 @@ function enemyEntryQuality(frame){
 function eventQuality(frame){
  return {quality_contract_version:1,
   autochess_round_start_ready:!!autoChessRoundResetMethod&&!cfg.autoChessRoundResetError,
+  character_lifecycle_ready:characterLifecycleReady(),
   unknown_sources:[...unknownSources],engagement_unknown_sources:[...engagementUnknownSources],
   source_attribution_version:1,
   partial_damage_version:7,
@@ -3515,7 +3554,7 @@ send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
  coalesce_enemy_hp:coalesceEnemyHp,trace_hp_context:traceHpContext,
  source_character_uid_ready:sourceCharacterClasses!==null,source_character_uid_error:cfg.sourceCharacterUidError||null,
  skill_finish_error:cfg.skillFinishError||null,
- character_lifecycle_ready:!!characterLifecycleMethods,character_lifecycle_error:cfg.characterLifecycleError||null,
+ character_lifecycle_ready:characterLifecycleReady(),character_lifecycle_error:cfg.characterLifecycleError||null,
  skill_cast_state_ready:skillCastStateReady,skill_cast_state_error:cfg.skillCastStateError||null,
  mitigation_ready:mitigationReady,mitigation_error:cfg.mitigationError||null,
  mitigation_diagnostics:mitigationDiagnostics(),

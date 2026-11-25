@@ -329,6 +329,7 @@ class Statistics:
         self.skill_active = {}
         self.deployment_lifecycle = DeploymentLifecycle()
         self.settlement_skill_deployment_unknown = set()
+        self.completed_skill_cast_invocations = set()
         self.lifecycle_watermark = start_time
         self.skill_windows = {}
         self.skill_observed = {}
@@ -999,6 +1000,8 @@ class Statistics:
 
     @classmethod
     def _unconfirmed_skill_reason(cls, window, *, live=False):
+        if window is not None and 'normal_cast_pending' in window:
+            return '原生施放调用尚未返回完整状态'
         if window is not None and 'owner_dead_at' in window:
             return '未观察到同实例的永久退场证明'
         if window is None or ('cast_completed_at' not in window and 'movement_at' not in window):
@@ -1035,14 +1038,14 @@ class Statistics:
             self._close_skill_window(owner, game_time, reason, confirmed=confirmed)
 
     def _record_skill_transition(self, owner, source, kind, game_time, *,
-                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None, frame=None, deployment=None, terminal=False):
+                                 key, skill_id, name, method, reason, wait_for_end=None, actor=None, frame=None, deployment=None, terminal=False, invocation=None):
         self._apply_skill_transition(
             self.skill_active, owner, source, kind, game_time, key=key, skill_id=skill_id,
             name=name, method=method, reason=reason, wait_for_end=wait_for_end,
-            close=self._close_skill_window, actor=actor, frame=frame, deployment=deployment, terminal=terminal)
+            close=self._close_skill_window, actor=actor, frame=frame, deployment=deployment, terminal=terminal, invocation=invocation)
 
     def record_settlement_skill(self, owner, actor, source, kind, game_time, *,
-                                key, skill_id, name, method, reason, wait_for_end=None, frame=None, deployment=None, terminal=False):
+                                key, skill_id, name, method, reason, wait_for_end=None, frame=None, deployment=None, terminal=False, invocation=None):
         def close(identity, _time, _reason, *, confirmed):
             window = self.settlement_skill_active.pop(identity)
             if (not confirmed and identity not in self.settlement_skill_initial_pending
@@ -1056,7 +1059,7 @@ class Statistics:
         effect_started = self._apply_skill_transition(
             self.settlement_skill_active, identity, source, kind, game_time,
             key=key, skill_id=skill_id, name=name, method=method, reason=reason,
-            wait_for_end=wait_for_end, close=close, actor=actor, frame=frame, deployment=deployment, terminal=terminal)
+            wait_for_end=wait_for_end, close=close, actor=actor, frame=frame, deployment=deployment, terminal=terminal, invocation=invocation)
         if effect_started:
             # Earlier unclassified hits stay in the damage ledger's denominator.
             self.settlement_skill_initial_pending.discard(identity)
@@ -1127,7 +1130,7 @@ class Statistics:
 
     def _apply_skill_transition(self, active, identity_key, source, kind, game_time, *,
                                 key, skill_id, name, method, reason, close,
-                                wait_for_end=None, actor=None, frame=None, deployment=None, terminal=False):
+                                wait_for_end=None, actor=None, frame=None, deployment=None, terminal=False, invocation=None):
         self._validate_skill_cast_state(kind, method, reason, wait_for_end, key, skill_id, frame)
         window = active.get(identity_key)
         if (window is not None and deployment is not None and window.get('deployment') is not None
@@ -1178,6 +1181,15 @@ class Statistics:
                 raise ValueError('native cast state has no matching skill activation')
             return
         if method == 'BasicSkill.OnCastFinish':
+            pending = window.get('normal_cast_pending')
+            if pending is not None:
+                if (invocation != pending['invocation'] or frame != pending['frame'] or game_time != pending['time']
+                        or deployment is None or deployment != window.get('deployment')):
+                    raise ValueError('native return does not close the pending invocation')
+                del window['normal_cast_pending']
+                if wait_for_end is False:
+                    close(identity_key, game_time, reason, confirmed=False)
+                    return
             # This native return observes cast state, never an effect endpoint.
             window.setdefault('cast_completed_at', game_time)
             window['native_cast_return_at'] = game_time
@@ -1189,6 +1201,15 @@ class Statistics:
             # the skill's damage effect is still active.
             # A normal return can also report the same cast completion when
             # the same actor and skill just confirmed that its effect remains.
+            if (reason == 0 and invocation is not None and window['effect_started']
+                    and deployment is not None and deployment == window.get('deployment')
+                    and type(actor) is int and actor > 0 and frame is not None):
+                pending = window.get('normal_cast_pending')
+                if pending is not None and pending['invocation'] != invocation:
+                    raise ValueError('overlapping native skill cast invocations')
+                window.setdefault('cast_completed_at', game_time)
+                window['normal_cast_pending'] = dict(invocation=invocation, frame=frame, time=game_time)
+                return
             if reason == 2 and deployment is not None and deployment == window.get('deployment'):
                 window.setdefault('cast_completed_at', game_time)
                 window['owner_dead_at'] = game_time
@@ -1487,7 +1508,7 @@ class Statistics:
               cancel_reason=None, shield_absorbed=None, target_instance=None,
               skill_key=None, skill_id=None, skill_name=None, skill_reason=None,
               verified_skill_end_owner=None, skill_method=None, skill_wait_for_end=None,
-              skill_actor=None, skill_frame=None, skill_deployment=None, skill_terminal=False,
+              skill_actor=None, skill_frame=None, skill_deployment=None, skill_terminal=False, skill_cast_invocation=None,
               mitigation_before=None, mitigation_after=None, settled_after_nested_kill=False):
         """Record one reliable event: damage, healing, or actual shield absorption.
 
@@ -1637,7 +1658,7 @@ class Statistics:
                 owner, source, kind, game_time, key=skill_key, skill_id=skill_id,
                 name=skill_name, method=skill_method or target_instance, reason=skill_reason,
                 wait_for_end=skill_wait_for_end, actor=skill_actor, frame=skill_frame,
-                deployment=skill_deployment, terminal=skill_terminal)
+                deployment=skill_deployment, terminal=skill_terminal, invocation=skill_cast_invocation)
             return
         if kind == 'hp_damage':
             friendly = (isinstance(target, str)

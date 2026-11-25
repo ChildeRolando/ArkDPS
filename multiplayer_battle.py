@@ -1211,7 +1211,8 @@ class MultiplayerBattleStatistics:
                                  or candidate.unique_id == skill_uid))
                     world_receipt = (self._native_mode and (event['kind'] in ENEMY_STATE_KINDS
                         or event['kind'] == 'elemental_burst' and event.get('source') is None))
-                    player.stream.accept(None, unresolved_source_keys, skip_scope or world_receipt, session=player.statistics.session,
+                    player.stream.accept(None, unresolved_source_keys, skip_scope or world_receipt, False,
+                        state == 'owned' and not entry.is_token, session=player.statistics.session,
                         settlement_identity=identity, replay_record=event, **payload)
                 if self._native_mode and state in ('owned', 'not_collected') and event['kind'] == 'elemental_bar':
                     self._confirm_scope_bar(event, side, actor)
@@ -1253,11 +1254,16 @@ class MultiplayerBattleStatistics:
             state, side, actor, entry = self._identity(event)
             if state == 'owned' and not entry.is_token:
                 owner = self._source_key(actor, side)
+                certificate = event.get('actor_lifecycle')
+                raw_proof = event.get('proof')
+                method = raw_proof.get('method') if isinstance(raw_proof, dict) else None
+                if (event['kind'] == 'skill_end' and (not isinstance(certificate, dict)
+                        or certificate.get('reason') != event.get('skill_reason'))):
+                    certificate = None
                 self._players[side].statistics.deployment_lifecycle.observe(owner, actor.unique_id,
-                    event.get('source_instance_uid'), event['kind'], event['game_time'],
-                    event.get('actor_lifecycle') if event['kind'] != 'skill_end'
-                        or event['actor_lifecycle'].get('reason') == event.get('skill_reason') else None,
-                    frame=event['frame'])
+                    event.get('source_instance_uid'), event['kind'], event['game_time'], certificate,
+                    frame=event['frame'], expected_finish=event['kind'] == 'skill_end'
+                        and method == 'BattleController.OnCharacterFinished')
             elif state not in ('foreign_scope', 'non_team', 'not_collected'):
                 pending.append(event)
         self._pending_lifecycles = pending

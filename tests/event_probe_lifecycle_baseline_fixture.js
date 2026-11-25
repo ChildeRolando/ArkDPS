@@ -3,13 +3,14 @@ const {world}=require('./native_pc_autochess_context_fixture');
 const output={};
 for(const platform of ['native_pc','mumu']){
  const cases={};
- for(const fault of ['valid','flags_missing','instance_zero','duplicate','short_read','token']){
-  const f=world({platform,fixtureOptions:{roundResetMethod:true,settlement:true}});
+ for(const fault of ['valid','flags_missing','instance_zero','duplicate','short_read','token','capability_missing','capability_bad_type','install_failure']){
+  const f=world({platform,fixtureOptions:{roundResetMethod:true,settlement:true,skillCastState:true,
+   characterLifecycle:fault==='capability_missing'?false:fault==='capability_bad_type'?{wrongEnumOwner:true}:true,failLifecycleBornHook:fault==='install_failure'}});
   f.players.forEach(([,p],i)=>f.write(p.add(0x18),f.text(String(i+1))));
   const specs=[[1,'<instanceUid>k__BackingField',0x18,9],[3,'<playerSide>k__BackingField',0x20,17],
    [4,'<inited>k__BackingField',0x24,2],[5,'<borned>k__BackingField',0x25,2],[6,'<isDisappeared>k__BackingField',0x26,2]];
-  const b=f.klass('BObject','Torappu.Battle',9,specs),e=f.klass('Entity','Torappu.Battle',410,[],b),
-   u=f.klass('Unit','Torappu.Battle',10,[],e),c=f.klass('Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,18]],u),
+  const b=f.klass('BObject','Torappu.Battle',9,specs,f.ptr(0),f.bObject),e=f.klass('Entity','Torappu.Battle',410,[],b),
+   u=f.klass('Unit','Torappu.Battle',10,[],e),c=f.klass('Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,18]],u,f.character),
    a=f.alloc();f.write(a,f.klass('Unit[]','Torappu.Battle',0));f.write(a.add(0x18),2);
   for(let i=0;i<2;i++){
    if(fault==='short_read'&&i===1)continue;

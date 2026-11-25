@@ -111,9 +111,9 @@ MuMu 可选读取限制为 4096 个引用、128 个角色、12000 次计费操�
 
 ## 真实部署生命周期（可选 version 1）
 
-两端共享生产者在元数据验证 `BObject.Born(): Void` 及 `BattleController.OnCharacterFinished(Character, Entity.FinishReason): Void` 后发布真实本体边界。验证包括枚举 declaring type、Int32 布局及每个 literal；`Entity.FinishReason` 与 `Ability.FinishReason` 绝不通用。能力不可验证时不发布证书，完整分母保持未知。没有读取 `m_createdTime` / `m_deadTime` 作为出生或死亡时间。
+两端共享生产者在元数据验证 `Character.Born(): Void`（真实 override，与敌人使用的 BObject.Born 地址必须不同）及 `BattleController.OnCharacterFinished(Character, Entity.FinishReason): Void` 后发布真实本体边界。验证包括枚举 declaring type、Int32 布局及每个 literal；`Entity.FinishReason` 与 `Ability.FinishReason` 绝不通用。能力不可验证时不发布证书，完整分母保持未知。没有读取 `m_createdTime` / `m_deadTime` 作为出生或死亡时间。
 
-`character_born` 是独立事件，amount=0，不开启技能。它只在同 Character、data UID、部署 instance UID、原始 frame/Q32 时钟及 scope 保持一致，且 Born 调用使 borned 从 false 变为 true、isDisappeared 为 false 时发布。`skill_end` 的 CharacterFinished 记录可携带同样的 body 证书，不要求当前有技能键或窗口。
+`character_born` 是独立事件，amount=0，不开启技能。它只在同 Character、data UID、部署 instance UID、原始 frame/Q32 时钟及 scope 保持一致，且 Character.Born 调用使 borned 从 false 变为 true、isDisappeared 为 false 时发布。`skill_end` 的 CharacterFinished 记录可携带同样的 body 证书，不要求当前有技能键或窗口。
 
 两种记录的显式字段为 `source_instance_uid: uint32>0` 和 `actor_lifecycle: {version:1,state:'born'|'finish',instance_uid,data_uid,frame,game_time,fixed}`；fixed 是原始非负 Q32 Int64 十进制字符串。finish 另含 `reason_type:'Torappu.Battle.Entity.FinishReason'`、`reason:Int32`。scope 沿用该回调的原始 `native_autochess_scope`，不能借后继快照补写。`event_processing_payload` 保留这些字段；EventStream 完成顺序、时间、scope 与本家 actor 归属校验后，才把证书交给 Statistics 的部署归约器。
 
@@ -122,3 +122,8 @@ MuMu 可选读取限制为 4096 个引用、128 个角色、12000 次计费操�
 技能回调和 typed native cast 返回在已证身份下透传 `source_instance_uid`；实际 Modifier 来源在入口和返回保持同身份时也透传该字段，不能拿召唤实例 UID 冒充宿主本体。无匹配激活窗的 wait=true cast 保留 `(owner,dataUID,instanceUID)` 的未知状态，不升级为 owner-wide 归属缺证，也不假造生效开始。真实未来激活只恢复未来分类；已记录的未知命中保留。
 
 零帧 point v2 可独立附带 `lifecycle_baseline:{version:1,complete:true,frame:0,game_time:0,fixed:'0',units:[...]}`。每个 unit 含 `cid,data_uid,instance_uid,player_index,player_uid,player_side,inited:true,borned:true,disappeared:false`。生产者从原始零帧完整 UnitManager 集合读取，经既有类型/布局验证、完整引用读取、账号匹配和双次现场 guard；非本体 token 不进入集合。缺字段、短读、重复 data/native UID、非法flags或名单冲突使该独立证书不可用，不改旧技能初态语义。消费者只按同 point 的玩家/member、原始scope与零时钟归约，从0截入当前小局分母，不声称该本体在备战时的出生时间。旧 point v1/v2 无证书时保守兼容。
+
+
+完整生命周期能力必须实际安装 Character.Born 与 typed CharacterFinished 两个钩子，零帧证书和其质量声明均须 `character_lifecycle_ready:true`，宿主还核对当前 mark/read 两端同能力；缺任一、安装失败或地址 alias 均不能认证完整分母。该可选失败不改旧统计。PC v29 的选取事实冻结于测试 fixture（metadata SHA e58fb854…），验证 Entity/Ability 的两个不同 declaring type，以及真实 Character.Born override、OnAfterSkill(BasicSkill,Ability.FinishReason) 与 OnCastFinish(Ability,Ability.FinishReason,Boolean) 原始签名。
+
+`skill_cast_invocation` 是生产者每次 typed BasicSkill.OnCastFinish enter 的唯一正整数 ID。只有同一线程嵌套调用、同 owner/skill 指针、data/native UID、帧/Q32/scope 的 Character.OnAfterSkill 与最终 native leave 才共用；真实效果端点在同调用内也可带此证书。正常 AfterSkill 先于 native leave 时，已真实生效的窗口暂存 pending 状态，必须同 ID、同本体、同技能、同刻最终 wait 状态才能继续；原始回调/序号/重放顺序保持。缺真实生效起点、不同 invocation/body、失败返回或真实效果已终止均不能用 wait=true 开窗。旧记录没有此证书时保留旧规则。

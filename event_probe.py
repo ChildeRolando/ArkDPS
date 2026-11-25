@@ -440,7 +440,7 @@ _ROUND_START_QUALITY_OPTIONAL = ('boss_damage_ready', 'boss_damage_unknown', 'da
     'mitigation_error',
     'mitigation_diagnostics', 'enemy_entry_ready', 'enemy_entry_unknown', 'enemy_phase_ready',
     'enemy_phase_unknown', 'enemy_state_ready', 'enemy_state_unknown', 'enemy_state_error',
-    'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error')
+    'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error', 'character_lifecycle_ready')
 
 
 def _round_start_integer(value):
@@ -581,7 +581,9 @@ def verified_autochess_round_start(sample, drained, mark):
         'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
     zero_sample.update(frame=0, game_time=point['game_time'], state=2, rows=[], global_total=None,
         global_heal=None, sum_damage=None, native_counter_scope='events_only', autochess_context=origin,
-        autochess_round_start=point, autochess_round_start_sequence=point['sequence'])
+        autochess_round_start=point, autochess_round_start_sequence=point['sequence'],
+        autochess_lifecycle_baseline_ready=point['quality'].get('character_lifecycle_ready') is True
+            and mark.get('character_lifecycle_ready') is True and drained.get('character_lifecycle_ready') is True)
     zero_drain = dict(zero_mark, events=[], hp_context=[], hp_context_dropped=0,
                       baseline_discarded_skill_events=[], baseline_discarded_skill_events_complete=True)
     replay_drain = {key: value for key, value in drained.items() if key not in _ROUND_START_FIELDS}
@@ -633,9 +635,12 @@ def autochess_round_start_lifecycle_instances(sample):
     if not autochess_round_start_origin(sample):
         return None
     point = sample['autochess_round_start']
+    if sample.get('autochess_lifecycle_baseline_ready') is not True:
+        return None
     raw = point.get('lifecycle_baseline')
-    if (not isinstance(raw, dict) or raw.keys() != {'version', 'complete', 'frame', 'game_time', 'fixed', 'units'}
+    if (not isinstance(raw, dict) or raw.keys() != {'version', 'complete', 'frame', 'game_time', 'fixed', 'units', 'character_lifecycle_ready'}
             or type(raw['version']) is not int or raw['version'] != 1 or raw['complete'] is not True
+            or raw['character_lifecycle_ready'] is not True or point['quality'].get('character_lifecycle_ready') is not True
             or type(raw['frame']) is not int or raw['frame'] != 0
             or type(raw['game_time']) not in (int, float) or raw['game_time'] != 0 or raw['fixed'] != '0'
             or not isinstance(raw['units'], list) or len(raw['units']) > 128):

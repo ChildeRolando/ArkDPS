@@ -168,9 +168,11 @@ def lifecycle_zero_sample():
     sample, drained, mark = inputs(events=[])
     point = drained['autochess_round_start']
     point.update(version=2, live_character_collection_empty=False, live_character_data_uids=[301],
-                 lifecycle_baseline=dict(version=1, complete=True, frame=0, game_time=0, fixed='0',
+                 lifecycle_baseline=dict(version=1, complete=True, character_lifecycle_ready=True, frame=0, game_time=0, fixed='0',
                      units=[dict(cid='char_zero', data_uid=301, instance_uid=77, player_index=3,
                                  player_uid='003', player_side=3, inited=True, borned=True, disappeared=False)]))
+    point['quality']['character_lifecycle_ready'] = True
+    mark['character_lifecycle_ready'] = drained['character_lifecycle_ready'] = True
     return verified_autochess_round_start(sample, drained, mark)
 
 
@@ -218,5 +220,216 @@ def test_actual_zero_unit_manager_alive_bodies_and_rejected_independent_witnesse
     for platform in ('native_pc', 'mumu'):
         assert len(report[platform]['valid']['point']['lifecycle_baseline']['units']) == 2
         assert report[platform]['token']['point']['lifecycle_baseline']['units'] == []
-        for fault in ('flags_missing', 'instance_zero', 'duplicate', 'short_read'):
+        for fault in ('flags_missing', 'instance_zero', 'duplicate', 'short_read', 'capability_missing', 'capability_bad_type', 'install_failure'):
             assert 'lifecycle_baseline' not in report[platform][fault]['point']
+
+@pytest.fixture(scope='module')
+def cast_transaction_source():
+    return json.loads(subprocess.check_output(['node', str(ROOT / 'tests/event_probe_cast_transaction_fixture.js')],
+                                             cwd=ROOT, text=True, encoding='utf-8'))
+
+
+def replay_cast_transaction(packet, *, old_source=False):
+    from copy import deepcopy
+    stats, stream = setup()
+    records = deepcopy(packet['batch']['events'])
+    for raw in records:
+        if old_source:
+            raw.pop('skill_cast_invocation', None)
+        stats.advance(raw['game_time'])
+        identity = ('foreign', None, None) if raw['source_character_uid'] != 1010 else ('local', 'owner', 1010)
+        stream.accept(session='life', settlement_identity=identity, replay_record=raw, **event_processing_payload(raw))
+    for index in range(36):
+        stats.advance(4)
+        stream.accept(session='life', sequence=stream.sequence + 1, frame=120, game_time=4,
+            source='char_237_gravel', source_character_uid=1010, source_instance_uid=10,
+            kind='damage_settlement', amount=1, nominal_amount=1, shield_absorbed=0,
+            settlement_complete=True, damage_type=1, target='enemy_1007_slime', target_uid='1',
+            target_instance='enemy-1', killed=False, settlement_identity=('local', 'owner', 1010))
+    stream.watermark(session='life', sequence=stream.sequence, frame=120, game_time=4)
+    return stats, stats.result()['rows']['owner']['settled_damage']
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
+def test_actual_nested_native_call_reproduces_36_unknown_on_old_contract_and_preserves_real_effect_on_new(
+        cast_transaction_source, platform):
+    from copy import deepcopy
+    packet = cast_transaction_source[platform]['nested_after_first']
+    original = deepcopy(packet)
+    old_stats, old = replay_cast_transaction(packet, old_source=True)
+    assert old['skill_unclassified_hits'] == 36 and old['skill_initial_unknown_hits'] == 0
+    stats, new = replay_cast_transaction(packet)
+    assert new['skill_unclassified_hits'] == 0 and new['skill_initial_unknown_hits'] == 0
+    assert new['observed_skill_damage'] == new['observed_damage'] == 36
+    assert new['observed_hits'] == old['observed_hits'] == 36
+    assert not stats.settlement_skill_unassigned and not stats.settlement_skill_incomplete
+    assert stats.skill_active['owner']['start'] == 1
+    assert packet == original
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
+@pytest.mark.parametrize('scenario', ['native_first', 'foreign_after'])
+def test_actual_native_transaction_supported_opposite_order_and_same_cid_foreign_isolation(
+        cast_transaction_source, platform, scenario):
+    stats, lane = replay_cast_transaction(cast_transaction_source[platform][scenario])
+    assert lane['skill_unclassified_hits'] == 0
+    assert stats.skill_active['owner']['start'] == 1
+
+
+@pytest.mark.parametrize('platform', ['native_pc', 'android'])
+@pytest.mark.parametrize('scenario', ['no_effect_start', 'wait_false', 'real_end'])
+def test_cast_transaction_without_independent_live_effect_proof_never_opens_effect(
+        cast_transaction_source, platform, scenario):
+    stats, lane = replay_cast_transaction(cast_transaction_source[platform][scenario])
+    assert not stats.skill_active and not stats.settlement_skill_active
+    assert lane['observed_skill_damage'] == (0 if scenario == 'real_end' else None)
+
+
+def test_zero_seed_duplicate_born_is_idempotent_and_retired_native_uid_cannot_be_reborn():
+    life = DeploymentLifecycle()
+    life.seed_zero('owner', 1010, 10)
+    life.observe('owner', 1010, 10, 'character_born', 0, proof('born', 0), frame=0)
+    assert life.result('owner', 2, continuous=True, archived=False)['lifecycle_presence_seconds'] == 2
+    life.observe('owner', 1010, 10, 'skill_end', 2, proof('finish', 2), frame=60)
+    life.observe('owner', 1010, 10, 'character_born', 3, proof('born', 3), frame=90)
+    assert life.result('owner', 4, continuous=True, archived=False)['lifecycle_presence_complete'] is False
+
+
+@pytest.mark.parametrize('reason', [11, 12])
+def test_typed_temporary_finish_keeps_body_open_but_malformed_finish_invalidates(reason):
+    life = DeploymentLifecycle()
+    life.seed_zero('owner', 1010, 10)
+    life.observe('owner', 1010, 10, 'skill_end', 1, proof('finish', 1, reason=reason), frame=30, expected_finish=True)
+    assert life.result('owner', 2, continuous=True, archived=False)['lifecycle_presence_seconds'] == 2
+    invalid = dict(proof('finish', 3), fixed='0')
+    life.observe('owner', 1010, 10, 'skill_end', 3, invalid, frame=90, expected_finish=True)
+    assert life.result('owner', 4, continuous=True, archived=False)['lifecycle_presence_complete'] is False
+
+@pytest.mark.parametrize('order', ['finish_first', 'born_first'])
+def test_same_clock_body_handoff_preserves_both_intervals_in_both_orders(order):
+    life = DeploymentLifecycle()
+    life.observe('owner', 1010, 10, 'character_born', 1, proof('born', 1), frame=30)
+    callbacks = [(10, 'skill_end', proof('finish', 2)),
+                 (20, 'character_born', proof('born', 2, instance=20))]
+    if order == 'born_first':
+        callbacks.reverse()
+    for instance, kind, certificate in callbacks:
+        life.observe('owner', 1010, instance, kind, 2, certificate, frame=60)
+    life.observe('owner', 1010, 20, 'skill_end', 4, proof('finish', 4, instance=20), frame=120)
+    result = life.result('owner', 4, continuous=True, archived=True)
+    assert result['lifecycle_presence_seconds'] == 3
+    assert result['lifecycle_presence_complete'] is True and result['lifecycle_terminal_complete'] is True
+
+
+def test_positive_time_body_overlap_is_never_certified_or_double_counted():
+    life = DeploymentLifecycle()
+    life.observe('owner', 1010, 10, 'character_born', 1, proof('born', 1), frame=30)
+    life.observe('owner', 1010, 20, 'character_born', 2, proof('born', 2, instance=20), frame=60)
+    assert life.result('owner', 2, continuous=True, archived=False)['lifecycle_presence_seconds'] is None
+    life.observe('owner', 1010, 10, 'skill_end', 3, proof('finish', 3), frame=90)
+    life.observe('owner', 1010, 20, 'skill_end', 4, proof('finish', 4, instance=20), frame=120)
+    assert life.result('owner', 4, continuous=True, archived=True)['lifecycle_presence_seconds'] is None
+
+
+@pytest.mark.parametrize('changes', [dict(fixed='1'), dict(fixed='00'), dict(fixed='9'*10000),
+    dict(fixed=str(1 << 63)), dict(game_time=float('nan')), dict(game_time=float('inf')),
+    dict(game_time=10**1000), dict(instance_uid=1 << 32), dict(data_uid=True), dict(frame=-1)])
+def test_lifecycle_raw_clock_and_identity_reject_malformed_values_without_throwing(changes):
+    value = dict(proof('born', 0), **changes)
+    assert lifecycle_proof(value, kind='character_born', actor=value['data_uid'], instance=value['instance_uid'],
+                           frame=value['frame'], game_time=value['game_time']) is None
+
+@pytest.mark.parametrize('fault', ['invocation', 'native_body', 'missing_invocation'])
+def test_native_normal_return_cannot_borrow_another_invocation_or_body(cast_transaction_source, fault):
+    from copy import deepcopy
+    packet = deepcopy(cast_transaction_source['native_pc']['nested_after_first'])
+    cast = next(e for e in packet['batch']['events'] if e['proof']['method'] == 'BasicSkill.OnCastFinish')
+    if fault == 'invocation':
+        cast['skill_cast_invocation'] += 1
+    elif fault == 'native_body':
+        cast['source_instance_uid'] += 1
+    else:
+        del cast['skill_cast_invocation']
+    stats, lane = replay_cast_transaction(packet)
+    assert lane['skill_unclassified_hits'] == 36 and not stats.settlement_skill_unassigned
+
+
+@pytest.mark.parametrize('mark_field', ['point', 'observer'])
+def test_zero_body_baseline_requires_complete_actual_hook_capability_at_both_fences(mark_field):
+    from event_probe import autochess_round_start_lifecycle_instances
+    zero, _, _, _ = lifecycle_zero_sample()
+    if mark_field == 'point':
+        zero['autochess_round_start']['quality']['character_lifecycle_ready'] = False
+    else:
+        zero['autochess_lifecycle_baseline_ready'] = False
+    assert autochess_round_start_lifecycle_instances(zero) is None
+
+
+def test_late_born_cannot_hide_earlier_body_output_but_same_clock_and_post_retreat_dot_are_valid():
+    life = DeploymentLifecycle()
+    life.note_body_output('owner', 1010, 10, 1)
+    life.observe('owner', 1010, 10, 'character_born', 2, proof('born', 2), frame=60)
+    assert life.result('owner', 4, continuous=True, archived=False)['lifecycle_presence_complete'] is False
+    same_clock = DeploymentLifecycle()
+    same_clock.note_body_output('owner', 1010, 10, 1)
+    same_clock.observe('owner', 1010, 10, 'character_born', 1, proof('born', 1), frame=30)
+    same_clock.observe('owner', 1010, 10, 'skill_end', 2, proof('finish', 2), frame=60)
+    same_clock.note_body_output('owner', 1010, 10, 3)
+    assert same_clock.result('owner', 4, continuous=True, archived=True)['lifecycle_presence_seconds'] == 1
+
+
+def test_selected_real_pc_disk_metadata_confirms_runtime_lifecycle_and_cast_signatures():
+    frozen = json.loads((ROOT / 'tests/fixtures/event_probe_business/20261125-pc-lifecycle-metadata-v29.json').read_text(encoding='utf-8'))
+    assert frozen['metadata_sha256'] == 'e58fb854ae519bc22f7d8bc7ac83502425a51b896a907a3374f5215202f9caa5'
+    types = frozen['types']
+    assert types['Torappu.Battle.Entity.FinishReason']['declaring_type'] == 'Torappu.Battle.Entity'
+    assert types['Torappu.Battle.Entity.FinishReason']['enum_literals']['HP_ZERO'] == 2
+    assert types['Torappu.Battle.Entity.FinishReason']['enum_literals']['MOVE_LIKE_RESPAWN_EXTERNAL'] == 12
+    assert types['Torappu.Battle.Ability.FinishReason']['declaring_type'] == 'Torappu.Battle.Ability'
+    assert types['Torappu.Battle.Ability.FinishReason']['enum_literals']['OWNER_DEAD'] == 2
+    def method(owner, name):
+        return next(m for m in types['Torappu.Battle.' + owner]['methods'] if m['name'] == name)
+    assert method('Character', 'Born')['parameters'] == []
+    assert method('Character', 'Born')['return_type'] == method('BObject', 'Born')['return_type'] == 'System.Void'
+    assert [p['type'] for p in method('BattleController', 'OnCharacterFinished')['parameters']] == [
+        'Torappu.Battle.Character', 'Torappu.Battle.Entity.FinishReason']
+    assert [p['type'] for p in method('Character', 'OnAfterSkill')['parameters']] == [
+        'Torappu.Battle.BasicSkill', 'Torappu.Battle.Ability.FinishReason']
+    metadata = Path('D:/games/Hypergryph Launcher/games/Arknights/Arknights_Data/il2cpp_data/Metadata/global-metadata.dat')
+    if metadata.exists():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('inspect_lifecycle_metadata', ROOT / 'tools/inspect_lifecycle_metadata.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert module.inspect(metadata) == frozen
+
+@pytest.mark.parametrize('instance', [None, 10])
+def test_multiplayer_body_hit_before_late_born_cannot_certify_shorter_denominator(instance):
+    from multiplayer_battle import MultiplayerBattleStatistics
+    from test_multiplayer_native_context import CID, consume, hit, player, stamp
+    meter = MultiplayerBattleStatistics()
+    consume(meter, 0)
+    early = hit(1, 3, 1, 10)
+    if instance is not None:
+        early['source_instance_uid'] = instance
+    born = dict(sequence=2, frame=60, game_time=2, source=CID, source_character_uid=301,
+                source_instance_uid=20, kind='character_born', amount=0,
+                actor_lifecycle=proof('born', 2, actor=301, instance=20), native_autochess_scope=stamp(when=2))
+    result = consume(meter, 3, [early, born])
+    row = next(iter(player(result, 3)['statistics']['rows'].values()))
+    assert row['lifecycle_presence_complete'] is False and row['lifecycle_presence_seconds'] is None
+
+
+def test_multiplayer_token_with_character_like_cid_is_not_a_host_body_output_witness():
+    from multiplayer_battle import MultiplayerBattleStatistics
+    from test_multiplayer_native_context import CID, consume, hit, member, player, context, stamp
+    meter = MultiplayerBattleStatistics()
+    members = [member(3), member(3, uid=302, cid='char_token_disguised', is_token=True, host_key=CID, host_uid=301)]
+    consume(meter, 0, native=context(0, members=members))
+    born = dict(sequence=1, frame=30, game_time=1, source=CID, source_character_uid=301,
+                source_instance_uid=10, kind='character_born', amount=0,
+                actor_lifecycle=proof('born', 1, actor=301), native_autochess_scope=stamp(when=1))
+    token = hit(2, 3, 2, 10, uid=302, cid='char_token_disguised')
+    result = consume(meter, 3, [born, token], native=context(3, members=members))
+    row = next(iter(player(result, 3)['statistics']['rows'].values()))
+    assert row['lifecycle_presence_seconds'] == 2 and row['lifecycle_presence_complete'] is True

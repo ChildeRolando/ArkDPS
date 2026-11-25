@@ -374,7 +374,8 @@ class BattleStatisticsAdapter:
         source = event.get('source')
         if self.statistics.settlement_enabled:
             if kind == 'damage_settlement':
-                self.event_stream.accept(settlement_identity=self._settlement_identity(
+                self.event_stream.accept(None, (), False, False, source not in self.settlement_tokens,
+                    settlement_identity=self._settlement_identity(
                     source, event.get('source_character_uid')), **event)
                 return
             if kind in SOURCE_EVENTS:
@@ -450,7 +451,8 @@ class BattleStatisticsAdapter:
             elif can_register and not self._register(source, owner):
                 self.event_stream.stop()
                 raise StreamGap('event source cannot be registered')
-        self.event_stream.accept(verified_skill_end_owner, **event)
+        self.event_stream.accept(verified_skill_end_owner, (), False, False,
+            owner is not None and source not in self.settlement_tokens, **event)
 
     @staticmethod
     def _world_player_accounts(context):
